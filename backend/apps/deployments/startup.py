@@ -6,12 +6,24 @@ Django boots so SSL/DNS stay in sync (Railway-style "just works").
 """
 
 import logging
+import os
 import threading
 import time
 
 logger = logging.getLogger(__name__)
 
 _started = False
+
+
+def caddy_disabled_mode() -> bool:
+    """Return True when this runtime topology does not include Caddy."""
+    mode = str(os.environ.get("MODE", "")).strip().lower()
+    node_type = str(os.environ.get("NODE_TYPE", "")).strip().lower()
+    return mode in {"agent", "agent-lite", "node"} or node_type in {
+        "agent",
+        "agent-lite",
+        "node",
+    }
 
 
 def _sync_caddy_once(delay: float = 3.0):
@@ -114,8 +126,8 @@ def schedule_startup_caddy_sync():
     # Always try to store SSH credentials from env vars on startup
     _store_ssh_from_env()
 
-    if str(os.environ.get("MODE", "")).strip().lower() == "agent":
-        logger.debug("Agent-lite mode: skipping startup caddy sync")
+    if caddy_disabled_mode():
+        logger.debug("Caddy-disabled mode: skipping startup caddy sync")
         return
 
     global _started  # noqa: PLW0603

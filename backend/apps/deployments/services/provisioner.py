@@ -107,6 +107,25 @@ def _node_queue_name(server: ManagedServer) -> str:
     return f"smsly-node-{slug or 'agent'}"
 
 
+def server_install_mode(server: ManagedServer) -> str:
+    """Return the installer topology for a managed server."""
+    if getattr(server, "is_lite_agent", False):
+        return "agent-lite"
+    if not bool(getattr(server, "is_primary", False)):
+        return "node"
+    return "master"
+
+
+def server_connection_mode(server: ManagedServer) -> str:
+    """Return the provider metadata connection mode for a managed server."""
+    install_mode = server_install_mode(server)
+    if install_mode == "agent-lite":
+        return "agent-lite"
+    if install_mode == "node":
+        return "full-stack-node"
+    return "full-install"
+
+
 def _master_gateway_secret() -> str:
     """Return the master's own GATEWAY_SECRET (used only as last resort fallback)."""
     return str(
@@ -749,7 +768,8 @@ def provision_server(self, server_id: str):
         }
 
         install_args: list[str] = []
-        if getattr(server, "is_lite_agent", False):
+        install_mode = server_install_mode(server)
+        if install_mode == "agent-lite":
             lite_env, lite_messages = build_agent_lite_install_env(
                 server,
                 master_ip=master_ip,
@@ -758,6 +778,8 @@ def provision_server(self, server_id: str):
                 _append_log(server, message)
             install_env.update(lite_env)
             install_args.append("--mode=agent-lite")
+        elif install_mode == "node":
+            install_args.append("--mode=node")
         # ─── Resume Check ──────────────────────────────────────────────────
         stdin, stdout, stderr = ssh.exec_command("test -f /opt/smsly-hosting/.smsly_install_state && echo 'RESUME' || echo 'FRESH'")
         remote_mode = stdout.read().decode().strip()
@@ -1058,9 +1080,7 @@ def provision_server(self, server_id: str):
         server.api_url = api_url
         server.api_token = api_token or ""
         provider_metadata = dict(server.provider_metadata or {})
-        provider_metadata["connection_mode"] = (
-            "agent-lite" if getattr(server, "is_lite_agent", False) else "full-install"
-        )
+        provider_metadata["connection_mode"] = server_connection_mode(server)
         update_fields = [
             "api_url", "api_token", "provision_status", "status",
             "provider_metadata", "updated_at",

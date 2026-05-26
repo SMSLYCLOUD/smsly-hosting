@@ -394,6 +394,16 @@ export default function ServerDetailPage() {
                                         Control Plane
                                     </span>
                                 )}
+                                {server.is_lite_agent && (
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-500 font-bold uppercase">
+                                        Lite Agent
+                                    </span>
+                                )}
+                                {!server.is_primary && !server.is_lite_agent && (
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500 font-bold uppercase">
+                                        Full Stack
+                                    </span>
+                                )}
                                 <span className={`text-xs font-bold px-2 py-0.5 rounded ${sc.bg} ${sc.color}`}>
                                     {sc.label}
                                 </span>

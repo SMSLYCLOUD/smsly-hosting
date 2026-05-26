@@ -98,7 +98,7 @@ services:
       UVICORN_WS_PING_TIMEOUT: 20
       CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-127.0.0.1:5000}
       DOCKER_HOST: tcp://socket-proxy:2375
-      SMSLY_ENABLE_STARTUP_CADDY_SYNC: "True"
+      SMSLY_ENABLE_STARTUP_CADDY_SYNC: ${SMSLY_ENABLE_STARTUP_CADDY_SYNC:-true}
       SMSLY_BUILDS_DIR: /opt/smsly-hosting/builds
     depends_on:
       pgcat:
@@ -396,7 +396,7 @@ services:
     - --api.insecure=true
     - --log.level=WARN
     ports:
-    - 127.0.0.1:8081:80
+    - "${TRAEFIK_HTTP_BIND:-127.0.0.1:8081}:80"
     - 127.0.0.1:8082:8080
     depends_on:
       socket-proxy:

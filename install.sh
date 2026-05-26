@@ -43,6 +43,11 @@ fi
 # ─── Parse flags early ───────────────────────────────────────────────────────
 NON_INTERACTIVE="${NON_INTERACTIVE:-false}"
 MODE_AGENT_LITE=false
+MODE_NODE=false
+INSTALL_MODE="master"
+_DETECTED_INSTALL_MODE=""
+_CLI_INSTALL_MODE=""
+_CLI_MODE_CONFLICT=false
 RESUME_MODE=false
 RUST_TWIN_MODE="${RUST_TWIN_MODE:-false}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
@@ -53,8 +58,17 @@ if [ -f "/opt/smsly-hosting/.env" ]; then
     set -a
     source /opt/smsly-hosting/.env
     set +a
-    if [ "${NODE_TYPE:-}" = "agent-lite" ]; then
-        MODE_AGENT_LITE=true
+    case "${NODE_TYPE:-}" in
+        agent-lite|agent) _DETECTED_INSTALL_MODE="agent-lite" ;;
+        node) _DETECTED_INSTALL_MODE="node" ;;
+        master) _DETECTED_INSTALL_MODE="master" ;;
+    esac
+    if [ -z "$_DETECTED_INSTALL_MODE" ]; then
+        case "${MODE:-}" in
+            agent-lite|agent) _DETECTED_INSTALL_MODE="agent-lite" ;;
+            node) _DETECTED_INSTALL_MODE="node" ;;
+            master) _DETECTED_INSTALL_MODE="master" ;;
+        esac
     fi
 fi
 
@@ -67,15 +81,41 @@ case "${SKIP_SCREEN:-}" in
   1|true|TRUE|yes|YES|on|ON) NO_SCREEN=true ;;
 esac
 
+set_cli_install_mode() {
+  local requested_mode="$1"
+  if [ -n "$_CLI_INSTALL_MODE" ] && [ "$_CLI_INSTALL_MODE" != "$requested_mode" ]; then
+    _CLI_MODE_CONFLICT=true
+  fi
+  _CLI_INSTALL_MODE="$requested_mode"
+}
+
+set_cli_install_mode_from_value() {
+  local requested_mode="$1"
+  case "$requested_mode" in
+    agent-lite|agent) set_cli_install_mode "agent-lite" ;;
+    node) set_cli_install_mode "node" ;;
+    master) set_cli_install_mode "master" ;;
+    *)
+      echo -e "\033[0;31mERROR: Unknown --mode value: $requested_mode. Use agent-lite, node, or master.\033[0m"
+      exit 1
+      ;;
+  esac
+}
+
 _EXPECT_MODE_VALUE=false
 for arg in "$@"; do
+  if [ "$_EXPECT_MODE_VALUE" = "true" ]; then
+    set_cli_install_mode_from_value "$arg"
+    _EXPECT_MODE_VALUE=false
+    continue
+  fi
   case "$arg" in
     --non-interactive) NON_INTERACTIVE=true ;;
-    --mode=agent-lite|--agent-lite) MODE_AGENT_LITE=true ;;
+    --mode=agent-lite|--agent-lite) set_cli_install_mode_from_value "agent-lite" ;;
+    --mode=node|--node) set_cli_install_mode_from_value "node" ;;
+    --mode=master|--master) set_cli_install_mode_from_value "master" ;;
+    --mode=*)         set_cli_install_mode_from_value "${arg#--mode=}" ;;
     --mode)           _EXPECT_MODE_VALUE=true ;;
-    agent-lite)
-                       if [ "$_EXPECT_MODE_VALUE" = "true" ]; then MODE_AGENT_LITE=true; fi
-                       _EXPECT_MODE_VALUE=false ;;
     --rust)            RUST_TWIN_MODE="true" ;;
     --resume)          RESUME_MODE=true ;;
     --no-screen|--skip-screen)
@@ -87,7 +127,43 @@ for arg in "$@"; do
                        NO_SCREEN=true ;;
   esac
 done
+if [ "$_EXPECT_MODE_VALUE" = "true" ]; then
+  echo -e "\033[0;31mERROR: --mode requires a value: agent-lite, node, or master.\033[0m"
+  exit 1
+fi
 unset _EXPECT_MODE_VALUE
+
+if [ "$_CLI_MODE_CONFLICT" = "true" ]; then
+  echo -e "\033[0;31mERROR: Conflicting install modes requested. Use only one of --mode=agent-lite, --mode=node, or --mode=master.\033[0m"
+  exit 1
+fi
+
+INSTALL_MODE="${_CLI_INSTALL_MODE:-${_DETECTED_INSTALL_MODE:-master}}"
+case "$INSTALL_MODE" in
+  agent-lite)
+    MODE_AGENT_LITE=true
+    MODE_NODE=false
+    MODE="agent"
+    NODE_TYPE="agent-lite"
+    ;;
+  node)
+    MODE_AGENT_LITE=false
+    MODE_NODE=true
+    MODE="node"
+    NODE_TYPE="node"
+    ;;
+  master)
+    MODE_AGENT_LITE=false
+    MODE_NODE=false
+    MODE="master"
+    NODE_TYPE="master"
+    ;;
+  *)
+    echo -e "\033[0;31mERROR: Unknown install mode: $INSTALL_MODE\033[0m"
+    exit 1
+    ;;
+esac
+export INSTALL_MODE MODE NODE_TYPE
 
 # ─── Resolve script path BEFORE any cd (screen guard needs absolute path) ────
 SCRIPT_PATH="$(readlink -f "$0")"
@@ -273,10 +349,10 @@ check_hardware() {
 }
 
 check_caddy_conflict() {
-    echo -e "${BLUE}  → Checking for host-level Caddy conflicts...${NC}"
+    echo -e "${BLUE}  → Checking for host-level Caddy/Traefik port conflicts...${NC}"
     if systemctl is-active --quiet caddy 2>/dev/null; then
         echo -e "${RED}ERROR: Host Caddy service detected (systemd)${NC}"
-        echo -e "${YELLOW}Grid uses Docker-only Caddy and cannot co-exist with system-level Caddy.${NC}"
+        echo -e "${YELLOW}Grid uses Docker-managed routing. Master uses Docker Caddy, and node mode uses Traefik on public port 80.${NC}"
         echo -e ""
         echo -e "Run:"
         echo -e "  sudo systemctl stop caddy"
@@ -285,7 +361,7 @@ check_caddy_conflict() {
         echo -e "Then re-run installer."
         exit 1
     fi
-    echo -e "${GREEN}  ✓ No host-level Caddy detected${NC}"
+    echo -e "${GREEN}  ✓ No host-level Caddy/Traefik conflict detected${NC}"
 }
 
 wait_for_apt_lock() {
@@ -671,6 +747,59 @@ env_ensure_var() {
     fi
 }
 
+is_agent_lite_mode() {
+    [ "${INSTALL_MODE:-master}" = "agent-lite" ] || [ "${MODE_AGENT_LITE:-false}" = "true" ]
+}
+
+is_node_mode() {
+    [ "${INSTALL_MODE:-master}" = "node" ] || [ "${MODE_NODE:-false}" = "true" ]
+}
+
+is_master_mode() {
+    [ "${INSTALL_MODE:-master}" = "master" ] \
+        && [ "${MODE_AGENT_LITE:-false}" != "true" ] \
+        && [ "${MODE_NODE:-false}" != "true" ]
+}
+
+should_manage_caddy() {
+    is_master_mode && [ "${RUST_TWIN_MODE:-false}" != "true" ]
+}
+
+mode_env_value() {
+    if is_agent_lite_mode; then
+        printf '%s\n' "agent"
+    elif is_node_mode; then
+        printf '%s\n' "node"
+    else
+        printf '%s\n' "master"
+    fi
+}
+
+sync_install_mode_env_file() {
+    local env_file="$1"
+    [ -f "$env_file" ] || return 0
+
+    local node_type="${INSTALL_MODE:-master}"
+    local mode_value
+    local traefik_bind="127.0.0.1:8081"
+    local startup_caddy_sync="true"
+    mode_value="$(mode_env_value)"
+
+    if is_agent_lite_mode; then
+        node_type="agent-lite"
+        startup_caddy_sync="false"
+    elif is_node_mode; then
+        node_type="node"
+        traefik_bind="0.0.0.0:80"
+        startup_caddy_sync="false"
+    fi
+
+    env_set_value "$env_file" "NODE_TYPE" "$node_type"
+    env_set_value "$env_file" "MODE" "$mode_value"
+    env_set_value "$env_file" "TRAEFIK_HTTP_BIND" "$traefik_bind"
+    env_set_value "$env_file" "SMSLY_ENABLE_STARTUP_CADDY_SYNC" "$startup_caddy_sync"
+}
+
 apply_agent_lite_env_overrides() {
     local env_file="$1"
     local seed_file="/opt/smsly-hosting/.agent_lite_seed"
@@ -754,7 +883,9 @@ SMSLY_NODE_QUEUE="$SMSLY_NODE_QUEUE"
 EOF
     chmod 600 "$seed_file"
 
+    env_set_value "$env_file" "NODE_TYPE" "agent-lite"
     env_set_value "$env_file" "MODE" "agent"
+    env_set_value "$env_file" "TRAEFIK_HTTP_BIND" "0.0.0.0:80"
     env_set_value "$env_file" "MASTER_IP" "$MASTER_IP"
     env_set_value "$env_file" "MASTER_MESH_IP" "$MASTER_MESH_IP"
     env_set_value "$env_file" "SMSLY_NODE_HOST" "$SMSLY_NODE_HOST"
@@ -1252,6 +1383,7 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "PGCAT_ADMIN_PASSWORD" "$(gen_hex_secret 24)" "PgCat administration password (mandatory for 1.2+)"
     # SSH host key check: strict by default. Set to false only for bootstrap/trusted labs.
     env_ensure_var "$env_file" "SMSLY_STRICT_SSH_HOST_KEY_CHECK" "true" "SSH host key verification (True=strict, False=accept-first)"
+    sync_install_mode_env_file "$env_file"
 
     redis_password="$(env_get_value "$env_file" "REDIS_PASSWORD")"
     rabbitmq_password="$(env_get_value "$env_file" "RABBITMQ_PASSWORD")"
@@ -1556,7 +1688,7 @@ compose_stack_drift() {
     local container_id=""
     local container_state=""
 
-    if ! services="$(docker compose -f "$COMPOSE_FILE" config --services 2>/tmp/smsly-compose-config.err)"; then
+    if ! services="$(compose_stack_services 2>/tmp/smsly-compose-config.err)"; then
         echo "__compose_config__:invalid"
         sed 's/^/__compose_config_error__:/' /tmp/smsly-compose-config.err 2>/dev/null | head -5 || true
         return 0
@@ -1589,15 +1721,15 @@ reconcile_compose_stack_after_resume() {
     printf '%s\n' "$drift" | sed 's/^/     - /'
 
     set +e
-    docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
+    compose_stack_up --remove-orphans
     reconcile_rc=$?
     if [ "$reconcile_rc" -ne 0 ]; then
         echo -e "${YELLOW}  -> Compose reconciliation needs a rebuild; rebuilding stack...${NC}"
         echo -e "${YELLOW}    ↳ Rebuilding with --no-cache to ensure clean state...${NC}"
-        docker compose -f "$COMPOSE_FILE" build --no-cache
+        compose_stack_build --no-cache
         reconcile_rc=$?
         if [ "$reconcile_rc" -eq 0 ]; then
-            docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
+            compose_stack_up --remove-orphans
             reconcile_rc=$?
         fi
     fi
@@ -1805,6 +1937,7 @@ EOF
 }
 
 reload_container_caddy() {
+    should_manage_caddy || return 0
     # Reload the Docker container Caddy (the one that handles actual traffic).
     # This is needed because the host Caddy (systemd) may not be running.
     local compose_f="${COMPOSE_FILE:-docker-compose.prod.yml}"
@@ -1819,6 +1952,7 @@ sync_active_caddyfile_to_shared() {
 }
 
 install_caddyfile_atomically() {
+    should_manage_caddy || return 0
     local candidate="$1"
     local label="${2:-Caddyfile}"
     local dest="${INSTALL_DIR:-/opt/smsly-hosting}/caddy-config/Caddyfile"
@@ -1858,15 +1992,17 @@ for arg in "$@"; do
         --debug)           DEBUG_MODE="true" ;;
         --verify)          VERIFY_MODE="true" ;;
         --rust)            RUST_TWIN_MODE="true" ;;
-        --mode=agent-lite|--agent-lite) MODE_AGENT_LITE="true" ;;
+        --mode=agent-lite|--agent-lite|--mode=node|--node|--mode=master|--master) : ;;
         --clear)           CLEAR_MODE="true" ;;
         --fix-domain)      FIX_DOMAIN_MODE="true" ;;
         --fix-permissions) FIX_PERMISSIONS_MODE="true" ;;
         --force-redeploy)  FORCE_REDEPLOY="true" ;;
         --help|-h)
-            echo "Usage: sudo bash install.sh [--rust] [--update|--update-half|--update-frontend|--update-backend|--refresh|--recover|--debug|--wipe|--clear|--fix-domain|--fix-permissions]"
+            echo "Usage: sudo bash install.sh [--rust] [--mode=agent-lite|--mode=node] [--update|--update-half|--update-frontend|--update-backend|--refresh|--recover|--debug|--wipe|--clear|--fix-domain|--fix-permissions]"
             echo ""
-            echo "  (no args)          Fresh install (Legacy Python)"
+            echo "  (no args)          Fresh install (Legacy Python | Full-Stack Master)"
+            echo "  --mode=agent-lite  Install as a Lite Agent (shared-DB node)"
+            echo "  --mode=node        Install as a Full-Stack Node (own DB, no frontend)"
             echo "  --rust             Deploy the Next-Gen Rust Twin instead of Python"
             echo "  --update           Pull latest code and rebuild all services (full rebuild)"
             echo "  --update-half      Pull latest code, restart backend only — no Docker image rebuild"
@@ -1891,6 +2027,8 @@ fi
 MODE_LABEL="fresh-install"
 if [ "$MODE_AGENT_LITE" = "true" ]; then
     MODE_LABEL="agent-lite-install"
+elif [ "$MODE_NODE" = "true" ]; then
+    MODE_LABEL="node-install"
 fi
 if [ -n "$UPDATE_MODE" ]; then
     MODE_LABEL="update-$UPDATE_MODE"
@@ -2207,6 +2345,10 @@ if [ "${FIX_DOMAIN_MODE:-false}" = "true" ]; then
         exit 1
     fi
     cd "$INSTALL_DIR"
+    if ! should_manage_caddy; then
+        echo -e "${YELLOW}  → --fix-domain is master-only because node/agent modes do not manage Caddy/HTTPS.${NC}"
+        exit 0
+    fi
     if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
         echo -e "${YELLOW}  ! Local changes detected - stashing before repository sync${NC}"
         git stash push --include-untracked -m "install-sync-$(date +%s)" >/dev/null 2>&1 || true
@@ -2270,6 +2412,63 @@ ensure_update_networks() {
     docker network inspect smsly-net >/dev/null 2>&1 || docker network create smsly-net >/dev/null 2>&1 || true
     docker network inspect smsly-proxy >/dev/null 2>&1 || docker network create smsly-proxy >/dev/null 2>&1 || true
     docker network inspect socket-proxy >/dev/null 2>&1 || docker network create --driver bridge --internal socket-proxy >/dev/null 2>&1 || true
+}
+
+compose_stack_services() {
+    local services=""
+    services="$(docker compose -f "$COMPOSE_FILE" config --services)" || return $?
+    if is_node_mode; then
+        printf '%s\n' "$services" | grep -Ev '^(frontend|caddy)$'
+    else
+        printf '%s\n' "$services"
+    fi
+}
+
+compose_stack_service_args() {
+    compose_stack_services | tr '\n' ' '
+}
+
+compose_stack_build_service_args() {
+    local candidates="pgcat backend celery celery-beat frontend celery-fast celery-deploy caddy"
+    local svc=""
+    if is_node_mode; then
+        candidates="pgcat backend celery celery-beat celery-fast celery-deploy"
+    fi
+    for svc in $candidates; do
+        if docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null | grep -qx "$svc"; then
+            printf '%s\n' "$svc"
+        fi
+    done | tr '\n' ' '
+}
+
+stop_node_excluded_services() {
+    is_node_mode || return 0
+    docker compose -f "$COMPOSE_FILE" stop frontend caddy >/dev/null 2>&1 || true
+    docker compose -f "$COMPOSE_FILE" rm -f frontend caddy >/dev/null 2>&1 || true
+}
+
+compose_stack_build() {
+    local services=""
+    if is_node_mode; then
+        stop_node_excluded_services
+        services="$(compose_stack_build_service_args)"
+        [ -n "$services" ] || return 1
+        docker compose -f "$COMPOSE_FILE" build "$@" $services
+    else
+        docker compose -f "$COMPOSE_FILE" build "$@"
+    fi
+}
+
+compose_stack_up() {
+    local services=""
+    if is_node_mode; then
+        stop_node_excluded_services
+        services="$(compose_stack_service_args)"
+        [ -n "$services" ] || return 1
+        docker compose -f "$COMPOSE_FILE" up -d "$@" $services
+    else
+        docker compose -f "$COMPOSE_FILE" up -d "$@"
+    fi
 }
 
 ensure_infrastructure_permissions() {
@@ -2438,6 +2637,7 @@ SAFECADDY
 
 # Returns 0 if Caddy config needs fixing, 1 if it's fine.
 caddy_needs_fix() {
+    should_manage_caddy || return 1
     local dest="${INSTALL_DIR:-/opt/smsly-hosting}/caddy-config/Caddyfile"
     if ! docker compose -f "$COMPOSE_FILE" exec -T caddy caddy validate --config /etc/caddy/Caddyfile 2>/dev/null; then
         return 0  # Syntax error
@@ -2482,6 +2682,8 @@ bust_core_build_cache() {
     local core_svcs="frontend backend celery celery-deploy celery-fast celery-beat"
     if [ "$MODE_AGENT_LITE" = "true" ]; then
         core_svcs="backend celery-worker"
+    elif [ "$MODE_NODE" = "true" ]; then
+        core_svcs="backend celery celery-deploy celery-fast celery-beat"
     fi
 
     # Remove old app image layers for deterministic rebuilds (no DB/data touched).
@@ -2544,7 +2746,7 @@ restart_edge_stack() {
     ensure_container_on_network "smsly-proxy" "smsly-hosting-socket-proxy-1"
 
     # Validate Caddy config before restart (H1 fix)
-    if command -v caddy >/dev/null 2>&1; then
+    if should_manage_caddy && command -v caddy >/dev/null 2>&1; then
         if caddy_needs_fix; then
             generate_safe_caddyfile "restart_edge_stack validation"
         fi
@@ -2601,8 +2803,12 @@ refresh_runtime_services() {
     echo -e "${BLUE}  -> Performing clean runtime refresh (non-data services only)...${NC}"
     ensure_update_networks
     ensure_infrastructure_permissions
+    stop_node_excluded_services
 
     for svc in "${app_services_requested[@]}"; do
+        if is_node_mode && [ "$svc" = "frontend" ]; then
+            continue
+        fi
         if docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null | grep -qx "$svc"; then
             app_services+=("$svc")
         fi
@@ -2632,7 +2838,9 @@ refresh_runtime_services() {
     ensure_container_on_network "smsly-net" "smsly-hosting-celery-beat-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-celery-deploy-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-celery-fast-1"
-    ensure_container_on_network "smsly-net" "smsly-hosting-frontend-1"
+    if [ "$MODE_NODE" != "true" ]; then
+        ensure_container_on_network "smsly-net" "smsly-hosting-frontend-1"
+    fi
     ensure_container_on_network "smsly-net" "smsly-hosting-route-fallback-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-traefik-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-frps-1"
@@ -2678,8 +2886,10 @@ refresh_runtime_services() {
         return 1
     fi
 
-    install_caddy_health_guard "${DOMAIN:-}"
-    reload_container_caddy 2>/dev/null || true
+    if should_manage_caddy; then
+        install_caddy_health_guard "${DOMAIN:-}"
+        reload_container_caddy 2>/dev/null || true
+    fi
 
     if [ "$MODE_AGENT_LITE" != "true" ]; then
         echo -e "${BLUE}  → Refreshing Observability Stack...${NC}"
@@ -2785,13 +2995,13 @@ recover_runtime_stack() {
         wait_for_container_ready "smsly-hosting-redis-1" 120 || true
         sync_agent_lite_rabbitmq_password
     else
-        docker compose -f "$COMPOSE_FILE" up -d db pgcat redis socket-proxy registry || true
+        docker compose -f "$COMPOSE_FILE" up -d db pgcat redis rabbitmq socket-proxy registry || true
         wait_for_container_ready "smsly-hosting-db-1" 120 || true
         wait_for_container_ready "smsly-hosting-pgcat-1" 120 || true
         wait_for_container_ready "smsly-hosting-redis-1" 120 || true
     fi
 
-    if command -v caddy >/dev/null 2>&1; then
+    if should_manage_caddy && command -v caddy >/dev/null 2>&1; then
         if caddy_needs_fix; then
             generate_safe_caddyfile "recover_runtime_stack"
         fi
@@ -2945,9 +3155,11 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
 
     DOMAIN="$(env_get_value "$INSTALL_DIR/.env" "DOMAIN" 2>/dev/null || echo "")"
 
-    echo -e "\n${BLUE}  ⟳ Syncing Proxy Configurations...${NC}"
-    reload_container_caddy 2>/dev/null || true
-    install_caddy_health_guard "$DOMAIN"
+    if should_manage_caddy; then
+        echo -e "\n${BLUE}  ⟳ Syncing Proxy Configurations...${NC}"
+        reload_container_caddy 2>/dev/null || true
+        install_caddy_health_guard "$DOMAIN"
+    fi
 
 
     sleep 3
@@ -2992,6 +3204,9 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
     # Platform domain (public-facing — tests Caddy → Traefik → backend chain)
     if [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ]; then
         EP_PUB_URL="http://${DOMAIN}/health"
+        if is_node_mode; then
+            EP_PUB_URL="http://${DOMAIN}/health/live"
+        fi
         EP_PUB_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 10 "$EP_PUB_URL" 2>/dev/null) || EP_PUB_CODE="000"
         if [ "$EP_PUB_CODE" = "200" ] || [ "$EP_PUB_CODE" = "301" ] || [ "$EP_PUB_CODE" = "308" ]; then
             echo -e "${GREEN}  ✓ Platform (${DOMAIN}): HTTP $EP_PUB_CODE${NC}"; PASS_COUNT=$((PASS_COUNT + 1))
@@ -3001,7 +3216,9 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
     fi
 
     # HTTPS domain (skip for raw IP addresses — certs can't be issued for IPs)
-    if [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ] && ! echo "$DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+    if ! should_manage_caddy; then
+        echo -e "${YELLOW}  ⊘ HTTPS: Skipped (Caddy/HTTPS is master-only in this mode)${NC}"
+    elif [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ] && ! echo "$DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
         EP2_URL="https://${DOMAIN}/health"
         EP2_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 10 "$EP2_URL" 2>/dev/null) || EP2_CODE="000"
         case "$EP2_CODE" in
@@ -3018,6 +3235,9 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
 
     # Traefik
     EP3_URL="http://127.0.0.1:8081/"
+    if is_node_mode; then
+        EP3_URL="http://127.0.0.1/health/live"
+    fi
     EP3_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP3_URL" 2>/dev/null) || EP3_CODE="000"
     if [ "$EP3_CODE" != "000" ] && [ "$EP3_CODE" != "502" ]; then
         echo -e "${GREEN}  ✓ Traefik: HTTP $EP3_CODE${NC}"; PASS_COUNT=$((PASS_COUNT + 1))
@@ -3041,7 +3261,11 @@ for s in Service.objects.exclude(public_domain__isnull=True).exclude(public_doma
     if [ -n "$ALL_SVC_DOMAINS" ]; then
         while IFS='|' read -r svc_name svc_domain; do
             [ -z "$svc_domain" ] && continue
-            svc_url="https://${svc_domain}/"
+            if should_manage_caddy; then
+                svc_url="https://${svc_domain}/"
+            else
+                svc_url="http://${svc_domain}/"
+            fi
             svc_code=$(curl -so /dev/null -w '%{http_code}' --max-time 8 "$svc_url" 2>/dev/null) || svc_code="000"
             if [ "$svc_code" != "000" ] && [ "$svc_code" != "502" ] && [ "$svc_code" != "503" ]; then
                 echo -e "${GREEN}  ✓ $svc_name ($svc_domain): HTTP $svc_code${NC}"; PASS_COUNT=$((PASS_COUNT + 1))
@@ -3236,7 +3460,12 @@ fi
         exit 1
     fi
 
-    if [ ! -f "frontend/Dockerfile" ]; then
+    if [ "$MODE_NODE" = "true" ] && [ ! -f "backend/requirements.txt" ]; then
+        echo -e "${RED}✗ Missing backend/requirements.txt${NC}"
+        exit 1
+    fi
+
+    if [ "$MODE_NODE" != "true" ] && [ ! -f "frontend/Dockerfile" ]; then
         echo -e "${RED}✗ Missing frontend/Dockerfile${NC}"
         exit 1
     fi
@@ -3339,28 +3568,32 @@ PYEOF
 
      case "$UPDATE_MODE" in
          frontend)
-             echo -e "${BLUE}  → Rebuilding frontend container (cached)...${NC}"
-             docker compose -f "$COMPOSE_FILE" build frontend
-             docker compose -f "$COMPOSE_FILE" up -d --no-deps frontend
-             
-             # Custom Domain SSL Setup for Frontend Update
-             if [ "$MODE_AGENT_LITE" != "true" ]; then  # Only for master mode
-                 echo -e "\n${YELLOW}[UPDATE] Setting up Custom Domain SSL Services...${NC}"
-                 if [ -f "install-custom-domain-ssl.sh" ]; then
-                     echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
-                     bash install-custom-domain-ssl.sh install
-                     
-                     # Start the services
-                     echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
-                     /opt/smsly-hosting/smsly-domain-ssl-manager.sh start
-                     
-                     # Enable auto-start on boot (if not already enabled)
-                     echo -e "${BLUE}  → Ensuring auto-start on boot...${NC}"
-                     /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable
-                     
-                     echo -e "${GREEN}  ✓ Custom domain SSL services configured${NC}"
-                 else
-                     echo -e "${YELLOW}  ⚠ Custom domain SSL manager not found, skipping setup${NC}"
+             if [ "$MODE_NODE" = "true" ]; then
+                 echo -e "${YELLOW}  → Node mode: no frontend to update. Skipping.${NC}"
+             else
+                 echo -e "${BLUE}  → Rebuilding frontend container (cached)...${NC}"
+                 docker compose -f "$COMPOSE_FILE" build frontend
+                 docker compose -f "$COMPOSE_FILE" up -d --no-deps frontend
+
+                 # Custom Domain SSL Setup for Frontend Update
+                 if should_manage_caddy; then  # Only for master mode
+                     echo -e "\n${YELLOW}[UPDATE] Setting up Custom Domain SSL Services...${NC}"
+                     if [ -f "install-custom-domain-ssl.sh" ]; then
+                         echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
+                         bash install-custom-domain-ssl.sh install
+
+                         # Start the services
+                         echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
+                         /opt/smsly-hosting/smsly-domain-ssl-manager.sh start
+
+                         # Enable auto-start on boot (if not already enabled)
+                         echo -e "${BLUE}  → Ensuring auto-start on boot...${NC}"
+                         /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable
+
+                         echo -e "${GREEN}  ✓ Custom domain SSL services configured${NC}"
+                     else
+                         echo -e "${YELLOW}  ⚠ Custom domain SSL manager not found, skipping setup${NC}"
+                     fi
                  fi
              fi
              ;;
@@ -3369,6 +3602,8 @@ PYEOF
             build_svcs="backend celery"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 build_svcs="backend"
+            elif [ "$MODE_NODE" = "true" ]; then
+                build_svcs="backend celery celery-deploy celery-fast celery-beat"
             fi
             docker compose -f "$COMPOSE_FILE" build $build_svcs
 
@@ -3377,6 +3612,9 @@ PYEOF
                 verify_agent_lite_connectivity
                 docker compose -f "$COMPOSE_FILE" up -d --remove-orphans redis rabbitmq socket-proxy
                 sync_agent_lite_rabbitmq_password
+            elif [ "$MODE_NODE" = "true" ]; then
+                stop_node_excluded_services
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db pgcat redis rabbitmq socket-proxy registry route-fallback traefik
             else
                 docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db pgcat redis socket-proxy
             fi
@@ -3417,7 +3655,7 @@ PYEOF
              fi
              
              # Custom Domain SSL Setup for Backend Update
-             if [ "$MODE_AGENT_LITE" != "true" ]; then  # Only for master mode
+             if should_manage_caddy; then  # Only for master mode
                  echo -e "\n${YELLOW}[UPDATE] Setting up Custom Domain SSL Services...${NC}"
                  if [ -f "install-custom-domain-ssl.sh" ]; then
                      echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
@@ -3441,12 +3679,14 @@ PYEOF
             echo -e "${BLUE}  → [HALF UPDATE] Rebuilding changed services from cache (no image pulls)${NC}"
 
             # 1. Rebuild frontend from cached layers (no --pull, no new base images)
-            echo -e "${BLUE}  → Rebuilding frontend (cached)...${NC}"
-            docker compose -f "$COMPOSE_FILE" build frontend 2>/dev/null || {
-                echo -e "${YELLOW}  ⚠ Frontend build failed (cached layers missing). Skipping frontend.${NC}"
-                echo -e "${YELLOW}    Run --update when Docker Hub is reachable for a full rebuild.${NC}"
-            }
-            docker compose -f "$COMPOSE_FILE" up -d --no-deps frontend 2>/dev/null || true
+            if [ "$MODE_NODE" != "true" ]; then
+                echo -e "${BLUE}  → Rebuilding frontend (cached)...${NC}"
+                docker compose -f "$COMPOSE_FILE" build frontend 2>/dev/null || {
+                    echo -e "${YELLOW}  ⚠ Frontend build failed (cached layers missing). Skipping frontend.${NC}"
+                    echo -e "${YELLOW}    Run --update when Docker Hub is reachable for a full rebuild.${NC}"
+                }
+                docker compose -f "$COMPOSE_FILE" up -d --no-deps frontend 2>/dev/null || true
+            fi
 
             # 2. Restart backend (picks up Python code changes from mounted volume)
             echo -e "${BLUE}  → Restarting backend...${NC}"
@@ -3485,7 +3725,7 @@ PYEOF
              set_checkpoint "update_db_migrated"
              
              # Custom Domain SSL Setup for Half Update
-             if [ "$MODE_AGENT_LITE" != "true" ]; then  # Only for master mode
+             if should_manage_caddy; then  # Only for master mode
                  echo -e "\n${YELLOW}[UPDATE] Setting up Custom Domain SSL Services...${NC}"
                  if [ -f "install-custom-domain-ssl.sh" ]; then
                      echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
@@ -3512,6 +3752,8 @@ PYEOF
             CORE_SERVICES="frontend backend celery celery-deploy celery-fast celery-beat"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 CORE_SERVICES="backend celery-worker"
+            elif [ "$MODE_NODE" = "true" ]; then
+                CORE_SERVICES="backend celery celery-deploy celery-fast celery-beat"
             fi
 
             # 2. Remove old PaaS images (NOT addon images) to free up space BEFORE the build
@@ -3543,6 +3785,10 @@ PYEOF
                 docker compose -f "$COMPOSE_FILE" up -d --remove-orphans redis rabbitmq socket-proxy
                 sync_agent_lite_rabbitmq_password
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --remove-orphans $CORE_SERVICES
+            elif [ "$MODE_NODE" = "true" ]; then
+                stop_node_excluded_services
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db pgcat redis rabbitmq socket-proxy registry route-fallback traefik
+                docker compose -f "$COMPOSE_FILE" up -d --no-deps --remove-orphans $CORE_SERVICES
             else
                 docker compose -f "$COMPOSE_FILE" up -d --no-deps --remove-orphans $CORE_SERVICES
             fi
@@ -3565,6 +3811,9 @@ PYEOF
                 verify_agent_lite_connectivity
                 docker compose -f "$COMPOSE_FILE" up -d --remove-orphans redis rabbitmq socket-proxy
                 sync_agent_lite_rabbitmq_password
+            elif [ "$MODE_NODE" = "true" ]; then
+                stop_node_excluded_services
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db pgcat redis rabbitmq socket-proxy registry route-fallback traefik
             else
                 docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db pgcat redis socket-proxy
             fi
@@ -3686,6 +3935,7 @@ if a_count > 0:
     fi
 
     # ─── Caddy: Generate self-signed cert + regenerate Caddyfile ──
+    if should_manage_caddy; then
     ensure_selfsigned_cert
     if command -v caddy &> /dev/null; then
         echo -e "${BLUE}  → Regenerating Caddyfile with current service domains...${NC}"
@@ -3897,6 +4147,7 @@ if d and d != 'localhost':
 
         install_caddy_health_guard "$POST_CADDY_DOMAIN"
     fi
+    fi
 
     safe_refresh_runtime_services
 
@@ -3997,7 +4248,10 @@ if d and d != 'localhost':
     HTTPS_OK=false
     EP2_CODE="---"
     EP2_URL="(skipped)"
-    if [ -n "$EP_DOMAIN" ] && [ "$EP_DOMAIN" != "localhost" ] && ! echo "$EP_DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+    if ! should_manage_caddy; then
+        EP2_RESULT="${YELLOW}SKIP${NC}"
+        echo -e "${YELLOW}  [2/3] SKIPPED (Caddy/HTTPS is master-only in this mode)${NC}"
+    elif [ -n "$EP_DOMAIN" ] && [ "$EP_DOMAIN" != "localhost" ] && ! echo "$EP_DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
         EP2_URL="https://${EP_DOMAIN}/health"
         echo -e "${BLUE}        Endpoint: $EP2_URL${NC}"
         for attempt in 1 2 3; do
@@ -4068,7 +4322,11 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
         while IFS='|' read -r svc_name svc_domain; do
             [ -z "$svc_domain" ] && continue
             SVC_COUNT=$((SVC_COUNT + 1))
-            svc_url="https://${svc_domain}/"
+            if should_manage_caddy; then
+                svc_url="https://${svc_domain}/"
+            else
+                svc_url="http://${svc_domain}/"
+            fi
             echo -e "${BLUE}        Testing: $svc_name → $svc_url${NC}"
             svc_code="000"
             svc_ok=false
@@ -4228,7 +4486,12 @@ if [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ]; then
     PRESET_USE_SSL="${USE_SSL:-}"
 
     # Deployment Mode Selection - Only prompt if not preset and in interactive shell
-    if [ -n "${PRESET_USE_SSL}" ]; then
+    if is_node_mode; then
+        USE_SSL="false"
+        DOMAIN="${DOMAIN:-$PUBLIC_IP}"
+        MODE_CHOICE=1
+        echo -e "${BLUE}  → Node mode: using Traefik HTTP on $DOMAIN; Caddy/HTTPS is master-owned.${NC}"
+    elif [ -n "${PRESET_USE_SSL}" ]; then
         if [ "${PRESET_USE_SSL}" = "true" ] && [ -n "${PRESET_DOMAIN}" ] && [ -n "${PRESET_ACME_EMAIL}" ]; then
             echo -e "${BLUE}  → Preset detected. Using SSL Mode for ${PRESET_DOMAIN}.${NC}"
             MODE_CHOICE=2
@@ -4245,7 +4508,10 @@ if [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ]; then
     fi
 
     # Set configuration based on choice or presets
-    if [ "$MODE_CHOICE" -eq "2" ] || [ "${PRESET_USE_SSL}" = "true" ]; then
+    if is_node_mode; then
+        USE_SSL="false"
+        DOMAIN="${DOMAIN:-$PUBLIC_IP}"
+    elif [ "$MODE_CHOICE" -eq "2" ] || [ "${PRESET_USE_SSL}" = "true" ]; then
         USE_SSL="true"
         DOMAIN="${PRESET_DOMAIN:-}"
         ACME_EMAIL="${PRESET_ACME_EMAIL:-}"
@@ -4319,6 +4585,14 @@ if [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ]; then
             fi
         fi
     fi
+fi
+
+if is_node_mode; then
+    PUBLIC_IP="${PUBLIC_IP:-$(detect_public_ip)}"
+    USE_SSL="false"
+    DOMAIN="${DOMAIN:-$PUBLIC_IP}"
+    WILDCARD_SUBDOMAINS="false"
+    CLOUDFLARE_API_TOKEN=""
 fi
 
 # -----------------------------------------------------------------------------
@@ -4427,9 +4701,8 @@ set_checkpoint "requirements_checked"
 if ! is_checkpoint_done "dependencies_installed"; then
     echo -e "\n${YELLOW}[2/9] Installing dependencies...${NC}"
 
-# Stop conflicting services if present (anything that holds port 80/443)
-# NOTE: Don't stop Caddy here — we install/configure it in step 7.
-# Stopping it on re-installs breaks the reverse proxy unnecessarily.
+# Stop conflicting services if present. Host Caddy conflicts are handled by
+# check_caddy_conflict because master Docker Caddy and node Traefik need port 80.
 for svc in nginx apache2; do
     if systemctl is-active --quiet "$svc" 2>/dev/null; then
         echo -e "${YELLOW}  ⚠ Stopping conflicting service: $svc${NC}"
@@ -4573,6 +4846,8 @@ fi
 echo -e "${BLUE}  → Validating deployment files...${NC}"
 MISSING_FILES=()
 if [ "$MODE_AGENT_LITE" = "true" ]; then
+    REQUIRED_FILES=("$COMPOSE_FILE" "backend/Dockerfile" "backend/entrypoint.sh" "backend/requirements.txt")
+elif [ "$MODE_NODE" = "true" ]; then
     REQUIRED_FILES=("$COMPOSE_FILE" "backend/Dockerfile" "backend/entrypoint.sh" "backend/requirements.txt")
 else
     REQUIRED_FILES=("$COMPOSE_FILE" "backend/Dockerfile" "frontend/Dockerfile" "backend/entrypoint.sh")
@@ -4720,9 +4995,23 @@ except Exception:
 
     # Create .env (Atomic)
     ENV_TMP="$INSTALL_DIR/.env.tmp"
+    ENV_MODE_VALUE="$(mode_env_value)"
+    ENV_NODE_TYPE="$INSTALL_MODE"
+    ENV_TRAEFIK_HTTP_BIND="127.0.0.1:8081"
+    ENV_STARTUP_CADDY_SYNC="true"
+    if is_agent_lite_mode; then
+        ENV_NODE_TYPE="agent-lite"
+        ENV_STARTUP_CADDY_SYNC="false"
+    elif is_node_mode; then
+        ENV_NODE_TYPE="node"
+        ENV_TRAEFIK_HTTP_BIND="0.0.0.0:80"
+        ENV_STARTUP_CADDY_SYNC="false"
+    fi
     cat <<EOF > "$ENV_TMP"
 # SMSLY Hosting Configuration — Generated $(date -Iseconds)
 ENVIRONMENT=production
+NODE_TYPE=$ENV_NODE_TYPE
+MODE=$ENV_MODE_VALUE
 DEBUG=False
 SECRET_KEY=$SECRET_KEY
 FIELD_ENCRYPTION_KEY=$FIELD_ENCRYPTION_KEY
@@ -4792,11 +5081,16 @@ SMSLY_RUN_ENTRYPOINT_TASKS=false
 
 # AppConfig.ready() must stay side-effect free during installs and management commands.
 # Edge/proxy sync is performed explicitly by the installer and watcher services.
-SMSLY_ENABLE_STARTUP_CADDY_SYNC=false
+SMSLY_ENABLE_STARTUP_CADDY_SYNC=$ENV_STARTUP_CADDY_SYNC
+TRAEFIK_HTTP_BIND=$ENV_TRAEFIK_HTTP_BIND
 EOF
 
     # ─── Dynamic Build Resource Allocation ──────────────────────────────
-    if [ "$MODE_AGENT_LITE" != "true" ]; then
+    if [ "$MODE_AGENT_LITE" = "true" ]; then
+        echo -e "${BLUE}  → Lite Agent mode: frontend build is not part of this node.${NC}"
+    elif [ "$MODE_NODE" = "true" ]; then
+        echo -e "${BLUE}  → Node mode: frontend build is not part of this node.${NC}"
+    else
         # Detect physical RAM for optimized build limits
         current_ram_mb=$(free -m | awk '/^Mem:/{print $2}')
         build_mem=2048
@@ -4807,8 +5101,6 @@ EOF
         fi
         echo "FRONTEND_BUILD_MEMORY_MB=$build_mem" >> "$ENV_TMP"
         echo -e "${BLUE}  → Allocated ${build_mem}MB for frontend build (System RAM: ${current_ram_mb}MB)${NC}"
-    else
-        echo -e "${BLUE}  → Lite Agent mode: frontend build is not part of this node.${NC}"
     fi
 
     # Derive expected tunnel domain
@@ -4824,8 +5116,6 @@ EOF
     # ── Agent Lite Overrides ──────────────────────────────────────
     if [ "$MODE_AGENT_LITE" = "true" ]; then
         apply_agent_lite_env_overrides "$ENV_TMP"
-    else
-        echo "MODE=master" >> "$ENV_TMP"
     fi
 
     # Atomic move and validation
@@ -4876,13 +5166,14 @@ docker network create smsly-proxy 2>/dev/null || true
 #
 
 # Both IP and SSL modes use the same compose stack.
-# Caddy (step 7) handles public-facing HTTP/HTTPS termination.
-# Traefik is NOT used — Caddy natively handles Let's Encrypt SSL.
+# Master exposes public HTTP/HTTPS through Caddy; node/agent modes expose HTTP through Traefik.
 # Ensure bind-mounted config paths exist before `docker compose up`.
 ensure_infrastructure_permissions
 if [ "$MODE_AGENT_LITE" = "true" ]; then
     echo -e "${BLUE}  → Lite Agent mode: disabling master-only Caddy services before Traefik bind.${NC}"
     true
+elif [ "$MODE_NODE" = "true" ]; then
+    echo -e "${BLUE}  → Node mode: deploying prod stack without frontend/Caddy; Traefik binds public HTTP.${NC}"
 fi
 if [ "$RUST_TWIN_MODE" != "true" ]; then
     echo -e "${BLUE}  → Disabling backend entrypoint bootstrap for installer-controlled migrations...${NC}"
@@ -4892,10 +5183,10 @@ fi
     ( while true; do sleep 30; echo -e "${BLUE}      ↳ Progress: Deployment in progress... $(date +%H:%M:%S)${NC}"; done ) &
     HEARTBEAT_PID=$!
     set +e
-    docker compose -f "$COMPOSE_FILE" build --no-cache
+    compose_stack_build --no-cache
     DEPLOY_RC=$?
     if [ "$DEPLOY_RC" -eq 0 ]; then
-        docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
+        compose_stack_up --remove-orphans
         DEPLOY_RC=$?
     fi
     set -e
@@ -5105,6 +5396,11 @@ fi
 if [ "$RUST_TWIN_MODE" != "true" ]; then
     echo -e "${BLUE}  → Keeping backend entrypoint bootstrap disabled; installer controls migrations...${NC}"
     env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
+    if should_manage_caddy; then
+        env_set_value "$INSTALL_DIR/.env" "SMSLY_ENABLE_STARTUP_CADDY_SYNC" "true"
+    else
+        env_set_value "$INSTALL_DIR/.env" "SMSLY_ENABLE_STARTUP_CADDY_SYNC" "false"
+    fi
 fi
     set_checkpoint "admin_created"
 fi
@@ -5113,8 +5409,8 @@ fi
 # -----------------------------------------------------------------------------
 # 7. Caddy Reverse Proxy (Public Access — Dockerized)
 # -----------------------------------------------------------------------------
-# Agent-lite mode uses Traefik instead of Caddy — skip this step entirely.
-if [ "$MODE_AGENT_LITE" != "true" ]; then
+# Agent-lite and node modes use Traefik instead of Caddy — skip this step entirely.
+if should_manage_caddy; then
 if ! is_checkpoint_done "caddy_configured" || [ "$REFRESH_MODE" = "true" ] || [ "$RECOVER_MODE" = "true" ]; then
     echo -e "\n${YELLOW}[7/9] Setting up Dockerized Caddy Proxy...${NC}"
 
@@ -5202,7 +5498,7 @@ EOF
 
     set_checkpoint "caddy_configured"
 fi
-fi # end agent-lite Caddy skip
+fi # end Caddy skip for agent-lite/node modes
 
 # -----------------------------------------------------------------------------
 # 8. System Memory Hardening (Prevents OOM kills)
@@ -5529,13 +5825,28 @@ else
     echo -e "${YELLOW}  ⚠ Swap low (${SWAP_TOTAL}MB) — recommend 2GB+${NC}"
 fi
 
-# ─── Check 5: Caddy running ───────────────────────────────────────────────
-echo -e "${BLUE}  → [5/5] Checking Caddy...${NC}"
-if docker inspect -f '{{.State.Running}}' smsly-hosting-caddy-1 2>/dev/null | grep -q "true"; then
-    echo -e "${GREEN}  ✓ Caddy reverse proxy container active${NC}"
-    VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
+# ─── Check 5: Public edge proxy ───────────────────────────────────────────
+if should_manage_caddy; then
+    echo -e "${BLUE}  → [5/5] Checking Caddy...${NC}"
+    if docker inspect -f '{{.State.Running}}' smsly-hosting-caddy-1 2>/dev/null | grep -q "true"; then
+        echo -e "${GREEN}  ✓ Caddy reverse proxy container active${NC}"
+        VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
+    else
+        echo -e "${RED}  ✗ Caddy container is not running${NC}"
+    fi
 else
-    echo -e "${RED}  ✗ Caddy container is not running${NC}"
+    echo -e "${BLUE}  → [5/5] Checking Traefik...${NC}"
+    TRAEFIK_CHECK_URL="http://127.0.0.1:8081/"
+    if is_node_mode; then
+        TRAEFIK_CHECK_URL="http://127.0.0.1/health/live"
+    fi
+    if docker inspect -f '{{.State.Running}}' smsly-hosting-traefik-1 2>/dev/null | grep -q "true" \
+       && curl -fsS --max-time 5 "$TRAEFIK_CHECK_URL" >/dev/null 2>&1; then
+        echo -e "${GREEN}  ✓ Traefik edge proxy active (${TRAEFIK_CHECK_URL})${NC}"
+        VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
+    else
+        echo -e "${RED}  ✗ Traefik edge proxy check failed (${TRAEFIK_CHECK_URL})${NC}"
+    fi
 fi
 fi
 
@@ -5686,6 +5997,12 @@ if [ "$MODE_AGENT_LITE" = "true" ]; then
     echo -e "   Mode:        Lite Agent"
     echo -e "   Agent Edge:  http://$SUMMARY_PUBLIC_IP"
     echo -e "   Master:      $SUMMARY_MASTER_IP"
+elif [ "$MODE_NODE" = "true" ]; then
+    echo -e "   Mode:        Full-Stack Node"
+    echo -e "   API:         http://$SUMMARY_PUBLIC_IP"
+    echo -e "   Edge:        Traefik on public port 80"
+    echo -e "   UI/HTTPS:    Managed by Master (frontend/Caddy disabled here)"
+    echo -e "   Credentials: $CREDENTIALS_FILE"
 else
     if [ "${USE_SSL:-false}" = "true" ] && [ -n "$SUMMARY_DOMAIN" ]; then
         echo -e "   URL:         https://$SUMMARY_DOMAIN"
@@ -5701,7 +6018,7 @@ echo -e "   Memory:      $(free -m | awk '/^Mem:/{print $7}')MB available"
 echo -e "   Swap:        $(free -m | awk '/^Swap:/{print $2}')MB total"
 
 # ─── Custom Domain SSL Integration ───────────────────────────────────────────
-if [ "$MODE_AGENT_LITE" != "true" ]; then  # Only for master mode
+if should_manage_caddy; then  # Only for master mode
     echo -e "\n${YELLOW}[9/9] Setting up Custom Domain SSL Services...${NC}"
     
     # Check if custom domain SSL manager script exists
@@ -5730,7 +6047,9 @@ fi
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
 echo -e "${YELLOW}  View credentials:   cat $CREDENTIALS_FILE${NC}"
 echo -e "${YELLOW}  View logs:          cat $LOG_FILE${NC}"
-echo -e "${YELLOW}  Update frontend:    sudo bash install.sh --update-frontend${NC}"
+if is_master_mode; then
+    echo -e "${YELLOW}  Update frontend:    sudo bash install.sh --update-frontend${NC}"
+fi
 echo -e "${YELLOW}  Update backend:     sudo bash install.sh --update-backend${NC}"
 echo -e "${YELLOW}  Full update:        sudo bash install.sh --update${NC}"
 echo -e "${YELLOW}  Runtime refresh:    sudo bash install.sh --refresh${NC}"

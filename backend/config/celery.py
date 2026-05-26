@@ -91,6 +91,8 @@ app.conf.task_routes = {
     'apps.deployments.tasks_safedeploy.run_preview_tests_job': {'queue': 'deploy'},
     'apps.deployments.tasks_safedeploy.run_preview_health_check_job': {'queue': 'deploy'},
     'apps.deployments.tasks_safedeploy.destroy_preview_environment_job': {'queue': 'deploy'},
+    'apps.deployments.tasks.update_remote_server_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.self_heal_remote_deployment': {'queue': 'deploy'},
 }
 
 app.conf.beat_schedule = {

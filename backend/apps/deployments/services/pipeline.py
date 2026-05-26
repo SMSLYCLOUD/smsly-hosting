@@ -1215,7 +1215,7 @@ class PipelineManager:
             )
             for addon in existing_addons:
                 try:
-                    _, url = addon_provisioner.provision(addon)
+                    _, url = addon_provisioner.provision_dispatch(addon)
                     if url and addon.connection_url != url:
                         addon.connection_url = url
                         addon.status = Addon.Status.ACTIVE
@@ -1257,7 +1257,7 @@ class PipelineManager:
                     status=Addon.Status.PROVISIONING,
                 )
                 try:
-                    _, url = addon_provisioner.provision(addon)
+                    _, url = addon_provisioner.provision_dispatch(addon)
                     addon.connection_url = url
                     addon.status = Addon.Status.ACTIVE
                     addon.save()
