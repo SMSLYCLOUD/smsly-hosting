@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-    Scan, Rocket, CheckCircle2, XCircle, AlertCircle, Loader2,
+    Scan, Rocket, CheckCircle2, XCircle, AlertCircle, Loader2, Plus,
     Server, Database, Globe, GitBranch, Zap, ArrowRight, RefreshCw, Sparkles,
     Code, CheckCircle, AlertTriangle
 } from 'lucide-react';
@@ -1184,7 +1184,7 @@ export default function EcosystemPage() {
                                 </div>
                             )}
 
-                            <div className="flex justify-center gap-4 pt-4">
+                            <div className="flex flex-wrap justify-center gap-3 pt-4">
                                 <Link
                                     href="/services"
                                     className="px-6 py-2.5 rounded-xl border border-border hover:border-foreground/20 text-foreground font-semibold transition-colors"
@@ -1198,8 +1198,18 @@ export default function EcosystemPage() {
                                     View Deployments
                                 </Link>
                                 <button
+                                    onClick={() => {
+                                        setStep('selection');
+                                        setError(null);
+                                        fetchRepos();
+                                    }}
+                                    className="px-6 py-2.5 rounded-xl border border-primary/30 text-primary hover:bg-primary/10 font-semibold transition-colors flex items-center gap-2"
+                                >
+                                    <Plus size={16} /> Add More Repos
+                                </button>
+                                <button
                                     onClick={() => { clearState(); setStep('idle'); setDeployResults([]); setError(null); }}
-                                    className="px-6 py-2.5 rounded-xl border border-border hover:border-foreground/20 text-foreground font-semibold transition-colors"
+                                    className="px-6 py-2.5 rounded-xl border border-border hover:border-foreground/20 text-muted-foreground font-semibold transition-colors"
                                 >
                                     Deploy Another
                                 </button>
