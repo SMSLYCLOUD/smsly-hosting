@@ -103,6 +103,7 @@ class Addon(TimeStampedModel):
         max_length=20,
         choices=Status.choices,
         default=Status.PROVISIONING)
+    deletion_error = models.TextField(blank=True, default='')
     connection_url = EncryptedCharField(
         max_length=512, blank=True)  # H-1 fix: encrypted at rest
 

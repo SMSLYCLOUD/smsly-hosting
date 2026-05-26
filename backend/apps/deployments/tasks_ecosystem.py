@@ -57,7 +57,8 @@ _EXTERNAL_SECRETS = {
     "API_KEY",
 }
 
-_DEFAULT_WAVE_SIZE = 10
+_DEFAULT_WAVE_SIZE = 2
+_MIN_FREE_MEMORY_MB = 512
 _MAX_WAVE_SIZE = 50
 _WAVE_RECHECK_SECONDS = 15
 _MAX_WAVE_RECHECKS = 480  # 2h (480 * 15s)
@@ -386,6 +387,24 @@ def _alias_ambiguity_report(dependencies: Dict[str, Set[str]], entries_by_key: D
         warnings_list.append(f"Ambiguous dependency aliases (resolved to None): {', '.join(sorted(ambiguous))}")
 
     return warnings_list
+
+
+def _get_available_memory_mb() -> int:
+    """Return available RAM in MB, or a large default if psutil is unavailable."""
+    try:
+        import psutil
+        return int(psutil.virtual_memory().available / (1024 * 1024))
+    except ImportError:
+        return 9999
+
+
+def _has_enough_memory(min_free_mb: int = _MIN_FREE_MEMORY_MB) -> bool:
+    """Check if system has at least min_free_mb of available memory."""
+    free = _get_available_memory_mb()
+    if free >= min_free_mb:
+        return True
+    logger.warning("Low memory: %d MB available, need %d MB. Deferring wave.", free, min_free_mb)
+    return False
 
 
 def _env_int(name: str, default: int, minimum: int = 1, maximum: int = 500) -> int:
@@ -1294,6 +1313,15 @@ def ecosystem_release_wave_task(
             reason="upstream dependency deployment failed",
         )
 
+    # Memory-aware gating: defer wave if system is under memory pressure
+    if not _has_enough_memory():
+        self.app.send_task(
+            "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
+            args=[provider_id, waves, wave_index, 0, max_rechecks, dependencies, deployment_by_repo_key],
+            countdown=_env_int("ECOSYSTEM_WAVE_RECHECK_SECONDS", _WAVE_RECHECK_SECONDS, minimum=5, maximum=30),
+        )
+        return {"status": "deferred", "wave": wave_index, "reason": "low_memory"}
+
     # We queue the next wave (which ignores CANCELLED statuses so only viable nodes deploy)
     queued = _queue_wave(self.app, waves[wave_index], provider_id, wave_index)
     if wave_index + 1 < len(waves):
@@ -1793,7 +1821,15 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
     safe_dependencies = {k: list(v) for k, v in dependencies.items()} if dependencies else {}
 
     if waves:
-        queued_now = _queue_wave(self.app, waves[0], str(provider.id), wave_index=0)
+        if not _has_enough_memory():
+            # Defer first wave — start via release task with memory gating
+            self.app.send_task(
+                "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
+                args=[str(provider.id), waves, 0, 0, _MAX_WAVE_RECHECKS, safe_dependencies, deployment_by_repo_key],
+                countdown=_env_int("ECOSYSTEM_WAVE_RECHECK_SECONDS", _WAVE_RECHECK_SECONDS, minimum=5, maximum=30),
+            )
+        else:
+            queued_now = _queue_wave(self.app, waves[0], str(provider.id), wave_index=0)
         if len(waves) > 1:
             self.app.send_task(
                 "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
