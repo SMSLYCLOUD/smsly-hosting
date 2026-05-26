@@ -1482,6 +1482,26 @@ ensure_env_runtime_defaults() {
             current_celery_broker_url="$expected_celery_broker_url"
         fi
 
+        # [NODE MODE] Override for full-stack node (local DB, not master's)
+        if [ "$MODE_NODE" = "true" ] && [ -n "$postgres_password" ]; then
+            local node_env_mode="$(mode_env_value)"
+            local node_expected_db_url="postgresql://smsly_admin:${postgres_password}@pgcat:5432/smsly_hosting"
+            local node_expected_direct_url="postgresql://smsly_admin:${postgres_password}@db:5432/smsly_hosting"
+            if [ "$current_database_url" != "$node_expected_db_url" ]; then
+                echo -e "${BLUE}  -> Setting DATABASE_URL for node mode (local DB via PgCat)${NC}"
+                env_set_value "$env_file" "DATABASE_URL" "$node_expected_db_url"
+                current_database_url="$node_expected_db_url"
+            fi
+            local current_direct_url
+            current_direct_url="$(env_get_value "$env_file" "DIRECT_DATABASE_URL")"
+            if [ "$current_direct_url" != "$node_expected_direct_url" ]; then
+                echo -e "${BLUE}  -> Setting DIRECT_DATABASE_URL for node mode (local DB direct)${NC}"
+                env_set_value "$env_file" "DIRECT_DATABASE_URL" "$node_expected_direct_url"
+            fi
+            env_set_value "$env_file" "NODE_TYPE" "node"
+            env_set_value "$env_file" "MODE" "$node_env_mode"
+        fi
+
         # Migrate legacy @db:5432 URLs to @pgcat:5432
         if [[ "$current_database_url" =~ @db:5432 ]] && [ "$MODE_AGENT_LITE" != "true" ]; then
             echo -e "${BLUE}  -> Migrating DATABASE_URL from db to pgcat${NC}"

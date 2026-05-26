@@ -1758,6 +1758,23 @@ class ServiceViewSet(viewsets.ModelViewSet):
         service = self.get_object()
         reveal_secrets = not hasattr(getattr(request, 'auth', None), 'prefix')
 
+        def _is_ciphertext(val: str) -> bool:
+            """Detect Fernet ciphertext to prevent storing it as plaintext."""
+            if not val or not isinstance(val, str):
+                return False
+            if val.startswith("gAAAAA"):
+                return True
+            if len(val) > 100 and all(c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_=" for c in val):
+                try:
+                    import base64
+                    padded = val + '=' * (-len(val) % 4)
+                    decoded = base64.urlsafe_b64decode(padded)
+                    if len(decoded) >= 57 and decoded[0] == 0x80:
+                        return True
+                except Exception:
+                    pass
+            return False
+
         if request.method.upper() == 'GET':
             vars = service.env_vars.all().order_by('key')
             serializer = EnvVarSerializer(
@@ -1777,6 +1794,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
             normalized = []
             seen_keys = set()
+            skipped_count = 0
 
             for idx, row in enumerate(payload_vars):
                 if not isinstance(row, dict):
@@ -1808,13 +1826,16 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 value = str(row.get('value', '') or '')
                 if existing and existing.is_secret and _looks_masked_secret(value):
                     value = existing.value
-                if value.startswith('gAAAAAB'):
+
+                if _is_ciphertext(value):
                     logger.warning(
-                        "Received ciphertext-like value for env var %s — "
-                        "sender may have sent undecrypted data. "
-                        "Saving as-is (ORM will encrypt once, not double-encrypt).",
-                        key,
+                        "[DB-ENCRYPT] Rejecting ciphertext env var %s for service %s — "
+                        "sender sent undecrypted/double-encrypted data. "
+                        "This var will NOT be saved to prevent corruption.",
+                        key, service.name,
                     )
+                    skipped_count += 1
+                    continue
 
                 if 'is_secret' in row:
                     is_secret = _parse_bool(row.get('is_secret'))
@@ -1867,12 +1888,15 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 many=True,
                 context={'request': request, 'reveal_secrets': reveal_secrets},
             )
-            return Response({
+            resp_data = {
                 'added': added,
                 'updated': updated,
                 'count': len(normalized),
                 'env_vars': serializer.data,
-            })
+            }
+            if skipped_count > 0:
+                resp_data['warning'] = f"Skipped {skipped_count} environment variables with ciphertext values."
+            return Response(resp_data)
 
         # Allow partial data — key is required, value can be empty
         key = str(request.data.get('key') or '').strip()
@@ -1890,6 +1914,11 @@ class ServiceViewSet(viewsets.ModelViewSet):
         value = str(request.data.get('value', '') or '')
         if existing and existing.is_secret and _looks_masked_secret(value):
             value = existing.value
+        if _is_ciphertext(value):
+            return Response(
+                {'value': ['Cannot save Fernet ciphertext as value. Sender must decrypt before sending.']},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         if 'is_secret' in request.data:
             is_secret = _parse_bool(request.data.get('is_secret'))
         else:
