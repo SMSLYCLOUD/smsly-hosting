@@ -1536,10 +1536,9 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
             existing_addon = Addon.objects.filter(
                 service__owner=user,
                 addon_type=addon_type,
-                name=f"{addon_type.lower()}-shared"[:255],
-                status=Addon.Status.ACTIVE
-            ).first()
-            if existing_addon and existing_addon.connection_url:
+                status=Addon.Status.ACTIVE,
+            ).exclude(connection_url__exact='').first()
+            if existing_addon:
                 provisioned_addon_urls[addon_type] = existing_addon.connection_url
                 logger.info("Reusing existing user-wide %s addon: %s", addon_type, existing_addon.id)
                 continue
