@@ -647,6 +647,244 @@ class AddonProvisioner:
 
         return container_id, connection_url
 
+    def provision_dispatch(self, addon) -> Tuple[str, str]:
+        """
+        Provision an addon on the correct host.
+
+        Auto-detects the target: full-stack nodes get the addon provisioned
+        locally on the node via SSH; lite agents and local services use the
+        existing local-Docker provisioning on the master.
+
+        This is the preferred entry point for all addon provisioning.
+        """
+        server = getattr(addon.service, 'server', None)
+        if (server and not server.is_primary
+                and not getattr(server, 'is_lite_agent', False)):
+            return self.provision_remote(addon, server)
+        return self.provision(addon)
+
+    def provision_remote(self, addon, server) -> Tuple[str, str]:
+        """
+        Provision an addon on a full-stack remote node via SSH.
+
+        The addon container runs on the same node as the service, making
+        the node truly self-sufficient (its database lives on the node,
+        not on the master).
+
+        Args:
+            addon: Addon model instance
+            server: ManagedServer instance (must be a non-lite, non-primary node)
+
+        Returns:
+            Tuple of (container_id, connection_url)
+        """
+        from apps.deployments.services.ssh_client import SSHClient
+
+        addon_type = addon.addon_type
+        service_name = addon.service.name
+        self._ensure_network()
+        container_name = f"smsly-addon-{addon_type.lower()}-{addon.id}"
+        alias_name = str(
+            getattr(addon, 'name', '') or f"{addon_type.lower()}-{service_name}"
+        ).strip()
+        image = self.ADDON_IMAGES.get(addon_type)
+        port = self.ADDON_PORTS.get(addon_type)
+        generic_config = self.GENERIC_ADDONS_CONFIG.get(addon_type)
+        if generic_config:
+            image = generic_config['image']
+            port = generic_config['port']
+        if not image:
+            raise ValueError(f"Unknown addon type: {addon_type}")
+
+        is_passworded = addon_type in (
+            'POSTGRES', 'REDIS', 'MYSQL', 'MONGODB', 'RABBITMQ', 'MINIO'
+        )
+        if generic_config and generic_config.get('auth'):
+            is_passworded = True
+        password = secrets.token_urlsafe(24) if is_passworded else ''
+
+        # Build the docker run command for the remote node
+        cmd_parts = [
+            'docker', 'run', '-d',
+            '--name', container_name,
+            '--network', self.network_name,
+            '--restart', 'unless-stopped',
+        ]
+
+        if addon_type == 'POSTGRES':
+            safe_suffix = (
+                (alias_name or container_name)
+                .replace('-', '_').replace('.', '_').replace(' ', '_')
+            )[:63]
+            db_user = safe_suffix
+            db_name = safe_suffix
+            cmd_parts.extend([
+                '-e', f'POSTGRES_PASSWORD={password}',
+                '-e', f'POSTGRES_USER={db_user}',
+                '-e', f'POSTGRES_DB={db_name}',
+                '-v', f'{container_name}-data:/var/lib/postgresql/data',
+            ])
+            if alias_name:
+                cmd_parts.extend(['--network-alias', alias_name])
+            cmd_parts.append(image)
+            cmd_str = ' '.join(shlex.quote(p) for p in cmd_parts)
+            hostname = alias_name or container_name
+            connection_url = f"postgresql://{db_user}:{password}@{hostname}:{port}/{db_name}"
+
+        elif addon_type == 'REDIS':
+            cmd_parts.extend([
+                'redis-server', '--requirepass', password,
+                '-v', f'{container_name}-data:/data',
+            ])
+            if alias_name:
+                cmd_parts.extend(['--network-alias', alias_name])
+            cmd_parts.append(image)
+            cmd_str = ' '.join(shlex.quote(p) for p in cmd_parts)
+            hostname = alias_name or container_name
+            connection_url = f"redis://:{password}@{hostname}:{port}/0"
+
+        elif addon_type == 'MYSQL':
+            safe_suffix = (
+                (alias_name or container_name)
+                .replace('-', '_').replace('.', '_').replace(' ', '_')
+            )[:63]
+            db_name = safe_suffix
+            db_user = safe_suffix
+            cmd_parts.extend([
+                '-e', f'MYSQL_ROOT_PASSWORD={password}',
+                '-e', f'MYSQL_DATABASE={db_name}',
+                '-e', f'MYSQL_USER={db_user}',
+                '-e', f'MYSQL_PASSWORD={password}',
+                '-v', f'{container_name}-data:/var/lib/mysql',
+            ])
+            if alias_name:
+                cmd_parts.extend(['--network-alias', alias_name])
+            cmd_parts.append(image)
+            cmd_str = ' '.join(shlex.quote(p) for p in cmd_parts)
+            hostname = alias_name or container_name
+            connection_url = f"mysql://{db_user}:{password}@{hostname}:{port}/{db_name}"
+
+        elif addon_type == 'MONGODB':
+            cmd_parts.extend([
+                '-e', f'MONGO_INITDB_ROOT_USERNAME=admin',
+                '-e', f'MONGO_INITDB_ROOT_PASSWORD={password}',
+                '-v', f'{container_name}-data:/data/db',
+            ])
+            if alias_name:
+                cmd_parts.extend(['--network-alias', alias_name])
+            cmd_parts.append(image)
+            cmd_str = ' '.join(shlex.quote(p) for p in cmd_parts)
+            hostname = alias_name or container_name
+            connection_url = f"mongodb://admin:{password}@{hostname}:{port}/app_db?authSource=admin"
+
+        elif addon_type == 'RABBITMQ':
+            user = "appuser"
+            vhost = "/"
+            cmd_parts.extend([
+                '-e', f'RABBITMQ_DEFAULT_USER={user}',
+                '-e', f'RABBITMQ_DEFAULT_PASS={password}',
+                '-e', f'RABBITMQ_DEFAULT_VHOST={vhost}',
+                '-v', f'{container_name}-data:/var/lib/rabbitmq',
+            ])
+            if alias_name:
+                cmd_parts.extend(['--network-alias', alias_name])
+            cmd_parts.append(image)
+            cmd_str = ' '.join(shlex.quote(p) for p in cmd_parts)
+            hostname = alias_name or container_name
+            connection_url = f"amqp://{user}:{password}@{hostname}:{port}//"
+
+        elif addon_type == 'MINIO':
+            username = secrets.token_hex(8)
+            cmd_parts.extend([
+                '-e', f'MINIO_ROOT_USER={username}',
+                '-e', f'MINIO_ROOT_PASSWORD={password}',
+                '-v', f'{container_name}-data:/data',
+            ])
+            if alias_name:
+                cmd_parts.extend(['--network-alias', alias_name])
+            cmd_parts.extend([image, 'server', '/data', '--console-address', ':9001'])
+            cmd_str = ' '.join(shlex.quote(p) for p in cmd_parts)
+            hostname = alias_name or container_name
+            bucket_name = "default-bucket"
+            connection_url = f"s3://{username}:{password}@{hostname}:{port}/{bucket_name}"
+
+        elif addon_type in ('QDRANT', 'ELASTICSEARCH'):
+            if alias_name:
+                cmd_parts.extend(['--network-alias', alias_name])
+            cmd_parts.append(image)
+            cmd_str = ' '.join(shlex.quote(p) for p in cmd_parts)
+            hostname = alias_name or container_name
+            connection_url = f"http://{hostname}:{port}"
+
+        elif generic_config:
+            hostname = alias_name or container_name
+            user = 'admin'
+            db = 'app_db'
+            if generic_config.get('user_env'):
+                cmd_parts.extend(['-e', f'{generic_config["user_env"]}={user}'])
+            if generic_config.get('pass_env'):
+                cmd_parts.extend(['-e', f'{generic_config["pass_env"]}={password}'])
+            if generic_config.get('root_pass_env'):
+                cmd_parts.extend(['-e', f'{generic_config["root_pass_env"]}={password}'])
+            if generic_config.get('db_env'):
+                cmd_parts.extend(['-e', f'{generic_config["db_env"]}={db}'])
+            cluster_id = self._generate_kraft_cluster_id()
+            env_extra = generic_config.get('env', {})
+            for k, v in env_extra.items():
+                val = (
+                    v.replace('{password}', password)
+                    .replace('{hostname}', hostname)
+                    .replace('{cluster_id}', cluster_id)
+                )
+                cmd_parts.extend(['-e', f'{k}={val}'])
+            if alias_name:
+                cmd_parts.extend(['--network-alias', alias_name])
+            cmd_parts.append(image)
+            if generic_config.get('command'):
+                cmd_args = [
+                    arg.replace('{password}', password).replace('{hostname}', hostname)
+                    for arg in generic_config['command']
+                ]
+                cmd_parts.extend(cmd_args)
+            cmd_str = ' '.join(shlex.quote(p) for p in cmd_parts)
+            scheme = generic_config.get('scheme', addon_type.lower())
+            if generic_config.get('auth'):
+                if generic_config.get('user_env'):
+                    connection_url = f"{scheme}://{user}:{password}@{hostname}:{port}/{db}"
+                else:
+                    connection_url = f"{scheme}://:{password}@{hostname}:{port}"
+            else:
+                connection_url = f"{scheme}://{hostname}:{port}"
+
+        else:
+            raise ValueError(f"Unsupported addon type for remote provisioning: {addon_type}")
+
+        # SSH into remote node and provision
+        net_setup = f"docker network inspect {shlex.quote(self.network_name)} >/dev/null 2>&1 || docker network create {shlex.quote(self.network_name)}"
+        provision_cmd = f"{net_setup} && docker rm -f {shlex.quote(container_name)} 2>/dev/null; {cmd_str}"
+
+        ssh = SSHClient(
+            ip=server.host,
+            key_content=server.ssh_key,
+            password=server.ssh_password,
+            user=server.ssh_user,
+            port=server.ssh_port,
+        )
+        ssh.connect()
+        stdout, stderr, code = ssh.exec_command(provision_cmd, timeout=300, raise_on_error=False)
+        if code != 0:
+            raise RuntimeError(
+                f"Remote addon provisioning failed on {server.host}:\n{stderr}\n{stdout}"
+            )
+
+        container_id = stdout.strip()[:12] if stdout.strip() else container_name
+
+        # Create data volume if not using auto-created one
+        # (the -v flag in docker run auto-creates named volumes)
+
+        ssh.close()
+        return container_id, connection_url
+
     def _provision_rabbitmq(self, container_name: str,
                             password: str, port: int,
                             alias_name: str = '', public_domain: str = None) -> Tuple[str, str]:
@@ -1177,6 +1415,44 @@ class AddonProvisioner:
             logger.error(
                 f"Failed to deprovision container {container_id}: {e}")
             return False
+
+    def deprovision_remote(self, container_id: str, server,
+                           container_name: Optional[str] = None) -> bool:
+        """
+        Remove an addon container from a remote full-stack node via SSH.
+        """
+        from apps.deployments.services.ssh_client import SSHClient
+        try:
+            ssh = SSHClient(
+                ip=server.host,
+                key_content=server.ssh_key,
+                password=server.ssh_password,
+                user=server.ssh_user,
+                port=server.ssh_port,
+            )
+            ssh.connect()
+            safe_id = shlex.quote(container_id)
+            ssh.exec_command(f"docker stop {safe_id} 2>/dev/null; docker rm -f {safe_id}", timeout=30)
+            if container_name:
+                safe_vol = shlex.quote(f'{container_name}-data')
+                ssh.exec_command(f"docker volume rm {safe_vol} 2>/dev/null", timeout=15)
+            ssh.close()
+            logger.info(f"Deprovisioned remote addon container: {container_id} on {server.host}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to deprovision remote container {container_id} on {server.host}: {e}")
+            return False
+
+    def deprovision_dispatch(self, container_id: str, addon,
+                             container_name: Optional[str] = None) -> bool:
+        """
+        De-provision an addon from the correct host (master or full-stack node).
+        """
+        server = getattr(addon.service, 'server', None) if addon else None
+        if (server and not server.is_primary
+                and not getattr(server, 'is_lite_agent', False)):
+            return self.deprovision_remote(container_id, server, container_name)
+        return self.deprovision(container_id, container_name)
 
     def get_status(self, container_id: str) -> Dict:
         """Get the status of an addon container."""

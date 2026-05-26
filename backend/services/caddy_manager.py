@@ -39,9 +39,22 @@ CONTROL_PLANE_UPSTREAMS = {
 }
 
 
+def caddy_disabled_mode() -> bool:
+    """Return True when this runtime topology does not include Caddy."""
+    mode = str(os.environ.get("MODE", "")).strip().lower()
+    node_type = str(os.environ.get("NODE_TYPE", "")).strip().lower()
+    return mode in {"agent", "agent-lite", "node"} or node_type in {
+        "agent",
+        "agent-lite",
+        "node",
+    }
+
+
 def is_agent_lite() -> bool:
-    """Return True if running in agent-lite mode where Caddy does not exist."""
-    return str(os.environ.get("MODE", "")).strip().lower() == "agent"
+    """Backward-compatible helper for agent-lite checks."""
+    mode = str(os.environ.get("MODE", "")).strip().lower()
+    node_type = str(os.environ.get("NODE_TYPE", "")).strip().lower()
+    return mode in {"agent", "agent-lite"} or node_type in {"agent", "agent-lite"}
 
 
 def _generate_selfsigned_cert(cert_path: str, key_path: str, ip_address: str):
@@ -1021,9 +1034,9 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
     operators to re-enter the Cloudflare token after restarts or background
     sync jobs that didn't pass it through.
     """
-    if is_agent_lite():
-        logger.debug("Agent-lite mode: skipping apply_caddyfile()")
-        return {"ok": True, "message": "Skipped in agent-lite mode"}
+    if caddy_disabled_mode():
+        logger.debug("Caddy-disabled mode: skipping apply_caddyfile()")
+        return {"ok": True, "message": "Skipped because Caddy is not part of this node"}
 
     result = {"ok": False, "message": ""}
 

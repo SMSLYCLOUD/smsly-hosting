@@ -3621,7 +3621,7 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
                 status=Addon.Status.PROVISIONING,
             )
             try:
-                _, url = addon_provisioner.provision(addon)
+                _, url = addon_provisioner.provision_dispatch(addon)
                 addon.connection_url = url
                 addon.status = Addon.Status.ACTIVE
                 addon.save()
@@ -3629,8 +3629,8 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
                 logger.error(f"Failed to provision {addon_type} for template: {e}")
                 addon.status = Addon.Status.FAILED
                 addon.save()
-                return # Stop deploy
-        
+                return
+
         addon_urls[addon_type] = addon.connection_url
 
         # Parse connection URL to get host:port for template DB_HOST vars
@@ -4011,7 +4011,7 @@ def provision_addon_task(self, addon_id: str):
     """Provision an addon Docker container and inject env vars."""
     try:
         addon = Addon.objects.get(id=addon_id)
-        cid, url = addon_provisioner.provision(addon)
+        cid, url = addon_provisioner.provision_dispatch(addon)
         addon.connection_url = url
         addon.status = Addon.Status.ACTIVE
         addon.coolify_uuid = cid
@@ -4070,7 +4070,7 @@ def deprovision_addon_task(addon_id: str):
         addon = Addon.objects.get(id=addon_id)
         if addon.coolify_uuid:
             container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
-            addon_provisioner.deprovision(addon.coolify_uuid, container_name)
+            addon_provisioner.deprovision_dispatch(addon.coolify_uuid, addon, container_name)
         addon.status = Addon.Status.DELETED
         addon.save()
     except Exception as e: # pylint: disable=broad-exception-caught
@@ -4551,13 +4551,23 @@ def delete_service_task(self, service_id: str, force: bool = False):
         success = orchestrator.delete_service_resources(service, force=force)
 
         # 2b. Clean up addon runtime resources before DB cascade
-        if orchestrator.docker_client:
-            for addon in service.addons.all():
-                if not orchestrator.delete_addon_resources(addon):
-                    logger.warning("Failed to clean up addon %s (%s) for service %s.",
-                                   addon.id, addon.addon_type, service.name)
-                    if not force:
-                        success = False
+        for addon in service.addons.all():
+            server = getattr(addon.service, 'server', None)
+            if (server and not server.is_primary
+                    and not getattr(server, 'is_lite_agent', False)):
+                container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
+                ok = addon_provisioner.deprovision_remote(
+                    addon.coolify_uuid or container_name, server, container_name,
+                )
+            elif orchestrator.docker_client:
+                ok = orchestrator.delete_addon_resources(addon)
+            else:
+                ok = True
+            if not ok:
+                logger.warning("Failed to clean up addon %s (%s) for service %s.",
+                               addon.id, addon.addon_type, service.name)
+                if not force:
+                    success = False
 
         # 3. Resilience: If force=True, we proceed regardless of resource cleanup success.
         # This ensures the DB record is purged when the user explicitly requests a force-delete.
@@ -4593,19 +4603,27 @@ def delete_addon_task(self, addon_id: str):
     """Async reliable deletion of an Addon"""
     from apps.deployments.models_addons import Addon
     from apps.deployments.services.deletion_orchestrator import DeletionOrchestrator
+    from services.addon_provisioner import addon_provisioner
     try:
         addon = Addon.objects.get(id=addon_id)
     except Addon.DoesNotExist:
         return
 
-    orchestrator = DeletionOrchestrator()
-    success = orchestrator.delete_addon_resources(addon)
-
-    # Resilience: If local docker client is missing but addon has no server (or is unassigned), 
-    # allow DB deletion to proceed.
-    if not success and not orchestrator.docker_client:
-        logger.warning("Docker client unavailable for addon %s. Forcing database-only deletion.", addon.id)
-        success = True
+    # Remote full-stack node addons: deprovision via SSH
+    server = getattr(addon.service, 'server', None)
+    if (server and not server.is_primary
+            and not getattr(server, 'is_lite_agent', False)):
+        container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
+        success = addon_provisioner.deprovision_remote(
+            addon.coolify_uuid or container_name, server, container_name,
+        )
+    else:
+        orchestrator = DeletionOrchestrator()
+        success = orchestrator.delete_addon_resources(addon)
+        # Resilience: If local docker client is missing
+        if not success and not orchestrator.docker_client:
+            logger.warning("Docker client unavailable for addon %s. Forcing database-only deletion.", addon.id)
+            success = True
 
     if success:
         addon.delete()
@@ -4840,7 +4858,23 @@ def update_remote_server_task(server_id: str):
         }
         update_args = ["--update"]
 
-        if getattr(server, "is_lite_agent", False):
+        is_lite = getattr(server, "is_lite_agent", False)
+        is_primary = getattr(server, "is_primary", False)
+        quoted_path = shlex.quote(hosting_path)
+        quoted_branch = shlex.quote(branch)
+        git_steps = (
+            "cd {quoted_path} && "
+            "if [ \"$(id -u)\" -eq 0 ]; then SUDO=''; else SUDO='sudo -n'; fi; "
+            "git config --global --add safe.directory \"$PWD\" 2>/dev/null || true; "
+            "if [ -n \"$(git status --porcelain 2>/dev/null)\" ]; then "
+            "git stash push --include-untracked -m \"remote-update-$(date +%s)\" >/dev/null 2>&1 || true; "
+            "fi; "
+            "git fetch origin {quoted_branch} >/dev/null 2>&1 && "
+            "git checkout -B {quoted_branch} origin/{quoted_branch} >/dev/null 2>&1 && "
+            "git branch --set-upstream-to=origin/{quoted_branch} {quoted_branch} >/dev/null 2>&1 || true"
+        ).format(quoted_path=quoted_path, quoted_branch=quoted_branch)
+
+        if is_lite:
             from apps.deployments.services.provisioner import build_agent_lite_install_env
 
             lite_env, lite_messages = build_agent_lite_install_env(
@@ -4851,44 +4885,93 @@ def update_remote_server_task(server_id: str):
                 _append_remote_update_log(server, f"> {message}\n")
             env_vars.update(lite_env)
             update_args.append("--mode=agent-lite")
-        
-        env_str = " ".join([f"{k}={shlex.quote(str(v))}" for k, v in env_vars.items()])
-        update_args_str = " ".join(shlex.quote(arg) for arg in update_args)
-        quoted_path = shlex.quote(hosting_path)
-        quoted_branch = shlex.quote(branch)
-        cmd_update = (
-            f"cd {quoted_path} && "
-            "if [ \"$(id -u)\" -eq 0 ]; then SUDO=''; else SUDO='sudo -n'; fi; "
-            "git config --global --add safe.directory \"$PWD\" 2>/dev/null || true; "
-            "if [ -n \"$(git status --porcelain 2>/dev/null)\" ]; then "
-            "git stash push --include-untracked -m \"remote-update-$(date +%s)\" >/dev/null 2>&1 || true; "
-            "fi; "
-            f"git fetch origin {quoted_branch} >/dev/null 2>&1 && "
-            f"git checkout -B {quoted_branch} origin/{quoted_branch} >/dev/null 2>&1 && "
-            f"git branch --set-upstream-to=origin/{quoted_branch} {quoted_branch} >/dev/null 2>&1 || true; "
-            f"$SUDO env {env_str} bash install.sh {update_args_str}"
-        )
 
-        _append_remote_update_log(server, f"> Running installer update (branch: {branch})...\n")
+            env_str = " ".join([f"{k}={shlex.quote(str(v))}" for k, v in env_vars.items()])
+            update_args_str = " ".join(shlex.quote(arg) for arg in update_args)
+            cmd_update = (
+                f"{git_steps} && "
+                f"$SUDO env {env_str} bash install.sh {update_args_str}"
+            )
+            _append_remote_update_log(server, f"> Running lite-agent installer update (branch: {branch})...\n")
+            stdout, stderr, code = ssh.exec_command(
+                cmd_update,
+                timeout=5400,
+                raise_on_error=False,
+            )
+            _append_remote_update_log(server, "\n--- Installer output ---\n" + stdout + stderr + "\n")
+            if code != 0:
+                raise RuntimeError(f"Installer update failed with exit code {code}.")
+            stdout, stderr, code = ssh.exec_command(
+                _remote_update_postflight_script(hosting_path),
+                timeout=180,
+                raise_on_error=False,
+            )
+            _append_remote_update_log(server, "\n--- Postflight ---\n" + stdout + stderr + "\n")
+            if code != 0:
+                raise RuntimeError(f"Remote update postflight failed with exit code {code}.")
+        elif is_primary:
+            # Primary/master node: full install.sh --update (rebuilds everything
+            # including frontend, Traefik, Caddy — master needs the full pipeline).
+            env_str = " ".join([f"{k}={shlex.quote(str(v))}" for k, v in env_vars.items()])
+            update_args_str = " ".join(shlex.quote(arg) for arg in update_args)
+            cmd_update = (
+                f"{git_steps} && "
+                f"$SUDO env {env_str} bash install.sh {update_args_str}"
+            )
+            _append_remote_update_log(server, f"> Running master full update (branch: {branch})...\n")
+            stdout, stderr, code = ssh.exec_command(
+                cmd_update,
+                timeout=5400,
+                raise_on_error=False,
+            )
+            _append_remote_update_log(server, "\n--- Installer output ---\n" + stdout + stderr + "\n")
+            if code != 0:
+                raise RuntimeError(f"Master update failed with exit code {code}.")
+            stdout, stderr, code = ssh.exec_command(
+                _remote_update_postflight_script(hosting_path),
+                timeout=180,
+                raise_on_error=False,
+            )
+            _append_remote_update_log(server, "\n--- Postflight ---\n" + stdout + stderr + "\n")
+            if code != 0:
+                raise RuntimeError(f"Remote update postflight failed with exit code {code}.")
+        else:
+            # Remote full-stack node (own DB): targeted rebuild of app containers only.
+            # Do NOT run install.sh --update — that restarts PG/Redis/RabbitMQ
+            # which can corrupt the node's own database.
+            BUILD_TIMEOUT = int(os.environ.get('SMSLY_REMOTE_BUILD_TIMEOUT', '14400'))  # 4h default
+            app_services = "backend celery celery-fast celery-deploy celery-beat"
+            compose_flags = "--no-cache --pull"
+            cmd_build = (
+                f"{git_steps} && "
+                f"$SUDO docker compose -f docker-compose.prod.yml build {compose_flags} {app_services}"
+            )
+            cmd_up = (
+                f"$SUDO docker compose -f docker-compose.prod.yml up -d --no-deps {app_services}"
+            )
+            _append_remote_update_log(
+                server,
+                f"> Remote full-stack node: rebuilding app containers (branch: {branch})...\n"
+                f"> Services: {app_services}\n",
+            )
+            stdout, stderr, code = ssh.exec_command(
+                cmd_build,
+                timeout=BUILD_TIMEOUT,
+                raise_on_error=False,
+            )
+            _append_remote_update_log(server, "\n--- Build output ---\n" + stdout + stderr + "\n")
+            if code != 0:
+                raise RuntimeError(f"Container build failed with exit code {code}.")
 
-        stdout, stderr, code = ssh.exec_command(
-            cmd_update,
-            timeout=5400,
-            raise_on_error=False,
-        )
-        _append_remote_update_log(server, "\n--- Installer output ---\n" + stdout + stderr + "\n")
-        
-        if code != 0:
-            raise RuntimeError(f"Installer update failed with exit code {code}.")
-
-        stdout, stderr, code = ssh.exec_command(
-            _remote_update_postflight_script(hosting_path),
-            timeout=180,
-            raise_on_error=False,
-        )
-        _append_remote_update_log(server, "\n--- Postflight ---\n" + stdout + stderr + "\n")
-        if code != 0:
-            raise RuntimeError(f"Remote update postflight failed with exit code {code}.")
+            _append_remote_update_log(server, "> Restarting app containers...\n")
+            stdout, stderr, code = ssh.exec_command(
+                cmd_up,
+                timeout=300,
+                raise_on_error=False,
+            )
+            _append_remote_update_log(server, "\n--- Restart output ---\n" + stdout + stderr + "\n")
+            if code != 0:
+                raise RuntimeError(f"Container restart failed with exit code {code}.")
 
         update_fields = ["provision_status", "updated_at"]
         if getattr(server, "is_lite_agent", False):

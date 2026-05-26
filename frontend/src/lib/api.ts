@@ -1044,6 +1044,7 @@ export interface ManagedServer {
   provider_metadata?: Record<string, any>;
   has_ssh_credentials?: boolean;
   is_primary: boolean;
+  is_lite_agent?: boolean;
   allow_user_workloads: boolean;
   status: 'ONLINE' | 'OFFLINE' | 'UNKNOWN';
   last_health_check: string | null;

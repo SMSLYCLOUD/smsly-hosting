@@ -80,7 +80,7 @@ User = get_user_model()
 @pytest.mark.django_db
 @patch('apps.deployments.tasks.smart_deploy_task.delay')
 @patch('apps.deployments.tasks.subprocess.run')
-@patch('apps.deployments.tasks.addon_provisioner.provision')
+@patch('apps.deployments.tasks.addon_provisioner.provision_dispatch')
 def test_all_ai_templates_dry_run(mock_addon_provisioner, mock_subprocess_run, mock_smart_deploy):
     mock_addon_provisioner.return_value = ('test-uuid', 'postgres://...')
     from apps.deployments.tasks import one_click_deploy_template_task
@@ -95,7 +95,7 @@ def test_all_ai_templates_dry_run(mock_addon_provisioner, mock_subprocess_run, m
         is_active=True,
     )
 
-    with open('apps/deployments/fixtures/templates.json', 'r') as f:
+    with open('apps/deployments/fixtures/templates.json', 'r', encoding='utf-8-sig') as f:
         templates = json.load(f)
 
     assert len(templates) > 0, "No templates found in fixtures!"

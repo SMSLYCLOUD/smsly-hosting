@@ -361,15 +361,33 @@ export default function ServersPage() {
                                                         />
                                                         Allow user deployments
                                                     </label>
-                                                    <label className="flex items-center gap-2 text-sm">
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={provisionForm.is_lite_agent}
-                                                            onChange={e => setProvisionForm({ ...provisionForm, is_lite_agent: e.target.checked })}
-                                                            className="rounded"
-                                                        />
-                                                        Lite Agent (Edge Node)
-                                                    </label>
+                                                    <div className="space-y-1.5">
+                                                        <label className="text-xs font-medium text-muted-foreground">Node Mode</label>
+                                                        <div className="flex items-center gap-3">
+                                                            <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                                                                <input
+                                                                    type="radio"
+                                                                    name="provision_mode"
+                                                                    checked={!provisionForm.is_lite_agent}
+                                                                    onChange={() => setProvisionForm({ ...provisionForm, is_lite_agent: false })}
+                                                                    className="accent-blue-500"
+                                                                />
+                                                                <span className="font-medium">Full Stack</span>
+                                                                <span className="text-[10px] text-muted-foreground">(own DB)</span>
+                                                            </label>
+                                                            <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                                                                <input
+                                                                    type="radio"
+                                                                    name="provision_mode"
+                                                                    checked={provisionForm.is_lite_agent}
+                                                                    onChange={() => setProvisionForm({ ...provisionForm, is_lite_agent: true })}
+                                                                    className="accent-purple-500"
+                                                                />
+                                                                <span className="font-medium">Lite Agent</span>
+                                                                <span className="text-[10px] text-muted-foreground">(shared DB)</span>
+                                                            </label>
+                                                        </div>
+                                                    </div>
                                                 </div>
                                             </div>
                                             <div>
@@ -605,15 +623,33 @@ export default function ServersPage() {
                                                     />
                                                     Allow user deployments
                                                 </label>
-                                                <label className="flex items-center gap-2 text-sm">
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={connectForm.is_lite_agent}
-                                                        onChange={e => setConnectForm({ ...connectForm, is_lite_agent: e.target.checked })}
-                                                        className="rounded"
-                                                    />
-                                                    Lite Agent (Edge Node)
-                                                </label>
+                                                <div className="space-y-1.5">
+                                                    <label className="text-xs font-medium text-muted-foreground">Node Mode</label>
+                                                    <div className="flex items-center gap-3">
+                                                        <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                                                            <input
+                                                                type="radio"
+                                                                name="connect_mode"
+                                                                checked={!connectForm.is_lite_agent}
+                                                                onChange={() => setConnectForm({ ...connectForm, is_lite_agent: false })}
+                                                                className="accent-blue-500"
+                                                            />
+                                                            <span className="font-medium">Full Stack</span>
+                                                            <span className="text-[10px] text-muted-foreground">(own DB)</span>
+                                                        </label>
+                                                        <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                                                            <input
+                                                                type="radio"
+                                                                name="connect_mode"
+                                                                checked={connectForm.is_lite_agent}
+                                                                onChange={() => setConnectForm({ ...connectForm, is_lite_agent: true })}
+                                                                className="accent-purple-500"
+                                                            />
+                                                            <span className="font-medium">Lite Agent</span>
+                                                            <span className="text-[10px] text-muted-foreground">(shared DB)</span>
+                                                        </label>
+                                                    </div>
+                                                </div>
                                             </div>
                                             <div className="flex gap-2">
                                                 <button onClick={() => setShowAdd(false)} className="px-4 py-2 text-sm rounded-lg border border-border hover:bg-muted/50">
@@ -776,6 +812,16 @@ export default function ServersPage() {
                                                     </h3>
                                                     <p className="text-xs text-muted-foreground">{server.host}</p>
                                                     <div className="mt-1 flex flex-wrap gap-1.5">
+                                                        {!server.is_primary && server.allow_user_workloads !== false && !server.is_lite_agent && (
+                                                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500 font-bold uppercase">
+                                                                Full Stack
+                                                            </span>
+                                                        )}
+                                                        {server.is_lite_agent && (
+                                                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-500 font-bold uppercase">
+                                                                Lite Agent
+                                                            </span>
+                                                        )}
                                                         {!server.is_primary && server.allow_user_workloads !== false && (
                                                             <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-500 font-medium">
                                                                 Workload target
@@ -789,11 +835,6 @@ export default function ServersPage() {
                                                         {server.has_ssh_credentials && (
                                                             <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500 font-medium">
                                                                 SSH ready
-                                                            </span>
-                                                        )}
-                                                        {server.is_lite_agent && (
-                                                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-500 font-bold uppercase">
-                                                                Lite Agent
                                                             </span>
                                                         )}
                                                     </div>
