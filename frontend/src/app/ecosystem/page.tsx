@@ -50,6 +50,7 @@ interface DeployResult {
     status: string;
     stack?: string;
     port?: number;
+    server?: string;
     error?: string;
 }
 
@@ -1071,68 +1072,124 @@ export default function EcosystemPage() {
                             animate={{ opacity: 1, y: 0 }}
                             className="space-y-6"
                         >
-                            <div className="text-center py-8">
+                            <div className="text-center py-6">
                                 <div className="w-20 h-20 mx-auto mb-4 rounded-3xl bg-emerald-500/20 flex items-center justify-center border border-emerald-500/20">
                                     <CheckCircle2 className="text-emerald-500" size={36} />
                                 </div>
                                 <h2 className="text-2xl font-bold mb-2">Ecosystem Deployment Queued!</h2>
                                 <p className="text-muted-foreground">
-                                    All services have been created and builds are running.
+                                    All services have been created and builds are running in dependency order.
                                 </p>
                             </div>
 
-                            {/* Results */}
-                            <div className="space-y-2">
-                                {deployResults.map((r, idx) => (
-                                    <div
-                                        key={r.repo}
-                                        className="bg-card border border-border p-4 rounded-xl flex items-center justify-between"
-                                    >
-                                        <div className="flex items-center gap-3">
-                                            {r.status === 'queued' ? (
-                                                <CheckCircle2 className="text-emerald-500" size={18} />
-                                            ) : r.status === 'skipped' ? (
-                                                <AlertCircle className="text-yellow-500" size={18} />
-                                            ) : (
-                                                <XCircle className="text-red-500" size={18} />
-                                            )}
-                                            <div>
-                                                <p className="font-medium">{r.name || r.repo}</p>
-                                                <p className="text-xs text-muted-foreground">
-                                                    {r.stack && `${r.stack} · `}
-                                                    {r.port && `port ${r.port} · `}
-                                                    {r.status}
-                                                </p>
-                                            </div>
-                                        </div>
-                                        <div className="flex gap-3 items-center">
-                                            {r.status === 'failed' && r.deployment_id && (
-                                                <button
-                                                    onClick={() => handleRetry(r.deployment_id!, idx)}
-                                                    className="text-xs flex items-center gap-1 text-primary bg-primary/10 hover:bg-primary/20 px-2 py-1 rounded"
-                                                >
-                                                    <RefreshCw size={12} /> Retry
-                                                </button>
-                                            )}
-                                            {r.deployment_id && (
-                                                <Link
-                                                    href={`/services/${r.service_id}?tab=logs`}
-                                                    className="text-xs text-primary hover:underline"
-                                                >
-                                                    View Logs →
-                                                </Link>
-                                            )}
-                                        </div>
+                            {/* Summary Stats */}
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                {[
+                                    { label: 'Total Services', value: deployResults.length, color: 'text-foreground' },
+                                    { label: 'Queued / Building', value: deployResults.filter(r => r.status === 'queued').length, color: 'text-emerald-500' },
+                                    { label: 'Skipped', value: deployResults.filter(r => r.status === 'skipped').length, color: 'text-yellow-500' },
+                                    { label: 'Failed', value: deployResults.filter(r => r.status === 'failed').length, color: 'text-red-500' },
+                                ].map(stat => (
+                                    <div key={stat.label} className="bg-card border border-border rounded-xl p-4 text-center">
+                                        <p className={`text-2xl font-bold ${stat.color}`}>{stat.value}</p>
+                                        <p className="text-xs text-muted-foreground mt-1">{stat.label}</p>
                                     </div>
                                 ))}
                             </div>
+
+                            {/* Addons created from plan */}
+                            {plan?.addons && plan.addons.length > 0 && (
+                                <div className="bg-card border border-border rounded-xl p-4">
+                                    <h3 className="font-bold text-sm uppercase tracking-wider text-muted-foreground flex items-center gap-2 mb-3">
+                                        <Database size={14} /> Addons Provisioned
+                                    </h3>
+                                    <div className="flex flex-wrap gap-2">
+                                        {plan.addons.map((a, i) => (
+                                            <span key={i} className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                                                <Database size={12} />
+                                                {a.type}
+                                                {a.shared_by?.length > 0 && (
+                                                    <span className="opacity-60">shared by {a.shared_by.length}</span>
+                                                )}
+                                            </span>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Results grouped */}
+                            {deployResults.length > 0 && (
+                                <div>
+                                    <h3 className="font-bold text-sm uppercase tracking-wider text-muted-foreground flex items-center gap-2 mb-3">
+                                        <Server size={14} /> Service Deployment Context
+                                    </h3>
+                                    <div className="space-y-2">
+                                        {deployResults.map((r, idx) => (
+                                            <div
+                                                key={r.repo}
+                                                className="bg-card border border-border p-4 rounded-xl flex items-center justify-between"
+                                            >
+                                                <div className="flex items-center gap-3 min-w-0">
+                                                    {r.status === 'queued' ? (
+                                                        <CheckCircle2 className="text-emerald-500 shrink-0" size={18} />
+                                                    ) : r.status === 'skipped' ? (
+                                                        <AlertCircle className="text-yellow-500 shrink-0" size={18} />
+                                                    ) : (
+                                                        <XCircle className="text-red-500 shrink-0" size={18} />
+                                                    )}
+                                                    <div className="min-w-0">
+                                                        <p className="font-medium truncate">{r.name || r.repo}</p>
+                                                        <p className="text-xs text-muted-foreground flex flex-wrap gap-x-2">
+                                                            {r.stack && <span className="inline-flex items-center gap-1"><Code size={10} />{r.stack}</span>}
+                                                            {r.port && <span>port {r.port}</span>}
+                                                            {r.server && <span className="inline-flex items-center gap-1"><Server size={10} />{r.server}</span>}
+                                                            <span className={`capitalize ${r.status === 'failed' ? 'text-red-400' : r.status === 'skipped' ? 'text-yellow-400' : 'text-emerald-400'}`}>
+                                                                {r.status}
+                                                            </span>
+                                                        </p>
+                                                        {r.error && (
+                                                            <p className="text-xs text-red-400 mt-1 truncate">{r.error}</p>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                                <div className="flex gap-3 items-center shrink-0 ml-3">
+                                                    {r.status === 'failed' && r.deployment_id && (
+                                                        <button
+                                                            onClick={() => handleRetry(r.deployment_id!, idx)}
+                                                            className="text-xs flex items-center gap-1 text-primary bg-primary/10 hover:bg-primary/20 px-2 py-1 rounded"
+                                                        >
+                                                            <RefreshCw size={12} /> Retry
+                                                        </button>
+                                                    )}
+                                                    {r.service_id && (
+                                                        <Link
+                                                            href={`/services/${r.service_id}`}
+                                                            className="text-xs text-primary hover:underline flex items-center gap-1"
+                                                        >
+                                                            <Globe size={12} /> Details →
+                                                        </Link>
+                                                    )}
+                                                    {r.deployment_id && (
+                                                        <Link
+                                                            href={`/deployments`}
+                                                            className="text-xs text-muted-foreground hover:text-foreground"
+                                                        >
+                                                            Build Logs
+                                                        </Link>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
 
                             <div className="flex justify-center gap-4 pt-4">
                                 <Link
                                     href="/services"
                                     className="px-6 py-2.5 rounded-xl border border-border hover:border-foreground/20 text-foreground font-semibold transition-colors"
                                 >
-                                    View Services
+                                    View All Services
                                 </Link>
                                 <Link
                                     href="/deployments"
@@ -1140,6 +1197,12 @@ export default function EcosystemPage() {
                                 >
                                     View Deployments
                                 </Link>
+                                <button
+                                    onClick={() => { clearState(); setStep('idle'); setDeployResults([]); setError(null); }}
+                                    className="px-6 py-2.5 rounded-xl border border-border hover:border-foreground/20 text-foreground font-semibold transition-colors"
+                                >
+                                    Deploy Another
+                                </button>
                             </div>
                         </motion.div>
                     )}
