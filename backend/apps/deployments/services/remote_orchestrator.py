@@ -1067,23 +1067,45 @@ class RemoteOrchestrator:
         return False
 
     def sync_env_vars(self, service: Service, remote_service_id: str):
-        """Sync environment variables to the remote service."""
+        """Sync environment variables to the remote service.
+
+        Skips vars whose ORM value is still ciphertext (starts with gAAAAAB)
+        to prevent sending undecrypted data to the remote node.
+        """
         path = f"/api/v1/services/{remote_service_id}/env_vars/"
+
+        _FERNET_PREFIX = "gAAAAAB"
+
+        def _is_ciphertext(val: str) -> bool:
+            return bool(val and val.startswith(_FERNET_PREFIX))
+
         env_vars = EnvironmentVariable.objects.filter(service=service)
 
-        payload = {
-            "vars": [
-                {
-                    "key": var.key,
-                    "value": var.value,
-                    "is_secret": var.is_secret,
-                    "source": var.source,
-                }
-                for var in env_vars
-            ]
-        }
-        if not payload["vars"]:
+        safe_vars = []
+        for var in env_vars:
+            raw_value = var.value
+            if _is_ciphertext(raw_value):
+                logger.warning(
+                    "[DB-ENCRYPT] Skipping env var %s for service %s — "
+                    "value is ciphertext (decryption failed or double-encrypted).",
+                    var.key, service.name,
+                )
+                continue
+            safe_vars.append({
+                "key": var.key,
+                "value": raw_value,
+                "is_secret": var.is_secret,
+                "source": var.source,
+            })
+
+        if not safe_vars:
+            logger.info(
+                "No safe env vars to sync for service %s (all were ciphertext).",
+                service.name,
+            )
             return
+
+        payload = {"vars": safe_vars}
 
         try:
             resp = self._request("POST", path, payload=payload, timeout=20)
@@ -1102,26 +1124,20 @@ class RemoteOrchestrator:
                 exc,
             )
 
-        for var in env_vars:
-            row = {
-                "key": var.key,
-                "value": var.value,
-                "is_secret": var.is_secret,
-                "source": var.source,
-            }
+        for var in safe_vars:
             try:
-                resp = self._request("POST", path, payload=row, timeout=10)
+                resp = self._request("POST", path, payload=var, timeout=10)
                 if resp is not None and resp.status_code >= 400:
                     logger.warning(
                         "Failed to sync env var %s to remote service %s: %s",
-                        var.key,
+                        var["key"],
                         remote_service_id,
                         self._response_error("env var sync failed", resp),
                     )
             except Exception as exc:
                 logger.warning(
                     "Failed to sync env var %s to remote service %s: %s",
-                    var.key,
+                    var["key"],
                     remote_service_id,
                     exc,
                 )

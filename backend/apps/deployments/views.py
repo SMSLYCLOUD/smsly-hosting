@@ -1808,6 +1808,13 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 value = str(row.get('value', '') or '')
                 if existing and existing.is_secret and _looks_masked_secret(value):
                     value = existing.value
+                if value.startswith('gAAAAAB'):
+                    logger.warning(
+                        "Received ciphertext-like value for env var %s — "
+                        "sender may have sent undecrypted data. "
+                        "Saving as-is (ORM will encrypt once, not double-encrypt).",
+                        key,
+                    )
 
                 if 'is_secret' in row:
                     is_secret = _parse_bool(row.get('is_secret'))
