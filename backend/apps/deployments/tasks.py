@@ -4549,7 +4549,16 @@ def delete_service_task(self, service_id: str, force: bool = False):
         # 2. Local cleanup
         orchestrator = DeletionOrchestrator()
         success = orchestrator.delete_service_resources(service, force=force)
-        
+
+        # 2b. Clean up addon runtime resources before DB cascade
+        if orchestrator.docker_client:
+            for addon in service.addons.all():
+                if not orchestrator.delete_addon_resources(addon):
+                    logger.warning("Failed to clean up addon %s (%s) for service %s.",
+                                   addon.id, addon.addon_type, service.name)
+                    if not force:
+                        success = False
+
         # 3. Resilience: If force=True, we proceed regardless of resource cleanup success.
         # This ensures the DB record is purged when the user explicitly requests a force-delete.
         if force:
@@ -4604,6 +4613,8 @@ def delete_addon_task(self, addon_id: str):
         addon.status = Addon.Status.DELETION_FAILED
         addon.deletion_error = "Failed to remove some runtime resources. If the system is offline, use manual DB cleanup."
         addon.save(update_fields=['status', 'deletion_error'])
+
+
 @shared_task(name="apps.deployments.tasks.auto_authenticate_nodes_task")
 def auto_authenticate_nodes_task():
     """
