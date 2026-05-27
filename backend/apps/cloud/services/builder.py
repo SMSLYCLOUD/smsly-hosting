@@ -207,5 +207,5 @@ class NixpacksBuilder:
             return report
 
         except FileNotFoundError:
-            logger.warning("Trivy binary not found. Skipping security scan.")
-            return {"status": "skipped", "reason": "trivy_missing"}
+            logger.warning("WARNING: Trivy binary not found — image built WITHOUT security scan. Install Trivy for vulnerability scanning.")
+            return {"status": "unscanned", "reason": "trivy_missing"}

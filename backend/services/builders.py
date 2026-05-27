@@ -198,10 +198,10 @@ class BuildManager:
                 timeout=10
             )
             if result.returncode != 0:
-                self._log("Trivy not available. Skipping security scan.")
+                self._log("WARNING: Trivy not available — image built WITHOUT security scan.")
                 return
         except (FileNotFoundError, subprocess.TimeoutExpired):
-            self._log("Trivy not installed. Skipping security scan.")
+            self._log("WARNING: Trivy not installed — image built WITHOUT security scan. Install Trivy for vulnerability scanning.")
             return
 
         try:

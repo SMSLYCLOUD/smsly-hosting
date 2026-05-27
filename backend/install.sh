@@ -2954,6 +2954,32 @@ docker network create smsly-proxy 2>/dev/null || true
 # Both IP and SSL modes use the same compose stack.
 # Caddy (step 7) handles public-facing HTTP/HTTPS termination.
 # Traefik is NOT used — Caddy natively handles Let's Encrypt SSL.
+# Generate registry TLS cert + htpasswd if missing
+echo -e "${BLUE}  → Configuring Docker registry auth and TLS...${NC}"
+mkdir -p "$INSTALL_DIR/auth" "$INSTALL_DIR/certs"
+if [ ! -f "$INSTALL_DIR/certs/registry.key" ] || [ ! -f "$INSTALL_DIR/certs/registry.crt" ]; then
+    echo -e "${BLUE}    Generating self-signed TLS cert for registry...${NC}"
+    openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+        -keyout "$INSTALL_DIR/certs/registry.key" \
+        -out "$INSTALL_DIR/certs/registry.crt" \
+        -subj "/CN=registry" 2>/dev/null || \
+        echo -e "${YELLOW}    ⚠ Failed to generate registry cert${NC}"
+fi
+if [ ! -f "$INSTALL_DIR/auth/htpasswd" ]; then
+    REGISTRY_PASS="${REGISTRY_PASSWORD:-$(python3 -c \"import secrets; print(secrets.token_urlsafe(18))\" 2>/dev/null || openssl rand -hex 12 2>/dev/null || echo 'auto-generated')}"
+    if command -v htpasswd >/dev/null 2>&1; then
+        htpasswd -Bbn "${REGISTRY_USER:-smsly-registry}" "$REGISTRY_PASS" > "$INSTALL_DIR/auth/htpasswd"
+    else
+        python3 -c "
+import bcrypt, sys
+pw = sys.argv[1] if len(sys.argv) > 1 else '$REGISTRY_PASS'
+print(f'${REGISTRY_USER:-smsly-registry}:' + bcrypt.hashpw(pw.encode(), bcrypt.gensalt(10)).decode())
+" "$REGISTRY_PASS" > "$INSTALL_DIR/auth/htpasswd" 2>/dev/null || \
+        echo -e "${YELLOW}    ⚠ Failed to generate htpasswd${NC}"
+    fi
+fi
+echo -e "${GREEN}  ✓ Registry auth + TLS configured${NC}"
+
 # Ensure bind-mounted config paths exist before `docker compose up`.
 ensure_infrastructure_permissions
 echo -e "${BLUE}  → Starting App Stack...${NC}"
@@ -3650,8 +3676,9 @@ echo -e "${GREEN}  ✓ System memory hardening complete${NC}"
 
 # ─── Docker insecure registry for mesh registry ─────────────────────────────
 # The internal registry runs on the master and is accessible via WireGuard IP
-# (default 10.100.0.1:5000). Remote nodes must trust this IP over HTTP.
-echo -e "${BLUE}  → Configuring Docker insecure-registries for mesh registry...${NC}"
+# (default 10.100.0.1:5000). Remote nodes must trust this IP.
+# NOTE: Registry now uses TLS + htpasswd auth. Insecure flag remains for self-signed certs.
+echo -e "${BLUE}  → Configuring Docker insecure-registries for mesh registry (self-signed TLS)...${NC}"
 DAEMON_JSON="/etc/docker/daemon.json"
 MASTER_MESH_IP="${MASTER_MESH_IP:-10.100.0.1}"
 REGISTRY_URL="${MASTER_MESH_IP}:5000"
