@@ -215,13 +215,22 @@ def _build_targets(service, active_deployment):
         configured = os.environ.get("TRAEFIK_INTERNAL_URL", "").strip()
         if configured:
             internal_urls.append(configured.rstrip("/"))
-        internal_urls.extend(
-            [
-                "http://traefik:80",
-                "http://127.0.0.1:8081",
-                "http://localhost:8081",
-            ]
-        )
+        internal_urls.append("http://traefik:80")
+        is_lite = getattr(service.server, "is_lite_agent", False) if service.server else False
+        if is_lite:
+            internal_urls.extend(
+                [
+                    "http://127.0.0.1:80",
+                    "http://localhost:80",
+                ]
+            )
+        else:
+            internal_urls.extend(
+                [
+                    "http://127.0.0.1:8081",
+                    "http://localhost:8081",
+                ]
+            )
         for base_url in internal_urls:
             for path in paths:
                 _add(
