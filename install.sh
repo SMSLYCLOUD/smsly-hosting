@@ -813,6 +813,12 @@ apply_agent_lite_env_overrides() {
     if [ -z "${MASTER_MESH_IP:-}" ] && [ -f "$env_file" ]; then
         MASTER_MESH_IP="$(env_get_value "$env_file" "MASTER_MESH_IP")"
     fi
+    if [ -z "${MASTER_FIELD_ENCRYPTION_KEY:-}" ] && [ -f "$env_file" ]; then
+        MASTER_FIELD_ENCRYPTION_KEY="$(env_get_value "$env_file" "FIELD_ENCRYPTION_KEY")"
+    fi
+    if [ -z "${MASTER_FIELD_ENCRYPTION_KEY:-}" ] && [ -f "$seed_file" ]; then
+        MASTER_FIELD_ENCRYPTION_KEY="$(env_get_value "$seed_file" "MASTER_FIELD_ENCRYPTION_KEY")"
+    fi
     if [ -z "${MASTER_DB_PASSWORD:-}" ] && [ -f "$env_file" ]; then
         # If we are updating and MASTER_DB_PASSWORD wasn't passed, try to preserve the existing one
         local db_url
@@ -878,6 +884,7 @@ MASTER_DB_PASSWORD="$MASTER_DB_PASSWORD"
 MASTER_MQ_PASSWORD="$MASTER_MQ_PASSWORD"
 MASTER_REDIS_PASSWORD="${MASTER_REDIS_PASSWORD:-}"
 MASTER_GATEWAY_SECRET="${MASTER_GATEWAY_SECRET:-}"
+MASTER_FIELD_ENCRYPTION_KEY="${MASTER_FIELD_ENCRYPTION_KEY:-}"
 SMSLY_NODE_ID="$SMSLY_NODE_ID"
 SMSLY_NODE_QUEUE="$SMSLY_NODE_QUEUE"
 EOF
@@ -907,6 +914,9 @@ EOF
     env_set_value "$env_file" "CONTAINER_REGISTRY_URL" "${registry_host}:5000"
     if [ -n "${MASTER_GATEWAY_SECRET:-}" ]; then
         env_set_value "$env_file" "GATEWAY_SECRET" "$MASTER_GATEWAY_SECRET"
+    fi
+    if [ -n "${MASTER_FIELD_ENCRYPTION_KEY:-}" ]; then
+        env_set_value "$env_file" "FIELD_ENCRYPTION_KEY" "$MASTER_FIELD_ENCRYPTION_KEY"
     fi
     env_set_value "$env_file" "SMSLY_DISABLE_LOCAL_SERVICES" "false"
     env_set_value "$env_file" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
@@ -4982,7 +4992,7 @@ else
     # Fallback: if the script didn't produce a valid Fernet key, generate it inline
     # (cryptography is guaranteed importable at this point from the check above).
     if [ -z "${FIELD_ENCRYPTION_KEY:-}" ]; then
-        FIELD_ENCRYPTION_KEY="$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null || true)"
+        FIELD_ENCRYPTION_KEY="${MASTER_FIELD_ENCRYPTION_KEY:-$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null || true)}"
     fi
     # Ensure all other secrets have fallback values just in case
     [ -n "${SECRET_KEY:-}" ] || SECRET_KEY="$(python3 -c "import secrets,string; chars=string.ascii_letters+string.digits; print(''.join(secrets.choice(chars) for _ in range(50)))" 2>/dev/null || true)"
