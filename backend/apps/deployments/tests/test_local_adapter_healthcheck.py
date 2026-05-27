@@ -266,3 +266,84 @@ class LocalAdapterHealthcheckCommandTests(SimpleTestCase):
             labels["traefik.http.middlewares.ai-router-api-base.replacepathregex.replacement"],
             "/v1/$1",
         )
+
+    @patch.object(LocalAdapter, "_wait_container_healthy", return_value=True)
+    def test_promote_container_injects_traefik_loadbalancer_healthchecks(self, _wait_mock):
+        adapter = object.__new__(LocalAdapter)
+        docker_client = MagicMock()
+        docker_client.api.create_endpoint_config.return_value = {}
+        docker_client.api.create_networking_config.return_value = {}
+        adapter.docker_client = docker_client
+        adapter.k8s_client = None
+        adapter.batch_v1 = None
+
+        green = MagicMock()
+        green.name = "buyforfront-green-e844e7"
+        green.id = "green-id"
+        green.labels = {
+            "smsly.blue_green.is_public": "True",
+            "smsly.blue_green.port": "8000",
+            "smsly.blue_green.host_rule": "Host(`buyforfront.example.com`)",
+            "smsly.blue_green.hc_path": "/healthz",
+            "smsly.blue_green.hc_interval": "10",
+            "smsly.blue_green.hc_timeout": "5",
+            "traefik.enable": "false",
+        }
+        green.attrs = {
+            "State": {"Status": "running", "Health": {"Status": "healthy"}},
+            "Config": {
+                "Env": [],
+                "Cmd": None,
+                "Entrypoint": None,
+                "Healthcheck": None,
+            },
+            "HostConfig": {
+                "Binds": None,
+                "RestartPolicy": {},
+            },
+        }
+        green.image.tags = ["registry:5000/smsly/buyforfront:test"]
+
+        old_live = MagicMock()
+        promoted = MagicMock()
+        promoted.id = "promoted-id"
+        docker_client.containers.create.return_value = promoted
+        docker_client.containers.get.side_effect = lambda value: (
+            green if value == "green-id" else old_live
+        )
+        docker_client.networks.get.return_value = MagicMock()
+
+        result = adapter.promote_container("buyforfront", "green-id")
+
+        self.assertEqual(result, "promoted-id")
+        labels = docker_client.containers.create.call_args.kwargs["labels"]
+        self.assertEqual(labels["traefik.http.services.buyforfront.loadbalancer.healthcheck.path"], "/healthz")
+        self.assertEqual(labels["traefik.http.services.buyforfront.loadbalancer.healthcheck.interval"], "10s")
+        self.assertEqual(labels["traefik.http.services.buyforfront.loadbalancer.healthcheck.timeout"], "5s")
+
+    @patch.object(LocalAdapter, "_wait_container_healthy", return_value=True)
+    @patch("apps.deployments.models.PlatformConfig.load")
+    def test_initial_deploy_injects_traefik_loadbalancer_healthchecks(self, mock_load, _wait_mock):
+        adapter, docker_client, _existing = self._build_adapter_with_mock_docker()
+        mock_load.return_value = SimpleNamespace(use_ssl=True)
+
+        adapter._deploy_docker(
+            name="buyforfront",
+            image="registry:5000/smsly/buyforfront:test",
+            env={
+                "PORT": "8000",
+                "PUBLIC_DOMAIN": "buyforfront.example.com",
+            },
+            healthcheck={
+                "path": "/healthz",
+                "port": 8000,
+                "interval": 15,
+                "timeout": 5,
+                "retries": 3,
+            }
+        )
+
+        labels = docker_client.containers.create.call_args.kwargs["labels"]
+        self.assertEqual(labels["traefik.http.services.buyforfront.loadbalancer.healthcheck.path"], "/healthz")
+        self.assertEqual(labels["traefik.http.services.buyforfront.loadbalancer.healthcheck.interval"], "15s")
+        self.assertEqual(labels["traefik.http.services.buyforfront.loadbalancer.healthcheck.timeout"], "5s")

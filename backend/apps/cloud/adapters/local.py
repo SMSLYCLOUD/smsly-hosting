@@ -392,6 +392,10 @@ class LocalAdapter(BaseCloudAdapter):
         else:
             labels.update(self._get_traefik_labels(name, host_rule, port, is_public))
             self._apply_router_special_labels(labels, name, env)
+            if platform_hc_enabled and hc_primary_path:
+                labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.path'] = hc_primary_path
+                labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.interval'] = f"{hc_interval}s"
+                labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.timeout'] = f"{hc_timeout}s"
 
         container_name = name
         aliases = [name, f"{name}.default.internal"]
@@ -618,6 +622,18 @@ class LocalAdapter(BaseCloudAdapter):
         for k, v in green_labels.items():
             if k.startswith('smsly.'):
                 live_labels[k] = v
+
+        # Add Traefik load balancer healthcheck if configured
+        hc_path = green_labels.get('smsly.blue_green.hc_path')
+        hc_interval = green_labels.get('smsly.blue_green.hc_interval')
+        hc_timeout = green_labels.get('smsly.blue_green.hc_timeout')
+        if hc_path:
+            router_name = name.replace('.', '-').replace('_', '-')
+            live_labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.path'] = hc_path
+            if hc_interval:
+                live_labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.interval'] = f"{hc_interval}s"
+            if hc_timeout:
+                live_labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.timeout'] = f"{hc_timeout}s"
 
         green_cmd = green_config.get('Cmd')
         green_entrypoint = green_config.get('Entrypoint')
