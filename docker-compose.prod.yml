@@ -1,8 +1,6 @@
 services:
   db:
     image: postgres:16-alpine
-    ports:
-      - "5432:5432" # Required for Lite Agents
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-smsly_hosting}
@@ -45,9 +43,7 @@ services:
     - smsly-net
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379" # Required for Lite Agents
-    command: redis-server ${REDIS_PASSWORD:+--requirepass ${REDIS_PASSWORD}}
+    command: redis-server --requirepass ${REDIS_PASSWORD}
     restart: unless-stopped
     volumes:
     - redis_data:/data
@@ -69,8 +65,15 @@ services:
     - 5000:5000
     environment:
       REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /var/lib/registry
+      REGISTRY_AUTH: htpasswd
+      REGISTRY_AUTH_HTPASSWD_REALM: SMSLY Registry
+      REGISTRY_AUTH_HTPASSWD_PATH: /auth/htpasswd
+      REGISTRY_HTTP_TLS_CERTIFICATE: /certs/registry.crt
+      REGISTRY_HTTP_TLS_KEY: /certs/registry.key
     volumes:
       - registry_data:/var/lib/registry
+      - ./auth:/auth:ro
+      - ./certs:/certs:ro
     networks:
       - smsly-net
   docker-mirror:
@@ -334,22 +337,16 @@ services:
     environment:
       CONTAINERS: 1
       IMAGES: 1
+      BUILD: 1        # needed for builds
       NETWORKS: 1
       VOLUMES: 1
       INFO: 1
       VERSION: 1
       EVENTS: 1
-      BUILD: 1
-      POST: 1
-      PUT: 1
-      DELETE: 1
-      EXEC: 1
-      SERVICES: 0
-      SWARM: 0
-      NODES: 0
-      CONFIGS: 0
-      SECRETS: 0
       COMMIT: 1
+      # EXEC: 0       # DISABLE — prevents container escape via exec
+      # POST: 0       # DISABLE — prevents arbitrary container create
+      # DELETE: 0     # DISABLE — prevents deletion attacks
     volumes:
     - /var/run/docker.sock:/var/run/docker.sock:ro
     healthcheck:
@@ -567,7 +564,7 @@ services:
       - "127.0.0.1:3001:3000"
     environment:
       - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_SERVER_ROOT_URL=https://${DOMAIN:-localhost}/grafana/
       - GF_SERVER_SERVE_FROM_SUB_PATH=true

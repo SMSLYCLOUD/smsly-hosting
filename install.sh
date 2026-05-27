@@ -289,11 +289,11 @@ EOF
         if [ "$my_ip" != "127.0.0.1" ]; then
             echo -e "${BLUE}  → Configuring Master insecure registry (registry:5000, ${my_ip}:5000)...${NC}"
             mkdir -p /etc/docker
-            local master_trust_list="\"registry:5000\", \"${my_ip}:5000\", \"127.0.0.1:5000\", \"10.0.0.1:5000\", \"10.100.0.1:5000\""
+            local master_trust_list="\"registry:5000\", \"${my_ip}:5000\""
             if [ -n "${MASTER_MESH_IP:-}" ]; then
                 master_trust_list="${master_trust_list}, \"${MASTER_MESH_IP}:5000\""
             fi
-            # Include loopback, public IP, and common mesh ranges for safety
+            # Registry now has TLS + htpasswd auth — keep insecure flag for self-signed certs
             cat > /etc/docker/daemon.json <<EOF
 {
   "insecure-registries": [${master_trust_list}]
@@ -5269,6 +5269,33 @@ docker network create smsly-proxy 2>/dev/null || true
 
 # Both IP and SSL modes use the same compose stack.
 # Master exposes public HTTP/HTTPS through Caddy; node/agent modes expose HTTP through Traefik.
+# Generate registry TLS cert + htpasswd if missing (required for auth-enabled registry)
+echo -e "${BLUE}  → Configuring Docker registry auth and TLS...${NC}"
+mkdir -p "$INSTALL_DIR/auth" "$INSTALL_DIR/certs"
+if [ ! -f "$INSTALL_DIR/certs/registry.key" ] || [ ! -f "$INSTALL_DIR/certs/registry.crt" ]; then
+    echo -e "${BLUE}    Generating self-signed TLS cert for registry...${NC}"
+    openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+        -keyout "$INSTALL_DIR/certs/registry.key" \
+        -out "$INSTALL_DIR/certs/registry.crt" \
+        -subj "/CN=registry" 2>/dev/null || \
+        echo -e "${YELLOW}    ⚠ Failed to generate registry cert (openssl missing?)${NC}"
+fi
+if [ ! -f "$INSTALL_DIR/auth/htpasswd" ]; then
+    REGISTRY_PASS="${REGISTRY_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_urlsafe(18))" 2>/dev/null || openssl rand -hex 12 2>/dev/null || echo 'auto-generated-change-me')}"
+    if command -v htpasswd >/dev/null 2>&1; then
+        htpasswd -Bbn "${REGISTRY_USER:-smsly-registry}" "$REGISTRY_PASS" > "$INSTALL_DIR/auth/htpasswd"
+    else
+        # Python-based bcrypt fallback
+        python3 -c "
+import bcrypt, sys
+pw = sys.argv[1] if len(sys.argv) > 1 else '$REGISTRY_PASS'
+print(f'${REGISTRY_USER:-smsly-registry}:' + bcrypt.hashpw(pw.encode(), bcrypt.gensalt(10)).decode())
+" "$REGISTRY_PASS" > "$INSTALL_DIR/auth/htpasswd" 2>/dev/null || \
+        echo -e "${YELLOW}    ⚠ Failed to generate htpasswd (neither htpasswd nor python bcrypt available)${NC}"
+    fi
+fi
+echo -e "${GREEN}  ✓ Registry auth + TLS configured${NC}"
+
 # Ensure bind-mounted config paths exist before `docker compose up`.
 ensure_infrastructure_permissions
 if [ "$MODE_AGENT_LITE" = "true" ]; then

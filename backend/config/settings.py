@@ -108,7 +108,7 @@ CONTAINER_REGISTRY_URL = config(
     default='registry.smsly.cloud')
 REGISTRY_USER = config('REGISTRY_USER', default='')
 REGISTRY_PASSWORD = config('REGISTRY_PASSWORD', default='')
-# Webhook secret: keep production running even if omitted.
+# Webhook secret: MUST be set explicitly in production. Fallback is random per startup.
 _GITHUB_WEBHOOK_SECRET_RAW = str(config('GITHUB_WEBHOOK_SECRET', default='')).strip()
 if IS_TESTING:
     GITHUB_WEBHOOK_SECRET = _GITHUB_WEBHOOK_SECRET_RAW or 'test-github-webhook-secret'
@@ -118,8 +118,9 @@ else:
     if _GITHUB_WEBHOOK_SECRET_RAW:
         GITHUB_WEBHOOK_SECRET = _GITHUB_WEBHOOK_SECRET_RAW
     else:
-        print("[settings] WARNING: GITHUB_WEBHOOK_SECRET missing; deriving fallback value from SECRET_KEY.")
-        GITHUB_WEBHOOK_SECRET = f"{SECRET_KEY}-github-webhook"
+        import secrets as _secrets
+        print("[settings] ERROR: GITHUB_WEBHOOK_SECRET missing in production. Generating random value (webhooks will break until this is set explicitly).")
+        GITHUB_WEBHOOK_SECRET = _secrets.token_hex(64)
 # SECURITY: No wildcard default - prevents host header injection
 # (DOMAIN moved to top of file)
 _DEFAULT_TUNNEL_BASE_DOMAIN = 'tunnel.localhost'
