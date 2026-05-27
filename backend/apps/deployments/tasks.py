@@ -644,7 +644,7 @@ def _build_runtime_env(service: Service, image_name: str = None) -> dict:
     def _is_ciphertext(val: str) -> bool:
         if not val or not isinstance(val, str):
             return False
-        if val.startswith("gAAAAA"):
+        if val.startswith("gAAAA"):
             return True
         if len(val) > 100 and all(c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_=" for c in val):
             try:

@@ -254,6 +254,7 @@ def build_agent_lite_install_env(
             "MASTER_MQ_PASSWORD": master_mq_pass,
             "MASTER_REDIS_PASSWORD": master_redis_pass,
             "MASTER_GATEWAY_SECRET": agent_gateway_secret,
+            "MASTER_FIELD_ENCRYPTION_KEY": getattr(settings, "FIELD_ENCRYPTION_KEY", ""),
             "SMSLY_NODE_HOST": str(server.host or "").strip(),
             "SMSLY_NODE_ID": node_id,
             "SMSLY_NODE_QUEUE": node_queue,

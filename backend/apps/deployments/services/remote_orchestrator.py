@@ -1078,8 +1078,8 @@ class RemoteOrchestrator:
             """Detect Fernet ciphertext that was not decrypted by the ORM."""
             if not val or not isinstance(val, str):
                 return False
-            # Fernet tokens always start with gAAAAA (base64 of version byte + timestamp)
-            if val.startswith("gAAAAA"):
+            # Fernet tokens always start with gAAAA (base64 of version byte + timestamp)
+            if val.startswith("gAAAA"):
                 return True
             # Additional heuristic: all-base64/base64url string of Fernet-typical length
             if len(val) > 100 and all(c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_=" for c in val):

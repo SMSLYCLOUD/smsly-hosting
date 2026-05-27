@@ -1762,7 +1762,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
             """Detect Fernet ciphertext to prevent storing it as plaintext."""
             if not val or not isinstance(val, str):
                 return False
-            if val.startswith("gAAAAA"):
+            if val.startswith("gAAAA"):
                 return True
             if len(val) > 100 and all(c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_=" for c in val):
                 try:
