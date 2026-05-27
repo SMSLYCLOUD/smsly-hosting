@@ -2229,8 +2229,14 @@ def _wait_for_local_route_ready(
     if configured:
         _add_probe(configured, headers={"Host": host}, verify=False)
     _add_probe("http://traefik:80", headers={"Host": host}, verify=False)
-    _add_probe("http://127.0.0.1:8081", headers={"Host": host}, verify=False)
-    _add_probe("http://localhost:8081", headers={"Host": host}, verify=False)
+    
+    is_lite = getattr(service.server, "is_lite_agent", False) if service.server else False
+    if is_lite:
+        _add_probe("http://127.0.0.1:80", headers={"Host": host}, verify=False)
+        _add_probe("http://localhost:80", headers={"Host": host}, verify=False)
+    else:
+        _add_probe("http://127.0.0.1:8081", headers={"Host": host}, verify=False)
+        _add_probe("http://localhost:8081", headers={"Host": host}, verify=False)
 
     # Preserve order and remove duplicates.
     probes = []
