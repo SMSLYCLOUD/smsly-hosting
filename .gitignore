@@ -68,3 +68,8 @@ reports/
 Thumbs.db
 *.swp
 *~
+
+# Workloads and runtime configs
+builds/
+caddy-config/
+

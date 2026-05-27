@@ -310,6 +310,29 @@ EOF
     fi
 }
 
+ensure_local_ignores() {
+    local target_dir="${INSTALL_DIR:-/opt/smsly-hosting}"
+    local gitignore_path="${target_dir}/.gitignore"
+    if [ -d "$target_dir" ]; then
+        if [ ! -f "$gitignore_path" ]; then
+            touch "$gitignore_path"
+        fi
+        local needs_update=false
+        if ! grep -q "^builds/" "$gitignore_path"; then
+            echo "" >> "$gitignore_path"
+            echo "builds/" >> "$gitignore_path"
+            needs_update=true
+        fi
+        if ! grep -q "^caddy-config/" "$gitignore_path"; then
+            echo "caddy-config/" >> "$gitignore_path"
+            needs_update=true
+        fi
+        if [ "$needs_update" = "true" ]; then
+            echo -e "${BLUE}  → Added builds/ and caddy-config/ to local .gitignore to prevent Git stash hangs${NC}"
+        fi
+    fi
+}
+
 # ─── Pre-flight Validators ──────────────────────────────────────────────────
 check_internet() {
     echo -e "${BLUE}  → Checking internet connectivity...${NC}"
@@ -2379,6 +2402,7 @@ if [ "${FIX_DOMAIN_MODE:-false}" = "true" ]; then
         echo -e "${YELLOW}  → --fix-domain is master-only because node/agent modes do not manage Caddy/HTTPS.${NC}"
         exit 0
     fi
+    ensure_local_ignores
     if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
         echo -e "${YELLOW}  ! Local changes detected - stashing before repository sync${NC}"
         git stash push --include-untracked -m "install-sync-$(date +%s)" >/dev/null 2>&1 || true
@@ -2387,8 +2411,12 @@ if [ "${FIX_DOMAIN_MODE:-false}" = "true" ]; then
     # Git pull latest code first to get all SEC-xxx fixes
     echo -e "${BLUE}  → Pulling latest installer code...${NC}"
     git config --global --add safe.directory "$INSTALL_DIR" 2>/dev/null || true
-    git fetch origin main 2>/dev/null || true
-    git checkout -B main origin/main 2>/dev/null || true
+    if ! git fetch origin main 2>/dev/null; then
+        git -c http.sslVerify=false fetch origin main 2>/dev/null || true
+    fi
+    if ! git checkout -B main origin/main 2>/dev/null; then
+        git -c http.sslVerify=false checkout -B main origin/main 2>/dev/null || true
+    fi
     echo -e "${GREEN}  ✓ Code updated${NC}"
 
     # Detect current or prompt for domain
@@ -3405,6 +3433,7 @@ if ! is_checkpoint_done "update_git_synced"; then
         PRE_UPDATE_HEAD="$(git rev-parse HEAD 2>/dev/null || true)"
     fi
     echo "$PRE_UPDATE_HEAD" > "$INSTALL_DIR/.pre-update-head" 2>/dev/null || true
+    ensure_local_ignores
     if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
         echo -e "${YELLOW}  ⚠ Local changes detected — stashing before pull${NC}"
         git stash push --include-untracked -m "install-update-$(date +%s)"
@@ -3417,14 +3446,22 @@ if ! is_checkpoint_done "update_git_synced"; then
     GIT_UPDATE_OK=true
 
     if ! git fetch origin "$SMSLY_BRANCH" >/dev/null 2>&1; then
-        echo -e "${YELLOW}  ⚠️ Git fetch failed for $SMSLY_BRANCH.${NC}"
-        GIT_UPDATE_OK=false
+        echo -e "${YELLOW}  ⚠️ Standard Git fetch failed. Retrying with http.sslVerify=false...${NC}"
+        if ! git -c http.sslVerify=false fetch origin "$SMSLY_BRANCH" >/dev/null 2>&1; then
+            echo -e "${YELLOW}  ⚠️ Git fetch failed for $SMSLY_BRANCH.${NC}"
+            GIT_UPDATE_OK=false
+        fi
     fi
 
     if [ "$GIT_UPDATE_OK" = "true" ]; then
         if ! git checkout -B "$SMSLY_BRANCH" "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
-            echo -e "${YELLOW}  ⚠️ Git reset failed.${NC}"
-            GIT_UPDATE_OK=false
+            echo -e "${YELLOW}  ⚠️ Standard Git checkout failed. Retrying with http.sslVerify=false...${NC}"
+            if ! git -c http.sslVerify=false checkout -B "$SMSLY_BRANCH" "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
+                echo -e "${YELLOW}  ⚠️ Git reset failed.${NC}"
+                GIT_UPDATE_OK=false
+            else
+                git -c http.sslVerify=false branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
+            fi
         else
             git branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
         fi
@@ -4678,12 +4715,16 @@ SMSLY_GIT_REMOTE="${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hostin
 if [ -d "$INSTALL_DIR/.git" ]; then
     echo -e "${BLUE}  → Updating existing repository ($SMSLY_BRANCH)...${NC}"
     cd "$INSTALL_DIR"
+    ensure_local_ignores
     if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
         echo -e "${YELLOW}  ! Local changes detected - stashing before repository sync${NC}"
         git stash push --include-untracked -m "install-sync-$(date +%s)" >/dev/null 2>&1 || true
     fi
     if ! git fetch origin "$SMSLY_BRANCH" >/dev/null 2>&1 || ! git reset --hard "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
-        echo -e "${YELLOW}  ⚠️ Git update failed. The installer repository is public; check network/DNS access to GitHub and branch name.${NC}"
+        echo -e "${YELLOW}  ⚠️ Standard Git update failed. Retrying with http.sslVerify=false...${NC}"
+        if ! git -c http.sslVerify=false fetch origin "$SMSLY_BRANCH" >/dev/null 2>&1 || ! git -c http.sslVerify=false reset --hard "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
+            echo -e "${YELLOW}  ⚠️ Git update failed. The installer repository is public; check network/DNS access to GitHub and branch name.${NC}"
+        fi
     fi
 else
     echo -e "${BLUE}  → Cloning repository ($SMSLY_BRANCH)...${NC}"
@@ -4693,16 +4734,28 @@ else
         cd "$INSTALL_DIR"
         git init -q
         git remote add origin "$SMSLY_GIT_REMOTE"
+        ensure_local_ignores
         if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
             git stash push --include-untracked -m "install-bootstrap-$(date +%s)" >/dev/null 2>&1 || true
         fi
         if git fetch origin "$SMSLY_BRANCH" -q >/dev/null 2>&1 && git checkout -B "$SMSLY_BRANCH" "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
             git branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
             CLONE_SUCCESS=true
+        else
+            echo -e "${YELLOW}  ⚠️ Standard Git fetch/checkout failed. Retrying with http.sslVerify=false...${NC}"
+            if git -c http.sslVerify=false fetch origin "$SMSLY_BRANCH" -q >/dev/null 2>&1 && git -c http.sslVerify=false checkout -B "$SMSLY_BRANCH" "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
+                git -c http.sslVerify=false branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
+                CLONE_SUCCESS=true
+            fi
         fi
     else
         if git clone -b "$SMSLY_BRANCH" "$SMSLY_GIT_REMOTE" "$INSTALL_DIR"; then
             CLONE_SUCCESS=true
+        else
+            echo -e "${YELLOW}  ⚠️ Standard Git clone failed. Retrying with http.sslVerify=false...${NC}"
+            if git -c http.sslVerify=false clone -b "$SMSLY_BRANCH" "$SMSLY_GIT_REMOTE" "$INSTALL_DIR"; then
+                CLONE_SUCCESS=true
+            fi
         fi
     fi
 
@@ -4830,15 +4883,21 @@ if [ "$(pwd)" != "$INSTALL_DIR" ]; then
         if [ -d "$INSTALL_DIR/.git" ]; then
              echo -e "${BLUE}  → Updating existing repository...${NC}"
              cd "$INSTALL_DIR"
+             ensure_local_ignores
              if [ -n "${SMSLY_GIT_REMOTE:-}" ]; then
                  git remote set-url origin "$SMSLY_GIT_REMOTE" 2>/dev/null || true
              fi
              if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
                  git stash push --include-untracked -m "install-config-sync-$(date +%s)" >/dev/null 2>&1 || true
              fi
-             git fetch origin "$SMSLY_BRANCH" >/dev/null 2>&1 || true
-             git checkout -B "$SMSLY_BRANCH" "origin/$SMSLY_BRANCH" >/dev/null 2>&1 || true
-             git branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
+             if ! git fetch origin "$SMSLY_BRANCH" >/dev/null 2>&1; then
+                 git -c http.sslVerify=false fetch origin "$SMSLY_BRANCH" >/dev/null 2>&1 || true
+             fi
+             if ! git checkout -B "$SMSLY_BRANCH" "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
+                 git -c http.sslVerify=false checkout -B "$SMSLY_BRANCH" "origin/$SMSLY_BRANCH" >/dev/null 2>&1 || true
+             fi
+             git branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || \
+             git -c http.sslVerify=false branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
         else
              echo -e "${BLUE}  → Cloning repository...${NC}"
              if [ -d "$INSTALL_DIR" ] && [ "$(ls -A "$INSTALL_DIR" 2>/dev/null)" ]; then
@@ -4846,13 +4905,23 @@ if [ "$(pwd)" != "$INSTALL_DIR" ]; then
                  cd "$INSTALL_DIR"
                  git init -q
                  git remote add origin "${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}"
-                 git fetch origin "$SMSLY_BRANCH" -q >/dev/null 2>&1 || true
-                 git checkout -B "$SMSLY_BRANCH" "origin/$SMSLY_BRANCH" >/dev/null 2>&1 || true
-                 git branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
+                 ensure_local_ignores
+                 if ! git fetch origin "$SMSLY_BRANCH" -q >/dev/null 2>&1; then
+                     git -c http.sslVerify=false fetch origin "$SMSLY_BRANCH" -q >/dev/null 2>&1 || true
+                 fi
+                 if ! git checkout -B "$SMSLY_BRANCH" "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
+                     git -c http.sslVerify=false checkout -B "$SMSLY_BRANCH" "origin/$SMSLY_BRANCH" >/dev/null 2>&1 || true
+                 fi
+                 git branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || \
+                 git -c http.sslVerify=false branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
              else
-                 git clone -b "$SMSLY_BRANCH" "${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}" "$INSTALL_DIR"
+                 if ! git clone -b "$SMSLY_BRANCH" "${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}" "$INSTALL_DIR"; then
+                     echo -e "${YELLOW}  ⚠️ Standard Git clone failed. Retrying with http.sslVerify=false...${NC}"
+                     git -c http.sslVerify=false clone -b "$SMSLY_BRANCH" "${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}" "$INSTALL_DIR"
+                 fi
                  cd "$INSTALL_DIR"
-                 git branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
+                 git branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || \
+                 git -c http.sslVerify=false branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
              fi
         fi
     fi
@@ -4865,8 +4934,11 @@ if [ ! -d ".git" ] && [ -n "${SMSLY_GIT_REMOTE:-}" ]; then
     git init -q
     git checkout -b "$SMSLY_BRANCH" >/dev/null 2>&1 || true
     git remote add origin "$SMSLY_GIT_REMOTE"
-    git fetch origin "$SMSLY_BRANCH" -q --depth=1 || true
-    git branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
+    if ! git fetch origin "$SMSLY_BRANCH" -q --depth=1; then
+        git -c http.sslVerify=false fetch origin "$SMSLY_BRANCH" -q --depth=1 || true
+    fi
+    git branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || \
+    git -c http.sslVerify=false branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
     # We don't reset --hard here to avoid losing the bundled files we just copied,
     # but the repo is now linked for future updates.
     echo -e "${GREEN}  ✓ Git origin set to ${SMSLY_GIT_REMOTE}${NC}"
