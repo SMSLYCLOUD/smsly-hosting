@@ -40,6 +40,31 @@ class DeploymentsConfig(AppConfig):
     name = 'apps.deployments'
 
     def ready(self):
+        # Patch EncryptedMixin to prevent ciphertext leaks on decryption failure
+        try:
+            from encrypted_model_fields.fields import EncryptedMixin
+            import logging
+            
+            logger = logging.getLogger('encrypted_model_fields')
+            original_to_python = EncryptedMixin.to_python
+            
+            def safe_to_python(self, value):
+                res = original_to_python(self, value)
+                if isinstance(res, str) and res.startswith('gAAAAA'):
+                    logger.error(
+                        "DECRYPTION_FAILURE: Failed to decrypt field '%s' on model '%s'. "
+                        "Returning empty string to prevent downstream crashes.",
+                        getattr(self, 'name', 'unknown'),
+                        self.model.__name__ if hasattr(self, 'model') else 'Unknown'
+                    )
+                    return ""
+                return res
+                
+            EncryptedMixin.to_python = safe_to_python
+        except Exception as e:
+            import logging
+            logging.getLogger('apps.deployments').error("Failed to patch EncryptedMixin: %s", e)
+
         # Import models to ensure they are registered
         from . import models
         from . import models_addons
