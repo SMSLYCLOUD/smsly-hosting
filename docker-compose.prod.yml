@@ -76,6 +76,14 @@ services:
       - registry_data:/var/lib/registry
       - ./auth:/auth:ro
       - ./certs:/certs:ro
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - wget -q --spider http://127.0.0.1:5000/v2/ || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     networks:
       - smsly-net
   docker-mirror:
@@ -88,6 +96,14 @@ services:
       REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /var/lib/registry
     volumes:
       - docker_mirror_data:/var/lib/registry
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - wget -q --spider http://127.0.0.1:5000/v2/ || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     networks:
       - smsly-net
   backend:
@@ -379,6 +395,14 @@ services:
     - traefik.http.routers.route-fallback.entrypoints=web
     - traefik.http.routers.route-fallback.priority=1
     - traefik.http.services.route-fallback.loadbalancer.server.port=80
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - wget -q -O /dev/null http://127.0.0.1:80/ || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     networks:
     - smsly-net
   traefik:
@@ -394,12 +418,19 @@ services:
     - --entrypoints.web.forwardedHeaders.trustedIPs=127.0.0.1/32,172.16.0.0/12,10.0.0.0/8
     - --api.insecure=true
     - --log.level=WARN
+    - --ping=true
     ports:
     - "${TRAEFIK_HTTP_BIND:-127.0.0.1:8081}:80"
     - 127.0.0.1:8082:8080
     depends_on:
       socket-proxy:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     security_opt:
     - no-new-privileges:true
     networks:
@@ -477,6 +508,14 @@ services:
       - media_volume:/app/media:ro
     depends_on:
       - backend
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - wget -q -O /dev/null http://127.0.0.1:2019/config/ || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     networks:
       - smsly-net
   loki:
