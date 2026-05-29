@@ -33,6 +33,11 @@ _FERNET_HEADER_SIZE = 1 + 8 + 16
 _FERNET_HMAC_SIZE = 32
 
 class BackupService:
+
+    def _backup_fvm(self, backup):
+        from apps.cloud.adapters.firecracker import FirecrackerAdapter
+        # Pause VM, snapshot ext4, resume
+        pass
     def __init__(self):
         try:
             from apps.cloud.docker_client import get_docker_client

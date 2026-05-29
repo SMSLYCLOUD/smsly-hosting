@@ -13,12 +13,84 @@ class BaseCloudAdapter(ABC):
     def authenticate(self) -> bool:
         """Verify credentials are valid."""
 
+    # --- Instance Lifecycle (Extended for FVM + Docker unification) ---
+    def create_instance(self, name: str, image: str, env: Dict[str, str], resources: Dict[str, int], volumes: List[Dict], network: str, labels: Dict[str, str], healthcheck: Dict) -> str:
+        """Create a compute instance (container or microVM). Returns instance_id."""
+        raise NotImplementedError
+
+    def start_instance(self, instance_id: str) -> None:
+        """Start a created instance."""
+        raise NotImplementedError
+
+    def stop_instance(self, instance_id: str, timeout: int = 10) -> None:
+        """Stop an instance gracefully."""
+        raise NotImplementedError
+
+    def remove_instance(self, instance_id: str, force: bool = False) -> None:
+        """Remove an instance."""
+        raise NotImplementedError
+
+    def get_instance(self, instance_id: str) -> Dict[str, Any]:
+        """Get info about an instance."""
+        raise NotImplementedError
+
+    def get_instance_logs(self, instance_id: str, tail: int = 200) -> str:
+        """Fetch logs for an instance."""
+        raise NotImplementedError
+
+    def wait_instance_healthy(self, instance_id: str, timeout: int = 60) -> bool:
+        """Wait until instance passes health checks."""
+        raise NotImplementedError
+
+    def exec_in_instance(self, instance_id: str, cmd: str) -> tuple[int, str, str]:
+        """Execute command in instance. Returns (exit_code, stdout, stderr)."""
+        raise NotImplementedError
+
+    def get_instance_stats(self, instance_id: str) -> Dict[str, Any]:
+        """Fetch resource usage metrics for the instance."""
+        raise NotImplementedError
+
+    # --- Image Management ---
     def pull_image(self, image: str) -> bool:
         """
         Pull a container image from a registry.
         Returns True if successful.
         """
         return True
+
+    def push_image(self, image: str) -> bool:
+        """Push an image to registry."""
+        raise NotImplementedError
+
+    def commit_instance(self, instance_id: str) -> str:
+        """Commit an instance to an image. Returns image_ref."""
+        raise NotImplementedError
+
+    def save_image(self, image_ref: str, path: str) -> None:
+        """Save an image to a tar/ext4 file."""
+        raise NotImplementedError
+
+    def load_image(self, path: str) -> str:
+        """Load an image from a tar/ext4 file. Returns image_ref."""
+        raise NotImplementedError
+
+    # --- Volume Management ---
+    def create_volume(self, name: str, size: int = 0) -> str:
+        """Create a storage volume."""
+        raise NotImplementedError
+
+    def remove_volume(self, name: str) -> None:
+        """Remove a storage volume."""
+        raise NotImplementedError
+
+    # --- Network Management ---
+    def create_network(self, name: str, driver: str = "bridge") -> str:
+        """Create a network."""
+        raise NotImplementedError
+
+    def connect_to_network(self, instance_id: str, network: str, aliases: List[str] = None) -> None:
+        """Connect an instance to a network."""
+        raise NotImplementedError
 
     @abstractmethod
     def deploy_container(self, service_name: str, image: str,

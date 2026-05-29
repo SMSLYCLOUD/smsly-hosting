@@ -73,3 +73,11 @@ scrape_configs:
             timestamp: timestamp
       - labels:
           level:
+
+  - job_name: smsly_fvm_logs
+    static_configs:
+    - targets:
+        - localhost
+      labels:
+        job: fvm_container_logs
+        __path__: /var/log/smsly-fvm/*/console.log

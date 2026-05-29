@@ -390,6 +390,8 @@ services:
     - --providers.docker.network=smsly-net
     - --providers.docker.endpoint=tcp://socket-proxy:2375
     - --providers.docker.httpClientTimeout=300s
+    - --providers.file.directory=/opt/smsly-hosting/traefik-dynamic
+    - --providers.file.watch=true
     - --entrypoints.web.address=:80
     - --entrypoints.web.forwardedHeaders.trustedIPs=127.0.0.1/32,172.16.0.0/12,10.0.0.0/8
     - --api.insecure=true
@@ -400,6 +402,8 @@ services:
     depends_on:
       socket-proxy:
         condition: service_healthy
+    volumes:
+    - /opt/smsly-hosting/traefik-dynamic:/opt/smsly-hosting/traefik-dynamic:ro
     security_opt:
     - no-new-privileges:true
     networks:
@@ -592,6 +596,11 @@ services:
       - "traefik.http.services.grafana.loadbalancer.server.port=3000"
       - "traefik.docker.network=smsly-proxy"
 networks:
+  smsly-fvm:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16
   smsly-net:
     external: true
     name: smsly-net
