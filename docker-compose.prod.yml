@@ -39,6 +39,8 @@ services:
       timeout: 10s
       retries: 10
       start_period: 60s
+    ports:
+      - "10.100.0.1:5432:5432"
     networks:
     - smsly-net
   redis:
