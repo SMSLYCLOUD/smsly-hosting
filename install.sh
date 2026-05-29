@@ -4793,34 +4793,23 @@ if [ -d "$INSTALL_DIR/.git" ]; then
 else
     echo -e "${BLUE}  → Cloning repository ($SMSLY_BRANCH)...${NC}"
     CLONE_SUCCESS=false
-    if [ -d "$INSTALL_DIR" ] && [ "$(ls -A "$INSTALL_DIR" 2>/dev/null)" ]; then
-        echo -e "${YELLOW}  → Destination not empty. Initializing git...${NC}"
-        cd "$INSTALL_DIR"
-        git init -q
-        git remote add origin "$SMSLY_GIT_REMOTE"
-        ensure_local_ignores
-        if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
-            git stash push --include-untracked -m "install-bootstrap-$(date +%s)" >/dev/null 2>&1 || true
-        fi
-        if git fetch origin "$SMSLY_BRANCH" -q >/dev/null 2>&1 && git checkout -B "$SMSLY_BRANCH" "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
-            git branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
-            CLONE_SUCCESS=true
-        else
-            echo -e "${YELLOW}  ⚠️ Standard Git fetch/checkout failed. Retrying with http.sslVerify=false...${NC}"
-            if git -c http.sslVerify=false fetch origin "$SMSLY_BRANCH" -q >/dev/null 2>&1 && git -c http.sslVerify=false checkout -B "$SMSLY_BRANCH" "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
-                git -c http.sslVerify=false branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
-                CLONE_SUCCESS=true
-            fi
-        fi
+    if [ -f "$INSTALL_DIR/.env" ]; then
+        echo -e "${YELLOW}  → Existing .env found — preserving configuration${NC}"
+        cp "$INSTALL_DIR/.env" /tmp/smsly-env-backup 2>/dev/null || true
+    fi
+    rm -rf "$INSTALL_DIR"
+    if git clone -b "$SMSLY_BRANCH" "$SMSLY_GIT_REMOTE" "$INSTALL_DIR"; then
+        CLONE_SUCCESS=true
     else
-        if git clone -b "$SMSLY_BRANCH" "$SMSLY_GIT_REMOTE" "$INSTALL_DIR"; then
+        echo -e "${YELLOW}  ⚠️ Standard Git clone failed. Retrying with http.sslVerify=false...${NC}"
+        if git -c http.sslVerify=false clone -b "$SMSLY_BRANCH" "$SMSLY_GIT_REMOTE" "$INSTALL_DIR"; then
             CLONE_SUCCESS=true
-        else
-            echo -e "${YELLOW}  ⚠️ Standard Git clone failed. Retrying with http.sslVerify=false...${NC}"
-            if git -c http.sslVerify=false clone -b "$SMSLY_BRANCH" "$SMSLY_GIT_REMOTE" "$INSTALL_DIR"; then
-                CLONE_SUCCESS=true
-            fi
         fi
+    fi
+    if [ "$CLONE_SUCCESS" = "true" ] && [ -f /tmp/smsly-env-backup ]; then
+        cp /tmp/smsly-env-backup "$INSTALL_DIR/.env"
+        rm -f /tmp/smsly-env-backup
+        echo -e "${GREEN}  ✓ Restored existing .env${NC}"
     fi
 
     if [ "$CLONE_SUCCESS" = "false" ]; then
