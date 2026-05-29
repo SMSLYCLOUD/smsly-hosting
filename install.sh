@@ -289,7 +289,7 @@ EOF
         if [ "$my_ip" != "127.0.0.1" ]; then
             echo -e "${BLUE}  → Configuring Master insecure registry (registry:5000, ${my_ip}:5000)...${NC}"
             mkdir -p /etc/docker
-            local master_trust_list="\"registry:5000\", \"${my_ip}:5000\""
+            local master_trust_list="\"127.0.0.1:5000\", \"registry:5000\", \"${my_ip}:5000\""
             if [ -n "${MASTER_MESH_IP:-}" ]; then
                 master_trust_list="${master_trust_list}, \"${MASTER_MESH_IP}:5000\""
             fi
@@ -5261,6 +5261,10 @@ PGCAT_ADMIN_PASSWORD=$PGCAT_ADMIN_PASSWORD
 # Direct database connection for migrations (bypasses PgCat pooler)
 DIRECT_DATABASE_URL=postgresql://smsly_admin:$POSTGRES_PASSWORD@db:5432/smsly_hosting
 
+# Private Docker registry (push/pull deployment images)
+CONTAINER_REGISTRY_URL=127.0.0.1:5000
+REGISTRY_USER=smsly-registry
+
 # The installer runs first-boot Django setup explicitly after the stack starts.
 # Keep the web container from doing the same work while Compose is waiting on health.
 SMSLY_RUN_ENTRYPOINT_TASKS=false
@@ -5428,6 +5432,9 @@ fi
         fi
     fi
     set_checkpoint "stack_deployed"
+
+    # Docker login now that the registry is actually running
+    docker_login
 fi
 if [ "$STACK_DEPLOYED_FROM_CHECKPOINT" = "true" ]; then
     reconcile_compose_stack_after_resume
