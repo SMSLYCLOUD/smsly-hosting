@@ -105,7 +105,7 @@ else:
 # Container Registry
 CONTAINER_REGISTRY_URL = config(
     'CONTAINER_REGISTRY_URL',
-    default='registry.smsly.cloud')
+    default='127.0.0.1:5000')
 REGISTRY_USER = config('REGISTRY_USER', default='')
 REGISTRY_PASSWORD = config('REGISTRY_PASSWORD', default='')
 # Webhook secret: MUST be set explicitly in production. Fallback is random per startup.
