@@ -360,6 +360,17 @@ PY
         echo -e "${RED}ERROR: Failed to update Docker registry trust${NC}"
         exit 1
     fi
+    docker_login
+}
+
+docker_login() {
+    local env_file="$INSTALL_DIR/.env"
+    local registry="${CONTAINER_REGISTRY_URL:-$(env_get_value "$env_file" "CONTAINER_REGISTRY_URL" 2>/dev/null || echo "")}"
+    local user="${REGISTRY_USER:-$(env_get_value "$env_file" "REGISTRY_USER" 2>/dev/null || echo "smsly-registry")}"
+    local pass="${REGISTRY_PASSWORD:-$(env_get_value "$env_file" "REGISTRY_PASSWORD" 2>/dev/null || echo "")}"
+    [ -z "$registry" ] && registry="127.0.0.1:5000"
+    [ -z "$pass" ] && return 0
+    echo "$pass" | docker login "$registry" -u "$user" --password-stdin >/dev/null 2>&1 || true
 }
 
 wait_for_local_rabbitmq() {

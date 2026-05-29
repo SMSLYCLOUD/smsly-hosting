@@ -1266,6 +1266,16 @@ bust_core_build_cache() {
     echo -e "${GREEN}  OK Cache bust complete (targeted images + build cache + deep prune)${NC}"
 }
 
+docker_login() {
+    local registry="${CONTAINER_REGISTRY_URL:-127.0.0.1:5000}"
+    local user="${REGISTRY_USER:-smsly-registry}"
+    local pass="${REGISTRY_PASSWORD:-}"
+    if [ -z "$pass" ]; then
+        return 0
+    fi
+    echo "$pass" | docker login "$registry" -u "$user" --password-stdin >/dev/null 2>&1 || true
+}
+
 restart_edge_stack() {
     local edge_services="socket-proxy traefik route-fallback"
 
@@ -1852,6 +1862,8 @@ if [ -n "$UPDATE_MODE" ]; then
 
     # Cache bust only if disk is low (already runs in the disk check above when needed).
     # Moved into case blocks below to avoid redundant double bust.
+
+    docker_login
 
     case "$UPDATE_MODE" in
         frontend)
@@ -2977,8 +2989,14 @@ print(f'${REGISTRY_USER:-smsly-registry}:' + bcrypt.hashpw(pw.encode(), bcrypt.g
 " "$REGISTRY_PASS" > "$INSTALL_DIR/auth/htpasswd" 2>/dev/null || \
         echo -e "${YELLOW}    ⚠ Failed to generate htpasswd${NC}"
     fi
+    env_set_value "$INSTALL_DIR/.env" "REGISTRY_USER" "${REGISTRY_USER:-smsly-registry}"
+    env_set_value "$INSTALL_DIR/.env" "REGISTRY_PASSWORD" "$REGISTRY_PASS"
 fi
 echo -e "${GREEN}  ✓ Registry auth + TLS configured${NC}"
+
+# Authenticate Docker CLI with the private registry so the daemon can
+# pull base images during builds without 403 errors.
+docker_login
 
 # Ensure bind-mounted config paths exist before `docker compose up`.
 ensure_infrastructure_permissions

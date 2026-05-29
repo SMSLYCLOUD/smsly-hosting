@@ -7,6 +7,8 @@ import docker
 import json
 from typing import Optional, Dict, Any
 
+from django.conf import settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -141,7 +143,13 @@ class NixpacksBuilder:
             image.tag(full_tag)
 
             logger.info(f"Pushing image to {full_tag}...")
-            push_result = client.images.push(full_tag)
+            auth_config = {}
+            if settings.REGISTRY_USER and settings.REGISTRY_PASSWORD:
+                auth_config = {
+                    "username": settings.REGISTRY_USER,
+                    "password": settings.REGISTRY_PASSWORD,
+                }
+            push_result = client.images.push(full_tag, auth_config=auth_config)
             # push() returns a generator (stream=True, default) that yields
             # status lines, or a single string (stream=False).  Consume
             # all output looking for JSON errors.
