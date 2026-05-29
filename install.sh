@@ -975,7 +975,11 @@ verify_agent_lite_connectivity() {
     fi
     if command -v curl >/dev/null 2>&1; then
         local registry_code
-        registry_code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://${registry_check_ip}:5000/v2/" 2>/dev/null || true)"
+        registry_code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "http://${registry_check_ip}:5000/v2/" 2>/dev/null || true)"
+        # Retry with HTTPS if HTTP returned 000 (connection refused / TLS redirect)
+        if [ "$registry_code" = "000" ] || [ "$registry_code" = "400" ]; then
+            registry_code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "https://${registry_check_ip}:5000/v2/" 2>/dev/null || true)"
+        fi
         case "$registry_code" in
             2*|401) ;;
             *)
