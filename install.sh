@@ -2167,6 +2167,7 @@ cleanup_on_failure() {
 
         echo -e "${YELLOW}  Full log: $LOG_FILE${NC}"
         echo -e "${RED}  Please review the log and re-run the installer.${NC}"
+        echo -e "${YELLOW}  ↳ Tip: Use --resume to skip completed steps: sudo bash install.sh --resume${NC}"
 
         # Keep screen session open for inspection if it failed
         if [ -n "${STY:-}" ]; then
@@ -2827,12 +2828,12 @@ restart_edge_stack() {
     ensure_container_on_network "smsly-proxy" "smsly-hosting-socket-proxy-1"
 
     # Validate Caddy config before restart (H1 fix)
-    if should_manage_caddy && command -v caddy >/dev/null 2>&1; then
+    # Use Docker-based Caddy, not host-level binary
+    if should_manage_caddy && docker compose -f "$COMPOSE_FILE" ps caddy 2>/dev/null | grep -q "Up"; then
         if caddy_needs_fix; then
             generate_safe_caddyfile "restart_edge_stack validation"
         fi
         reload_container_caddy 2>/dev/null || true
-
     fi
     echo -e "${GREEN}  OK Edge stack refreshed${NC}"
 }
@@ -3108,7 +3109,7 @@ print('${REGISTRY_USER:-smsly-registry}:' + bcrypt.hashpw(pw.encode(), bcrypt.ge
         wait_for_container_ready "smsly-hosting-redis-1" 120 || true
     fi
 
-    if should_manage_caddy && command -v caddy >/dev/null 2>&1; then
+    if should_manage_caddy && docker compose -f "$COMPOSE_FILE" ps caddy 2>/dev/null | grep -q "Up"; then
         if caddy_needs_fix; then
             generate_safe_caddyfile "recover_runtime_stack"
         fi
@@ -4890,7 +4891,7 @@ fi
 echo -e "${GREEN}  ✓ Previous artifacts cleaned${NC}"
 
 apt_run apt-get update -qq
-apt_run apt-get install -y curl wget git python3 python3-pip python3-venv openssl ca-certificates gnupg lsb-release dnsutils
+apt_run apt-get install -y curl wget git python3 python3-pip python3-venv openssl ca-certificates gnupg lsb-release dnsutils apache2-utils
 
 # Install Docker if missing
 if ! command -v docker &> /dev/null; then
@@ -4902,14 +4903,34 @@ if ! command -v docker &> /dev/null; then
       $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
     apt_run apt-get update -qq
     apt_run apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    systemctl enable docker 2>/dev/null || true
+    systemctl start docker 2>/dev/null || true
+    if ! docker info >/dev/null 2>&1; then
+        echo -e "${RED}  ✗ Docker daemon failed to start. Check 'systemctl status docker' and kernel modules.${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}  ✓ Docker installed and running${NC}"
 else
     echo -e "${GREEN}  ✓ Docker already installed ($(docker --version | head -c 40))${NC}"
 fi
+
+# Create smsly system user for container file ownership
+id smsly >/dev/null 2>&1 || useradd -r -s /usr/sbin/nologin -u 1000 smsly 2>/dev/null || true
 
 # Ensure docker compose is available
 if ! docker compose version >/dev/null 2>&1; then
     echo -e "${BLUE}  → Installing Docker Compose plugin...${NC}"
     apt_run apt-get install -y docker-compose-plugin || true
+fi
+# Fallback to docker-compose v1 if plugin still not available
+if ! docker compose version >/dev/null 2>&1; then
+    if command -v docker-compose >/dev/null 2>&1; then
+        echo -e "${YELLOW}  ⚠ docker compose plugin not available; falling back to docker-compose v1${NC}"
+        docker_compose() { docker-compose "$@"; }
+    else
+        echo -e "${RED}  ✗ Neither 'docker compose' nor 'docker-compose' found. Install Docker Compose.${NC}"
+        exit 1
+    fi
 fi
 
 # Apply mirror config if applicable (Only if docker is now present)
@@ -5388,6 +5409,7 @@ fi
     wait $HEARTBEAT_PID 2>/dev/null || true
     if [ "$DEPLOY_RC" -ne 0 ]; then
         echo -e "${RED}  ✗ Docker Compose failed during stack deployment (exit $DEPLOY_RC).${NC}"
+        echo -e "${YELLOW}  ↳ Re-run with --resume to skip completed steps: sudo bash install.sh --resume${NC}"
         docker compose -f "$COMPOSE_FILE" ps 2>/dev/null || true
         docker compose -f "$COMPOSE_FILE" logs --tail=120 2>/dev/null || true
         exit "$DEPLOY_RC"
@@ -5491,6 +5513,7 @@ if [ "$RUST_TWIN_MODE" != "true" ]; then
     if [ "$MIGRATE_OK" != "true" ]; then
         echo -e "${RED}  ✗ Migrations failed after 3 attempts.${NC}"
         echo -e "${YELLOW}  Check: docker compose -f $COMPOSE_FILE logs backend${NC}"
+        echo -e "${YELLOW}  ↳ Tip: Re-run with --resume: sudo bash install.sh --resume${NC}"
         exit 1
     fi
 else
