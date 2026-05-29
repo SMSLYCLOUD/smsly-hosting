@@ -10,7 +10,6 @@ to ensure Django recognizes them for migrations and administrative purposes.
 
 # 1. Base / Core models (Must be first to avoid circularity in sub-models)
 from .models_core import (
-    ManagedServer,
     TimeStampedModel,
     Region,
     Service,

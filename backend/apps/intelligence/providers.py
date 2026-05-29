@@ -2447,11 +2447,11 @@ def ask_code_review(
     _sync_db_to_env()
 
     if not provider_ids or len(provider_ids) < 2:
-        return ask_with_fallback(prompt, system_prompt)
+        return ask_with_fallback(prompt, system_prompt, mode='single')
 
     available = _resolve_providers(provider_ids[:2])
     if len(available) < 2:
-        return ask_with_fallback(prompt, system_prompt, provider_ids[0] if provider_ids else None)
+        return ask_with_fallback(prompt, system_prompt, provider_ids[0] if provider_ids else None, mode='single')
 
     agent_a, agent_b = available[0], available[1]
     effective_system = system_prompt or CODE_REVIEW_SYSTEM_PROMPT
@@ -2472,7 +2472,7 @@ def ask_code_review(
     except Exception as exc:
         pool.shutdown(wait=False, cancel_futures=True)
         logger.warning("Code review phase 1 failed: %s", exc)
-        return ask_with_fallback(prompt, system_prompt)
+        return ask_with_fallback(prompt, system_prompt, mode='single')
 
     # Phase 2: Cross-review (parallel)
     cross_prompt_a = (

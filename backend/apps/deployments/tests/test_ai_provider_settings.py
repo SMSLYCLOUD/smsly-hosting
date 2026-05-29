@@ -41,6 +41,8 @@ class AIProviderSettingsTests(APITestCase):
         self.assertFalse(settings.openai_api_key)
 
     def test_sync_db_to_env_removes_cleared_key(self):
+        if "OPENAI_API_KEY" in os.environ:
+            del os.environ["OPENAI_API_KEY"]
         settings = AIProviderSettings.get_solo()
         settings.openai_api_key = ""
         settings.save(update_fields=["openai_api_key"])

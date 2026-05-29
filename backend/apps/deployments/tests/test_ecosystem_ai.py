@@ -6,7 +6,7 @@ from apps.deployments.services.ecosystem_graph import build_ecosystem_graph
 class TestEcosystemAISafe(TestCase):
     @patch('apps.deployments.services.ecosystem_ai._cached_ask')
     def test_propose_env_resolution(self, mock_ask):
-        mock_ask.return_value = '{"resolutions": {"api": {"PORT": "8000"}}}'
+        mock_ask.return_value = ('{"resolutions": {"api": {"PORT": "8000"}}}', 'mock-provider')
 
         manifest_yaml = """
         version: "1"
@@ -22,7 +22,7 @@ class TestEcosystemAISafe(TestCase):
 
     @patch('apps.deployments.services.ecosystem_ai._cached_ask')
     def test_propose_env_resolution_fallback(self, mock_ask):
-        mock_ask.return_value = "I am an AI. I cannot output JSON."
+        mock_ask.return_value = ("I am an AI. I cannot output JSON.", "mock-provider")
         graph = build_ecosystem_graph('version: "1"')
         res = EcosystemDeploymentSenate.propose_env_resolution(graph)
         self.assertIsNone(res)
