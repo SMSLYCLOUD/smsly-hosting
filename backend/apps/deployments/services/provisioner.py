@@ -607,6 +607,10 @@ def _provision_node_db_credentials(server: ManagedServer):
                 target_cur.execute(sql.SQL("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO {}").format(sql.Identifier(username)))
 
         logger.info("Created dedicated Master DB credentials for node %s: %s", server.name, username)
+        if not isinstance(server.provider_metadata, dict):
+            server.provider_metadata = {}
+        server.provider_metadata["node_db_password"] = password
+        server.save(update_fields=["provider_metadata"])
         return username, password
     except Exception as e:
         logger.error("Failed to create node DB credentials for %s: %s", server.name, e)
