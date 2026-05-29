@@ -3963,6 +3963,14 @@ if not created and not cp.is_active:
     docker container prune -f --filter "label=com.docker.compose.project" --filter "status=exited" 2>/dev/null || true
     # Prune BuildKit build cache (saves significant disk space)
     docker builder prune -f --filter "until=24h" 2>/dev/null || true
+    # Prune stale rollback backup containers left from failed blue-green promotions
+    docker container prune -f --filter "status=exited" 2>/dev/null || true
+    for ctr in $(docker ps -a --filter "status=exited" --filter "name=-rollback-" --format '{{.Names}}' 2>/dev/null || true); do
+        docker rm -f "$ctr" 2>/dev/null || true
+    done
+    for ctr in $(docker ps -a --filter "status=created" --filter "name=-rollback-" --format '{{.Names}}' 2>/dev/null || true); do
+        docker rm -f "$ctr" 2>/dev/null || true
+    done
 
     # ─── Self-Healing: Automatic Queue Restoration ──────────────────────────
     echo -e "${BLUE}  → Checking for stalled deployments/addons in QUEUED state...${NC}"

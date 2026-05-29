@@ -21,27 +21,75 @@ class Command(BaseCommand):
         import psycopg2
         from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
         from psycopg2 import sql as pg_sql
+        from urllib.parse import urlparse
 
-        db_url = os.environ.get("DIRECT_DATABASE_URL") or os.environ.get("DATABASE_URL")
-        if not db_url:
-            self.stdout.write(self.style.WARNING("DATABASE_URL not set, skipping."))
+        # Prefer DIRECT_DATABASE_URL (bypasses PgCat, uses admin credentials).
+        # Fall back to DATABASE_URL, then construct from POSTGRES_* env vars.
+        conn = None
+        errors = []
+        candidates = []
+
+        direct_url = os.environ.get("DIRECT_DATABASE_URL")
+        if direct_url:
+            candidates.append(("DIRECT_DATABASE_URL", direct_url))
+
+        db_url = os.environ.get("DATABASE_URL")
+        if db_url and (not direct_url or db_url != direct_url):
+            candidates.append(("DATABASE_URL", db_url))
+
+        pg_host = os.environ.get("POSTGRES_HOST", "db")
+        pg_port = os.environ.get("POSTGRES_PORT", "5432")
+        pg_user = os.environ.get("POSTGRES_USER", "smsly_admin")
+        pg_pass = os.environ.get("POSTGRES_PASSWORD", "")
+        pg_db = os.environ.get("POSTGRES_DB", "smsly_hosting")
+        if pg_pass:
+            fallback_url = f"postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{pg_db}"
+            candidates.append(("POSTGRES_* fallback", fallback_url))
+
+        if not candidates:
+            self.stdout.write(self.style.WARNING(
+                "No database connection info found. Set DIRECT_DATABASE_URL or DATABASE_URL."
+            ))
             return
 
-        try:
-            conn = psycopg2.connect(db_url)
-            conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-        except Exception as e:
-            err_msg = str(e)
-            if "No pool configured" in err_msg or "No pool" in err_msg:
-                self.stdout.write(self.style.ERROR(
-                    f"PgCat pool not configured for this node agent.\n"
-                    f"  Error: {e}\n"
-                    f"  Fix: On the Master node, run:\n"
-                    f"    docker restart smsly-hosting-pgcat-1\n"
-                    f"  Then re-run this update."
-                ))
-            else:
-                self.stdout.write(self.style.ERROR(f"Failed to connect to database: {e}"))
+        for label, url in candidates:
+            try:
+                parsed = urlparse(url)
+                if parsed.hostname in ("pgcat", "pgbouncer", "haproxy"):
+                    self.stdout.write(
+                        self.style.WARNING(
+                            f"Skipping {label} — points to pooler "
+                            f"({parsed.hostname}), which may not have node_agent users. "
+                            f"Set DIRECT_DATABASE_URL to bypass pooler."
+                        )
+                    )
+                    continue
+                conn = psycopg2.connect(url)
+                conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+                self.stdout.write(f"Connected via {label} ({parsed.hostname}:{parsed.port})")
+                break
+            except Exception as e:
+                err_msg = str(e)
+                if "No pool configured" in err_msg or "No pool" in err_msg:
+                    self.stdout.write(self.style.ERROR(
+                        f"PgCat pool not configured for this node agent.\n"
+                        f"  Error: {e}\n"
+                        f"  Fix: On the Master node, run:\n"
+                        f"    docker restart smsly-hosting-pgcat-1\n"
+                        f"  Then re-run this update."
+                    ))
+                    return
+                errors.append(f"{label}: {e}")
+                self.stdout.write(
+                    self.style.WARNING(f"Failed to connect via {label}: {e}")
+                )
+
+        if conn is None:
+            self.stdout.write(self.style.ERROR(
+                "Could not connect to database with any available credentials:\n  "
+                + "\n  ".join(errors)
+                + "\n\n  Ensure DIRECT_DATABASE_URL is set to a direct PostgreSQL connection."
+            ))
             return
 
         try:
