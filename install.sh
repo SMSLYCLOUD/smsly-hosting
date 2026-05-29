@@ -4942,6 +4942,45 @@ if command -v docker &> /dev/null; then
     configure_docker_mirror
 fi
 
+# Ensure WireGuard mesh interface exists on master (PgCat binds to 10.100.0.1:5432)
+ensure_wireguard_mesh() {
+    local mesh_ip="${MASTER_MESH_IP:-10.100.0.1}"
+    local wg_iface="wg0"
+    # Only needed on master — lite agents connect via the mesh to the master
+    if is_agent_lite_mode || is_node_mode; then
+        return 0
+    fi
+    if ip link show "$wg_iface" >/dev/null 2>&1; then
+        echo -e "${GREEN}  ✓ WireGuard mesh ($wg_iface) already configured${NC}"
+        return 0
+    fi
+    echo -e "${BLUE}  → Configuring WireGuard mesh interface ($wg_iface: $mesh_ip)...${NC}"
+    if ! command -v wg >/dev/null 2>&1; then
+        apt_run apt-get install -y wireguard
+    fi
+    mkdir -p /etc/wireguard
+    if [ ! -f /etc/wireguard/private.key ]; then
+        wg genkey | tee /etc/wireguard/private.key | wg pubkey > /etc/wireguard/public.key
+    fi
+    local privkey
+    privkey="$(cat /etc/wireguard/private.key)"
+    if [ ! -f "/etc/wireguard/${wg_iface}.conf" ]; then
+        cat > "/etc/wireguard/${wg_iface}.conf" <<WGCONF
+[Interface]
+PrivateKey = ${privkey}
+Address = ${mesh_ip}/24
+ListenPort = 51820
+WGCONF
+    fi
+    systemctl enable --now "wg-quick@${wg_iface}" 2>/dev/null || true
+    if ip link show "$wg_iface" >/dev/null 2>&1; then
+        echo -e "${GREEN}  ✓ WireGuard mesh ($wg_iface: $mesh_ip) is up${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ WireGuard ($wg_iface) failed to start — PgCat mesh binding may fail${NC}"
+    fi
+}
+ensure_wireguard_mesh
+
 echo -e "${GREEN}  ✓ Dependencies installed${NC}"
     set_checkpoint "dependencies_installed"
 fi
