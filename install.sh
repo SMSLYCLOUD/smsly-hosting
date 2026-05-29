@@ -3069,6 +3069,32 @@ recover_runtime_stack() {
     fi
 
     echo -e "${BLUE}    -> Starting dependency services...${NC}"
+
+    # Ensure registry TLS cert + htpasswd exist before starting the registry.
+    # The registry container will crash-loop without these files.
+    mkdir -p "$INSTALL_DIR/auth" "$INSTALL_DIR/certs"
+    if [ ! -f "$INSTALL_DIR/certs/registry.key" ] || [ ! -f "$INSTALL_DIR/certs/registry.crt" ]; then
+        echo -e "${BLUE}      Generating self-signed TLS cert for registry...${NC}"
+        openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+            -keyout "$INSTALL_DIR/certs/registry.key" \
+            -out "$INSTALL_DIR/certs/registry.crt" \
+            -subj "/CN=registry" 2>/dev/null || true
+    fi
+    if [ ! -f "$INSTALL_DIR/auth/htpasswd" ]; then
+        REGISTRY_PASS="${REGISTRY_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_urlsafe(18))" 2>/dev/null || openssl rand -hex 12 2>/dev/null || echo 'auto-generated-change-me')}"
+        if command -v htpasswd >/dev/null 2>&1; then
+            htpasswd -Bbn "${REGISTRY_USER:-smsly-registry}" "$REGISTRY_PASS" > "$INSTALL_DIR/auth/htpasswd"
+        else
+            python3 -c "
+import bcrypt, sys
+pw = sys.argv[1] if len(sys.argv) > 1 else '$REGISTRY_PASS'
+print('${REGISTRY_USER:-smsly-registry}:' + bcrypt.hashpw(pw.encode(), bcrypt.gensalt(10)).decode())
+" "$REGISTRY_PASS" > "$INSTALL_DIR/auth/htpasswd" 2>/dev/null || true
+        fi
+        env_set_value "$INSTALL_DIR/.env" "REGISTRY_USER" "${REGISTRY_USER:-smsly-registry}"
+        env_set_value "$INSTALL_DIR/.env" "REGISTRY_PASSWORD" "$REGISTRY_PASS"
+    fi
+
     if [ "$MODE_AGENT_LITE" = "true" ]; then
         docker compose -f "$COMPOSE_FILE" up -d redis rabbitmq socket-proxy || true
         wait_for_container_ready "smsly-hosting-redis-1" 120 || true
