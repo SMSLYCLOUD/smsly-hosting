@@ -1498,7 +1498,9 @@ ensure_env_runtime_defaults() {
             # Use WireGuard mesh IP for database connections (public IP is firewalled)
             local db_host="${MASTER_MESH_IP:-$MASTER_IP}"
             expected_database_url="postgresql://${db_user}:${db_pass}@${db_host}:5432/smsly_hosting"
-            expected_direct_url="postgresql://${db_user}:${db_pass}@${db_host}:5432/smsly_hosting"
+            # DIRECT_DATABASE_URL uses smsly_admin (not node_agent) so management
+            # commands can self-heal permissions/passwords when node_agent creds fail.
+            expected_direct_url="postgresql://smsly_admin:${postgres_password}@${db_host}:5432/smsly_hosting"
             # Local RabbitMQ is used for Lite Agent node
             expected_celery_broker_url="amqp://smsly_user:${rabbitmq_password}@rabbitmq:5672//"
 
