@@ -41,15 +41,7 @@ frontend-dev-*.err.log
 # Custom domain debugging and fix scripts
 fix_custom_domain_ssl.py
 quick_fix_ssl.py
-scratch/clear_lock.py
-scratch/db_check.py
-scratch/diagnose_master_containers.py
-scratch/diagnose_master_db.py
-scratch/diagnose_master_direct.py
-scratch/diagnose_master_git.py
-scratch/diagnose_remote_utils.py
-scratch/diagnose_worker.py
-scratch/update_master_stream.py
+scratch/
 dummy.tar.gz
 
 # Temporary analysis files
