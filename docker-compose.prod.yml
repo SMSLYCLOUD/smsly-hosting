@@ -127,7 +127,7 @@ services:
       redis:
         condition: service_healthy
       socket-proxy:
-        condition: service_started
+        condition: service_healthy
       rabbitmq:
         condition: service_healthy
     volumes:
@@ -179,7 +179,7 @@ services:
       redis:
         condition: service_healthy
       socket-proxy:
-        condition: service_started
+        condition: service_healthy
       rabbitmq:
         condition: service_healthy
     volumes:
@@ -284,7 +284,7 @@ services:
       redis:
         condition: service_healthy
       socket-proxy:
-        condition: service_started
+        condition: service_healthy
       rabbitmq:
         condition: service_healthy
     volumes:
@@ -327,7 +327,7 @@ services:
       redis:
         condition: service_healthy
       socket-proxy:
-        condition: service_started
+        condition: service_healthy
       rabbitmq:
         condition: service_healthy
     volumes:
@@ -355,16 +355,16 @@ services:
     environment:
       CONTAINERS: 1
       IMAGES: 1
-      BUILD: 1        # needed for builds
+      BUILD: 1
       NETWORKS: 1
       VOLUMES: 1
       INFO: 1
       VERSION: 1
       EVENTS: 1
       COMMIT: 1
-      EXEC: 1          # Required: container terminal access, Caddy reload, DB admin
-      POST: 1          # Required: exec creation + container operations
-      DELETE: 0        # DISABLE — prevents deletion attacks
+      EXEC: 1
+      POST: 1
+      DELETE: 0
     volumes:
     - /var/run/docker.sock:/var/run/docker.sock:ro
     healthcheck:

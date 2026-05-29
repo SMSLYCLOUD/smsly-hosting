@@ -152,6 +152,12 @@ if DOMAIN and DOMAIN != 'localhost' and DOMAIN not in ALLOWED_HOSTS:
     ALLOWED_HOSTS.append(DOMAIN)
 # Ensure common cPanel/CloudNode hostnames are allowed for automated checks
 ALLOWED_HOSTS.extend(['.cprapid.com', '.sslip.io'])
+# Ensure sub-subdomains of the platform domain are matched for deployed services
+# e.g. service-name.grid.smsly.cloud needs .grid.smsly.cloud pattern
+if DOMAIN and DOMAIN != 'localhost':
+    _grid_wildcard = f'.{DOMAIN}'
+    if _grid_wildcard not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append(_grid_wildcard)
 APPEND_SLASH = False
 
 # ---------------------------------------------------------------------------
@@ -160,14 +166,30 @@ APPEND_SLASH = False
 # without requiring manual .env edits.
 # ---------------------------------------------------------------------------
 try:
-    import dj_database_url
-    from urllib.parse import urlparse
     import psycopg2
-    
-    # Manually extract DB credentials from the DATABASE_URL since Django apps aren't loaded yet.
-    db_url = config('DATABASE_URL', default='')
+    from urllib.parse import urlparse
+
+    # Prefer DIRECT_DATABASE_URL (bypasses PgCat/poolers, uses admin credentials).
+    # On lite agents, DATABASE_URL goes through PgCat with node_agent credentials
+    # which will be rejected if PgCat hasn't been reloaded after provisioning.
+    db_url = config('DIRECT_DATABASE_URL', default='') or config('DATABASE_URL', default='')
     if db_url:
         parsed = urlparse(db_url)
+        # Skip pooler connections to avoid "No pool configured" / auth failures
+        if parsed.hostname in ("pgcat", "pgbouncer", "haproxy"):
+            direct_fallback = config('DIRECT_DATABASE_URL', default='')
+            if not direct_fallback:
+                pg_host = config('POSTGRES_HOST', default='db')
+                pg_port = config('POSTGRES_PORT', default='5432')
+                pg_user = config('POSTGRES_USER', default='smsly_admin')
+                pg_pass = config('POSTGRES_PASSWORD', default='')
+                pg_db = config('POSTGRES_DB', default='smsly_hosting')
+                if pg_pass:
+                    db_url = f"postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{pg_db}"
+                    parsed = urlparse(db_url)
+            else:
+                db_url = direct_fallback
+                parsed = urlparse(db_url)
         conn = psycopg2.connect(
             dbname=parsed.path.lstrip('/'),
             user=parsed.username,
@@ -184,6 +206,10 @@ try:
                     # Sync to ALLOWED_HOSTS
                     if db_domain not in ALLOWED_HOSTS:
                         ALLOWED_HOSTS.append(db_domain)
+                    # Also add wildcard subdomain pattern for deployed services
+                    _db_wildcard = f'.{db_domain}'
+                    if _db_wildcard not in ALLOWED_HOSTS:
+                        ALLOWED_HOSTS.append(_db_wildcard)
                     # Override DOMAIN in memory so that other settings depend on the DB state
                     DOMAIN = db_domain
                     # Sync USE_SSL from DB so security settings stay consistent

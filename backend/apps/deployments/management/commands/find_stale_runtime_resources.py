@@ -55,6 +55,15 @@ class Command(BaseCommand):
                     stale_containers.append((c, f"Orphan green container for slug {slug}"))
                 continue
 
+            # Identify orphaned rollback backup containers: "slug-rollback-xyz"
+            if '-rollback-' in c_name:
+                slug = c_name.split('-rollback-')[0]
+                if slug not in active_service_slugs:
+                    stale_containers.append((c, f"Orphan rollback backup container for slug {slug}"))
+                else:
+                    stale_containers.append((c, f"Stale rollback backup container for active slug {slug}"))
+                continue
+
             # Check if container name matches any known service slug
             # This is tricky because custom names could be anything.
             # We'll rely on the labels or specific patterns above for safety.
