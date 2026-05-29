@@ -7,6 +7,8 @@ import os
 import re
 import shlex
 from typing import Dict, Any, List
+
+from django.conf import settings
 from kubernetes import client, config
 from .base import BaseCloudAdapter
 
@@ -210,7 +212,13 @@ class LocalAdapter(BaseCloudAdapter):
             return True
         try:
             logger.info("Pulling image: %s", image)
-            self.docker_client.images.pull(image)
+            auth_config = {}
+            if settings.REGISTRY_USER and settings.REGISTRY_PASSWORD:
+                auth_config = {
+                    "username": settings.REGISTRY_USER,
+                    "password": settings.REGISTRY_PASSWORD,
+                }
+            self.docker_client.images.pull(image, auth_config=auth_config)
             return True
         except Exception as e:
             logger.error("Failed to pull image %s: %s", image, e)

@@ -1920,6 +1920,23 @@ class PipelineManager:
         # without needing --load, which avoids buildkit-container issues.
         self._ensure_docker_driver()
 
+        # Authenticate with the private registry before building so the
+        # Docker daemon can pull base images (FROM lines in Dockerfile)
+        # from an auth-enabled registry without 403 errors.
+        if settings.REGISTRY_USER and settings.REGISTRY_PASSWORD:
+            registry_url = (settings.CONTAINER_REGISTRY_URL or "registry.smsly.cloud").split("://")[-1]
+            try:
+                login_proc = subprocess.run(
+                    ["docker", "login", registry_url,
+                     "-u", settings.REGISTRY_USER, "--password-stdin"],
+                    input=settings.REGISTRY_PASSWORD,
+                    capture_output=True, text=True, timeout=30
+                )
+                if login_proc.returncode != 0:
+                    logger.warning("Docker login to %s failed: %s", registry_url, login_proc.stderr.strip())
+            except Exception as exc:
+                logger.warning("Docker login attempt failed (%s); proceeding without auth", exc)
+
         # Only use --cache-from when the image is registry-qualified.
         # Bare image names (e.g. "smsly/name:tag") cause BuildKit to
         # resolve them to docker.io, triggering "insufficient_scope"

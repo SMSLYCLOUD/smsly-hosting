@@ -2505,7 +2505,18 @@ stop_node_excluded_services() {
     docker compose -f "$COMPOSE_FILE" rm -f frontend caddy >/dev/null 2>&1 || true
 }
 
+docker_login() {
+    local registry="${CONTAINER_REGISTRY_URL:-127.0.0.1:5000}"
+    local user="${REGISTRY_USER:-smsly-registry}"
+    local pass="${REGISTRY_PASSWORD:-}"
+    if [ -z "$pass" ]; then
+        return 0
+    fi
+    echo "$pass" | docker login "$registry" -u "$user" --password-stdin >/dev/null 2>&1 || true
+}
+
 compose_stack_build() {
+    docker_login
     local services=""
     if is_node_mode; then
         stop_node_excluded_services
@@ -3630,10 +3641,12 @@ PYEOF
     # Ensure shared networks exist (prod stack uses external networks)
     ensure_update_networks
 
-    # Cache bust only if disk is low (already runs in the disk check above when needed).
-    # Moved into case blocks below to avoid redundant double bust.
+     # Cache bust only if disk is low (already runs in the disk check above when needed).
+     # Moved into case blocks below to avoid redundant double bust.
 
-     case "$UPDATE_MODE" in
+     docker_login
+
+      case "$UPDATE_MODE" in
          frontend)
              if [ "$MODE_NODE" = "true" ]; then
                  echo -e "${YELLOW}  → Node mode: no frontend to update. Skipping.${NC}"
@@ -5293,8 +5306,14 @@ print(f'${REGISTRY_USER:-smsly-registry}:' + bcrypt.hashpw(pw.encode(), bcrypt.g
 " "$REGISTRY_PASS" > "$INSTALL_DIR/auth/htpasswd" 2>/dev/null || \
         echo -e "${YELLOW}    ⚠ Failed to generate htpasswd (neither htpasswd nor python bcrypt available)${NC}"
     fi
+    env_set_value "$INSTALL_DIR/.env" "REGISTRY_USER" "${REGISTRY_USER:-smsly-registry}"
+    env_set_value "$INSTALL_DIR/.env" "REGISTRY_PASSWORD" "$REGISTRY_PASS"
 fi
 echo -e "${GREEN}  ✓ Registry auth + TLS configured${NC}"
+
+# Authenticate Docker CLI with the private registry so the daemon can
+# pull base images during builds without 403 errors.
+docker_login
 
 # Ensure bind-mounted config paths exist before `docker compose up`.
 ensure_infrastructure_permissions
