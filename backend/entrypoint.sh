@@ -47,17 +47,24 @@ run_migrations_with_retry() {
     max_retries="${MIGRATE_MAX_RETRIES:-5}"
     retry=0
     while [ "$retry" -lt "$max_retries" ]; do
-        if python manage.py migrate --database="$migrate_db" --noinput; then
+        if python manage.py migrate --database="$migrate_db" --noinput 2>&1; then
             echo "Migrations complete (on database: $migrate_db)."
             return 0
         fi
         retry=$((retry + 1))
+        if [ "$retry" -ge "$max_retries" ]; then
+            break
+        fi
         wait_secs=$((retry * 5))
         echo "Migration attempt $retry/$max_retries failed. Retrying in ${wait_secs}s..."
         sleep "$wait_secs"
     done
 
     echo "ERROR: migrations failed after $max_retries attempts."
+    echo ""
+    echo "If the error mentions 'No pool configured for database',"
+    echo "PgCat on the Master node needs to be reloaded to pick up this node agent."
+    echo "  On Master: docker restart smsly-hosting-pgcat-1"
     return 1
 }
 

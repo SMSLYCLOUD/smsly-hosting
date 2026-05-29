@@ -346,9 +346,9 @@ services:
       VERSION: 1
       EVENTS: 1
       COMMIT: 1
-      # EXEC: 0       # DISABLE — prevents container escape via exec
-      # POST: 0       # DISABLE — prevents arbitrary container create
-      # DELETE: 0     # DISABLE — prevents deletion attacks
+      EXEC: 1          # Required: container terminal access, Caddy reload, DB admin
+      POST: 1          # Required: exec creation + container operations
+      DELETE: 0        # DISABLE — prevents deletion attacks
     volumes:
     - /var/run/docker.sock:/var/run/docker.sock:ro
     healthcheck:

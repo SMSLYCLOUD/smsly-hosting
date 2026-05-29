@@ -1914,6 +1914,16 @@ run_backend_migrations() {
         backend python manage.py fix_node_db_permissions 2>&1 || true
     set -e
 
+    # After fixing permissions, reload pgcat so newly created/fixed node agent
+    # users are picked up into the pool config. Critical for agent-lite nodes
+    # that connect through pgcat and would otherwise get "No pool configured".
+    if [ "$MODE_AGENT_LITE" != "true" ] && docker compose -f "$COMPOSE_FILE" ps pgcat 2>/dev/null | grep -q "Up"; then
+        echo -e "${BLUE}  -> Reloading PgCat to pick up node agent pools...${NC}"
+        docker compose -f "$COMPOSE_FILE" restart pgcat >/dev/null 2>&1
+        sleep 5
+        echo -e "${GREEN}  ✓ PgCat reloaded${NC}"
+    fi
+
     return 0
 }
 
