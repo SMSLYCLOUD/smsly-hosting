@@ -26,7 +26,7 @@ should_run_entrypoint_tasks() {
 
 select_management_database() {
     if [ -n "${DIRECT_DATABASE_URL:-}" ]; then
-        echo "Detected DIRECT_DATABASE_URL. Using direct database alias for management tasks..." >&2
+        echo "[INFO] DIRECT_DATABASE_URL is set. Using direct database alias for management tasks."
         printf '%s\n' "direct"
         return 0
     fi
