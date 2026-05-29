@@ -398,7 +398,7 @@ services:
     healthcheck:
       test:
       - CMD-SHELL
-      - wget -q -O /dev/null http://127.0.0.1:80/ || exit 1
+      - wget -q -O /dev/null http://127.0.0.1:80/health || exit 1
       interval: 10s
       timeout: 5s
       retries: 5

@@ -1468,11 +1468,11 @@ recover_runtime_stack() {
     ensure_update_networks
     ensure_infrastructure_permissions
 
-    if systemctl list-unit-files docker.service >/dev/null 2>&1; then
-        echo -e "${BLUE}    -> Restarting Docker daemon...${NC}"
-        systemctl restart docker >/dev/null 2>&1 || true
-        sleep 8
-        ensure_update_networks
+    # Only restart Docker if the daemon was reconfigured (e.g. for registry trust).
+    # Unconditional restart during recovery can cascade-fail all running
+    # containers — including the proxy — causing a total outage.
+    if [ -f "/etc/docker/daemon.json" ] && [ -f "/var/run/docker.sock" ]; then
+        echo -e "${BLUE}    -> Docker daemon is running; skipping restart to preserve live containers${NC}"
     fi
 
     echo -e "${BLUE}    -> Starting dependency services...${NC}"

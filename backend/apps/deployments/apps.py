@@ -44,22 +44,33 @@ class DeploymentsConfig(AppConfig):
         try:
             from encrypted_model_fields.fields import EncryptedMixin
             import logging
-            
+            import time
+
             logger = logging.getLogger('encrypted_model_fields')
             original_to_python = EncryptedMixin.to_python
-            
+
+            # Rate-limit/dedup: track (model, field) -> next-allowed timestamp
+            _decrypt_fail_cooldowns: dict[tuple, float] = {}
+            _DECRYPT_FAIL_LOG_INTERVAL = 300  # log each (model, field) combo at most every 5 min
+
             def safe_to_python(self, value):
                 res = original_to_python(self, value)
                 if isinstance(res, str) and res.startswith('gAAAAA'):
-                    logger.error(
-                        "DECRYPTION_FAILURE: Failed to decrypt field '%s' on model '%s'. "
-                        "Returning empty string to prevent downstream crashes.",
-                        getattr(self, 'name', 'unknown'),
-                        self.model.__name__ if hasattr(self, 'model') else 'Unknown'
-                    )
+                    model_name = self.model.__name__ if hasattr(self, 'model') else 'Unknown'
+                    field_name = getattr(self, 'name', 'unknown')
+                    key = (model_name, field_name)
+                    now = time.monotonic()
+                    if key not in _decrypt_fail_cooldowns or now >= _decrypt_fail_cooldowns[key]:
+                        _decrypt_fail_cooldowns[key] = now + _DECRYPT_FAIL_LOG_INTERVAL
+                        logger.error(
+                            "DECRYPTION_FAILURE: Failed to decrypt field '%s' on model '%s'. "
+                            "Returning empty string to prevent downstream crashes. "
+                            "(subsequent failures for this field suppressed for %ds)",
+                            field_name, model_name, _DECRYPT_FAIL_LOG_INTERVAL
+                        )
                     return ""
                 return res
-                
+
             EncryptedMixin.to_python = safe_to_python
         except Exception as e:
             import logging

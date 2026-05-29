@@ -1,4 +1,9 @@
 :80 {
+	# Healthcheck endpoint for Docker
+	handle /health {
+		respond "OK" 200
+	}
+
 	# Proxy route health recheck to backend
 	@api_recheck path /api/v1/system/route-recheck/*
 	handle @api_recheck {
