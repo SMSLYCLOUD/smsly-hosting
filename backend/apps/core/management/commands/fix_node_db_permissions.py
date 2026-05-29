@@ -31,7 +31,17 @@ class Command(BaseCommand):
             conn = psycopg2.connect(db_url)
             conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
         except Exception as e:
-            self.stdout.write(self.style.ERROR(f"Failed to connect to database: {e}"))
+            err_msg = str(e)
+            if "No pool configured" in err_msg or "No pool" in err_msg:
+                self.stdout.write(self.style.ERROR(
+                    f"PgCat pool not configured for this node agent.\n"
+                    f"  Error: {e}\n"
+                    f"  Fix: On the Master node, run:\n"
+                    f"    docker restart smsly-hosting-pgcat-1\n"
+                    f"  Then re-run this update."
+                ))
+            else:
+                self.stdout.write(self.style.ERROR(f"Failed to connect to database: {e}"))
             return
 
         try:

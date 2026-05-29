@@ -1085,41 +1085,54 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
             with os.fdopen(os.open(CADDY_TOKEN_CLEAR_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as handle:
                 handle.write("clear")
 
-        # Trigger reload — try Docker container first, fall back to restart
+        # Always write the .reload flag so the host-side watcher can pick it up.
+        # This is the reliable reload path — docker exec may fail through the
+        # socket-proxy (403), but the host-side watcher has direct socket access.
+        try:
+            with open(CADDY_RELOAD_FLAG, "w", encoding="utf-8") as f:
+                f.write(str(int(__import__("time").time())))
+            os.chmod(CADDY_RELOAD_FLAG, 0o664)
+            logger.info("Wrote .reload flag to %s", CADDY_RELOAD_FLAG)
+        except Exception as flag_exc:
+            logger.warning("Failed to write .reload flag: %s", flag_exc)
+
+        # Fire-and-forget: try docker exec for an immediate reload.
+        # If it fails (e.g. socket-proxy 403), the host-side watcher will
+        # handle the reload within a few seconds via the .reload flag.
         CONTAINER_NAME = "smsly-hosting-caddy-1"
-        logger.info("Triggering Caddy reload via Docker container %s...", CONTAINER_NAME)
-        dock_res = subprocess.run(
-            ["docker", "exec", CONTAINER_NAME, "caddy", "reload", "--config", "/etc/caddy/Caddyfile"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if dock_res.returncode == 0:
-            result["ok"] = True
-            result["message"] = "Caddyfile written and reloaded via Docker"
-            logger.info("Caddyfile reloaded via Docker container %s", CONTAINER_NAME)
-        else:
-            logger.warning(
-                "Docker reload failed (%s): %s. Attempting container restart...",
-                CONTAINER_NAME, dock_res.stderr.strip(),
-            )
-            restart_res = subprocess.run(
-                ["docker", "restart", CONTAINER_NAME],
+        logger.info("Attempting fast-path Caddy reload via Docker exec %s...", CONTAINER_NAME)
+        try:
+            dock_res = subprocess.run(
+                ["docker", "exec", CONTAINER_NAME, "caddy", "reload", "--config", "/etc/caddy/Caddyfile"],
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=15,
             )
-            if restart_res.returncode == 0:
+            if dock_res.returncode == 0:
                 result["ok"] = True
-                result["message"] = "Caddyfile written, Caddy container restarted"
-                logger.info("Caddy container %s restarted", CONTAINER_NAME)
+                result["message"] = "Caddyfile written and reloaded via Docker"
+                logger.info("Caddy reloaded via docker exec on %s", CONTAINER_NAME)
             else:
-                logger.error("Caddy restart failed: %s", restart_res.stderr.strip())
-                result["message"] = f"Reload and restart failed. Error: {restart_res.stderr.strip()}"
-                result["ok"] = False
-                return result
-
-        logger.info("Caddyfile written to %s", CADDY_FILE_PATH)
+                logger.info(
+                    "Docker exec reload not available (%s) — host-side watcher will handle it",
+                    dock_res.stderr.strip()[:200],
+                )
+                # Not a failure — the .reload flag ensures the host watcher applies it.
+                result["ok"] = True
+                result["message"] = "Caddyfile written; reload pending via host-side watcher"
+        except FileNotFoundError:
+            # docker CLI not installed in this container
+            logger.info("Docker CLI not found in container — host-side watcher will handle reload")
+            result["ok"] = True
+            result["message"] = "Caddyfile written; reload pending via host-side watcher"
+        except subprocess.TimeoutExpired:
+            logger.info("Docker exec timed out — host-side watcher will handle reload")
+            result["ok"] = True
+            result["message"] = "Caddyfile written; reload pending via host-side watcher"
+        except Exception as exec_exc:
+            logger.info("Docker exec failed (%s) — host-side watcher will handle reload", exec_exc)
+            result["ok"] = True
+            result["message"] = "Caddyfile written; reload pending via host-side watcher"
 
     except Exception as exc:
         result["message"] = f"Failed to apply Caddyfile: {exc}"

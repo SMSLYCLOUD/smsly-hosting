@@ -3458,6 +3458,30 @@ WATCHEREOF
     echo -e "${GREEN}  ✓ Caddy watcher service installed and running${NC}"
 fi
 
+# ─── Install caddy-docker-watcher service (reloads Caddy Docker container) ───
+if [ -f "$INSTALL_DIR/scripts/caddy-docker-reload.sh" ]; then
+    chmod +x "$INSTALL_DIR/scripts/caddy-docker-reload.sh"
+    cat > /etc/systemd/system/caddy-docker-watcher.service <<DOCKERWATCHEREOF
+[Unit]
+Description=Caddy Docker Reload Watcher (SMSLY)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=$INSTALL_DIR/scripts/caddy-docker-reload.sh /opt/smsly-hosting/caddy-config
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+DOCKERWATCHEREOF
+    systemctl daemon-reload
+    systemctl enable caddy-docker-watcher.service 2>/dev/null || true
+    systemctl start caddy-docker-watcher.service 2>/dev/null || true
+    echo -e "${GREEN}  ✓ Caddy Docker watcher service installed and running${NC}"
+fi
+
 # ─── Install update-watcher service (picks up UI-driven platform updates) ─────
 if [ -f "$INSTALL_DIR/scripts/platform-update.sh" ]; then
     chmod +x "$INSTALL_DIR/scripts/platform-update.sh"
