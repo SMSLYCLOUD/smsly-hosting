@@ -226,6 +226,22 @@ ensure_agent_env_defaults() {
     env_set_value "$env_file" "MODE" "agent"
     env_set_value "$env_file" "SMSLY_DISABLE_LOCAL_SERVICES" "false"
 
+    # Sync FIELD_ENCRYPTION_KEY from master seed (critical: must match master
+    # for shared-database encrypted fields to decrypt correctly on both nodes)
+    local master_encryption_key
+    master_encryption_key="$(env_get_value "$env_file" "MASTER_FIELD_ENCRYPTION_KEY")"
+    if [ -z "$master_encryption_key" ]; then
+        master_encryption_key="$(env_get_value "$env_file" "FIELD_ENCRYPTION_KEY")"
+    fi
+    if [ -n "$master_encryption_key" ]; then
+        local current_key
+        current_key="$(env_get_value "$env_file" "FIELD_ENCRYPTION_KEY")"
+        if [ "$current_key" != "$master_encryption_key" ]; then
+            env_set_value "$env_file" "FIELD_ENCRYPTION_KEY" "$master_encryption_key"
+            echo -e "${BLUE}  -> Synced FIELD_ENCRYPTION_KEY from master${NC}"
+        fi
+    fi
+
     # Automatically set and update ALLOWED_HOSTS
     local allowed_hosts current_ips public_ip new_hosts
     allowed_hosts="$(env_get_value "$env_file" "ALLOWED_HOSTS")"
@@ -611,10 +627,11 @@ do_update_full() {
     run_migrations
     fix_permissions
     
-    # Restart the docker daemon to ensure all container networks and caches are fully refreshed 
-    # (matching the masternode update behavior which restarts docker and Caddy/Nginx)
-    echo -e "${BLUE}  -> Restarting Docker daemon to apply full system refresh...${NC}"
-    systemctl restart docker >/dev/null 2>&1 || true
+    # NOTE: We do NOT unconditionally restart the Docker daemon here.
+    # Doing so would cascade-fail all running containers — including Traefik
+    # (the proxy) — causing a total outage for every service on the node.
+    # configure_docker_registry_trust (called above) already handles restarting
+    # Docker conditionally when daemon.json was actually changed.
     
     echo -e "\n${GREEN}✅ Agent update complete${NC}"
 }
@@ -641,8 +658,11 @@ do_update_half() {
     run_migrations
     fix_permissions
     
-    echo -e "${BLUE}  -> Restarting Docker daemon to apply full system refresh...${NC}"
-    systemctl restart docker >/dev/null 2>&1 || true
+    # NOTE: We do NOT unconditionally restart the Docker daemon here.
+    # Doing so would cascade-fail all running containers — including Traefik
+    # (the proxy) — causing a total outage for every service on the node.
+    # configure_docker_registry_trust (called above) already handles restarting
+    # Docker conditionally when daemon.json was actually changed.
     
     echo -e "\n${GREEN}✅ Agent half-update complete${NC}"
 }

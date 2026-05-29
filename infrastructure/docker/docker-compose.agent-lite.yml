@@ -92,6 +92,7 @@ services:
       - DOCKER_HOST=tcp://socket-proxy:2375
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - FIELD_ENCRYPTION_KEY=${FIELD_ENCRYPTION_KEY:?FIELD_ENCRYPTION_KEY must be set in .env}
     depends_on:
       socket-proxy:
         condition: service_healthy
@@ -127,6 +128,7 @@ services:
       - DOCKER_NETWORK=smsly-net
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - FIELD_ENCRYPTION_KEY=${FIELD_ENCRYPTION_KEY:?FIELD_ENCRYPTION_KEY must be set in .env}
     depends_on:
       backend:
         condition: service_healthy
