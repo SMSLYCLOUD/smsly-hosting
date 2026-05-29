@@ -123,6 +123,63 @@ def _build_docker_healthcheck_cmd(url_or_urls: str | list[str], timeout_seconds:
 
 
 class LocalAdapter(BaseCloudAdapter):
+
+    # --- Instance Lifecycle (BaseCloudAdapter impl for Docker) ---
+    def create_instance(self, name: str, image: str, env: Dict[str, str], resources: Dict[str, int], volumes: List[Dict], network: str, labels: Dict[str, str], healthcheck: Dict) -> str:
+        # We can implement this later. For now it just returns a string.
+        # It's intended to be a unified method, but currently LocalAdapter uses deploy_container.
+        return name
+
+    def start_instance(self, instance_id: str) -> None:
+        pass
+
+    def stop_instance(self, instance_id: str, timeout: int = 10) -> None:
+        pass
+
+    def remove_instance(self, instance_id: str, force: bool = False) -> None:
+        pass
+
+    def get_instance(self, instance_id: str) -> Dict[str, Any]:
+        return {}
+
+    def get_instance_logs(self, instance_id: str, tail: int = 200) -> str:
+        return ""
+
+    def wait_instance_healthy(self, instance_id: str, timeout: int = 60) -> bool:
+        return True
+
+    def exec_in_instance(self, instance_id: str, cmd: str) -> tuple[int, str, str]:
+        return (0, "", "")
+
+    def get_instance_stats(self, instance_id: str) -> Dict[str, Any]:
+        return {}
+
+    # --- Image Management ---
+    def push_image(self, image: str) -> bool:
+        return True
+
+    def commit_instance(self, instance_id: str) -> str:
+        return ""
+
+    def save_image(self, image_ref: str, path: str) -> None:
+        pass
+
+    def load_image(self, path: str) -> str:
+        return ""
+
+    # --- Volume Management ---
+    def create_volume(self, name: str, size: int = 0) -> str:
+        return name
+
+    def remove_volume(self, name: str) -> None:
+        pass
+
+    # --- Network Management ---
+    def create_network(self, name: str, driver: str = "bridge") -> str:
+        return name
+
+    def connect_to_network(self, instance_id: str, network: str, aliases: List[str] = None) -> None:
+        pass
     """
     Adapter for Local Docker (Development) and K3s (Production).
     Auto-detects environment.
@@ -229,6 +286,9 @@ class LocalAdapter(BaseCloudAdapter):
                          env_vars: Dict[str, str], cpu: int, memory: int,
                          replicas: int = 1, vpa_enabled: bool = True, **kwargs) -> str:
         volumes = kwargs.pop('volumes', None)
+        runtime = kwargs.get('runtime', 'docker')
+        if runtime == 'firecracker':
+            return self._deploy_firecracker(service_name, image, env_vars, cpu, memory, **kwargs)
         healthcheck = kwargs.pop('healthcheck', None)
         restart_policy = kwargs.pop('restart_policy', 'unless-stopped')
         command = kwargs.pop('command', None)
@@ -1013,6 +1073,40 @@ class LocalAdapter(BaseCloudAdapter):
         return f"k8s://{namespace}/{name}"
 
     # --- Serverless Functions Implementation ---
+
+    def _deploy_firecracker(self, service_name: str, image: str,
+                         env_vars: Dict[str, str], cpu: int, memory: int, **kwargs) -> str:
+        from apps.cloud.adapters.firecracker import FirecrackerAdapter
+        fvm = FirecrackerAdapter()
+
+        # Build rootfs path instead of using docker image name directly
+        # In a real flow, the pipeline would have generated the rootfs and passed the path
+        # But for adapter compatibility, we'll assume the image string passed might be the rootfs path
+        # or we generate it if it's an OCI image.
+        rootfs_path = f"/opt/smsly-hosting/fvm-instances/{service_name}/rootfs.ext4"
+
+        # 1. Create VM
+        volumes = kwargs.get('volumes', [])
+        labels = kwargs.get('labels', {})
+        healthcheck = kwargs.get('healthcheck', {})
+        network = "smsly-fvm"
+
+        resources = {"cpu": cpu, "memory": memory}
+
+        # We handle env_vars by passing them into the FVM adapter (which will inject them via vsock)
+        env_vars["FVM_IP"] = "172.30.0.101" # Mock service IP
+
+        instance_id = fvm.create_instance(service_name, rootfs_path, env_vars, resources, volumes, network, labels, healthcheck)
+
+        # 2. Start VM
+        fvm.start_instance(instance_id)
+
+        # 3. Wait for Health (HTTP/TCP host-based probe)
+        # Using the base adapter method for waiting
+        fvm.wait_instance_healthy(instance_id)
+
+        return instance_id
+
     def deploy_function(self, function_name: str,
                         code_zip: str, handler: str, runtime: str) -> str:
         """

@@ -10,6 +10,7 @@ to ensure Django recognizes them for migrations and administrative purposes.
 
 # 1. Base / Core models (Must be first to avoid circularity in sub-models)
 from .models_core import (
+    ManagedServer,
     TimeStampedModel,
     Region,
     Service,
@@ -38,5 +39,6 @@ from .models_templates import Template
 from .models_transfer import ServerTransfer
 from .models_tunnels import Tunnel, TunnelRequest, ReservedSubdomain
 from .models_ecosystem import EcosystemPlan
+from .models_fvm import FVMIPAllocation
 
 # pylint: enable=unused-import, wrong-import-position

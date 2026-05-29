@@ -32,6 +32,69 @@ class AddonProvisioner:
     For Kubernetes environments, use the K8s operator approach instead.
     """
 
+
+    def _provision_firecracker(self, addon, container_name: str, image: str, port: int, env_vars: dict) -> dict:
+        from apps.cloud.adapters.firecracker import FirecrackerAdapter
+        from apps.deployments.models_fvm import FVMIPAllocation
+        from django.utils import timezone
+
+        fvm = FirecrackerAdapter()
+        rootfs_path = f"/opt/smsly-hosting/fvm-addon-templates/{addon.addon_type.lower()}/rootfs.ext4"
+
+        # CPU/Mem based on plan or default
+        cpu = 2
+        memory = 1024
+
+        # Ensure IP Allocation
+        # Fetch or allocate an IP
+        alloc, created = FVMIPAllocation.objects.get_or_create(
+            node=addon.server,
+            vm_id=container_name,
+            service=None,
+            defaults={'ip_address': '172.30.0.' + str(hash(container_name) % 250 + 2)} # Simplistic IPAM allocation
+        )
+        vm_ip = alloc.ip_address
+        # In real scenario we'd do: alloc = FVMIPAllocation.objects.create(node=..., vm_id=container_name...)
+
+        # Volumes for persistent addon data
+        vol_path = f"{container_name}-data"
+        volumes = [{"name": vol_path, "mount_path": "/data"}]
+
+        instance_id = fvm.create_instance(
+            name=container_name,
+            image=rootfs_path,
+            env=env_vars,
+            resources={"cpu": cpu, "memory": memory},
+            volumes=volumes,
+            network="smsly-fvm",
+            labels={},
+            healthcheck={}
+        )
+
+        fvm.start_instance(instance_id)
+
+        # Connection string needs to point to vm_ip now
+        user = env_vars.get("POSTGRES_USER", env_vars.get("MYSQL_USER", "admin"))
+        pwd = env_vars.get("POSTGRES_PASSWORD", env_vars.get("MYSQL_PASSWORD", addon.password))
+        db = env_vars.get("POSTGRES_DB", env_vars.get("MYSQL_DATABASE", addon.database_name))
+
+        type_prefix = addon.addon_type.lower()
+        if type_prefix == "postgres":
+            url = f"postgresql://{user}:{pwd}@{vm_ip}:{port}/{db}"
+        elif type_prefix == "redis":
+            url = f"redis://:{pwd}@{vm_ip}:{port}/0"
+        elif type_prefix == "mongodb":
+            url = f"mongodb://{user}:{pwd}@{vm_ip}:{port}/{db}?authSource=admin"
+        else:
+            url = f"{type_prefix}://{user}:{pwd}@{vm_ip}:{port}/{db}"
+
+        return {
+            "status": "SUCCESS",
+            "connection_url": url,
+            "private_ip": vm_ip,
+            "container_id": instance_id
+        }
+
     # Official Docker images for each addon type
     ADDON_IMAGES = {
         # pgvector-enabled Postgres to support embeddings (Khoj, etc.)
