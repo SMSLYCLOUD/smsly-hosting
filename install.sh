@@ -4995,45 +4995,23 @@ if [ "$(pwd)" != "$INSTALL_DIR" ]; then
         if [ -d "$INSTALL_DIR/.git" ]; then
              echo -e "${BLUE}  → Updating existing repository...${NC}"
              cd "$INSTALL_DIR"
-             ensure_local_ignores
-             if [ -n "${SMSLY_GIT_REMOTE:-}" ]; then
-                 git remote set-url origin "$SMSLY_GIT_REMOTE" 2>/dev/null || true
+             if ! git pull origin "$SMSLY_BRANCH" >/dev/null 2>&1; then
+                 git -c http.sslVerify=false pull origin "$SMSLY_BRANCH" >/dev/null 2>&1 || true
              fi
-             if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
-                 git stash push --include-untracked -m "install-config-sync-$(date +%s)" >/dev/null 2>&1 || true
-             fi
-             if ! git fetch origin "$SMSLY_BRANCH" >/dev/null 2>&1; then
-                 git -c http.sslVerify=false fetch origin "$SMSLY_BRANCH" >/dev/null 2>&1 || true
-             fi
-             if ! git checkout -B "$SMSLY_BRANCH" "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
-                 git -c http.sslVerify=false checkout -B "$SMSLY_BRANCH" "origin/$SMSLY_BRANCH" >/dev/null 2>&1 || true
-             fi
-             git branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || \
-             git -c http.sslVerify=false branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
         else
              echo -e "${BLUE}  → Cloning repository...${NC}"
-             if [ -d "$INSTALL_DIR" ] && [ "$(ls -A "$INSTALL_DIR" 2>/dev/null)" ]; then
-                 echo -e "${YELLOW}  → Destination not empty. Initializing git and pulling...${NC}"
-                 cd "$INSTALL_DIR"
-                 git init -q
-                 git remote add origin "${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}"
-                 ensure_local_ignores
-                 if ! git fetch origin "$SMSLY_BRANCH" -q >/dev/null 2>&1; then
-                     git -c http.sslVerify=false fetch origin "$SMSLY_BRANCH" -q >/dev/null 2>&1 || true
-                 fi
-                 if ! git checkout -B "$SMSLY_BRANCH" "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
-                     git -c http.sslVerify=false checkout -B "$SMSLY_BRANCH" "origin/$SMSLY_BRANCH" >/dev/null 2>&1 || true
-                 fi
-                 git branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || \
-                 git -c http.sslVerify=false branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
-             else
-                 if ! git clone -b "$SMSLY_BRANCH" "${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}" "$INSTALL_DIR"; then
-                     echo -e "${YELLOW}  ⚠️ Standard Git clone failed. Retrying with http.sslVerify=false...${NC}"
-                     git -c http.sslVerify=false clone -b "$SMSLY_BRANCH" "${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}" "$INSTALL_DIR"
-                 fi
-                 cd "$INSTALL_DIR"
-                 git branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || \
-                 git -c http.sslVerify=false branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
+             if [ -f "$INSTALL_DIR/.env" ]; then
+                 cp "$INSTALL_DIR/.env" /tmp/smsly-env-backup 2>/dev/null || true
+             fi
+             rm -rf "$INSTALL_DIR"
+             if ! git clone -b "$SMSLY_BRANCH" "${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}" "$INSTALL_DIR"; then
+                 git -c http.sslVerify=false clone -b "$SMSLY_BRANCH" "${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}" "$INSTALL_DIR"
+             fi
+             cd "$INSTALL_DIR"
+             if [ -f /tmp/smsly-env-backup ]; then
+                 cp /tmp/smsly-env-backup "$INSTALL_DIR/.env"
+                 rm -f /tmp/smsly-env-backup
+                 echo -e "${GREEN}  ✓ Restored existing .env${NC}"
              fi
         fi
     fi
