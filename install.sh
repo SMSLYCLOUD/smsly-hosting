@@ -1891,11 +1891,13 @@ run_backend_migrations() {
     migrate_db="$(get_migration_database_alias)"
     timeout_seconds="${MIGRATION_TIMEOUT_SECONDS:-900}"
     echo -e "${BLUE}  -> Migration database: ${migrate_db}${NC}"
+    local direct_url="postgresql://${POSTGRES_USER:-smsly_admin}:${POSTGRES_PASSWORD:-}@${POSTGRES_HOST:-db}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-smsly_hosting}"
     set +e
     docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T \
         "${user_args[@]}" \
         -e SMSLY_DISABLE_STARTUP_TASKS=true \
         -e SMSLY_MIGRATION_MODE=true \
+        -e DIRECT_DATABASE_URL="$direct_url" \
         backend timeout "$timeout_seconds" \
         python manage.py migrate --database="$migrate_db" --noinput
     rc=$?

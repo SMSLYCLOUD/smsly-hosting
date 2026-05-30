@@ -183,17 +183,20 @@ def _resolve_db_url() -> str:
     if parsed.hostname not in _POOLER_HOSTNAMES:
         return url
 
-    # Explicit direct URL takes priority
+    # Pooler detected - bypass it
+    # 1. Explicit direct URL takes priority
     direct = config('DIRECT_DATABASE_URL', default='')
     if direct:
         return direct
 
-    # Construct direct URL from individual POSTGRES_* vars
-    pg_host = config('POSTGRES_HOST', default='db')
-    pg_port = config('POSTGRES_PORT', default='5432')
-    pg_user = config('POSTGRES_USER', default='smsly_admin')
-    pg_pass = config('POSTGRES_PASSWORD', default='')
-    pg_db = config('POSTGRES_DB', default='smsly_hosting')
+    # 2. Construct direct URL from individual POSTGRES_* vars
+    #    Use os.environ directly as fallback since decouple may not see
+    #    variables injected via docker-compose environment block.
+    pg_host = config('POSTGRES_HOST', default='') or os.environ.get('POSTGRES_HOST', 'db')
+    pg_port = config('POSTGRES_PORT', default='') or os.environ.get('POSTGRES_PORT', '5432')
+    pg_user = config('POSTGRES_USER', default='') or os.environ.get('POSTGRES_USER', 'smsly_admin')
+    pg_pass = config('POSTGRES_PASSWORD', default='') or os.environ.get('POSTGRES_PASSWORD', '')
+    pg_db = config('POSTGRES_DB', default='') or os.environ.get('POSTGRES_DB', 'smsly_hosting')
     if pg_pass:
         return f"postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{pg_db}"
 
