@@ -11,7 +11,7 @@ def backfill_metadata(apps, schema_editor):
     with conn.cursor() as cursor:
         cursor.execute("""
             UPDATE deployments_service s
-            SET active_host_ip = COALESCE(ms.private_ip, ms.host),
+            SET active_host_ip = COALESCE(ms.private_ip::text, ms.host),
                 active_target_type = 'remote'
             FROM deployments_managedserver ms
             WHERE s.server_id = ms.id
