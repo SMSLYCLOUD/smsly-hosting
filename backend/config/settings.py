@@ -209,48 +209,55 @@ def _resolve_db_url() -> str:
 # changes made via the Settings UI take effect after container restart,
 # without requiring manual .env edits.
 # ---------------------------------------------------------------------------
-try:
-    import psycopg2
-    from urllib.parse import urlparse
+# Skip eager DB sync during migrations / one-off containers where the pooler
+# (pgcat) may not be reachable.  The domain sync is irrelevant for migrations.
+_skip_platform_sync = (
+    os.environ.get("SMSLY_MIGRATION_MODE") == "true"
+    or os.environ.get("SMSLY_DISABLE_STARTUP_TASKS") == "true"
+)
+if not _skip_platform_sync:
+    try:
+        import psycopg2
+        from urllib.parse import urlparse
 
-    db_url = _resolve_db_url()
-    if db_url:
-        parsed = urlparse(db_url)
-        conn = psycopg2.connect(
-            dbname=parsed.path.lstrip('/'),
-            user=parsed.username,
-            password=parsed.password,
-            host=parsed.hostname,
-            port=parsed.port
-        )
-        with conn.cursor() as cursor:
-            cursor.execute("SELECT domain, use_ssl FROM deployments_platformconfig ORDER BY id ASC LIMIT 1;")
-            row = cursor.fetchone()
-            if row and row[0]:
-                db_domain = str(row[0]).strip().lower().rstrip('.')
-                if db_domain:
-                    # Sync to ALLOWED_HOSTS
-                    if db_domain not in ALLOWED_HOSTS:
-                        ALLOWED_HOSTS.append(db_domain)
-                    # Also add wildcard subdomain pattern for deployed services
-                    _db_wildcard = f'.{db_domain}'
-                    if _db_wildcard not in ALLOWED_HOSTS:
-                        ALLOWED_HOSTS.append(_db_wildcard)
-                    # Override DOMAIN in memory so that other settings depend on the DB state
-                    DOMAIN = db_domain
-                    # Sync USE_SSL from DB so security settings stay consistent
-                    db_use_ssl = bool(row[1]) if len(row) > 1 else False
-                    # Only override USE_SSL from DB if it was explicitly set
-                    if len(row) > 1:
-                        os.environ['USE_SSL'] = 'True' if db_use_ssl else 'False'
-                    # Update SITE_URL to match the DB domain
-                    _db_is_ip = bool(re.fullmatch(r'\d{1,3}(?:\.\d{1,3}){3}', db_domain))
-                    _db_proto = 'https' if (db_use_ssl and not _db_is_ip) else 'http'
-                    if not DEBUG:
-                        SITE_URL = f"{_db_proto}://{db_domain}"
-        conn.close()
-except Exception as e:
-    print(f"[settings] Could not sync PlatformConfig domain to memory on boot: {e}")
+        db_url = _resolve_db_url()
+        if db_url:
+            parsed = urlparse(db_url)
+            conn = psycopg2.connect(
+                dbname=parsed.path.lstrip('/'),
+                user=parsed.username,
+                password=parsed.password,
+                host=parsed.hostname,
+                port=parsed.port
+            )
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT domain, use_ssl FROM deployments_platformconfig ORDER BY id ASC LIMIT 1;")
+                row = cursor.fetchone()
+                if row and row[0]:
+                    db_domain = str(row[0]).strip().lower().rstrip('.')
+                    if db_domain:
+                        # Sync to ALLOWED_HOSTS
+                        if db_domain not in ALLOWED_HOSTS:
+                            ALLOWED_HOSTS.append(db_domain)
+                        # Also add wildcard subdomain pattern for deployed services
+                        _db_wildcard = f'.{db_domain}'
+                        if _db_wildcard not in ALLOWED_HOSTS:
+                            ALLOWED_HOSTS.append(_db_wildcard)
+                        # Override DOMAIN in memory so that other settings depend on the DB state
+                        DOMAIN = db_domain
+                        # Sync USE_SSL from DB so security settings stay consistent
+                        db_use_ssl = bool(row[1]) if len(row) > 1 else False
+                        # Only override USE_SSL from DB if it was explicitly set
+                        if len(row) > 1:
+                            os.environ['USE_SSL'] = 'True' if db_use_ssl else 'False'
+                        # Update SITE_URL to match the DB domain
+                        _db_is_ip = bool(re.fullmatch(r'\d{1,3}(?:\.\d{1,3}){3}', db_domain))
+                        _db_proto = 'https' if (db_use_ssl and not _db_is_ip) else 'http'
+                        if not DEBUG:
+                            SITE_URL = f"{_db_proto}://{db_domain}"
+            conn.close()
+    except Exception as e:
+        print(f"[settings] Could not sync PlatformConfig domain to memory on boot: {e}")
 
 
 # ---------------------------------------------------------------------------
