@@ -80,6 +80,11 @@ def patch_runtime_settings():
                     domain=effective_domain,
                     name=f'CloudNeuron ({effective_domain})'
                 )
+        except Exception as site_exc:
+            # django_site table may not exist on first boot (before
+            # django.contrib.sites migrations run).  Skip silently —
+            # the in-memory patches above are still applied.
+            logger.debug("[patch] Skipped django_site sync (table may not exist yet): %s", site_exc)
         logger.info("[patch] Runtime settings synchronized successfully.")
     except Exception as exc:
         logger.warning("[patch] Runtime patching skipped or failed: %s", exc)

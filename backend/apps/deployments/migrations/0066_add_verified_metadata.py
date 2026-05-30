@@ -9,21 +9,45 @@ def backfill_metadata(apps, schema_editor):
     Deployment = apps.get_model('deployments', 'Deployment')
 
     # Backfill Service active_host_ip conservatively based on server host/ip
-    for service in Service.objects.all():
+    # Use bulk operations to avoid per-row saves and long-held locks.
+    services_with_server = []
+    services_local = []
+    for service in Service.objects.select_related('server').all().iterator():
         if service.server:
             service.active_host_ip = service.server.private_ip or service.server.host
             service.active_target_type = "remote"
-            service.save(update_fields=['active_host_ip', 'active_target_type'])
+            services_with_server.append(service)
         else:
             service.active_target_type = "local"
-            service.save(update_fields=['active_target_type'])
+            services_local.append(service)
+
+    if services_with_server:
+        Service.objects.bulk_update(services_with_server, ['active_host_ip', 'active_target_type'], batch_size=500)
+    if services_local:
+        Service.objects.bulk_update(services_local, ['active_target_type'], batch_size=500)
 
     # Backfill Deployment based on related Service (conservative approximation)
-    for deployment in Deployment.objects.exclude(status='FAILED'):
-        if getattr(deployment.service, 'active_target_type', None):
-            deployment.verified_target_type = deployment.service.active_target_type
-            deployment.verified_host_ip = deployment.service.active_host_ip
-            deployment.save(update_fields=['verified_target_type', 'verified_host_ip'])
+    # Use subquery-style updates per target_type to avoid per-row saves.
+    deployments_to_update = []
+    for deployment in (
+        Deployment.objects
+        .exclude(status='FAILED')
+        .select_related('service')
+        .iterator()
+    ):
+        svc = deployment.service
+        if svc and getattr(svc, 'active_target_type', None):
+            deployment.verified_target_type = svc.active_target_type
+            deployment.verified_host_ip = svc.active_host_ip
+            deployments_to_update.append(deployment)
+
+    if deployments_to_update:
+        Deployment.objects.bulk_update(
+            deployments_to_update,
+            ['verified_target_type', 'verified_host_ip'],
+            batch_size=500,
+        )
+
 
 
 class Migration(migrations.Migration):
