@@ -160,6 +160,14 @@ if DOMAIN and DOMAIN != 'localhost':
         ALLOWED_HOSTS.append(_grid_wildcard)
 APPEND_SLASH = False
 
+# SECURITY: Fail-fast in production — no dev-creds default
+_fallback_sqlite_path = (BASE_DIR / 'fallback.db').resolve().as_posix()
+_DATABASE_DEFAULT = (
+    'postgres://postgres:postgres@localhost:5432/smsly_hosting'
+    if DEBUG
+    else f'sqlite:///{_fallback_sqlite_path}'
+)
+
 # ---------------------------------------------------------------------------
 # PgCat / connection-pooler bypass helper
 # ---------------------------------------------------------------------------
@@ -468,13 +476,6 @@ TEMPLATES = [
 WSGI_APPLICATION = 'config.wsgi.application'
 ASGI_APPLICATION = 'config.asgi.application'
 
-# SECURITY: Fail-fast in production — no dev-creds default
-_fallback_sqlite_path = (BASE_DIR / 'fallback.db').resolve().as_posix()
-_DATABASE_DEFAULT = (
-    'postgres://postgres:postgres@localhost:5432/smsly_hosting'
-    if DEBUG
-    else f'sqlite:///{_fallback_sqlite_path}'
-)
 DATABASE_CONNECT_TIMEOUT = config('DATABASE_CONNECT_TIMEOUT', default=5, cast=int)
 REDIS_SOCKET_TIMEOUT = config('REDIS_SOCKET_TIMEOUT', default=5, cast=int)
 

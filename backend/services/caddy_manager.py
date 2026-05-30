@@ -828,16 +828,7 @@ def generate_caddyfile(config) -> str:
 
     # Site block for the primary access point (Domain or IP)
     if domain:
-        if _is_ip(domain):
-            # Explicitly use http:// for IP to prevent Caddy's auto-HTTPS loop.
-            # IP-based access proxies to backend:8000 for control plane API access.
-            sections.append(
-                f"""http://{domain} {{
-    reverse_proxy backend:8000
-    encode gzip
-}}"""
-            )
-        elif not use_ssl:
+        if not use_ssl:
             sections.append(
                 f"""http://{domain} {{
     encode gzip
