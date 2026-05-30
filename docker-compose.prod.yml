@@ -70,9 +70,12 @@ services:
       REGISTRY_AUTH: htpasswd
       REGISTRY_AUTH_HTPASSWD_REALM: SMSLY Registry
       REGISTRY_AUTH_HTPASSWD_PATH: /auth/htpasswd
+      REGISTRY_HTTP_TLS_CERTIFICATE: /certs/registry.crt
+      REGISTRY_HTTP_TLS_KEY: /certs/registry.key
     volumes:
       - registry_data:/var/lib/registry
       - ./auth:/auth:ro
+      - ./certs:/certs:ro
     healthcheck:
       test:
       - CMD-SHELL
