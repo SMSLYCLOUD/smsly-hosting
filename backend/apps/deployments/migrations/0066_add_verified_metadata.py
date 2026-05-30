@@ -3,50 +3,38 @@
 from django.db import migrations, models
 
 
-
 def backfill_metadata(apps, schema_editor):
-    Service = apps.get_model('deployments', 'Service')
-    Deployment = apps.get_model('deployments', 'Deployment')
+    conn = schema_editor.connection
+    if conn.vendor != 'postgresql':
+        return
 
-    # Backfill Service active_host_ip conservatively based on server host/ip
-    # Use bulk operations to avoid per-row saves and long-held locks.
-    services_with_server = []
-    services_local = []
-    for service in Service.objects.select_related('server').all().iterator():
-        if service.server:
-            service.active_host_ip = service.server.private_ip or service.server.host
-            service.active_target_type = "remote"
-            services_with_server.append(service)
-        else:
-            service.active_target_type = "local"
-            services_local.append(service)
+    with conn.cursor() as cursor:
+        cursor.execute("""
+            UPDATE deployments_service s
+            SET active_host_ip = COALESCE(ms.private_ip, ms.host),
+                active_target_type = 'remote'
+            FROM deployments_managedserver ms
+            WHERE s.server_id = ms.id
+              AND (s.active_host_ip IS NULL OR s.active_target_type IS NULL)
+        """)
 
-    if services_with_server:
-        Service.objects.bulk_update(services_with_server, ['active_host_ip', 'active_target_type'], batch_size=500)
-    if services_local:
-        Service.objects.bulk_update(services_local, ['active_target_type'], batch_size=500)
+        cursor.execute("""
+            UPDATE deployments_service
+            SET active_target_type = 'local'
+            WHERE server_id IS NULL
+              AND active_target_type IS NULL
+        """)
 
-    # Backfill Deployment based on related Service (conservative approximation)
-    # Use subquery-style updates per target_type to avoid per-row saves.
-    deployments_to_update = []
-    for deployment in (
-        Deployment.objects
-        .exclude(status='FAILED')
-        .select_related('service')
-        .iterator()
-    ):
-        svc = deployment.service
-        if svc and getattr(svc, 'active_target_type', None):
-            deployment.verified_target_type = svc.active_target_type
-            deployment.verified_host_ip = svc.active_host_ip
-            deployments_to_update.append(deployment)
-
-    if deployments_to_update:
-        Deployment.objects.bulk_update(
-            deployments_to_update,
-            ['verified_target_type', 'verified_host_ip'],
-            batch_size=500,
-        )
+        cursor.execute("""
+            UPDATE deployments_deployment d
+            SET verified_target_type = s.active_target_type,
+                verified_host_ip = s.active_host_ip
+            FROM deployments_service s
+            WHERE d.service_id = s.id
+              AND d.status != 'FAILED'
+              AND s.active_target_type IS NOT NULL
+              AND (d.verified_target_type IS NULL OR d.verified_host_ip IS NULL)
+        """)
 
 
 

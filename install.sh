@@ -3746,10 +3746,10 @@ PYEOF
             else
                 docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db pgcat redis socket-proxy
             fi
-            # Stop backend & celery so their DB connections don't block
+            # Stop backend, celery & pgcat so their DB connections don't block
             # migrations (ALTER TABLE requires exclusive locks).
-            echo -e "${BLUE}  → Stopping backend & celery for migrations...${NC}"
-            docker compose -f "$COMPOSE_FILE" stop backend celery celery-deploy celery-fast celery-beat 2>/dev/null || true
+            echo -e "${BLUE}  → Stopping backend, celery & pgcat for migrations...${NC}"
+            docker compose -f "$COMPOSE_FILE" stop backend celery celery-deploy celery-fast celery-beat pgcat 2>/dev/null || true
 
             echo -e "${BLUE}  → Running migrations...${NC}"
             run_backend_migrations --root || {
@@ -3758,7 +3758,8 @@ PYEOF
                 run_backend_migrations --root
             }
 
-            echo -e "${BLUE}  → Starting backend...${NC}"
+            echo -e "${BLUE}  → Starting backend & pgcat...${NC}"
+            docker compose -f "$COMPOSE_FILE" up -d --no-deps pgcat 2>/dev/null || true
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate backend
             else
@@ -3818,10 +3819,10 @@ PYEOF
                 docker compose -f "$COMPOSE_FILE" up -d --no-deps frontend 2>/dev/null || true
             fi
 
-            # 2. Stop backend & celery so their DB connections don't block
+            # 2. Stop backend, celery & pgcat so their DB connections don't block
             #    migrations (ALTER TABLE requires exclusive locks).
-            echo -e "${BLUE}  → Stopping backend & celery for migrations...${NC}"
-            docker compose -f "$COMPOSE_FILE" stop backend celery celery-deploy celery-fast celery-beat 2>/dev/null || true
+            echo -e "${BLUE}  → Stopping backend, celery & pgcat for migrations...${NC}"
+            docker compose -f "$COMPOSE_FILE" stop backend celery celery-deploy celery-fast celery-beat pgcat 2>/dev/null || true
 
             # 3. Run migrations
             echo -e "${BLUE}  → Running migrations...${NC}"
@@ -3831,8 +3832,9 @@ PYEOF
                 run_backend_migrations --root
             }
 
-            # 4. Start backend (picks up Python code changes from mounted volume)
-            echo -e "${BLUE}  → Starting backend...${NC}"
+            # 4. Start pgcat & backend (picks up Python code changes from mounted volume)
+            echo -e "${BLUE}  → Starting pgcat & backend...${NC}"
+            docker compose -f "$COMPOSE_FILE" up -d --no-deps pgcat 2>/dev/null || true
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 docker compose -f "$COMPOSE_FILE" up -d --remove-orphans redis rabbitmq socket-proxy
                 sync_agent_lite_rabbitmq_password
@@ -3938,10 +3940,10 @@ PYEOF
                 done
             fi
 
-            # 8. Stop backend & celery so their DB connections don't block
+            # 8. Stop backend, celery & pgcat so their DB connections don't block
             #    migrations (ALTER TABLE requires exclusive locks).
-            echo -e "${BLUE}  → Stopping backend & celery for migrations...${NC}"
-            docker compose -f "$COMPOSE_FILE" stop backend celery celery-deploy celery-fast celery-beat 2>/dev/null || true
+            echo -e "${BLUE}  → Stopping backend, celery & pgcat for migrations...${NC}"
+            docker compose -f "$COMPOSE_FILE" stop backend celery celery-deploy celery-fast celery-beat pgcat 2>/dev/null || true
 
             # 9. Run migrations
             echo -e "${BLUE}  → Running migrations...${NC}"
@@ -3955,6 +3957,20 @@ PYEOF
                 docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db pgcat redis rabbitmq socket-proxy registry route-fallback traefik
             else
                 docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db pgcat redis socket-proxy
+            fi
+            run_backend_migrations --root || {
+                echo -e "${YELLOW}  ⚠ Migration failed — retrying in 15s...${NC}"
+                sleep 15
+                run_backend_migrations --root
+            }
+
+            # 10. Start pgcat & backend
+            echo -e "${BLUE}  → Starting pgcat & backend...${NC}"
+            docker compose -f "$COMPOSE_FILE" up -d --no-deps pgcat 2>/dev/null || true
+            if [ "$MODE_AGENT_LITE" = "true" ]; then
+                docker compose -f "$COMPOSE_FILE" up -d --force-recreate backend
+            else
+                docker compose -f "$COMPOSE_FILE" up -d --no-deps backend
             fi
             run_backend_migrations --root || {
                 echo -e "${YELLOW}  ⚠ Migration failed — retrying in 15s...${NC}"
