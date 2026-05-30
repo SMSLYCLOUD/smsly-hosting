@@ -143,6 +143,24 @@ def github_connect(request):
 # ── NEW: API-based GitHub OAuth (bypasses session cookies) ───────────────────
 
 
+def _is_ip_or_localhost(url_str: str) -> bool:
+    """Return True if the URL contains a raw IP address or localhost."""
+    from urllib.parse import urlparse
+    import ipaddress
+    try:
+        hostname = urlparse(url_str).hostname
+        if not hostname:
+            return False
+        if hostname.lower() in ("localhost", "127.0.0.1", "::1"):
+            return True
+        # Strip brackets for IPv6 if present
+        host_clean = hostname.strip("[]")
+        ipaddress.ip_address(host_clean)
+        return True
+    except ValueError:
+        return False
+
+
 @extend_schema(responses=OpenApiTypes.OBJECT)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -169,8 +187,8 @@ def github_oauth_url(request):
     
     if not callback_url:
         site_url = getattr(settings, 'SITE_URL', '').rstrip('/')
-        # Force HTTPS in production to match GitHub App settings
-        if not settings.DEBUG and site_url:
+        # Force HTTPS in production to match GitHub App settings (except IP or localhost)
+        if not settings.DEBUG and site_url and not _is_ip_or_localhost(site_url):
             site_url = site_url.replace('http://', 'https://')
         
         if site_url:
@@ -247,8 +265,8 @@ def github_oauth_callback(request):
     
     if not callback_url:
         site_url = getattr(settings, 'SITE_URL', '').rstrip('/')
-        # Force HTTPS in production to match GitHub App settings
-        if not settings.DEBUG and site_url:
+        # Force HTTPS in production to match GitHub App settings (except IP or localhost)
+        if not settings.DEBUG and site_url and not _is_ip_or_localhost(site_url):
             site_url = site_url.replace('http://', 'https://')
         
         if not site_url:

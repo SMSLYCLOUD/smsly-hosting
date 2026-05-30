@@ -1,9 +1,15 @@
 # pylint: disable=invalid-name
-"""Integration API tests (GitHub connect bootstrap flow)."""
+"""Integration API tests (GitHub connect bootstrap flow and OAuth url generation)."""
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
+from django.contrib.sites.models import Site
+
+try:
+    from allauth.socialaccount.models import SocialApp
+except ImportError:
+    SocialApp = None
 
 User = get_user_model()
 
@@ -35,3 +41,54 @@ class GitHubConnectBootstrapTests(TestCase):
         client = APIClient()
         resp = client.get("/api/v1/integrations/github/connect/")
         self.assertIn(resp.status_code, [401, 403])
+
+
+class GitHubOAuthUrlTests(TestCase):
+    """Test generating GitHub OAuth authorization URL."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="oauth-user",
+            email="oauth-user@example.com",
+            password="pass12345",
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+
+        # Create a GitHub SocialApp if allauth is available
+        if SocialApp is not None:
+            site = Site.objects.get_current()
+            self.app, _ = SocialApp.objects.get_or_create(
+                provider="github",
+                defaults={
+                    "name": "GitHub",
+                    "client_id": "test_client_id",
+                    "secret": "test_secret",
+                }
+            )
+            self.app.sites.add(site)
+
+    @override_settings(DEBUG=False, SITE_URL="http://209.159.152.123")
+    def test_github_oauth_url_ip_keeps_http(self):
+        if SocialApp is None:
+            self.skipTest("allauth not installed/available")
+        resp = self.client.get("/api/v1/integrations/github/oauth-url/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("redirect_uri=http%3A%2F%2F209.159.152.123%2Fauth%2Fgithub%2Fcallback", resp.data.get("url", ""))
+
+    @override_settings(DEBUG=False, SITE_URL="http://grid.smsly.cloud")
+    def test_github_oauth_url_domain_forces_https(self):
+        if SocialApp is None:
+            self.skipTest("allauth not installed/available")
+        resp = self.client.get("/api/v1/integrations/github/oauth-url/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("redirect_uri=https%3A%2F%2Fgrid.smsly.cloud%2Fauth%2Fgithub%2Fcallback", resp.data.get("url", ""))
+
+    @override_settings(DEBUG=False, SITE_URL="http://localhost:3000")
+    def test_github_oauth_url_localhost_keeps_http(self):
+        if SocialApp is None:
+            self.skipTest("allauth not installed/available")
+        resp = self.client.get("/api/v1/integrations/github/oauth-url/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("redirect_uri=http%3A%2F%2Flocalhost%3A3000%2Fauth%2Fgithub%2Fcallback", resp.data.get("url", ""))
+
