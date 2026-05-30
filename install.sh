@@ -5513,38 +5513,53 @@ sleep 5
 
 if [ "$RUST_TWIN_MODE" != "true" ]; then
     echo -e "${BLUE}  → Running Migrations...${NC}"
-    # Halt non-migration services to prevent table locks/contention.
-    # Celery workers and beat poll the DB and can block ALTER TABLE statements.
-    MIGRATION_STOPPED_SVCS="celery celery-deploy celery-fast celery-beat"
-    echo -e "${BLUE}    Pausing ${MIGRATION_STOPPED_SVCS} to avoid lock contention...${NC}"
+
+    # Stop all services that talk to the DB.  Any open connection — even
+    # a SELECT — holds a shared lock that blocks the ACCESS EXCLUSIVE
+    # lock an ALTER TABLE needs.  Celery, backend health checks, and
+    # PgCat connection pools all compete with the migration.
+    MIGRATION_STOPPED_SVCS="backend celery celery-deploy celery-fast celery-beat pgcat"
+    echo -e "${BLUE}    Stopping ${MIGRATION_STOPPED_SVCS} to prevent lock contention...${NC}"
     docker compose -f "$COMPOSE_FILE" stop ${MIGRATION_STOPPED_SVCS} >/dev/null 2>&1 || true
-    # Kill any idle-in-transaction connections left by PgCat pool
+    sleep 3
+
+    # Kill every backend on the database so the migration owns it exclusively
     docker compose -f "$COMPOSE_FILE" exec -T db \
-        psql -U postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE state = 'idle in transaction' AND pid != pg_backend_pid()" \
+        psql -U smsly_admin -d smsly_hosting \
+        -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND backend_type = 'client backend'" \
         >/dev/null 2>&1 || true
+    sleep 2
+
+    echo -e "${BLUE}    Running migrations (database: direct)...${NC}"
     # Note: Do NOT run makemigrations — migrations are committed in the repo.
-    # Running makemigrations generates files inside the container that conflict on redeploy.
     MIGRATE_OK=false
-    for attempt in 1 2 3; do
+    # Migration runs via DIRECT_DATABASE_URL which goes straight to the
+    # postgres backend, not through PgCat, so PgCat being stopped is safe.
+    if run_backend_migrations 2>&1; then
+        MIGRATE_OK=true
+    else
+        echo -e "${YELLOW}  ⚠ Migration attempt 1 failed — killing stale connections and retrying...${NC}"
+        docker compose -f "$COMPOSE_FILE" exec -T db \
+            psql -U smsly_admin -d smsly_hosting \
+            -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND backend_type = 'client backend'" \
+            >/dev/null 2>&1 || true
+        sleep 5
         if run_backend_migrations 2>&1; then
             MIGRATE_OK=true
-            break
         fi
-        WAIT=$((attempt * 10))
-        echo -e "${YELLOW}  ⚠ Migration attempt $attempt/3 failed — retrying in ${WAIT}s...${NC}"
-        docker compose -f "$COMPOSE_FILE" restart pgcat backend >/dev/null 2>&1
-        sleep "$WAIT"
-    done
+    fi
+
+    # Restart everything that was paused
+    echo -e "${BLUE}    Restarting ${MIGRATION_STOPPED_SVCS}...${NC}"
+    docker compose -f "$COMPOSE_FILE" start ${MIGRATION_STOPPED_SVCS} >/dev/null 2>&1 || true
+    sleep 5
 
     if [ "$MIGRATE_OK" != "true" ]; then
-        echo -e "${RED}  ✗ Migrations failed after 3 attempts.${NC}"
+        echo -e "${RED}  ✗ Migrations failed after 2 attempts.${NC}"
         echo -e "${YELLOW}  Check: docker compose -f $COMPOSE_FILE logs backend${NC}"
         echo -e "${YELLOW}  ↳ Tip: Re-run with --resume: sudo bash install.sh --resume${NC}"
         exit 1
     fi
-    # Resume services paused before migration
-    echo -e "${BLUE}    Resuming ${MIGRATION_STOPPED_SVCS}...${NC}"
-    docker compose -f "$COMPOSE_FILE" start ${MIGRATION_STOPPED_SVCS} >/dev/null 2>&1 || true
 else
     echo -e "${BLUE}  → Rust Twin: Skipping Django manage.py migrations (handled via SeaORM/CLI in future steps)...${NC}"
 fi
