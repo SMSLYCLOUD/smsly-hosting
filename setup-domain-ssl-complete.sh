@@ -77,7 +77,9 @@ install_domain_ssl_manager() {
     
     # Copy the manager script
     if [ -f "smsly-domain-ssl-manager.sh" ]; then
-        cp smsly-domain-ssl-manager.sh "$DOMAIN_SSL_MANAGER"
+        if [ "$(readlink -f smsly-domain-ssl-manager.sh)" != "$(readlink -f "$DOMAIN_SSL_MANAGER")" ]; then
+            cp smsly-domain-ssl-manager.sh "$DOMAIN_SSL_MANAGER"
+        fi
         chmod +x "$DOMAIN_SSL_MANAGER"
         log_success "Domain SSL manager installed"
     else
