@@ -161,6 +161,47 @@ if DOMAIN and DOMAIN != 'localhost':
 APPEND_SLASH = False
 
 # ---------------------------------------------------------------------------
+# PgCat / connection-pooler bypass helper
+# ---------------------------------------------------------------------------
+_POOLER_HOSTNAMES = frozenset({"pgcat", "pgbouncer", "haproxy"})
+
+
+def _resolve_db_url() -> str:
+    """Return a usable DATABASE_URL, bypassing connection poolers when needed.
+
+    PgCat (transaction pooling) doesn't support SET/SAVEPOINT required by
+    Django migrations and some ORM operations.  When DATABASE_URL points at a
+    pooler and no DIRECT_DATABASE_URL is provided, we construct a direct
+    connection string from the individual POSTGRES_* environment variables.
+    """
+    from urllib.parse import urlparse
+
+    url = config('DATABASE_URL', default=_DATABASE_DEFAULT)
+    parsed = urlparse(url)
+
+    # Already a direct connection - return as-is
+    if parsed.hostname not in _POOLER_HOSTNAMES:
+        return url
+
+    # Explicit direct URL takes priority
+    direct = config('DIRECT_DATABASE_URL', default='')
+    if direct:
+        return direct
+
+    # Construct direct URL from individual POSTGRES_* vars
+    pg_host = config('POSTGRES_HOST', default='db')
+    pg_port = config('POSTGRES_PORT', default='5432')
+    pg_user = config('POSTGRES_USER', default='smsly_admin')
+    pg_pass = config('POSTGRES_PASSWORD', default='')
+    pg_db = config('POSTGRES_DB', default='smsly_hosting')
+    if pg_pass:
+        return f"postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{pg_db}"
+
+    # Last resort: return the original pooler URL (will fail loudly)
+    return url
+
+
+# ---------------------------------------------------------------------------
 # Dynamically include the domain from PlatformConfig (DB) so that domain
 # changes made via the Settings UI take effect after container restart,
 # without requiring manual .env edits.
@@ -169,27 +210,9 @@ try:
     import psycopg2
     from urllib.parse import urlparse
 
-    # Prefer DIRECT_DATABASE_URL (bypasses PgCat/poolers, uses admin credentials).
-    # On lite agents, DATABASE_URL goes through PgCat with node_agent credentials
-    # which will be rejected if PgCat hasn't been reloaded after provisioning.
-    db_url = config('DIRECT_DATABASE_URL', default='') or config('DATABASE_URL', default='')
+    db_url = _resolve_db_url()
     if db_url:
         parsed = urlparse(db_url)
-        # Skip pooler connections to avoid "No pool configured" / auth failures
-        if parsed.hostname in ("pgcat", "pgbouncer", "haproxy"):
-            direct_fallback = config('DIRECT_DATABASE_URL', default='')
-            if not direct_fallback:
-                pg_host = config('POSTGRES_HOST', default='db')
-                pg_port = config('POSTGRES_PORT', default='5432')
-                pg_user = config('POSTGRES_USER', default='smsly_admin')
-                pg_pass = config('POSTGRES_PASSWORD', default='')
-                pg_db = config('POSTGRES_DB', default='smsly_hosting')
-                if pg_pass:
-                    db_url = f"postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{pg_db}"
-                    parsed = urlparse(db_url)
-            else:
-                db_url = direct_fallback
-                parsed = urlparse(db_url)
         conn = psycopg2.connect(
             dbname=parsed.path.lstrip('/'),
             user=parsed.username,
@@ -444,9 +467,16 @@ _DATABASE_DEFAULT = (
 )
 DATABASE_CONNECT_TIMEOUT = config('DATABASE_CONNECT_TIMEOUT', default=5, cast=int)
 REDIS_SOCKET_TIMEOUT = config('REDIS_SOCKET_TIMEOUT', default=5, cast=int)
+
+_db_url = _resolve_db_url()
+if os.environ.get("SMSLY_MIGRATION_MODE") == "true" or os.environ.get("SMSLY_DISABLE_STARTUP_TASKS") == "true":
+    _direct_url = config('DIRECT_DATABASE_URL', default='')
+    if _direct_url:
+        _db_url = _direct_url
+
 DATABASES = {
     'default': dj_database_url.config(
-        default=config('DATABASE_URL', default=_DATABASE_DEFAULT),
+        default=_db_url,
         # PgCat (transaction pooling) requires conn_max_age=0
         # so Django returns connections to the pool after each request.
         conn_max_age=0,
@@ -460,9 +490,9 @@ DATABASES = {
 # We derive a 'session' pool alias (smsly_hosting_session) or use a 'direct'
 # connection to bypass the pooler during migrations.
 # ---------------------------------------------------------------------------
-_db_url = config('DATABASE_URL', default=_DATABASE_DEFAULT)
-if _db_url and 'pgcat' in _db_url and '_session' not in _db_url:
-    _session_url = _db_url.rstrip('/') + '_session'
+_orig_db_url = config('DATABASE_URL', default=_DATABASE_DEFAULT)
+if _orig_db_url and 'pgcat' in _orig_db_url and '_session' not in _orig_db_url:
+    _session_url = _orig_db_url.rstrip('/') + '_session'
     DATABASES['session'] = dj_database_url.config(
         default=_session_url,
         conn_max_age=0,
