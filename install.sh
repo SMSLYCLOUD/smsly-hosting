@@ -5515,9 +5515,9 @@ if [ "$RUST_TWIN_MODE" != "true" ]; then
     echo -e "${BLUE}  → Running Migrations...${NC}"
     # Halt non-migration services to prevent table locks/contention.
     # Celery workers and beat poll the DB and can block ALTER TABLE statements.
-    local migration_svcs="celery celery-deploy celery-fast celery-beat"
-    echo -e "${BLUE}    Pausing ${migration_svcs} to avoid lock contention...${NC}"
-    docker compose -f "$COMPOSE_FILE" stop ${migration_svcs} >/dev/null 2>&1 || true
+    MIGRATION_STOPPED_SVCS="celery celery-deploy celery-fast celery-beat"
+    echo -e "${BLUE}    Pausing ${MIGRATION_STOPPED_SVCS} to avoid lock contention...${NC}"
+    docker compose -f "$COMPOSE_FILE" stop ${MIGRATION_STOPPED_SVCS} >/dev/null 2>&1 || true
     # Kill any idle-in-transaction connections left by PgCat pool
     docker compose -f "$COMPOSE_FILE" exec -T db \
         psql -U postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE state = 'idle in transaction' AND pid != pg_backend_pid()" \
@@ -5543,8 +5543,8 @@ if [ "$RUST_TWIN_MODE" != "true" ]; then
         exit 1
     fi
     # Resume services paused before migration
-    echo -e "${BLUE}    Resuming ${migration_svcs}...${NC}"
-    docker compose -f "$COMPOSE_FILE" start ${migration_svcs} >/dev/null 2>&1 || true
+    echo -e "${BLUE}    Resuming ${MIGRATION_STOPPED_SVCS}...${NC}"
+    docker compose -f "$COMPOSE_FILE" start ${MIGRATION_STOPPED_SVCS} >/dev/null 2>&1 || true
 else
     echo -e "${BLUE}  → Rust Twin: Skipping Django manage.py migrations (handled via SeaORM/CLI in future steps)...${NC}"
 fi
