@@ -2202,7 +2202,7 @@ class PipelineManager:
 
         try:
             append_log(self.deployment, f"Pushing to {registry_url}...\n")
-            remote_tag = NixpacksBuilder.push_image(self.image_name, registry_url)
+            remote_tag, push_error = NixpacksBuilder.push_image(self.image_name, registry_url)
             self.image_name = remote_tag
 
             # If push_image returned the original name (registry unreachable),
@@ -2214,6 +2214,8 @@ class PipelineManager:
                 update_stage(self.deployment, 'Push', 'success')
                 append_log(self.deployment, f"✓ Pushed: {remote_tag}\n")
             else:
+                if push_error:
+                    append_log(self.deployment, f"Registry error details: {push_error}\n")
                 if not is_local:
                     raise SystemError(
                         f"Image push failed: Local fallback is not allowed for remote deployments. "

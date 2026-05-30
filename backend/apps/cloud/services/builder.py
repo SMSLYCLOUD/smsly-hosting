@@ -124,7 +124,7 @@ class NixpacksBuilder:
             raise RuntimeError(f"Nixpacks build failed:\n{error_detail or e.stderr}") from e
 
     @staticmethod
-    def push_image(image_name: str, registry_url: str) -> str:
+    def push_image(image_name: str, registry_url: str) -> tuple[str, Optional[str]]:
         """
         Tags and pushes the image to the internal or external registry.
 
@@ -154,6 +154,7 @@ class NixpacksBuilder:
             # status lines, or a single string (stream=False).  Consume
             # all output looking for JSON errors.
             push_failed = False
+            error_msg = None
             if push_result is not None:
                 if isinstance(push_result, str):
                     source = push_result.split("\n")
@@ -162,15 +163,16 @@ class NixpacksBuilder:
                 for line in source:
                     if '"error"' in str(line):
                         push_failed = True
+                        error_msg = str(line)
                         logger.error(f"Registry push failed: {line}")
                         break
             if push_failed:
-                return image_name  # fallback to local
+                return image_name, error_msg  # fallback to local
 
-            return full_tag
+            return full_tag, None
         except Exception as e:
             logger.warning(f"Registry push failed ({e}); keeping local image name.")
-            return image_name  # fallback to local
+            return image_name, str(e)  # fallback to local
 
     @staticmethod
     def scan_image(image_name: str) -> Dict[str, Any]:
