@@ -3746,22 +3746,24 @@ PYEOF
             else
                 docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db pgcat redis socket-proxy
             fi
+            # Stop backend & celery so their DB connections don't block
+            # migrations (ALTER TABLE requires exclusive locks).
+            echo -e "${BLUE}  → Stopping backend & celery for migrations...${NC}"
+            docker compose -f "$COMPOSE_FILE" stop backend celery celery-deploy celery-fast celery-beat 2>/dev/null || true
+
+            echo -e "${BLUE}  → Running migrations...${NC}"
+            run_backend_migrations --root || {
+                echo -e "${YELLOW}  ⚠ Migration failed — retrying in 15s...${NC}"
+                sleep 15
+                run_backend_migrations --root
+            }
+
+            echo -e "${BLUE}  → Starting backend...${NC}"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate backend
             else
                 docker compose -f "$COMPOSE_FILE" up -d --no-deps backend
             fi
-
-            echo -e "${BLUE}  → Running migrations...${NC}"
-            sleep 10  # Wait for backend to start
-            # Note: Do NOT run makemigrations here — migrations are committed in the repo.
-            # Running makemigrations auto-generates files inside the container that conflict
-            # with committed migrations on subsequent deploys.
-            run_backend_migrations --root || {
-                echo -e "${YELLOW}  ⚠ Migration failed — backend may still be starting. Retrying in 15s...${NC}"
-                sleep 15
-                run_backend_migrations --root
-            }
 
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput
 
@@ -3816,24 +3818,28 @@ PYEOF
                 docker compose -f "$COMPOSE_FILE" up -d --no-deps frontend 2>/dev/null || true
             fi
 
-            # 2. Restart backend (picks up Python code changes from mounted volume)
-            echo -e "${BLUE}  → Restarting backend...${NC}"
+            # 2. Stop backend & celery so their DB connections don't block
+            #    migrations (ALTER TABLE requires exclusive locks).
+            echo -e "${BLUE}  → Stopping backend & celery for migrations...${NC}"
+            docker compose -f "$COMPOSE_FILE" stop backend celery celery-deploy celery-fast celery-beat 2>/dev/null || true
+
+            # 3. Run migrations
+            echo -e "${BLUE}  → Running migrations...${NC}"
+            run_backend_migrations --root || {
+                echo -e "${YELLOW}  ⚠ Migration failed — retrying in 15s...${NC}"
+                sleep 15
+                run_backend_migrations --root
+            }
+
+            # 4. Start backend (picks up Python code changes from mounted volume)
+            echo -e "${BLUE}  → Starting backend...${NC}"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 docker compose -f "$COMPOSE_FILE" up -d --remove-orphans redis rabbitmq socket-proxy
                 sync_agent_lite_rabbitmq_password
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate backend
             else
-                docker compose -f "$COMPOSE_FILE" restart backend
+                docker compose -f "$COMPOSE_FILE" up -d --no-deps backend
             fi
-            sleep 5
-
-            # 3. Run migrations
-            echo -e "${BLUE}  → Running migrations...${NC}"
-            run_backend_migrations --root || {
-                echo -e "${YELLOW}  ⚠ Migration failed — backend may still be starting. Retrying in 15s...${NC}"
-                sleep 15
-                run_backend_migrations --root
-            }
 
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput 2>/dev/null || true
 
@@ -3932,7 +3938,12 @@ PYEOF
                 done
             fi
 
-            # 8. Run migrations
+            # 8. Stop backend & celery so their DB connections don't block
+            #    migrations (ALTER TABLE requires exclusive locks).
+            echo -e "${BLUE}  → Stopping backend & celery for migrations...${NC}"
+            docker compose -f "$COMPOSE_FILE" stop backend celery celery-deploy celery-fast celery-beat 2>/dev/null || true
+
+            # 9. Run migrations
             echo -e "${BLUE}  → Running migrations...${NC}"
             echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
@@ -3945,13 +3956,19 @@ PYEOF
             else
                 docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db pgcat redis socket-proxy
             fi
-            sleep 10
-            # Note: Do NOT run makemigrations — migrations are committed in the repo.
             run_backend_migrations --root || {
-                echo -e "${YELLOW}  ⚠ Migration failed — backend may still be starting. Retrying in 15s...${NC}"
+                echo -e "${YELLOW}  ⚠ Migration failed — retrying in 15s...${NC}"
                 sleep 15
                 run_backend_migrations --root
             }
+
+            # 10. Start backend
+            echo -e "${BLUE}  → Starting backend...${NC}"
+            if [ "$MODE_AGENT_LITE" = "true" ]; then
+                docker compose -f "$COMPOSE_FILE" up -d --force-recreate backend
+            else
+                docker compose -f "$COMPOSE_FILE" up -d --no-deps backend
+            fi
 
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput
 
