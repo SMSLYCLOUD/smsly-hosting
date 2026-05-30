@@ -143,7 +143,8 @@ class CaddyCustomDomainRoutingTests(TestCase):
 
         caddyfile = generate_caddyfile(config)
 
-        self.assertIn('http://163.245.214.62 {\n    reverse_proxy backend:8000', caddyfile)
+        self.assertIn('http://163.245.214.62 {', caddyfile)
+        self.assertIn('reverse_proxy frontend:3000', caddyfile)
 
     def test_wildcard_routes_known_hosts_and_sends_unknown_to_notice(self):
         Service.objects.create(
