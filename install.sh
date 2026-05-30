@@ -3092,7 +3092,7 @@ recover_runtime_stack() {
             -out "$INSTALL_DIR/certs/registry.crt" \
             -subj "/CN=registry" 2>/dev/null || true
     fi
-    if [ ! -f "$INSTALL_DIR/auth/htpasswd" ]; then
+    if [ ! -f "$INSTALL_DIR/auth/htpasswd" ] || [ -z "${REGISTRY_PASSWORD:-}" ] || [ -z "${REGISTRY_USER:-}" ]; then
         REGISTRY_PASS="${REGISTRY_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_urlsafe(18))" 2>/dev/null || openssl rand -hex 12 2>/dev/null || echo 'auto-generated-change-me')}"
         if command -v htpasswd >/dev/null 2>&1; then
             htpasswd -Bbn "${REGISTRY_USER:-smsly-registry}" "$REGISTRY_PASS" > "$INSTALL_DIR/auth/htpasswd"
@@ -5412,7 +5412,7 @@ if [ ! -f "$INSTALL_DIR/certs/registry.key" ] || [ ! -f "$INSTALL_DIR/certs/regi
         -subj "/CN=registry" 2>/dev/null || \
         echo -e "${YELLOW}    ⚠ Failed to generate registry cert (openssl missing?)${NC}"
 fi
-if [ ! -f "$INSTALL_DIR/auth/htpasswd" ]; then
+if [ ! -f "$INSTALL_DIR/auth/htpasswd" ] || [ -z "${REGISTRY_PASSWORD:-}" ] || [ -z "${REGISTRY_USER:-}" ]; then
     REGISTRY_PASS="${REGISTRY_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_urlsafe(18))" 2>/dev/null || openssl rand -hex 12 2>/dev/null || echo 'auto-generated-change-me')}"
     if command -v htpasswd >/dev/null 2>&1; then
         htpasswd -Bbn "${REGISTRY_USER:-smsly-registry}" "$REGISTRY_PASS" > "$INSTALL_DIR/auth/htpasswd"
