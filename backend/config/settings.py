@@ -485,8 +485,8 @@ if os.environ.get("SMSLY_MIGRATION_MODE") == "true" or os.environ.get("SMSLY_DIS
         _db_url = _direct_url
 
 DATABASES = {
-    'default': dj_database_url.config(
-        default=_db_url,
+    'default': dj_database_url.parse(
+        _db_url,
         # PgCat (transaction pooling) requires conn_max_age=0
         # so Django returns connections to the pool after each request.
         conn_max_age=0,
@@ -503,8 +503,8 @@ DATABASES = {
 _orig_db_url = config('DATABASE_URL', default=_DATABASE_DEFAULT)
 if _orig_db_url and 'pgcat' in _orig_db_url and '_session' not in _orig_db_url:
     _session_url = _orig_db_url.rstrip('/') + '_session'
-    DATABASES['session'] = dj_database_url.config(
-        default=_session_url,
+    DATABASES['session'] = dj_database_url.parse(
+        _session_url,
         conn_max_age=0,
         conn_health_checks=True,
     )
@@ -512,8 +512,8 @@ if _orig_db_url and 'pgcat' in _orig_db_url and '_session' not in _orig_db_url:
 # Direct connection for migrations — bypasses PgCat entirely if configured.
 _DIRECT_DB_URL = config('DIRECT_DATABASE_URL', default='')
 if _DIRECT_DB_URL:
-    DATABASES['direct'] = dj_database_url.config(
-        default=_DIRECT_DB_URL,
+    DATABASES['direct'] = dj_database_url.parse(
+        _DIRECT_DB_URL,
         conn_max_age=0,
         conn_health_checks=True,
     )
