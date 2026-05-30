@@ -1851,9 +1851,12 @@ release_install_lock() {
 
 get_migration_database_alias() {
     local migrate_db
+    local direct_url="postgresql://${POSTGRES_USER:-smsly_admin}:${POSTGRES_PASSWORD:-}@${POSTGRES_HOST:-db}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-smsly_hosting}"
     migrate_db="$(
         docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T \
             -e SMSLY_DISABLE_STARTUP_TASKS=true \
+            -e SMSLY_MIGRATION_MODE=true \
+            -e DIRECT_DATABASE_URL="$direct_url" \
             backend python manage.py shell -c \
             "from django.conf import settings; print('direct' if 'direct' in settings.DATABASES else ('session' if 'session' in settings.DATABASES else 'default'))" \
             2>/dev/null | tail -n 1 | tr -d '\r'
