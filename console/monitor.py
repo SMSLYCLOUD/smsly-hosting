@@ -260,8 +260,7 @@ class ConsoleMonitor:
             # Calculate disconnect rates
             disconnect_rates = [s.get_disconnect_rate() for s in all_sessions 
                                if s.get_duration().total_seconds() > 60]  # At least 1 minute
-            avg_disconnect_rate = (sum(disconnect_rates) / len(disconnect_rates)) 
-                                  if disconnect_rates else 0
+            avg_disconnect_rate = (sum(disconnect_rates) / len(disconnect_rates)) if disconnect_rates else 0
             
             return {
                 "total_sessions": total_sessions,
