@@ -142,7 +142,8 @@ class Command(BaseCommand):
                     )
                     continue
 
-                conn = psycopg2.connect(url)
+                timeout = int(os.environ.get("DATABASE_CONNECT_TIMEOUT", 5))
+                conn = psycopg2.connect(url, connect_timeout=timeout)
                 conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
                 if is_admin:
                     admin_conn = conn

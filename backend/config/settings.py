@@ -236,7 +236,8 @@ if not _skip_platform_sync:
                 user=parsed.username,
                 password=parsed.password,
                 host=parsed.hostname,
-                port=parsed.port
+                port=parsed.port,
+                connect_timeout=config('DATABASE_CONNECT_TIMEOUT', default=5, cast=int)
             )
             with conn.cursor() as cursor:
                 cursor.execute("SELECT domain, use_ssl FROM deployments_platformconfig ORDER BY id ASC LIMIT 1;")
