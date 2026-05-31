@@ -75,3 +75,7 @@ username = "smsly_admin"
 password = "${POSTGRES_PASSWORD}"
 pool_size = 100
 min_pool_size = 20
+# NOTE: Node agent user pools are generated dynamically by render_pgcat_config.py
+# at container startup. It queries the DB for all lite-agent rows and builds
+# pool entries for each. After provisioning a new node, PgCat is restarted
+# automatically by the provisioner to pick up the new user.
