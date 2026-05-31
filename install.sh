@@ -6034,8 +6034,8 @@ if command -v iptables >/dev/null 2>&1; then
     # Allow Docker bridge networks (172.16.0.0/12 covers docker0 + compose nets)
     iptables -I DOCKER-USER -s 172.16.0.0/12 -p tcp --dport 5000 -j ACCEPT 2>/dev/null || true
 
-    # Allow WireGuard mesh (10.0.0.0/8 covers typical mesh VPN ranges)
-    iptables -I DOCKER-USER -s 10.0.0.0/8 -p tcp --dport 5000 -j ACCEPT 2>/dev/null || true
+    # Allow WireGuard mesh (10.100.0.0/24 is the assigned mesh range)
+    iptables -I DOCKER-USER -s 10.100.0.0/24 -p tcp --dport 5000 -j ACCEPT 2>/dev/null || true
 
     # Allow known node IPs
     if [ -n "${MASTER_MESH_IP:-}" ]; then
@@ -6054,6 +6054,32 @@ if command -v iptables >/dev/null 2>&1; then
         echo -e "${GREEN}  ✓ Registry port 5000 HARDENED — now locked to localhost + mesh/docker networks${NC}"
     else
         echo -e "${GREEN}  ✓ Registry port 5000 rules refreshed (trusted sources only)${NC}"
+    fi
+
+    # Persist iptables rules across reboots
+    if command -v iptables-save >/dev/null 2>&1; then
+        mkdir -p /etc/iptables
+        iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+        # Create a systemd service to restore rules on boot (before Docker starts)
+        if [ ! -f /etc/systemd/system/iptables-restore.service ]; then
+            cat > /etc/systemd/system/iptables-restore.service <<'RESTORE_EOF'
+[Unit]
+Description=Restore iptables rules
+Before=docker.service
+After=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/sbin/iptables-restore /etc/iptables/rules.v4
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+RESTORE_EOF
+            systemctl daemon-reload 2>/dev/null || true
+            systemctl enable iptables-restore 2>/dev/null || true
+        fi
+        echo -e "${GREEN}  ✓ iptables rules saved to /etc/iptables/rules.v4 for persistence${NC}"
     fi
 fi
 
