@@ -106,6 +106,8 @@ services:
     command: gunicorn config.asgi:application --bind 0.0.0.0:8000 --workers 2 --worker-class
       uvicorn.workers.UvicornWorker --timeout 600
     restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
     env_file: .env
     environment:
       UVICORN_WS_PING_INTERVAL: 20
