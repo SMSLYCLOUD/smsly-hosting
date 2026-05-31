@@ -16,6 +16,7 @@ RUN apt-get update \
     iputils-ping \
     dnsutils \
     net-tools \
+    iptables \
     # Security: Install Docker via official repo with GPG verification
     && install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \

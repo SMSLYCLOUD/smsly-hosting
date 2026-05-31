@@ -86,6 +86,8 @@ services:
       context: ../../backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
     command: gunicorn config.asgi:application --bind 0.0.0.0:8000 --workers 1 --worker-class uvicorn.workers.UvicornWorker --timeout 600
     env_file: ../../.env
     environment:
