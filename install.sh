@@ -859,8 +859,12 @@ apply_agent_lite_env_overrides() {
     fi
 
     # MASTER_MESH_IP is the WireGuard IP used for internal services (DB, MQ, Redis).
-    # Falls back to MASTER_IP if not set (for backwards compatibility).
-    MASTER_MESH_IP="${MASTER_MESH_IP:-$MASTER_IP}"
+    # Must be set — no fallback to MASTER_IP (public IP is firewalled for internal ports).
+    if [ -z "${MASTER_MESH_IP:-}" ]; then
+        echo -e "${RED}  ✗ ERROR: MASTER_MESH_IP is missing. Lite Agent requires the WireGuard mesh IP.${NC}"
+        echo -e "${YELLOW}    Set MASTER_MESH_IP to the WireGuard IP of the master node.${NC}"
+        exit 1
+    fi
 
     MASTER_DB_USER="${MASTER_DB_USER:-smsly_admin}"
     # If password is still missing after recovery attempt, we must stop.
@@ -933,7 +937,7 @@ EOF
     env_set_value "$env_file" "REDIS_PASSWORD" "${node_redis_password:-}"
     env_set_value "$env_file" "REDIS_HOST" "redis"
     env_set_value "$env_file" "REDIS_PORT" "6379"
-    local registry_host="${MASTER_MESH_IP:-$MASTER_IP}"
+    local registry_host="${MASTER_MESH_IP}"
     env_set_value "$env_file" "CONTAINER_REGISTRY_URL" "${registry_host}:5000"
     if [ -n "${MASTER_GATEWAY_SECRET:-}" ]; then
         env_set_value "$env_file" "GATEWAY_SECRET" "$MASTER_GATEWAY_SECRET"
@@ -956,7 +960,7 @@ verify_agent_lite_connectivity() {
     fi
 
     # 2. Check Database port via mesh IP (internal services use WireGuard)
-    local db_check_ip="${MASTER_MESH_IP:-$MASTER_IP}"
+    local db_check_ip="${MASTER_MESH_IP}"
     if ! timeout 2 bash -c "</dev/tcp/${db_check_ip}/5432" 2>/dev/null; then
         echo -e "${RED}  ✗ ERROR: Master Database (port 5432) is unreachable on ${db_check_ip}.${NC}"
         echo -e "${YELLOW}    Ensure the Master allows port 5432 from this node's IP via WireGuard mesh.${NC}"
@@ -967,7 +971,7 @@ verify_agent_lite_connectivity() {
     echo -e "${BLUE}  → Redis and RabbitMQ will run locally on this node.${NC}"
 
     # 4. The deploy path pulls master-built images from the master's registry.
-    local registry_check_ip="${MASTER_MESH_IP:-$MASTER_IP}"
+    local registry_check_ip="${MASTER_MESH_IP}"
     if ! timeout 2 bash -c "</dev/tcp/${registry_check_ip}/5000" 2>/dev/null; then
         echo -e "${RED}  ✗ ERROR: Master container registry (port 5000) is unreachable on ${registry_check_ip}.${NC}"
         echo -e "${YELLOW}    Ensure the Master registry is running and the mesh/firewall allows port 5000 from this node.${NC}"
@@ -1500,7 +1504,7 @@ ensure_env_runtime_defaults() {
             local mq_pass="${MASTER_MQ_PASSWORD:-$rabbitmq_password}"
 
             # Use WireGuard mesh IP for database connections (public IP is firewalled)
-            local db_host="${MASTER_MESH_IP:-$MASTER_IP}"
+            local db_host="${MASTER_MESH_IP}"
             expected_database_url="postgresql://${db_user}:${db_pass}@${db_host}:5432/smsly_hosting"
             # DIRECT_DATABASE_URL uses smsly_admin (not node_agent) so management
             # commands can self-heal permissions/passwords when node_agent creds fail.

@@ -223,15 +223,14 @@ def build_agent_lite_install_env(
     )
 
     # WireGuard mesh IP for internal services (DB, MQ, Redis)
+    # Must be set — public IP is firewalled for internal ports.
     master_mesh_ip = _get_master_mesh_ip()
-    if master_mesh_ip:
-        messages.append(f"Master mesh IP for internal services: {master_mesh_ip}")
-    else:
-        messages.append(
-            "Warning: No WireGuard mesh IP found for master. "
-            "Falling back to public IP for internal services (may fail if firewalled)."
+    if not master_mesh_ip:
+        raise ValueError(
+            "No WireGuard mesh IP found for master. "
+            "Cannot provision a lite agent without a mesh VPN IP."
         )
-        master_mesh_ip = resolved_master_ip
+    messages.append(f"Master mesh IP for internal services: {master_mesh_ip}")
 
     node_id = str(server.id)
     node_queue = _node_queue_name(server)
