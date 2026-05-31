@@ -5364,6 +5364,11 @@ EOF
         # .env when the user updates settings via the web UI — no SSH needed.
         chown root:1000 "$INSTALL_DIR/.env"
         chmod 664 "$INSTALL_DIR/.env"
+        # Docker Compose v2+ resolves .env from the compose file's parent directory,
+        # not the CWD. Create a symlink so all compose files can find it.
+        local _compose_env_link="$INSTALL_DIR/infrastructure/docker/.env"
+        rm -f "$_compose_env_link" 2>/dev/null || true
+        ln -sf "$INSTALL_DIR/.env" "$_compose_env_link" 2>/dev/null || true
         echo -e "${GREEN}  ✓ Configuration saved to .env${NC}"
     else
         echo -e "${RED}  x Generated .env failed validation. Aborting install.${NC}"
@@ -5376,6 +5381,10 @@ fi
 if [ -f "$INSTALL_DIR/.env" ]; then
     ensure_env_runtime_defaults "$INSTALL_DIR/.env"
     apply_agent_lite_env_overrides "$INSTALL_DIR/.env"
+    # Ensure .env symlink exists for Docker Compose v2+ .env resolution
+    local _compose_env_link="$INSTALL_DIR/infrastructure/docker/.env"
+    rm -f "$_compose_env_link" 2>/dev/null || true
+    ln -sf "$INSTALL_DIR/.env" "$_compose_env_link" 2>/dev/null || true
     if ! validate_env_file "$INSTALL_DIR/.env"; then
         echo -e "${RED}x Existing .env is invalid after runtime-default reconciliation.${NC}"
         exit 1
