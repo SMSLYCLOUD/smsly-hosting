@@ -6017,7 +6017,7 @@ if command -v iptables >/dev/null 2>&1; then
 
     # Flush any previous registry rules (idempotent re-runs)
     iptables -L DOCKER-USER --line-numbers -n 2>/dev/null | \
-        grep "dpt:5000" | awk '{print $1}' | sort -rn | \
+        { grep "dpt:5000" || true; } | awk '{print $1}' | sort -rn | \
         while read -r num; do iptables -D DOCKER-USER "$num" 2>/dev/null || true; done
 
     # Allow localhost (container-to-registry on the same host)
