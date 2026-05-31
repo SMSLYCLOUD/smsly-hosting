@@ -5992,6 +5992,46 @@ if command -v ufw >/dev/null 2>&1; then
     echo -e "${GREEN}  ✓ Firewall hardened (Inbound blocked, SSH/Web permitted)${NC}"
 fi
 
+# ── Registry port firewall (DOCKER-USER chain) ──────────────────────────
+# Docker bypasses UFW by inserting its own iptables rules in the DOCKER
+# chain. The DOCKER-USER chain is the official way to add custom rules.
+# Since the registry has no auth, we lock port 5000 to trusted sources.
+if command -v iptables >/dev/null 2>&1; then
+    echo -e "${BLUE}  → Securing registry port 5000 via iptables (DOCKER-USER chain)...${NC}"
+
+    # Ensure DOCKER-USER chain exists (Docker creates it, but be safe)
+    iptables -N DOCKER-USER 2>/dev/null || true
+
+    # Flush any previous registry rules (idempotent re-runs)
+    iptables -L DOCKER-USER --line-numbers -n 2>/dev/null | \
+        grep "dpt:5000" | awk '{print $1}' | sort -rn | \
+        while read -r num; do iptables -D DOCKER-USER "$num" 2>/dev/null || true; done
+
+    # Allow localhost (container-to-registry on the same host)
+    iptables -I DOCKER-USER -i lo -p tcp --dport 5000 -j ACCEPT 2>/dev/null || true
+
+    # Allow Docker bridge networks (172.16.0.0/12 covers docker0 + compose nets)
+    iptables -I DOCKER-USER -s 172.16.0.0/12 -p tcp --dport 5000 -j ACCEPT 2>/dev/null || true
+
+    # Allow WireGuard mesh (10.0.0.0/8 covers typical mesh VPN ranges)
+    iptables -I DOCKER-USER -s 10.0.0.0/8 -p tcp --dport 5000 -j ACCEPT 2>/dev/null || true
+
+    # Allow known node IPs
+    if [ -n "${MASTER_MESH_IP:-}" ]; then
+        iptables -I DOCKER-USER -s "${MASTER_MESH_IP}" -p tcp --dport 5000 -j ACCEPT 2>/dev/null || true
+    fi
+
+    # Drop everything else to port 5000
+    iptables -A DOCKER-USER -p tcp --dport 5000 -j DROP 2>/dev/null || true
+
+    # Return to the DOCKER chain for all other traffic
+    # (ensure the RETURN rule exists at the end)
+    iptables -C DOCKER-USER -j RETURN 2>/dev/null || \
+        iptables -A DOCKER-USER -j RETURN 2>/dev/null || true
+
+    echo -e "${GREEN}  ✓ Registry port 5000 locked to localhost + mesh/docker networks${NC}"
+fi
+
 echo -e "${GREEN}  ✓ System security hardening complete${NC}"
     set_checkpoint "memory_hardened"
 fi
