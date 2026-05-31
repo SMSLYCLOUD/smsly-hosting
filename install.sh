@@ -6002,6 +6002,19 @@ if command -v iptables >/dev/null 2>&1; then
     # Ensure DOCKER-USER chain exists (Docker creates it, but be safe)
     iptables -N DOCKER-USER 2>/dev/null || true
 
+    # --- Pre-check: detect if registry port 5000 is currently open to the public internet ---
+    _registry_port_open=false
+    _existing_drop_rule="$(iptables -L DOCKER-USER -n 2>/dev/null | grep -c 'dpt:5000.*DROP' || true)"
+    if [ "${_existing_drop_rule:-0}" -eq 0 ]; then
+        # No DROP rule exists — port 5000 is currently reachable from any source
+        _registry_port_open=true
+        echo -e "${YELLOW}  ⚠ WARNING: Registry port 5000 is currently OPEN to the public internet!${NC}"
+        echo -e "${YELLOW}    The container registry has no authentication and is accessible from any IP.${NC}"
+        echo -e "${YELLOW}    Hardening now to restrict access to trusted sources only...${NC}"
+    else
+        echo -e "${BLUE}  → Registry port 5000 already has DROP rules — refreshing whitelist...${NC}"
+    fi
+
     # Flush any previous registry rules (idempotent re-runs)
     iptables -L DOCKER-USER --line-numbers -n 2>/dev/null | \
         grep "dpt:5000" | awk '{print $1}' | sort -rn | \
@@ -6029,7 +6042,11 @@ if command -v iptables >/dev/null 2>&1; then
     iptables -C DOCKER-USER -j RETURN 2>/dev/null || \
         iptables -A DOCKER-USER -j RETURN 2>/dev/null || true
 
-    echo -e "${GREEN}  ✓ Registry port 5000 locked to localhost + mesh/docker networks${NC}"
+    if [ "$_registry_port_open" = true ]; then
+        echo -e "${GREEN}  ✓ Registry port 5000 HARDENED — now locked to localhost + mesh/docker networks${NC}"
+    else
+        echo -e "${GREEN}  ✓ Registry port 5000 rules refreshed (trusted sources only)${NC}"
+    fi
 fi
 
 echo -e "${GREEN}  ✓ System security hardening complete${NC}"
