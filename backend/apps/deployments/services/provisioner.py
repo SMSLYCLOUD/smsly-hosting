@@ -289,6 +289,11 @@ def _harden_master_firewall(server: ManagedServer) -> None:
     2. iptables DOCKER-USER chain rules for the registry port (5000) — ALL
        remote nodes.  Docker bypasses UFW entirely, so the DOCKER-USER chain
        is the only way to restrict access to Docker-published ports.
+
+    Since the backend runs as a non-root user inside a Docker container
+    (no ``sudo`` available), commands are executed on the host via a
+    short-lived helper container with ``NET_ADMIN`` capability and host
+    networking.
     """
     if not server.host:
         return
@@ -304,89 +309,87 @@ def _harden_master_firewall(server: ManagedServer) -> None:
 
     _append_log(server, f"🛡️ Hardening Master firewall for Node IP: {validated_ip}...")
 
+    # Build a single shell script with all firewall commands to minimise
+    # the number of short-lived containers (each one pays for image
+    # layer checks + iptables install).
+    cmds = []
+
     # ── UFW rules for lite agent service ports ──────────────────────────
     if getattr(server, "is_lite_agent", False):
-        # Ports required for Lite Agent -> Master communication
-        # 5432: Postgres, 6379: Redis, 5672: RabbitMQ/Celery
         for port in ("5432", "6379", "5672"):
-            try:
-                subprocess.run(
-                    ["sudo", "ufw", "allow", "from", validated_ip,
-                     "to", "any", "port", port, "proto", "tcp"],
-                    capture_output=True, timeout=5,
-                )
-            except Exception:
-                pass  # Fail gracefully if ufw is not available
+            cmds.append(
+                f"ufw allow from {validated_ip} to any port {port} proto tcp 2>/dev/null || true"
+            )
 
     # ── iptables DOCKER-USER rule for registry port 5000 ────────────────
-    # ALL remote nodes need to pull images from the master registry.
-    # Docker bypasses UFW, so we must use the DOCKER-USER chain.
-    try:
-        # Ensure chain exists
-        subprocess.run(
-            ["sudo", "iptables", "-N", "DOCKER-USER"],
-            capture_output=True, timeout=5,
-        )
-    except Exception:
-        pass
+    # Ensure chain exists
+    cmds.append("iptables -N DOCKER-USER 2>/dev/null || true")
+
+    # Check if rule already exists (idempotent)
+    cmds.append(
+        f"if ! iptables -C DOCKER-USER -s {validated_ip} -p tcp"
+        f" --dport 5000 -j ACCEPT 2>/dev/null; then"
+        f" iptables -I DOCKER-USER -s {validated_ip} -p tcp"
+        f" --dport 5000 -j ACCEPT && echo ALLOWED_{validated_ip}"
+        f"; else echo EXISTS_{validated_ip}; fi"
+    )
+
+    # Also allow WireGuard mesh IP if available
+    wg_address = getattr(server, "wg_address", None) or ""
+    if wg_address:
+        try:
+            validated_wg = str(ipaddress.ip_address(str(wg_address)))
+            cmds.append(
+                f"if ! iptables -C DOCKER-USER -s {validated_wg} -p tcp"
+                f" --dport 5000 -j ACCEPT 2>/dev/null; then"
+                f" iptables -I DOCKER-USER -s {validated_wg} -p tcp"
+                f" --dport 5000 -j ACCEPT && echo ALLOWED_WG_{validated_wg}"
+                f"; else echo EXISTS_WG_{validated_wg}; fi"
+            )
+        except (ValueError, Exception) as exc:
+            logger.debug("Skipping WireGuard IP iptables rule: %s", exc)
+
+    script = " && ".join(cmds)
 
     try:
-        # Check if rule already exists (idempotent)
-        check = subprocess.run(
-            ["sudo", "iptables", "-C", "DOCKER-USER",
-             "-s", validated_ip, "-p", "tcp", "--dport", "5000",
-             "-j", "ACCEPT"],
-            capture_output=True, timeout=5,
+        import docker as _docker
+
+        client = _docker.from_env()
+        output = client.containers.run(
+            "alpine:latest",
+            command=[
+                "sh", "-c",
+                f"apk add --no-cache -q iptables ufw >/dev/null 2>&1 && {script}",
+            ],
+            remove=True,
+            cap_add=["NET_ADMIN"],
+            network_mode="host",
+            stderr=True,
+            stdout=True,
         )
-        if check.returncode != 0:
-            # Rule doesn't exist yet — insert it before the DROP rule
-            subprocess.run(
-                ["sudo", "iptables", "-I", "DOCKER-USER",
-                 "-s", validated_ip, "-p", "tcp", "--dport", "5000",
-                 "-j", "ACCEPT"],
-                capture_output=True, timeout=5,
-            )
+        output_text = output.decode("utf-8", errors="replace") if isinstance(output, bytes) else str(output)
+        if f"ALLOWED_{validated_ip}" in output_text:
             _append_log(
                 server,
                 f"✅ iptables: Allowed {validated_ip} -> registry port 5000",
             )
-        else:
+        elif f"EXISTS_{validated_ip}" in output_text:
             _append_log(
                 server,
                 f"ℹ️ iptables: Rule for {validated_ip}:5000 already exists",
             )
+        if f"ALLOWED_WG_" in output_text:
+            _append_log(
+                server,
+                f"✅ iptables: Allowed WireGuard mesh IP -> registry port 5000",
+            )
     except Exception as exc:
-        logger.warning("Failed to add iptables rule for %s: %s", validated_ip, exc)
+        logger.warning("Failed to apply host firewall rules: %s", exc)
         _append_log(
             server,
             f"⚠️ Could not add iptables rule for {validated_ip}:5000 — "
             "ensure the master firewall allows this node manually.",
         )
-
-    # Also allow the node's WireGuard mesh IP if available
-    wg_address = getattr(server, "wg_address", None) or ""
-    if wg_address:
-        try:
-            validated_wg = str(ipaddress.ip_address(str(wg_address)))
-            check = subprocess.run(
-                ["sudo", "iptables", "-C", "DOCKER-USER",
-                 "-s", validated_wg, "-p", "tcp", "--dport", "5000",
-                 "-j", "ACCEPT"],
-                capture_output=True, timeout=5,
-            )
-            if check.returncode != 0:
-                subprocess.run(
-                    ["sudo", "iptables", "-I", "DOCKER-USER",
-                     "-s", validated_wg, "-p", "tcp", "--dport", "5000",
-                     "-j", "ACCEPT"],
-                    capture_output=True, timeout=5,
-                )
-                _append_log(
-                    server,
-                    f"✅ iptables: Allowed mesh IP {validated_wg} -> registry port 5000",
-                )
-        except (ValueError, Exception) as exc:
-            logger.debug("Skipping WireGuard IP iptables rule: %s", exc)
 
     _append_log(server, "✅ Master firewall rules synchronized for this node.")
 
