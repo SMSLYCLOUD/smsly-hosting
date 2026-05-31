@@ -282,32 +282,112 @@ def _schedule_remote_reboot(ssh, server: ManagedServer, reason: str) -> bool:
 
 
 def _harden_master_firewall(server: ManagedServer) -> None:
-    """Ensure the Master's firewall allows traffic from the new node's IP."""
+    """Ensure the Master's firewall allows traffic from the new node's IP.
+
+    Two layers of firewall rules are applied:
+    1. UFW rules for standard ports (Postgres, Redis, RabbitMQ) — lite agents only.
+    2. iptables DOCKER-USER chain rules for the registry port (5000) — ALL
+       remote nodes.  Docker bypasses UFW entirely, so the DOCKER-USER chain
+       is the only way to restrict access to Docker-published ports.
+    """
     if not server.host:
         return
-    
-    # We only need this for Lite Agents that connect back to Master services
-    if not getattr(server, "is_lite_agent", False):
+
+    # Validate the IP to prevent shell injection
+    try:
+        validated_ip = str(ipaddress.ip_address(server.host))
+    except ValueError:
+        logger.warning(
+            "Skipping firewall hardening: invalid IP %s", server.host
+        )
         return
 
-    _append_log(server, f"🛡️ Hardening Master firewall for Node IP: {server.host}...")
-    
-    # Ports required for Lite Agent -> Master communication
-    # 5432: Postgres, 6379: Redis, 5672: RabbitMQ/Celery, 5000: Docker Registry
-    ports = ["5432", "6379", "5672", "5000"]
-    
-    for port in ports:
-        # Note: This runs on the Master (local host) since provisioner runs in Master backend.
-        # However, Master backend is in Docker. We need to run this on the Master HOST.
-        # We can use SSH to 'localhost' if keys are set, but usually we just log the instruction
-        # or use a pre-authorized sudo wrapper if available.
-        # For now, we will log it and attempt a local ufw call if not in container.
+    _append_log(server, f"🛡️ Hardening Master firewall for Node IP: {validated_ip}...")
+
+    # ── UFW rules for lite agent service ports ──────────────────────────
+    if getattr(server, "is_lite_agent", False):
+        # Ports required for Lite Agent -> Master communication
+        # 5432: Postgres, 6379: Redis, 5672: RabbitMQ/Celery
+        for port in ("5432", "6379", "5672"):
+            try:
+                subprocess.run(
+                    ["sudo", "ufw", "allow", "from", validated_ip,
+                     "to", "any", "port", port, "proto", "tcp"],
+                    capture_output=True, timeout=5,
+                )
+            except Exception:
+                pass  # Fail gracefully if ufw is not available
+
+    # ── iptables DOCKER-USER rule for registry port 5000 ────────────────
+    # ALL remote nodes need to pull images from the master registry.
+    # Docker bypasses UFW, so we must use the DOCKER-USER chain.
+    try:
+        # Ensure chain exists
+        subprocess.run(
+            ["iptables", "-N", "DOCKER-USER"],
+            capture_output=True, timeout=5,
+        )
+    except Exception:
+        pass
+
+    try:
+        # Check if rule already exists (idempotent)
+        check = subprocess.run(
+            ["iptables", "-C", "DOCKER-USER",
+             "-s", validated_ip, "-p", "tcp", "--dport", "5000",
+             "-j", "ACCEPT"],
+            capture_output=True, timeout=5,
+        )
+        if check.returncode != 0:
+            # Rule doesn't exist yet — insert it before the DROP rule
+            subprocess.run(
+                ["iptables", "-I", "DOCKER-USER",
+                 "-s", validated_ip, "-p", "tcp", "--dport", "5000",
+                 "-j", "ACCEPT"],
+                capture_output=True, timeout=5,
+            )
+            _append_log(
+                server,
+                f"✅ iptables: Allowed {validated_ip} -> registry port 5000",
+            )
+        else:
+            _append_log(
+                server,
+                f"ℹ️ iptables: Rule for {validated_ip}:5000 already exists",
+            )
+    except Exception as exc:
+        logger.warning("Failed to add iptables rule for %s: %s", validated_ip, exc)
+        _append_log(
+            server,
+            f"⚠️ Could not add iptables rule for {validated_ip}:5000 — "
+            "ensure the master firewall allows this node manually.",
+        )
+
+    # Also allow the node's WireGuard mesh IP if available
+    wg_address = getattr(server, "wg_address", None) or ""
+    if wg_address:
         try:
-            cmd = f"sudo ufw allow from {server.host} to any port {port} proto tcp"
-            subprocess.run(cmd.split(), capture_output=True, timeout=5)
-        except Exception:
-            pass # Fail gracefully if ufw is not local or permissions missing
-    
+            validated_wg = str(ipaddress.ip_address(str(wg_address)))
+            check = subprocess.run(
+                ["iptables", "-C", "DOCKER-USER",
+                 "-s", validated_wg, "-p", "tcp", "--dport", "5000",
+                 "-j", "ACCEPT"],
+                capture_output=True, timeout=5,
+            )
+            if check.returncode != 0:
+                subprocess.run(
+                    ["iptables", "-I", "DOCKER-USER",
+                     "-s", validated_wg, "-p", "tcp", "--dport", "5000",
+                     "-j", "ACCEPT"],
+                    capture_output=True, timeout=5,
+                )
+                _append_log(
+                    server,
+                    f"✅ iptables: Allowed mesh IP {validated_wg} -> registry port 5000",
+                )
+        except (ValueError, Exception) as exc:
+            logger.debug("Skipping WireGuard IP iptables rule: %s", exc)
+
     _append_log(server, "✅ Master firewall rules synchronized for this node.")
 
 
