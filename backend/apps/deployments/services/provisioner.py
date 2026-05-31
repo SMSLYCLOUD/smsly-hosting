@@ -687,10 +687,37 @@ def _provision_node_db_credentials(server: ManagedServer):
             server.provider_metadata = {}
         server.provider_metadata["node_db_password"] = password
         server.save(update_fields=["provider_metadata"])
+
+        _restart_pgcat()
         return username, password
     except Exception as e:
         logger.error("Failed to create node DB credentials for %s: %s", server.name, e)
         return None, None
+
+
+def _restart_pgcat():
+    """Restart the PgCat pooler so it re-renders its config with new node agents.
+
+    render_pgcat_config.py queries the DB for all lite-agent rows and builds
+    PgCat user pools for each.  A restart causes that script to run again,
+    picking up any newly-provisioned node agent credentials.
+    """
+    try:
+        import docker as docker_lib
+        client = docker_lib.from_env()
+        # Container name follows docker-compose naming convention:
+        # <project>-<service>-<replica>
+        for name in ("smsly-hosting-pgcat-1", "smsly-hosting-pgcat"):
+            try:
+                container = client.containers.get(name)
+                container.restart(timeout=10)
+                logger.info("Restarted PgCat container %s to pick up new node agent pools.", name)
+                return
+            except docker_lib.errors.NotFound:
+                continue
+        logger.warning("PgCat container not found — node agent pools may not be active until next restart.")
+    except Exception as e:
+        logger.warning("Could not restart PgCat: %s — node agent pools may not be active until next restart.", e)
 
 
 @shared_task(bind=True, max_retries=0, soft_time_limit=1860, time_limit=1920)
