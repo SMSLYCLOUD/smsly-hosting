@@ -324,7 +324,7 @@ def _harden_master_firewall(server: ManagedServer) -> None:
     try:
         # Ensure chain exists
         subprocess.run(
-            ["iptables", "-N", "DOCKER-USER"],
+            ["sudo", "iptables", "-N", "DOCKER-USER"],
             capture_output=True, timeout=5,
         )
     except Exception:
@@ -333,7 +333,7 @@ def _harden_master_firewall(server: ManagedServer) -> None:
     try:
         # Check if rule already exists (idempotent)
         check = subprocess.run(
-            ["iptables", "-C", "DOCKER-USER",
+            ["sudo", "iptables", "-C", "DOCKER-USER",
              "-s", validated_ip, "-p", "tcp", "--dport", "5000",
              "-j", "ACCEPT"],
             capture_output=True, timeout=5,
@@ -341,7 +341,7 @@ def _harden_master_firewall(server: ManagedServer) -> None:
         if check.returncode != 0:
             # Rule doesn't exist yet — insert it before the DROP rule
             subprocess.run(
-                ["iptables", "-I", "DOCKER-USER",
+                ["sudo", "iptables", "-I", "DOCKER-USER",
                  "-s", validated_ip, "-p", "tcp", "--dport", "5000",
                  "-j", "ACCEPT"],
                 capture_output=True, timeout=5,
@@ -369,14 +369,14 @@ def _harden_master_firewall(server: ManagedServer) -> None:
         try:
             validated_wg = str(ipaddress.ip_address(str(wg_address)))
             check = subprocess.run(
-                ["iptables", "-C", "DOCKER-USER",
+                ["sudo", "iptables", "-C", "DOCKER-USER",
                  "-s", validated_wg, "-p", "tcp", "--dport", "5000",
                  "-j", "ACCEPT"],
                 capture_output=True, timeout=5,
             )
             if check.returncode != 0:
                 subprocess.run(
-                    ["iptables", "-I", "DOCKER-USER",
+                    ["sudo", "iptables", "-I", "DOCKER-USER",
                      "-s", validated_wg, "-p", "tcp", "--dport", "5000",
                      "-j", "ACCEPT"],
                     capture_output=True, timeout=5,
