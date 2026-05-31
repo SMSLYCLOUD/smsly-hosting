@@ -846,7 +846,7 @@ apply_agent_lite_env_overrides() {
         # If we are updating and MASTER_DB_PASSWORD wasn't passed, try to preserve the existing one
         local db_url
         db_url="$(env_get_value "$env_file" "DATABASE_URL")"
-        if [[ "$db_url" =~ :([^@]+)@ ]]; then
+        if [[ "$db_url" =~ ://[^:]+:([^@]+)@ ]]; then
             MASTER_DB_PASSWORD="${BASH_REMATCH[1]}"
         fi
     fi
