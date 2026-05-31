@@ -143,13 +143,32 @@ class NixpacksBuilder:
             image.tag(full_tag)
 
             logger.info(f"Pushing image to {full_tag}...")
-            auth_config = {}
-            if settings.REGISTRY_USER and settings.REGISTRY_PASSWORD:
-                auth_config = {
-                    "username": settings.REGISTRY_USER,
-                    "password": settings.REGISTRY_PASSWORD,
-                }
-            push_result = client.images.push(full_tag, auth_config=auth_config)
+
+            # ── Authenticate with the registry ──────────────────────────
+            # The Docker SDK's auth_config parameter on push() is unreliable
+            # and often causes "no basic auth credentials" errors.  Instead,
+            # call client.login() which properly registers credentials with
+            # the daemon for this registry.
+            has_creds = bool(
+                settings.REGISTRY_USER and settings.REGISTRY_PASSWORD
+            )
+            if has_creds:
+                try:
+                    client.login(
+                        username=settings.REGISTRY_USER,
+                        password=settings.REGISTRY_PASSWORD,
+                        registry=registry_url,
+                    )
+                    logger.info("Docker SDK login to %s succeeded", registry_url)
+                except Exception as login_exc:
+                    logger.warning(
+                        "Docker SDK login to %s failed (%s); "
+                        "will attempt push anyway (CLI login may still work)",
+                        registry_url, login_exc,
+                    )
+
+            # ── Push via SDK ────────────────────────────────────────────
+            push_result = client.images.push(full_tag)
             # push() returns a generator (stream=True, default) that yields
             # status lines, or a single string (stream=False).  Consume
             # all output looking for JSON errors.
@@ -164,12 +183,29 @@ class NixpacksBuilder:
                     if '"error"' in str(line):
                         push_failed = True
                         error_msg = str(line)
-                        logger.error(f"Registry push failed: {line}")
+                        logger.error(f"Registry push failed (SDK): {line}")
                         break
-            if push_failed:
-                return image_name, error_msg  # fallback to local
 
-            return full_tag, None
+            if not push_failed:
+                return full_tag, None
+
+            # ── Fallback: push via docker CLI ───────────────────────────
+            # The pipeline's _build_image() already ran `docker login` via
+            # subprocess, which stores creds in ~/.docker/config.json.
+            # Use that as a fallback.
+            logger.info("SDK push failed; retrying via docker CLI for %s", full_tag)
+            cli_result = subprocess.run(
+                ["docker", "push", full_tag],
+                capture_output=True, text=True, timeout=300,
+            )
+            if cli_result.returncode == 0:
+                logger.info("CLI push succeeded for %s", full_tag)
+                return full_tag, None
+
+            cli_error = cli_result.stderr.strip() or error_msg
+            logger.error("CLI push also failed: %s", cli_error)
+            return image_name, cli_error  # fallback to local
+
         except Exception as e:
             logger.warning(f"Registry push failed ({e}); keeping local image name.")
             return image_name, str(e)  # fallback to local

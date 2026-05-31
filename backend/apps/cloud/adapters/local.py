@@ -212,13 +212,19 @@ class LocalAdapter(BaseCloudAdapter):
             return True
         try:
             logger.info("Pulling image: %s", image)
-            auth_config = {}
+            # Authenticate via client.login() instead of the unreliable
+            # auth_config parameter on pull().
             if settings.REGISTRY_USER and settings.REGISTRY_PASSWORD:
-                auth_config = {
-                    "username": settings.REGISTRY_USER,
-                    "password": settings.REGISTRY_PASSWORD,
-                }
-            self.docker_client.images.pull(image, auth_config=auth_config)
+                registry_url = getattr(settings, 'CONTAINER_REGISTRY_URL', None) or ''
+                try:
+                    self.docker_client.login(
+                        username=settings.REGISTRY_USER,
+                        password=settings.REGISTRY_PASSWORD,
+                        registry=registry_url,
+                    )
+                except Exception as login_exc:
+                    logger.warning("Docker login for pull failed (%s); trying pull anyway", login_exc)
+            self.docker_client.images.pull(image)
             return True
         except Exception as e:
             logger.error("Failed to pull image %s: %s", image, e)
