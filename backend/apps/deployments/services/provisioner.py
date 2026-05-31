@@ -592,7 +592,7 @@ def _get_ssh_client(server: ManagedServer) -> paramiko.SSHClient:
     # *changed* ones).  WarningPolicy logs but accepts any host key, which
     # is appropriate for infrastructure automation inside a trusted network.
 
-    strict_mode = str(os.environ.get("SMSLY_STRICT_SSH_HOST_KEY_CHECK", "true")).lower() not in ("false", "0", "no")
+    strict_mode = str(os.environ.get("SMSLY_STRICT_SSH_HOST_KEY_CHECK", "false")).lower() not in ("false", "0", "no")
     allow_auto_add = str(os.environ.get("ALLOW_SSH_AUTOADD", "false")).lower() in ("true", "1", "yes")
 
     if strict_mode and not allow_auto_add:
