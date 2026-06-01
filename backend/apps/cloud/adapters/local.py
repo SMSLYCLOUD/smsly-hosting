@@ -449,7 +449,7 @@ class LocalAdapter(BaseCloudAdapter):
         if restart_policy == 'no':
             rp = None
         elif restart_policy == 'unless-stopped':
-            rp = {"Name": "on-failure", "MaximumRetryCount": 5}
+            rp = {"Name": "unless-stopped"}
         else:
             rp = {"Name": restart_policy, "MaximumRetryCount": 5}
 
