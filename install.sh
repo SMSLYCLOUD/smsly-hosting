@@ -4106,7 +4106,6 @@ if not created and not cp.is_active:
 
     # ─── Self-Healing: Automatic Queue Restoration ──────────────────────────
     echo -e "${BLUE}  → Checking for stalled deployments/addons in QUEUED state...${NC}"
-    local backend_container
     backend_container="$(resolve_container_target "smsly-hosting-backend-1")"
     docker exec -i "$backend_container" python manage.py shell -c "
 from apps.deployments.models import Deployment
@@ -4136,7 +4135,7 @@ if a_count > 0:
     echo -e "${BLUE}  → Verifying worker connectivity and queue bindings...${NC}"
     # Give workers a moment to connect to Redis and report active queues
     sleep 15
-    local raw_worker="smsly-hosting-celery-deploy-1"
+    raw_worker="smsly-hosting-celery-deploy-1"
     if [ "$MODE_AGENT_LITE" = "true" ]; then
         raw_worker="smsly-hosting-celery-worker-1"
     fi
@@ -6347,7 +6346,6 @@ fi
 # ─── Check 5: Public edge proxy ───────────────────────────────────────────
 if should_manage_caddy; then
     echo -e "${BLUE}  → [5/5] Checking Caddy...${NC}"
-    local caddy_container
     caddy_container="$(resolve_container_target "smsly-hosting-caddy-1")"
     if docker inspect -f '{{.State.Running}}' "$caddy_container" 2>/dev/null | grep -q "true"; then
         echo -e "${GREEN}  ✓ Caddy reverse proxy container active${NC}"
@@ -6361,7 +6359,6 @@ else
     if is_node_mode; then
         TRAEFIK_CHECK_URL="http://127.0.0.1/health/live"
     fi
-    local traefik_container
     traefik_container="$(resolve_container_target "smsly-hosting-traefik-1")"
     if docker inspect -f '{{.State.Running}}' "$traefik_container" 2>/dev/null | grep -q "true" \
        && curl -fsS --max-time 5 "$TRAEFIK_CHECK_URL" >/dev/null 2>&1; then
