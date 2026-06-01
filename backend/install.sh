@@ -4973,12 +4973,47 @@ if command -v docker &> /dev/null; then
     configure_docker_mirror
 fi
 
-# Ensure WireGuard mesh interface exists on master (PgCat binds to 10.100.0.1:5432)
+# Ensure WireGuard mesh interface exists (master gets 10.100.0.1, nodes get
+# a placeholder that will be updated by WireGuardService after provisioning).
 ensure_wireguard_mesh() {
     local mesh_ip="${MASTER_MESH_IP:-10.100.0.1}"
     local wg_iface="wg0"
-    # Only needed on master — lite agents connect via the mesh to the master
-    if is_agent_lite_mode || is_node_mode; then
+
+    # On node mode, install WireGuard and create a placeholder interface.
+    # The real mesh IP (e.g. 10.100.0.x) is assigned later by
+    # WireGuardService.ensure_server_in_default_mesh(), but having the
+    # interface ready prevents delays during provisioning.
+    if is_node_mode; then
+        mesh_ip="${NODE_MESH_IP:-10.100.0.2}"
+        echo -e "${BLUE}  → Configuring WireGuard mesh on node ($wg_iface: $mesh_ip)...${NC}"
+        if ! command -v wg >/dev/null 2>&1; then
+            apt_run apt-get install -y wireguard
+        fi
+        mkdir -p /etc/wireguard
+        if [ ! -f /etc/wireguard/private.key ]; then
+            wg genkey | tee /etc/wireguard/private.key | wg pubkey > /etc/wireguard/public.key
+        fi
+        local privkey
+        privkey="$(cat /etc/wireguard/private.key)"
+        if [ ! -f "/etc/wireguard/${wg_iface}.conf" ]; then
+            cat > "/etc/wireguard/${wg_iface}.conf" <<WGCONF
+[Interface]
+PrivateKey = ${privkey}
+Address = ${mesh_ip}/24
+ListenPort = 51820
+WGCONF
+        fi
+        systemctl enable --now "wg-quick@${wg_iface}" 2>/dev/null || true
+        if ip link show "$wg_iface" >/dev/null 2>&1; then
+            echo -e "${GREEN}  ✓ WireGuard mesh ($wg_iface: $mesh_ip) is up on node${NC}"
+        else
+            echo -e "${YELLOW}  ⚠ WireGuard ($wg_iface) failed to start on node — mesh will be configured post-provision${NC}"
+        fi
+        return 0
+    fi
+
+    # Lite agents don't run WireGuard (they connect via master's mesh)
+    if is_agent_lite_mode; then
         return 0
     fi
     if ip link show "$wg_iface" >/dev/null 2>&1; then

@@ -45,6 +45,20 @@ def _host_is_ip(host_port: str) -> bool:
         return False
 
 
+def _is_node_server(server) -> bool:
+    """Return True when the server is a full-stack node (not primary, not lite).
+
+    Full-stack nodes run Traefik on port 80 but do NOT run Caddy, so they
+    have no HTTPS listener.  TLS enforcement should be skipped for these
+    servers to avoid HTTP 400 errors from the orchestrator trying HTTPS.
+    """
+    if getattr(server, "is_primary", False):
+        return False  # Primary has Caddy → HTTPS available
+    if getattr(server, "is_lite_agent", False):
+        return False  # Lite agents are handled separately
+    return True  # Full-stack node → HTTP only (Traefik)
+
+
 def _is_internal_target(url: str) -> bool:
     """Return True when a remote URL should use mesh/IP transport semantics."""
     parsed = urlparse(str(url or ""))
@@ -224,13 +238,27 @@ class RemoteOrchestrator:
             classification = self._classify_404_response(probe)
             result['diagnosis'] = classification
             diagnosis_msg = self._404_DIAGNOSIS_MESSAGES.get(classification, '')
+        elif probe is not None and probe.status_code == 400:
+            classification = self._classify_400_response(probe)
+            result['diagnosis'] = classification
+            diagnosis_msg = self._400_DIAGNOSIS_MESSAGES.get(classification, '')
         else:
             classification = 'auth_or_other'
             diagnosis_msg = connectivity.get('error', self.describe_last_error())
             result['diagnosis'] = classification
 
-        # Step 3: Attempt SSH auto-heal for 'traefik_no_router' (backend down)
-        if classification == 'traefik_no_router':
+        # Step 3: Attempt SSH auto-heal for proxy-level errors
+        # Previously only 'traefik_no_router' (404) triggered auto-heal.
+        # Now also handle 400 errors that indicate proxy misconfiguration
+        # (e.g. TLS mismatch, Traefik bad request) which a stack restart
+        # may resolve.
+        healable_classifications = {
+            'traefik_no_router',
+            'tls_mismatch',
+            'traefik_bad_request',
+            'proxy_html_400',
+        }
+        if classification in healable_classifications:
             logger.warning(
                 "Remote node %s (%s) has Traefik running but backend is "
                 "unreachable. Attempting SSH auto-heal (full stack restart)...",
@@ -587,10 +615,12 @@ class RemoteOrchestrator:
 
         # Internal mesh VPN IPs should use HTTP (encryption handled by WireGuard/ZeroTier).
         # Lite agents on WireGuard mesh also skip TLS — they may not have HTTPS on 443.
+        # Full-stack nodes (non-primary, non-lite) only have Traefik on HTTP — no Caddy.
         enforce_tls = (
             _ENFORCE_TLS
             and not _is_internal_target(host_port)
             and not getattr(self.server, 'is_lite_agent', False)
+            and not _is_node_server(self.server)
         )
 
         has_explicit_port = host_port.count(":") == 1
@@ -822,6 +852,30 @@ class RemoteOrchestrator:
                         redirected = True
                         break  # L3 break → L2 break via redirected → next base URL
 
+                    # For safe methods, a 400 may indicate TLS mismatch (HTTPS
+                    # request hit an HTTP-only node).  Try the next candidate
+                    # base URL so we can fall back to HTTP.
+                    if method_upper in SAFE_METHODS and status == 400:
+                        classification_400 = self._classify_400_response(response)
+                        # Only try next URL for proxy-level 400s, not app-level.
+                        # App-level 400s (e.g. validation errors) are meaningful
+                        # and should be returned to the caller.
+                        proxy_400s = {'tls_mismatch', 'traefik_bad_request', 'proxy_html_400'}
+                        if classification_400 in proxy_400s:
+                            diagnosis_400 = self._400_DIAGNOSIS_MESSAGES.get(classification_400, '')
+                            self._set_last_error(
+                                f"Remote API returned HTTP 400 at {base_url}. "
+                                f"Diagnosis ({classification_400}): {diagnosis_400}",
+                                response=response,
+                            )
+                            logger.warning(
+                                "Trying next base URL after 400 for %s %s at %s (diagnosis: %s)",
+                                method_upper, request_path, base_url,
+                                classification_400,
+                            )
+                            redirected = True
+                            break  # L3 break → L2 break via redirected → next base URL
+
                     if status >= 400:
                         self._set_last_error(
                             f"Remote API returned HTTP {status} for {method_upper} {request_path}.",
@@ -892,6 +946,47 @@ class RemoteOrchestrator:
             'upstream is unreachable.'
         ),
         'unknown_404': 'The remote node returned an unrecognised 404 response.',
+    }
+
+    @staticmethod
+    def _classify_400_response(response) -> str:
+        """Classify what service returned a 400 to diagnose the root cause.
+
+        Returns one of:
+          - 'tls_mismatch': HTTPS request hit an HTTP-only service (proxy 400)
+          - 'traefik_bad_request': Traefik returned a 400 (e.g. bad Host header)
+          - 'proxy_html_400': Proxy returned an HTML 400 page
+          - 'unknown_400': Unrecognised 400 format
+        """
+        body = (getattr(response, 'text', '') or '').strip()
+        body_lower = body.lower()
+        if '<html' in body_lower or '<!doctype' in body_lower:
+            if 'bad request' in body_lower:
+                return 'tls_mismatch'
+            return 'proxy_html_400'
+        if '400 bad request' in body_lower:
+            return 'tls_mismatch'
+        if body_lower.startswith('400'):
+            return 'traefik_bad_request'
+        return 'unknown_400'
+
+    _400_DIAGNOSIS_MESSAGES = {
+        'tls_mismatch': (
+            'An HTTPS request was sent to an HTTP-only service. This happens '
+            'when the orchestrator tries TLS on a node that only has Traefik '
+            '(no Caddy). The wg_address or api_url should use HTTP.'
+        ),
+        'traefik_bad_request': (
+            'Traefik returned a 400 Bad Request, likely due to a malformed '
+            'Host header or an unsupported request. The backend may be down '
+            'or the Traefik routing configuration is incorrect.'
+        ),
+        'proxy_html_400': (
+            'A reverse proxy on the remote node returned an HTML 400 page. '
+            'The proxy may be misconfigured or the backend upstream is '
+            'unreachable.'
+        ),
+        'unknown_400': 'The remote node returned an unrecognised 400 response.',
     }
 
     def _enrich_404_error(self, response, base_url: str):
