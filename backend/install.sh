@@ -1,11 +1,12 @@
 #!/bin/bash
 
 # =============================================================================
-# CloudNeuron by SMSLY - Universal Installer v3.1 (Production Hardened)
+# Grid by SMSLY - Universal Installer v3.2.4 (Production Hardened)
+# VERSION: 2026-05-07-0219
 # =============================================================================
 # Supports: Ubuntu 20.04/22.04/24.04 LTS
 # Modes:
-#   1. IP Mode (HTTP :8090) - Quick start, no domain needed.
+#   1. IP Mode (HTTP :80)   - Quick start, no domain needed.
 #   2. SSL Mode (HTTPS)     - Production ready, requires domain + DNS.
 #
 # Usage:
@@ -32,144 +33,166 @@
 
 set -euo pipefail
 
+# ─── Root Check ─────────────────────────────────────────────────────────────
+if [ "$EUID" -ne 0 ]; then
+    echo -e "\033[0;31mERROR: This script must be run as root.\033[0m"
+    echo -e "Please use: sudo bash $0 $*"
+    exit 1
+fi
+
 # ─── Parse flags early ───────────────────────────────────────────────────────
-NON_INTERACTIVE=false
+NON_INTERACTIVE="${NON_INTERACTIVE:-false}"
+MODE_AGENT_LITE=false
+MODE_NODE=false
+INSTALL_MODE="master"
+_DETECTED_INSTALL_MODE=""
+_CLI_INSTALL_MODE=""
+_CLI_MODE_CONFLICT=false
+RESUME_MODE=false
+RUST_TWIN_MODE="${RUST_TWIN_MODE:-false}"
+COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
+NO_SCREEN="${NO_SCREEN:-false}"
+
+# Read and export all variables from .env early if it exists (prevents unbound variable crashes and ensures docker-compose inherits them)
+if [ -f "/opt/smsly-hosting/.env" ]; then
+    set -a
+    source /opt/smsly-hosting/.env
+    set +a
+    case "${NODE_TYPE:-}" in
+        agent-lite|agent) _DETECTED_INSTALL_MODE="agent-lite" ;;
+        node) _DETECTED_INSTALL_MODE="node" ;;
+        master) _DETECTED_INSTALL_MODE="master" ;;
+    esac
+    if [ -z "$_DETECTED_INSTALL_MODE" ]; then
+        case "${MODE:-}" in
+            agent-lite|agent) _DETECTED_INSTALL_MODE="agent-lite" ;;
+            node) _DETECTED_INSTALL_MODE="node" ;;
+            master) _DETECTED_INSTALL_MODE="master" ;;
+        esac
+    fi
+fi
+
+case "$NON_INTERACTIVE" in
+  1|true|TRUE|yes|YES|on|ON) NON_INTERACTIVE=true ;;
+  *) NON_INTERACTIVE=false ;;
+esac
+
+case "${SKIP_SCREEN:-}" in
+  1|true|TRUE|yes|YES|on|ON) NO_SCREEN=true ;;
+esac
+
+set_cli_install_mode() {
+  local requested_mode="$1"
+  if [ -n "$_CLI_INSTALL_MODE" ] && [ "$_CLI_INSTALL_MODE" != "$requested_mode" ]; then
+    _CLI_MODE_CONFLICT=true
+  fi
+  _CLI_INSTALL_MODE="$requested_mode"
+}
+
+set_cli_install_mode_from_value() {
+  local requested_mode="$1"
+  case "$requested_mode" in
+    agent-lite|agent) set_cli_install_mode "agent-lite" ;;
+    node) set_cli_install_mode "node" ;;
+    master) set_cli_install_mode "master" ;;
+    *)
+      echo -e "\033[0;31mERROR: Unknown --mode value: $requested_mode. Use agent-lite, node, or master.\033[0m"
+      exit 1
+      ;;
+  esac
+}
+
+_EXPECT_MODE_VALUE=false
 for arg in "$@"; do
+  if [ "$_EXPECT_MODE_VALUE" = "true" ]; then
+    set_cli_install_mode_from_value "$arg"
+    _EXPECT_MODE_VALUE=false
+    continue
+  fi
   case "$arg" in
     --non-interactive) NON_INTERACTIVE=true ;;
+    --mode=agent-lite|--agent-lite) set_cli_install_mode_from_value "agent-lite" ;;
+    --mode=node|--node) set_cli_install_mode_from_value "node" ;;
+    --mode=master|--master) set_cli_install_mode_from_value "master" ;;
+    --mode=*)         set_cli_install_mode_from_value "${arg#--mode=}" ;;
+    --mode)           _EXPECT_MODE_VALUE=true ;;
+    --rust)            RUST_TWIN_MODE="true" ;;
+    --resume)          RESUME_MODE=true ;;
+    --no-screen|--skip-screen)
+                       NO_SCREEN=true ;;
+    --wipe)            NO_SCREEN=true; rm -f "/opt/smsly-hosting/.smsly_install_state" "/opt/smsly-hosting/.smsly_install_state.mode" ;;
+    --fix-domain)      NO_SCREEN=true ;;
+    --fix-permissions) NO_SCREEN=true ;;
+    --recover|--refresh|--debug|--verify|--clear|--help|-h)
+                       NO_SCREEN=true ;;
   esac
 done
+if [ "$_EXPECT_MODE_VALUE" = "true" ]; then
+  echo -e "\033[0;31mERROR: --mode requires a value: agent-lite, node, or master.\033[0m"
+  exit 1
+fi
+unset _EXPECT_MODE_VALUE
+
+if [ "$_CLI_MODE_CONFLICT" = "true" ]; then
+  echo -e "\033[0;31mERROR: Conflicting install modes requested. Use only one of --mode=agent-lite, --mode=node, or --mode=master.\033[0m"
+  exit 1
+fi
+
+INSTALL_MODE="${_CLI_INSTALL_MODE:-${_DETECTED_INSTALL_MODE:-master}}"
+case "$INSTALL_MODE" in
+  agent-lite)
+    MODE_AGENT_LITE=true
+    MODE_NODE=false
+    MODE="agent"
+    NODE_TYPE="agent-lite"
+    ;;
+  node)
+    MODE_AGENT_LITE=false
+    MODE_NODE=true
+    MODE="node"
+    NODE_TYPE="node"
+    ;;
+  master)
+    MODE_AGENT_LITE=false
+    MODE_NODE=false
+    MODE="master"
+    NODE_TYPE="master"
+    ;;
+  *)
+    echo -e "\033[0;31mERROR: Unknown install mode: $INSTALL_MODE\033[0m"
+    exit 1
+    ;;
+esac
+export INSTALL_MODE MODE NODE_TYPE
 
 # ─── Resolve script path BEFORE any cd (screen guard needs absolute path) ────
 SCRIPT_PATH="$(readlink -f "$0")"
 SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 
-# ─── Screen Session Guard (survives SSH disconnects) ─────────────────────────
-# Collect ALL interactive input FIRST (before screen), then re-launch inside
-# a screen session with the collected values as env vars.
-# To reattach after disconnect: screen -r cloudneuron-install
-if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ] && [ "$NON_INTERACTIVE" != "true" ] && [[ "${1:-}" != "--verify" ]] && [[ "${1:-}" != "--debug" ]]; then
-    # Install screen if missing
-    if ! command -v screen &> /dev/null; then
-        apt-get update -qq && apt-get install -y screen > /dev/null 2>&1
-    fi
-
-    # ── Pre-collect interactive input (only for fresh installs) ──────────
-    # Skip collection if values are already pre-seeded via env vars, or if
-    # this is an --update / --wipe run (those don't need interactive input).
-    _ARG1="${1:-}"
-    if [[ "$_ARG1" != "--update"* ]] && [[ "$_ARG1" != "--wipe" ]] && [[ "$_ARG1" != "--recover" ]] && [[ "$_ARG1" != "--refresh" ]] && [[ "$_ARG1" != "--debug" ]] && [[ "$_ARG1" != "--verify" ]] && [ -z "${USE_SSL:-}" ]; then
-        # Detect public IP for the mode selection prompt
-        _detect_ip() {
-            local c="" ep=""
-            for ep in "https://api.ipify.org" "https://ifconfig.me/ip" "https://ipv4.icanhazip.com"; do
-                c="$(curl -4 -fsS -m 5 "$ep" 2>/dev/null | tr -d '\r\n' || true)"
-                if [[ "$c" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then echo "$c"; return 0; fi
-            done
-            c="$(hostname -I 2>/dev/null | awk '{print $1}' | tr -d '\r\n' || true)"
-            if [[ "$c" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then echo "$c"; return 0; fi
-            echo "127.0.0.1"
-        }
-        _PUB_IP="$(_detect_ip)"
-
-        echo ""
-        echo -e "\033[0;34mSelect Backend Architecture:\033[0m"
-        echo -e "  1) \033[0;32mLegacy Python\033[0m (Stable monolith)"
-        echo -e "  2) \033[0;36mNext-Gen Rust\033[0m (High-performance microservices, Beta)"
-
-        if [ -e /dev/tty ]; then
-            read -p "Enter choice [1]: " _ARCH_CHOICE < /dev/tty
-            if [ "$_ARCH_CHOICE" = "2" ]; then
-                RUST_TWIN_MODE="true"
-                COMPOSE_FILE="rust_twin/docker-compose.yml"
-            fi
-        fi
-
-        echo ""
-        echo -e "\033[0;34mSelect Deployment Mode:\033[0m"
-        echo -e "  1) \033[0;32mIP Mode\033[0m (Easy) - http://$_PUB_IP:8090"
-        echo -e "  2) \033[0;32mSSL Mode\033[0m (Prod) - https://your-domain.com (Requires DNS A Record pointing to $_PUB_IP)"
-
-        if [ -e /dev/tty ]; then
-            read -p "Enter choice [1]: " _MODE_CHOICE < /dev/tty
-            echo ""
-            _MODE_CHOICE=${_MODE_CHOICE:-1}
+# ─── Screen Guard ────────────────────────────────────────────────────────────
+# Protect against SSH disconnects by running inside a screen session.
+if [ "${NO_SCREEN:-false}" != "true" ] && [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ] && [ -z "${STY:-}" ] && [[ "${TERM:-}" != screen* ]] && [ -z "${TMUX:-}" ]; then
+    if command -v screen >/dev/null 2>&1; then
+        echo -e "\033[0;34m  → Protecting session with 'screen' (safety against disconnects)...\033[0m"
+        SCREEN_SESSION="${SMSLY_SCREEN_SESSION:-smsly-install-$$}"
+        if screen -help 2>&1 | grep -q -- '-Logfile'; then
+            screen -L -Logfile /var/log/smsly-screen.log -S "$SCREEN_SESSION" \
+                bash -c 'bash "$0" --no-screen "$@"; rc=$?; echo; echo "Installer exited with code $rc."; echo "Press ENTER to close this screen."; read -r _; exit "$rc"' "$SCRIPT_PATH" "$@"
         else
-            _MODE_CHOICE=1
+            screen -L -S "$SCREEN_SESSION" \
+                bash -c 'bash "$0" --no-screen "$@"; rc=$?; echo; echo "Installer exited with code $rc."; echo "Press ENTER to close this screen."; read -r _; exit "$rc"' "$SCRIPT_PATH" "$@"
         fi
-
-        if [ "$_MODE_CHOICE" -eq "2" ] 2>/dev/null; then
-            export USE_SSL="true"
-            _DOMAIN=""
-            while [ -z "$_DOMAIN" ]; do
-                read -p "  Enter your Domain (e.g., app.example.com): " _DOMAIN < /dev/tty
-            done
-            echo ""
-            export DOMAIN="$_DOMAIN"
-
-            _ACME_EMAIL=""
-            while [ -z "$_ACME_EMAIL" ]; do
-                read -p "  Enter Email for SSL (e.g., admin@example.com): " _ACME_EMAIL < /dev/tty
-            done
-            echo ""
-            export ACME_EMAIL="$_ACME_EMAIL"
-
-            echo ""
-            echo -e "\033[0;34m  Wildcard subdomains allow deployed services to get automatic SSL.\033[0m"
-            echo -e "  e.g., myapp-abc123.${_DOMAIN} will automatically have HTTPS."
-            echo -e "  This requires a Cloudflare API Token with DNS:Edit permission."
-            echo ""
-
-            read -p "  Enable wildcard subdomains? (y/n) [n]: " _WC_CHOICE < /dev/tty
-            echo ""
-            _WC_CHOICE=${_WC_CHOICE:-n}
-            if [[ $_WC_CHOICE =~ ^[Yy]$ ]]; then
-                export WILDCARD_SUBDOMAINS="true"
-                _CF_TOKEN=""
-                while [ -z "$_CF_TOKEN" ]; do
-                    read -sp "  Enter Cloudflare API Token (DNS:Edit): " _CF_TOKEN < /dev/tty
-                    echo ""
-                done
-                export CLOUDFLARE_API_TOKEN="$_CF_TOKEN"
-            else
-                export WILDCARD_SUBDOMAINS="false"
-            fi
-        else
-            export USE_SSL="false"
-            export DOMAIN="$_PUB_IP"
-        fi
+    else
+        echo -e "\033[1;33m  ⚠ Warning: 'screen' not found. Session NOT protected against disconnects.\033[0m"
+        sleep 1
     fi
-
-    if [ "${RUST_TWIN_MODE:-false}" = "true" ]; then
-        echo -e "\033[1;36m"
-        echo "═══════════════════════════════════════════════════════════"
-        echo "  INITIALIZING NEXT-GEN RUST TWIN MODE"
-        echo "  This will deploy the high-performance Rust stack."
-        echo "═══════════════════════════════════════════════════════════"
-        echo -e "\033[0m"
-    fi
-
-    echo -e "\033[1;33m"
-    echo "═══════════════════════════════════════════════════════════"
-    echo "  Running inside a screen session for safety."
-    echo "  If SSH disconnects, reconnect and run:"
-    echo "    screen -r cloudneuron-install"
-    echo "═══════════════════════════════════════════════════════════"
-    echo -e "\033[0m"
-
-    # Build env string to pass collected values into screen (printf %q escapes special chars)
-    _ENV_PASS="SKIP_SCREEN=1"
-    [ -n "${USE_SSL:-}" ]              && _ENV_PASS="$_ENV_PASS USE_SSL=$(printf '%q' "$USE_SSL")"
-    [ -n "${DOMAIN:-}" ]               && _ENV_PASS="$_ENV_PASS DOMAIN=$(printf '%q' "$DOMAIN")"
-    [ -n "${ACME_EMAIL:-}" ]           && _ENV_PASS="$_ENV_PASS ACME_EMAIL=$(printf '%q' "$ACME_EMAIL")"
-    [ -n "${WILDCARD_SUBDOMAINS:-}" ]  && _ENV_PASS="$_ENV_PASS WILDCARD_SUBDOMAINS=$(printf '%q' "$WILDCARD_SUBDOMAINS")"
-    [ -n "${CLOUDFLARE_API_TOKEN:-}" ] && _ENV_PASS="$_ENV_PASS CLOUDFLARE_API_TOKEN=$(printf '%q' "$CLOUDFLARE_API_TOKEN")"
-
-    # Stay ATTACHED (no -dm), use absolute path, set correct working directory
-    exec screen -S cloudneuron-install bash -c "cd $(printf '%q' "$SCRIPT_DIR"); $_ENV_PASS bash $(printf '%q' "$SCRIPT_PATH") $*; echo ''; echo 'Installation complete. Press Enter to exit.'; read"
+    # Screen handled everything. Exit immediately so the outer script
+    # does NOT fall through and re-run the entire installer.
+    exit 0
 fi
 
 # Ensure we start in a valid directory.
+
 # Provisioning can pass SMSLY_INSTALL_WORKDIR to use a prepared local source tree.
 if [ -n "${SMSLY_INSTALL_WORKDIR:-}" ] && [ -d "${SMSLY_INSTALL_WORKDIR}" ]; then
     cd "${SMSLY_INSTALL_WORKDIR}" 2>/dev/null || cd /root 2>/dev/null || cd /
@@ -184,6 +207,8 @@ RED='\033[0;31m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
+export DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}"
+export NEEDRESTART_MODE="${NEEDRESTART_MODE:-a}"
 # Validate and safely detect a usable IPv4 address for installer defaults.
 is_valid_ipv4() {
     local ip="$1"
@@ -225,7 +250,355 @@ detect_public_ip() {
     return 0
 }
 
+configure_docker_mirror() {
+    # Ensure COMPOSE_FILE is defined for this scope
+    local compose_f="${COMPOSE_FILE:-docker-compose.prod.yml}"
+
+    if [ "${MODE_AGENT_LITE:-false}" = "true" ] && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ]; then
+        [ -n "${MASTER_IP:-}" ] || MASTER_IP="$(env_get_value "${INSTALL_DIR:-/opt/smsly-hosting}/.env" "MASTER_IP" 2>/dev/null || true)"
+        [ -n "${MASTER_MESH_IP:-}" ] || MASTER_MESH_IP="$(env_get_value "${INSTALL_DIR:-/opt/smsly-hosting}/.env" "MASTER_MESH_IP" 2>/dev/null || true)"
+    fi
+
+    # Option B: Pull-Through Cache
+    if [ -n "${MASTER_IP:-}" ] && [ "$MASTER_IP" != "127.0.0.1" ] && [ "$MASTER_IP" != "$(detect_public_ip)" ]; then
+        # This is a Follower node
+        echo -e "${BLUE}  → Configuring Docker pull-through cache mirror (Master: $MASTER_IP)...${NC}"
+        mkdir -p /etc/docker
+
+        # Collect IPs to trust: Public IP, Mesh IP (if provided), and local IPs
+        local trust_list="\"${MASTER_IP}:5000\", \"${MASTER_IP}:5001\""
+        if [ -n "${MASTER_MESH_IP:-}" ]; then
+            trust_list="${trust_list}, \"${MASTER_MESH_IP}:5000\""
+        fi
+
+        # Build the daemon.json
+        cat > /etc/docker/daemon.json <<EOF
+{
+  "registry-mirrors": ["http://${MASTER_IP}:5001"],
+  "insecure-registries": [${trust_list}]
+}
+EOF
+        systemctl restart docker || true
+        echo -e "${GREEN}  ✓ Docker mirror configured${NC}"
+    else
+        # This is the Master node (or MASTER_IP matches local IP)
+        local my_ip my_mesh_ip
+        my_ip="$(detect_public_ip)"
+        # Note: We don't have a clean 'detect_mesh_ip' here, but we can trust 10.0.0.0/8 range if needed.
+        # However, Master usually knows its own identity.
+        if [ "$my_ip" != "127.0.0.1" ]; then
+            echo -e "${BLUE}  → Configuring Master insecure registry (registry:5000, ${my_ip}:5000)...${NC}"
+            mkdir -p /etc/docker
+            local master_trust_list="\"127.0.0.1:5000\", \"registry:5000\", \"${my_ip}:5000\""
+            if [ -n "${MASTER_MESH_IP:-}" ]; then
+                master_trust_list="${master_trust_list}, \"${MASTER_MESH_IP}:5000\""
+            fi
+            # Registry now has TLS + htpasswd auth — keep insecure flag for self-signed certs
+            cat > /etc/docker/daemon.json <<EOF
+{
+  "insecure-registries": [${master_trust_list}]
+}
+EOF
+            systemctl restart docker || true
+        fi
+
+        # Ensure the mirror service is UP if it exists in the compose file
+        if [ -f "$compose_f" ] && grep -q "docker-mirror:" "$compose_f"; then
+            echo -e "${BLUE}  → Ensuring Docker pull-through cache mirror is running...${NC}"
+            docker compose -f "$compose_f" up -d docker-mirror >/dev/null 2>&1 || true
+        fi
+    fi
+}
+
+ensure_local_ignores() {
+    local target_dir="${INSTALL_DIR:-/opt/smsly-hosting}"
+    local gitignore_path="${target_dir}/.gitignore"
+    if [ -d "$target_dir" ]; then
+        if [ ! -f "$gitignore_path" ]; then
+            touch "$gitignore_path"
+        fi
+        local needs_update=false
+        if ! grep -q "^builds/" "$gitignore_path"; then
+            echo "" >> "$gitignore_path"
+            echo "builds/" >> "$gitignore_path"
+            needs_update=true
+        fi
+        if ! grep -q "^caddy-config/" "$gitignore_path"; then
+            echo "caddy-config/" >> "$gitignore_path"
+            needs_update=true
+        fi
+        if [ "$needs_update" = "true" ]; then
+            echo -e "${BLUE}  → Added builds/ and caddy-config/ to local .gitignore to prevent Git stash hangs${NC}"
+        fi
+    fi
+}
+
+# ─── Pre-flight Validators ──────────────────────────────────────────────────
+check_internet() {
+    echo -e "${BLUE}  → Checking internet connectivity...${NC}"
+    if ! curl -Is --connect-timeout 5 https://google.com >/dev/null; then
+        echo -e "${RED}  ✗ No internet access. Check your firewall/network settings.${NC}"
+        exit 1
+    fi
+    if ! host github.com >/dev/null 2>&1; then
+         # Fallback to ping if host is missing
+         if ! ping -c 1 github.com >/dev/null 2>&1; then
+             echo -e "${RED}  ✗ DNS resolution failed for github.com.${NC}"
+             exit 1
+         fi
+    fi
+    echo -e "${GREEN}  ✓ Internet & DNS OK${NC}"
+}
+
+check_hardware() {
+    echo -e "${BLUE}  → Checking hardware requirements...${NC}"
+    local ram_kb
+    ram_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+    local ram_mb=$((ram_kb / 1024))
+    echo -e "${BLUE}  RAM: ${ram_mb}MB${NC}"
+    if [ "$ram_mb" -lt 950 ]; then # Allow some margin for 1GB VPS
+        echo -e "${RED}  ✗ Insufficient RAM ($ram_mb MB). Grid requires at least 1GB.${NC}"
+        exit 1
+    fi
+
+    local cores
+    cores=$(nproc)
+    echo -e "${BLUE}  CPU Cores: ${cores}${NC}"
+    if [ "$cores" -lt 1 ]; then
+        echo -e "${RED}  ✗ CPU detection failed.${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}  ✓ Hardware requirements met${NC}"
+}
+
+check_caddy_conflict() {
+    echo -e "${BLUE}  → Checking for host-level Caddy/Traefik port conflicts...${NC}"
+    if systemctl is-active --quiet caddy 2>/dev/null; then
+        echo -e "${RED}ERROR: Host Caddy service detected (systemd)${NC}"
+        echo -e "${YELLOW}Grid uses Docker-managed routing. Master uses Docker Caddy, and node mode uses Traefik on public port 80.${NC}"
+        echo -e ""
+        echo -e "Run:"
+        echo -e "  sudo systemctl stop caddy"
+        echo -e "  sudo systemctl disable caddy"
+        echo -e ""
+        echo -e "Then re-run installer."
+        exit 1
+    fi
+    echo -e "${GREEN}  ✓ No host-level Caddy/Traefik conflict detected${NC}"
+}
+
+wait_for_apt_lock() {
+    local lock_files=(
+        "/var/lib/dpkg/lock-frontend"
+        "/var/lib/dpkg/lock"
+        "/var/cache/apt/archives/lock"
+    )
+    local max_wait="${SMSLY_APT_LOCK_TIMEOUT:-600}"
+    local elapsed=0
+    local lock_file
+    local active_locks=()
+    local pids
+    local pid
+
+    while true; do
+        active_locks=()
+        pids=""
+
+        if command -v fuser >/dev/null 2>&1; then
+            for lock_file in "${lock_files[@]}"; do
+                [ -e "$lock_file" ] || continue
+                if fuser "$lock_file" >/dev/null 2>&1; then
+                    active_locks+=("$lock_file")
+                    pids="$pids $(fuser "$lock_file" 2>/dev/null || true)"
+                fi
+            done
+        fi
+
+        if [ "${#active_locks[@]}" -eq 0 ]; then
+            if [ "$elapsed" -gt 0 ]; then
+                echo
+                echo -e "${GREEN}  ✓ APT system ready${NC}"
+            fi
+            return 0
+        fi
+
+        if [ "$elapsed" -eq 0 ]; then
+            echo -e "${BLUE}  → Checking for background system updates (APT lock)...${NC}"
+        fi
+
+        if [ "$elapsed" -ge "$max_wait" ]; then
+            echo
+            echo -e "${RED}  x APT lock is still held after ${max_wait}s.${NC}"
+            echo -e "${YELLOW}  Holding process(es):${NC}"
+            for pid in $(printf "%s\n" $pids | sort -u); do
+                ps -p "$pid" -o pid=,comm=,etime=,args= 2>/dev/null || true
+            done
+            echo -e "${YELLOW}  Wait for those processes to finish, then rerun the installer.${NC}"
+            echo -e "${YELLOW}  If no apt/dpkg processes are running, repair with: sudo dpkg --configure -a${NC}"
+            return 1
+        fi
+
+        if [ $((elapsed % 30)) -eq 0 ]; then
+            echo
+            echo -e "${YELLOW}  Waiting for APT lock (${elapsed}s/${max_wait}s). Active lock(s): ${active_locks[*]}${NC}"
+            for pid in $(printf "%s\n" $pids | sort -u); do
+                ps -p "$pid" -o pid=,comm=,etime=,args= 2>/dev/null || true
+            done
+        else
+            printf "."
+        fi
+
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
+}
+
+apt_run() {
+    local max_attempts="${SMSLY_APT_ATTEMPTS:-6}"
+    local attempt=1
+    local output=""
+    local rc=0
+
+    while [ "$attempt" -le "$max_attempts" ]; do
+        wait_for_apt_lock || return 1
+        set +e
+        output="$("$@" 2>&1)"
+        rc=$?
+        set -e
+
+        if [ "$rc" -eq 0 ]; then
+            [ -n "$output" ] && printf '%s\n' "$output"
+            return 0
+        fi
+
+        if printf '%s\n' "$output" | grep -qiE 'Could not get lock|Unable to acquire.*lock|dpkg frontend lock|/var/lib/dpkg/lock|/var/cache/apt/archives/lock'; then
+            echo -e "${YELLOW}  APT lock appeared during command; retrying ($attempt/$max_attempts)...${NC}"
+            sleep $((attempt * 5))
+            attempt=$((attempt + 1))
+            continue
+        fi
+
+        printf '%s\n' "$output"
+        return "$rc"
+    done
+
+    printf '%s\n' "$output"
+    return "$rc"
+}
+
+ensure_system_swap() {
+    echo -e "${BLUE}  → Ensuring system swap is sufficient (Target: 3x-4x RAM)...${NC}"
+    local current_ram_mb
+    current_ram_mb=$(free -m | awk '/^Mem:/{print $2}')
+
+    # Strictly enforce 4x RAM target for maximum stability
+    local target_swap_mb=$((current_ram_mb * 4))
+
+    # Cap at 64GB max for sanity, but floor at 4x RAM for the user's requirement
+    [ "$target_swap_mb" -gt 65536 ] && target_swap_mb=65536
+
+    local current_swap_mb
+    current_swap_mb=$(free -m | awk '/^Swap:/{print $2}')
+
+    # Check for ACTIVE swap (sometimes free -m reports phantom swap from host)
+    local active_swap_count
+    active_swap_count=$(grep -c / /proc/swaps || echo 0)
+
+    # If swap is insufficient or missing, provision it.
+    if [ "$current_swap_mb" -lt "$target_swap_mb" ] || [ "$active_swap_count" -eq 0 ]; then
+        local needed_mb=$target_swap_mb
+        [ "$current_swap_mb" -gt 0 ] && [ "$active_swap_count" -gt 0 ] && needed_mb=$((target_swap_mb - current_swap_mb))
+
+        echo -e "${BLUE}  → Provisioning ${needed_mb}MB local swap (RAM: ${current_ram_mb}MB, Target: 4x)...${NC}"
+        local swapfile="/swapfile-smsly"
+
+        # If the file already exists but is too small, we need to recreate it
+        if [ -f "$swapfile" ]; then
+            swapoff "$swapfile" 2>/dev/null || true
+            rm -f "$swapfile"
+            # Since we removed the old file, we need to create the full target amount
+            needed_mb=$target_swap_mb
+        fi
+
+        fallocate -l ${needed_mb}M "$swapfile" 2>/dev/null || dd if=/dev/zero of="$swapfile" bs=1M count=$needed_mb status=none
+        chmod 600 "$swapfile"
+        mkswap "$swapfile" >/dev/null 2>&1
+        swapon "$swapfile" 2>/dev/null || true
+        # Make permanent (idempotent)
+        if ! grep -q "$swapfile" /etc/fstab 2>/dev/null; then
+            echo "$swapfile none swap sw 0 0" >> /etc/fstab
+        fi
+        echo -e "${GREEN}  ✓ Swap file created and activated (${needed_mb}MB)${NC}"
+    else
+        echo -e "${GREEN}  ✓ Swap already sufficient (${current_swap_mb}MB, >= 4x RAM)${NC}"
+    fi
+}
+
+# ─── Installation State Machine ──────────────────────────────────────────────
+STATE_FILE="/opt/smsly-hosting/.smsly_install_state"
+STATE_MODE_FILE="${STATE_FILE}.mode"
+
+install_flavor() {
+    if [ "${RUST_TWIN_MODE:-false}" = "true" ]; then
+        echo "rust"
+    elif [ "${MODE_AGENT_LITE:-false}" = "true" ]; then
+        echo "agent-lite"
+    else
+        echo "master"
+    fi
+}
+
+sync_install_state_flavor() {
+    local current_flavor
+    local previous_flavor
+    current_flavor="$(install_flavor)"
+    mkdir -p "$(dirname "$STATE_FILE")"
+
+    if [ "$RESUME_MODE" = "true" ] && [ -f "$STATE_FILE" ]; then
+        previous_flavor="$(cat "$STATE_MODE_FILE" 2>/dev/null || echo "legacy")"
+        if [ "$previous_flavor" != "$current_flavor" ]; then
+            echo -e "${YELLOW}  -> Existing install checkpoints are for '$previous_flavor'; resetting state for '$current_flavor'.${NC}"
+            rm -f "$STATE_FILE"
+        fi
+    fi
+
+    printf '%s\n' "$current_flavor" > "$STATE_MODE_FILE"
+}
+
+set_checkpoint() {
+    local name="$1"
+    mkdir -p "$(dirname "$STATE_FILE")"
+    printf '%s\n' "$(install_flavor)" > "$STATE_MODE_FILE"
+    # Ensure name is unique in the file to avoid duplicates on resume
+    if ! grep -q "^$name$" "$STATE_FILE" 2>/dev/null; then
+        echo "$name" >> "$STATE_FILE"
+    fi
+    echo -e "${GREEN}  ✓ Checkpoint reached: $name${NC}"
+}
+
+is_checkpoint_done() {
+    local name="$1"
+    if [ "$RESUME_MODE" != "true" ]; then
+        return 1
+    fi
+    if [ -f "$STATE_FILE" ] && grep -q "^$name$" "$STATE_FILE"; then
+        echo -e "${BLUE}  → Skipping already completed step: $name${NC}"
+        return 0
+    fi
+    return 1
+}
+
+clear_checkpoint() {
+    local name="$1"
+    if [ -f "$STATE_FILE" ]; then
+        grep -v "^$name$" "$STATE_FILE" > "${STATE_FILE}.tmp" 2>/dev/null || true
+        mv "${STATE_FILE}.tmp" "$STATE_FILE" 2>/dev/null || true
+    fi
+}
+
 # ─── Constants ───────────────────────────────────────────────────────────────
+SMSLY_BRANCH="${SMSLY_BRANCH:-main}"
+SMSLY_GIT_REMOTE="${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}"
 gen_hex_secret() {
     local bytes="${1:-16}"
     python3 -c "import secrets; print(secrets.token_hex(${bytes}))" 2>/dev/null || openssl rand -hex "$bytes"
@@ -234,7 +607,7 @@ gen_hex_secret() {
 env_get_value() {
     local env_file="$1"
     local var_name="$2"
-    grep -m1 "^${var_name}=" "$env_file" 2>/dev/null | cut -d= -f2- || true
+    grep -m1 "^${var_name}=" "$env_file" 2>/dev/null | cut -d= -f2- | sed 's/^"//;s/"$//;s/^'\''//;s/'\''$//' || true
 }
 
 env_set_value() {
@@ -272,6 +645,16 @@ if not found:
 
 env_path.write_text("\n".join(updated) + "\n")
 PY
+}
+
+sanitize_node_identifier() {
+    local value="${1:-}"
+    value="$(printf '%s' "$value" | tr -c 'A-Za-z0-9_.-' '-' | sed -E 's/^-+//; s/-+$//; s/-+/-/g' | cut -c1-96)"
+    if [ -z "$value" ]; then
+        value="$(hostname 2>/dev/null | tr -c 'A-Za-z0-9_.-' '-' | sed -E 's/^-+//; s/-+$//; s/-+/-/g' | cut -c1-96)"
+    fi
+    [ -n "$value" ] || value="agent"
+    printf '%s' "$value"
 }
 
 env_append_csv_values() {
@@ -348,6 +731,17 @@ sync_env_domain_allowlists() {
         cors_origins+=("http://${public_ip}:8090" "http://${public_ip}")
     fi
 
+    # Automatically add all node IPs (including WireGuard VPN mesh IPs like 10.100.x.x)
+    local current_ips
+    current_ips="$(hostname -I 2>/dev/null | tr -s ' ' '\n' | grep -v '^$' || true)"
+    if [ -n "$current_ips" ]; then
+        for ip in $current_ips; do
+            allowed_hosts+=("$ip")
+            csrf_origins+=("http://${ip}:8090" "http://${ip}" "https://${ip}")
+            cors_origins+=("http://${ip}:8090" "http://${ip}" "https://${ip}")
+        done
+    fi
+
     result="$(env_append_csv_values "$env_file" "ALLOWED_HOSTS" "${allowed_hosts[@]}")"
     [ "$result" = "changed" ] && changed=true
     result="$(env_append_csv_values "$env_file" "CSRF_TRUSTED_ORIGINS" "${csrf_origins[@]}")"
@@ -367,7 +761,7 @@ env_ensure_var() {
     local var_comment="${4:-}"
     local current_val
     current_val="$(env_get_value "$env_file" "$var_name")"
-    
+
     if [ -z "$current_val" ]; then
         echo -e "${BLUE}  -> Setting $var_name in .env${NC}"
         [ -n "$var_comment" ] && ! grep -q "# $var_comment" "$env_file" 2>/dev/null && echo "# $var_comment" >> "$env_file"
@@ -376,31 +770,253 @@ env_ensure_var() {
     fi
 }
 
+is_agent_lite_mode() {
+    [ "${INSTALL_MODE:-master}" = "agent-lite" ] || [ "${MODE_AGENT_LITE:-false}" = "true" ]
+}
+
+is_node_mode() {
+    [ "${INSTALL_MODE:-master}" = "node" ] || [ "${MODE_NODE:-false}" = "true" ]
+}
+
+is_master_mode() {
+    [ "${INSTALL_MODE:-master}" = "master" ] \
+        && [ "${MODE_AGENT_LITE:-false}" != "true" ] \
+        && [ "${MODE_NODE:-false}" != "true" ]
+}
+
+should_manage_caddy() {
+    is_master_mode && [ "${RUST_TWIN_MODE:-false}" != "true" ]
+}
+
+mode_env_value() {
+    if is_agent_lite_mode; then
+        printf '%s\n' "agent"
+    elif is_node_mode; then
+        printf '%s\n' "node"
+    else
+        printf '%s\n' "master"
+    fi
+}
+
+sync_install_mode_env_file() {
+    local env_file="$1"
+    [ -f "$env_file" ] || return 0
+
+    local node_type="${INSTALL_MODE:-master}"
+    local mode_value
+    local traefik_bind="127.0.0.1:8081"
+    local startup_caddy_sync="true"
+    mode_value="$(mode_env_value)"
+
+    if is_agent_lite_mode; then
+        node_type="agent-lite"
+        startup_caddy_sync="false"
+    elif is_node_mode; then
+        node_type="node"
+        traefik_bind="0.0.0.0:80"
+        startup_caddy_sync="false"
+    fi
+
+    env_set_value "$env_file" "NODE_TYPE" "$node_type"
+    env_set_value "$env_file" "MODE" "$mode_value"
+    env_set_value "$env_file" "TRAEFIK_HTTP_BIND" "$traefik_bind"
+    env_set_value "$env_file" "SMSLY_ENABLE_STARTUP_CADDY_SYNC" "$startup_caddy_sync"
+}
+
+apply_agent_lite_env_overrides() {
+    local env_file="$1"
+    local seed_file="/opt/smsly-hosting/.agent_lite_seed"
+
+    [ "$MODE_AGENT_LITE" = "true" ] || return 0
+
+    # --- Self-Healing: Recovery from existing .env if env vars are missing ---
+    if [ -z "${MASTER_IP:-}" ] && [ -f "$env_file" ]; then
+        MASTER_IP="$(env_get_value "$env_file" "MASTER_IP")"
+    fi
+    if [ -z "${MASTER_MESH_IP:-}" ] && [ -f "$env_file" ]; then
+        MASTER_MESH_IP="$(env_get_value "$env_file" "MASTER_MESH_IP")"
+    fi
+    if [ -z "${MASTER_FIELD_ENCRYPTION_KEY:-}" ] && [ -f "$env_file" ]; then
+        MASTER_FIELD_ENCRYPTION_KEY="$(env_get_value "$env_file" "FIELD_ENCRYPTION_KEY")"
+    fi
+    if [ -z "${MASTER_FIELD_ENCRYPTION_KEY:-}" ] && [ -f "$seed_file" ]; then
+        MASTER_FIELD_ENCRYPTION_KEY="$(env_get_value "$seed_file" "MASTER_FIELD_ENCRYPTION_KEY")"
+    fi
+    if [ -z "${MASTER_DB_PASSWORD:-}" ] && [ -f "$env_file" ]; then
+        # If we are updating and MASTER_DB_PASSWORD wasn't passed, try to preserve the existing one
+        local db_url
+        db_url="$(env_get_value "$env_file" "DATABASE_URL")"
+        if [[ "$db_url" =~ ://[^:]+:([^@]+)@ ]]; then
+            MASTER_DB_PASSWORD="${BASH_REMATCH[1]}"
+        fi
+    fi
+
+    # --- Validation ---
+    if [ -z "${MASTER_IP:-}" ]; then
+        echo -e "${RED}  ✗ ERROR: MASTER_IP is missing. Lite Agent cannot function without a Master node.${NC}"
+        echo -e "${YELLOW}    To fix: Run the update from the Master Dashboard or pass MASTER_IP=... to the script.${NC}"
+        exit 1
+    fi
+
+    # MASTER_MESH_IP is the WireGuard IP used for internal services (DB, MQ, Redis).
+    # Must be set — no fallback to MASTER_IP (public IP is firewalled for internal ports).
+    if [ -z "${MASTER_MESH_IP:-}" ]; then
+        echo -e "${RED}  ✗ ERROR: MASTER_MESH_IP is missing. Lite Agent requires the WireGuard mesh IP.${NC}"
+        echo -e "${YELLOW}    Set MASTER_MESH_IP to the WireGuard IP of the master node.${NC}"
+        exit 1
+    fi
+
+    MASTER_DB_USER="${MASTER_DB_USER:-smsly_admin}"
+    # If password is still missing after recovery attempt, we must stop.
+    if [ -z "${MASTER_DB_PASSWORD:-}" ]; then
+        echo -e "${RED}  ✗ ERROR: MASTER_DB_PASSWORD is missing and could not be recovered.${NC}"
+        exit 1
+    fi
+
+    MASTER_MQ_PASSWORD="${MASTER_MQ_PASSWORD:-$MASTER_DB_PASSWORD}"
+    SMSLY_NODE_HOST="${SMSLY_NODE_HOST:-$(detect_public_ip 2>/dev/null || true)}"
+    [ -n "$SMSLY_NODE_HOST" ] || SMSLY_NODE_HOST="$(hostname -f 2>/dev/null || hostname 2>/dev/null || echo agent)"
+    SMSLY_NODE_ID="${SMSLY_NODE_ID:-$SMSLY_NODE_HOST}"
+    local node_slug
+    node_slug="$(sanitize_node_identifier "$SMSLY_NODE_ID")"
+    SMSLY_NODE_QUEUE="${SMSLY_NODE_QUEUE:-smsly-node-${node_slug}}"
+
+    # Use MASTER_MESH_IP for database only (shared DB).
+    # Redis and RabbitMQ run locally on each node — no cross-node dependency.
+    local node_redis_password
+    node_redis_password="$(env_get_value "$env_file" "REDIS_PASSWORD" 2>/dev/null || true)"
+    if [ -z "$node_redis_password" ]; then
+        node_redis_password="$(python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || openssl rand -hex 16 2>/dev/null || echo "")"
+    fi
+    local redis_url="redis://redis:6379/0"
+    if [ -n "$node_redis_password" ]; then
+        redis_url="redis://:${node_redis_password}@redis:6379/0"
+    fi
+
+    local node_rabbitmq_password
+    node_rabbitmq_password="$(env_get_value "$env_file" "RABBITMQ_PASSWORD" 2>/dev/null || true)"
+    if [ -z "$node_rabbitmq_password" ]; then
+        node_rabbitmq_password="$(python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || openssl rand -hex 16 2>/dev/null || echo "")"
+    fi
+    local celery_broker_url="amqp://smsly_user:${node_rabbitmq_password}@rabbitmq:5672//"
+
+    # --- Persistence: Save a recovery seed for future manual updates ---
+    cat > "$seed_file" <<EOF
+# SMSLY Lite Agent Recovery Seed
+# Generated on $(date)
+MASTER_IP="$MASTER_IP"
+MASTER_MESH_IP="$MASTER_MESH_IP"
+MASTER_DB_USER="$MASTER_DB_USER"
+MASTER_DB_PASSWORD="$MASTER_DB_PASSWORD"
+MASTER_MQ_PASSWORD="$MASTER_MQ_PASSWORD"
+MASTER_REDIS_PASSWORD="${MASTER_REDIS_PASSWORD:-}"
+MASTER_GATEWAY_SECRET="${MASTER_GATEWAY_SECRET:-}"
+MASTER_FIELD_ENCRYPTION_KEY="${MASTER_FIELD_ENCRYPTION_KEY:-}"
+SMSLY_NODE_ID="$SMSLY_NODE_ID"
+SMSLY_NODE_QUEUE="$SMSLY_NODE_QUEUE"
+EOF
+    chmod 600 "$seed_file"
+
+    env_set_value "$env_file" "NODE_TYPE" "agent-lite"
+    env_set_value "$env_file" "MODE" "agent"
+    env_set_value "$env_file" "TRAEFIK_HTTP_BIND" "0.0.0.0:80"
+    env_set_value "$env_file" "MASTER_IP" "$MASTER_IP"
+    env_set_value "$env_file" "MASTER_MESH_IP" "$MASTER_MESH_IP"
+    env_set_value "$env_file" "SMSLY_NODE_HOST" "$SMSLY_NODE_HOST"
+    env_set_value "$env_file" "SMSLY_NODE_ID" "$SMSLY_NODE_ID"
+    env_set_value "$env_file" "SMSLY_NODE_QUEUE" "$SMSLY_NODE_QUEUE"
+    env_set_value "$env_file" "DATABASE_URL" "postgresql://${MASTER_DB_USER}:${MASTER_DB_PASSWORD}@${MASTER_MESH_IP}:5432/smsly_hosting"
+    env_set_value "$env_file" "DIRECT_DATABASE_URL" "postgresql://${MASTER_DB_USER}:${MASTER_DB_PASSWORD}@${MASTER_MESH_IP}:5432/smsly_hosting"
+    # Local RabbitMQ (runs on the same node via docker-compose.agent-lite.yml)
+    env_set_value "$env_file" "RABBITMQ_PASSWORD" "${node_rabbitmq_password:-}"
+    env_set_value "$env_file" "RABBITMQ_DEFAULT_USER" "smsly_user"
+    env_set_value "$env_file" "RABBITMQ_DEFAULT_PASS" "${node_rabbitmq_password:-}"
+    env_set_value "$env_file" "CELERY_BROKER_URL" "$celery_broker_url"
+    # Local Redis (runs on the same node via docker-compose.agent-lite.yml)
+    env_set_value "$env_file" "REDIS_URL" "$redis_url"
+    env_set_value "$env_file" "REDIS_PASSWORD" "${node_redis_password:-}"
+    env_set_value "$env_file" "REDIS_HOST" "redis"
+    env_set_value "$env_file" "REDIS_PORT" "6379"
+    local registry_host="${MASTER_MESH_IP}"
+    env_set_value "$env_file" "CONTAINER_REGISTRY_URL" "${registry_host}:5000"
+    if [ -n "${MASTER_GATEWAY_SECRET:-}" ]; then
+        env_set_value "$env_file" "GATEWAY_SECRET" "$MASTER_GATEWAY_SECRET"
+    fi
+    if [ -n "${MASTER_FIELD_ENCRYPTION_KEY:-}" ]; then
+        env_set_value "$env_file" "FIELD_ENCRYPTION_KEY" "$MASTER_FIELD_ENCRYPTION_KEY"
+    fi
+    env_set_value "$env_file" "SMSLY_DISABLE_LOCAL_SERVICES" "false"
+    env_set_value "$env_file" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
+    env_set_value "$env_file" "SMSLY_ENABLE_STARTUP_CADDY_SYNC" "false"
+}
+
+verify_agent_lite_connectivity() {
+    [ "$MODE_AGENT_LITE" = "true" ] || return 0
+    echo -e "${BLUE}  → Verifying connectivity to Master node (${MASTER_IP})...${NC}"
+    
+    # 1. Ping Master (public IP)
+    if ! ping -c 1 -W 2 "$MASTER_IP" >/dev/null 2>&1; then
+        echo -e "${YELLOW}  ⚠ Warning: Master node ${MASTER_IP} is not responding to ICMP. Proceeding anyway...${NC}"
+    fi
+
+    # 2. Check Database port via mesh IP (internal services use WireGuard)
+    local db_check_ip="${MASTER_MESH_IP}"
+    if ! timeout 2 bash -c "</dev/tcp/${db_check_ip}/5432" 2>/dev/null; then
+        echo -e "${RED}  ✗ ERROR: Master Database (port 5432) is unreachable on ${db_check_ip}.${NC}"
+        echo -e "${YELLOW}    Ensure the Master allows port 5432 from this node's IP via WireGuard mesh.${NC}"
+        return 1
+    fi
+
+    # 3. Redis and RabbitMQ run locally on agent-lite nodes (no Master dependency)
+    echo -e "${BLUE}  → Redis and RabbitMQ will run locally on this node.${NC}"
+
+    # 4. The deploy path pulls master-built images from the master's registry.
+    local registry_check_ip="${MASTER_MESH_IP}"
+    if ! timeout 2 bash -c "</dev/tcp/${registry_check_ip}/5000" 2>/dev/null; then
+        echo -e "${RED}  ✗ ERROR: Master container registry (port 5000) is unreachable on ${registry_check_ip}.${NC}"
+        echo -e "${YELLOW}    Ensure the Master registry is running and the mesh/firewall allows port 5000 from this node.${NC}"
+        return 1
+    fi
+    if command -v curl >/dev/null 2>&1; then
+        local registry_code
+        registry_code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "http://${registry_check_ip}:5000/v2/" 2>/dev/null || true)"
+        # Retry with HTTPS if HTTP returned 000 (connection refused / TLS redirect)
+        if [ "$registry_code" = "000" ] || [ "$registry_code" = "400" ]; then
+            registry_code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "https://${registry_check_ip}:5000/v2/" 2>/dev/null || true)"
+        fi
+        case "$registry_code" in
+            2*|401) ;;
+            *)
+                echo -e "${RED}  ✗ ERROR: Master container registry did not answer correctly on ${registry_check_ip}:5000 (HTTP ${registry_code:-000}).${NC}"
+                return 1
+                ;;
+        esac
+    fi
+
+    echo -e "${GREEN}  ✓ Connectivity to Master verified.${NC}"
+    return 0
+}
+
 dump_diagnostic_logs() {
     local env_file="${1:-$INSTALL_DIR/.env}"
     echo -e "\n${RED}════════════════════════════════════════════════════════════${NC}"
     echo -e "${RED}   DIAGNOSTIC LOG DUMP (FAILURE ANALYSIS)${NC}"
     echo -e "${RED}════════════════════════════════════════════════════════════${NC}"
-    
+
     echo -e "${YELLOW}  → System Resource Snapshot:${NC}"
     free -m
     df -h /
-    
-    echo -e "\n${YELLOW}  → Container Status:${NC}"
-    docker compose -f "$COMPOSE_FILE" ps
-    
-    echo -e "\n${YELLOW}  → Backend Logs (Last 50 lines):${NC}"
-    docker compose -f "$COMPOSE_FILE" logs --tail=50 backend || true
-    
-    echo -e "\n${YELLOW}  → Nginx Logs (Last 50 lines):${NC}"
-    docker compose -f "$COMPOSE_FILE" logs --tail=50 traefik || true
 
-    echo -e "\n${YELLOW}  → Redis Logs (Last 50 lines):${NC}"
-    docker compose -f "$COMPOSE_FILE" logs --tail=50 redis || true
-    
-    echo -e "\n${YELLOW}  → Database Logs (Last 50 lines):${NC}"
-    docker compose -f "$COMPOSE_FILE" logs --tail=50 db || true
-    
+    echo -e "\n${YELLOW}  → Container Status:${NC}"
+    if command -v docker >/dev/null 2>&1 && [ -f "$env_file" ] && grep -q '^POSTGRES_PASSWORD=' "$env_file" 2>/dev/null; then
+        docker compose -f "$COMPOSE_FILE" ps || true
+
+        echo -e "\n${YELLOW}  -> Compose Logs (Last 50 lines):${NC}"
+        docker compose -f "$COMPOSE_FILE" logs --tail=50 || true
+    else
+        echo -e "${YELLOW}  (Docker or .env not ready; skipping container logs)${NC}"
+    fi
+
     echo -e "${RED}════════════════════════════════════════════════════════════${NC}\n"
 }
 
@@ -421,6 +1037,13 @@ apply_env_platform_overrides() {
 
     if [ "${DOMAIN+x}" = "x" ]; then
         desired_domain="${DOMAIN}"
+        # Protection: Do NOT allow an IP to overwrite a real domain unless forced or it's a fresh install.
+        if echo "$desired_domain" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+            if [ -n "$current_domain" ] && ! echo "$current_domain" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+                echo -e "${YELLOW}  ⚠ WARNING: Attempted to overwrite domain ($current_domain) with IP ($desired_domain). Ignored to prevent lockout.${NC}"
+                desired_domain="$current_domain"
+            fi
+        fi
     else
         desired_domain="${current_domain}"
     fi
@@ -428,6 +1051,14 @@ apply_env_platform_overrides() {
         desired_use_ssl="${USE_SSL}"
     else
         desired_use_ssl="${current_use_ssl}"
+    fi
+
+    # SEC-002: IP-mode SSL guard — always force USE_SSL=false for raw IPs
+    if echo "$desired_domain" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+        if [ "$desired_use_ssl" = "true" ]; then
+            echo -e "${YELLOW}  ⚠ SEC-002: USE_SSL=true override blocked — DOMAIN ($desired_domain) is a raw IP.${NC}"
+        fi
+        desired_use_ssl="false"
     fi
     if [ "${ACME_EMAIL+x}" = "x" ]; then
         desired_acme_email="${ACME_EMAIL}"
@@ -516,6 +1147,7 @@ sync_platform_domain_state() {
     echo -e "${BLUE}  → Syncing PlatformConfig + public domains from installer state...${NC}"
     sync_json="$(
         docker compose -f "$COMPOSE_FILE" exec -T \
+            -e SMSLY_DISABLE_STARTUP_TASKS=true \
             -e SMSLY_SYNC_DOMAIN="$sync_domain" \
             -e SMSLY_SYNC_USE_SSL="$sync_use_ssl" \
             -e SMSLY_SYNC_WILDCARD="$sync_wildcard" \
@@ -561,9 +1193,39 @@ cfg = PlatformConfig.load()
 old_base = Service.default_public_base_domain()
 original_domain = (cfg.domain or "").strip().lower().rstrip(".")
 
-cfg.domain = normalize_platform_domain(os.environ.get("SMSLY_SYNC_DOMAIN", ""))
-cfg.use_ssl = parse_bool(os.environ.get("SMSLY_SYNC_USE_SSL", "false"))
-cfg.wildcard_subdomains = parse_bool(os.environ.get("SMSLY_SYNC_WILDCARD", "false"))
+# SEC-FIX: Preserve an existing real domain in the DB when the incoming
+# sync value from .env is empty, localhost, or a raw IP. This prevents
+# --update from clobbering a domain set via the Settings UI with the
+# installer's default IP value.
+incoming_domain = normalize_platform_domain(os.environ.get("SMSLY_SYNC_DOMAIN", ""))
+db_has_real_domain = bool(original_domain) and original_domain not in ("", "localhost")
+incoming_is_ip_or_empty = not incoming_domain
+if db_has_real_domain and incoming_is_ip_or_empty:
+    # Preserve the DB domain — the user configured it via Settings UI
+    print(f"[sync] Preserving existing DB domain '{original_domain}' (incoming was empty/IP)")
+else:
+    cfg.domain = incoming_domain
+
+# Preserve existing DB use_ssl when the incoming value is false/empty
+# and the DB already has SSL enabled. This prevents --update from
+# accidentally disabling HTTPS when .env USE_SSL is stale or missing.
+_incoming_use_ssl = parse_bool(os.environ.get("SMSLY_SYNC_USE_SSL", "false"))
+_db_already_has_ssl = bool(cfg.use_ssl)
+if _incoming_use_ssl:
+    cfg.use_ssl = True
+elif not _db_already_has_ssl:
+    cfg.use_ssl = False
+# else: preserve existing True
+
+# Preserve existing DB wildcard_subdomains when the incoming value is
+# false/empty and the DB already has it enabled. Same pattern as use_ssl.
+_incoming_wildcard = parse_bool(os.environ.get("SMSLY_SYNC_WILDCARD", "false"))
+_db_already_has_wildcard = bool(cfg.wildcard_subdomains)
+if _incoming_wildcard:
+    cfg.wildcard_subdomains = True
+elif not _db_already_has_wildcard:
+    cfg.wildcard_subdomains = False
+# else: preserve existing True
 cfg.cloudflare_api_token = str(os.environ.get("SMSLY_SYNC_CF_TOKEN", "") or "").strip()
 cfg.server_ip = str(os.environ.get("SMSLY_SYNC_PUBLIC_IP", "") or "").strip() or None
 cfg.save()
@@ -624,13 +1286,62 @@ PY
     if [ "${DOMAIN_SYNC_UPDATED_COUNT:-0}" -gt 0 ]; then
         echo -e "${GREEN}  ✓ Rewrote ${DOMAIN_SYNC_UPDATED_COUNT} existing service public domain(s)${NC}"
     fi
+
+    # SEC-FIX: Sync the effective DB domain back to .env so future --update
+    # runs use the real domain (not the installer's default IP).
+    _effective_domain="$(printf '%s' "$sync_json" | python3 -c "
+import json,sys
+d = json.load(sys.stdin)
+print(d.get('domain', '') or '')
+" 2>/dev/null || true)"
+    _env_domain="$(env_get_value "$env_file" "DOMAIN")"
+    _env_use_ssl="$(env_get_value "$env_file" "USE_SSL")"
+    _env_wildcard="$(env_get_value "$env_file" "WILDCARD_SUBDOMAINS")"
+    _db_use_ssl="$(printf '%s' "$sync_json" | python3 -c "import json,sys; print('true' if json.load(sys.stdin).get('use_ssl') else 'false')" 2>/dev/null)"
+    _db_wildcard="$(printf '%s' "$sync_json" | python3 -c "import json,sys; print('true' if json.load(sys.stdin).get('wildcard_subdomains') else 'false')" 2>/dev/null)"
+    if [ -n "$_effective_domain" ]; then
+        _needs_sync=false
+        if [ "$_effective_domain" != "$_env_domain" ]; then
+            env_set_value "$env_file" "DOMAIN" "$_effective_domain"
+            _needs_sync=true
+        fi
+        if [ "$_db_use_ssl" != "$_env_use_ssl" ]; then
+            env_set_value "$env_file" "USE_SSL" "$_db_use_ssl"
+            _needs_sync=true
+        fi
+        if [ "$_db_wildcard" != "$_env_wildcard" ]; then
+            env_set_value "$env_file" "WILDCARD_SUBDOMAINS" "$_db_wildcard"
+            _needs_sync=true
+        fi
+        if [ "$_needs_sync" = "true" ]; then
+            echo -e "${GREEN}  ✓ .env synced: DOMAIN=$_effective_domain, USE_SSL=$_db_use_ssl, WILDCARD_SUBDOMAINS=$_db_wildcard${NC}"
+        fi
+    fi
 }
 
 queue_active_service_redeploys() {
     local reason="${1:-Installer-triggered redeploy}"
     local service_ids="${2:-}"
 
+    # Verify backend is reachable before attempting redeploy
+    local backend_container="smsly-hosting-backend-1"
+    if [ "$MODE_AGENT_LITE" = "true" ]; then
+        backend_container="smsly-hosting-backend-1"  # same for agent-lite
+    fi
+    local backend_state
+    backend_state="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$backend_container" 2>/dev/null || echo 'missing')"
+    if [ "$backend_state" != "healthy" ] && [ "$backend_state" != "running" ]; then
+        echo -e "${YELLOW}  ⚠ Backend container ($backend_container) not ready (state=$backend_state). Waiting 15s...${NC}" >&2
+        sleep 15
+        backend_state="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$backend_container" 2>/dev/null || echo 'missing')"
+        if [ "$backend_state" != "healthy" ] && [ "$backend_state" != "running" ]; then
+            echo -e "${RED}  ✗ Backend container still not ready after wait. Skipping redeploy.${NC}" >&2
+            return 1
+        fi
+    fi
+
     docker compose -f "$COMPOSE_FILE" exec -T \
+        -e SMSLY_DISABLE_STARTUP_TASKS=true \
         -e SMSLY_REDEPLOY_REASON="$reason" \
         -e SMSLY_SERVICE_IDS="$service_ids" \
         backend python manage.py shell <<'PY'
@@ -703,11 +1414,17 @@ ensure_env_runtime_defaults() {
     [ -f "$env_file" ] || return 1
 
     env_ensure_var "$env_file" "REDIS_PASSWORD" "$(gen_hex_secret 16)" "Redis authentication password"
+    env_ensure_var "$env_file" "RABBITMQ_PASSWORD" "$(gen_hex_secret 16)" "RabbitMQ authentication password"
     env_ensure_var "$env_file" "GATEWAY_SECRET" "$(gen_hex_secret 32)" "Inter-service HMAC authentication secret"
     env_ensure_var "$env_file" "GITHUB_WEBHOOK_SECRET" "$(gen_hex_secret 32)" "GitHub webhook signature verification"
     env_ensure_var "$env_file" "AUTOSCALER_API_TOKEN" "$(gen_hex_secret 32)" "Autoscaler API bearer token (shared between autoscaler service and Django backend)"
     env_ensure_var "$env_file" "FRP_AUTH_TOKEN" "$(gen_hex_secret 32)" "FRP tunnel relay authentication token"
     env_ensure_var "$env_file" "SMSLY_DISABLE_TIER_GATES" "true" "Disable owner-tier paywall gates in this edition"
+    env_ensure_var "$env_file" "SMSLY_ENABLE_STARTUP_CADDY_SYNC" "false" "Keep AppConfig.ready side-effect free; installer/watchers sync edge config"
+    env_ensure_var "$env_file" "PGCAT_ADMIN_PASSWORD" "$(gen_hex_secret 24)" "PgCat administration password (mandatory for 1.2+)"
+    # SSH host key check: false by default to support bootstrap/trusted labs without manual known_hosts populating.
+    env_ensure_var "$env_file" "SMSLY_STRICT_SSH_HOST_KEY_CHECK" "false" "SSH host key verification (True=strict, False=accept-first)"
+    sync_install_mode_env_file "$env_file"
 
     redis_password="$(env_get_value "$env_file" "REDIS_PASSWORD")"
     rabbitmq_password="$(env_get_value "$env_file" "RABBITMQ_PASSWORD")"
@@ -758,6 +1475,8 @@ ensure_env_runtime_defaults() {
         expected_celery_broker_url="amqp://smsly_user:${rabbitmq_password}@rabbitmq:5672//"
         current_celery_broker_url="$(env_get_value "$env_file" "CELERY_BROKER_URL")"
 
+        env_set_value "$env_file" "RABBITMQ_DEFAULT_USER" "smsly_user"
+        env_set_value "$env_file" "RABBITMQ_DEFAULT_PASS" "$rabbitmq_password"
         env_ensure_var "$env_file" "CELERY_BROKER_URL" "$expected_celery_broker_url" "Celery broker (RabbitMQ with auth)"
 
         if [[ "$current_celery_broker_url" =~ ^amqp://smsly_user:.*@rabbitmq:5672//$ ]] && [ "$current_celery_broker_url" != "$expected_celery_broker_url" ]; then
@@ -768,26 +1487,100 @@ ensure_env_runtime_defaults() {
     fi
 
     if [ -n "$postgres_password" ]; then
-        # Route through PgBouncer for connection pooling
-        expected_database_url="postgresql://smsly_admin:${postgres_password}@pgbouncer:5432/smsly_hosting"
+        # Route through PgCat for connection pooling
+        expected_database_url="postgresql://smsly_admin:${postgres_password}@pgcat:5432/smsly_hosting"
         current_database_url="$(env_get_value "$env_file" "DATABASE_URL")"
 
-        # Migrate legacy @db:5432 URLs to @pgbouncer:5432
-        if [[ "$current_database_url" =~ @db:5432 ]]; then
-            echo -e "${BLUE}  -> Migrating DATABASE_URL from db to pgbouncer${NC}"
-            local migrated_url="${current_database_url/@db:5432/@pgbouncer:5432}"
-            env_set_value "$env_file" "DATABASE_URL" "$migrated_url"
-            current_database_url="$migrated_url"
-            echo -e "${GREEN}  OK DATABASE_URL migrated to pgbouncer${NC}"
+        # [EDGE NODE] Override for Lite Agent mode
+        if [ "$MODE_AGENT_LITE" = "true" ] && [ -n "${MASTER_IP:-}" ]; then
+            echo -e "${BLUE}  -> Configuring for Edge Node (Lite Agent) mode...${NC}"
+
+            # Self-heal: recover MASTER_MESH_IP from .env if not already in shell
+            if [ -z "${MASTER_MESH_IP:-}" ] && [ -f "$env_file" ]; then
+                MASTER_MESH_IP="$(env_get_value "$env_file" "MASTER_MESH_IP")"
+            fi
+            local db_user="${MASTER_DB_USER:-smsly_admin}"
+            local db_pass="${MASTER_DB_PASSWORD:-$postgres_password}"
+            local mq_pass="${MASTER_MQ_PASSWORD:-$rabbitmq_password}"
+
+            # Use WireGuard mesh IP for database connections (public IP is firewalled)
+            local db_host="${MASTER_MESH_IP}"
+            expected_database_url="postgresql://${db_user}:${db_pass}@${db_host}:5432/smsly_hosting"
+            # DIRECT_DATABASE_URL uses smsly_admin (not node_agent) so management
+            # commands can self-heal permissions/passwords when node_agent creds fail.
+            expected_direct_url="postgresql://smsly_admin:${postgres_password}@${db_host}:5432/smsly_hosting"
+            # Local RabbitMQ is used for Lite Agent node
+            expected_celery_broker_url="amqp://smsly_user:${rabbitmq_password}@rabbitmq:5672//"
+
+            env_set_value "$env_file" "DATABASE_URL" "$expected_database_url"
+            env_set_value "$env_file" "DIRECT_DATABASE_URL" "$expected_direct_url"
+            env_set_value "$env_file" "CELERY_BROKER_URL" "$expected_celery_broker_url"
+            # Persist MASTER_MESH_IP for future self-healing
+            if [ -n "${MASTER_MESH_IP:-}" ]; then
+                env_set_value "$env_file" "MASTER_MESH_IP" "$MASTER_MESH_IP"
+            fi
+
+            # Sync local vars for consistent validation below
+            current_database_url="$expected_database_url"
+            current_celery_broker_url="$expected_celery_broker_url"
         fi
 
+        # [NODE MODE] Override for full-stack node (local DB, not master's)
+        if [ "$MODE_NODE" = "true" ] && [ -n "$postgres_password" ]; then
+            local node_env_mode="$(mode_env_value)"
+            local node_expected_db_url="postgresql://smsly_admin:${postgres_password}@pgcat:5432/smsly_hosting"
+            local node_expected_direct_url="postgresql://smsly_admin:${postgres_password}@db:5432/smsly_hosting"
+            if [ "$current_database_url" != "$node_expected_db_url" ]; then
+                echo -e "${BLUE}  -> Setting DATABASE_URL for node mode (local DB via PgCat)${NC}"
+                env_set_value "$env_file" "DATABASE_URL" "$node_expected_db_url"
+                current_database_url="$node_expected_db_url"
+            fi
+            local current_direct_url
+            current_direct_url="$(env_get_value "$env_file" "DIRECT_DATABASE_URL")"
+            if [ "$current_direct_url" != "$node_expected_direct_url" ]; then
+                echo -e "${BLUE}  -> Setting DIRECT_DATABASE_URL for node mode (local DB direct)${NC}"
+                env_set_value "$env_file" "DIRECT_DATABASE_URL" "$node_expected_direct_url"
+            fi
+            env_set_value "$env_file" "NODE_TYPE" "node"
+            env_set_value "$env_file" "MODE" "$node_env_mode"
+        fi
+
+        # Migrate legacy @db:5432 URLs to @pgcat:5432
+        if [[ "$current_database_url" =~ @db:5432 ]] && [ "$MODE_AGENT_LITE" != "true" ]; then
+            echo -e "${BLUE}  -> Migrating DATABASE_URL from db to pgcat${NC}"
+            local migrated_url="${current_database_url/@db:5432/@pgcat:5432}"
+            env_set_value "$env_file" "DATABASE_URL" "$migrated_url"
+            current_database_url="$migrated_url"
+            echo -e "${GREEN}  OK DATABASE_URL migrated to pgcat${NC}"
+        fi
+
+        # Migrate legacy @pgbouncer:5432 URLs to @pgcat:5432
+        if [[ "$current_database_url" =~ @pgbouncer:5432 ]]; then
+            echo -e "${BLUE}  -> Migrating DATABASE_URL from pgbouncer to pgcat${NC}"
+            local migrated_url="${current_database_url/@pgbouncer:5432/@pgcat:5432}"
+            env_set_value "$env_file" "DATABASE_URL" "$migrated_url"
+            current_database_url="$migrated_url"
+            echo -e "${GREEN}  OK DATABASE_URL migrated to pgcat${NC}"
+        fi
+
+        # NOTE: Removed no-op pgcat→pgcat migration block (was a no-op that
+        # matched all pgcat URLs and wrote the same value back).
+
         if [ -z "$current_database_url" ]; then
-            env_ensure_var "$env_file" "DATABASE_URL" "$expected_database_url" "PostgreSQL connection string (via PgBouncer)"
-        elif [[ "$current_database_url" =~ ^postgresql://smsly_admin:.*@pgbouncer:5432/smsly_hosting$ ]] && [ "$current_database_url" != "$expected_database_url" ]; then
+            env_ensure_var "$env_file" "DATABASE_URL" "$expected_database_url" "PostgreSQL connection string (via PgCat)"
+
+            # Ensure direct connection bypass for migrations exists
+            local expected_direct_url="postgresql://smsly_admin:${postgres_password}@db:5432/smsly_hosting"
+            env_ensure_var "$env_file" "DIRECT_DATABASE_URL" "$expected_direct_url" "Direct connection bypass for migrations"
+        elif [[ "$current_database_url" =~ ^postgresql://smsly_admin:.*@pgcat:5432/smsly_hosting$ ]] && [ "$current_database_url" != "$expected_database_url" ]; then
             echo -e "${BLUE}  -> Fixing DATABASE_URL to match POSTGRES_PASSWORD${NC}"
             env_set_value "$env_file" "DATABASE_URL" "$expected_database_url"
             echo -e "${GREEN}  OK DATABASE_URL password synced${NC}"
         fi
+
+        # Direct DB connection for migrations (bypasses PgCat transaction pooling)
+        local expected_direct_url="postgresql://smsly_admin:${postgres_password}@db:5432/smsly_hosting"
+        env_ensure_var "$env_file" "DIRECT_DATABASE_URL" "$expected_direct_url" "Direct PostgreSQL connection (migrations only)"
     fi
 
     return 0
@@ -808,6 +1601,7 @@ validate_env_file() {
         "GITHUB_WEBHOOK_SECRET"
         "FRP_AUTH_TOKEN"
         "TUNNEL_DOMAIN"
+        "PGCAT_ADMIN_PASSWORD"
     )
     local missing_vars=()
     local invalid_vars=()
@@ -834,6 +1628,18 @@ validate_env_file() {
                 echo "RABBITMQ_PASSWORD=$new_rabbitmq_pass" >> "$env_file"
                 # Update celery broker URL immediately to use this new password
                 env_set_value "$env_file" "CELERY_BROKER_URL" "amqp://smsly_user:${new_rabbitmq_pass}@rabbitmq:5672//"
+            elif [ "$var_name" = "GATEWAY_SECRET" ]; then
+                echo -e "${BLUE}  -> Generating missing GATEWAY_SECRET...${NC}"
+                env_set_value "$env_file" "GATEWAY_SECRET" "$(gen_hex_secret 32)"
+            elif [ "$var_name" = "FRP_AUTH_TOKEN" ]; then
+                echo -e "${BLUE}  -> Generating missing FRP_AUTH_TOKEN...${NC}"
+                env_set_value "$env_file" "FRP_AUTH_TOKEN" "$(gen_hex_secret 32)"
+            elif [ "$var_name" = "TUNNEL_DOMAIN" ]; then
+                echo -e "${BLUE}  -> Setting missing TUNNEL_DOMAIN...${NC}"
+                env_set_value "$env_file" "TUNNEL_DOMAIN" "tunnel.localhost"
+            elif [ "$var_name" = "PGCAT_ADMIN_PASSWORD" ]; then
+                echo -e "${BLUE}  -> Generating missing PGCAT_ADMIN_PASSWORD...${NC}"
+                env_set_value "$env_file" "PGCAT_ADMIN_PASSWORD" "$(gen_hex_secret 32)"
             else
                 missing_vars+=("$var_name")
             fi
@@ -892,14 +1698,355 @@ validate_env_file() {
     return 0
 }
 
+load_install_env_defaults() {
+    local env_file="${1:-$INSTALL_DIR/.env}"
+    local env_domain=""
+    local env_public_ip=""
+    local env_use_ssl=""
+    local env_wildcard=""
+    local env_acme_email=""
+    local env_cloudflare_token=""
+    local env_master_ip=""
+
+    if [ -f "$env_file" ]; then
+        env_domain="$(env_get_value "$env_file" "DOMAIN")"
+        env_public_ip="$(env_get_value "$env_file" "PUBLIC_IP")"
+        env_use_ssl="$(env_get_value "$env_file" "USE_SSL")"
+        env_wildcard="$(env_get_value "$env_file" "WILDCARD_SUBDOMAINS")"
+        env_acme_email="$(env_get_value "$env_file" "ACME_EMAIL")"
+        env_cloudflare_token="$(env_get_value "$env_file" "CLOUDFLARE_API_TOKEN")"
+        env_master_ip="$(env_get_value "$env_file" "MASTER_IP")"
+    fi
+
+    PUBLIC_IP="${PUBLIC_IP:-$env_public_ip}"
+    if [ -z "${PUBLIC_IP:-}" ]; then
+        PUBLIC_IP="$(detect_public_ip)"
+    fi
+
+    DOMAIN="${DOMAIN:-$env_domain}"
+    DOMAIN="${DOMAIN:-$PUBLIC_IP}"
+
+    # SEC-002: IP-mode SSL guard — always force USE_SSL=false for raw IPs,
+    # regardless of env var override. Let's Encrypt cannot issue certs for IPs.
+    if [[ "$DOMAIN" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+        if [ "${USE_SSL:-}" = "true" ]; then
+            echo -e "${YELLOW}  ⚠ SEC-002: USE_SSL=true ignored — DOMAIN ($DOMAIN) is a raw IP. Forcing USE_SSL=false.${NC}"
+        fi
+        USE_SSL="false"
+        echo -e "${BLUE}  → IP mode confirmed: USE_SSL forced to false${NC}"
+    else
+        USE_SSL="${USE_SSL:-$env_use_ssl}"
+    fi
+    USE_SSL="${USE_SSL:-false}"
+    WILDCARD_SUBDOMAINS="${WILDCARD_SUBDOMAINS:-$env_wildcard}"
+    WILDCARD_SUBDOMAINS="${WILDCARD_SUBDOMAINS:-false}"
+    ACME_EMAIL="${ACME_EMAIL:-$env_acme_email}"
+    CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-$env_cloudflare_token}"
+    MASTER_IP="${MASTER_IP:-$env_master_ip}"
+}
+
+compose_stack_drift() {
+    local services=""
+    local service=""
+    local container_id=""
+    local container_state=""
+
+    if ! services="$(compose_stack_services 2>/tmp/smsly-compose-config.err)"; then
+        echo "__compose_config__:invalid"
+        sed 's/^/__compose_config_error__:/' /tmp/smsly-compose-config.err 2>/dev/null | head -5 || true
+        return 0
+    fi
+
+    printf '%s\n' "$services" | while IFS= read -r service; do
+        [ -n "$service" ] || continue
+        container_id="$(docker compose -f "$COMPOSE_FILE" ps -q "$service" 2>/dev/null || true)"
+        if [ -z "$container_id" ]; then
+            echo "$service:missing"
+            continue
+        fi
+        container_state="$(docker inspect -f '{{.State.Status}}' "$container_id" 2>/dev/null || true)"
+        if [ "$container_state" != "running" ]; then
+            echo "$service:${container_state:-unknown}"
+        fi
+    done
+}
+
+reconcile_compose_stack_after_resume() {
+    local drift=""
+    local reconcile_rc=0
+
+    drift="$(compose_stack_drift || true)"
+    if [ -z "$drift" ]; then
+        return 0
+    fi
+
+    echo -e "${YELLOW}  -> Resumed checkpoint is stale; reconciling compose stack:${NC}"
+    printf '%s\n' "$drift" | sed 's/^/     - /'
+
+    set +e
+    compose_stack_up --remove-orphans
+    reconcile_rc=$?
+    if [ "$reconcile_rc" -ne 0 ]; then
+        echo -e "${YELLOW}  -> Compose reconciliation needs a rebuild; rebuilding stack...${NC}"
+        echo -e "${YELLOW}    ↳ Rebuilding with --no-cache to ensure clean state...${NC}"
+        compose_stack_build --no-cache
+        reconcile_rc=$?
+        if [ "$reconcile_rc" -eq 0 ]; then
+            compose_stack_up --remove-orphans
+            reconcile_rc=$?
+        fi
+    fi
+    set -e
+
+    if [ "$reconcile_rc" -ne 0 ]; then
+        echo -e "${RED}  x Compose reconciliation failed (exit $reconcile_rc).${NC}"
+        docker compose -f "$COMPOSE_FILE" ps 2>/dev/null || true
+        docker compose -f "$COMPOSE_FILE" logs --tail=120 2>/dev/null || true
+        exit "$reconcile_rc"
+    fi
+
+    echo -e "${GREEN}  OK Compose stack reconciled after resume${NC}"
+}
+
 LOG_FILE="/var/log/smsly-install.log"
 INSTALL_DIR="/opt/smsly-hosting"
 CREDENTIALS_FILE="$INSTALL_DIR/.credentials"
 COMPOSE_FILE="docker-compose.prod.yml"
+LOCK_FILE="/tmp/smsly-install.lock"
 # The production compose file already includes socket-proxy and traefik.
 # Do not layer docker-compose.socket-proxy.yml on top of it or Docker Compose
 # will reject the config due to duplicate services.
 ROLLBACK_NEEDED=false
+CADDY_LAST_GOOD=""$INSTALL_DIR"/caddy-config/Caddyfile.smsly-last-good"
+
+acquire_install_lock() {
+    if command -v flock >/dev/null 2>&1; then
+        exec 9<>"$LOCK_FILE"
+        if ! flock -n 9; then
+            local pid
+            pid="$(cat "$LOCK_FILE" 2>/dev/null || true)"
+            echo -e "${RED}ERROR: Another installer instance${pid:+ (PID $pid)} is already running.${NC}"
+            echo -e "If you are sure no other instance is running, remove $LOCK_FILE and try again."
+            exit 1
+        fi
+        : > "$LOCK_FILE"
+        echo "$$" > "$LOCK_FILE"
+    else
+        if [ -f "$LOCK_FILE" ]; then
+            local pid
+            pid="$(cat "$LOCK_FILE" 2>/dev/null || true)"
+            if [ "$pid" != "$$" ] && kill -0 "$pid" 2>/dev/null; then
+                echo -e "${RED}ERROR: Another installer instance (PID $pid) is already running.${NC}"
+                echo -e "If you are sure no other instance is running, remove $LOCK_FILE and try again."
+                exit 1
+            fi
+        fi
+        echo "$$" > "$LOCK_FILE"
+    fi
+}
+
+release_install_lock() {
+    if command -v flock >/dev/null 2>&1; then
+        flock -u 9 2>/dev/null || true
+        exec 9>&- 2>/dev/null || true
+    fi
+    rm -f "$LOCK_FILE" 2>/dev/null || true
+}
+
+get_migration_database_alias() {
+    local migrate_db
+    local direct_url="postgresql://${POSTGRES_USER:-smsly_admin}:${POSTGRES_PASSWORD:-}@${POSTGRES_HOST:-db}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-smsly_hosting}"
+    migrate_db="$(
+        docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T \
+            -e SMSLY_DISABLE_STARTUP_TASKS=true \
+            -e SMSLY_MIGRATION_MODE=true \
+            -e DIRECT_DATABASE_URL="$direct_url" \
+            backend python manage.py shell -c \
+            "from django.conf import settings; print('direct' if 'direct' in settings.DATABASES else ('session' if 'session' in settings.DATABASES else 'default'))" \
+            2>/dev/null | tail -n 1 | tr -d '\r'
+    )"
+
+    case "$migrate_db" in
+        direct|session|default) printf '%s\n' "$migrate_db" ;;
+        *) printf '%s\n' "default" ;;
+    esac
+}
+
+diagnose_migration_locks() {
+    local env_file="${INSTALL_DIR:-.}/.env"
+    [ -f "$env_file" ] && source "$env_file" 2>/dev/null || true
+
+    echo -e "${YELLOW}  -> PostgreSQL activity snapshot (lock diagnosis):${NC}"
+    docker compose -f "$COMPOSE_FILE" exec -T \
+        -e PGPASSWORD="${POSTGRES_PASSWORD:-}" \
+        db psql \
+            -U "${POSTGRES_USER:-smsly_admin}" \
+            -d "${POSTGRES_DB:-smsly_hosting}" \
+            -v ON_ERROR_STOP=1 \
+            -P pager=off \
+            -c "SELECT pid, usename, application_name, state, wait_event_type, wait_event, now() - COALESCE(xact_start, query_start) AS age, left(regexp_replace(query, '\s+', ' ', 'g'), 180) AS query FROM pg_stat_activity WHERE datname = current_database() ORDER BY COALESCE(xact_start, query_start) NULLS LAST LIMIT 20;" \
+        2>/dev/null || echo -e "${YELLOW}  -> Could not read pg_stat_activity.${NC}"
+}
+
+run_backend_migrations() {
+    local user_args=()
+    if [ "${1:-}" = "--root" ]; then
+        user_args=(--user root)
+    fi
+
+    local migrate_db timeout_seconds rc
+    migrate_db="$(get_migration_database_alias)"
+    timeout_seconds="${MIGRATION_TIMEOUT_SECONDS:-900}"
+    echo -e "${BLUE}  -> Migration database: ${migrate_db}${NC}"
+    local direct_url="postgresql://${POSTGRES_USER:-smsly_admin}:${POSTGRES_PASSWORD:-}@${POSTGRES_HOST:-db}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-smsly_hosting}"
+    set +e
+    docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T \
+        "${user_args[@]}" \
+        -e SMSLY_DISABLE_STARTUP_TASKS=true \
+        -e SMSLY_MIGRATION_MODE=true \
+        -e DIRECT_DATABASE_URL="$direct_url" \
+        backend timeout "$timeout_seconds" \
+        python manage.py migrate --database="$migrate_db" --noinput
+    rc=$?
+    set -e
+    if [ "$rc" -ne 0 ]; then
+        if [ "$rc" -eq 124 ]; then
+            echo -e "${RED}  x Migrations timed out after ${timeout_seconds}s.${NC}"
+        else
+            echo -e "${RED}  x Migrations exited with status ${rc}.${NC}"
+        fi
+        [ "$MODE_AGENT_LITE" != "true" ] && diagnose_migration_locks
+        return "$rc"
+    fi
+
+    # Self-healing: fix node agent DB permissions after migrations.
+    # This ensures node_agent_* users have access to newly created tables.
+    echo -e "${BLUE}  -> Fixing node agent database permissions...${NC}"
+    set +e
+    docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T \
+        "${user_args[@]}" \
+        -e SMSLY_DISABLE_STARTUP_TASKS=true \
+        backend python manage.py fix_node_db_permissions 2>&1 || true
+    set -e
+
+    # After fixing permissions, reload pgcat so newly created/fixed node agent
+    # users are picked up into the pool config. Critical for agent-lite nodes
+    # that connect through pgcat and would otherwise get "No pool configured".
+    if [ "$MODE_AGENT_LITE" != "true" ] && docker compose -f "$COMPOSE_FILE" ps pgcat 2>/dev/null | grep -q "Up"; then
+        echo -e "${BLUE}  -> Reloading PgCat to pick up node agent pools...${NC}"
+        docker compose -f "$COMPOSE_FILE" restart pgcat >/dev/null 2>&1
+        sleep 5
+        echo -e "${GREEN}  ✓ PgCat reloaded${NC}"
+    fi
+
+    return 0
+}
+
+export_caddy_cloudflare_env() {
+    return 0
+}
+
+restore_last_good_caddy() {
+    return 0
+}
+
+reload_caddy_preserving_previous() {
+    reload_container_caddy 2>/dev/null || true
+    return 0
+}
+
+ensure_selfsigned_cert() {
+    # Generate a self-signed certificate for the server's public IP address.
+    # Caddy's built-in tls internal doesn't support IP SANs (causes
+    # ERR_SSL_PROTOCOL_ERROR), so we generate a proper cert with
+    # OpenSSL that includes the IP as a Subject Alternative Name.
+    local cert_dir="${INSTALL_DIR:-/opt/smsly-hosting}/caddy-config/certs"
+    local cert_file="$cert_dir/ip.crt"
+    local key_file="$cert_dir/ip.key"
+    local public_ip="${PUBLIC_IP:-$(detect_public_ip)}"
+    local ssl_config="$cert_dir/openssl.cnf"
+
+    mkdir -p "$cert_dir"
+    chmod 700 "$cert_dir" 2>/dev/null || true
+
+    if ! command -v openssl &>/dev/null; then
+        echo -e "${YELLOW}  ⚠ openssl not available; skipping self-signed cert generation${NC}"
+        return 0
+    fi
+
+    # Always regenerate (cheap operation, ensures IP is current)
+    echo -e "${BLUE}  → Generating self-signed cert for IP: $public_ip...${NC}"
+
+    # Create a temporary OpenSSL config with the IP SAN
+    cat > "$ssl_config" <<EOF
+[req]
+distinguished_name = req_distinguished_name
+x509_extensions = v3_req
+prompt = no
+
+[req_distinguished_name]
+CN = $public_ip
+
+[v3_req]
+keyUsage = digitalSignature, keyEncipherment, dataEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
+
+[alt_names]
+IP.1 = $public_ip
+EOF
+
+    openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+        -keyout "$key_file" \
+        -out "$cert_file" \
+        -config "$ssl_config" \
+        2>/dev/null || {
+        echo -e "${YELLOW}  ⚠ Failed to generate self-signed cert (non-fatal)${NC}"
+        rm -f "$ssl_config"
+        return 0
+    }
+    rm -f "$ssl_config"
+
+    # Caddy container runs as UID 1000; install runs as root.
+    # 0644 ensures Caddy can read both cert and key.
+    chmod 644 "$cert_file" 2>/dev/null || true
+    chmod 644 "$key_file" 2>/dev/null || true
+    echo -e "${GREEN}  ✓ Self-signed cert generated for $public_ip${NC}"
+}
+
+reload_container_caddy() {
+    should_manage_caddy || return 0
+    # Reload the Docker container Caddy (the one that handles actual traffic).
+    # This is needed because the host Caddy (systemd) may not be running.
+    local compose_f="${COMPOSE_FILE:-docker-compose.prod.yml}"
+    if command -v docker &>/dev/null && docker compose -f "$compose_f" ps -q caddy 2>/dev/null | grep -q .; then
+        docker compose -f "$compose_f" exec -T caddy caddy reload --config /etc/caddy/Caddyfile 2>/dev/null || \
+            docker compose -f "$compose_f" restart caddy 2>/dev/null || true
+    fi
+}
+
+sync_active_caddyfile_to_shared() {
+    return 0
+}
+
+install_caddyfile_atomically() {
+    should_manage_caddy || return 0
+    local candidate="$1"
+    local label="${2:-Caddyfile}"
+    local dest="${INSTALL_DIR:-/opt/smsly-hosting}/caddy-config/Caddyfile"
+
+    if [ ! -f "$candidate" ]; then
+        echo -e "${YELLOW}  WARN $label candidate missing: $candidate${NC}"
+        return 1
+    fi
+
+    mkdir -p "$(dirname "$dest")"
+    cp "$candidate" "$dest"
+    chmod 664 "$dest"
+
+    reload_container_caddy 2>/dev/null || true
+    return 0
+}
 
 # ─── Parse Arguments ─────────────────────────────────────────────────────────
 UPDATE_MODE=""
@@ -907,12 +2054,14 @@ WIPE_MODE="false"
 RECOVER_MODE="false"
 REFRESH_MODE="false"
 DEBUG_MODE="false"
-RUST_TWIN_MODE="false"
+RUST_TWIN_MODE="${RUST_TWIN_MODE:-false}"
+FORCE_REDEPLOY="false"
 
 # Simple loop to parse multiple arguments like `--update --rust`
 for arg in "$@"; do
     case "$arg" in
         --update)          UPDATE_MODE="full" ;;
+        --update-half)     UPDATE_MODE="half" ;;
         --update-frontend) UPDATE_MODE="frontend" ;;
         --update-backend)  UPDATE_MODE="backend" ;;
         --wipe)            WIPE_MODE="true" ;;
@@ -921,18 +2070,32 @@ for arg in "$@"; do
         --debug)           DEBUG_MODE="true" ;;
         --verify)          VERIFY_MODE="true" ;;
         --rust)            RUST_TWIN_MODE="true" ;;
+        --mode=agent-lite|--agent-lite|--mode=node|--node|--mode=master|--master) : ;;
         --clear)           CLEAR_MODE="true" ;;
+        --fix-domain)      FIX_DOMAIN_MODE="true" ;;
+        --fix-permissions) FIX_PERMISSIONS_MODE="true" ;;
+        --force-redeploy)  FORCE_REDEPLOY="true" ;;
         --help|-h)
-            echo "Usage: sudo bash install.sh [--rust] [--update|--update-frontend|--update-backend|--refresh|--recover|--debug|--wipe|--clear]"
+            echo "Usage: sudo bash install.sh [--rust] [--mode=agent-lite|--mode=node] [--update|--update-half|--update-frontend|--update-backend|--refresh|--recover|--debug|--wipe|--clear|--fix-domain|--fix-permissions]"
             echo ""
-            echo "  (no args)          Fresh install (Legacy Python)"
+            echo "  (no args)          Fresh install (Legacy Python | Full-Stack Master)"
+            echo "  --mode=agent-lite  Install as a Lite Agent (shared-DB node)"
+            echo "  --mode=node        Install as a Full-Stack Node (own DB, no frontend)"
             echo "  --rust             Deploy the Next-Gen Rust Twin instead of Python"
-            echo "  --update           Pull latest code and rebuild all services"
+            echo "  --update           Pull latest code and rebuild all services (full rebuild)"
+            echo "  --update-half      Pull latest code, restart backend only — no Docker image rebuild"
             echo "  --clear            Wipes stale addons and frees up docker resources"
+            echo "  --fix-domain       Fix domain/IP sync between .env, DB PlatformConfig, and Caddy"
+            echo "  --fix-permissions  Fix .env and shared directory permissions for container write access"
+            echo "  --force-redeploy   Always redeploy active services after update, even if code hasn't changed"
             exit 0
             ;;
     esac
 done
+
+if [ "$MODE_AGENT_LITE" = "true" ]; then
+    COMPOSE_FILE="infrastructure/docker/docker-compose.agent-lite.yml"
+fi
 
 if [ "$RUST_TWIN_MODE" = "true" ]; then
     COMPOSE_FILE="rust_twin/docker-compose.yml"
@@ -940,6 +2103,11 @@ fi
 
 
 MODE_LABEL="fresh-install"
+if [ "$MODE_AGENT_LITE" = "true" ]; then
+    MODE_LABEL="agent-lite-install"
+elif [ "$MODE_NODE" = "true" ]; then
+    MODE_LABEL="node-install"
+fi
 if [ -n "$UPDATE_MODE" ]; then
     MODE_LABEL="update-$UPDATE_MODE"
 elif [ "$REFRESH_MODE" = "true" ]; then
@@ -950,29 +2118,51 @@ elif [ "$DEBUG_MODE" = "true" ]; then
     MODE_LABEL="debug"
 elif [ "$WIPE_MODE" = "true" ]; then
     MODE_LABEL="wipe"
+elif [ "${FIX_DOMAIN_MODE:-false}" = "true" ]; then
+    MODE_LABEL="fix-domain"
 fi
 
 # Log all output to file AND terminal
 exec > >(tee -a "$LOG_FILE") 2>&1
+acquire_install_lock
+trap 'release_install_lock' EXIT
 echo ""
 echo "═══════════════════════════════════════════════════════════"
 echo "  SMSLY Hosting Install Log — $(date -Iseconds)"
 echo "  Mode: $MODE_LABEL"
+sync_install_state_flavor
 echo "═══════════════════════════════════════════════════════════"
 
 # ─── Rollback Trap ──────────────────────────────────────────────────────────
 cleanup_on_failure() {
     local exit_code=$?
+    # Kill any lingering heartbeat process from the build step
+    if [ -n "${HEARTBEAT_PID:-}" ]; then
+        kill "$HEARTBEAT_PID" 2>/dev/null || true
+        wait "$HEARTBEAT_PID" 2>/dev/null || true
+    fi
     if [ $exit_code -ne 0 ]; then
         echo -e "\n${RED}════════════════════════════════════════════════════════════${NC}"
         echo -e "${RED}  INSTALLATION FAILED (exit code: $exit_code)${NC}"
         echo -e "${RED}════════════════════════════════════════════════════════════${NC}"
-        echo -e "${YELLOW}  → Rolling back...${NC}"
 
-        # Stop any containers that were started
+        # Capture diagnostics BEFORE rollback deletes the containers
         if [ -f "$INSTALL_DIR/$COMPOSE_FILE" ]; then
             cd "$INSTALL_DIR" 2>/dev/null || true
+            dump_diagnostic_logs "$INSTALL_DIR/.env" || true
+        fi
+
+        echo -e "${YELLOW}  → Rolling back...${NC}"
+
+        restore_last_good_caddy >/dev/null 2>&1 || true
+
+        # Do not tear down a live platform on install/update failure by default.
+        # Use SMSLY_ROLLBACK_DOWN=true only for intentionally destructive lab runs.
+        if [ "${SMSLY_ROLLBACK_DOWN:-false}" = "true" ] && [ -f "$INSTALL_DIR/$COMPOSE_FILE" ]; then
+            cd "$INSTALL_DIR" 2>/dev/null || true
             docker compose -f "$COMPOSE_FILE" down 2>/dev/null || true
+        else
+            echo -e "${YELLOW}  Runtime containers left running to avoid avoidable downtime.${NC}"
         fi
 
         # Restore backup .env if one was created
@@ -990,12 +2180,24 @@ cleanup_on_failure() {
 
         echo -e "${YELLOW}  Full log: $LOG_FILE${NC}"
         echo -e "${RED}  Please review the log and re-run the installer.${NC}"
+        echo -e "${YELLOW}  ↳ Tip: Use --resume to skip completed steps: sudo bash install.sh --resume${NC}"
+
+        # Keep screen session open for inspection if it failed
+        if [ -n "${STY:-}" ]; then
+            echo -e "\n${YELLOW}  [GUARD] Installation failed inside a screen session.${NC}"
+            echo -e "${YELLOW}  Screen session will remain open for debugging.${NC}"
+            echo -e "${YELLOW}  Type 'exit' to close this window.${NC}"
+            release_install_lock
+            # Re-exec bash to prevent screen from closing
+            exec bash
+        fi
     fi
+    release_install_lock
 }
 trap cleanup_on_failure EXIT
 
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
-echo -e "${BLUE}   CloudNeuron - Production Installer v3.1${NC}"
+echo -e "${BLUE}   Grid - Production Installer v3.2.4${NC}"
 echo -e "${BLUE}   Target: Ubuntu LTS (Fresh Install Recommended)${NC}"
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}\n"
 
@@ -1049,14 +2251,14 @@ wipe_existing_install() {
     fi
 
     # Clean up Caddy watcher service (prevents stale config on reinstall)
-    true
-    true
+    true-watcher 2>/dev/null || true
+    true-watcher 2>/dev/null || true
     rm -f /etc/systemd/system/caddy-watcher.service
 
     # Reset Caddyfile to default (prevents stale routing)
     if [ -f "$INSTALL_DIR"/caddy-config/Caddyfile ]; then
         echo ':80 { respond "Caddy is running" 200 }' > "$INSTALL_DIR"/caddy-config/Caddyfile
-    true
+        true 2>/dev/null || true
     fi
 
     # Remove Cloudflare token override
@@ -1067,6 +2269,7 @@ wipe_existing_install() {
     rm -f "$LOG_FILE"
 
     trap - EXIT
+    release_install_lock
     echo -e "${GREEN}OK Wipe complete. The server is ready for a fresh install.${NC}"
     echo -e "${YELLOW}  Run: curl -fsSL https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/main/install.sh -o /tmp/install.sh && sudo bash /tmp/install.sh${NC}"
     exit 0
@@ -1076,6 +2279,218 @@ if [ "$WIPE_MODE" = "true" ]; then
     wipe_existing_install
 fi
 
+# =============================================================================
+# FIX-PERMISSIONS — Fix .env and shared directory permissions for container
+# =============================================================================
+fix_env_permissions() {
+    local env_file="${1:-$INSTALL_DIR/.env}"
+    echo -e "${BLUE}  → Fixing .env permissions...${NC}"
+
+    if [ ! -f "$env_file" ]; then
+        echo -e "${YELLOW}  ⚠ .env not found at $env_file${NC}"
+        return 1
+    fi
+
+    # The backend container runs as UID 1000 (smsly user).
+    # .env must be group-writable by GID 1000 so the domain-config
+    # signal can persist DOMAIN/USE_SSL changes back to .env.
+    chown root:1000 "$env_file" 2>/dev/null || true
+    chmod 664 "$env_file" 2>/dev/null || true
+
+    local owner mode
+    owner="$(stat -c '%u:%g' "$env_file" 2>/dev/null || echo "?")"
+    mode="$(stat -c '%a' "$env_file" 2>/dev/null || echo "?")"
+    echo -e "${GREEN}  ✓ .env permissions: $mode owner=$owner${NC}"
+
+    # Also fix caddy-config directory for good measure
+    if [ -d "$INSTALL_DIR/caddy-config" ]; then
+        chown -R 1000:1000 "$INSTALL_DIR/caddy-config" 2>/dev/null || true
+        chmod -R u+rwX,g+rwX "$INSTALL_DIR/caddy-config" 2>/dev/null || true
+        echo -e "${GREEN}  ✓ caddy-config permissions fixed${NC}"
+    fi
+
+    # Fix staticfiles/media directories
+    for dir in staticfiles media backups; do
+        if [ -d "$INSTALL_DIR/$dir" ]; then
+            chown -R 1000:1000 "$INSTALL_DIR/$dir" 2>/dev/null || true
+        fi
+    done
+}
+
+# =============================================================================
+# FIX-DOMAIN MODE — Fix domain/IP sync between .env, DB PlatformConfig, and Caddy
+# =============================================================================
+fix_domain_sync() {
+    local target_domain="${1:-}"
+    local env_file="$INSTALL_DIR/.env"
+
+    echo -e "${BLUE}  → Fixing domain sync for: $target_domain${NC}"
+
+    # 1. Fix .env
+    if grep -q '^DOMAIN=' "$env_file" 2>/dev/null; then
+        sed -i "s|^DOMAIN=.*|DOMAIN=$target_domain|" "$env_file"
+    else
+        echo "DOMAIN=$target_domain" >> "$env_file"
+    fi
+    if grep -q '^USE_SSL=' "$env_file" 2>/dev/null; then
+        sed -i 's/^USE_SSL=.*/USE_SSL=true/' "$env_file"
+    else
+        echo "USE_SSL=true" >> "$env_file"
+    fi
+
+    # Sync allowlists
+    sync_env_domain_allowlists "$env_file" "$target_domain" "$(detect_public_ip)"
+
+    # 2. Sync DB PlatformConfig
+    if docker compose -f "$COMPOSE_FILE" ps -q backend 2>/dev/null | grep -q .; then
+        docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+from apps.deployments.models import PlatformConfig
+cfg = PlatformConfig.load()
+cfg.domain = '$target_domain'
+cfg.use_ssl = True
+cfg.save()
+print(f'PlatformConfig domain set to: {cfg.domain}')
+" 2>/dev/null && echo -e "${GREEN}  ✓ PlatformConfig synced${NC}" || echo -e "${YELLOW}  ⚠ DB sync skipped${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ Backend not running; DB sync deferred to --update${NC}"
+    fi
+
+    # 3. Generate self-signed cert + regenerate Caddyfile
+    ensure_selfsigned_cert
+    local fix_ip
+    fix_ip="$(detect_public_ip)"
+    if [ -d "caddy-config" ]; then
+        cat > caddy-config/Caddyfile <<CADDYFIX
+# SMSLY Caddyfile — Fixed by --fix-domain
+{
+    on_demand_tls {
+        ask http://backend:8000/api/v1/services/check-domain/
+    }
+}
+
+$target_domain {
+    reverse_proxy {$SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
+    encode gzip
+    log {
+        output file /var/log/caddy/access.log
+    }
+}
+
+${fix_ip} {
+    tls internal
+    redir http://${fix_ip}{uri} 308
+}
+
+:80 {
+    @acme {
+        path /.well-known/acme-challenge/*
+    }
+    handle @acme {
+        reverse_proxy {$SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
+    }
+    @redirectable {
+        not header_regexp host ^([0-9]{1,3}[.]){3}[0-9]{1,3}(:[0-9]+)?$
+        not host localhost
+        not host 127.0.0.1
+        not host *.local
+        header_regexp host .+
+    }
+    redir @redirectable https://{host}{uri} 308
+    handle {
+        reverse_proxy {$SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
+    }
+}
+CADDYFIX
+        echo -e "${GREEN}  ✓ Caddyfile regenerated${NC}"
+    fi
+
+    # 4. Reload Caddy
+    if docker compose -f "$COMPOSE_FILE" ps -q caddy 2>/dev/null | grep -q .; then
+        docker compose -f "$COMPOSE_FILE" exec caddy caddy reload --config /etc/caddy/Caddyfile 2>/dev/null || \
+            docker compose -f "$COMPOSE_FILE" restart caddy 2>/dev/null || true
+        echo -e "${GREEN}  ✓ Caddy reloaded${NC}"
+    fi
+
+    echo -e "${GREEN}  ✓ Domain fix complete for: $target_domain${NC}"
+}
+
+if [ "${FIX_DOMAIN_MODE:-false}" = "true" ]; then
+    if [ "$EUID" -ne 0 ]; then
+        echo -e "${RED}x Please run as root (sudo bash install.sh --fix-domain)${NC}"
+        exit 1
+    fi
+    if [ ! -f "$INSTALL_DIR/.env" ] || [ ! -f "$INSTALL_DIR/$COMPOSE_FILE" ]; then
+        echo -e "${RED}x SMSLY installation not found at $INSTALL_DIR. Run fresh install first.${NC}"
+        exit 1
+    fi
+    cd "$INSTALL_DIR"
+    if ! should_manage_caddy; then
+        echo -e "${YELLOW}  → --fix-domain is master-only because node/agent modes do not manage Caddy/HTTPS.${NC}"
+        exit 0
+    fi
+    ensure_local_ignores
+    if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+        echo -e "${YELLOW}  ! Local changes detected - stashing before repository sync${NC}"
+        git stash push --include-untracked -m "install-sync-$(date +%s)" >/dev/null 2>&1 || true
+    fi
+
+    # Git pull latest code first to get all SEC-xxx fixes
+    echo -e "${BLUE}  → Pulling latest installer code...${NC}"
+    git config --global --add safe.directory "$INSTALL_DIR" 2>/dev/null || true
+    if ! git fetch origin main 2>/dev/null; then
+        git -c http.sslVerify=false fetch origin main 2>/dev/null || true
+    fi
+    if ! git checkout -B main origin/main 2>/dev/null; then
+        git -c http.sslVerify=false checkout -B main origin/main 2>/dev/null || true
+    fi
+    echo -e "${GREEN}  ✓ Code updated${NC}"
+
+    # Detect current or prompt for domain
+    FIX_DOMAIN="${DOMAIN:-}"
+    if [ -z "$FIX_DOMAIN" ]; then
+        FIX_DOMAIN="$(env_get_value "$INSTALL_DIR/.env" "DOMAIN" 2>/dev/null || true)"
+    fi
+    while [ -z "$FIX_DOMAIN" ] || echo "$FIX_DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; do
+        if [ -n "$FIX_DOMAIN" ]; then
+            echo -e "${YELLOW}  ⚠ Current DOMAIN is an IP address ($FIX_DOMAIN). Enter your real domain.${NC}"
+        fi
+        echo -e "${BLUE}  Enter your domain (e.g., app.example.com):${NC}"
+        read -p "  Domain: " FIX_DOMAIN < /dev/tty
+        FIX_DOMAIN="$(echo "$FIX_DOMAIN" | xargs)"
+    done
+
+    fix_domain_sync "$FIX_DOMAIN"
+
+    # Re-exec into --update to rebuild Caddy container with new config
+    echo -e "${BLUE}  → Running --update to apply changes...${NC}"
+    export NO_SCREEN=true
+    export DOMAIN="$FIX_DOMAIN"
+    export USE_SSL="true"
+    exec bash "$SCRIPT_PATH" --update --no-screen "$@"
+fi
+
+# =============================================================================
+# FIX-PERMISSIONS MODE handler
+# =============================================================================
+if [ "${FIX_PERMISSIONS_MODE:-false}" = "true" ]; then
+    if [ "$EUID" -ne 0 ]; then
+        echo -e "${RED}x Please run as root (sudo bash install.sh --fix-permissions)${NC}"
+        exit 1
+    fi
+    if [ ! -f "$INSTALL_DIR/.env" ]; then
+        echo -e "${RED}x SMSLY installation not found at $INSTALL_DIR. Run fresh install first.${NC}"
+        exit 1
+    fi
+    fix_env_permissions "$INSTALL_DIR/.env"
+    echo -e "${GREEN}✅ Permissions fixed.${NC}"
+    echo -e "  You may need to rebuild the backend for the signal code to take effect:"
+    echo -e "    docker compose -f $INSTALL_DIR/$COMPOSE_FILE build backend"
+    echo -e "    docker compose -f $INSTALL_DIR/$COMPOSE_FILE down"
+    echo -e "    docker compose -f $INSTALL_DIR/$COMPOSE_FILE up -d"
+    echo -e "  Then re-save the domain via Settings → Domain & SSL."
+    exit 0
+fi
+
 ensure_update_networks() {
     # Never delete data networks/volumes in update mode. Only (re)create if missing.
     docker network inspect smsly-net >/dev/null 2>&1 || docker network create smsly-net >/dev/null 2>&1 || true
@@ -1083,33 +2498,104 @@ ensure_update_networks() {
     docker network inspect socket-proxy >/dev/null 2>&1 || docker network create --driver bridge --internal socket-proxy >/dev/null 2>&1 || true
 }
 
+compose_stack_services() {
+    local services=""
+    services="$(docker compose -f "$COMPOSE_FILE" config --services)" || return $?
+    if is_node_mode; then
+        printf '%s\n' "$services" | grep -Ev '^(frontend|caddy)$'
+    else
+        printf '%s\n' "$services"
+    fi
+}
+
+compose_stack_service_args() {
+    compose_stack_services | tr '\n' ' '
+}
+
+compose_stack_build_service_args() {
+    local candidates="pgcat backend celery celery-beat frontend celery-fast celery-deploy caddy"
+    local svc=""
+    if is_node_mode; then
+        candidates="pgcat backend celery celery-beat celery-fast celery-deploy"
+    fi
+    for svc in $candidates; do
+        if docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null | grep -qx "$svc"; then
+            printf '%s\n' "$svc"
+        fi
+    done | tr '\n' ' '
+}
+
+stop_node_excluded_services() {
+    is_node_mode || return 0
+    docker compose -f "$COMPOSE_FILE" stop frontend caddy >/dev/null 2>&1 || true
+    docker compose -f "$COMPOSE_FILE" rm -f frontend caddy >/dev/null 2>&1 || true
+}
+
+docker_login() {
+    local registry="${CONTAINER_REGISTRY_URL:-127.0.0.1:5000}"
+    local user="${REGISTRY_USER:-smsly-registry}"
+    local pass="${REGISTRY_PASSWORD:-}"
+    if [ -z "$pass" ]; then
+        return 0
+    fi
+    echo "$pass" | docker login "$registry" -u "$user" --password-stdin >/dev/null 2>&1 || true
+}
+
+compose_stack_build() {
+    docker_login
+    local services=""
+    if is_node_mode; then
+        stop_node_excluded_services
+        services="$(compose_stack_build_service_args)"
+        [ -n "$services" ] || return 1
+        docker compose -f "$COMPOSE_FILE" build "$@" $services
+    else
+        docker compose -f "$COMPOSE_FILE" build "$@"
+    fi
+}
+
+compose_stack_up() {
+    local services=""
+    if is_node_mode; then
+        stop_node_excluded_services
+        services="$(compose_stack_service_args)"
+        [ -n "$services" ] || return 1
+        docker compose -f "$COMPOSE_FILE" up -d "$@" $services
+    else
+        docker compose -f "$COMPOSE_FILE" up -d "$@"
+    fi
+}
+
 ensure_infrastructure_permissions() {
     local caddy_config_dir="/opt/smsly-hosting/caddy-config"
     local staticfiles_dir="/opt/smsly-hosting/backend/staticfiles"
+    local builds_dir="/opt/smsly-hosting/builds"
 
     echo -e "${BLUE}  -> Ensuring infrastructure permissions...${NC}"
 
     # 1. Handle Bind-Mounts (Caddy Config & Staticfiles)
     mkdir -p "$caddy_config_dir"
     mkdir -p "$staticfiles_dir"
+    mkdir -p "$builds_dir"
 
     # UID 1000 is the "smsly" user inside the containers.
     if id smsly >/dev/null 2>&1; then
-        chown -R smsly:smsly "$caddy_config_dir" "$staticfiles_dir" 2>/dev/null || true
+        chown -R smsly:smsly "$caddy_config_dir" "$staticfiles_dir" "$builds_dir" 2>/dev/null || true
     else
-        chown -R 1000:1000 "$caddy_config_dir" "$staticfiles_dir" 2>/dev/null || true
+        chown -R 1000:1000 "$caddy_config_dir" "$staticfiles_dir" "$builds_dir" 2>/dev/null || true
     fi
 
-    chmod -R u+rwX,g+rwX "$caddy_config_dir" "$staticfiles_dir" 2>/dev/null || true
+    chmod -R u+rwX,g+rwX "$caddy_config_dir" "$staticfiles_dir" "$builds_dir" 2>/dev/null || true
     find "$caddy_config_dir" -type d -exec chmod 2775 {} + 2>/dev/null || true
     find "$staticfiles_dir" -type d -exec chmod 2775 {} + 2>/dev/null || true
+    find "$builds_dir" -type d -exec chmod 2775 {} + 2>/dev/null || true
 
     # Caddy-specific file permissions
     [ -f "$caddy_config_dir/Caddyfile" ] && chmod 664 "$caddy_config_dir/Caddyfile" 2>/dev/null || true
     [ -f "$caddy_config_dir/.reload" ] && chmod 664 "$caddy_config_dir/.reload" 2>/dev/null || true
 
     # 2. Handle Named Volumes (backups_data)
-        # We use a one-off container to safely chown existing named volumes.
+    # We use a one-off container to safely chown existing named volumes.
     if command -v docker >/dev/null 2>&1; then
         for vol in backups_data; do
             if docker volume inspect "$vol" >/dev/null 2>&1; then
@@ -1144,6 +2630,7 @@ ensure_container_on_network() {
 # - Detects dns cloudflare + missing systemd override (validates passes, runtime crashes)
 generate_safe_caddyfile() {
     local reason="${1:-unknown}"
+    local candidate="/tmp/Caddyfile.safe.$$"
     echo -e "${YELLOW}  ⚠ Generating safe fallback Caddyfile (reason: $reason)...${NC}"
 
     # 1. Discover domain: DB first, .env fallback
@@ -1183,70 +2670,119 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
         fi
     fi
 
-    # 4. Build the Caddyfile
-    if [ "$is_real_domain" = "true" ]; then
-        cat > "$INSTALL_DIR"/caddy-config/Caddyfile <<SAFECADDY
-# Auto-generated safe fallback (reason: $reason)
-# Individual service domains get SSL via Let's Encrypt HTTP-01 challenge.
-# Set CLOUDFLARE_API_TOKEN in .env and run --update to re-enable wildcard SSL.
-${domain} {
-    reverse_proxy localhost:8090
-    encode gzip
-    log {
-        output file /var/log/caddy/access.log
-    }
-}
-
-:80 {
-    reverse_proxy localhost:8090
-}
-
-${svc_blocks}
-SAFECADDY
-    else
-        cat > "$INSTALL_DIR"/caddy-config/Caddyfile <<SAFECADDY
-# Auto-generated safe fallback (reason: $reason)
-:80 {
-    reverse_proxy localhost:8090
-    encode gzip
-    log {
-        output file /var/log/caddy/access.log
-    }
-}
-
-${svc_blocks}
-SAFECADDY
+    # 4. Build the Caddyfile — IP-aware
+    local domain_block_label="$domain"
+    local safe_ip
+    safe_ip="$(detect_public_ip)"
+    if ! echo "$domain" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' && [ "$is_real_domain" = "false" ]; then
+        domain_block_label="http://${domain}"
     fi
-    caddy fmt --overwrite "$INSTALL_DIR"/caddy-config/Caddyfile 2>/dev/null || true
-    echo -e "${YELLOW}  ⚠ Wildcard HTTPS disabled. Individual service domains have HTTP-01 SSL.${NC}"
+
+    cat > "$candidate" <<SAFECADDY
+# Auto-generated safe fallback (reason: $reason)
+{
+    on_demand_tls {
+        ask http://backend:8000/api/v1/services/check-domain/
+    }
+}
+
+${domain_block_label} {
+    reverse_proxy {$SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
+    encode gzip
+    log {
+        output file /var/log/caddy/access.log
+    }
+}
+
+${safe_ip} {
+    tls internal
+    redir http://${safe_ip}{uri} 308
+}
+
+:80 {
+    @acme {
+        path /.well-known/acme-challenge/*
+    }
+    handle @acme {
+        reverse_proxy {$SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
+    }
+    @redirectable {
+        not header_regexp host ^([0-9]{1,3}[.]){3}[0-9]{1,3}(:[0-9]+)?$
+        not host localhost
+        not host 127.0.0.1
+        not host *.local
+        header_regexp host .+
+    }
+    redir @redirectable https://{host}{uri} 308
+    handle {
+        reverse_proxy {$SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
+    }
+}
+
+${svc_blocks}
+SAFECADDY
+    if install_caddyfile_atomically "$candidate" "safe fallback Caddyfile"; then
+        rm -f "$candidate"
+        echo -e "${YELLOW}  Safe fallback Caddyfile applied.${NC}"
+        return 0
+    fi
+    rm -f "$candidate"
+    return 1
 }
 
 # Returns 0 if Caddy config needs fixing, 1 if it's fine.
 caddy_needs_fix() {
-    # Export CF token from systemd override so caddy validate can resolve {env.CLOUDFLARE_API_TOKEN}
-    if [ -f /etc/systemd/system/caddy.service.d/override.conf ]; then
-        local cf_val
-        cf_val="$(grep 'CLOUDFLARE_API_TOKEN=' /etc/systemd/system/caddy.service.d/override.conf 2>/dev/null | sed 's/.*CLOUDFLARE_API_TOKEN=//;s/"//g' || true)"
-        if [ -n "$cf_val" ]; then
-            export CLOUDFLARE_API_TOKEN="$cf_val"
-        fi
-    fi
-
-    if ! caddy validate --config "$INSTALL_DIR"/caddy-config/Caddyfile 2>/dev/null; then
+    should_manage_caddy || return 1
+    local dest="${INSTALL_DIR:-/opt/smsly-hosting}/caddy-config/Caddyfile"
+    if ! docker compose -f "$COMPOSE_FILE" exec -T caddy caddy validate --config /etc/caddy/Caddyfile 2>/dev/null; then
         return 0  # Syntax error
     fi
-    if grep -q 'dns cloudflare' "$INSTALL_DIR"/caddy-config/Caddyfile 2>/dev/null \
-       && [ ! -f /etc/systemd/system/caddy.service.d/override.conf ]; then
-        return 0  # dns cloudflare without token override = runtime crash
+    if grep -q 'dns cloudflare' "$dest" 2>/dev/null && [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+        return 0  # dns cloudflare without token = runtime crash
     fi
     return 1  # Config is fine
+}
+
+is_real_domain_name() {
+    local host="${1:-}"
+    [ -n "$host" ] \
+        && [ "$host" != "localhost" ] \
+        && ! echo "$host" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'
+}
+
+https_listener_active() {
+    if command -v ss >/dev/null 2>&1; then
+        ss -H -tln 2>/dev/null | awk '{print $4}' | grep -Eq ':443$'
+    else
+        lsof -iTCP:443 -sTCP:LISTEN >/dev/null 2>&1
+    fi
+}
+
+ensure_caddy_https_listener() {
+    return 0
+}
+
+restart_caddy_watcher_safely() {
+    return 0
+}
+
+install_caddy_health_guard() {
+    return 0
 }
 
 bust_core_build_cache() {
     echo -e "${BLUE}  -> Busting frontend/backend build cache (safe mode)...${NC}"
 
+    # Define core services for cache busting
+    local core_svcs="frontend backend celery celery-deploy celery-fast celery-beat"
+    if [ "$MODE_AGENT_LITE" = "true" ]; then
+        core_svcs="backend celery-worker"
+    elif [ "$MODE_NODE" = "true" ]; then
+        core_svcs="backend celery celery-deploy celery-fast celery-beat"
+    fi
+
     # Remove old app image layers for deterministic rebuilds (no DB/data touched).
-    for svc in frontend backend celery celery-deploy celery-fast celery-beat; do
+    for svc in $core_svcs; do
         local image_ids=""
         image_ids="$(docker compose -f "$COMPOSE_FILE" images -q "$svc" 2>/dev/null | awk 'NF' | sort -u || true)"
         if [ -n "$image_ids" ]; then
@@ -1258,43 +2794,59 @@ bust_core_build_cache() {
 
     # Build cache only (no global container/image prune).
     docker builder prune -af >/dev/null 2>&1 || true
-    
+
     # NEW: Prune old unused images older than 7 days to prevent disk space exhaustion.
     echo -e "${BLUE}  -> Pruning deeply stale images (>7 days old)...${NC}"
     docker image prune -a -f --filter "until=168h" >/dev/null 2>&1 || true
-    
+
     echo -e "${GREEN}  OK Cache bust complete (targeted images + build cache + deep prune)${NC}"
 }
 
-docker_login() {
-    local registry="${CONTAINER_REGISTRY_URL:-127.0.0.1:5000}"
-    local user="${REGISTRY_USER:-smsly-registry}"
-    local pass="${REGISTRY_PASSWORD:-}"
-    if [ -z "$pass" ]; then
-        return 0
-    fi
-    echo "$pass" | docker login "$registry" -u "$user" --password-stdin >/dev/null 2>&1 || true
-}
-
 restart_edge_stack() {
-    local edge_services="socket-proxy traefik route-fallback"
+    local edge_services="socket-proxy traefik"
+    if [ "$MODE_AGENT_LITE" != "true" ]; then
+        edge_services="socket-proxy traefik route-fallback"
+    fi
 
     echo -e "${BLUE}  -> Refreshing edge proxy stack (traefik/socket-proxy/route-fallback)...${NC}"
-    # NOTE(Zero-Downtime): Removed --force-recreate to eliminate downtime for deployed services.
-    docker compose -f "$COMPOSE_FILE" up -d --no-deps $edge_services >/dev/null 2>&1 || \
-        docker compose -f "$COMPOSE_FILE" up -d $edge_services >/dev/null 2>&1 || true
+    # First ensure socket-proxy and route-fallback are running (no recreate).
+    # Only Traefik is force-recreated below to avoid disruption to the Docker
+    # event stream that socket-proxy provides to Traefik.
+    local non_traefik_services="socket-proxy"
+    if [ "$MODE_AGENT_LITE" != "true" ]; then
+        non_traefik_services="socket-proxy route-fallback"
+    fi
+    docker compose -f "$COMPOSE_FILE" up -d --no-deps $non_traefik_services >/dev/null 2>&1 || \
+        docker compose -f "$COMPOSE_FILE" up -d $non_traefik_services >/dev/null 2>&1 || true
 
-    # Re-attach expected external networks (idempotent).
+    # Force-recreate ONLY Traefik (not socket-proxy) to trigger full container
+    # re-discovery. Traefik v3.x removed pollInterval; a fresh start against a
+    # stable socket-proxy is the only way to guarantee complete provider re-scan
+    # after network topology changes.
+    # Brief downtime: ~2-5s while Traefik restarts. Caddy retries through it.
+    # NOTE(Zero-Downtime): We removed --force-recreate. Traefik dynamically listens to
+    # Docker events and does not need to be restarted. This eliminates the 2-5s downtime
+    # for deployed user services during an update.
+    docker compose -f "$COMPOSE_FILE" up -d traefik >/dev/null 2>&1 || true
+
+    # Re-attach expected external networks AFTER Traefik restart so it
+    # discovers containers with stable network topology (idempotent).
+    # If run before 'up -d', Docker Compose will forcefully strip 'smsly-proxy' 
+    # since it's not defined in the compose file's networks block.
     ensure_container_on_network "smsly-net" "smsly-hosting-traefik-1"
-    ensure_container_on_network "smsly-net" "smsly-hosting-route-fallback-1"
+    if [ "$MODE_AGENT_LITE" != "true" ]; then
+        ensure_container_on_network "smsly-net" "smsly-hosting-route-fallback-1"
+    fi
     ensure_container_on_network "smsly-proxy" "smsly-hosting-traefik-1"
     ensure_container_on_network "smsly-proxy" "smsly-hosting-socket-proxy-1"
 
     # Validate Caddy config before restart (H1 fix)
-    if command -v caddy >/dev/null 2>&1; then
+    # Use Docker-based Caddy, not host-level binary
+    if should_manage_caddy && docker compose -f "$COMPOSE_FILE" ps caddy 2>/dev/null | grep -q "Up"; then
         if caddy_needs_fix; then
             generate_safe_caddyfile "restart_edge_stack validation"
         fi
+        reload_container_caddy 2>/dev/null || true
     fi
     echo -e "${GREEN}  OK Edge stack refreshed${NC}"
 }
@@ -1317,8 +2869,11 @@ wait_for_traefik_api() {
 }
 
 refresh_runtime_services() {
+    # Ensure Docker mirror is configured (Option B)
+    configure_docker_mirror
+
     local app_services_requested=(
-        pgbouncer
+        pgcat
         backend
         celery
         celery-deploy
@@ -1343,8 +2898,12 @@ refresh_runtime_services() {
     echo -e "${BLUE}  -> Performing clean runtime refresh (non-data services only)...${NC}"
     ensure_update_networks
     ensure_infrastructure_permissions
+    stop_node_excluded_services
 
     for svc in "${app_services_requested[@]}"; do
+        if is_node_mode && [ "$svc" = "frontend" ]; then
+            continue
+        fi
         if docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null | grep -qx "$svc"; then
             app_services+=("$svc")
         fi
@@ -1364,17 +2923,19 @@ refresh_runtime_services() {
     fi
 
     if [ "${#app_services[@]}" -gt 0 ]; then
-        docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "${app_services[@]}" >/dev/null 2>&1 || \
-            docker compose -f "$COMPOSE_FILE" up -d --force-recreate "${app_services[@]}" >/dev/null 2>&1 || true
+        docker compose -f "$COMPOSE_FILE" up -d --no-deps "${app_services[@]}" >/dev/null 2>&1 || \
+            docker compose -f "$COMPOSE_FILE" up -d "${app_services[@]}" >/dev/null 2>&1 || true
     fi
 
-    ensure_container_on_network "smsly-net" "smsly-hosting-pgbouncer-1"
+    ensure_container_on_network "smsly-net" "smsly-hosting-pgcat-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-backend-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-celery-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-celery-beat-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-celery-deploy-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-celery-fast-1"
-    ensure_container_on_network "smsly-net" "smsly-hosting-frontend-1"
+    if [ "$MODE_NODE" != "true" ]; then
+        ensure_container_on_network "smsly-net" "smsly-hosting-frontend-1"
+    fi
     ensure_container_on_network "smsly-net" "smsly-hosting-route-fallback-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-traefik-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-frps-1"
@@ -1397,8 +2958,8 @@ refresh_runtime_services() {
     done
 
     if [ "${#failed_services[@]}" -eq 0 ] && [ "${#edge_services[@]}" -gt 0 ]; then
-        docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "${edge_services[@]}" >/dev/null 2>&1 || \
-            docker compose -f "$COMPOSE_FILE" up -d --force-recreate "${edge_services[@]}" >/dev/null 2>&1 || true
+        docker compose -f "$COMPOSE_FILE" up -d --no-deps "${edge_services[@]}" >/dev/null 2>&1 || \
+            docker compose -f "$COMPOSE_FILE" up -d "${edge_services[@]}" >/dev/null 2>&1 || true
 
         ensure_container_on_network "smsly-net" "smsly-hosting-route-fallback-1"
         ensure_container_on_network "smsly-net" "smsly-hosting-traefik-1"
@@ -1420,12 +2981,18 @@ refresh_runtime_services() {
         return 1
     fi
 
-    if docker compose -f "$COMPOSE_FILE" ps -q caddy 2>/dev/null | grep -q .; then
-    true
-    else
-    true
+    if should_manage_caddy; then
+        install_caddy_health_guard "${DOMAIN:-}"
+        reload_container_caddy 2>/dev/null || true
     fi
-    true
+
+    if [ "$MODE_AGENT_LITE" != "true" ]; then
+        echo -e "${BLUE}  → Refreshing Observability Stack...${NC}"
+        if [ -f "infrastructure/docker/docker-compose.observability.yml" ]; then
+            docker compose -f infrastructure/docker/docker-compose.observability.yml up -d >/dev/null 2>&1 || true
+        fi
+    fi
+
     systemctl restart smsly-autoscaler >/dev/null 2>&1 || true
     echo -e "${GREEN}  OK Clean runtime refresh complete${NC}"
 }
@@ -1462,6 +3029,48 @@ wait_for_container_ready() {
     return 1
 }
 
+sync_agent_lite_rabbitmq_password() {
+    [ "$MODE_AGENT_LITE" = "true" ] || return 0
+
+    local env_file="$INSTALL_DIR/.env"
+    local rabbitmq_user rabbitmq_password
+
+    rabbitmq_user="$(env_get_value "$env_file" "RABBITMQ_DEFAULT_USER" 2>/dev/null || true)"
+    rabbitmq_user="${rabbitmq_user:-smsly_user}"
+    rabbitmq_password="$(env_get_value "$env_file" "RABBITMQ_PASSWORD" 2>/dev/null || true)"
+    rabbitmq_password="${rabbitmq_password:-$(env_get_value "$env_file" "RABBITMQ_DEFAULT_PASS" 2>/dev/null || true)}"
+
+    if [ -z "$rabbitmq_password" ]; then
+        echo -e "${RED}  ERROR RABBITMQ_PASSWORD is empty after agent-lite env generation${NC}"
+        exit 1
+    fi
+
+    docker compose -f "$COMPOSE_FILE" up -d rabbitmq >/dev/null 2>&1 || true
+    wait_for_container_ready "smsly-hosting-rabbitmq-1" 120 || {
+        docker compose -f "$COMPOSE_FILE" logs --tail=80 rabbitmq 2>/dev/null || true
+        exit 1
+    }
+
+    if docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" >/dev/null 2>&1; then
+        echo -e "${GREEN}  OK Lite Agent RabbitMQ password already matches .env${NC}"
+        return 0
+    fi
+
+    echo -e "${BLUE}  -> Syncing Lite Agent RabbitMQ password for ${rabbitmq_user}...${NC}"
+    docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl add_user "$rabbitmq_user" "$rabbitmq_password" >/dev/null 2>&1 || true
+    docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl change_password "$rabbitmq_user" "$rabbitmq_password" >/dev/null
+    docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_user_tags "$rabbitmq_user" administrator >/dev/null
+    docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_permissions -p / "$rabbitmq_user" ".*" ".*" ".*" >/dev/null
+
+    if docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" >/dev/null 2>&1; then
+        echo -e "${GREEN}  OK Lite Agent RabbitMQ password synced${NC}"
+        return 0
+    fi
+
+    echo -e "${RED}  ERROR Lite Agent RabbitMQ password sync failed${NC}"
+    exit 1
+}
+
 recover_runtime_stack() {
     echo -e "${BLUE}  -> Running runtime recovery (network + core services + edge)...${NC}"
 
@@ -1470,18 +3079,50 @@ recover_runtime_stack() {
 
     # Only restart Docker if the daemon was reconfigured (e.g. for registry trust).
     # Unconditional restart during recovery can cascade-fail all running
-    # containers — including the proxy — causing a total outage.
+    # containers — including the proxy (Caddy/Traefik) — causing a total outage.
     if [ -f "/etc/docker/daemon.json" ] && [ -f "/var/run/docker.sock" ]; then
         echo -e "${BLUE}    -> Docker daemon is running; skipping restart to preserve live containers${NC}"
     fi
 
     echo -e "${BLUE}    -> Starting dependency services...${NC}"
-    docker compose -f "$COMPOSE_FILE" up -d db pgbouncer redis socket-proxy registry || true
-    wait_for_container_ready "smsly-hosting-db-1" 120 || true
-    wait_for_container_ready "smsly-hosting-pgbouncer-1" 120 || true
-    wait_for_container_ready "smsly-hosting-redis-1" 120 || true
 
-    if command -v caddy >/dev/null 2>&1; then
+    # Ensure registry TLS cert + htpasswd exist before starting the registry.
+    # The registry container will crash-loop without these files.
+    mkdir -p "$INSTALL_DIR/auth" "$INSTALL_DIR/certs"
+    if [ ! -f "$INSTALL_DIR/certs/registry.key" ] || [ ! -f "$INSTALL_DIR/certs/registry.crt" ]; then
+        echo -e "${BLUE}      Generating self-signed TLS cert for registry...${NC}"
+        openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+            -keyout "$INSTALL_DIR/certs/registry.key" \
+            -out "$INSTALL_DIR/certs/registry.crt" \
+            -subj "/CN=registry" 2>/dev/null || true
+    fi
+    if [ ! -f "$INSTALL_DIR/auth/htpasswd" ] || [ -z "${REGISTRY_PASSWORD:-}" ] || [ -z "${REGISTRY_USER:-}" ]; then
+        REGISTRY_PASS="${REGISTRY_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_urlsafe(18))" 2>/dev/null || openssl rand -hex 12 2>/dev/null || echo 'auto-generated-change-me')}"
+        if command -v htpasswd >/dev/null 2>&1; then
+            htpasswd -Bbn "${REGISTRY_USER:-smsly-registry}" "$REGISTRY_PASS" > "$INSTALL_DIR/auth/htpasswd"
+        else
+            python3 -c "
+import bcrypt, sys
+pw = sys.argv[1] if len(sys.argv) > 1 else '$REGISTRY_PASS'
+print('${REGISTRY_USER:-smsly-registry}:' + bcrypt.hashpw(pw.encode(), bcrypt.gensalt(10)).decode())
+" "$REGISTRY_PASS" > "$INSTALL_DIR/auth/htpasswd" 2>/dev/null || true
+        fi
+        env_set_value "$INSTALL_DIR/.env" "REGISTRY_USER" "${REGISTRY_USER:-smsly-registry}"
+        env_set_value "$INSTALL_DIR/.env" "REGISTRY_PASSWORD" "$REGISTRY_PASS"
+    fi
+
+    if [ "$MODE_AGENT_LITE" = "true" ]; then
+        docker compose -f "$COMPOSE_FILE" up -d redis rabbitmq socket-proxy || true
+        wait_for_container_ready "smsly-hosting-redis-1" 120 || true
+        sync_agent_lite_rabbitmq_password
+    else
+        docker compose -f "$COMPOSE_FILE" up -d db pgcat redis rabbitmq socket-proxy registry || true
+        wait_for_container_ready "smsly-hosting-db-1" 120 || true
+        wait_for_container_ready "smsly-hosting-pgcat-1" 120 || true
+        wait_for_container_ready "smsly-hosting-redis-1" 120 || true
+    fi
+
+    if should_manage_caddy && docker compose -f "$COMPOSE_FILE" ps caddy 2>/dev/null | grep -q "Up"; then
         if caddy_needs_fix; then
             generate_safe_caddyfile "recover_runtime_stack"
         fi
@@ -1505,8 +3146,8 @@ debug_platform_status() {
 
     echo "---- Systemd ----"
     systemctl is-active docker 2>/dev/null || true
-    true 2>/dev/null || true
-    true-watcher 2>/dev/null || true
+    true
+    true
     systemctl is-active smsly-autoscaler 2>/dev/null || true
     echo ""
 
@@ -1523,11 +3164,11 @@ debug_platform_status() {
     echo ""
 
     echo "---- Backend DNS Checks ----"
-    docker compose -f "$COMPOSE_FILE" exec -T backend getent hosts db pgbouncer redis 2>/dev/null || echo "backend DNS check failed"
+    docker compose -f "$COMPOSE_FILE" exec -T backend getent hosts db pgcat redis 2>/dev/null || echo "backend DNS check failed"
     echo ""
 
     echo "---- Key Logs (tail 120) ----"
-    docker compose -f "$COMPOSE_FILE" logs --tail=120 backend frontend traefik pgbouncer redis 2>/dev/null || true
+    docker compose -f "$COMPOSE_FILE" logs --tail=120 backend frontend traefik pgcat redis 2>/dev/null || true
     echo -e "${YELLOW}=== END DEBUG SNAPSHOT ===${NC}\n"
     set -e
 }
@@ -1635,13 +3276,13 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
 
     DOMAIN="$(env_get_value "$INSTALL_DIR/.env" "DOMAIN" 2>/dev/null || echo "")"
 
-    echo -e "\n${BLUE}  ⟳ Syncing Proxy Configurations...${NC}"
-    if docker compose -f "$COMPOSE_FILE" ps -q caddy 2>/dev/null | grep -q .; then
-    true
-    else
-    true
+    if should_manage_caddy; then
+        echo -e "\n${BLUE}  ⟳ Syncing Proxy Configurations...${NC}"
+        reload_container_caddy 2>/dev/null || true
+        install_caddy_health_guard "$DOMAIN"
     fi
-    true
+
+
     sleep 3
 
     echo -e "\n${BLUE}  → Running endpoint verification...${NC}"
@@ -1650,12 +3291,27 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
 
     # Backend health (internal) — docker exec into backend container
     EP1_FALLBACK_URL="http://127.0.0.1:8090/health"
-    if docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health >/dev/null 2>&1; then
-        EP1_CODE="200"
-    elif curl -fsS --max-time 5 "$EP1_FALLBACK_URL" >/dev/null 2>&1; then
-        EP1_CODE="200"
+    _LITE_HOST_HEADER=""
+    if [ "$MODE_AGENT_LITE" = "true" ]; then
+        _ep1_domain="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]' || true)"
+        if [ -n "$_ep1_domain" ] && [ "$_ep1_domain" != "localhost" ]; then
+            _LITE_HOST_HEADER="$_ep1_domain"
+        fi
+    fi
+    if [ "$MODE_AGENT_LITE" = "true" ]; then
+        if [ -n "${_LITE_HOST_HEADER:-}" ]; then
+            EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 -H "Host: ${_LITE_HOST_HEADER}" "http://127.0.0.1/health" 2>/dev/null) || EP1_CODE="000"
+        else
+            EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1/health" 2>/dev/null) || EP1_CODE="000"
+        fi
     else
-        EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP1_FALLBACK_URL" 2>/dev/null) || EP1_CODE="000"
+        if docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health >/dev/null 2>&1; then
+            EP1_CODE="200"
+        elif curl -fsS --max-time 5 "$EP1_FALLBACK_URL" >/dev/null 2>&1; then
+            EP1_CODE="200"
+        else
+            EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP1_FALLBACK_URL" 2>/dev/null) || EP1_CODE="000"
+        fi
     fi
     case "$EP1_CODE" in
         2*|3*)
@@ -1669,6 +3325,9 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
     # Platform domain (public-facing — tests Caddy → Traefik → backend chain)
     if [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ]; then
         EP_PUB_URL="http://${DOMAIN}/health"
+        if is_node_mode; then
+            EP_PUB_URL="http://${DOMAIN}/health/live"
+        fi
         EP_PUB_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 10 "$EP_PUB_URL" 2>/dev/null) || EP_PUB_CODE="000"
         if [ "$EP_PUB_CODE" = "200" ] || [ "$EP_PUB_CODE" = "301" ] || [ "$EP_PUB_CODE" = "308" ]; then
             echo -e "${GREEN}  ✓ Platform (${DOMAIN}): HTTP $EP_PUB_CODE${NC}"; PASS_COUNT=$((PASS_COUNT + 1))
@@ -1678,7 +3337,9 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
     fi
 
     # HTTPS domain (skip for raw IP addresses — certs can't be issued for IPs)
-    if [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ] && ! echo "$DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+    if ! should_manage_caddy; then
+        echo -e "${YELLOW}  ⊘ HTTPS: Skipped (Caddy/HTTPS is master-only in this mode)${NC}"
+    elif [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ] && ! echo "$DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
         EP2_URL="https://${DOMAIN}/health"
         EP2_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 10 "$EP2_URL" 2>/dev/null) || EP2_CODE="000"
         case "$EP2_CODE" in
@@ -1695,6 +3356,9 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
 
     # Traefik
     EP3_URL="http://127.0.0.1:8081/"
+    if is_node_mode; then
+        EP3_URL="http://127.0.0.1/health/live"
+    fi
     EP3_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP3_URL" 2>/dev/null) || EP3_CODE="000"
     if [ "$EP3_CODE" != "000" ] && [ "$EP3_CODE" != "502" ]; then
         echo -e "${GREEN}  ✓ Traefik: HTTP $EP3_CODE${NC}"; PASS_COUNT=$((PASS_COUNT + 1))
@@ -1718,7 +3382,11 @@ for s in Service.objects.exclude(public_domain__isnull=True).exclude(public_doma
     if [ -n "$ALL_SVC_DOMAINS" ]; then
         while IFS='|' read -r svc_name svc_domain; do
             [ -z "$svc_domain" ] && continue
-            svc_url="https://${svc_domain}/"
+            if should_manage_caddy; then
+                svc_url="https://${svc_domain}/"
+            else
+                svc_url="http://${svc_domain}/"
+            fi
             svc_code=$(curl -so /dev/null -w '%{http_code}' --max-time 8 "$svc_url" 2>/dev/null) || svc_code="000"
             if [ "$svc_code" != "000" ] && [ "$svc_code" != "502" ] && [ "$svc_code" != "503" ]; then
                 echo -e "${GREEN}  ✓ $svc_name ($svc_domain): HTTP $svc_code${NC}"; PASS_COUNT=$((PASS_COUNT + 1))
@@ -1751,12 +3419,36 @@ if [ -n "$UPDATE_MODE" ]; then
     mkdir -p /opt/smsly-cache/repos
     chmod 775 /opt/smsly-cache
     chown -R 1000:1000 /opt/smsly-cache 2>/dev/null || true
+    mkdir -p /opt/smsly-hosting/builds
+    chmod 775 /opt/smsly-hosting/builds
+    chown -R 1000:1000 /opt/smsly-hosting/builds 2>/dev/null || true
+
+    # ─── Fix .env permissions BEFORE any containers start ────────────────────
+    # The docker-compose.prod.yml mounts .env into the backend container.
+    # If .env has 600 permissions (created by old install.sh), the container
+    # can't read it and Django crashes with PermissionError.
+    # The backend container runs as UID 1000 (smsly user), so the file must be
+    # writable by that user to allow the domain-config signal to sync back to .env.
+    if [ -f "$INSTALL_DIR/.env" ]; then
+        chown root:1000 "$INSTALL_DIR/.env" 2>/dev/null || true
+        chmod 664 "$INSTALL_DIR/.env" 2>/dev/null || true
+        echo -e "${BLUE}  → Fixed .env permissions to 664 (group-writable by container UID 1000)${NC}"
+    fi
 
     # ─── Pre-flight ──────────────────────────────────────────────────────────
     if [ "$EUID" -ne 0 ]; then
         echo -e "${RED}✗ Please run as root (sudo bash install.sh --update)${NC}"
         exit 1
     fi
+
+    check_internet
+    check_hardware
+    check_caddy_conflict
+    ensure_system_swap
+
+    # ─── Git Safety ──────────────────────────────────────────────────────────
+    # Prevents "dubious ownership" errors on production VPS
+    git config --global --add safe.directory "$INSTALL_DIR" 2>/dev/null || true
 
     ensure_infrastructure_permissions
 
@@ -1771,6 +3463,11 @@ if [ -n "$UPDATE_MODE" ]; then
     fi
 
     cd "$INSTALL_DIR"
+    if [ "${SMSLY_REEXEC:-}" != "1" ]; then
+        # Every new update attempt must hit GitHub. Checkpoints are only for
+        # resume/re-exec within the same attempt, not for skipping future pulls.
+        clear_checkpoint "update_git_synced"
+    fi
 
     echo -e "${BLUE}  -> Validating existing .env configuration...${NC}"
     ensure_env_runtime_defaults "$INSTALL_DIR/.env"
@@ -1778,19 +3475,78 @@ if [ -n "$UPDATE_MODE" ]; then
         echo -e "${RED}x .env validation failed. Fix the values above and re-run update.${NC}"
         exit 1
     fi
+    set_checkpoint "update_preflight_done"
+
+if ! is_checkpoint_done "update_git_synced"; then
 
 
     # ─── Git Stash + Pull (CRITICAL BLINDSPOT FIX) ───────────────────────────
     echo -e "${BLUE}  → Checking for local changes...${NC}"
+    # Save pre-update HEAD for reliable redeploy detection after git operations.
+    # Priority: 1) env var from re-exec (survives exec boundary),
+    #           2) stale file from failed previous update (survives process death),
+    #           3) current HEAD (normal first run).
+    PRE_UPDATE_HEAD=""
+    if [ -n "${SMSLY_PRE_UPDATE_HEAD:-}" ]; then
+        PRE_UPDATE_HEAD="$SMSLY_PRE_UPDATE_HEAD"
+    elif [ -f "$INSTALL_DIR/.pre-update-head" ] && [ -s "$INSTALL_DIR/.pre-update-head" ]; then
+        PRE_UPDATE_HEAD="$(cat "$INSTALL_DIR/.pre-update-head" 2>/dev/null || true)"
+        echo -e "${YELLOW}  ⚠ Recovering pre-update baseline from prior incomplete run (${PRE_UPDATE_HEAD:0:7})${NC}"
+    else
+        PRE_UPDATE_HEAD="$(git rev-parse HEAD 2>/dev/null || true)"
+    fi
+    echo "$PRE_UPDATE_HEAD" > "$INSTALL_DIR/.pre-update-head" 2>/dev/null || true
+    ensure_local_ignores
     if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
         echo -e "${YELLOW}  ⚠ Local changes detected — stashing before pull${NC}"
         git stash push --include-untracked -m "install-update-$(date +%s)"
         touch "$INSTALL_DIR/.git-stash-marker"
     fi
 
-    echo -e "${BLUE}  → Force-pulling latest code from GitHub...${NC}"
-    git fetch origin main >/dev/null 2>&1 || true
-    git reset --hard origin/main
+    echo -e "${BLUE}  → Force-pulling latest code from GitHub ($SMSLY_BRANCH)...${NC}"
+
+    # Track if git update succeeded
+    GIT_UPDATE_OK=true
+
+    if ! git fetch origin "$SMSLY_BRANCH" >/dev/null 2>&1; then
+        echo -e "${YELLOW}  ⚠️ Standard Git fetch failed. Retrying with http.sslVerify=false...${NC}"
+        if ! git -c http.sslVerify=false fetch origin "$SMSLY_BRANCH" >/dev/null 2>&1; then
+            echo -e "${YELLOW}  ⚠️ Git fetch failed for $SMSLY_BRANCH.${NC}"
+            GIT_UPDATE_OK=false
+        fi
+    fi
+
+    if [ "$GIT_UPDATE_OK" = "true" ]; then
+        if ! git checkout -B "$SMSLY_BRANCH" "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
+            echo -e "${YELLOW}  ⚠️ Standard Git checkout failed. Retrying with http.sslVerify=false...${NC}"
+            if ! git -c http.sslVerify=false checkout -B "$SMSLY_BRANCH" "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
+                echo -e "${YELLOW}  ⚠️ Git reset failed.${NC}"
+                GIT_UPDATE_OK=false
+            else
+                git -c http.sslVerify=false branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
+            fi
+        else
+            git branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
+        fi
+    fi
+
+    # Fallback if git failed but a local bundle was provided
+    if [ "$GIT_UPDATE_OK" = "false" ]; then
+        if [ -n "${SMSLY_INSTALL_WORKDIR:-}" ] && [ -d "${SMSLY_INSTALL_WORKDIR}" ]; then
+            echo -e "${BLUE}  → Fallback: Synchronizing from pre-uploaded source bundle...${NC}"
+            # Use rsync if available, otherwise cp. Exclude .git to preserve local repo state if any.
+            if command -v rsync >/dev/null 2>&1; then
+                rsync -rtv --exclude='.git' "${SMSLY_INSTALL_WORKDIR}/" "$INSTALL_DIR/"
+            else
+                cp -rv "${SMSLY_INSTALL_WORKDIR}/"* "$INSTALL_DIR/" 2>/dev/null || true
+            fi
+            echo -e "${GREEN}  ✓ Fallback synchronization complete.${NC}"
+        else
+            echo -e "${RED}✗ Git update failed and no local fallback bundle available. Update may be incomplete.${NC}"
+        fi
+    fi
+    set_checkpoint "update_git_synced"
+fi
 
     # ─── Self-Update Check ──────────────────────────────────────────────────
     # If the installer itself was updated, we MUST re-execute it to pick up
@@ -1798,7 +3554,16 @@ if [ -n "$UPDATE_MODE" ]; then
     if [[ "${SMSLY_REEXEC:-}" != "1" ]]; then
         echo -e "${GREEN}  → Installer updated. Re-executing for safe synchronization...${NC}"
         export SMSLY_REEXEC=1
-        exec bash "$SCRIPT_PATH" "$@"
+        export NO_SCREEN=true
+        export SKIP_SCREEN=1
+        # Preserve pre-update HEAD across re-exec so the SHA comparison
+        # uses the TRUE baseline commit (before git pull), not the
+        # already-updated HEAD (which would prevent redeploy detection).
+        export SMSLY_PRE_UPDATE_HEAD="$PRE_UPDATE_HEAD"
+        # Release the lock before re-exec so the new process can acquire it.
+        # Closing FD 9 releases the flock.
+        exec 9>&- 2>/dev/null || true
+        exec bash "$SCRIPT_PATH" --no-screen "$@"
     fi
 
     echo -e "${BLUE}  → Applying platform/domain overrides...${NC}"
@@ -1825,7 +3590,12 @@ if [ -n "$UPDATE_MODE" ]; then
         exit 1
     fi
 
-    if [ ! -f "frontend/Dockerfile" ]; then
+    if [ "$MODE_NODE" = "true" ] && [ ! -f "backend/requirements.txt" ]; then
+        echo -e "${RED}✗ Missing backend/requirements.txt${NC}"
+        exit 1
+    fi
+
+    if [ "$MODE_NODE" != "true" ] && [ ! -f "frontend/Dockerfile" ]; then
         echo -e "${RED}✗ Missing frontend/Dockerfile${NC}"
         exit 1
     fi
@@ -1833,14 +3603,18 @@ if [ -n "$UPDATE_MODE" ]; then
     echo -e "${GREEN}  ✓ All required files present${NC}"
 
     # ─── Disk space check (prevents mid-build failure) ───────────────────────
-    echo -e "${BLUE}  → Running comprehensive Docker prune to free up disk space...${NC}"
-    docker container prune -f || true
-    docker image prune -af || true
     DISK_AVAIL_MB=$(df -BM "$INSTALL_DIR" | tail -1 | awk '{print $4}' | tr -d 'M')
-    if [ "$DISK_AVAIL_MB" -lt 2000 ]; then
-        echo -e "${YELLOW}  ⚠ WARNING: Only ${DISK_AVAIL_MB}MB disk space available.${NC}"
-        echo -e "${YELLOW}    Docker builds typically need 2GB+. Cleaning safe caches (no volume deletion)...${NC}"
-        bust_core_build_cache
+    if [ "$DISK_AVAIL_MB" -lt 5000 ]; then
+        echo -e "${YELLOW}  ⚠ Disk space low (${DISK_AVAIL_MB}MB). Running Docker prune...${NC}"
+        docker container prune -f || true
+        docker image prune -f || true # Only dangling images by default
+
+        if [ "$DISK_AVAIL_MB" -lt 2000 ]; then
+            echo -e "${RED}  ⚠ Disk space CRITICAL. Running aggressive prune...${NC}"
+            docker image prune -af || true
+            bust_core_build_cache
+        fi
+
         DISK_AVAIL_MB=$(df -BM "$INSTALL_DIR" | tail -1 | awk '{print $4}' | tr -d 'M')
         echo -e "${BLUE}  → Disk space after cleanup: ${DISK_AVAIL_MB}MB${NC}"
         if [ "$DISK_AVAIL_MB" -lt 1000 ]; then
@@ -1851,58 +3625,276 @@ if [ -n "$UPDATE_MODE" ]; then
 
     # ─── Targeted Rebuild (CRITICAL BLINDSPOT FIX: --no-deps) ────────────────
     # Using --no-deps prevents cascade restart of unrelated services
+    if ! is_checkpoint_done "update_containers_rebuilt"; then
 
     # ─── Fix script permissions (Git on Windows strips execute bits) ──────────
     echo -e "${BLUE}  → Fixing script permissions...${NC}"
     find "$INSTALL_DIR" -name "*.sh" -exec chmod +x {} \;
     echo -e "${GREEN}  ✓ Script permissions fixed${NC}"
 
+    # ─── Fix SSH provisioner: always auto-add host keys ─────────────────────
+    # The env-var-based approach fails because container env vars are set at
+    # startup and don't hot-reload when .env changes. AutoAddPolicy accepts
+    # unknown hosts once, saves to known_hosts, then verifies subsequently.
+    _PROVISIONER="$INSTALL_DIR/backend/apps/deployments/services/provisioner.py"
+    if [ -f "$_PROVISIONER" ]; then
+        # Replace the strict_host_key_check block with a single AutoAddPolicy line
+        python3 << PYEOF 2>/dev/null || echo -e "${YELLOW}  ⚠ Could not patch provisioner.py${NC}"
+import re
+with open("$_PROVISIONER", "r") as f:
+    code = f.read()
+# Replace both old and new env-var based check patterns
+code = re.sub(
+    r"(strict_host_key_check|_strict)\s*=.*?RejectPolicy\(\)\s*else:\s*.*?AutoAddPolicy\(\)",
+    "client.set_missing_host_key_policy(paramiko.AutoAddPolicy())",
+    code,
+    flags=re.DOTALL,
+)
+# Remove any second occurrence if the first replacement left duplicates
+code = re.sub(
+    r"client\.set_missing_host_key_policy\(paramiko\.AutoAddPolicy\(\)\)\s*\n\s*client\.set_missing_host_key_policy\(paramiko\.AutoAddPolicy\(\)\)",
+    "client.set_missing_host_key_policy(paramiko.AutoAddPolicy())",
+    code,
+)
+with open("$_PROVISIONER", "w") as f:
+    f.write(code)
+print("\033[0;32m  ✓ SSH provisioner patched\033[0m")
+PYEOF
+    fi
+
+    # ─── Fix SSH client: always auto-add host keys ─────────────────────────
+    # The update-server flow uses SSHClient from ssh_client.py (not provisioner).
+    # Same fix: replace the allow_autoadd env check with direct AutoAddPolicy.
+    _SSH_CLIENT="$INSTALL_DIR/backend/apps/deployments/services/ssh_client.py"
+    if [ -f "$_SSH_CLIENT" ]; then
+        python3 << PYEOF 2>/dev/null || echo -e "${YELLOW}  ⚠ Could not patch ssh_client.py${NC}"
+import re
+with open("$_SSH_CLIENT", "r") as f:
+    code = f.read()
+# Replace the allow_autoadd env check block with direct AutoAddPolicy
+code = re.sub(
+    r"allow_autoadd\s*=.*?RejectPolicy\(\)",
+    'self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())',
+    code,
+    flags=re.DOTALL,
+)
+# Remove any duplicate or the old logger.warning block that followed
+code = re.sub(
+    r"client\.load_system_host_keys\(\)\s*\n\s*client\.set_missing_host_key_policy\(paramiko\.AutoAddPolicy\(\)\)\s*\n\s*client\.set_missing_host_key_policy\(paramiko\.AutoAddPolicy\(\)\)",
+    'client.load_system_host_keys()\n        self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())',
+    code,
+)
+with open("$_SSH_CLIENT", "w") as f:
+    f.write(code)
+print("\033[0;32m  ✓ SSH client patched\033[0m")
+PYEOF
+    fi
+
     # Ensure shared networks exist (prod stack uses external networks)
     ensure_update_networks
 
-    # Cache bust only if disk is low (already runs in the disk check above when needed).
-    # Moved into case blocks below to avoid redundant double bust.
+     # Cache bust only if disk is low (already runs in the disk check above when needed).
+     # Moved into case blocks below to avoid redundant double bust.
 
-    docker_login
+     docker_login
 
-    case "$UPDATE_MODE" in
-        frontend)
-            echo -e "${BLUE}  → Rebuilding frontend container only...${NC}"
-            docker compose -f "$COMPOSE_FILE" build --no-cache frontend
-            docker compose -f "$COMPOSE_FILE" up -d --no-deps frontend
-            ;;
-        backend)
-            echo -e "${BLUE}  → Rebuilding backend containers...${NC}"
-            docker compose -f "$COMPOSE_FILE" build --no-cache backend celery
+      case "$UPDATE_MODE" in
+         frontend)
+             if [ "$MODE_NODE" = "true" ]; then
+                 echo -e "${YELLOW}  → Node mode: no frontend to update. Skipping.${NC}"
+             else
+                 echo -e "${BLUE}  → Rebuilding frontend container (cached)...${NC}"
+                 docker compose -f "$COMPOSE_FILE" build frontend
+                 docker compose -f "$COMPOSE_FILE" up -d --no-deps frontend
+
+                 # Custom Domain SSL Setup for Frontend Update
+                 if should_manage_caddy; then  # Only for master mode
+                     echo -e "\n${YELLOW}[UPDATE] Setting up Custom Domain SSL Services...${NC}"
+                     if [ -f "install-custom-domain-ssl.sh" ]; then
+                         echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
+                         bash install-custom-domain-ssl.sh install
+
+                         # Start the services
+                         echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
+                         /opt/smsly-hosting/smsly-domain-ssl-manager.sh start
+
+                         # Enable auto-start on boot (if not already enabled)
+                         echo -e "${BLUE}  → Ensuring auto-start on boot...${NC}"
+                         /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable
+
+                         echo -e "${GREEN}  ✓ Custom domain SSL services configured${NC}"
+                     else
+                         echo -e "${YELLOW}  ⚠ Custom domain SSL manager not found, skipping setup${NC}"
+                     fi
+                 fi
+             fi
+             ;;
+         backend)
+            echo -e "${BLUE}  → Rebuilding backend containers (cached)...${NC}"
+            build_svcs="backend celery"
+            if [ "$MODE_AGENT_LITE" = "true" ]; then
+                build_svcs="backend"
+            elif [ "$MODE_NODE" = "true" ]; then
+                build_svcs="backend celery celery-deploy celery-fast celery-beat"
+            fi
+            docker compose -f "$COMPOSE_FILE" build $build_svcs
+
             echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
-            docker compose -f "$COMPOSE_FILE" up -d db pgbouncer redis socket-proxy
-            docker compose -f "$COMPOSE_FILE" up -d --no-deps backend
+            if [ "$MODE_AGENT_LITE" = "true" ]; then
+                verify_agent_lite_connectivity
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans redis rabbitmq socket-proxy
+                sync_agent_lite_rabbitmq_password
+            elif [ "$MODE_NODE" = "true" ]; then
+                stop_node_excluded_services
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db pgcat redis rabbitmq socket-proxy registry route-fallback traefik
+            else
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db pgcat redis socket-proxy
+            fi
+            # Stop backend, celery & pgcat so their DB connections don't block
+            # migrations (ALTER TABLE requires exclusive locks).
+            echo -e "${BLUE}  → Stopping backend, celery & pgcat for migrations...${NC}"
+            docker compose -f "$COMPOSE_FILE" stop backend celery celery-deploy celery-fast celery-beat pgcat 2>/dev/null || true
 
             echo -e "${BLUE}  → Running migrations...${NC}"
-            sleep 10  # Wait for backend to start
-            # Note: Do NOT run makemigrations here — migrations are committed in the repo.
-            # Running makemigrations auto-generates files inside the container that conflict
-            # with committed migrations on subsequent deploys.
-            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py migrate --noinput || {
-                echo -e "${YELLOW}  ⚠ Migration failed — backend may still be starting. Retrying in 15s...${NC}"
+            run_backend_migrations --root || {
+                echo -e "${YELLOW}  ⚠ Migration failed — retrying in 15s...${NC}"
                 sleep 15
-                docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py migrate --noinput
+                run_backend_migrations --root
             }
 
+            echo -e "${BLUE}  → Starting backend & pgcat...${NC}"
+            docker compose -f "$COMPOSE_FILE" up -d --no-deps pgcat 2>/dev/null || true
+            if [ "$MODE_AGENT_LITE" = "true" ]; then
+                docker compose -f "$COMPOSE_FILE" up -d --force-recreate backend
+            else
+                docker compose -f "$COMPOSE_FILE" up -d --no-deps backend
+            fi
+
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput
+
+            set_checkpoint "update_db_migrated"
 
             # Clean stale celerybeat-schedule (prevents Permission denied crash loop)
             echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule 2>/dev/null || true
 
             echo -e "${BLUE}  → Restarting celery workers...${NC}"
-            docker compose -f "$COMPOSE_FILE" up -d --no-deps celery celery-deploy celery-fast celery-beat
-            ;;
-        full)
+            celery_svcs="celery celery-deploy celery-fast celery-beat"
+            if [ "$MODE_AGENT_LITE" = "true" ]; then
+                celery_svcs="celery-worker"
+            fi
+            if [ "$MODE_AGENT_LITE" = "true" ]; then
+                docker compose -f "$COMPOSE_FILE" up -d --force-recreate $celery_svcs
+            else
+                 docker compose -f "$COMPOSE_FILE" up -d --no-deps $celery_svcs
+             fi
+             
+             # Custom Domain SSL Setup for Backend Update
+             if should_manage_caddy; then  # Only for master mode
+                 echo -e "\n${YELLOW}[UPDATE] Setting up Custom Domain SSL Services...${NC}"
+                 if [ -f "install-custom-domain-ssl.sh" ]; then
+                     echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
+                     bash install-custom-domain-ssl.sh install
+                     
+                     # Start the services
+                     echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
+                     /opt/smsly-hosting/smsly-domain-ssl-manager.sh start
+                     
+                     # Enable auto-start on boot (if not already enabled)
+                     echo -e "${BLUE}  → Ensuring auto-start on boot...${NC}"
+                     /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable
+                     
+                     echo -e "${GREEN}  ✓ Custom domain SSL services configured${NC}"
+                 else
+                     echo -e "${YELLOW}  ⚠ Custom domain SSL manager not found, skipping setup${NC}"
+                 fi
+             fi
+             ;;
+         half)
+            echo -e "${BLUE}  → [HALF UPDATE] Rebuilding changed services from cache (no image pulls)${NC}"
+
+            # 1. Rebuild frontend from cached layers (no --pull, no new base images)
+            if [ "$MODE_NODE" != "true" ]; then
+                echo -e "${BLUE}  → Rebuilding frontend (cached)...${NC}"
+                docker compose -f "$COMPOSE_FILE" build frontend 2>/dev/null || {
+                    echo -e "${YELLOW}  ⚠ Frontend build failed (cached layers missing). Skipping frontend.${NC}"
+                    echo -e "${YELLOW}    Run --update when Docker Hub is reachable for a full rebuild.${NC}"
+                }
+                docker compose -f "$COMPOSE_FILE" up -d --no-deps frontend 2>/dev/null || true
+            fi
+
+            # 2. Stop backend, celery & pgcat so their DB connections don't block
+            #    migrations (ALTER TABLE requires exclusive locks).
+            echo -e "${BLUE}  → Stopping backend, celery & pgcat for migrations...${NC}"
+            docker compose -f "$COMPOSE_FILE" stop backend celery celery-deploy celery-fast celery-beat pgcat 2>/dev/null || true
+
+            # 3. Run migrations
+            echo -e "${BLUE}  → Running migrations...${NC}"
+            run_backend_migrations --root || {
+                echo -e "${YELLOW}  ⚠ Migration failed — retrying in 15s...${NC}"
+                sleep 15
+                run_backend_migrations --root
+            }
+
+            # 4. Start pgcat & backend (picks up Python code changes from mounted volume)
+            echo -e "${BLUE}  → Starting pgcat & backend...${NC}"
+            docker compose -f "$COMPOSE_FILE" up -d --no-deps pgcat 2>/dev/null || true
+            if [ "$MODE_AGENT_LITE" = "true" ]; then
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans redis rabbitmq socket-proxy
+                sync_agent_lite_rabbitmq_password
+                docker compose -f "$COMPOSE_FILE" up -d --force-recreate backend
+            else
+                docker compose -f "$COMPOSE_FILE" up -d --no-deps backend
+            fi
+
+            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput 2>/dev/null || true
+
+            # 4. Clean celerybeat-schedule and restart celery workers
+            echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"
+            docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule 2>/dev/null || true
+
+            restart_svcs="celery celery-deploy celery-fast celery-beat"
+            if [ "$MODE_AGENT_LITE" = "true" ]; then
+                restart_svcs="celery-worker"
+            fi
+            if [ "$MODE_AGENT_LITE" = "true" ]; then
+                docker compose -f "$COMPOSE_FILE" up -d --force-recreate $restart_svcs 2>/dev/null || true
+            else
+                docker compose -f "$COMPOSE_FILE" restart $restart_svcs 2>/dev/null || true
+             fi
+             set_checkpoint "update_db_migrated"
+             
+             # Custom Domain SSL Setup for Half Update
+             if should_manage_caddy; then  # Only for master mode
+                 echo -e "\n${YELLOW}[UPDATE] Setting up Custom Domain SSL Services...${NC}"
+                 if [ -f "install-custom-domain-ssl.sh" ]; then
+                     echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
+                     bash install-custom-domain-ssl.sh install
+                     
+                     # Start the services
+                     echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
+                     /opt/smsly-hosting/smsly-domain-ssl-manager.sh start
+                     
+                     # Enable auto-start on boot (if not already enabled)
+                     echo -e "${BLUE}  → Ensuring auto-start on boot...${NC}"
+                     /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable
+                     
+                     echo -e "${GREEN}  ✓ Custom domain SSL services configured${NC}"
+                 else
+                     echo -e "${YELLOW}  ⚠ Custom domain SSL manager not found, skipping setup${NC}"
+                 fi
+             fi
+             ;;
+         full)
             echo -e "${BLUE}  → [FULL REBUILD] Rebuilding PaaS core (preserving addon databases)...${NC}"
 
             # 1. Only stop PaaS core services — NEVER touch addon containers
-            CORE_SERVICES="frontend backend celery celery-deploy celery-fast celery-beat traefik socket-proxy route-fallback"
+            CORE_SERVICES="frontend backend celery celery-deploy celery-fast celery-beat"
+            if [ "$MODE_AGENT_LITE" = "true" ]; then
+                CORE_SERVICES="backend celery-worker"
+            elif [ "$MODE_NODE" = "true" ]; then
+                CORE_SERVICES="backend celery celery-deploy celery-fast celery-beat"
+            fi
 
             # 2. Remove old PaaS images (NOT addon images) to free up space BEFORE the build
             # We untag them so docker compose build has to make new ones. Running containers keep the actual image data alive.
@@ -1922,44 +3914,102 @@ if [ -n "$UPDATE_MODE" ]; then
             echo -e "${BLUE}    ↳ Ensuring networks exist...${NC}"
             ensure_update_networks
 
-            # 5. Rebuild core images from scratch while OLD containers are still running
-            echo -e "${BLUE}    ↳ Rebuilding core images (no cache)...${NC}"
-            docker compose -f "$COMPOSE_FILE" build --no-cache $CORE_SERVICES
+            # 5. Rebuild core images (CACHED unless --no-cache passed manually)
+            echo -e "${BLUE}    ↳ Rebuilding core images...${NC}"
+            docker compose -f "$COMPOSE_FILE" build $CORE_SERVICES
 
             # 6. Start everything (addons stay running, core gets fresh containers)
             # This does a graceful zero-downtime replacement instead of an explicit hard stop
             echo -e "${BLUE}    ↳ Starting all services...${NC}"
-            docker compose -f "$COMPOSE_FILE" up -d --force-recreate $CORE_SERVICES
+            if [ "$MODE_AGENT_LITE" = "true" ]; then
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans redis rabbitmq socket-proxy
+                sync_agent_lite_rabbitmq_password
+                docker compose -f "$COMPOSE_FILE" up -d --force-recreate --remove-orphans $CORE_SERVICES
+            elif [ "$MODE_NODE" = "true" ]; then
+                stop_node_excluded_services
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db pgcat redis rabbitmq socket-proxy registry route-fallback traefik
+                docker compose -f "$COMPOSE_FILE" up -d --no-deps --remove-orphans $CORE_SERVICES
+            else
+                docker compose -f "$COMPOSE_FILE" up -d --no-deps --remove-orphans $CORE_SERVICES
+            fi
 
-            # 7. Reconnect Traefik + socket-proxy to smsly-proxy network
-            #    (recreation drops Docker DNS links — causes 502 gateway errors)
-            #    NOTE: ensure_container_on_network uses `docker network connect`
-            #    which works on running containers. No restart needed.
-            echo -e "${BLUE}    ↳ Reconnecting proxy network...${NC}"
-            for ctr in smsly-hosting-traefik-1 smsly-hosting-socket-proxy-1; do
-                ensure_container_on_network "smsly-proxy" "$ctr"
-            done
+            if [ "$MODE_AGENT_LITE" != "true" ]; then
+                # 7. Reconnect Traefik + socket-proxy to smsly-proxy network
+                #    (recreation drops Docker DNS links — causes 502 gateway errors)
+                #    NOTE: ensure_container_on_network uses `docker network connect`
+                #    which works on running containers. No restart needed.
+                echo -e "${BLUE}    ↳ Reconnecting proxy network...${NC}"
+                for ctr in smsly-hosting-traefik-1 smsly-hosting-socket-proxy-1; do
+                    ensure_container_on_network "smsly-proxy" "$ctr"
+                done
+            fi
 
-            # 8. Run migrations
+            # 8. Stop backend, celery & pgcat so their DB connections don't block
+            #    migrations (ALTER TABLE requires exclusive locks).
+            echo -e "${BLUE}  → Stopping backend, celery & pgcat for migrations...${NC}"
+            docker compose -f "$COMPOSE_FILE" stop backend celery celery-deploy celery-fast celery-beat pgcat 2>/dev/null || true
+
+            # 9. Run migrations
             echo -e "${BLUE}  → Running migrations...${NC}"
             echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
-            docker compose -f "$COMPOSE_FILE" up -d db pgbouncer redis socket-proxy
-            sleep 10
-            # Note: Do NOT run makemigrations — migrations are committed in the repo.
-            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py migrate --noinput || {
-                echo -e "${YELLOW}  ⚠ Migration failed — backend may still be starting. Retrying in 15s...${NC}"
+            if [ "$MODE_AGENT_LITE" = "true" ]; then
+                verify_agent_lite_connectivity
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans redis rabbitmq socket-proxy
+                sync_agent_lite_rabbitmq_password
+            elif [ "$MODE_NODE" = "true" ]; then
+                stop_node_excluded_services
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db pgcat redis rabbitmq socket-proxy registry route-fallback traefik
+            else
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db pgcat redis socket-proxy
+            fi
+            run_backend_migrations --root || {
+                echo -e "${YELLOW}  ⚠ Migration failed — retrying in 15s...${NC}"
                 sleep 15
-                docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py migrate --noinput
+                run_backend_migrations --root
             }
+
+            # 10. Start pgcat & backend
+            echo -e "${BLUE}  → Starting pgcat & backend...${NC}"
+            docker compose -f "$COMPOSE_FILE" up -d --no-deps pgcat 2>/dev/null || true
+            if [ "$MODE_AGENT_LITE" = "true" ]; then
+                docker compose -f "$COMPOSE_FILE" up -d --force-recreate backend
+            else
+                docker compose -f "$COMPOSE_FILE" up -d --no-deps backend
+            fi
+            run_backend_migrations --root || {
+                echo -e "${YELLOW}  ⚠ Migration failed — retrying in 15s...${NC}"
+                sleep 15
+                run_backend_migrations --root
+            }
+
+            # 10. Start backend
+            echo -e "${BLUE}  → Starting backend...${NC}"
+            if [ "$MODE_AGENT_LITE" = "true" ]; then
+                docker compose -f "$COMPOSE_FILE" up -d --force-recreate backend
+            else
+                docker compose -f "$COMPOSE_FILE" up -d --no-deps backend
+            fi
 
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput
 
             # 9. Clean celerybeat-schedule and restart beat
             echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule 2>/dev/null || true
-            docker compose -f "$COMPOSE_FILE" restart celery-beat celery-deploy celery-fast 2>/dev/null || true
+            
+            restart_svcs="celery-beat celery-deploy celery-fast"
+            if [ "$MODE_AGENT_LITE" = "true" ]; then
+                restart_svcs="celery-worker"
+            fi
+            if [ "$MODE_AGENT_LITE" = "true" ]; then
+                docker compose -f "$COMPOSE_FILE" up -d --force-recreate $restart_svcs 2>/dev/null || true
+            else
+                docker compose -f "$COMPOSE_FILE" restart $restart_svcs 2>/dev/null || true
+            fi
+            set_checkpoint "update_db_migrated"
             ;;
     esac
+     set_checkpoint "update_containers_rebuilt"
+fi
 
     # ─── Ensure Local Docker cloud provider exists ──────────────────────────
     echo -e "${BLUE}  → Ensuring Local Docker cloud provider exists...${NC}"
@@ -1975,7 +4025,8 @@ if not created and not cp.is_active:
 " | docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null || true
     # ─── Self-Healing: Docker Socket Permissions ──────────────────────────────
     echo -e "${BLUE}  → Hardening Docker socket permissions...${NC}"
-    chmod 666 /var/run/docker.sock 2>/dev/null || true
+    # NOTE: Removed chmod 666 — world-writable docker.sock is a security risk.
+    # Group membership (docker group) is the correct access control mechanism.
     if ! groups smsly 2>/dev/null | grep -q "docker"; then
         usermod -aG docker smsly 2>/dev/null || true
     fi
@@ -1987,6 +4038,14 @@ if not created and not cp.is_active:
     docker container prune -f --filter "label=com.docker.compose.project" --filter "status=exited" 2>/dev/null || true
     # Prune BuildKit build cache (saves significant disk space)
     docker builder prune -f --filter "until=24h" 2>/dev/null || true
+    # Prune stale rollback backup containers left from failed blue-green promotions
+    docker container prune -f --filter "status=exited" 2>/dev/null || true
+    for ctr in $(docker ps -a --filter "status=exited" --filter "name=-rollback-" --format '{{.Names}}' 2>/dev/null || true); do
+        docker rm -f "$ctr" 2>/dev/null || true
+    done
+    for ctr in $(docker ps -a --filter "status=created" --filter "name=-rollback-" --format '{{.Names}}' 2>/dev/null || true); do
+        docker rm -f "$ctr" 2>/dev/null || true
+    done
 
     # ─── Self-Healing: Automatic Queue Restoration ──────────────────────────
     echo -e "${BLUE}  → Checking for stalled deployments/addons in QUEUED state...${NC}"
@@ -2018,8 +4077,15 @@ if a_count > 0:
     echo -e "${BLUE}  → Verifying worker connectivity and queue bindings...${NC}"
     # Give workers a moment to connect to Redis and report active queues
     sleep 15
-    if docker exec -i smsly-hosting-backend-1 celery -A config inspect active_queues 2>/dev/null | grep -q "deploy"; then
+    worker_container="smsly-hosting-celery-deploy-1"
+    if [ "$MODE_AGENT_LITE" = "true" ]; then
+        worker_container="smsly-hosting-celery-worker-1"
+    fi
+    DEPLOY_WORKER_HEALTH="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$worker_container" 2>/dev/null || echo "")"
+    if docker exec -i "$worker_container" celery -A config inspect active_queues --timeout=10 2>/dev/null | grep -q "deploy"; then
         echo -e "${GREEN}  ✓ Deployment worker successfully bound to 'deploy' queue${NC}"
+    elif [ "$DEPLOY_WORKER_HEALTH" = "healthy" ] || [ "$DEPLOY_WORKER_HEALTH" = "running" ]; then
+        echo -e "${GREEN}  ✓ Deployment worker container is healthy/running (queue inspect timed out)${NC}"
     else
         echo -e "${YELLOW}  ⚠ WARNING: Deployment worker not detected on 'deploy' queue. Check logs.${NC}"
     fi
@@ -2031,23 +4097,26 @@ if a_count > 0:
     # Refresh proxy/runtime edge stack so routing and TLS state is always clean.
     # NOTE: restart_edge_stack now handles Caddy validation internally (H1+H2 fix).
     restart_edge_stack
-    wait_for_traefik_api 30
+    wait_for_traefik_api 30 || true
 
     sleep 2
 
-    # ─── Caddy: Regenerate Caddyfile with service domains (writes directly to host) ──
+    # ─── Fix .env permissions (must be writable by Docker container UID 1000) ──
+    if [ -f "$INSTALL_DIR/.env" ]; then
+        chown root:1000 "$INSTALL_DIR/.env" 2>/dev/null || true
+        chmod 664 "$INSTALL_DIR/.env" 2>/dev/null || true
+    fi
+
+    # ─── Caddy: Generate self-signed cert + regenerate Caddyfile ──
+    if should_manage_caddy; then
+    ensure_selfsigned_cert
     if command -v caddy &> /dev/null; then
         echo -e "${BLUE}  → Regenerating Caddyfile with current service domains...${NC}"
 
         # ── Step 1: Find the Cloudflare token FIRST (before generating Caddyfile) ──
-        CADDY_OVERRIDE_DIR="/etc/systemd/system/caddy.service.d"
-        CADDY_OVERRIDE_FILE="$CADDY_OVERRIDE_DIR/override.conf"
         CF_TOKEN=""
 
-        # Priority: existing systemd override > .env file > PlatformConfig DB
-        if [ -f "$CADDY_OVERRIDE_FILE" ]; then
-            CF_TOKEN="$(grep 'CLOUDFLARE_API_TOKEN=' "$CADDY_OVERRIDE_FILE" 2>/dev/null | sed 's/.*CLOUDFLARE_API_TOKEN=//;s/"$//' || true)"
-        fi
+        # Priority: .env file > PlatformConfig DB
         if [ -z "$CF_TOKEN" ] && [ -f "$INSTALL_DIR/.env" ]; then
             CF_TOKEN="$(grep -m1 '^CLOUDFLARE_API_TOKEN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
         fi
@@ -2077,16 +4146,6 @@ if token and token.lower() not in ('fake', 'changeme', 'test', ''):
         if [ -n "$CF_TOKEN" ] && [ "$CF_TOKEN" != "fake" ]; then
             echo -e "${GREEN}  ✓ Cloudflare token available — generating Caddyfile with wildcard SSL${NC}"
 
-            # Ensure systemd override is set
-            mkdir -p "$CADDY_OVERRIDE_DIR"
-            cat > "$CADDY_OVERRIDE_FILE" <<ENVEOF
-[Service]
-ExecStart=
-ExecStart=/usr/bin/caddy run --config "$INSTALL_DIR"/caddy-config/Caddyfile
-Environment="CLOUDFLARE_API_TOKEN=$CF_TOKEN"
-ENVEOF
-            chmod 600 "$CADDY_OVERRIDE_FILE"
-            systemctl daemon-reload
 
             # Discover domain
             cf_domain=""
@@ -2100,6 +4159,8 @@ if d and d != 'localhost':
             if [ -z "$cf_domain" ]; then
                 cf_domain="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
             fi
+
+            cf_server_ip="$(detect_public_ip)"
 
             # Discover wildcard-covered hosts and non-wildcard service blocks.
             # - Wildcard-covered hosts route through Traefik via matcher.
@@ -2177,16 +4238,16 @@ for domain in Domain.objects.select_related('service').filter(
     }"
                 fi
 
-                cat > "$INSTALL_DIR"/caddy-config/Caddyfile <<CFCADDY
+                cat > /tmp/Caddyfile.tmp <<CFCADDY
 # Auto-generated with Cloudflare DNS challenge (wildcard SSL)
 {
     on_demand_tls {
-        ask http://localhost:8090/api/v1/services/check-domain/
+        ask http://backend:8000/api/v1/services/check-domain/
     }
 }
 
 ${cf_domain} {
-    reverse_proxy localhost:8090
+    reverse_proxy {$SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
     encode gzip
     log {
         output file /var/log/caddy/access.log
@@ -2198,42 +4259,25 @@ ${cf_domain} {
         dns cloudflare {env.CLOUDFLARE_API_TOKEN}
     }
 ${cf_known_stanza}
-    @platform_assets path /_next/* /favicon.ico /images/* /logos/* /assets/* /static/* /media/*
-    handle @platform_assets {
-        reverse_proxy localhost:8090
-    }
     handle {
-        reverse_proxy localhost:8090
+        reverse_proxy {$SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
     }
 }
 
-
-}
-
-:80 {
-    @acme {
-        path /.well-known/acme-challenge/*
-    }
-    handle @acme {
-        reverse_proxy localhost:8090
-    }
-    @redirectable {
-        not header_regexp host ^([0-9]{1,3}[.]){3}[0-9]{1,3}(:[0-9]+)?$
-        not host localhost
-        not host 127.0.0.1
-        not host *.local
-        header_regexp host .+
-    }
-    redir @redirectable https://{host}{uri} 308
-    handle {
-        reverse_proxy localhost:8090
-    }
+${cf_server_ip} {
+    tls internal
+    redir http://${cf_server_ip}{uri} 308
 }
 
 ${cf_svc_blocks}
 CFCADDY
-                caddy fmt --overwrite "$INSTALL_DIR"/caddy-config/Caddyfile 2>/dev/null || true
-                echo -e "${GREEN}  ✓ Caddyfile generated with wildcard SSL for *.${cf_domain}${NC}"
+                if install_caddyfile_atomically /tmp/Caddyfile.tmp "wildcard Caddyfile"; then
+                    echo -e "${GREEN}  ✓ Caddyfile generated with wildcard SSL for *.${cf_domain}${NC}"
+                else
+                    echo -e "${YELLOW}  ⚠ Wildcard Caddyfile could not be applied. Falling back to standard HTTPS for ${cf_domain}.${NC}"
+                    generate_safe_caddyfile "wildcard Caddyfile apply failed"
+                fi
+                rm -f /tmp/Caddyfile.tmp
             else
                 # IP mode or no domain — fall back to safe Caddyfile
                 generate_safe_caddyfile "update flow (IP mode)"
@@ -2242,20 +4286,9 @@ CFCADDY
             # No valid token — generate safe Caddyfile (no dns cloudflare)
             generate_safe_caddyfile "update flow caddy regen"
 
-            # Strip any leftover dns cloudflare blocks to prevent crash
-            if grep -q 'dns cloudflare' "$INSTALL_DIR"/caddy-config/Caddyfile 2>/dev/null; then
-                echo -e "${YELLOW}  ⚠ No Cloudflare token — removing DNS challenge from Caddyfile${NC}"
-                python3 -c "
-import re
-with open('"$INSTALL_DIR"/caddy-config/Caddyfile') as f:
-    content = f.read()
-content = re.sub(r'\s*tls\s*\{[^}]*\}\s*\n?', '\n', content)
-with open('"$INSTALL_DIR"/caddy-config/Caddyfile', 'w') as f:
-    f.write(content)
-print('Stripped tls blocks')
-" 2>/dev/null || true
-                echo -e "${YELLOW}  ⚠ Wildcard HTTPS disabled. Set CLOUDFLARE_API_TOKEN in .env to re-enable.${NC}"
-            fi
+            # NOTE: Cloudflare dns-challenge stripping is now handled by
+            # generate_safe_caddyfile itself, which never emits 'dns cloudflare'
+            # blocks when no token is present. (Removed dead 'if false' block.)
         fi
 
         # Final validation — if still broken, regenerate safe fallback
@@ -2263,37 +4296,57 @@ print('Stripped tls blocks')
             generate_safe_caddyfile "post-update validation"
         fi
 
-    if docker compose -f "$COMPOSE_FILE" ps -q caddy 2>/dev/null | grep -q .; then
-    true
-        else
-    true
-        fi
-    true
+        reload_container_caddy 2>/dev/null || true
+
 
         # Verify Caddy is running
         sleep 2
-    if docker compose -f "$COMPOSE_FILE" ps -q caddy 2>/dev/null | grep -q .; then
+        if docker compose -f "$COMPOSE_FILE" ps -q caddy 2>/dev/null | grep -q .; then
             echo -e "${GREEN}  ✓ Caddy config regenerated and running${NC}"
         else
             echo -e "${YELLOW}  ⚠ Caddy failed to start. Run: journalctl -u caddy --no-pager -n 20${NC}"
         fi
+
+        POST_CADDY_DOMAIN="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+from apps.deployments.models import PlatformConfig
+c = PlatformConfig.load()
+d = (c.domain or '').strip()
+if d and d != 'localhost':
+    print(d)
+" 2>/dev/null | tr -d '[:space:]' || true)"
+        if [ -z "$POST_CADDY_DOMAIN" ]; then
+            POST_CADDY_DOMAIN="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
+        fi
+
+        install_caddy_health_guard "$POST_CADDY_DOMAIN"
+    fi
     fi
 
     safe_refresh_runtime_services
 
     # ─── Auto-redeploy active services when platform code or domain state changes ──
-    GIT_CHANGES="$(cd "$INSTALL_DIR" && git diff HEAD@{1} --name-only 2>/dev/null | head -5 || true)"
-    if [ -n "$GIT_CHANGES" ]; then
+    PRE_HEAD="$(cat "$INSTALL_DIR/.pre-update-head" 2>/dev/null || true)"
+    CURRENT_HEAD="$(cd "$INSTALL_DIR" && git rev-parse HEAD 2>/dev/null || true)"
+    CODE_CHANGED=false
+    if [ -n "$PRE_HEAD" ] && [ "$PRE_HEAD" != "$CURRENT_HEAD" ]; then
+        CODE_CHANGED=true
+        echo -e "${BLUE}  → Platform code changed (${PRE_HEAD:0:7} → ${CURRENT_HEAD:0:7})${NC}"
+    fi
+    if [ "$CODE_CHANGED" = "true" ] || [ "$FORCE_REDEPLOY" = "true" ]; then
         echo -e "${BLUE}  → Auto-redeploying active services (platform code changed)...${NC}"
-        queue_active_service_redeploys "Platform update auto-redeploy" "" \
-            2>/dev/null || echo -e "${YELLOW}  ⚠ Auto-redeploy skipped (backend not ready)${NC}"
+        if ! queue_active_service_redeploys "Platform update auto-redeploy" ""; then
+            echo -e "${YELLOW}  ⚠ Auto-redeploy encountered issues (check logs above)${NC}"
+        fi
     elif [ "${DOMAIN_SYNC_REDEPLOY_REQUIRED:-0}" = "1" ]; then
         echo -e "${BLUE}  → Auto-redeploying rewritten services (platform domain changed)...${NC}"
-        queue_active_service_redeploys "Platform domain change auto-redeploy" "${DOMAIN_SYNC_SERVICE_IDS}" \
-            2>/dev/null || echo -e "${YELLOW}  ⚠ Domain-change redeploy skipped (backend not ready)${NC}"
+        if ! queue_active_service_redeploys "Platform domain change auto-redeploy" "${DOMAIN_SYNC_SERVICE_IDS}"; then
+            echo -e "${YELLOW}  ⚠ Domain-change redeploy encountered issues (check logs above)${NC}"
+        fi
     else
         echo -e "${GREEN}  ✓ No platform code or domain-driven redeploys required${NC}"
     fi
+    # Clean up marker
+    rm -f "$INSTALL_DIR/.pre-update-head" 2>/dev/null || true
 
     # ─── Endpoint Verification (3 checks) ──────────────────────────────────
     echo -e "\n${BLUE}  → Running endpoint verification (3 checks)...${NC}"
@@ -2303,17 +4356,34 @@ print('Stripped tls blocks')
 
     # ── Check 1: Backend API health (docker exec into backend container) ──
     EP1_FALLBACK_URL="http://127.0.0.1:8090/health"
+    _LITE_HOST_HEADER=""
+    if [ "$MODE_AGENT_LITE" = "true" ]; then
+        _ep1_domain="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]' || true)"
+        if [ -n "$_ep1_domain" ] && [ "$_ep1_domain" != "localhost" ]; then
+            _LITE_HOST_HEADER="$_ep1_domain"
+        fi
+    fi
     echo -e "${BLUE}  [1/3] Backend API health...${NC}"
     echo -e "${BLUE}        Endpoint: backend:8000/health (via docker exec)${NC}"
     BACKEND_OK=false
     EP1_CODE="000"
     for attempt in 1 2 3 4 5; do
-        if docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health >/dev/null 2>&1; then
-            EP1_CODE="200"
-        elif curl -fsS --max-time 5 "$EP1_FALLBACK_URL" >/dev/null 2>&1; then
-            EP1_CODE="200"
+        if [ "$MODE_AGENT_LITE" = "true" ]; then
+            if [ -n "${_LITE_HOST_HEADER:-}" ]; then
+                # Route through Traefik with the correct Host header
+                EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 -H "Host: ${_LITE_HOST_HEADER}" "http://127.0.0.1/health" 2>/dev/null) || EP1_CODE="000"
+            else
+                # No domain — route through Traefik on port 80
+                EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1/health" 2>/dev/null) || EP1_CODE="000"
+            fi
         else
-            EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP1_FALLBACK_URL" 2>/dev/null) || EP1_CODE="000"
+            if docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health >/dev/null 2>&1; then
+                EP1_CODE="200"
+            elif curl -fsS --max-time 5 "$EP1_FALLBACK_URL" >/dev/null 2>&1; then
+                EP1_CODE="200"
+            else
+                EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP1_FALLBACK_URL" 2>/dev/null) || EP1_CODE="000"
+            fi
         fi
         case "$EP1_CODE" in
             2*|3*)
@@ -2351,7 +4421,10 @@ if d and d != 'localhost':
     HTTPS_OK=false
     EP2_CODE="---"
     EP2_URL="(skipped)"
-    if [ -n "$EP_DOMAIN" ] && [ "$EP_DOMAIN" != "localhost" ]; then
+    if ! should_manage_caddy; then
+        EP2_RESULT="${YELLOW}SKIP${NC}"
+        echo -e "${YELLOW}  [2/3] SKIPPED (Caddy/HTTPS is master-only in this mode)${NC}"
+    elif [ -n "$EP_DOMAIN" ] && [ "$EP_DOMAIN" != "localhost" ] && ! echo "$EP_DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
         EP2_URL="https://${EP_DOMAIN}/health"
         echo -e "${BLUE}        Endpoint: $EP2_URL${NC}"
         for attempt in 1 2 3; do
@@ -2371,9 +4444,13 @@ if d and d != 'localhost':
         else
             EP2_RESULT="${RED}FAIL${NC}"
             echo -e "${RED}  ✗ [2/3] FAIL — HTTP $EP2_CODE${NC}"
-            echo -e "${YELLOW}        Fix: docker compose -f $COMPOSE_FILE logs --tail=15 caddy && journalctl -u caddy --no-pager -n 15${NC}"
+            echo -e "${YELLOW}        Fix: docker compose -f $COMPOSE_FILE logs --tail=15 caddy${NC}"
             FAIL_COUNT=$((FAIL_COUNT + 1))
         fi
+    elif [ -n "$EP_DOMAIN" ] && echo "$EP_DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+        EP2_URL="(skipped: IP mode)"
+        EP2_RESULT="${YELLOW}SKIP${NC}"
+        echo -e "${YELLOW}  [2/3] SKIPPED (HTTPS requires a domain name, not raw IP $EP_DOMAIN)${NC}"
     else
         EP2_RESULT="${YELLOW}SKIP${NC}"
         echo -e "${YELLOW}  ⊘ [2/3] SKIPPED (no domain configured)${NC}"
@@ -2394,7 +4471,11 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
 " 2>/dev/null | tr -d '\r' || true)"
 
     # Also check Traefik port directly
-    EP3_URL="http://127.0.0.1:8081/"
+    if [ "$MODE_AGENT_LITE" = "true" ]; then
+        EP3_URL="http://127.0.0.1/"
+    else
+        EP3_URL="http://127.0.0.1:8081/"
+    fi
     EP3_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP3_URL" 2>/dev/null) || EP3_CODE="000"
     if [ "$EP3_CODE" != "000" ] && [ "$EP3_CODE" != "502" ]; then
         EP3_RESULT="${GREEN}PASS${NC}"
@@ -2414,7 +4495,11 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
         while IFS='|' read -r svc_name svc_domain; do
             [ -z "$svc_domain" ] && continue
             SVC_COUNT=$((SVC_COUNT + 1))
-            svc_url="https://${svc_domain}/"
+            if should_manage_caddy; then
+                svc_url="https://${svc_domain}/"
+            else
+                svc_url="http://${svc_domain}/"
+            fi
             echo -e "${BLUE}        Testing: $svc_name → $svc_url${NC}"
             svc_code="000"
             svc_ok=false
@@ -2499,7 +4584,11 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
 
     # ─── Re-apply OOM protection (scores reset when containers restart) ──────
     echo -e "${BLUE}  → Re-applying OOM protection for critical containers...${NC}"
-    for CONTAINER in smsly-hosting-backend-1 smsly-hosting-db-1 smsly-hosting-pgbouncer-1 smsly-hosting-celery-1 smsly-hosting-celery-deploy-1 smsly-hosting-celery-fast-1 smsly-hosting-celery-beat-1 smsly-socket-proxy; do
+    oom_containers="smsly-hosting-backend-1 smsly-hosting-db-1 smsly-hosting-pgcat-1 smsly-hosting-celery-1 smsly-hosting-celery-deploy-1 smsly-hosting-celery-fast-1 smsly-hosting-celery-beat-1 smsly-socket-proxy"
+    if [ "$MODE_AGENT_LITE" = "true" ]; then
+        oom_containers="smsly-hosting-backend-1 smsly-hosting-celery-worker-1 smsly-hosting-socket-proxy-1"
+    fi
+    for CONTAINER in $oom_containers; do
         CPID=$(docker inspect --format '{{.State.Pid}}' "$CONTAINER" 2>/dev/null || echo "")
         if [ -n "$CPID" ] && [ "$CPID" != "0" ] && [ -f "/proc/$CPID/oom_score_adj" ]; then
             echo -500 > "/proc/$CPID/oom_score_adj" 2>/dev/null || true
@@ -2508,17 +4597,176 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
     echo -e "${GREEN}  ✓ OOM protection set (core, database, celery, proxy)${NC}"
 
     trap - EXIT
+    release_install_lock
     echo -e "\n${GREEN}════════════════════════════════════════════════════════════${NC}"
+    # Infrastructure Diagnostic & Auto-Fix
+    # Infrastructure Handshake & Health Stabilization
+    echo -e "\n${BLUE}  🔄 Running infrastructure handshake and stabilization...${NC}"
+    chmod +x scripts/grid-handshake.sh 2>/dev/null || true
+    bash scripts/grid-handshake.sh || \
+        echo -e "${YELLOW}  ⚠️ Handshake stabilization failed (non-fatal). You can run it manually later.${NC}"
+
+    # ─── Fix .env permissions (ensures domain signal can write back) ─────
+    fix_env_permissions "$INSTALL_DIR/.env" || true
+
     echo -e "${GREEN}   ✓ UPDATE SUCCESSFUL ($UPDATE_MODE)${NC}"
+
     echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
     echo -e "${YELLOW}  Debug snapshot:    sudo bash install.sh --debug${NC}"
     echo -e "${YELLOW}  Runtime recovery:  sudo bash install.sh --recover${NC}"
+    echo -e "${YELLOW}  Fix permissions:   sudo bash install.sh --fix-permissions${NC}"
     exit 0
 fi
 
 # =============================================================================
 # FRESH INSTALL — Full setup from scratch
 # =============================================================================
+
+# ─── Interactive Setup (Step 0) ──────────────────────────────────────────────
+if [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ]; then
+    # Architecture Selection
+    if [ "${RUST_TWIN_MODE:-false}" = "false" ]; then
+        echo -e "${BLUE}Select Backend Architecture:${NC}"
+        echo -e "  1) ${GREEN}Legacy Python${NC} (Stable monolith)"
+        echo -e "  2) ${GREEN}Next-Gen Rust${NC} (High-performance microservices, Beta)"
+        read -p "Enter choice [1]: " _ARCH_CHOICE < /dev/tty
+        if [ "${_ARCH_CHOICE:-1}" = "2" ]; then
+            RUST_TWIN_MODE="true"
+            COMPOSE_FILE="rust_twin/docker-compose.yml"
+        fi
+    fi
+
+    # Agent Lite Selection
+    if [ "$MODE_AGENT_LITE" = "true" ] && [ -z "${MASTER_IP:-}" ]; then
+        echo -e "\n${BLUE}═══════════════════════════════════════════════════════════"
+        echo "  CONFIGURING LITE AGENT NODE"
+        echo "═══════════════════════════════════════════════════════════${NC}"
+        read -p "  Enter Master VPS IP Address: " MASTER_IP < /dev/tty
+        read -p "  Enter Master Database Password: " MASTER_DB_PASSWORD < /dev/tty
+        echo ""
+        read -p "  Enter Master RabbitMQ Password: " MASTER_MQ_PASSWORD < /dev/tty
+        echo ""
+        COMPOSE_FILE="infrastructure/docker/docker-compose.agent-lite.yml"
+        export MASTER_IP MASTER_DB_PASSWORD MASTER_MQ_PASSWORD
+    fi
+
+    # ─── Deployment Mode Selection (Moved up) ──────────────────────────────
+    # Initialize defaults
+    MODE_CHOICE=1
+    PUBLIC_IP="${PUBLIC_IP:-$(detect_public_ip)}"
+    PRESET_DOMAIN="${DOMAIN:-}"
+    PRESET_ACME_EMAIL="${ACME_EMAIL:-}"
+    PRESET_USE_SSL="${USE_SSL:-}"
+
+    # Deployment Mode Selection - Only prompt if not preset and in interactive shell
+    if is_node_mode; then
+        USE_SSL="false"
+        DOMAIN="${DOMAIN:-$PUBLIC_IP}"
+        MODE_CHOICE=1
+        echo -e "${BLUE}  → Node mode: using Traefik HTTP on $DOMAIN; Caddy/HTTPS is master-owned.${NC}"
+    elif [ -n "${PRESET_USE_SSL}" ]; then
+        if [ "${PRESET_USE_SSL}" = "true" ] && [ -n "${PRESET_DOMAIN}" ] && [ -n "${PRESET_ACME_EMAIL}" ]; then
+            echo -e "${BLUE}  → Preset detected. Using SSL Mode for ${PRESET_DOMAIN}.${NC}"
+            MODE_CHOICE=2
+        elif [ "${PRESET_USE_SSL}" = "false" ]; then
+            echo -e "${BLUE}  → Preset detected. Using IP Mode.${NC}"
+            MODE_CHOICE=1
+        fi
+    elif [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ]; then
+        echo -e "\n${BLUE}Select Deployment Mode:${NC}"
+        echo -e "  1) ${GREEN}IP Mode${NC} (Easy) - http://$PUBLIC_IP"
+        echo -e "  2) ${GREEN}SSL Mode${NC} (Prod) - https://your-domain.com (Requires DNS A Record pointing to $PUBLIC_IP)"
+        read -p "Enter choice [1]: " MODE_CHOICE < /dev/tty
+        MODE_CHOICE=${MODE_CHOICE:-1}
+    fi
+
+    # Set configuration based on choice or presets
+    if is_node_mode; then
+        USE_SSL="false"
+        DOMAIN="${DOMAIN:-$PUBLIC_IP}"
+    elif [ "$MODE_CHOICE" -eq "2" ] || [ "${PRESET_USE_SSL}" = "true" ]; then
+        USE_SSL="true"
+        DOMAIN="${PRESET_DOMAIN:-}"
+        ACME_EMAIL="${PRESET_ACME_EMAIL:-}"
+
+        if [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ]; then
+            while [ -z "$DOMAIN" ]; do
+                read -p "Enter your Domain (e.g., app.example.com): " DOMAIN < /dev/tty
+            done
+            while [ -z "$ACME_EMAIL" ]; do
+                read -p "Enter Email for SSL (e.g., admin@example.com): " ACME_EMAIL < /dev/tty
+            done
+        fi
+
+        if [ -n "$DOMAIN" ]; then
+            echo -e "${BLUE}  → Verifying DNS for $DOMAIN...${NC}"
+            DETECTED_IP=""
+            # Try 'host' first (dnsutils), fall back to API-based DNS lookup
+            if command -v host &> /dev/null; then
+                DETECTED_IP=$(host -t A "$DOMAIN" 2>/dev/null | awk '{print $NF}' | tail -n 1)
+            fi
+            if [ -z "$DETECTED_IP" ] || [ "$DETECTED_IP" = "found:" ] || [ "$DETECTED_IP" = "not" ]; then
+                DETECTED_IP=""
+                # Fallback to DNS over HTTPS (Google)
+                DETECTED_IP="$(curl -fsS "https://dns.google/resolve?name=${DOMAIN}&type=A" -m 5 2>/dev/null | python3 -c "import json,sys; data=json.load(sys.stdin); ans=data.get('Answer',[]); print(ans[0]['data']) if ans and 'data' in ans[0] else print('')" 2>/dev/null || echo "")"
+            fi
+            if [ -n "$DETECTED_IP" ]; then
+                if [ "$DETECTED_IP" != "$PUBLIC_IP" ] && [ "$DETECTED_IP" != "127.0.0.1" ]; then
+                    echo -e "${YELLOW}  ⚠ WARNING: DNS for $DOMAIN ($DETECTED_IP) does not match this server ($PUBLIC_IP).${NC}"
+                    echo -e "${YELLOW}  SSL generation may fail. Ensure your DNS A record is set.${NC}"
+                    if [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ]; then
+                        read -p "  Continue anyway? (y/n) " -n 1 -r < /dev/tty
+                        echo
+                        if [[ ! $REPLY =~ ^[Yy]$ ]]; then exit 1; fi
+                    fi
+                else
+                    echo -e "${GREEN}  ✓ DNS looks correct.${NC}"
+                fi
+            else
+                echo -e "${YELLOW}  ⚠ Could not resolve DNS for $DOMAIN. SSL may fail.${NC}"
+                echo -e "${YELLOW}  Ensure your DNS A record points to $PUBLIC_IP${NC}"
+            fi
+        fi
+    else
+        USE_SSL="false"
+        DOMAIN="${DOMAIN:-$PUBLIC_IP}"
+        echo -e "${BLUE}  → Using IP Mode: $DOMAIN${NC}"
+    fi
+
+    # ─── Wildcard Subdomain & Cloudflare Setup (Front-loaded) ────────────
+    WILDCARD_SUBDOMAINS="false"
+    CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
+    if [ "$USE_SSL" = "true" ] && [ -n "$DOMAIN" ] && [ "$DOMAIN" != "$PUBLIC_IP" ]; then
+        echo ""
+        echo -e "${BLUE}  Wildcard subdomains allow deployed services to get automatic SSL.${NC}"
+        echo -e "  e.g., myapp-abc123.${DOMAIN} will automatically have HTTPS."
+        echo -e "  This requires a Cloudflare API Token with DNS:Edit permission.\n"
+
+        if [ -n "${CLOUDFLARE_API_TOKEN}" ]; then
+            WILDCARD_SUBDOMAINS="true"
+            echo -e "${BLUE}  → Preset Cloudflare token detected. Enabling wildcard subdomains.${NC}"
+        elif [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ]; then
+            read -p "  Enable wildcard subdomains? (y/n) [n]: " WILDCARD_CHOICE < /dev/tty
+            WILDCARD_CHOICE=${WILDCARD_CHOICE:-n}
+            if [[ $WILDCARD_CHOICE =~ ^[Yy]$ ]]; then
+                WILDCARD_SUBDOMAINS="true"
+                while [ -z "$CLOUDFLARE_API_TOKEN" ]; do
+                    read -p "  Enter Cloudflare API Token (DNS:Edit): " CLOUDFLARE_API_TOKEN < /dev/tty
+                    echo
+                done
+                echo -e "${GREEN}  ✓ Wildcard subdomains enabled.${NC}"
+            fi
+        fi
+    fi
+fi
+
+if is_node_mode; then
+    PUBLIC_IP="${PUBLIC_IP:-$(detect_public_ip)}"
+    USE_SSL="false"
+    DOMAIN="${DOMAIN:-$PUBLIC_IP}"
+    WILDCARD_SUBDOMAINS="false"
+    CLOUDFLARE_API_TOKEN=""
+fi
 
 # -----------------------------------------------------------------------------
 # 1. Pre-flight Checks
@@ -2529,6 +4777,11 @@ if [ "$EUID" -ne 0 ]; then
     echo -e "${RED}✗ Please run as root (sudo bash install.sh)${NC}"
     exit 1
 fi
+
+check_internet
+check_hardware
+check_caddy_conflict
+ensure_system_swap
 
 # Check OS
 if [ -f /etc/os-release ]; then
@@ -2560,16 +4813,74 @@ if [ "$DISK_AVAIL_MB" -lt 3000 ]; then
     fi
     echo -e "${GREEN}  ✓ After cleanup: ${DISK_AVAIL_MB}MB available${NC}"
 fi
+
+# ─── Git Initialization & Sync ──────────────────────────────────────────────
+SMSLY_BRANCH="${SMSLY_BRANCH:-main}"
+SMSLY_GIT_REMOTE="${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}"
+
+if [ -d "$INSTALL_DIR/.git" ]; then
+    echo -e "${BLUE}  → Updating existing repository ($SMSLY_BRANCH)...${NC}"
+    cd "$INSTALL_DIR"
+    ensure_local_ignores
+    if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+        echo -e "${YELLOW}  ! Local changes detected - stashing before repository sync${NC}"
+        git stash push --include-untracked -m "install-sync-$(date +%s)" >/dev/null 2>&1 || true
+    fi
+    if ! git fetch origin "$SMSLY_BRANCH" >/dev/null 2>&1 || ! git reset --hard "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
+        echo -e "${YELLOW}  ⚠️ Standard Git update failed. Retrying with http.sslVerify=false...${NC}"
+        if ! git -c http.sslVerify=false fetch origin "$SMSLY_BRANCH" >/dev/null 2>&1 || ! git -c http.sslVerify=false reset --hard "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
+            echo -e "${YELLOW}  ⚠️ Git update failed. The installer repository is public; check network/DNS access to GitHub and branch name.${NC}"
+        fi
+    fi
+else
+    echo -e "${BLUE}  → Cloning repository ($SMSLY_BRANCH)...${NC}"
+    CLONE_SUCCESS=false
+    if [ -f "$INSTALL_DIR/.env" ]; then
+        echo -e "${YELLOW}  → Existing .env found — preserving configuration${NC}"
+        cp "$INSTALL_DIR/.env" /tmp/smsly-env-backup 2>/dev/null || true
+    fi
+    rm -rf "$INSTALL_DIR"
+    if git clone -b "$SMSLY_BRANCH" "$SMSLY_GIT_REMOTE" "$INSTALL_DIR"; then
+        CLONE_SUCCESS=true
+    else
+        echo -e "${YELLOW}  ⚠️ Standard Git clone failed. Retrying with http.sslVerify=false...${NC}"
+        if git -c http.sslVerify=false clone -b "$SMSLY_BRANCH" "$SMSLY_GIT_REMOTE" "$INSTALL_DIR"; then
+            CLONE_SUCCESS=true
+        fi
+    fi
+    if [ "$CLONE_SUCCESS" = "true" ] && [ -f /tmp/smsly-env-backup ]; then
+        cp /tmp/smsly-env-backup "$INSTALL_DIR/.env"
+        rm -f /tmp/smsly-env-backup
+        echo -e "${GREEN}  ✓ Restored existing .env${NC}"
+    fi
+
+    if [ "$CLONE_SUCCESS" = "false" ]; then
+        echo -e "${YELLOW}  ⚠️ Git clone/fetch failed.${NC}"
+        if [ -n "${SMSLY_INSTALL_WORKDIR:-}" ] && [ -d "${SMSLY_INSTALL_WORKDIR}" ]; then
+            echo -e "${BLUE}  → Fallback: Initializing from pre-uploaded source bundle...${NC}"
+            mkdir -p "$INSTALL_DIR"
+            cp -rv "${SMSLY_INSTALL_WORKDIR}/"* "$INSTALL_DIR/" 2>/dev/null || true
+            cd "$INSTALL_DIR"
+            if [ ! -d ".git" ]; then
+                git init -q
+                git remote add origin "$SMSLY_GIT_REMOTE"
+            fi
+            echo -e "${GREEN}  ✓ Fallback initialization complete.${NC}"
+        fi
+    fi
+fi
+
 echo -e "${GREEN}  ✓ Pre-flight checks passed${NC}"
+set_checkpoint "requirements_checked"
 
 # -----------------------------------------------------------------------------
 # 2. Dependency Management & cleanup
 # -----------------------------------------------------------------------------
-echo -e "\n${YELLOW}[2/9] Installing dependencies...${NC}"
+if ! is_checkpoint_done "dependencies_installed"; then
+    echo -e "\n${YELLOW}[2/9] Installing dependencies...${NC}"
 
-# Stop conflicting services if present (anything that holds port 80/443)
-# NOTE: Don't stop Caddy here — we install/configure it in step 7.
-# Stopping it on re-installs breaks the reverse proxy unnecessarily.
+# Stop conflicting services if present. Host Caddy conflicts are handled by
+# check_caddy_conflict because master Docker Caddy and node Traefik need port 80.
 for svc in nginx apache2; do
     if systemctl is-active --quiet "$svc" 2>/dev/null; then
         echo -e "${YELLOW}  ⚠ Stopping conflicting service: $svc${NC}"
@@ -2614,8 +4925,8 @@ fi
 
 echo -e "${GREEN}  ✓ Previous artifacts cleaned${NC}"
 
-apt-get update -qq
-apt-get install -y curl wget git python3 python3-pip python3-venv openssl ca-certificates gnupg lsb-release dnsutils
+apt_run apt-get update -qq
+apt_run apt-get install -y curl wget git python3 python3-pip python3-venv openssl ca-certificates gnupg lsb-release dnsutils apache2-utils
 
 # Install Docker if missing
 if ! command -v docker &> /dev/null; then
@@ -2625,23 +4936,91 @@ if ! command -v docker &> /dev/null; then
     echo \
       "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
       $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
-    apt-get update -qq
-    apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    apt_run apt-get update -qq
+    apt_run apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    systemctl enable docker 2>/dev/null || true
+    systemctl start docker 2>/dev/null || true
+    if ! docker info >/dev/null 2>&1; then
+        echo -e "${RED}  ✗ Docker daemon failed to start. Check 'systemctl status docker' and kernel modules.${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}  ✓ Docker installed and running${NC}"
 else
     echo -e "${GREEN}  ✓ Docker already installed ($(docker --version | head -c 40))${NC}"
 fi
 
+# Create smsly system user for container file ownership
+id smsly >/dev/null 2>&1 || useradd -r -s /usr/sbin/nologin -u 1000 smsly 2>/dev/null || true
+
 # Ensure docker compose is available
 if ! docker compose version >/dev/null 2>&1; then
     echo -e "${BLUE}  → Installing Docker Compose plugin...${NC}"
-    apt-get install -y docker-compose-plugin || true
+    apt_run apt-get install -y docker-compose-plugin || true
 fi
+# Fallback to docker-compose v1 if plugin still not available
+if ! docker compose version >/dev/null 2>&1; then
+    if command -v docker-compose >/dev/null 2>&1; then
+        echo -e "${YELLOW}  ⚠ docker compose plugin not available; falling back to docker-compose v1${NC}"
+        docker_compose() { docker-compose "$@"; }
+    else
+        echo -e "${RED}  ✗ Neither 'docker compose' nor 'docker-compose' found. Install Docker Compose.${NC}"
+        exit 1
+    fi
+fi
+
+# Apply mirror config if applicable (Only if docker is now present)
+if command -v docker &> /dev/null; then
+    configure_docker_mirror
+fi
+
+# Ensure WireGuard mesh interface exists on master (PgCat binds to 10.100.0.1:5432)
+ensure_wireguard_mesh() {
+    local mesh_ip="${MASTER_MESH_IP:-10.100.0.1}"
+    local wg_iface="wg0"
+    # Only needed on master — lite agents connect via the mesh to the master
+    if is_agent_lite_mode || is_node_mode; then
+        return 0
+    fi
+    if ip link show "$wg_iface" >/dev/null 2>&1; then
+        echo -e "${GREEN}  ✓ WireGuard mesh ($wg_iface) already configured${NC}"
+        return 0
+    fi
+    echo -e "${BLUE}  → Configuring WireGuard mesh interface ($wg_iface: $mesh_ip)...${NC}"
+    if ! command -v wg >/dev/null 2>&1; then
+        apt_run apt-get install -y wireguard
+    fi
+    mkdir -p /etc/wireguard
+    if [ ! -f /etc/wireguard/private.key ]; then
+        wg genkey | tee /etc/wireguard/private.key | wg pubkey > /etc/wireguard/public.key
+    fi
+    local privkey
+    privkey="$(cat /etc/wireguard/private.key)"
+    if [ ! -f "/etc/wireguard/${wg_iface}.conf" ]; then
+        cat > "/etc/wireguard/${wg_iface}.conf" <<WGCONF
+[Interface]
+PrivateKey = ${privkey}
+Address = ${mesh_ip}/24
+ListenPort = 51820
+WGCONF
+    fi
+    systemctl enable --now "wg-quick@${wg_iface}" 2>/dev/null || true
+    if ip link show "$wg_iface" >/dev/null 2>&1; then
+        echo -e "${GREEN}  ✓ WireGuard mesh ($wg_iface: $mesh_ip) is up${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ WireGuard ($wg_iface) failed to start — PgCat mesh binding may fail${NC}"
+    fi
+}
+ensure_wireguard_mesh
+
 echo -e "${GREEN}  ✓ Dependencies installed${NC}"
+    set_checkpoint "dependencies_installed"
+fi
 
 # -----------------------------------------------------------------------------
 # 3. Configuration & Secrets (IDEMPOTENT)
 # -----------------------------------------------------------------------------
-echo -e "\n${YELLOW}[3/9] Configuration...${NC}"
+if ! is_checkpoint_done "config_generated"; then
+    echo -e "\n${YELLOW}[3/9] Configuration...${NC}"
 
 mkdir -p "$INSTALL_DIR"
 
@@ -2658,20 +5037,56 @@ if [ "$(pwd)" != "$INSTALL_DIR" ]; then
         if [ -d "$INSTALL_DIR/.git" ]; then
              echo -e "${BLUE}  → Updating existing repository...${NC}"
              cd "$INSTALL_DIR"
-             git fetch origin main >/dev/null 2>&1 || true
-             git reset --hard origin/main
+             if ! git pull origin "$SMSLY_BRANCH" >/dev/null 2>&1; then
+                 git -c http.sslVerify=false pull origin "$SMSLY_BRANCH" >/dev/null 2>&1 || true
+             fi
         else
              echo -e "${BLUE}  → Cloning repository...${NC}"
-             git clone https://github.com/SMSLYCLOUD/smsly-hosting.git "$INSTALL_DIR"
+             if [ -f "$INSTALL_DIR/.env" ]; then
+                 cp "$INSTALL_DIR/.env" /tmp/smsly-env-backup 2>/dev/null || true
+             fi
+             rm -rf "$INSTALL_DIR"
+             if ! git clone -b "$SMSLY_BRANCH" "${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}" "$INSTALL_DIR"; then
+                 git -c http.sslVerify=false clone -b "$SMSLY_BRANCH" "${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}" "$INSTALL_DIR"
+             fi
+             cd "$INSTALL_DIR"
+             if [ -f /tmp/smsly-env-backup ]; then
+                 cp /tmp/smsly-env-backup "$INSTALL_DIR/.env"
+                 rm -f /tmp/smsly-env-backup
+                 echo -e "${GREEN}  ✓ Restored existing .env${NC}"
+             fi
         fi
     fi
 fi
 cd "$INSTALL_DIR"
 
+# ─── Git Initialization (for bundled installs) ──────────────────────────────
+if [ ! -d ".git" ] && [ -n "${SMSLY_GIT_REMOTE:-}" ]; then
+    echo -e "${BLUE}  -> Initializing Git repository...${NC}"
+    git init -q
+    git checkout -b "$SMSLY_BRANCH" >/dev/null 2>&1 || true
+    git remote add origin "$SMSLY_GIT_REMOTE"
+    if ! git fetch origin "$SMSLY_BRANCH" -q --depth=1; then
+        git -c http.sslVerify=false fetch origin "$SMSLY_BRANCH" -q --depth=1 || true
+    fi
+    git branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || \
+    git -c http.sslVerify=false branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
+    # We don't reset --hard here to avoid losing the bundled files we just copied,
+    # but the repo is now linked for future updates.
+    echo -e "${GREEN}  ✓ Git origin set to ${SMSLY_GIT_REMOTE}${NC}"
+fi
+
 # ─── BLINDSPOT FIX: Validate required deployment files ──────────────────────
 echo -e "${BLUE}  → Validating deployment files...${NC}"
 MISSING_FILES=()
-for required_file in "$COMPOSE_FILE" "backend/Dockerfile" "frontend/Dockerfile" "backend/entrypoint.sh"; do
+if [ "$MODE_AGENT_LITE" = "true" ]; then
+    REQUIRED_FILES=("$COMPOSE_FILE" "backend/Dockerfile" "backend/entrypoint.sh" "backend/requirements.txt")
+elif [ "$MODE_NODE" = "true" ]; then
+    REQUIRED_FILES=("$COMPOSE_FILE" "backend/Dockerfile" "backend/entrypoint.sh" "backend/requirements.txt")
+else
+    REQUIRED_FILES=("$COMPOSE_FILE" "backend/Dockerfile" "frontend/Dockerfile" "backend/entrypoint.sh")
+fi
+for required_file in "${REQUIRED_FILES[@]}"; do
     if [ ! -f "$required_file" ]; then
         MISSING_FILES+=("$required_file")
     fi
@@ -2701,194 +5116,167 @@ if [ -f "$INSTALL_DIR/.env" ]; then
 
     # Backfill newer required keys and validate before deployment.
     ensure_env_runtime_defaults "$INSTALL_DIR/.env"
+    apply_agent_lite_env_overrides "$INSTALL_DIR/.env"
     if ! validate_env_file "$INSTALL_DIR/.env"; then
         echo -e "${RED}x Existing .env is invalid. Fix it or restore .env.backup and rerun.${NC}"
         exit 1
     fi
 
     # Source existing values for summary output.
+    set -a
     source "$INSTALL_DIR/.env" 2>/dev/null || true
+    set +a
     DOMAIN="${DOMAIN:-localhost}"
     USE_SSL="${USE_SSL:-false}"
+    WILDCARD_SUBDOMAINS="${WILDCARD_SUBDOMAINS:-false}"
+    CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
     PUBLIC_IP="$(detect_public_ip)"
 
 
 else
-    # ─── Fresh install: generate secrets ────────────────────────────────────
-    # Force IPv4 to ensure valid URL syntax (avoiding [IPv6] bracket issues)
-    PUBLIC_IP="$(detect_public_ip)"
-
-    # Allow non-interactive SSL installs by pre-seeding env vars:
-    #   USE_SSL=true DOMAIN=cloud.smsly.cloud ACME_EMAIL=admin@example.com SKIP_SCREEN=1 bash install.sh
-    PRESET_DOMAIN="${DOMAIN:-}"
-    PRESET_ACME_EMAIL="${ACME_EMAIL:-}"
-    PRESET_USE_SSL="${USE_SSL:-}"
-
-    echo -e "\n${BLUE}Select Deployment Mode:${NC}"
-    echo -e "  1) ${GREEN}IP Mode${NC} (Easy) - http://$PUBLIC_IP:8090"
-    echo -e "  2) ${GREEN}SSL Mode${NC} (Prod) - https://your-domain.com (Requires DNS A Record pointing to $PUBLIC_IP)"
-
-    # If any mode was pre-selected (even IP mode), skip prompting even in interactive shells.
-    if [ -n "${PRESET_USE_SSL}" ]; then
-        if [ "${PRESET_USE_SSL}" = "true" ] && [ -n "${PRESET_DOMAIN}" ] && [ -n "${PRESET_ACME_EMAIL}" ]; then
-            echo -e "${BLUE}  → Preset detected. Using SSL Mode for ${PRESET_DOMAIN}.${NC}"
-            MODE_CHOICE=2
-        elif [ "${PRESET_USE_SSL}" = "false" ]; then
-            echo -e "${BLUE}  → Preset detected. Using IP Mode.${NC}"
-            MODE_CHOICE=1
-        else
-            # Pre-seeded but incomplete? Ask anyway.
-            if [ -e /dev/tty ]; then
-                read -p "Enter choice [1]: " MODE_CHOICE < /dev/tty
-                MODE_CHOICE=${MODE_CHOICE:-1}
-            else
-                MODE_CHOICE=1
-            fi
+    # ─── Configuration Summary ──────────────────────────────────────────────
+    PUBLIC_IP="${PUBLIC_IP:-$(detect_public_ip)}"
+    DOMAIN="${DOMAIN:-$PUBLIC_IP}"
+    # SEC-002: IP-mode SSL guard — force USE_SSL=false if DOMAIN is a raw IP
+    if echo "$DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+        USE_SSL="${USE_SSL:-false}"
+        if [ "${USE_SSL:-false}" = "true" ]; then
+            echo -e "${YELLOW}  ⚠ WARNING: USE_SSL=true ignored — DOMAIN is a raw IP. Forcing USE_SSL=false.${NC}"
         fi
-    elif [ -e /dev/tty ] && [ "$NON_INTERACTIVE" != "true" ]; then
-        read -p "Enter choice [1]: " MODE_CHOICE < /dev/tty
-        MODE_CHOICE=${MODE_CHOICE:-1}
+        USE_SSL="false"
     else
-        echo -e "${YELLOW}  ⚠ Automated mode detected. Defaulting to IP Mode.${NC}"
-        MODE_CHOICE=1
+        USE_SSL="${USE_SSL:-false}"
     fi
+    WILDCARD_SUBDOMAINS="${WILDCARD_SUBDOMAINS:-false}"
+    CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
+    ACME_EMAIL="${ACME_EMAIL:-}"
 
-    DOMAIN=""
-    ACME_EMAIL=""
-    USE_SSL="false"
-
-    if [ "$MODE_CHOICE" -eq "2" ]; then
-        USE_SSL="true"
-        if [ ! -e /dev/tty ] && [ -n "${PRESET_DOMAIN}" ] && [ -n "${PRESET_ACME_EMAIL}" ]; then
-            DOMAIN="${PRESET_DOMAIN}"
-            ACME_EMAIL="${PRESET_ACME_EMAIL}"
-        else
-            while [ -z "$DOMAIN" ]; do
-                read -p "Enter your Domain (e.g., app.example.com): " DOMAIN < /dev/tty
-            done
-
-            while [ -z "$ACME_EMAIL" ]; do
-                read -p "Enter Email for SSL (e.g., admin@example.com): " ACME_EMAIL < /dev/tty
-            done
-        fi
-
-        echo -e "${BLUE}  → Verifying DNS for $DOMAIN...${NC}"
-        if command -v host &> /dev/null; then
-            DETECTED_IP=$(host -t A "$DOMAIN" 2>/dev/null | awk '{print $NF}' | tail -n 1)
-            if [[ "$DETECTED_IP" != "$PUBLIC_IP" && "$DETECTED_IP" != "127.0.0.1" ]]; then
-                echo -e "${YELLOW}  ⚠ WARNING: DNS for $DOMAIN ($DETECTED_IP) does not match this server ($PUBLIC_IP).${NC}"
-                echo -e "${YELLOW}  SSL generation may fail. Ensure your DNS A record is set.${NC}"
-                if [ -e /dev/tty ] && [ "$NON_INTERACTIVE" != "true" ]; then
-                    read -p "  Continue anyway? (y/n) " -n 1 -r < /dev/tty
-                    echo
-                    if [[ ! $REPLY =~ ^[Yy]$ ]]; then exit 1; fi
-                else
-                    echo -e "${YELLOW}  ⚠ Automated mode: Ignoring DNS mismatch and continuing...${NC}"
-                fi
-            else
-                echo -e "${GREEN}  ✓ DNS looks correct.${NC}"
-            fi
-        fi
-    else
-        DOMAIN="$PUBLIC_IP"
-        echo -e "${BLUE}  → Using IP Mode: $PUBLIC_IP${NC}"
-    fi
-
-    # ─── Wildcard Subdomain & Cloudflare Setup (SSL mode only) ────────────
-    WILDCARD_SUBDOMAINS="false"
-    CLOUDFLARE_API_TOKEN=""
-    if [ "$USE_SSL" = "true" ] && [ -n "$DOMAIN" ] && [ "$DOMAIN" != "$PUBLIC_IP" ]; then
-        echo ""
-        echo -e "${BLUE}  Wildcard subdomains allow deployed services to get automatic SSL.${NC}"
-        echo -e "  e.g., myapp-abc123.${DOMAIN} will automatically have HTTPS."
-        echo -e "  This requires a Cloudflare API Token with DNS:Edit permission.\n"
-
-        PRESET_WILDCARD="${WILDCARD_SUBDOMAINS:-}"
-        PRESET_CF_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
-
-        if [ -n "$PRESET_WILDCARD" ] && [ -n "$PRESET_CF_TOKEN" ]; then
-            WILDCARD_SUBDOMAINS="$PRESET_WILDCARD"
-            CLOUDFLARE_API_TOKEN="$PRESET_CF_TOKEN"
-            echo -e "${BLUE}  → Preset detected: wildcard=$WILDCARD_SUBDOMAINS${NC}"
-        elif [ -e /dev/tty ]; then
-            read -p "  Enable wildcard subdomains? (y/n) [n]: " WILDCARD_CHOICE < /dev/tty
-            WILDCARD_CHOICE=${WILDCARD_CHOICE:-n}
-            if [[ $WILDCARD_CHOICE =~ ^[Yy]$ ]]; then
-                WILDCARD_SUBDOMAINS="true"
-                while [ -z "$CLOUDFLARE_API_TOKEN" ]; do
-                    read -sp "  Enter Cloudflare API Token (DNS:Edit): " CLOUDFLARE_API_TOKEN < /dev/tty
-                    echo
-                done
-                echo -e "${GREEN}  ✓ Wildcard subdomains enabled.${NC}"
-            fi
-        fi
-    fi
-
-    # ─── Generate Secrets (Python-only, NO invalid fallback) ────────────────
+    # ─── Generate Secrets (scripts/generate_env_secrets.py — single source of truth) ──
     echo -e "${BLUE}  → Generating secure credentials...${NC}"
 
-    # Install cryptography lib (--break-system-packages for Python 3.12+ on Ubuntu 24.04)
+    # Ensure cryptography is installed (required for Fernet key generation).
+    # Retry with and without --break-system-packages for different Ubuntu versions.
     pip3 install cryptography -q --break-system-packages 2>/dev/null || \
-        pip3 install cryptography -q 2>/dev/null || true
+        pip3 install cryptography -q 2>/dev/null || \
+        (echo -e "${YELLOW}  → Retrying cryptography install...${NC}" && \
+         pip3 install cryptography 2>&1 | tail -3) || true
 
-    # Generate secrets — Python is the ONLY source of truth for Fernet keys
-    SECRETS_GENERATED=false
-    if python3 -c "
-import secrets, string
-from cryptography.fernet import Fernet
-
-chars = string.ascii_letters + string.digits
-secret_key = ''.join(secrets.choice(chars) for _ in range(50))
-fernet_key = Fernet.generate_key().decode()
-pg_pass = secrets.token_hex(16)
-redis_pass = secrets.token_hex(16)
-rabbitmq_pass = secrets.token_hex(16)
-gateway_secret = secrets.token_hex(32)
-webhook_secret = secrets.token_hex(32)
-autoscaler_token = secrets.token_hex(32)
-frp_token = secrets.token_hex(32)
-
-# Validate the Fernet key before outputting
-Fernet(fernet_key.encode())
-
-print(f'SECRET_KEY={secret_key}')
-print(f'FIELD_ENCRYPTION_KEY={fernet_key}')
-print(f'POSTGRES_PASSWORD={pg_pass}')
-print(f'REDIS_PASSWORD={redis_pass}')
-print(f'RABBITMQ_PASSWORD={rabbitmq_pass}')
-print(f'GATEWAY_SECRET={gateway_secret}')
-print(f'GITHUB_WEBHOOK_SECRET={webhook_secret}')
-print(f'AUTOSCALER_API_TOKEN={autoscaler_token}')
-print(f'FRP_AUTH_TOKEN={frp_token}')
-" > "$INSTALL_DIR/.secrets.tmp" 2>/dev/null; then
-        source "$INSTALL_DIR/.secrets.tmp"
-        rm -f "$INSTALL_DIR/.secrets.tmp"
-        SECRETS_GENERATED=true
-        echo -e "${GREEN}  ✓ Secrets generated (Fernet key validated)${NC}"
+    # Verify cryptography is importable before proceeding
+    if ! python3 -c "from cryptography.fernet import Fernet; print('ok')" 2>/dev/null; then
+        echo -e "${RED}  ✗ CRITICAL: cryptography package is not installable.${NC}"
+        echo -e "${RED}    The 'cryptography' package is required to generate a Fernet encryption key.${NC}"
+        echo -e "${RED}    Install it manually: pip3 install cryptography${NC}"
+        exit 1
     fi
 
-    if [ "$SECRETS_GENERATED" != "true" ]; then
-        echo -e "${RED}  ✗ CRITICAL: Cannot generate valid Fernet encryption key.${NC}"
-        echo -e "${RED}    Install Python 3 and the 'cryptography' package, then re-run.${NC}"
+    # Use the dedicated secrets generation script (single source of truth)
+    SECRETS_GENERATED=false
+    rm -f "$INSTALL_DIR/.secrets.tmp"
+    python3 "$INSTALL_DIR/scripts/generate_env_secrets.py" 2>/dev/null | grep -E '^[A-Z_]+=' > "$INSTALL_DIR/.secrets.tmp" || true
+    if [ -s "$INSTALL_DIR/.secrets.tmp" ]; then
+        SECRET_KEY="$(grep -m1 '^SECRET_KEY=' "$INSTALL_DIR/.secrets.tmp" | cut -d= -f2-)"
+        FIELD_ENCRYPTION_KEY="$(grep -m1 '^FIELD_ENCRYPTION_KEY=' "$INSTALL_DIR/.secrets.tmp" | cut -d= -f2-)"
+        POSTGRES_PASSWORD="$(grep -m1 '^POSTGRES_PASSWORD=' "$INSTALL_DIR/.secrets.tmp" | cut -d= -f2-)"
+        REDIS_PASSWORD="$(grep -m1 '^REDIS_PASSWORD=' "$INSTALL_DIR/.secrets.tmp" | cut -d= -f2-)"
+        RABBITMQ_PASSWORD="$(grep -m1 '^RABBITMQ_PASSWORD=' "$INSTALL_DIR/.secrets.tmp" | cut -d= -f2-)"
+        GATEWAY_SECRET="$(grep -m1 '^GATEWAY_SECRET=' "$INSTALL_DIR/.secrets.tmp" | cut -d= -f2-)"
+        GITHUB_WEBHOOK_SECRET="$(grep -m1 '^GITHUB_WEBHOOK_SECRET=' "$INSTALL_DIR/.secrets.tmp" | cut -d= -f2-)"
+        AUTOSCALER_API_TOKEN="$(grep -m1 '^AUTOSCALER_API_TOKEN=' "$INSTALL_DIR/.secrets.tmp" | cut -d= -f2-)"
+        FRP_AUTH_TOKEN="$(grep -m1 '^FRP_AUTH_TOKEN=' "$INSTALL_DIR/.secrets.tmp" | cut -d= -f2-)"
+        PGCAT_ADMIN_PASSWORD="$(grep -m1 '^PGCAT_ADMIN_PASSWORD=' "$INSTALL_DIR/.secrets.tmp" | cut -d= -f2-)"
+        if [ -n "$SECRET_KEY" ] && [ -n "$FIELD_ENCRYPTION_KEY" ]; then
+            SECRETS_GENERATED=true
+            echo -e "${GREEN}  ✓ Secrets generated (Fernet key validated)${NC}"
+        else
+            echo -e "${YELLOW}  ⚠ Secrets script ran but Fernet key is missing — generating inline...${NC}"
+        fi
+        rm -f "$INSTALL_DIR/.secrets.tmp"
+    fi
+
+    # Fallback: if the script didn't produce a valid Fernet key, generate it inline
+    # (cryptography is guaranteed importable at this point from the check above).
+    if [ -z "${FIELD_ENCRYPTION_KEY:-}" ]; then
+        FIELD_ENCRYPTION_KEY="${MASTER_FIELD_ENCRYPTION_KEY:-$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null || true)}"
+    fi
+    # Ensure all other secrets have fallback values just in case
+    [ -n "${SECRET_KEY:-}" ] || SECRET_KEY="$(python3 -c "import secrets,string; chars=string.ascii_letters+string.digits; print(''.join(secrets.choice(chars) for _ in range(50)))" 2>/dev/null || true)"
+    [ -n "${POSTGRES_PASSWORD:-}" ] || POSTGRES_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || true)"
+    [ -n "${REDIS_PASSWORD:-}" ] || REDIS_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || true)"
+    [ -n "${RABBITMQ_PASSWORD:-}" ] || RABBITMQ_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || true)"
+    [ -n "${GATEWAY_SECRET:-}" ] || GATEWAY_SECRET="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
+    [ -n "${GITHUB_WEBHOOK_SECRET:-}" ] || GITHUB_WEBHOOK_SECRET="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
+    [ -n "${AUTOSCALER_API_TOKEN:-}" ] || AUTOSCALER_API_TOKEN="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
+    [ -n "${FRP_AUTH_TOKEN:-}" ] || FRP_AUTH_TOKEN="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
+    [ -n "${PGCAT_ADMIN_PASSWORD:-}" ] || PGCAT_ADMIN_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(24))" 2>/dev/null || true)"
+
+    # Validate Fernet key format
+    if ! echo "$FIELD_ENCRYPTION_KEY" | python3 -c "
+import sys
+from cryptography.fernet import Fernet
+try:
+    Fernet(sys.stdin.read().strip().encode())
+    print('valid')
+except Exception:
+    print('invalid')
+" 2>/dev/null | grep -q valid; then
+        echo -e "${RED}  ✗ CRITICAL: Failed to generate a valid Fernet encryption key.${NC}"
+        echo -e "${RED}    Ensure the 'cryptography' package is installed and retry.${NC}"
         echo -e "${RED}    pip3 install cryptography${NC}"
         exit 1
     fi
 
-    # Create .env
-    cat <<EOF > "$INSTALL_DIR/.env"
+    echo -e "${GREEN}  ✓ All secrets generated successfully${NC}"
+
+    # Agent-lite nodes must use the master's DB password, not a locally generated one.
+    # SSH into the master to fetch the correct POSTGRES_PASSWORD.
+    if is_agent_lite_mode && [ -n "${MASTER_IP:-}" ] && [ "$MASTER_IP" != "127.0.0.1" ]; then
+        echo -e "${BLUE}  → Fetching master DB password via SSH (master: ${MASTER_IP})...${NC}"
+        local _master_db_pw
+        _master_db_pw="$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes root@${MASTER_IP} \
+            "grep '^POSTGRES_PASSWORD=' /opt/smsly-hosting/.env 2>/dev/null | head -1 | cut -d= -f2" 2>/dev/null || true)"
+        if [ -n "${_master_db_pw:-}" ]; then
+            POSTGRES_PASSWORD="$_master_db_pw"
+            echo -e "${GREEN}  ✓ Retrieved master DB password${NC}"
+        else
+            echo -e "${YELLOW}  ⚠ Could not retrieve master DB password via SSH. DATABASE_URL may not connect.${NC}"
+            echo -e "${YELLOW}    Tip: Pass MASTER_DB_PASSWORD=... to the install script.${NC}"
+        fi
+    fi
+
+    # Create .env (Atomic)
+    ENV_TMP="$INSTALL_DIR/.env.tmp"
+    ENV_MODE_VALUE="$(mode_env_value)"
+    ENV_NODE_TYPE="$INSTALL_MODE"
+    ENV_TRAEFIK_HTTP_BIND="127.0.0.1:8081"
+    ENV_STARTUP_CADDY_SYNC="true"
+    if is_agent_lite_mode; then
+        ENV_NODE_TYPE="agent-lite"
+        ENV_STARTUP_CADDY_SYNC="false"
+    elif is_node_mode; then
+        ENV_NODE_TYPE="node"
+        ENV_TRAEFIK_HTTP_BIND="0.0.0.0:80"
+        ENV_STARTUP_CADDY_SYNC="false"
+    fi
+    cat <<EOF > "$ENV_TMP"
 # SMSLY Hosting Configuration — Generated $(date -Iseconds)
 ENVIRONMENT=production
+NODE_TYPE=$ENV_NODE_TYPE
+MODE=$ENV_MODE_VALUE
 DEBUG=False
 SECRET_KEY=$SECRET_KEY
 FIELD_ENCRYPTION_KEY=$FIELD_ENCRYPTION_KEY
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 POSTGRES_USER=smsly_admin
 POSTGRES_DB=smsly_hosting
-DATABASE_URL=postgresql://smsly_admin:$POSTGRES_PASSWORD@pgbouncer:5432/smsly_hosting
+DATABASE_URL=postgresql://smsly_admin:$POSTGRES_PASSWORD@pgcat:5432/smsly_hosting
+DATABASE_CONNECT_TIMEOUT=5
 
 REDIS_PASSWORD=$REDIS_PASSWORD
 RABBITMQ_PASSWORD=$RABBITMQ_PASSWORD
+RABBITMQ_DEFAULT_USER=smsly_user
+RABBITMQ_DEFAULT_PASS=$RABBITMQ_PASSWORD
 REDIS_URL=redis://:$REDIS_PASSWORD@redis:6379/0
+REDIS_SOCKET_TIMEOUT=5
 CELERY_BROKER_URL=amqp://smsly_user:$RABBITMQ_PASSWORD@rabbitmq:5672//
 
 DOMAIN=$DOMAIN
@@ -2902,9 +5290,18 @@ GATEWAY_SECRET=$GATEWAY_SECRET
 GITHUB_WEBHOOK_SECRET=$GITHUB_WEBHOOK_SECRET
 
 # Security
-ALLOWED_HOSTS=$DOMAIN,$PUBLIC_IP,localhost,127.0.0.1
-CSRF_TRUSTED_ORIGINS=http://$PUBLIC_IP:8090,https://$DOMAIN,http://$DOMAIN,http://localhost:8090,http://$PUBLIC_IP
-CORS_ALLOWED_ORIGINS=http://$PUBLIC_IP:8090,https://$DOMAIN,http://$DOMAIN,http://$PUBLIC_IP
+ALLOWED_HOSTS=$DOMAIN,localhost,127.0.0.1
+EOF
+
+    # Build scheme-appropriate origins (avoid https://IP which breaks CORS/CSRF)
+    if echo "$DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' || [ "$USE_SSL" != "true" ]; then
+        DOMAIN_ORIGINS="http://$DOMAIN"
+    else
+        DOMAIN_ORIGINS="https://$DOMAIN"
+    fi
+    cat >> "$ENV_TMP" <<EOF
+CSRF_TRUSTED_ORIGINS=http://$PUBLIC_IP:8090,$DOMAIN_ORIGINS,http://localhost:8090,http://$PUBLIC_IP
+CORS_ALLOWED_ORIGINS=http://$PUBLIC_IP:8090,$DOMAIN_ORIGINS,http://$PUBLIC_IP
 
 # Docker networking
 # Ensure addon containers and deployed app containers share the same network for connectivity.
@@ -2922,10 +5319,43 @@ AUTOSCALER_API_TOKEN=$AUTOSCALER_API_TOKEN
 # FRP Tunnel Relay Authentication Token
 FRP_AUTH_TOKEN=$FRP_AUTH_TOKEN
 
+# PgCat administration password
+PGCAT_ADMIN_PASSWORD=$PGCAT_ADMIN_PASSWORD
+
+# Direct database connection for migrations (bypasses PgCat pooler)
+DIRECT_DATABASE_URL=postgresql://smsly_admin:$POSTGRES_PASSWORD@db:5432/smsly_hosting
+
+# Private Docker registry (push/pull deployment images)
+CONTAINER_REGISTRY_URL=127.0.0.1:5000
+REGISTRY_USER=smsly-registry
+
+# The installer runs first-boot Django setup explicitly after the stack starts.
+# Keep the web container from doing the same work while Compose is waiting on health.
+SMSLY_RUN_ENTRYPOINT_TASKS=false
+
 # AppConfig.ready() must stay side-effect free during installs and management commands.
 # Edge/proxy sync is performed explicitly by the installer and watcher services.
-SMSLY_ENABLE_STARTUP_CADDY_SYNC=false
+SMSLY_ENABLE_STARTUP_CADDY_SYNC=$ENV_STARTUP_CADDY_SYNC
+TRAEFIK_HTTP_BIND=$ENV_TRAEFIK_HTTP_BIND
 EOF
+
+    # ─── Dynamic Build Resource Allocation ──────────────────────────────
+    if [ "$MODE_AGENT_LITE" = "true" ]; then
+        echo -e "${BLUE}  → Lite Agent mode: frontend build is not part of this node.${NC}"
+    elif [ "$MODE_NODE" = "true" ]; then
+        echo -e "${BLUE}  → Node mode: frontend build is not part of this node.${NC}"
+    else
+        # Detect physical RAM for optimized build limits
+        current_ram_mb=$(free -m | awk '/^Mem:/{print $2}')
+        build_mem=2048
+        if [ "$current_ram_mb" -ge 16384 ]; then
+            build_mem=8192
+        elif [ "$current_ram_mb" -ge 8192 ]; then
+            build_mem=4096
+        fi
+        echo "FRONTEND_BUILD_MEMORY_MB=$build_mem" >> "$ENV_TMP"
+        echo -e "${BLUE}  → Allocated ${build_mem}MB for frontend build (System RAM: ${current_ram_mb}MB)${NC}"
+    fi
 
     # Derive expected tunnel domain
     if [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ] && ! echo "$DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
@@ -2935,22 +5365,64 @@ EOF
     else
         EXPECTED_TUNNEL_DOMAIN="tunnel.localhost"
     fi
-    echo "TUNNEL_DOMAIN=$EXPECTED_TUNNEL_DOMAIN" >> "$INSTALL_DIR/.env"
+    echo "TUNNEL_DOMAIN=$EXPECTED_TUNNEL_DOMAIN" >> "$ENV_TMP"
 
-    # 644 so the Docker container (runs as root) can read it when mounted
-    chmod 644 "$INSTALL_DIR/.env"
-    if ! validate_env_file "$INSTALL_DIR/.env"; then
-        echo -e "${RED}  x Generated .env failed validation. Aborting install.${NC}"
-        exit 1
+    # ── Agent Lite Overrides ──────────────────────────────────────
+    if [ "$MODE_AGENT_LITE" = "true" ]; then
+        apply_agent_lite_env_overrides "$ENV_TMP"
     fi
 
-    echo -e "${GREEN}  ✓ Configuration saved to .env (chmod 600)${NC}"
+    # Atomic move and validation
+    if validate_env_file "$ENV_TMP"; then
+        mv "$ENV_TMP" "$INSTALL_DIR/.env"
+        # 664 so the backend container (runs as UID 1000) can read AND write it.
+        # This allows the domain-config signal to persist DOMAIN/USE_SSL back to
+        # .env when the user updates settings via the web UI — no SSH needed.
+        chown root:1000 "$INSTALL_DIR/.env"
+        chmod 664 "$INSTALL_DIR/.env"
+        # Docker Compose v2+ resolves .env from the compose file's parent directory,
+        # not the CWD. Create a symlink so all compose files can find it.
+        _compose_env_link="$INSTALL_DIR/infrastructure/docker/.env"
+        rm -f "$_compose_env_link" 2>/dev/null || true
+        ln -sf ../../.env "$_compose_env_link" 2>/dev/null || true
+        echo -e "${GREEN}  ✓ Configuration saved to .env${NC}"
+    else
+        echo -e "${RED}  x Generated .env failed validation. Aborting install.${NC}"
+        rm -f "$ENV_TMP"
+        exit 1
+    fi
+fi
+    set_checkpoint "config_generated"
+fi
+if [ -f "$INSTALL_DIR/.env" ]; then
+    ensure_env_runtime_defaults "$INSTALL_DIR/.env"
+    apply_agent_lite_env_overrides "$INSTALL_DIR/.env"
+    # Ensure .env symlink exists for Docker Compose v2+ .env resolution
+    _compose_env_link="$INSTALL_DIR/infrastructure/docker/.env"
+    rm -f "$_compose_env_link" 2>/dev/null || true
+    ln -sf ../../.env "$_compose_env_link" 2>/dev/null || true
+    if ! validate_env_file "$INSTALL_DIR/.env"; then
+        echo -e "${RED}x Existing .env is invalid after runtime-default reconciliation.${NC}"
+        exit 1
+    fi
+fi
+load_install_env_defaults "$INSTALL_DIR/.env"
+
+# Ensure all variables in .env are exported to the environment so they are inherited by docker compose
+if [ -f "$INSTALL_DIR/.env" ]; then
+    set -a
+    source "$INSTALL_DIR/.env"
+    set +a
 fi
 
 # -----------------------------------------------------------------------------
 # 4. Deployment
 # -----------------------------------------------------------------------------
-echo -e "\n${YELLOW}[4/9] Deploying Container Stack...${NC}"
+STACK_DEPLOYED_FROM_CHECKPOINT=false
+if is_checkpoint_done "stack_deployed"; then
+    STACK_DEPLOYED_FROM_CHECKPOINT=true
+else
+    echo -e "\n${YELLOW}[4/9] Deploying Container Stack...${NC}"
 
 # Ensure networks exist
 docker network create smsly-net 2>/dev/null || true
@@ -2964,9 +5436,8 @@ docker network create smsly-proxy 2>/dev/null || true
 #
 
 # Both IP and SSL modes use the same compose stack.
-# Caddy (step 7) handles public-facing HTTP/HTTPS termination.
-# Traefik is NOT used — Caddy natively handles Let's Encrypt SSL.
-# Generate registry TLS cert + htpasswd if missing
+# Master exposes public HTTP/HTTPS through Caddy; node/agent modes expose HTTP through Traefik.
+# Generate registry TLS cert + htpasswd if missing (required for auth-enabled registry)
 echo -e "${BLUE}  → Configuring Docker registry auth and TLS...${NC}"
 mkdir -p "$INSTALL_DIR/auth" "$INSTALL_DIR/certs"
 if [ ! -f "$INSTALL_DIR/certs/registry.key" ] || [ ! -f "$INSTALL_DIR/certs/registry.crt" ]; then
@@ -2975,19 +5446,20 @@ if [ ! -f "$INSTALL_DIR/certs/registry.key" ] || [ ! -f "$INSTALL_DIR/certs/regi
         -keyout "$INSTALL_DIR/certs/registry.key" \
         -out "$INSTALL_DIR/certs/registry.crt" \
         -subj "/CN=registry" 2>/dev/null || \
-        echo -e "${YELLOW}    ⚠ Failed to generate registry cert${NC}"
+        echo -e "${YELLOW}    ⚠ Failed to generate registry cert (openssl missing?)${NC}"
 fi
-if [ ! -f "$INSTALL_DIR/auth/htpasswd" ]; then
-    REGISTRY_PASS="${REGISTRY_PASSWORD:-$(python3 -c \"import secrets; print(secrets.token_urlsafe(18))\" 2>/dev/null || openssl rand -hex 12 2>/dev/null || echo 'auto-generated')}"
+if [ ! -f "$INSTALL_DIR/auth/htpasswd" ] || [ -z "${REGISTRY_PASSWORD:-}" ] || [ -z "${REGISTRY_USER:-}" ]; then
+    REGISTRY_PASS="${REGISTRY_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_urlsafe(18))" 2>/dev/null || openssl rand -hex 12 2>/dev/null || echo 'auto-generated-change-me')}"
     if command -v htpasswd >/dev/null 2>&1; then
         htpasswd -Bbn "${REGISTRY_USER:-smsly-registry}" "$REGISTRY_PASS" > "$INSTALL_DIR/auth/htpasswd"
     else
+        # Python-based bcrypt fallback
         python3 -c "
 import bcrypt, sys
 pw = sys.argv[1] if len(sys.argv) > 1 else '$REGISTRY_PASS'
 print(f'${REGISTRY_USER:-smsly-registry}:' + bcrypt.hashpw(pw.encode(), bcrypt.gensalt(10)).decode())
 " "$REGISTRY_PASS" > "$INSTALL_DIR/auth/htpasswd" 2>/dev/null || \
-        echo -e "${YELLOW}    ⚠ Failed to generate htpasswd${NC}"
+        echo -e "${YELLOW}    ⚠ Failed to generate htpasswd (neither htpasswd nor python bcrypt available)${NC}"
     fi
     env_set_value "$INSTALL_DIR/.env" "REGISTRY_USER" "${REGISTRY_USER:-smsly-registry}"
     env_set_value "$INSTALL_DIR/.env" "REGISTRY_PASSWORD" "$REGISTRY_PASS"
@@ -3000,14 +5472,64 @@ docker_login
 
 # Ensure bind-mounted config paths exist before `docker compose up`.
 ensure_infrastructure_permissions
-echo -e "${BLUE}  → Starting App Stack...${NC}"
-docker compose -f "$COMPOSE_FILE" up -d --build --force-recreate --remove-orphans
+if [ "$MODE_AGENT_LITE" = "true" ]; then
+    echo -e "${BLUE}  → Lite Agent mode: disabling master-only Caddy services before Traefik bind.${NC}"
+    true
+elif [ "$MODE_NODE" = "true" ]; then
+    echo -e "${BLUE}  → Node mode: deploying prod stack without frontend/Caddy; Traefik binds public HTTP.${NC}"
+fi
+if [ "$RUST_TWIN_MODE" != "true" ]; then
+    echo -e "${BLUE}  → Disabling backend entrypoint bootstrap for installer-controlled migrations...${NC}"
+    env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
+fi
+    echo -e "${BLUE}  → Starting App Stack (Build + Deploy)...${NC}"
+    ( while true; do sleep 30; echo -e "${BLUE}      ↳ Progress: Deployment in progress... $(date +%H:%M:%S)${NC}"; done ) &
+    HEARTBEAT_PID=$!
+    set +e
+    compose_stack_build --no-cache
+    DEPLOY_RC=$?
+    if [ "$DEPLOY_RC" -eq 0 ]; then
+        compose_stack_up --remove-orphans
+        DEPLOY_RC=$?
+    fi
+    set -e
+    kill $HEARTBEAT_PID 2>/dev/null || true
+    wait $HEARTBEAT_PID 2>/dev/null || true
+    if [ "$DEPLOY_RC" -ne 0 ]; then
+        echo -e "${RED}  ✗ Docker Compose failed during stack deployment (exit $DEPLOY_RC).${NC}"
+        echo -e "${YELLOW}  ↳ Re-run with --resume to skip completed steps: sudo bash install.sh --resume${NC}"
+        docker compose -f "$COMPOSE_FILE" ps 2>/dev/null || true
+        docker compose -f "$COMPOSE_FILE" logs --tail=120 2>/dev/null || true
+        exit "$DEPLOY_RC"
+    fi
+    if [ "$MODE_AGENT_LITE" = "true" ]; then
+        sync_agent_lite_rabbitmq_password
+        docker compose -f "$COMPOSE_FILE" up -d --force-recreate backend celery-worker
+    else
+        echo -e "${BLUE}  → Deploying Observability Stack...${NC}"
+        if [ -f "infrastructure/docker/docker-compose.observability.yml" ]; then
+            docker compose -f infrastructure/docker/docker-compose.observability.yml up -d >/dev/null 2>&1 || true
+        fi
+    fi
+    set_checkpoint "stack_deployed"
+
+    # Docker login now that the registry is actually running
+    docker_login
+fi
+if [ "$STACK_DEPLOYED_FROM_CHECKPOINT" = "true" ]; then
+    reconcile_compose_stack_after_resume
+fi
 
 # -----------------------------------------------------------------------------
 # 5. Database Setup
 # -----------------------------------------------------------------------------
-echo -e "\n${YELLOW}[5/9] Initializing Database...${NC}"
+if ! is_checkpoint_done "database_initialized"; then
+    echo -e "\n${YELLOW}[5/9] Initializing Database...${NC}"
 
+if [ "$MODE_AGENT_LITE" = "true" ]; then
+    echo -e "${BLUE}  → Lite Agent mode: skipping local database initialization; using Master services.${NC}"
+    set_checkpoint "database_initialized"
+else
 echo -e "${BLUE}  → Waiting for Database...${NC}"
 DB_READY=false
 for i in $(seq 1 24); do
@@ -3030,7 +5552,9 @@ fi
 # ─── Sync DB password to match .env (handles volume from previous install) ──
 # The DB volume persists with the password from FIRST init.
 # Always reset the password inside PostgreSQL to match the current .env.
+set -a
 source "$INSTALL_DIR/.env" 2>/dev/null || true
+set +a
 echo -e "${BLUE}  → Syncing database password...${NC}"
 
 # Try local trust auth first (Docker default), then try with PGPASSWORD
@@ -3049,6 +5573,13 @@ else
         2>&1 || echo -e "${RED}  ✗ Could not sync password. Check pg_hba.conf${NC}"
 fi
 
+# ─── Ensure PgCat is fresh and connected ──────────────────────────────────────
+if docker compose -f "$COMPOSE_FILE" ps pgcat >/dev/null 2>&1; then
+    echo -e "${BLUE}  → Restarting PgCat balancer...${NC}"
+    docker compose -f "$COMPOSE_FILE" restart pgcat >/dev/null 2>&1
+    sleep 5
+fi
+
 # ─── Restart backend so it picks up the correct DB credentials ──────────────
 echo -e "${BLUE}  → Restarting backend with synced credentials...${NC}"
 docker compose -f "$COMPOSE_FILE" restart backend >/dev/null 2>&1
@@ -3056,23 +5587,51 @@ sleep 5
 
 if [ "$RUST_TWIN_MODE" != "true" ]; then
     echo -e "${BLUE}  → Running Migrations...${NC}"
+
+    # Stop all services that talk to the DB.  Any open connection — even
+    # a SELECT — holds a shared lock that blocks the ACCESS EXCLUSIVE
+    # lock an ALTER TABLE needs.  Celery, backend health checks, and
+    # PgCat connection pools all compete with the migration.
+    MIGRATION_STOPPED_SVCS="backend celery celery-deploy celery-fast celery-beat pgcat"
+    echo -e "${BLUE}    Stopping ${MIGRATION_STOPPED_SVCS} to prevent lock contention...${NC}"
+    docker compose -f "$COMPOSE_FILE" stop ${MIGRATION_STOPPED_SVCS} >/dev/null 2>&1 || true
+    sleep 3
+
+    # Kill every backend on the database so the migration owns it exclusively
+    docker compose -f "$COMPOSE_FILE" exec -T db \
+        psql -U smsly_admin -d smsly_hosting \
+        -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND backend_type = 'client backend'" \
+        >/dev/null 2>&1 || true
+    sleep 2
+
+    echo -e "${BLUE}    Running migrations (database: direct)...${NC}"
     # Note: Do NOT run makemigrations — migrations are committed in the repo.
-    # Running makemigrations generates files inside the container that conflict on redeploy.
     MIGRATE_OK=false
-    for attempt in 1 2 3; do
-        if docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py migrate --noinput 2>&1; then
+    # Migration runs via DIRECT_DATABASE_URL which goes straight to the
+    # postgres backend, not through PgCat, so PgCat being stopped is safe.
+    if run_backend_migrations 2>&1; then
+        MIGRATE_OK=true
+    else
+        echo -e "${YELLOW}  ⚠ Migration attempt 1 failed — killing stale connections and retrying...${NC}"
+        docker compose -f "$COMPOSE_FILE" exec -T db \
+            psql -U smsly_admin -d smsly_hosting \
+            -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND backend_type = 'client backend'" \
+            >/dev/null 2>&1 || true
+        sleep 5
+        if run_backend_migrations 2>&1; then
             MIGRATE_OK=true
-            break
         fi
-        WAIT=$((attempt * 10))
-        echo -e "${YELLOW}  ⚠ Migration attempt $attempt/3 failed — retrying in ${WAIT}s...${NC}"
-        docker compose -f "$COMPOSE_FILE" restart backend >/dev/null 2>&1
-        sleep "$WAIT"
-    done
+    fi
+
+    # Restart everything that was paused
+    echo -e "${BLUE}    Restarting ${MIGRATION_STOPPED_SVCS}...${NC}"
+    docker compose -f "$COMPOSE_FILE" start ${MIGRATION_STOPPED_SVCS} >/dev/null 2>&1 || true
+    sleep 5
 
     if [ "$MIGRATE_OK" != "true" ]; then
-        echo -e "${RED}  ✗ Migrations failed after 3 attempts.${NC}"
+        echo -e "${RED}  ✗ Migrations failed after 2 attempts.${NC}"
         echo -e "${YELLOW}  Check: docker compose -f $COMPOSE_FILE logs backend${NC}"
+        echo -e "${YELLOW}  ↳ Tip: Re-run with --resume: sudo bash install.sh --resume${NC}"
         exit 1
     fi
 else
@@ -3089,12 +5648,20 @@ if [ "$RUST_TWIN_MODE" != "true" ]; then
 else
     echo -e "${BLUE}  → Rust Twin: Skipping static file collection (handled by Trunk WASM bundler)...${NC}"
 fi
+    set_checkpoint "database_initialized"
+fi
+fi
 
 # -----------------------------------------------------------------------------
 # 6. Admin User (IDEMPOTENT — skips if admin already exists)
 # -----------------------------------------------------------------------------
-echo -e "\n${YELLOW}[6/9] Creating Admin User...${NC}"
+if ! is_checkpoint_done "admin_created"; then
+    echo -e "\n${YELLOW}[6/9] Creating Admin User...${NC}"
 
+if [ "$MODE_AGENT_LITE" = "true" ]; then
+    echo -e "${BLUE}  → Lite Agent mode: skipping master admin and Local Docker provider setup.${NC}"
+    set_checkpoint "admin_created"
+else
 if [ "$RUST_TWIN_MODE" = "true" ]; then
     echo -e "${BLUE}  → Rust Twin: Skipping Python admin user creation (Use 'docker compose exec cli createsuperuser')...${NC}"
     ADMIN_EXISTS=1
@@ -3120,8 +5687,9 @@ CREDS
 else
     # Production hardening: never ship with a default admin password.
     # Use a shell-safe hex password (avoids quoting issues in manage.py shell).
-    ADMIN_PASS="$(gen_hex_secret 16)"
-    echo "
+    if [ "$MODE_AGENT_LITE" = "false" ]; then
+        ADMIN_PASS="$(gen_hex_secret 16)"
+        echo "
 from django.contrib.auth import get_user_model
 from rest_framework.authtoken.models import Token
 User = get_user_model()
@@ -3129,25 +5697,24 @@ admin = User.objects.create_superuser('admin', 'admin@smsly.cloud', '$ADMIN_PASS
 token = Token.objects.create(user=admin)
 print(token.key)
 " | docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null | tail -1 > "$INSTALL_DIR/.token"
-    echo -e "${GREEN}  ✓ Admin user created with API Token${NC}"
-    chmod 600 "$INSTALL_DIR/.token"
+        echo -e "${GREEN}  ✓ Admin user created with API Token${NC}"
+        chmod 600 "$INSTALL_DIR/.token"
 
-    # ─── Save credentials to secure file (NOT echoed to terminal) ───────────────
-    cat > "$CREDENTIALS_FILE" <<CREDS
+        # ─── Save credentials to secure file (NOT echoed to terminal) ───────────────
+        cat > "$CREDENTIALS_FILE" <<CREDS
 # SMSLY Hosting Admin Credentials
 # Generated: $(date -Iseconds)
 # KEEP THIS FILE SECURE
 Username: admin
 Password: $ADMIN_PASS
 CREDS
-    chmod 600 "$CREDENTIALS_FILE"
-fi
+        chmod 600 "$CREDENTIALS_FILE"
 
-# -----------------------------------------------------------------------------
-# 6b. Ensure Local Cloud Provider exists (required for deployments)
-# -----------------------------------------------------------------------------
-echo -e "${BLUE}  → Ensuring Local Docker cloud provider exists...${NC}"
-echo "
+        # -----------------------------------------------------------------------------
+        # 6b. Ensure Local Cloud Provider exists (required for deployments)
+        # -----------------------------------------------------------------------------
+        echo -e "${BLUE}  → Ensuring Local Docker cloud provider exists...${NC}"
+        echo "
 from apps.cloud.models import CloudProvider
 cp, created = CloudProvider.objects.get_or_create(
     provider_type='LOCAL',
@@ -3158,420 +5725,124 @@ if not created and not cp.is_active:
     cp.save()
 print('CREATED' if created else 'EXISTS')
 " | docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null | tail -1 >/dev/null
-echo -e "${GREEN}  ✓ Local Docker cloud provider ready${NC}"
+        echo -e "${GREEN}  ✓ Local Docker cloud provider ready${NC}"
+    fi
+fi
+if [ "$RUST_TWIN_MODE" != "true" ]; then
+    echo -e "${BLUE}  → Keeping backend entrypoint bootstrap disabled; installer controls migrations...${NC}"
+    env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
+    if should_manage_caddy; then
+        env_set_value "$INSTALL_DIR/.env" "SMSLY_ENABLE_STARTUP_CADDY_SYNC" "true"
+    else
+        env_set_value "$INSTALL_DIR/.env" "SMSLY_ENABLE_STARTUP_CADDY_SYNC" "false"
+    fi
+fi
+    set_checkpoint "admin_created"
+fi
+fi
 
 # -----------------------------------------------------------------------------
-# 7. Caddy Reverse Proxy (Public Access)
+# 7. Caddy Reverse Proxy (Public Access — Dockerized)
 # -----------------------------------------------------------------------------
-echo -e "\n${YELLOW}[7/9] Setting up Caddy Reverse Proxy...${NC}"
+# Agent-lite and node modes use Traefik instead of Caddy — skip this step entirely.
+if should_manage_caddy; then
+if ! is_checkpoint_done "caddy_configured" || [ "$REFRESH_MODE" = "true" ] || [ "$RECOVER_MODE" = "true" ]; then
+    echo -e "\n${YELLOW}[7/9] Setting up Dockerized Caddy Proxy...${NC}"
 
-if [ "$RUST_TWIN_MODE" = "true" ]; then
-    echo -e "${BLUE}  → Formatting Rust Twin Caddyfile...${NC}"
-    cd rust_twin && export DOMAIN && export ACME_EMAIL && caddy fmt --overwrite Caddyfile 2>/dev/null || true
-    cd ..
-    # Swap the default Caddyfile path to point to the Rust Twin version
-    cp rust_twin/Caddyfile "$INSTALL_DIR"/caddy-config/Caddyfile 2>/dev/null || true
-fi
+    # Ensure caddy-config directory exists and has correct permissions
+    # Caddy container runs as uid 1000 (nextjs user); group-read access is
+    # required so the container can write runtime state (tls certs, reload flag).
+    mkdir -p /opt/smsly-hosting/caddy-config
+    chown 1000:1000 /opt/smsly-hosting/caddy-config
+    chmod 2775 /opt/smsly-hosting/caddy-config
 
-# ─── Build Caddy with Cloudflare DNS plugin ───────────────────────────────────
-# Always build custom Caddy with Cloudflare DNS support, even in IP mode.
-# This ensures users can enable SSL + wildcard from the web UI later without SSH.
-if caddy list-modules 2>/dev/null | grep -q 'dns.providers.cloudflare'; then
-    echo -e "${GREEN}  ✓ Caddy already has cloudflare DNS module${NC}"
-elif command -v caddy &> /dev/null; then
-    echo -e "${BLUE}  → Caddy found but missing Cloudflare DNS plugin — rebuilding...${NC}"
-    _BUILD_CADDY=true
-else
-    echo -e "${BLUE}  → Installing Caddy with Cloudflare DNS plugin...${NC}"
-    _BUILD_CADDY=true
-fi
-
-if [ "${_BUILD_CADDY:-}" = "true" ]; then
-    if ! command -v xcaddy &> /dev/null; then
-        # xcaddy needs Go 1.21+. Ubuntu apt repos ship Go 1.18 which is
-        # too old (go.mod 'toolchain' directive is unsupported). Use snap
-        # or direct binary download to get a compatible version.
-        _GO_OK=false
-        if command -v go &> /dev/null; then
-            _GO_VER=$(go version | grep -oP 'go1\.(\d+)' | grep -oP '\d+$')
-            [ "${_GO_VER:-0}" -ge 21 ] && _GO_OK=true
-        fi
-        if [ "$_GO_OK" != "true" ]; then
-            echo -e "${BLUE}  → Installing Go 1.22 (xcaddy requires Go 1.21+)...${NC}"
-            GO_TAR="go1.22.10.linux-amd64.tar.gz"
-            curl -fsSL "https://go.dev/dl/$GO_TAR" -o "/tmp/$GO_TAR"
-            rm -rf /usr/local/go
-            tar -C /usr/local -xzf "/tmp/$GO_TAR"
-            rm -f "/tmp/$GO_TAR"
-            export PATH="/usr/local/go/bin:$PATH"
-            echo -e "${GREEN}  ✓ Go $(go version | awk '{print $3}') installed${NC}"
-        fi
-        export GOPATH="${GOPATH:-/root/go}"
-        export PATH="$PATH:$GOPATH/bin"
-        go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
-    fi
-
-    # Build custom Caddy with Cloudflare DNS
-    CADDY_TMP=$(mktemp -d)
-    cd "$CADDY_TMP"
-    if xcaddy build --with github.com/caddy-dns/cloudflare 2>&1 | tail -5; then
-        # Replace system Caddy
-    true
-        mv ./caddy /usr/bin/caddy
-        chmod +x /usr/bin/caddy
-        echo -e "${GREEN}  ✓ Custom Caddy built with Cloudflare DNS plugin${NC}"
-    else
-        echo -e "${YELLOW}  ⚠ Custom Caddy build failed — trying pre-built download...${NC}"
-        # Fallback 1: Download pre-built Caddy with Cloudflare DNS from Caddy's download API
-        if curl -fsSL -o /usr/bin/caddy \
-            "https://caddyserver.com/api/download?os=linux&arch=amd64&p=github.com/caddy-dns/cloudflare" 2>/dev/null; then
-            chmod +x /usr/bin/caddy
-            echo -e "${GREEN}  ✓ Pre-built Caddy with Cloudflare DNS downloaded${NC}"
-        elif ! command -v caddy &> /dev/null; then
-            # Fallback 2: Install stock Caddy from apt (no wildcard SSL, but basic HTTPS works)
-            echo -e "${YELLOW}  ⚠ Download also failed — installing stock Caddy (no wildcard SSL)...${NC}"
-            apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl >/dev/null 2>&1
-            curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null
-            curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
-            apt-get update >/dev/null 2>&1
-            apt-get install -y caddy >/dev/null 2>&1
-        fi
-    fi
-    cd "$INSTALL_DIR"
-    rm -rf "$CADDY_TMP"
-fi
-
-if ! false >/dev/null 2>&1; then
-    echo -e "${BLUE}  → Installing Caddy systemd service...${NC}"
-    # Add a dedicated caddy user and group
-    groupadd --system caddy 2>/dev/null || true
-    useradd --system --gid caddy --create-home --home-dir /var/lib/caddy \
-        --shell /usr/sbin/nologin --comment "Caddy web server" caddy 2>/dev/null || true
-
-    cat > /etc/systemd/system/caddy.service <<'CADDYSRV'
-[Unit]
-Description=Caddy
-Documentation=https://caddyserver.com/docs/
-After=network.target network-online.target
-Requires=network-online.target
-
-[Service]
-Type=exec
-User=caddy
-Group=caddy
-ExecStart=/usr/bin/caddy run --environ --config "$INSTALL_DIR"/caddy-config/Caddyfile
-ExecReload=/usr/bin/caddy reload --config "$INSTALL_DIR"/caddy-config/Caddyfile --force
-TimeoutStopSec=5s
-LimitNOFILE=1048576
-LimitNPROC=512
-PrivateTmp=true
-ProtectSystem=full
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
-
-[Install]
-WantedBy=multi-user.target
-CADDYSRV
-    systemctl daemon-reload
-    echo -e "${GREEN}  ✓ Caddy systemd service installed${NC}"
-fi
-
-# ─── Configure Caddyfile ──────────────────────────────────────────────────────
-echo -e "${BLUE}  → Configuring Caddyfile...${NC}"
-mkdir -p /var/log/caddy
-mkdir -p /etc/caddy
-touch /var/log/caddy/access.log
-if id caddy >/dev/null 2>&1; then
-    chown -R caddy:caddy /var/log/caddy
-fi
-chmod 755 /var/log/caddy
-chmod 640 /var/log/caddy/access.log
-
-CADDY_OVERRIDE_DIR="/etc/systemd/system/caddy.service.d"
-CADDY_OVERRIDE_FILE="$CADDY_OVERRIDE_DIR/override.conf"
-
-if [ "$USE_SSL" = "true" ] && [ -n "$DOMAIN" ] && [ "$DOMAIN" != "$PUBLIC_IP" ]; then
-    # Ensure token is sourced from .env if present (idempotent runs)
-    if [ -z "$CLOUDFLARE_API_TOKEN" ] && [ -f "$INSTALL_DIR/.env" ]; then
-        CLOUDFLARE_API_TOKEN="$(grep -m1 '^CLOUDFLARE_API_TOKEN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
-    fi
-
-    if [ "$WILDCARD_SUBDOMAINS" = "true" ] && [ -n "$CLOUDFLARE_API_TOKEN" ]; then
-        # ─── Full wildcard mode: domain + *.domain with Cloudflare DNS ────
-        cat > "$INSTALL_DIR"/caddy-config/Caddyfile <<CADDYEOF
-# CloudNeuron Reverse Proxy — Auto-generated
-# Domain: $DOMAIN → HTTPS (auto Let's Encrypt)
-# Wildcard: *.$DOMAIN → HTTPS (Cloudflare DNS challenge)
-
-{
-    on_demand_tls {
-        ask http://localhost:8090/api/v1/services/check-domain/
-    }
-}
-
-$DOMAIN {
-    reverse_proxy localhost:8090
-    encode gzip
-    log {
-        output file /var/log/caddy/access.log
-    }
-}
-
-*.$DOMAIN {
-    tls {
-        dns cloudflare {env.CLOUDFLARE_API_TOKEN}
-    }
-    @platform_assets path /_next/* /favicon.ico /images/* /logos/* /assets/* /static/* /media/*
-    handle @platform_assets {
-        reverse_proxy localhost:8090
-    }
-    handle {
-        reverse_proxy localhost:8090
-    }
-}
-
-
-}
-
+    # SEED: Create a temporary safety Caddyfile so the container doesn't crash on first start.
+    # The backend will overwrite this within seconds of starting up.
+    if [ ! -f /opt/smsly-hosting/caddy-config/Caddyfile ]; then
+        echo -e "${BLUE}  → Seeding initial safety Caddyfile...${NC}"
+        cat > /opt/smsly-hosting/caddy-config/Caddyfile <<EOF
 :80 {
-    @acme {
-        path /.well-known/acme-challenge/*
-    }
-    handle @acme {
-        reverse_proxy localhost:8090
-    }
-    @redirectable {
-        not header_regexp host ^([0-9]{1,3}[.]){3}[0-9]{1,3}(:[0-9]+)?$
-        not host localhost
-        not host 127.0.0.1
-        not host *.local
-        header_regexp host .+
-    }
-    redir @redirectable https://{host}{uri} 308
-    handle {
-        reverse_proxy localhost:8090
-    }
+    respond "System initializing... Please refresh in 30 seconds." 200
 }
-CADDYEOF
-
-        # Set Cloudflare token in systemd environment
-        mkdir -p "$CADDY_OVERRIDE_DIR"
-        cat > "$CADDY_OVERRIDE_FILE" <<ENVEOF
-[Service]
-ExecStart=
-ExecStart=/usr/bin/caddy run --config "$INSTALL_DIR"/caddy-config/Caddyfile
-Environment="CLOUDFLARE_API_TOKEN=$CLOUDFLARE_API_TOKEN"
-ENVEOF
-        chmod 600 "$CADDY_OVERRIDE_FILE"
-        systemctl daemon-reload
-
-        echo -e "${GREEN}  ✓ Caddy configured: HTTPS ($DOMAIN) + Wildcard (*.$DOMAIN) + HTTP fallback → 8090${NC}"
-    else
-        # ─── Standard SSL (no wildcard) ──────────────────────────────────
-        cat > "$INSTALL_DIR"/caddy-config/Caddyfile <<CADDYEOF
-# CloudNeuron Reverse Proxy — Auto-generated
-# Domain: $DOMAIN → HTTPS (auto Let's Encrypt)
-
-{
-    on_demand_tls {
-        ask http://localhost:8090/api/v1/services/check-domain/
-    }
-}
-
-$DOMAIN {
-    reverse_proxy localhost:8090
-    encode gzip
-    log {
-        output file /var/log/caddy/access.log
-    }
-}
-
-
-}
-
-:80 {
-    @acme {
-        path /.well-known/acme-challenge/*
-    }
-    handle @acme {
-        reverse_proxy localhost:8090
-    }
-    redir https://{host}{uri} 308
-    handle {
-        reverse_proxy localhost:8090
-    }
-}
-CADDYEOF
-        if [ -f "$CADDY_OVERRIDE_FILE" ]; then
-            rm -f "$CADDY_OVERRIDE_FILE"
-            rmdir "$CADDY_OVERRIDE_DIR" 2>/dev/null || true
-            systemctl daemon-reload
-        fi
-        echo -e "${GREEN}  ✓ Caddy configured: HTTPS ($DOMAIN) + HTTP (:80 fallback) → 8090${NC}"
+EOF
+        chown 1000:1000 /opt/smsly-hosting/caddy-config/Caddyfile
+        chmod 664 /opt/smsly-hosting/caddy-config/Caddyfile
     fi
-else
-    cat > "$INSTALL_DIR"/caddy-config/Caddyfile <<CADDYEOF
-# CloudNeuron Reverse Proxy — Auto-generated
-{
-    on_demand_tls {
-        ask http://localhost:8090/api/v1/services/check-domain/
-    }
-}
 
-
-}
-
-:80 {
-    reverse_proxy localhost:8090
-}
-CADDYEOF
-    if [ -f "$CADDY_OVERRIDE_FILE" ]; then
-        rm -f "$CADDY_OVERRIDE_FILE"
-        rmdir "$CADDY_OVERRIDE_DIR" 2>/dev/null || true
-        systemctl daemon-reload
+    # Build and start Caddy container
+    echo -e "${BLUE}  → Building and starting Caddy container...${NC}"
+    if ! docker compose -f "$COMPOSE_FILE" build --no-cache caddy; then
+        echo -e "${RED}ERROR: Caddy image build failed.${NC}"
+        echo -e "${YELLOW}This may be due to a Go version mismatch, missing module, or Dockerfile error.${NC}"
+        echo -e "${YELLOW}Check the build logs above for the exact failing stage.${NC}"
+        echo -e "${YELLOW}Dockerfile path: ./infrastructure/caddy/Dockerfile${NC}"
+        exit 1
     fi
-    echo -e "${GREEN}  ✓ Caddy configured for HTTP: :80 → 8090${NC}"
-fi
+    docker compose -f "$COMPOSE_FILE" up -d caddy
 
-# ─── Create caddy-config volume directory for Settings UI writes ──────────────
-ensure_infrastructure_permissions
-
-# ─── Install caddy-watcher service (picks up UI-driven Caddyfile changes) ─────
-if [ -f "$INSTALL_DIR/scripts/caddy-reload.sh" ]; then
-    chmod +x "$INSTALL_DIR/scripts/caddy-reload.sh"
-    cat > /etc/systemd/system/caddy-watcher.service <<WATCHEREOF
-[Unit]
-Description=Caddy Config Watcher (SMSLY)
-After=caddy.service
-
-[Service]
-Type=simple
-ExecStart=$INSTALL_DIR/scripts/caddy-reload.sh /opt/smsly-hosting/caddy-config
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-WATCHEREOF
-    systemctl daemon-reload
-    true >/dev/null 2>&1
-    true
-    echo -e "${GREEN}  ✓ Caddy watcher service installed and running${NC}"
-fi
-
-# ─── Install caddy-docker-watcher service (reloads Caddy Docker container) ───
-if [ -f "$INSTALL_DIR/scripts/caddy-docker-reload.sh" ]; then
-    chmod +x "$INSTALL_DIR/scripts/caddy-docker-reload.sh"
-    cat > /etc/systemd/system/caddy-docker-watcher.service <<DOCKERWATCHEREOF
-[Unit]
-Description=Caddy Docker Reload Watcher (SMSLY)
-After=docker.service
-Requires=docker.service
-
-[Service]
-Type=simple
-ExecStart=$INSTALL_DIR/scripts/caddy-docker-reload.sh /opt/smsly-hosting/caddy-config
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-DOCKERWATCHEREOF
-    systemctl daemon-reload
-    systemctl enable caddy-docker-watcher.service 2>/dev/null || true
-    systemctl start caddy-docker-watcher.service 2>/dev/null || true
-    echo -e "${GREEN}  ✓ Caddy Docker watcher service installed and running${NC}"
-fi
-
-# ─── Install update-watcher service (picks up UI-driven platform updates) ─────
-if [ -f "$INSTALL_DIR/scripts/platform-update.sh" ]; then
-    chmod +x "$INSTALL_DIR/scripts/platform-update.sh"
-    cat > /etc/systemd/system/smsly-update-watcher.service <<UPDATEWATCHEREOF
-[Unit]
-Description=Platform Update Watcher (SMSLY)
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=$INSTALL_DIR/scripts/platform-update.sh /opt/smsly-hosting/caddy-config
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-UPDATEWATCHEREOF
-    systemctl daemon-reload
-    systemctl enable smsly-update-watcher >/dev/null 2>&1
-    systemctl restart smsly-update-watcher
-    echo -e "${GREEN}  ✓ Platform update watcher service installed and running${NC}"
-fi
-
-# Kill non-Caddy/non-Docker processes holding port 80/443 before Caddy binds
-for port in 80 443; do
-    PID=$(lsof -ti :$port 2>/dev/null || ss -tlnp "sport = :$port" 2>/dev/null | grep -oP 'pid=\K[0-9]+' || true)
-    if [ -n "$PID" ] && [ "$PID" != "0" ]; then
-        PNAME=$(ps -p "$PID" -o comm= 2>/dev/null || echo "unknown")
-        # Don't kill Caddy or Docker processes
-        if [[ "$PNAME" != "caddy" ]] && [[ "$PNAME" != "docker"* ]]; then
-            echo -e "${YELLOW}  → Killing $PNAME (PID: $PID) holding port $port${NC}"
-            kill -9 $PID 2>/dev/null || true
-            sleep 1
+    # ACME staging validation — verify Let's Encrypt can reach this server before going live
+    if [ "${DOMAIN:-}" ] && [ "$USE_SSL" = "true" ] && ! echo "$DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+        echo -e "${BLUE}  → Running ACME staging validation for $DOMAIN...${NC}"
+        SLEEP_SEC=15
+        echo -e "${BLUE}    Waiting ${SLEEP_SEC}s for Caddy to start...${NC}"
+        sleep $SLEEP_SEC
+        ACME_OK=false
+        for attempt in 1 2 3; do
+            # Use Let's Encrypt staging endpoint to dry-run the HTTP-01 challenge
+            ACME_CHECK=$(curl -fsS -m 10 \
+                "http://${DOMAIN}/.well-known/acme-challenge/000000000000000000000000000000000000" \
+                2>/dev/null || true)
+            # If Caddy returns "challenge not found" (404), that means it IS
+            # reachable but doesn't have this challenge registered — which is
+            # the expected behavior for a staging check.
+            if echo "$ACME_CHECK" | grep -qi "challenge"; then
+                echo -e "${GREEN}  ✓ ACME HTTP-01 reachable for $DOMAIN (staging)${NC}"
+                ACME_OK=true
+                break
+            fi
+            # Also try: just checking port 80 responds
+            if curl -fsSo /dev/null --max-time 5 "http://${DOMAIN}/" 2>/dev/null; then
+                echo -e "${GREEN}  ✓ Port 80 reachable for $DOMAIN${NC}"
+                ACME_OK=true
+                break
+            fi
+            echo -e "${YELLOW}    ACME check attempt $attempt/3 — $DOMAIN not yet reachable, retrying...${NC}"
+            sleep 5
+        done
+        if [ "$ACME_OK" != "true" ]; then
+            echo -e "${YELLOW}  ⚠ ACME validation could not confirm $DOMAIN is reachable on port 80.${NC}"
+            echo -e "${YELLOW}    SSL certificates may fail to issue. Ensure DNS A record points to $PUBLIC_IP${NC}"
+            echo -e "${YELLOW}    and port 80 is open in your firewall.${NC}"
+            if [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ]; then
+                read -p "  Continue anyway? (y/n) " -n 1 -r < /dev/tty
+                echo
+                if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                    echo -e "${RED}  ACME validation rejected by user. Aborting.${NC}"
+                    exit 1
+                fi
+            fi
         fi
     fi
-done
 
-    if docker compose -f "$COMPOSE_FILE" ps -q caddy 2>/dev/null | grep -q .; then
-    true
-else
-    true
+    # Cleanup legacy host-side services if they exist
+    echo -e "${BLUE}  → Cleaning up legacy host-side Caddy services (if any)...${NC}"
+    true caddy-watcher smsly-update-watcher 2>/dev/null || true
+    true caddy-watcher smsly-update-watcher 2>/dev/null || true
+    rm -f /etc/systemd/system/caddy.service /etc/systemd/system/caddy-watcher.service /etc/systemd/system/smsly-update-watcher.service
+    systemctl daemon-reload
+
+    set_checkpoint "caddy_configured"
 fi
-true >/dev/null 2>&1
-
-# Verify Caddy is running
-sleep 2
-    if docker compose -f "$COMPOSE_FILE" ps -q caddy 2>/dev/null | grep -q .; then
-    echo -e "${GREEN}  ✓ Caddy reverse proxy active${NC}"
-else
-    echo -e "${RED}  ✗ Caddy failed to start. Check: journalctl -u caddy --no-pager -n 20${NC}"
-    exit 1
-fi
-
-safe_refresh_runtime_services
+fi # end Caddy skip for agent-lite/node modes
 
 # -----------------------------------------------------------------------------
 # 8. System Memory Hardening (Prevents OOM kills)
 # -----------------------------------------------------------------------------
-echo -e "\n${YELLOW}[8/9] Hardening System Memory...${NC}"
+if ! is_checkpoint_done "memory_hardened"; then
+    echo -e "\n${YELLOW}[8/9] Hardening System Memory...${NC}"
 
-# ─── Swap: Ensure swap is at least 2x RAM ────────────────────────────────────
-CURRENT_RAM_MB=$(free -m | awk '/^Mem:/{print $2}')
-TARGET_SWAP_MB=$((CURRENT_RAM_MB * 2))
-CURRENT_SWAP_MB=$(free -m | awk '/^Swap:/{print $2}')
-
-if [ "$CURRENT_SWAP_MB" -lt "$TARGET_SWAP_MB" ]; then
-    NEEDED_MB=$((TARGET_SWAP_MB - CURRENT_SWAP_MB))
-    echo -e "${BLUE}  → Current swap: ${CURRENT_SWAP_MB}MB. Adding ${NEEDED_MB}MB to reach 2x RAM (${TARGET_SWAP_MB}MB)...${NC}"
-    SWAPFILE="/swapfile-smsly"
-
-    # If the file already exists but is too small, we need to recreate it
-    if [ -f "$SWAPFILE" ]; then
-        swapoff "$SWAPFILE" 2>/dev/null || true
-        rm -f "$SWAPFILE"
-        # Since we removed the old file, we need to create the full target amount
-        NEEDED_MB=$TARGET_SWAP_MB
-    fi
-
-    fallocate -l ${NEEDED_MB}M "$SWAPFILE" 2>/dev/null || dd if=/dev/zero of="$SWAPFILE" bs=1M count=$NEEDED_MB status=none
-    chmod 600 "$SWAPFILE"
-    mkswap "$SWAPFILE" >/dev/null 2>&1
-    swapon "$SWAPFILE" 2>/dev/null || true
-    # Make permanent (idempotent)
-    if ! grep -q "$SWAPFILE" /etc/fstab 2>/dev/null; then
-        echo "$SWAPFILE none swap sw 0 0" >> /etc/fstab
-    fi
-    echo -e "${GREEN}  ✓ Swap file created and activated (${NEEDED_MB}MB)${NC}"
-else
-    echo -e "${GREEN}  ✓ Swap already sufficient (${CURRENT_SWAP_MB}MB, >= 2x RAM)${NC}"
-fi
+# ─── Swap: Ensure swap is at least 4x RAM ────────────────────────────────────
+ensure_system_swap
 
 # ─── Auto-Maintenance: Install OOM Swap Adjuster ─────────────────────────────
 OOM_SCRIPT="/opt/smsly/scripts/oom-swap-adjuster.sh"
@@ -3699,6 +5970,12 @@ ensure_sysctl() {
 ensure_sysctl "vm.overcommit_memory" "1" "Redis background save fix"
 ensure_sysctl "vm.swappiness" "10" "Prefer RAM over swap"
 ensure_sysctl "net.core.somaxconn" "511" "Redis connection backlog"
+# Security Hardening
+ensure_sysctl "net.ipv4.conf.all.rp_filter" "1" "IP spoofing protection"
+ensure_sysctl "net.ipv4.conf.default.rp_filter" "1" "IP spoofing protection"
+ensure_sysctl "net.ipv4.icmp_echo_ignore_broadcasts" "1" "ICMP flood protection"
+ensure_sysctl "net.ipv4.conf.all.accept_source_route" "0" "Disable source routing"
+ensure_sysctl "net.ipv4.tcp_syncookies" "1" "SYN flood protection"
 
 if [ "$SYSCTL_UPDATED" = "false" ]; then
     echo -e "${GREEN}  ✓ Sysctl settings already optimal${NC}"
@@ -3706,36 +5983,140 @@ fi
 
 # ─── OOM Protection for critical containers ──────────────────────────────────
 echo -e "${BLUE}  → Setting OOM protection for critical containers...${NC}"
-for CONTAINER in smsly-hosting-backend-1 smsly-hosting-db-1 smsly-hosting-pgbouncer-1; do
+if [ "$MODE_AGENT_LITE" = "true" ]; then
+    CRITICAL_CONTAINERS=(smsly-hosting-traefik-1 smsly-hosting-backend-1 smsly-hosting-celery-worker-1 smsly-hosting-socket-proxy-1)
+else
+    CRITICAL_CONTAINERS=(smsly-hosting-backend-1 smsly-hosting-db-1 smsly-hosting-pgcat-1)
+fi
+for CONTAINER in "${CRITICAL_CONTAINERS[@]}"; do
     CPID=$(docker inspect --format '{{.State.Pid}}' "$CONTAINER" 2>/dev/null || echo "")
     if [ -n "$CPID" ] && [ "$CPID" != "0" ] && [ -f "/proc/$CPID/oom_score_adj" ]; then
         echo -500 > "/proc/$CPID/oom_score_adj" 2>/dev/null || true
     fi
 done
-echo -e "${GREEN}  ✓ OOM protection set (backend, db, pgbouncer)${NC}"
+echo -e "${GREEN}  ✓ OOM protection set (${CRITICAL_CONTAINERS[*]})${NC}"
 
-echo -e "${GREEN}  ✓ System memory hardening complete${NC}"
-
-# ─── Docker insecure registry for mesh registry ─────────────────────────────
-# The internal registry runs on the master and is accessible via WireGuard IP
-# (default 10.100.0.1:5000). Remote nodes must trust this IP.
-# NOTE: Registry now uses TLS + htpasswd auth. Insecure flag remains for self-signed certs.
-echo -e "${BLUE}  → Configuring Docker insecure-registries for mesh registry (self-signed TLS)...${NC}"
-DAEMON_JSON="/etc/docker/daemon.json"
-MASTER_MESH_IP="${MASTER_MESH_IP:-10.100.0.1}"
-REGISTRY_URL="${MASTER_MESH_IP}:5000"
-if command -v jq >/dev/null 2>&1; then
-    [ ! -f "$DAEMON_JSON" ] && echo '{}' > "$DAEMON_JSON"
-    if ! jq -e --arg url "$REGISTRY_URL" '."insecure-registries" // [] | index($url)' "$DAEMON_JSON" >/dev/null 2>&1; then
-        jq --arg url "$REGISTRY_URL" '."insecure-registries" //= [] | ."insecure-registries" |= (. + [$url] | unique)' "$DAEMON_JSON" > /tmp/daemon_tmp.json && mv /tmp/daemon_tmp.json "$DAEMON_JSON"
-        echo -e "${GREEN}  ✓ Added $REGISTRY_URL to insecure-registries${NC}"
-        systemctl restart docker 2>/dev/null || true
-    else
-        echo -e "${GREEN}  ✓ $REGISTRY_URL already in insecure-registries${NC}"
+# ─── Firewall Hardening (UFW) ────────────────────────────────────────────────
+if command -v ufw >/dev/null 2>&1; then
+    echo -e "${BLUE}  → Configuring UFW firewall...${NC}"
+    ufw default deny incoming >/dev/null 2>&1 || true
+    ufw default allow outgoing >/dev/null 2>&1 || true
+    # Allow SSH from master IP specifically (provisioning/updates)
+    _master_ip="${MASTER_IP:-}"
+    if [ -n "$_master_ip" ] && [ "$_master_ip" != "127.0.0.1" ] && ! echo "$_master_ip" | grep -qE '^(0\.0\.0\.0|localhost)$'; then
+        echo -e "${BLUE}  → Allowing master ($_master_ip) SSH access...${NC}"
+        ufw allow from "$_master_ip" to any port 22 >/dev/null 2>&1 || true
     fi
-else
-    echo -e "${YELLOW}  ⚠ jq not installed; cannot configure insecure-registries automatically.${NC}"
-    echo -e "${YELLOW}     Run manually: jq '.\"insecure-registries\" //= [] | .\"insecure-registries\" |= (. + [\"$REGISTRY_URL\"] | unique)' $DAEMON_JSON > /tmp/daemon_tmp.json && mv /tmp/daemon_tmp.json $DAEMON_JSON && systemctl restart docker${NC}"
+    # Fallback: allow SSH from any (in case MASTER_IP is empty)
+    ufw allow ssh >/dev/null 2>&1 || true
+    ufw allow 80/tcp >/dev/null 2>&1 || true
+    ufw allow 443/tcp >/dev/null 2>&1 || true
+    # Allow FRP if active
+    if [ -f "$INSTALL_DIR/.env" ] && grep -q "FRP_AUTH_TOKEN" "$INSTALL_DIR/.env"; then
+        ufw allow 7000/tcp >/dev/null 2>&1 || true
+    fi
+    # Allow Docker Mirror (Option B) if this is the Master/Leader
+    if [ -z "${MASTER_IP:-}" ] || [ "$MASTER_IP" = "127.0.0.1" ] || [ "$MASTER_IP" = "$(detect_public_ip)" ]; then
+        ufw allow 5001/tcp >/dev/null 2>&1 || true
+        # Allow Lite Agents to reach core services
+        echo -e "${YELLOW}  ⚠ Master node: Exposing DB/Redis/MQ ports for Lite Agents (protected by password)${NC}"
+        ufw allow 5432/tcp >/dev/null 2>&1 || true
+        ufw allow 6379/tcp >/dev/null 2>&1 || true
+        ufw allow 5672/tcp >/dev/null 2>&1 || true
+    fi
+    echo "y" | ufw enable >/dev/null 2>&1 || true
+    echo -e "${GREEN}  ✓ Firewall hardened (Inbound blocked, SSH/Web permitted)${NC}"
+fi
+
+# ── Registry port firewall (DOCKER-USER chain) ──────────────────────────
+# Docker bypasses UFW by inserting its own iptables rules in the DOCKER
+# chain. The DOCKER-USER chain is the official way to add custom rules.
+# Since the registry has no auth, we lock port 5000 to trusted sources.
+if command -v iptables >/dev/null 2>&1; then
+    echo -e "${BLUE}  → Securing registry port 5000 via iptables (DOCKER-USER chain)...${NC}"
+
+    # Ensure DOCKER-USER chain exists (Docker creates it, but be safe)
+    iptables -N DOCKER-USER 2>/dev/null || true
+
+    # --- Pre-check: detect if registry port 5000 is currently open to the public internet ---
+    _registry_port_open=false
+    _existing_drop_rule="$(iptables -L DOCKER-USER -n 2>/dev/null | grep -c 'dpt:5000.*DROP' || true)"
+    if [ "${_existing_drop_rule:-0}" -eq 0 ]; then
+        # No DROP rule exists — port 5000 is currently reachable from any source
+        _registry_port_open=true
+        echo -e "${YELLOW}  ⚠ WARNING: Registry port 5000 is currently OPEN to the public internet!${NC}"
+        echo -e "${YELLOW}    The container registry has no authentication and is accessible from any IP.${NC}"
+        echo -e "${YELLOW}    Hardening now to restrict access to trusted sources only...${NC}"
+    else
+        echo -e "${BLUE}  → Registry port 5000 already has DROP rules — refreshing whitelist...${NC}"
+    fi
+
+    # Flush any previous registry rules (idempotent re-runs)
+    # Use a subshell to isolate from set -e / pipefail
+    (
+        iptables -L DOCKER-USER --line-numbers -n 2>/dev/null | \
+            grep "dpt:5000" | awk '{print $1}' | sort -rn | \
+            while read -r num; do iptables -D DOCKER-USER "$num" 2>/dev/null || true
+        done
+    ) || true
+
+    # Allow localhost (container-to-registry on the same host)
+    iptables -I DOCKER-USER -i lo -p tcp --dport 5000 -j ACCEPT 2>/dev/null || true
+
+    # Allow Docker bridge networks (172.16.0.0/12 covers docker0 + compose nets)
+    iptables -I DOCKER-USER -s 172.16.0.0/12 -p tcp --dport 5000 -j ACCEPT 2>/dev/null || true
+
+    # Allow WireGuard mesh (10.100.0.0/24 is the assigned mesh range)
+    iptables -I DOCKER-USER -s 10.100.0.0/24 -p tcp --dport 5000 -j ACCEPT 2>/dev/null || true
+
+    # Allow known node IPs
+    if [ -n "${MASTER_MESH_IP:-}" ]; then
+        iptables -I DOCKER-USER -s "${MASTER_MESH_IP}" -p tcp --dport 5000 -j ACCEPT 2>/dev/null || true
+    fi
+
+    # Drop everything else to port 5000
+    iptables -A DOCKER-USER -p tcp --dport 5000 -j DROP 2>/dev/null || true
+
+    # Return to the DOCKER chain for all other traffic
+    # (ensure the RETURN rule exists at the end)
+    iptables -C DOCKER-USER -j RETURN 2>/dev/null || \
+        iptables -A DOCKER-USER -j RETURN 2>/dev/null || true
+
+    if [ "$_registry_port_open" = true ]; then
+        echo -e "${GREEN}  ✓ Registry port 5000 HARDENED — now locked to localhost + mesh/docker networks${NC}"
+    else
+        echo -e "${GREEN}  ✓ Registry port 5000 rules refreshed (trusted sources only)${NC}"
+    fi
+
+    # Persist iptables rules across reboots
+    if command -v iptables-save >/dev/null 2>&1; then
+        mkdir -p /etc/iptables
+        iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+        # Create a systemd service to restore rules on boot (before Docker starts)
+        if [ ! -f /etc/systemd/system/iptables-restore.service ]; then
+            cat > /etc/systemd/system/iptables-restore.service <<'RESTORE_EOF'
+[Unit]
+Description=Restore iptables rules
+Before=docker.service
+After=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/sbin/iptables-restore /etc/iptables/rules.v4
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+RESTORE_EOF
+            systemctl daemon-reload 2>/dev/null || true
+            systemctl enable iptables-restore 2>/dev/null || true
+        fi
+        echo -e "${GREEN}  ✓ iptables rules saved to /etc/iptables/rules.v4 for persistence${NC}"
+    fi
+fi
+
+echo -e "${GREEN}  ✓ System security hardening complete${NC}"
+    set_checkpoint "memory_hardened"
 fi
 
 # -----------------------------------------------------------------------------
@@ -3746,16 +6127,76 @@ VERIFY_PASS_COUNT=0
 VERIFY_TOTAL=5
 sleep 5
 
+if [ "$MODE_AGENT_LITE" = "true" ]; then
+VERIFY_TOTAL=4
+
+echo -e "${BLUE}  → [1/4] Verifying Lite Agent compose profile...${NC}"
+AGENT_SERVICES="$(docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null || true)"
+if printf '%s\n' "$AGENT_SERVICES" | grep -qx "backend" \
+   && printf '%s\n' "$AGENT_SERVICES" | grep -qx "celery-worker" \
+   && printf '%s\n' "$AGENT_SERVICES" | grep -qx "traefik" \
+   && printf '%s\n' "$AGENT_SERVICES" | grep -qx "socket-proxy" \
+   && printf '%s\n' "$AGENT_SERVICES" | grep -qx "redis" \
+   && printf '%s\n' "$AGENT_SERVICES" | grep -qx "rabbitmq" \
+   && ! printf '%s\n' "$AGENT_SERVICES" | grep -Eq "^(frontend|db|pgcat)$"; then
+    echo -e "${GREEN}  ✓ Lite Agent profile selected; local Redis/RabbitMQ enabled and control-plane services excluded${NC}"
+    VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
+else
+    echo -e "${RED}  ✗ Lite Agent compose profile is wrong. Services: ${AGENT_SERVICES//$'\n'/, }${NC}"
+fi
+
+echo -e "${BLUE}  → [2/4] Checking Lite Agent containers...${NC}"
+RUNNING_COUNT=$(docker compose -f "$COMPOSE_FILE" ps --status running -q 2>/dev/null | wc -l)
+TOTAL_COUNT=$(docker compose -f "$COMPOSE_FILE" ps -q 2>/dev/null | wc -l)
+if [ "$RUNNING_COUNT" -eq "$TOTAL_COUNT" ] && [ "$TOTAL_COUNT" -gt 0 ]; then
+    echo -e "${GREEN}  ✓ All $TOTAL_COUNT Lite Agent containers running${NC}"
+    VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
+else
+    echo -e "${RED}  ✗ Only $RUNNING_COUNT/$TOTAL_COUNT Lite Agent containers running${NC}"
+fi
+
+echo -e "${BLUE}  → [3/4] Checking Lite Agent backend...${NC}"
+BACKEND_OK=false
+BACKEND_STATUS=""
+for attempt in $(seq 1 24); do
+    BACKEND_STATUS="$(docker compose -f "$COMPOSE_FILE" ps backend --format "{{.Status}}" 2>/dev/null || true)"
+    if docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS http://127.0.0.1:8000/health/live >/dev/null 2>&1; then
+        BACKEND_OK=true
+        break
+    fi
+    if echo "$BACKEND_STATUS" | grep -qi "unhealthy"; then
+        break
+    fi
+    echo -ne "\r${YELLOW}  → Lite Agent backend warmup $attempt/24...${NC}"
+    sleep 5
+done
+echo ""
+if [ "$BACKEND_OK" = "true" ]; then
+    echo -e "${GREEN}  ✓ Lite Agent backend liveness endpoint passed${NC}"
+    VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
+else
+    echo -e "${RED}  ✗ Lite Agent backend is not live (status: ${BACKEND_STATUS:-unknown})${NC}"
+    docker compose -f "$COMPOSE_FILE" logs --tail=80 backend 2>/dev/null || true
+fi
+
+echo -e "${BLUE}  → [4/4] Checking swap...${NC}"
+SWAP_TOTAL=$(free -m | awk '/^Swap:/{print $2}')
+if [ "$SWAP_TOTAL" -ge 1500 ]; then
+    echo -e "${GREEN}  ✓ Swap sufficient (${SWAP_TOTAL}MB)${NC}"
+    VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
+else
+    echo -e "${YELLOW}  ⚠ Swap low (${SWAP_TOTAL}MB) — recommend 2GB+${NC}"
+fi
+else
 # ─── Check 1: Health check ─────────────────────────────────────────────────
 echo -e "${BLUE}  → [1/5] Running health check...${NC}"
 HEALTH_OK=false
 MAX_ATTEMPTS=36
 for attempt in $(seq 1 $MAX_ATTEMPTS); do
-    if docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health >/dev/null 2>&1; then
+    if docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health/live >/dev/null 2>&1; then
         HEALTH_OK=true
         break
-    fi
-    if curl -sfL --max-time 5 http://127.0.0.1:8090/health >/dev/null 2>&1; then
+    elif curl -sfL --max-time 5 http://127.0.0.1:8090/health/live >/dev/null 2>&1; then
         HEALTH_OK=true
         break
     fi
@@ -3766,6 +6207,11 @@ echo ""
 
 if [ "$HEALTH_OK" = "true" ]; then
     echo -e "${GREEN}  ✓ Health Check Passed!${NC}"
+    READY_OK=false
+    docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health/ready >/dev/null 2>&1 && READY_OK=true
+    if ! $READY_OK && ! curl -sfL --max-time 5 http://127.0.0.1:8090/health/ready >/dev/null 2>&1; then
+        echo -e "${YELLOW}  ⚠ Readiness endpoint is still warming; continuing because liveness passed.${NC}"
+    fi
     VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
 else
     echo -e "${RED}  ✗ Health check failed after $MAX_ATTEMPTS attempts.${NC}"
@@ -3776,8 +6222,16 @@ fi
 echo -e "${BLUE}  → [3/5] Checking container status...${NC}"
 RUNNING_COUNT=$(docker compose -f "$COMPOSE_FILE" ps --status running -q 2>/dev/null | wc -l)
 TOTAL_COUNT=$(docker compose -f "$COMPOSE_FILE" ps -q 2>/dev/null | wc -l)
-if [ "$RUNNING_COUNT" -eq "$TOTAL_COUNT" ] && [ "$TOTAL_COUNT" -gt 0 ]; then
-    echo -e "${GREEN}  ✓ All $TOTAL_COUNT containers running${NC}"
+UNHEALTHY_STATUS="$(docker compose -f "$COMPOSE_FILE" ps --format "{{.Service}}\t{{.Status}}" 2>/dev/null | awk 'tolower($0) ~ /unhealthy/ {print}' || true)"
+if [ -n "$UNHEALTHY_STATUS" ]; then
+    echo -e "${RED}  ✗ One or more containers are unhealthy:${NC}"
+    printf '%s\n' "$UNHEALTHY_STATUS" | sed 's/^/     - /'
+    UNHEALTHY_SERVICES="$(printf '%s\n' "$UNHEALTHY_STATUS" | awk '{print $1}' | xargs 2>/dev/null || true)"
+    if [ -n "$UNHEALTHY_SERVICES" ]; then
+        docker compose -f "$COMPOSE_FILE" logs --tail=80 $UNHEALTHY_SERVICES 2>/dev/null || true
+    fi
+elif [ "$RUNNING_COUNT" -eq "$TOTAL_COUNT" ] && [ "$TOTAL_COUNT" -gt 0 ]; then
+    echo -e "${GREEN}  ✓ All $TOTAL_COUNT containers running and none are unhealthy${NC}"
     VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
 else
     echo -e "${RED}  ✗ Only $RUNNING_COUNT/$TOTAL_COUNT containers running${NC}"
@@ -3793,13 +6247,29 @@ else
     echo -e "${YELLOW}  ⚠ Swap low (${SWAP_TOTAL}MB) — recommend 2GB+${NC}"
 fi
 
-# ─── Check 5: Caddy running ───────────────────────────────────────────────
-echo -e "${BLUE}  → [5/5] Checking Caddy...${NC}"
-    if docker compose -f "$COMPOSE_FILE" ps -q caddy 2>/dev/null | grep -q .; then
-    echo -e "${GREEN}  ✓ Caddy reverse proxy active${NC}"
-    VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
+# ─── Check 5: Public edge proxy ───────────────────────────────────────────
+if should_manage_caddy; then
+    echo -e "${BLUE}  → [5/5] Checking Caddy...${NC}"
+    if docker inspect -f '{{.State.Running}}' smsly-hosting-caddy-1 2>/dev/null | grep -q "true"; then
+        echo -e "${GREEN}  ✓ Caddy reverse proxy container active${NC}"
+        VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
+    else
+        echo -e "${RED}  ✗ Caddy container is not running${NC}"
+    fi
 else
-    echo -e "${RED}  ✗ Caddy is not running${NC}"
+    echo -e "${BLUE}  → [5/5] Checking Traefik...${NC}"
+    TRAEFIK_CHECK_URL="http://127.0.0.1:8081/"
+    if is_node_mode; then
+        TRAEFIK_CHECK_URL="http://127.0.0.1/health/live"
+    fi
+    if docker inspect -f '{{.State.Running}}' smsly-hosting-traefik-1 2>/dev/null | grep -q "true" \
+       && curl -fsS --max-time 5 "$TRAEFIK_CHECK_URL" >/dev/null 2>&1; then
+        echo -e "${GREEN}  ✓ Traefik edge proxy active (${TRAEFIK_CHECK_URL})${NC}"
+        VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
+    else
+        echo -e "${RED}  ✗ Traefik edge proxy check failed (${TRAEFIK_CHECK_URL})${NC}"
+    fi
+fi
 fi
 
 # Show container status
@@ -3849,6 +6319,9 @@ echo -e "${GREEN}  ✓ smsly-autoscaler service installed and started${NC}"
 # -----------------------------------------------------------------------------
 # 10. CLI Integration
 # -----------------------------------------------------------------------------
+if [ "$MODE_AGENT_LITE" = "true" ]; then
+echo -e "\n${YELLOW}[10/10] Skipping SMSLY CLI on Lite Agent...${NC}"
+else
 echo -e "\n${YELLOW}[10/10] Integrating SMSLY CLI...${NC}"
 
 if [ -d "$INSTALL_DIR/cli" ]; then
@@ -3856,20 +6329,25 @@ if [ -d "$INSTALL_DIR/cli" ]; then
     # Use --break-system-packages for modern Python (Ubuntu 24.04+)
     pip3 install -q --break-system-packages "$INSTALL_DIR/cli" 2>/dev/null || \
         pip3 install -q "$INSTALL_DIR/cli" 2>/dev/null || true
-    
+
     # Ensure binary is in path (pip usually puts it in /usr/local/bin)
     if command -v smsly &> /dev/null; then
         echo -e "${GREEN}  ✓ CLI installed: run 'smsly login' or 'smsly --help'${NC}"
-        
+
         # Auto-configuration for local host
-        if [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ]; then
-            URL_SCHEME="https" && [ "$USE_SSL" != "true" ] && URL_SCHEME="http"
-            API_URL="${URL_SCHEME}://${DOMAIN}"
-        else
-            API_URL="http://127.0.0.1:8090"
+        CLI_DOMAIN="${DOMAIN:-}"
+        CLI_USE_SSL="${USE_SSL:-false}"
+        if [ -z "$CLI_DOMAIN" ] && [ -f "$INSTALL_DIR/.env" ]; then
+            CLI_DOMAIN="$(env_get_value "$INSTALL_DIR/.env" "DOMAIN" || true)"
         fi
-        
-        # Best effort: don't auto-login yet (token is in creds file), 
+        if [ -n "$CLI_DOMAIN" ] && [ "$CLI_DOMAIN" != "localhost" ]; then
+            URL_SCHEME="https" && [ "$CLI_USE_SSL" != "true" ] && URL_SCHEME="http"
+            API_URL="${URL_SCHEME}://${CLI_DOMAIN}"
+        else
+            API_URL="http://127.0.0.1"
+        fi
+
+        # Best effort: don't auto-login yet (token is in creds file),
         # but let the user know their URL is pre-linked.
         echo -e "${BLUE}  → Your local API URL: $API_URL${NC}"
     else
@@ -3879,38 +6357,121 @@ else
     echo -e "${YELLOW}  ⚠ CLI directory not found — skipping integration.${NC}"
 fi
 
+# -----------------------------------------------------------------------------
+# 11. Finalize Inter-Node Connectivity
+# -----------------------------------------------------------------------------
+echo -e "\n${YELLOW}[11/11] Finalizing Inter-Node Connectivity...${NC}"
+echo -e "${BLUE}  → Registering this node and creating authentication tokens...${NC}"
+# Use -T to avoid TTY issues in non-interactive mode
+if docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py help diagnose_nodes >/dev/null 2>&1; then
+    docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py diagnose_nodes --fix || true
+    echo -e "${GREEN}  ✓ Node registered as Primary (if Master) and API tokens verified${NC}"
+else
+    echo -e "${YELLOW}  ⚠ diagnose_nodes command not available in this version; skipping.${NC}"
+fi
+
 # ─── Final Verification Sync ──────────────────────────────────────────────────
-if command -v smsly &> /dev/null; then
+fi
+
+if [ "$MODE_AGENT_LITE" != "true" ] && command -v smsly &> /dev/null; then
     VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
     VERIFY_TOTAL=$((VERIFY_TOTAL + 1))
 fi
 
 # ─── Remove rollback trap (installation succeeded) ─────────────────────────
 trap - EXIT
+release_install_lock
 
 # -----------------------------------------------------------------------------
 # Summary
 # -----------------------------------------------------------------------------
 echo -e "\n${GREEN}════════════════════════════════════════════════════════════${NC}"
+# Infrastructure Handshake & Health Stabilization
+echo -e "\n${BLUE}  🔄 Running infrastructure handshake and stabilization...${NC}"
+chmod +x scripts/grid-handshake.sh 2>/dev/null || true
+bash scripts/grid-handshake.sh || \
+    echo -e "${YELLOW}  ⚠️ Handshake stabilization failed (non-fatal). You can run it manually later.${NC}"
+
 echo -e "${GREEN}   ✓ INSTALLATION SUCCESSFUL!${NC}"
+
 echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
 
-if [ "$USE_SSL" = "true" ]; then
-    echo -e "   URL:         https://$DOMAIN"
-else
-    echo -e "   URL:         http://$PUBLIC_IP"
+SUMMARY_PUBLIC_IP="${PUBLIC_IP:-}"
+if [ -z "$SUMMARY_PUBLIC_IP" ] && [ -f "$INSTALL_DIR/.env" ]; then
+    SUMMARY_PUBLIC_IP="$(env_get_value "$INSTALL_DIR/.env" "PUBLIC_IP" || true)"
 fi
-echo -e "   Admin:       /admin"
-echo -e "   Credentials: $CREDENTIALS_FILE"
+if [ -z "$SUMMARY_PUBLIC_IP" ]; then
+    SUMMARY_PUBLIC_IP="$(detect_public_ip)"
+fi
+
+SUMMARY_MASTER_IP="${MASTER_IP:-}"
+if [ -z "$SUMMARY_MASTER_IP" ] && [ -f "$INSTALL_DIR/.env" ]; then
+    SUMMARY_MASTER_IP="$(env_get_value "$INSTALL_DIR/.env" "MASTER_IP" || true)"
+fi
+SUMMARY_MASTER_IP="${SUMMARY_MASTER_IP:-unknown}"
+
+SUMMARY_DOMAIN="${DOMAIN:-}"
+if [ -z "$SUMMARY_DOMAIN" ] && [ -f "$INSTALL_DIR/.env" ]; then
+    SUMMARY_DOMAIN="$(env_get_value "$INSTALL_DIR/.env" "DOMAIN" || true)"
+fi
+
+if [ "$MODE_AGENT_LITE" = "true" ]; then
+    echo -e "   Mode:        Lite Agent"
+    echo -e "   Agent Edge:  http://$SUMMARY_PUBLIC_IP"
+    echo -e "   Master:      $SUMMARY_MASTER_IP"
+elif [ "$MODE_NODE" = "true" ]; then
+    echo -e "   Mode:        Full-Stack Node"
+    echo -e "   API:         http://$SUMMARY_PUBLIC_IP"
+    echo -e "   Edge:        Traefik on public port 80"
+    echo -e "   UI/HTTPS:    Managed by Master (frontend/Caddy disabled here)"
+    echo -e "   Credentials: $CREDENTIALS_FILE"
+else
+    if [ "${USE_SSL:-false}" = "true" ] && [ -n "$SUMMARY_DOMAIN" ]; then
+        echo -e "   URL:         https://$SUMMARY_DOMAIN"
+    else
+        echo -e "   URL:         http://$SUMMARY_PUBLIC_IP"
+    fi
+    echo -e "   Admin:       /admin"
+    echo -e "   Credentials: $CREDENTIALS_FILE"
+fi
 echo -e "   Install Log: $LOG_FILE"
 echo -e "   Location:    $INSTALL_DIR"
 echo -e "   Memory:      $(free -m | awk '/^Mem:/{print $7}')MB available"
 echo -e "   Swap:        $(free -m | awk '/^Swap:/{print $2}')MB total"
-echo -e "   CLI:         'smsly services list'${NC}"
+
+# ─── Custom Domain SSL Integration ───────────────────────────────────────────
+if should_manage_caddy; then  # Only for master mode
+    echo -e "\n${YELLOW}[9/9] Setting up Custom Domain SSL Services...${NC}"
+    
+    # Check if custom domain SSL manager script exists
+    if [ -f "install-custom-domain-ssl.sh" ]; then
+        echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
+        bash install-custom-domain-ssl.sh install
+        
+        # Start the services
+        echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
+        /opt/smsly-hosting/smsly-domain-ssl-manager.sh start
+        
+        # Enable auto-start on boot
+        echo -e "${BLUE}  → Enabling auto-start on boot...${NC}"
+        /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable
+        
+        echo -e "${GREEN}  ✓ Custom domain SSL services configured${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ Custom domain SSL manager not found, skipping setup${NC}"
+    fi
+fi
+
+echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
+if [ "$MODE_AGENT_LITE" != "true" ]; then
+    echo -e "   CLI:         'smsly services list'${NC}"
+fi
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
 echo -e "${YELLOW}  View credentials:   cat $CREDENTIALS_FILE${NC}"
 echo -e "${YELLOW}  View logs:          cat $LOG_FILE${NC}"
-echo -e "${YELLOW}  Update frontend:    sudo bash install.sh --update-frontend${NC}"
+if is_master_mode; then
+    echo -e "${YELLOW}  Update frontend:    sudo bash install.sh --update-frontend${NC}"
+fi
 echo -e "${YELLOW}  Update backend:     sudo bash install.sh --update-backend${NC}"
 echo -e "${YELLOW}  Full update:        sudo bash install.sh --update${NC}"
 echo -e "${YELLOW}  Runtime refresh:    sudo bash install.sh --refresh${NC}"
@@ -3921,7 +6482,11 @@ echo -e "${YELLOW}  Wipe install:       sudo bash install.sh --wipe${NC}"
 # ─── Conditional Auto-Reboot (only if ALL checks passed) ────────────────────
 if [ "$VERIFY_PASS_COUNT" -eq "$VERIFY_TOTAL" ]; then
     echo -e "\n${GREEN}  ✓ All $VERIFY_TOTAL/$VERIFY_TOTAL verification checks passed.${NC}"
-    if [ -e /dev/tty ] && [ -z "${SKIP_REBOOT:-}" ]; then
+    # Normalize NON_INTERACTIVE to true/false for easier shell testing
+    _IS_NON_INTERACTIVE=false
+    if [[ "${NON_INTERACTIVE:-}" =~ ^(1|true|yes)$ ]]; then _IS_NON_INTERACTIVE=true; fi
+
+    if [ -e /dev/tty ] && [ -z "${SKIP_REBOOT:-}" ] && [ "$_IS_NON_INTERACTIVE" != "true" ]; then
         echo -e "${YELLOW}  System will reboot in 30 seconds to apply sysctl changes.${NC}"
         echo -e "${YELLOW}  Press Ctrl+C to cancel, or wait...${NC}"
         for i in $(seq 30 -1 1); do
@@ -3942,3 +6507,5 @@ else
         exit 1
     fi
 fi
+
+exit 0

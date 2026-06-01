@@ -5384,7 +5384,7 @@ EOF
         # not the CWD. Create a symlink so all compose files can find it.
         _compose_env_link="$INSTALL_DIR/infrastructure/docker/.env"
         rm -f "$_compose_env_link" 2>/dev/null || true
-        ln -sf "$INSTALL_DIR/.env" "$_compose_env_link" 2>/dev/null || true
+        ln -sf ../../.env "$_compose_env_link" 2>/dev/null || true
         echo -e "${GREEN}  ✓ Configuration saved to .env${NC}"
     else
         echo -e "${RED}  x Generated .env failed validation. Aborting install.${NC}"
@@ -5400,13 +5400,20 @@ if [ -f "$INSTALL_DIR/.env" ]; then
     # Ensure .env symlink exists for Docker Compose v2+ .env resolution
     _compose_env_link="$INSTALL_DIR/infrastructure/docker/.env"
     rm -f "$_compose_env_link" 2>/dev/null || true
-    ln -sf "$INSTALL_DIR/.env" "$_compose_env_link" 2>/dev/null || true
+    ln -sf ../../.env "$_compose_env_link" 2>/dev/null || true
     if ! validate_env_file "$INSTALL_DIR/.env"; then
         echo -e "${RED}x Existing .env is invalid after runtime-default reconciliation.${NC}"
         exit 1
     fi
 fi
 load_install_env_defaults "$INSTALL_DIR/.env"
+
+# Ensure all variables in .env are exported to the environment so they are inherited by docker compose
+if [ -f "$INSTALL_DIR/.env" ]; then
+    set -a
+    source "$INSTALL_DIR/.env"
+    set +a
+fi
 
 # -----------------------------------------------------------------------------
 # 4. Deployment
