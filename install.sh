@@ -5326,7 +5326,6 @@ except Exception:
     # SSH into the master to fetch the correct POSTGRES_PASSWORD.
     if is_agent_lite_mode && [ -n "${MASTER_IP:-}" ] && [ "$MASTER_IP" != "127.0.0.1" ]; then
         echo -e "${BLUE}  → Fetching master DB password via SSH (master: ${MASTER_IP})...${NC}"
-        local _master_db_pw
         _master_db_pw="$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes root@${MASTER_IP} \
             "grep '^POSTGRES_PASSWORD=' /opt/smsly-hosting/.env 2>/dev/null | head -1 | cut -d= -f2" 2>/dev/null || true)"
         if [ -n "${_master_db_pw:-}" ]; then
