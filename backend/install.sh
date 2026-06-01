@@ -272,13 +272,20 @@ configure_docker_mirror() {
         fi
 
         # Build the daemon.json
-        cat > /etc/docker/daemon.json <<EOF
+        local temp_daemon_json
+        temp_daemon_json=$(mktemp)
+        cat > "$temp_daemon_json" <<EOF
 {
   "registry-mirrors": ["http://${MASTER_IP}:5001"],
   "insecure-registries": [${trust_list}]
 }
 EOF
-        systemctl restart docker || true
+        if [ ! -f /etc/docker/daemon.json ] || ! cmp -s "$temp_daemon_json" /etc/docker/daemon.json; then
+            mkdir -p /etc/docker
+            cp "$temp_daemon_json" /etc/docker/daemon.json
+            systemctl restart docker || true
+        fi
+        rm -f "$temp_daemon_json"
         echo -e "${GREEN}  ✓ Docker mirror configured${NC}"
     else
         # This is the Master node (or MASTER_IP matches local IP)
@@ -294,12 +301,19 @@ EOF
                 master_trust_list="${master_trust_list}, \"${MASTER_MESH_IP}:5000\""
             fi
             # Registry now has TLS + htpasswd auth — keep insecure flag for self-signed certs
-            cat > /etc/docker/daemon.json <<EOF
+            local temp_daemon_json
+            temp_daemon_json=$(mktemp)
+            cat > "$temp_daemon_json" <<EOF
 {
   "insecure-registries": [${master_trust_list}]
 }
 EOF
-            systemctl restart docker || true
+            if [ ! -f /etc/docker/daemon.json ] || ! cmp -s "$temp_daemon_json" /etc/docker/daemon.json; then
+                mkdir -p /etc/docker
+                cp "$temp_daemon_json" /etc/docker/daemon.json
+                systemctl restart docker || true
+            fi
+            rm -f "$temp_daemon_json"
         fi
 
         # Ensure the mirror service is UP if it exists in the compose file
