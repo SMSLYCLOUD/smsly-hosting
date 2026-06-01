@@ -1324,10 +1324,8 @@ queue_active_service_redeploys() {
     local service_ids="${2:-}"
 
     # Verify backend is reachable before attempting redeploy
-    local backend_container="smsly-hosting-backend-1"
-    if [ "$MODE_AGENT_LITE" = "true" ]; then
-        backend_container="smsly-hosting-backend-1"  # same for agent-lite
-    fi
+    local backend_container
+    backend_container="$(resolve_container_target "smsly-hosting-backend-1")"
     local backend_state
     backend_state="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$backend_container" 2>/dev/null || echo 'missing')"
     if [ "$backend_state" != "healthy" ] && [ "$backend_state" != "running" ]; then
@@ -2609,12 +2607,68 @@ ensure_infrastructure_permissions() {
     echo "perm-check $(date +%s)" > "$caddy_config_dir/.perm_probe" 2>/dev/null || true
 }
 
+resolve_container_target() {
+    local target="$1"
+
+    [ -z "$target" ] && return 0
+
+    # 1. If target is already a valid container ID or name inspectable by docker, return it
+    if docker container inspect "$target" >/dev/null 2>&1; then
+        echo "$target"
+        return 0
+    fi
+
+    # 2. Try to map target to a docker compose service.
+    local compose_f="${COMPOSE_FILE:-docker-compose.prod.yml}"
+    if [ -f "$compose_f" ]; then
+        local services
+        services="$(docker compose -f "$compose_f" config --services 2>/dev/null)"
+        if [ -n "$services" ]; then
+            for svc in $services; do
+                if [[ "$target" == *"-${svc}-"* || "$target" == *"_${svc}_"* || "$target" == *"-${svc}" || "$target" == *"_${svc}" || "$target" == "$svc" ]]; then
+                    local cid
+                    cid="$(docker compose -f "$compose_f" ps -q "$svc" 2>/dev/null | head -n 1 || true)"
+                    if [ -n "$cid" ]; then
+                        echo "$cid"
+                        return 0
+                    fi
+                fi
+            done
+        fi
+    fi
+
+    # 3. Fallback: maybe target is a service name itself?
+    local cid_svc
+    cid_svc="$(docker compose -f "$compose_f" ps -q "$target" 2>/dev/null | head -n 1 || true)"
+    if [ -n "$cid_svc" ]; then
+        echo "$cid_svc"
+        return 0
+    fi
+
+    # 4. Fallback: search for container matching substring wildcard
+    local cid_fuzzy
+    local fuzzy_pattern
+    fuzzy_pattern="${target//-/*}"
+    fuzzy_pattern="${fuzzy_pattern//_/*}"
+    cid_fuzzy="$(docker ps -a --filter "name=${fuzzy_pattern}" -q 2>/dev/null | head -n 1 || true)"
+    if [ -n "$cid_fuzzy" ]; then
+        echo "$cid_fuzzy"
+        return 0
+    fi
+
+    # 5. Last resort fallback to the original target string
+    echo "$target"
+}
+
 ensure_container_on_network() {
     local network_name="$1"
-    local container_name="$2"
+    local raw_target="$2"
 
     [ -z "$network_name" ] && return 0
-    [ -z "$container_name" ] && return 0
+    [ -z "$raw_target" ] && return 0
+
+    local container_name
+    container_name="$(resolve_container_target "$raw_target")"
 
     docker container inspect "$container_name" >/dev/null 2>&1 || return 0
     docker network inspect "$network_name" >/dev/null 2>&1 || return 0
@@ -3008,24 +3062,27 @@ safe_refresh_runtime_services() {
 }
 
 wait_for_container_ready() {
-    local container_name="$1"
+    local raw_target="$1"
     local timeout_seconds="${2:-180}"
     local elapsed=0
     local state=""
 
-    [ -z "$container_name" ] && return 1
+    [ -z "$raw_target" ] && return 1
+
+    local container_name
+    container_name="$(resolve_container_target "$raw_target")"
 
     while [ "$elapsed" -lt "$timeout_seconds" ]; do
         state="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container_name" 2>/dev/null || echo "missing")"
         if [ "$state" = "healthy" ] || [ "$state" = "running" ]; then
-            echo -e "${GREEN}  OK $container_name is $state${NC}"
+            echo -e "${GREEN}  OK $raw_target is $state${NC}"
             return 0
         fi
         sleep 5
         elapsed=$((elapsed + 5))
     done
 
-    echo -e "${YELLOW}  WARN $container_name not ready after ${timeout_seconds}s (state=$state)${NC}"
+    echo -e "${YELLOW}  WARN $raw_target not ready after ${timeout_seconds}s (state=$state)${NC}"
     return 1
 }
 
@@ -4049,7 +4106,8 @@ if not created and not cp.is_active:
 
     # ─── Self-Healing: Automatic Queue Restoration ──────────────────────────
     echo -e "${BLUE}  → Checking for stalled deployments/addons in QUEUED state...${NC}"
-    docker exec -i smsly-hosting-backend-1 python manage.py shell -c "
+    backend_container="$(resolve_container_target "smsly-hosting-backend-1")"
+    docker exec -i "$backend_container" python manage.py shell -c "
 from apps.deployments.models import Deployment
 from apps.deployments.models_addons import Addon
 from apps.deployments.tasks import provision_addon_task, recover_stalled_queued_deployments
@@ -4077,10 +4135,11 @@ if a_count > 0:
     echo -e "${BLUE}  → Verifying worker connectivity and queue bindings...${NC}"
     # Give workers a moment to connect to Redis and report active queues
     sleep 15
-    worker_container="smsly-hosting-celery-deploy-1"
+    raw_worker="smsly-hosting-celery-deploy-1"
     if [ "$MODE_AGENT_LITE" = "true" ]; then
-        worker_container="smsly-hosting-celery-worker-1"
+        raw_worker="smsly-hosting-celery-worker-1"
     fi
+    worker_container="$(resolve_container_target "$raw_worker")"
     DEPLOY_WORKER_HEALTH="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$worker_container" 2>/dev/null || echo "")"
     if docker exec -i "$worker_container" celery -A config inspect active_queues --timeout=10 2>/dev/null | grep -q "deploy"; then
         echo -e "${GREEN}  ✓ Deployment worker successfully bound to 'deploy' queue${NC}"
@@ -4589,7 +4648,8 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
         oom_containers="smsly-hosting-backend-1 smsly-hosting-celery-worker-1 smsly-hosting-socket-proxy-1"
     fi
     for CONTAINER in $oom_containers; do
-        CPID=$(docker inspect --format '{{.State.Pid}}' "$CONTAINER" 2>/dev/null || echo "")
+        resolved_container="$(resolve_container_target "$CONTAINER")"
+        CPID=$(docker inspect --format '{{.State.Pid}}' "$resolved_container" 2>/dev/null || echo "")
         if [ -n "$CPID" ] && [ "$CPID" != "0" ] && [ -f "/proc/$CPID/oom_score_adj" ]; then
             echo -500 > "/proc/$CPID/oom_score_adj" 2>/dev/null || true
         fi
@@ -6024,7 +6084,8 @@ else
     CRITICAL_CONTAINERS=(smsly-hosting-backend-1 smsly-hosting-db-1 smsly-hosting-pgcat-1)
 fi
 for CONTAINER in "${CRITICAL_CONTAINERS[@]}"; do
-    CPID=$(docker inspect --format '{{.State.Pid}}' "$CONTAINER" 2>/dev/null || echo "")
+    resolved_container="$(resolve_container_target "$CONTAINER")"
+    CPID=$(docker inspect --format '{{.State.Pid}}' "$resolved_container" 2>/dev/null || echo "")
     if [ -n "$CPID" ] && [ "$CPID" != "0" ] && [ -f "/proc/$CPID/oom_score_adj" ]; then
         echo -500 > "/proc/$CPID/oom_score_adj" 2>/dev/null || true
     fi
@@ -6285,7 +6346,8 @@ fi
 # ─── Check 5: Public edge proxy ───────────────────────────────────────────
 if should_manage_caddy; then
     echo -e "${BLUE}  → [5/5] Checking Caddy...${NC}"
-    if docker inspect -f '{{.State.Running}}' smsly-hosting-caddy-1 2>/dev/null | grep -q "true"; then
+    caddy_container="$(resolve_container_target "smsly-hosting-caddy-1")"
+    if docker inspect -f '{{.State.Running}}' "$caddy_container" 2>/dev/null | grep -q "true"; then
         echo -e "${GREEN}  ✓ Caddy reverse proxy container active${NC}"
         VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
     else
@@ -6297,7 +6359,8 @@ else
     if is_node_mode; then
         TRAEFIK_CHECK_URL="http://127.0.0.1/health/live"
     fi
-    if docker inspect -f '{{.State.Running}}' smsly-hosting-traefik-1 2>/dev/null | grep -q "true" \
+    traefik_container="$(resolve_container_target "smsly-hosting-traefik-1")"
+    if docker inspect -f '{{.State.Running}}' "$traefik_container" 2>/dev/null | grep -q "true" \
        && curl -fsS --max-time 5 "$TRAEFIK_CHECK_URL" >/dev/null 2>&1; then
         echo -e "${GREEN}  ✓ Traefik edge proxy active (${TRAEFIK_CHECK_URL})${NC}"
         VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
