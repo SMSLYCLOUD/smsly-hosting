@@ -1212,20 +1212,19 @@ def provision_server(self, server_id: str):
                 )
             _append_log(server, f"Lite Agent node queue: {node_queue}")
         server.provider_metadata = provider_metadata
-        server.provision_status = ManagedServer.ProvisionStatus.DONE
-        server.status = ManagedServer.Status.ONLINE
-        server.save(update_fields=update_fields)
 
-        _append_log(server, "✅ Grid provisioning complete!")
-        _append_log(server, f"🖥️ Server '{server.name}' is now online at {api_url}")
-
-        # -- Step 7: Auto-exchange — get a proper smsly_ API token --
+        # -- Step 7: Synchronous WireGuard mesh setup BEFORE marking ONLINE --
+        # The wg_address must be populated before the server is marked ONLINE so
+        # the orchestrator can use WireGuard mesh URLs for health checks and
+        # deployments immediately after provisioning completes.
+        wg_assigned = False
         try:
             from apps.deployments.services.wireguard_service import WireGuardService
             mesh_result = WireGuardService.ensure_server_in_default_mesh(
                 server,
                 deploy_async=True,
             )
+            wg_assigned = bool(mesh_result.get("wg_address"))
             _append_log(
                 server,
                 f"VPN mesh auto-connect queued: {mesh_result.get('wg_address')}",
@@ -1235,6 +1234,37 @@ def provision_server(self, server_id: str):
                 server,
                 f"Warning: VPN mesh auto-connect could not complete yet: {mesh_exc}",
             )
+
+        # Fallback: if wg_address is still empty, try to read it directly from
+        # the WireGuardPeer record that ensure_server_in_default_mesh may have
+        # created before raising.  This prevents the node from being marked
+        # ONLINE with no WireGuard address, which would force all API traffic
+        # through the public IP (and fail for HTTP-only nodes).
+        if not wg_assigned and not getattr(server, "wg_address", None):
+            try:
+                from apps.deployments.models_mesh import WireGuardPeer
+                fallback_peer = WireGuardPeer.objects.filter(
+                    server=server,
+                    is_local=False,
+                    is_active=True,
+                ).order_by("-created_at").first()
+                if fallback_peer and fallback_peer.wg_address:
+                    server.wg_address = fallback_peer.wg_address
+                    server.save(update_fields=["wg_address", "updated_at"])
+                    wg_assigned = True
+                    _append_log(
+                        server,
+                        f"VPN mesh wg_address recovered from peer record: {fallback_peer.wg_address}",
+                    )
+            except Exception:
+                pass
+
+        server.provision_status = ManagedServer.ProvisionStatus.DONE
+        server.status = ManagedServer.Status.ONLINE
+        server.save(update_fields=update_fields)
+
+        _append_log(server, "✅ Grid provisioning complete!")
+        _append_log(server, f"🖥️ Server '{server.name}' is now online at {api_url}")
 
         # The token from provisioning may be a DRF session token.
         # Try to exchange it for a long-lived smsly_ API token via the
