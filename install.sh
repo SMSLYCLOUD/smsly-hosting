@@ -5227,6 +5227,22 @@ except Exception:
 
     echo -e "${GREEN}  ✓ All secrets generated successfully${NC}"
 
+    # Agent-lite nodes must use the master's DB password, not a locally generated one.
+    # SSH into the master to fetch the correct POSTGRES_PASSWORD.
+    if is_agent_lite_mode && [ -n "${MASTER_IP:-}" ] && [ "$MASTER_IP" != "127.0.0.1" ]; then
+        echo -e "${BLUE}  → Fetching master DB password via SSH (master: ${MASTER_IP})...${NC}"
+        local _master_db_pw
+        _master_db_pw="$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes root@${MASTER_IP} \
+            "grep '^POSTGRES_PASSWORD=' /opt/smsly-hosting/.env 2>/dev/null | head -1 | cut -d= -f2" 2>/dev/null || true)"
+        if [ -n "${_master_db_pw:-}" ]; then
+            POSTGRES_PASSWORD="$_master_db_pw"
+            echo -e "${GREEN}  ✓ Retrieved master DB password${NC}"
+        else
+            echo -e "${YELLOW}  ⚠ Could not retrieve master DB password via SSH. DATABASE_URL may not connect.${NC}"
+            echo -e "${YELLOW}    Tip: Pass MASTER_DB_PASSWORD=... to the install script.${NC}"
+        fi
+    fi
+
     # Create .env (Atomic)
     ENV_TMP="$INSTALL_DIR/.env.tmp"
     ENV_MODE_VALUE="$(mode_env_value)"
