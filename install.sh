@@ -259,6 +259,23 @@ configure_docker_mirror() {
         [ -n "${MASTER_MESH_IP:-}" ] || MASTER_MESH_IP="$(env_get_value "${INSTALL_DIR:-/opt/smsly-hosting}/.env" "MASTER_MESH_IP" 2>/dev/null || true)"
     fi
 
+    # Detect if we need custom DNS fallback (test resolution inside Docker)
+    local use_dns_fallback=false
+    if command -v docker >/dev/null 2>&1 && systemctl is-active --quiet docker; then
+        echo -e "${BLUE}  → Checking Docker DNS resolution for npm registry...${NC}"
+        # Use node:20-alpine if cached, otherwise fallback to alpine
+        local test_img="node:20-alpine"
+        if ! docker image inspect "$test_img" >/dev/null 2>&1; then
+            test_img="alpine"
+        fi
+        if ! docker run --rm "$test_img" nslookup registry.npmjs.org >/dev/null 2>&1; then
+            echo -e "${YELLOW}  ⚠ Docker container DNS test failed. Enabling public DNS fallback (8.8.8.8, 1.1.1.1)...${NC}"
+            use_dns_fallback=true
+        else
+            echo -e "${GREEN}  ✓ Docker container DNS resolution verified.${NC}"
+        fi
+    fi
+
     # Option B: Pull-Through Cache
     if [ -n "${MASTER_IP:-}" ] && [ "$MASTER_IP" != "127.0.0.1" ] && [ "$MASTER_IP" != "$(detect_public_ip)" ]; then
         # This is a Follower node
@@ -274,12 +291,22 @@ configure_docker_mirror() {
         # Build the daemon.json
         local temp_daemon_json
         temp_daemon_json=$(mktemp)
-        cat > "$temp_daemon_json" <<EOF
+        if [ "$use_dns_fallback" = "true" ]; then
+            cat > "$temp_daemon_json" <<EOF
+{
+  "registry-mirrors": ["http://${MASTER_IP}:5001"],
+  "insecure-registries": [${trust_list}],
+  "dns": ["8.8.8.8", "1.1.1.1"]
+}
+EOF
+        else
+            cat > "$temp_daemon_json" <<EOF
 {
   "registry-mirrors": ["http://${MASTER_IP}:5001"],
   "insecure-registries": [${trust_list}]
 }
 EOF
+        fi
         if [ ! -f /etc/docker/daemon.json ] || ! cmp -s "$temp_daemon_json" /etc/docker/daemon.json; then
             mkdir -p /etc/docker
             cp "$temp_daemon_json" /etc/docker/daemon.json
@@ -303,9 +330,33 @@ EOF
             # Registry now has TLS + htpasswd auth — keep insecure flag for self-signed certs
             local temp_daemon_json
             temp_daemon_json=$(mktemp)
-            cat > "$temp_daemon_json" <<EOF
+            if [ "$use_dns_fallback" = "true" ]; then
+                cat > "$temp_daemon_json" <<EOF
+{
+  "insecure-registries": [${master_trust_list}],
+  "dns": ["8.8.8.8", "1.1.1.1"]
+}
+EOF
+            else
+                cat > "$temp_daemon_json" <<EOF
 {
   "insecure-registries": [${master_trust_list}]
+}
+EOF
+            fi
+            if [ ! -f /etc/docker/daemon.json ] || ! cmp -s "$temp_daemon_json" /etc/docker/daemon.json; then
+                mkdir -p /etc/docker
+                cp "$temp_daemon_json" /etc/docker/daemon.json
+                systemctl restart docker || true
+            fi
+            rm -f "$temp_daemon_json"
+        elif [ "$use_dns_fallback" = "true" ]; then
+            # If local host (127.0.0.1) but DNS fallback is needed
+            local temp_daemon_json
+            temp_daemon_json=$(mktemp)
+            cat > "$temp_daemon_json" <<EOF
+{
+  "dns": ["8.8.8.8", "1.1.1.1"]
 }
 EOF
             if [ ! -f /etc/docker/daemon.json ] || ! cmp -s "$temp_daemon_json" /etc/docker/daemon.json; then
