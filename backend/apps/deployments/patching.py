@@ -105,10 +105,29 @@ def is_valid_host(host_str: str) -> bool:
     if domain in [h.strip().lower() for h in settings.ALLOWED_HOSTS]:
         return True
 
+    # Allow IP address whitelist (public node IP or private/mesh IPs)
+    import ipaddress
+    import os
+    try:
+        ip = ipaddress.ip_address(domain)
+        # Allow private / loopback IPs (e.g. WireGuard mesh, local docker networks)
+        if ip.is_private or ip.is_loopback:
+            return True
+        # Allow if it matches SMSLY_NODE_HOST
+        node_host = os.environ.get('SMSLY_NODE_HOST')
+        if node_host and domain == node_host.strip().lower():
+            return True
+    except ValueError:
+        pass
+
     # 1. PlatformConfig primary domain (and First-Run bypass)
+    cfg = None
     try:
         from apps.deployments.models import PlatformConfig
         cfg = PlatformConfig.load()
+        # Allow if it matches the server's public IP stored in PlatformConfig
+        if cfg.server_ip and domain == cfg.server_ip.strip().lower():
+            return True
         if not cfg.domain:
             # Chicken-and-egg fix: If the database is completely empty (no domain set),
             # we must trust the incoming host (which Caddy already allowed) so the user 
