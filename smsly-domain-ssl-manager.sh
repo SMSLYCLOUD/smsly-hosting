@@ -112,16 +112,30 @@ if ! docker compose ps -q backend | grep -q .; then
     exit 1
 fi
 
-# Check if Django can access the database
-if ! docker compose exec -T backend python -c "
+# Check if Django can access the database (with retries for container bootstrap phase)
+max_retries=15
+retry_count=0
+db_ok=false
+
+while [ "$retry_count" -lt "$max_retries" ]; do
+    if docker compose exec -T backend python -c "
 from apps.domains.models import Domain
 print(f'Total domains: {Domain.objects.count()}')
 " 2>/dev/null; then
+        db_ok=true
+        break
+    fi
+    log "Waiting for Django database to be ready (attempt $((retry_count + 1))/$max_retries)..."
+    sleep 2
+    retry_count=$((retry_count + 1))
+done
+
+if [ "$db_ok" != "true" ]; then
     log "ERROR: Cannot access Django database inside container"
     exit 1
 fi
 
-# Process pending domains
+# Process pending domains asynchronously via Celery
 docker compose exec -T backend python -c "
 from apps.domains.models import Domain
 from apps.domains.tasks import verify_dns_and_provision_ssl_task
@@ -131,8 +145,8 @@ domains = Domain.objects.filter(status__in=['pending', 'dns_pending'])
 print(f'Processing {domains.count()} pending domains...')
 
 for domain in domains:
-    print(f'Verifying domain: {domain.domain_name}')
-    verify_dns_and_provision_ssl_task(domain.id)
+    print(f'Queueing verification for domain: {domain.domain_name}')
+    verify_dns_and_provision_ssl_task.delay(domain.id)
     print(f'Task queued for {domain.domain_name}')
 "
 
