@@ -6,7 +6,6 @@ use tokio::net::TcpListener;
 use tracing::info;
 use anyhow::{Context, Result};
 use std::sync::Arc;
-use sea_orm::DatabaseConnection;
 
 use api::{routes, AppState};
 

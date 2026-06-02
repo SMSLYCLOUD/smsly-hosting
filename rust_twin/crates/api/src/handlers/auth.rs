@@ -95,7 +95,7 @@ pub async fn login(
 
     let user_model = match user_model {
         Some(u) => u,
-        None => return Err((StatusCode::UNAUTHORIZED, "Invalid credentials".to_string())),
+        None => return Err((StatusCode::BAD_REQUEST, "Invalid credentials".to_string())),
     };
 
     // 2. Verify password (Argon2 or PBKDF2 compatibility check if migrating old users)
@@ -103,7 +103,7 @@ pub async fn login(
         .unwrap_or(false);
 
     if !is_valid {
-        return Err((StatusCode::UNAUTHORIZED, "Invalid credentials".to_string()));
+        return Err((StatusCode::BAD_REQUEST, "Invalid credentials".to_string()));
     }
 
     // 3. Generate JWT
