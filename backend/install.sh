@@ -6641,29 +6641,13 @@ echo -e "${YELLOW}  Runtime recovery:   sudo bash install.sh --recover${NC}"
 echo -e "${YELLOW}  Debug snapshot:     sudo bash install.sh --debug${NC}"
 echo -e "${YELLOW}  Wipe install:       sudo bash install.sh --wipe${NC}"
 
-# ─── Conditional Auto-Reboot (only if ALL checks passed) ────────────────────
+# ─── Verification Check Summary ──────────────────────────────────────────────
 if [ "$VERIFY_PASS_COUNT" -eq "$VERIFY_TOTAL" ]; then
     echo -e "\n${GREEN}  ✓ All $VERIFY_TOTAL/$VERIFY_TOTAL verification checks passed.${NC}"
-    # Normalize NON_INTERACTIVE to true/false for easier shell testing
-    _IS_NON_INTERACTIVE=false
-    if [[ "${NON_INTERACTIVE:-}" =~ ^(1|true|yes)$ ]]; then _IS_NON_INTERACTIVE=true; fi
-
-    if [ -e /dev/tty ] && [ -z "${SKIP_REBOOT:-}" ] && [ "$_IS_NON_INTERACTIVE" != "true" ]; then
-        echo -e "${YELLOW}  System will reboot in 30 seconds to apply sysctl changes.${NC}"
-        echo -e "${YELLOW}  Press Ctrl+C to cancel, or wait...${NC}"
-        for i in $(seq 30 -1 1); do
-            printf "\r${YELLOW}  Rebooting in %2d seconds... ${NC}" "$i"
-            sleep 1
-        done
-        echo -e "\n${BLUE}  → Rebooting now...${NC}"
-        reboot
-    else
-        echo -e "${YELLOW}  Non-interactive mode — skipping auto-reboot.${NC}"
-        echo -e "${YELLOW}  Run 'sudo reboot' manually to apply sysctl changes.${NC}"
-    fi
+    echo -e "${YELLOW}  If needed, run 'sudo reboot' manually to apply sysctl changes.${NC}"
 else
-    echo -e "\n${RED}  ⚠ Only $VERIFY_PASS_COUNT/$VERIFY_TOTAL checks passed — skipping auto-reboot.${NC}"
-    echo -e "${YELLOW}  Fix the failed checks above, then run: sudo reboot${NC}"
+    echo -e "\n${RED}  ⚠ Only $VERIFY_PASS_COUNT/$VERIFY_TOTAL checks passed.${NC}"
+    echo -e "${YELLOW}  Fix the failed checks above. You can run 'sudo reboot' manually if sysctl changes were made.${NC}"
     if [ "${SMSLY_STRICT_VERIFY:-0}" = "1" ]; then
         echo -e "${RED}  ✗ Strict verification is enabled; failing installation.${NC}"
         exit 1

@@ -169,6 +169,7 @@ fix_existing_installation() {
 create_post_install_hook() {
     log "Creating post-install hook for custom domain SSL"
     
+    mkdir -p "$INSTALL_DIR/hooks"
     HOOK_FILE="$INSTALL_DIR/hooks/post-install-domain-ssl.sh"
     
     cat > "$HOOK_FILE" << EOF
