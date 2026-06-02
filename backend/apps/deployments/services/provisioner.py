@@ -163,7 +163,18 @@ def _get_master_mesh_ip() -> str:
             return str(peer.wg_address)
     except Exception:
         pass
+
+    # Try environment variable fallback (loaded from host environment or .env if passed)
+    env_mesh = os.environ.get("MASTER_MESH_IP")
+    if env_mesh:
+        return env_mesh.strip()
+
+    # Fallback to standard 10.100.0.1 if is_primary and we don't have a database mesh IP yet
+    if primary.is_primary:
+        return "10.100.0.1"
+
     return ""
+
 
 
 def build_agent_lite_install_env(

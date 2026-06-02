@@ -140,3 +140,30 @@ class MeshNetworkTest(TestCase):
 
         self.assertFalse(second["queued"])
         self.assertEqual(WireGuardPeer.objects.filter(mesh=mesh).count(), 2)
+
+    @patch.dict('os.environ', {}, clear=True)
+    def test_get_master_mesh_ip_fallback(self):
+        from apps.deployments.services.provisioner import _get_master_mesh_ip
+        User = get_user_model()
+        user = User.objects.create_user(username="mesh-owner-fallback", password="test")
+        
+        primary = ManagedServer.objects.create(
+            name="primary",
+            host="198.51.100.1",
+            owner=user,
+            is_primary=True,
+            status=ManagedServer.Status.ONLINE,
+        )
+
+        # 1. Initially wg_address is None, default fallback to 10.100.0.1 (since is_primary is True)
+        self.assertEqual(_get_master_mesh_ip(), "10.100.0.1")
+
+        # 2. Environment variable fallback
+        with patch.dict('os.environ', {'MASTER_MESH_IP': '10.100.0.99'}):
+            self.assertEqual(_get_master_mesh_ip(), "10.100.0.99")
+
+        # 3. Database direct wg_address
+        primary.wg_address = "10.100.0.5"
+        primary.save()
+        self.assertEqual(_get_master_mesh_ip(), "10.100.0.5")
+
