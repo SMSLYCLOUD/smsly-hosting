@@ -6284,7 +6284,7 @@ fi
 # -----------------------------------------------------------------------------
 echo -e "\n${YELLOW}[9/9] Verifying Deployment...${NC}"
 VERIFY_PASS_COUNT=0
-VERIFY_TOTAL=5
+VERIFY_TOTAL=4
 sleep 5
 
 if [ "$MODE_AGENT_LITE" = "true" ]; then
@@ -6349,7 +6349,7 @@ else
 fi
 else
 # ─── Check 1: Health check ─────────────────────────────────────────────────
-echo -e "${BLUE}  → [1/5] Running health check...${NC}"
+echo -e "${BLUE}  → [1/4] Running health check...${NC}"
 HEALTH_OK=false
 MAX_ATTEMPTS=36
 for attempt in $(seq 1 $MAX_ATTEMPTS); do
@@ -6379,7 +6379,7 @@ else
 fi
 
 # ─── Check 3: All containers running ──────────────────────────────────────
-echo -e "${BLUE}  → [3/5] Checking container status...${NC}"
+echo -e "${BLUE}  → [2/4] Checking container status...${NC}"
 RUNNING_COUNT=$(docker compose -f "$COMPOSE_FILE" ps --status running -q 2>/dev/null | wc -l)
 TOTAL_COUNT=$(docker compose -f "$COMPOSE_FILE" ps -q 2>/dev/null | wc -l)
 UNHEALTHY_STATUS="$(docker compose -f "$COMPOSE_FILE" ps --format "{{.Service}}\t{{.Status}}" 2>/dev/null | awk 'tolower($0) ~ /unhealthy/ {print}' || true)"
@@ -6398,7 +6398,7 @@ else
 fi
 
 # ─── Check 4: Swap is sufficient ──────────────────────────────────────────
-echo -e "${BLUE}  → [4/5] Checking swap...${NC}"
+echo -e "${BLUE}  → [3/4] Checking swap...${NC}"
 SWAP_TOTAL=$(free -m | awk '/^Swap:/{print $2}')
 if [ "$SWAP_TOTAL" -ge 1500 ]; then
     echo -e "${GREEN}  ✓ Swap sufficient (${SWAP_TOTAL}MB)${NC}"
@@ -6409,7 +6409,7 @@ fi
 
 # ─── Check 5: Public edge proxy ───────────────────────────────────────────
 if should_manage_caddy; then
-    echo -e "${BLUE}  → [5/5] Checking Caddy...${NC}"
+    echo -e "${BLUE}  → [4/4] Checking Caddy...${NC}"
     caddy_container="$(resolve_container_target "smsly-hosting-caddy-1")"
     if docker inspect -f '{{.State.Running}}' "$caddy_container" 2>/dev/null | grep -q "true"; then
         echo -e "${GREEN}  ✓ Caddy reverse proxy container active${NC}"
@@ -6418,7 +6418,7 @@ if should_manage_caddy; then
         echo -e "${RED}  ✗ Caddy container is not running${NC}"
     fi
 else
-    echo -e "${BLUE}  → [5/5] Checking Traefik...${NC}"
+    echo -e "${BLUE}  → [4/4] Checking Traefik...${NC}"
     TRAEFIK_CHECK_URL="http://127.0.0.1:8081/"
     if is_node_mode; then
         TRAEFIK_CHECK_URL="http://127.0.0.1/health/live"
