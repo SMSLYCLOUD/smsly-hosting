@@ -538,8 +538,8 @@ class ManagedServerViewTests(TestCase):
         self.assertEqual(resp.data["domains"][0]["domain"], "app.example.com")
         self.assertEqual(resp.data["domains"][1]["domain"], "api.example.com")
 
-    @patch("apps.deployments.tasks.update_remote_server_task.delay")
-    def test_update_server_queues_task_when_ssh_credentials_exist(self, delay_mock):
+    @patch("threading.Thread")
+    def test_update_server_queues_task_when_ssh_credentials_exist(self, thread_mock):
         server = ManagedServer.objects.create(
             owner=self.user,
             name="UpdateMe",
@@ -552,12 +552,17 @@ class ManagedServerViewTests(TestCase):
 
         self.assertEqual(resp.status_code, 200)
         self.assertTrue(resp.data["success"])
-        delay_mock.assert_called_once_with(str(server.id))
+        thread_mock.assert_called_once()
+        kwargs = thread_mock.call_args.kwargs
+        self.assertEqual(kwargs["target"], update_remote_server_task)
+        self.assertEqual(kwargs["args"], (str(server.id),))
+        self.assertTrue(kwargs["daemon"])
+        thread_mock.return_value.start.assert_called_once()
         server.refresh_from_db()
-        self.assertIn("Update queued by", server.provision_logs)
+        self.assertIn("Update started by", server.provision_logs)
 
-    @patch("apps.deployments.tasks.update_remote_server_task.delay")
-    def test_update_server_rejects_missing_ssh_credentials(self, delay_mock):
+    @patch("threading.Thread")
+    def test_update_server_rejects_missing_ssh_credentials(self, thread_mock):
         server = ManagedServer.objects.create(
             owner=self.user,
             name="NoSSH",
@@ -568,10 +573,10 @@ class ManagedServerViewTests(TestCase):
 
         self.assertEqual(resp.status_code, 400)
         self.assertIn("SSH credentials", resp.data["error"])
-        delay_mock.assert_not_called()
+        thread_mock.assert_not_called()
 
-    @patch("apps.deployments.tasks.update_remote_server_task.delay")
-    def test_update_server_auto_clears_stalled_status(self, delay_mock):
+    @patch("threading.Thread")
+    def test_update_server_auto_clears_stalled_status(self, thread_mock):
         server = ManagedServer.objects.create(
             owner=self.user,
             name="Busy",
@@ -586,7 +591,7 @@ class ManagedServerViewTests(TestCase):
         self.assertTrue(resp.data["success"])
         server.refresh_from_db()
         self.assertNotEqual(server.provision_status, ManagedServer.ProvisionStatus.UPDATING)
-        delay_mock.assert_called_once_with(str(server.id))
+        thread_mock.assert_called_once()
 
     def test_update_server_name(self):
         """Test that a server name can be updated via PATCH."""

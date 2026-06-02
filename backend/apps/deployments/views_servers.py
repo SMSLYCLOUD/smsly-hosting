@@ -844,32 +844,40 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
 
         server.provision_logs = (
             (server.provision_logs or "")
-            + f"\n--- Update queued by {request.user.username} at {timezone.now()} ---\n"
+            + f"\n--- Update started by {request.user.username} at {timezone.now()} ---\n"
         )
         server.save(update_fields=["provision_logs", "updated_at"])
 
+        import threading
         from .tasks import update_remote_server_task
         try:
-            update_remote_server_task.delay(str(server.id))
-        except Exception as exc:  # pragma: no cover - broker/runtime failure
-            logger.exception("Failed to queue update for server %s", server.id)
+            # Run the update flow directly in a background thread to bypass the Celery task queue,
+            # ensuring that update execution starts immediately on the remote server.
+            thread = threading.Thread(
+                target=update_remote_server_task,
+                args=(str(server.id),),
+                daemon=True
+            )
+            thread.start()
+        except Exception as exc:
+            logger.exception("Failed to start update thread for server %s", server.id)
             server.provision_status = ManagedServer.ProvisionStatus.FAILED
             server.provision_logs = (
                 (server.provision_logs or "")
-                + f"\nFATAL ERROR: failed to queue update task: {exc}\n"
+                + f"\nFATAL ERROR: failed to start update thread: {exc}\n"
             )
             server.save(update_fields=["provision_status", "provision_logs", "updated_at"])
             return Response(
                 {
-                    "error": "Failed to queue server update task. Check Celery/Redis health.",
+                    "error": "Failed to start server update process.",
                     "server_id": str(server.id),
                 },
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
         return Response({
             "success": True,
-            "message": "Update task queued. Progress will be visible in provision logs.",
+            "message": "Update task started. Progress will be visible in provision logs.",
             "server_id": str(server.id),
             "provision_status": server.provision_status,
         })
