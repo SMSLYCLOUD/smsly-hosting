@@ -26,12 +26,14 @@ class SSHClient:
         host=None,
         username=None,
         private_key=None,
+        wg_address=None,
     ):
         self.ip = ip or host
         self.port = port
         self.user = username or user
         self.key_content = key_content or private_key or ''
         self.password = password
+        self.wg_address = wg_address
         self.client = None
         self.sftp = None
         self._key = None
@@ -174,22 +176,33 @@ class SSHClient:
 
         retries = 3
         last_exc = None
-        for i in range(retries):
-            try:
-                self.client.connect(**connect_kwargs)
-                transport = self.client.get_transport()
-                if transport:
-                    transport.set_keepalive(30)
-                return
-            except paramiko.AuthenticationException:
-                raise
-            except (socket.error, socket.timeout, TimeoutError, paramiko.SSHException) as e:
-                last_exc = e
-                if i < retries - 1:
-                    time.sleep(2)
+        
+        # Connect to self.ip first, then self.wg_address if provided and self.ip failed
+        hosts_to_try = [self.ip]
+        if self.wg_address and self.wg_address != self.ip:
+            hosts_to_try.append(self.wg_address)
+
+        for host in hosts_to_try:
+            connect_kwargs['hostname'] = host
+            for i in range(retries):
+                try:
+                    logger.info("SSHClient: Connecting to %s:%s (try %d)", host, self.port, i+1)
+                    self.client.connect(**connect_kwargs)
+                    transport = self.client.get_transport()
+                    if transport:
+                        transport.set_keepalive(30)
+                    self.ip = host  # Update self.ip to the successful one
+                    logger.info("SSHClient: Connected to %s:%s successfully", host, self.port)
+                    return
+                except paramiko.AuthenticationException:
+                    raise
+                except (socket.error, socket.timeout, TimeoutError, paramiko.SSHException) as e:
+                    last_exc = e
+                    if i < retries - 1:
+                        time.sleep(2)
 
         raise SSHConnectionError(
-            f"SSH connection to {self.ip}:{self.port} failed after {retries} attempts: {last_exc}"
+            f"SSH connection to {self.ip}:{self.port} failed after trying {hosts_to_try}: {last_exc}"
         )
 
     def close(self):

@@ -78,7 +78,8 @@ def audit_node(server):
                 key_content=server.ssh_key,
                 password=server.ssh_password,
                 user=server.ssh_user,
-                port=server.ssh_port
+                port=server.ssh_port,
+                wg_address=getattr(server, "wg_address", None),
             )
             ssh.connect()
             info("SSH Connection: Valid")

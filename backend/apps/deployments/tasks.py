@@ -4856,7 +4856,8 @@ def update_remote_server_task(server_id: str):
             key_content=server.ssh_key,
             password=server.ssh_password,
             user=server.ssh_user,
-            port=server.ssh_port
+            port=server.ssh_port,
+            wg_address=server.wg_address,
         )
         ssh.connect()
         hosting_path = ssh.find_hosting_path()

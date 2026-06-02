@@ -138,6 +138,7 @@ class SelfHealingOrchestrator:
             password=self.server.ssh_password,
             user=self.server.ssh_user,
             port=self.server.ssh_port,
+            wg_address=self.server.wg_address,
         )
         self._ssh.connect()
         return self._ssh
