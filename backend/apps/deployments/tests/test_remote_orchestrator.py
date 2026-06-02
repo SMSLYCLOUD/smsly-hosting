@@ -100,6 +100,7 @@ class TestCandidateBaseURLs(unittest.TestCase):
         self.mock_server.host = "192.168.1.100"
         self.mock_server.api_url = None
         self.mock_server.is_lite_agent = False
+        self.mock_server.wg_address = ""
         self.mock_server.api_token = "test_token"
         self.mock_server.gateway_secret = "test_secret"
 
@@ -150,6 +151,7 @@ class TestRemoteRequestSSLVerification(unittest.TestCase):
         self.mock_server.name = "test-node"
         self.mock_server.host = "192.168.1.100"
         self.mock_server.api_url = None
+        self.mock_server.wg_address = ""
         self.mock_server.api_token = "test_token"
         self.mock_server.gateway_secret = "test_secret"
 
@@ -164,7 +166,8 @@ class TestRemoteRequestSSLVerification(unittest.TestCase):
         # Mock the auth methods to avoid actual auth logic
         with patch.object(orchestrator, '_auth_modes', return_value=['token']):
             with patch.object(orchestrator, '_candidate_base_urls', return_value=['http://192.168.1.100']):
-                orchestrator._request("GET", "/api/v1/test/", timeout=10)
+                with patch.object(orchestrator, '_filter_reachable', side_effect=lambda urls, *a, **kw: urls):
+                    orchestrator._request("GET", "/api/v1/test/", timeout=10)
         
         # Verify that verify=False was passed for internal IP
         call_kwargs = mock_request.call_args[1]
@@ -182,7 +185,8 @@ class TestRemoteRequestSSLVerification(unittest.TestCase):
         
         with patch.object(orchestrator, '_auth_modes', return_value=['token']):
             with patch.object(orchestrator, '_candidate_base_urls', return_value=['https://api.smsly.cloud']):
-                orchestrator._request("GET", "/api/v1/test/", timeout=10)
+                with patch.object(orchestrator, '_filter_reachable', side_effect=lambda urls, *a, **kw: urls):
+                    orchestrator._request("GET", "/api/v1/test/", timeout=10)
         
         # For HTTPS public domains, verify should be True (when _REMOTE_VERIFY is True)
         call_kwargs = mock_request.call_args[1]
@@ -198,6 +202,7 @@ class TestRemoteOrchestratorLogging(unittest.TestCase):
         self.mock_server.name = "test-node"
         self.mock_server.host = "192.168.1.100"
         self.mock_server.api_url = None
+        self.mock_server.wg_address = ""
         self.mock_server.api_token = "test_token"
         self.mock_server.gateway_secret = "test_secret"
 
@@ -234,6 +239,7 @@ class TestRemoteServiceSyncPayload(unittest.TestCase):
         self.mock_server.name = "test-node"
         self.mock_server.host = "192.168.1.100"
         self.mock_server.api_url = None
+        self.mock_server.wg_address = ""
         self.mock_server.api_token = "test_token"
         self.mock_server.gateway_secret = "test_secret"
 
@@ -301,6 +307,7 @@ class TestRemoteServiceDeletion(unittest.TestCase):
         self.mock_server.name = "test-node"
         self.mock_server.host = "192.168.1.100"
         self.mock_server.api_url = None
+        self.mock_server.wg_address = ""
         self.mock_server.api_token = "test_token"
         self.mock_server.gateway_secret = "test_secret"
         self.mock_server.ssh_key = ""
@@ -462,6 +469,7 @@ class TestPreflightCheckOrHeal(unittest.TestCase):
         self.mock_server.host = "69.164.244.51"
         self.mock_server.api_url = None
         self.mock_server.is_lite_agent = True
+        self.mock_server.wg_address = ""
         self.mock_server.api_token = "test_token"
         self.mock_server.gateway_secret = "test_secret"
         self.mock_server.ssh_key = ""
@@ -504,7 +512,7 @@ class TestPreflightCheckOrHeal(unittest.TestCase):
         ):
             with patch(
                 'apps.deployments.services.remote_orchestrator.requests.get',
-                side_effect=[ConnectTimeout('mesh timed out'), ok_health],
+                side_effect=[ConnectTimeout('mesh timed out'), ConnectTimeout('mesh timed out live'), ok_health],
             ):
                 with patch.object(orchestrator, '_request', return_value=ok_api):
                     result = orchestrator.check_connectivity()
@@ -539,18 +547,21 @@ class TestLiteAgentCandidateURLs(unittest.TestCase):
         self.mock_server.name = "lite-node"
         self.mock_server.host = "69.164.244.51"
         self.mock_server.api_url = None
+        self.mock_server.wg_address = ""
         self.mock_server.api_token = "test_token"
         self.mock_server.gateway_secret = "test_secret"
 
     @patch("apps.deployments.services.remote_orchestrator._ENFORCE_TLS", False)
     def test_lite_agent_only_port_80(self):
-        """Lite agents should only generate http://{host} (port 80)."""
+        """Lite agents should generate http, http:8090, and https candidate URLs when TLS is not enforced."""
         self.mock_server.is_lite_agent = True
         orchestrator = RemoteOrchestrator(self.mock_server)
         urls = orchestrator._candidate_base_urls()
 
-        self.assertEqual(len(urls), 1, f"Lite agent should have exactly 1 URL, got: {urls}")
+        self.assertEqual(len(urls), 3, f"Lite agent should have exactly 3 URLs, got: {urls}")
         self.assertEqual(urls[0], "http://69.164.244.51")
+        self.assertEqual(urls[1], "http://69.164.244.51:8090")
+        self.assertEqual(urls[2], "https://69.164.244.51")
 
     @patch("apps.deployments.services.remote_orchestrator._ENFORCE_TLS", False)
     def test_full_install_has_multiple_ports(self):
