@@ -107,7 +107,8 @@ log() {
 log "Starting domain verification process"
 
 # Check if container is running first
-if ! docker compose ps -q backend | grep -q .; then
+BACKEND_CID=$(docker compose ps -q backend 2>/dev/null || true)
+if [ -z "$BACKEND_CID" ]; then
     log "ERROR: backend container is not running"
     exit 1
 fi
@@ -118,7 +119,7 @@ retry_count=0
 db_ok=false
 
 while [ "$retry_count" -lt "$max_retries" ]; do
-    if docker compose exec -T backend python -c "
+    if docker exec -i "$BACKEND_CID" python -c "
 from apps.domains.models import Domain
 print(f'Total domains: {Domain.objects.count()}')
 " 2>/dev/null; then
@@ -136,7 +137,7 @@ if [ "$db_ok" != "true" ]; then
 fi
 
 # Process pending domains asynchronously via Celery
-docker compose exec -T backend python -c "
+docker exec -i "$BACKEND_CID" python -c "
 from apps.domains.models import Domain
 from apps.domains.tasks import verify_dns_and_provision_ssl_task
 
