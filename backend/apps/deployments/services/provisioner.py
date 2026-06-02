@@ -141,10 +141,16 @@ def _get_master_mesh_ip() -> str:
     Lite agents must use the mesh IP for database, RabbitMQ, and Redis
     connections because the public IP is typically firewalled.
     """
+    # 1. Try environment variable fallback first
+    env_mesh = os.environ.get("MASTER_MESH_IP")
+    if env_mesh:
+        return env_mesh.strip()
+
     from apps.deployments.models_core import ManagedServer
     primary = ManagedServer.get_primary()
     if not primary:
-        return ""
+        # Fallback to standard 10.100.0.1 if no primary server exists yet in DB (e.g. bootstrapping or tests)
+        return "10.100.0.1"
 
     # Try "default" mesh first to be extremely robust
     try:
@@ -164,16 +170,11 @@ def _get_master_mesh_ip() -> str:
     except Exception:
         pass
 
-    # Try environment variable fallback (loaded from host environment or .env if passed)
-    env_mesh = os.environ.get("MASTER_MESH_IP")
-    if env_mesh:
-        return env_mesh.strip()
-
     # Fallback to standard 10.100.0.1 if is_primary and we don't have a database mesh IP yet
     if primary.is_primary:
         return "10.100.0.1"
 
-    return ""
+    return "10.100.0.1"
 
 
 
