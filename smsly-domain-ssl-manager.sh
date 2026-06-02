@@ -98,7 +98,7 @@ start_domain_verification() {
 # SMSLY Domain Verification Script
 # Runs domain verification tasks for custom domains
 
-cd /opt/smsly-hosting/backend
+cd /opt/smsly-hosting
 
 log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> /var/log/smsly-domain-ssl.log
@@ -106,25 +106,23 @@ log() {
 
 log "Starting domain verification process"
 
+# Check if container is running first
+if ! docker compose ps -q backend | grep -q .; then
+    log "ERROR: backend container is not running"
+    exit 1
+fi
+
 # Check if Django can access the database
-if ! python -c "
-import os
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
-import django
-django.setup()
+if ! docker compose exec -T backend python -c "
 from apps.domains.models import Domain
 print(f'Total domains: {Domain.objects.count()}')
 " 2>/dev/null; then
-    log "ERROR: Cannot access Django database"
+    log "ERROR: Cannot access Django database inside container"
     exit 1
 fi
 
 # Process pending domains
-python -c "
-import os
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
-import django
-django.setup()
+docker compose exec -T backend python -c "
 from apps.domains.models import Domain
 from apps.domains.tasks import verify_dns_and_provision_ssl_task
 
