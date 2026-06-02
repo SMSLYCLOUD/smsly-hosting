@@ -869,6 +869,7 @@ class AddonProvisioner:
             password=server.ssh_password,
             user=server.ssh_user,
             port=server.ssh_port,
+            wg_address=getattr(server, "wg_address", None),
         )
         ssh.connect()
         stdout, stderr, code = ssh.exec_command(provision_cmd, timeout=300, raise_on_error=False)
@@ -1429,6 +1430,7 @@ class AddonProvisioner:
                 password=server.ssh_password,
                 user=server.ssh_user,
                 port=server.ssh_port,
+                wg_address=getattr(server, "wg_address", None),
             )
             ssh.connect()
             safe_id = shlex.quote(container_id)

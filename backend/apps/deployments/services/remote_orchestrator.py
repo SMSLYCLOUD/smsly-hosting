@@ -326,6 +326,7 @@ class RemoteOrchestrator:
                 password=self.server.ssh_password,
                 user=self.server.ssh_user,
                 port=self.server.ssh_port,
+                wg_address=self.server.wg_address,
             )
             ssh.connect()
             success, output = ssh.restart_stack()
@@ -363,7 +364,8 @@ class RemoteOrchestrator:
             key_content=self.server.ssh_key,
             password=self.server.ssh_password,
             user=self.server.ssh_user,
-            port=self.server.ssh_port
+            port=self.server.ssh_port,
+            wg_address=self.server.wg_address,
         )
         try:
             ssh.connect()
@@ -1492,6 +1494,7 @@ exit 0
             password=self.server.ssh_password,
             user=self.server.ssh_user,
             port=self.server.ssh_port,
+            wg_address=self.server.wg_address,
         )
         try:
             ssh.connect()

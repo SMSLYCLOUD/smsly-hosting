@@ -633,6 +633,7 @@ class WireGuardService:
             username=server.ssh_user,
             password=server.ssh_password,
             private_key=server.ssh_key,
+            wg_address=getattr(server, "wg_address", None),
         )
         try:
             ssh.connect()
