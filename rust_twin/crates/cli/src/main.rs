@@ -105,8 +105,8 @@ async fn main() -> Result<()> {
         }
         Commands::Migrate => {
             info!("Running database migrations...");
-            // TODO: (Phase 6.2) Integrate `sea-orm-migration` programmatic runner here.
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            use sea_orm_migration::MigratorTrait;
+            cn_core::migration::migrator::Migrator::up(&db, None).await?;
             info!("Migrations complete.");
         }
         Commands::SetupSocialApps => {

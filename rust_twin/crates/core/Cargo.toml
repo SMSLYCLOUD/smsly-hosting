@@ -18,3 +18,5 @@ envy = "0.4"
 jsonwebtoken = "9.3"
 argon2 = "0.5"
 chrono = { version = "0.4", features = ["serde"] }
+sea-orm-migration = { workspace = true }
+async-trait = "0.1.80"

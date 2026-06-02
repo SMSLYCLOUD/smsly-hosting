@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use axum::extract::Path;
 use redis::AsyncCommands;
-use cn_core::entities::{project, user, service, deployment};
+use cn_core::entities::{project, service, deployment};
 use crate::{AppState, middleware::AuthUser};
 
 #[derive(Serialize)]
