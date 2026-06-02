@@ -4748,7 +4748,7 @@ fi
 # =============================================================================
 
 # ─── Interactive Setup (Step 0) ──────────────────────────────────────────────
-if [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ]; then
+if [ "$NON_INTERACTIVE" != "true" ] && [ -e /dev/tty ]; then
     # Architecture Selection
     if [ "${RUST_TWIN_MODE:-false}" = "false" ]; then
         echo -e "${BLUE}Select Backend Architecture:${NC}"
@@ -4797,7 +4797,7 @@ if [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ]; then
             echo -e "${BLUE}  → Preset detected. Using IP Mode.${NC}"
             MODE_CHOICE=1
         fi
-    elif [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ]; then
+    elif [ "$NON_INTERACTIVE" != "true" ] && [ -e /dev/tty ]; then
         echo -e "\n${BLUE}Select Deployment Mode:${NC}"
         echo -e "  1) ${GREEN}IP Mode${NC} (Easy) - http://$PUBLIC_IP"
         echo -e "  2) ${GREEN}SSL Mode${NC} (Prod) - https://your-domain.com (Requires DNS A Record pointing to $PUBLIC_IP)"
@@ -4814,7 +4814,7 @@ if [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ]; then
         DOMAIN="${PRESET_DOMAIN:-}"
         ACME_EMAIL="${PRESET_ACME_EMAIL:-}"
 
-        if [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ]; then
+        if [ "$NON_INTERACTIVE" != "true" ] && [ -e /dev/tty ]; then
             while [ -z "$DOMAIN" ]; do
                 read -p "Enter your Domain (e.g., app.example.com): " DOMAIN < /dev/tty
             done
@@ -4839,7 +4839,7 @@ if [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ]; then
                 if [ "$DETECTED_IP" != "$PUBLIC_IP" ] && [ "$DETECTED_IP" != "127.0.0.1" ]; then
                     echo -e "${YELLOW}  ⚠ WARNING: DNS for $DOMAIN ($DETECTED_IP) does not match this server ($PUBLIC_IP).${NC}"
                     echo -e "${YELLOW}  SSL generation may fail. Ensure your DNS A record is set.${NC}"
-                    if [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ]; then
+                    if [ "$NON_INTERACTIVE" != "true" ] && [ -e /dev/tty ]; then
                         read -p "  Continue anyway? (y/n) " -n 1 -r < /dev/tty
                         echo
                         if [[ ! $REPLY =~ ^[Yy]$ ]]; then exit 1; fi
@@ -4870,7 +4870,7 @@ if [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ]; then
         if [ -n "${CLOUDFLARE_API_TOKEN}" ]; then
             WILDCARD_SUBDOMAINS="true"
             echo -e "${BLUE}  → Preset Cloudflare token detected. Enabling wildcard subdomains.${NC}"
-        elif [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ]; then
+        elif [ "$NON_INTERACTIVE" != "true" ] && [ -e /dev/tty ]; then
             read -p "  Enable wildcard subdomains? (y/n) [n]: " WILDCARD_CHOICE < /dev/tty
             WILDCARD_CHOICE=${WILDCARD_CHOICE:-n}
             if [[ $WILDCARD_CHOICE =~ ^[Yy]$ ]]; then
@@ -5972,7 +5972,7 @@ EOF
             echo -e "${YELLOW}  ⚠ ACME validation could not confirm $DOMAIN is reachable on port 80.${NC}"
             echo -e "${YELLOW}    SSL certificates may fail to issue. Ensure DNS A record points to $PUBLIC_IP${NC}"
             echo -e "${YELLOW}    and port 80 is open in your firewall.${NC}"
-            if [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ]; then
+            if [ "$NON_INTERACTIVE" != "true" ] && [ -e /dev/tty ]; then
                 read -p "  Continue anyway? (y/n) " -n 1 -r < /dev/tty
                 echo
                 if [[ ! $REPLY =~ ^[Yy]$ ]]; then
