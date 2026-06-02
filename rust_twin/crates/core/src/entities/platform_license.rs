@@ -8,16 +8,27 @@ use serde::{Deserialize, Serialize};
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
-    #[sea_orm(column_type = "String(StringLen::N(50))")]
-    pub tier: String, // COMMUNITY, PRO, ENTERPRISE
-    #[sea_orm(column_type = "String(StringLen::N(255))", nullable)]
-    pub customer_id: Option<String>, // Stripe/Cryptomus Customer ID
-    #[sea_orm(column_type = "String(StringLen::N(255))", nullable)]
-    pub subscription_id: Option<String>,
-    pub is_active: bool,
+    #[sea_orm(column_type = "Text")]
+    pub license_key: String,
+    #[sea_orm(column_type = "String(StringLen::N(20))")]
+    pub tier: String, // community, pro, enterprise
+    #[sea_orm(column_type = "Text")]
+    pub license_data: String,
+    pub is_valid: bool,
+    pub last_validated: Option<DateTimeWithTimeZone>,
+    #[sea_orm(column_type = "Text")]
+    pub validation_error: String,
+    #[sea_orm(column_type = "String(StringLen::N(255))")]
+    pub licensed_to: String,
+    #[sea_orm(column_type = "String(StringLen::N(64))")]
+    pub instance_id: String,
     pub expires_at: Option<DateTimeWithTimeZone>,
-    #[sea_orm(column_type = "Text", nullable)]
-    pub encrypted_license_key: Option<String>, // Used for offline RSA validation in Enterprise
+    pub max_services: i32,
+    pub max_team_members: i32,
+    #[sea_orm(column_type = "String(StringLen::N(20))")]
+    pub payment_provider: String,
+    #[sea_orm(column_type = "String(StringLen::N(255))")]
+    pub subscription_id: String,
     pub created_at: DateTimeWithTimeZone,
     pub updated_at: DateTimeWithTimeZone,
 }

@@ -4,19 +4,19 @@ use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, Serialize, Deserialize)]
-#[sea_orm(table_name = "core_apikey")]
+#[sea_orm(table_name = "deployments_apitoken")]
 pub struct Model {
-    #[sea_orm(primary_key)]
-    pub id: i32,
+    #[sea_orm(primary_key, auto_increment = false)]
+    pub id: Uuid,
     pub user_id: i32,
     #[sea_orm(column_type = "String(StringLen::N(100))")]
     pub name: String,
-    #[sea_orm(column_type = "String(StringLen::N(128))")]
-    pub key_hash: String,
-    #[sea_orm(column_type = "String(StringLen::N(8))")]
+    #[sea_orm(column_type = "String(StringLen::N(12))")]
     pub prefix: String,
-    pub last_used: Option<DateTimeWithTimeZone>,
-    pub expires_at: Option<DateTimeWithTimeZone>,
+    #[sea_orm(column_type = "String(StringLen::N(64))")]
+    pub token_hash: String,
+    pub is_active: bool,
+    pub last_used_at: Option<DateTimeWithTimeZone>,
     pub created_at: DateTimeWithTimeZone,
 }
 

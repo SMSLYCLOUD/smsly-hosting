@@ -11,5 +11,4 @@ pub mod team_member;
 pub mod addon;
 pub mod usage;
 pub mod environment_variable;
-pub mod custom_domain;
 pub mod cron;

@@ -4,16 +4,16 @@ use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
-#[sea_orm(table_name = "billing_resourceusage")]
+#[sea_orm(table_name = "billing_usagerecord")]
 pub struct Model {
     #[sea_orm(primary_key)]
-    pub id: i32,
-    pub owner_id: i32,
-    pub service_id: Option<Uuid>,
-    pub addon_id: Option<Uuid>,
-    pub cpu_cores_used: f64,
-    pub memory_mb_used: f64,
-    pub captured_at: DateTimeWithTimeZone,
+    pub id: i64,
+    pub service_id: Uuid,
+    pub cpu_cores: f64,
+    pub memory_mb: i32,
+    pub duration_seconds: i32,
+    pub cost: f64,
+    pub timestamp: DateTimeWithTimeZone,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

@@ -6,14 +6,18 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, Serialize, Deserialize)]
 #[sea_orm(table_name = "deployments_cronjob")]
 pub struct Model {
-    #[sea_orm(primary_key)]
-    pub id: i32,
+    #[sea_orm(primary_key, auto_increment = false)]
+    pub id: Uuid,
     pub service_id: Uuid,
+    #[sea_orm(column_type = "String(StringLen::N(255))")]
+    pub name: String,
     #[sea_orm(column_type = "String(StringLen::N(100))")]
     pub schedule: String, // UNIX Cron Expression (e.g. "0 * * * *")
-    #[sea_orm(column_type = "String(StringLen::N(255))")]
+    #[sea_orm(column_type = "String(StringLen::N(500))")]
     pub command: String,
     pub is_active: bool,
+    pub last_run_at: Option<DateTimeWithTimeZone>,
+    pub next_run_at: Option<DateTimeWithTimeZone>,
     pub created_at: DateTimeWithTimeZone,
     pub updated_at: DateTimeWithTimeZone,
 }

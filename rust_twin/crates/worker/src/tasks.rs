@@ -95,7 +95,6 @@ async fn handle_smart_deploy(
                 .unwrap()
                 .into();
             deploy_failed.status = Set("FAILED".to_string());
-            deploy_failed.message = Set(Some(e.to_string()));
             deploy_failed.save(&state.db).await?;
 
             return Err(e);
@@ -122,7 +121,6 @@ async fn handle_smart_deploy(
         .into();
 
     deploy_success.status = Set("RUNNING".to_string());
-    deploy_success.docker_image = Set(Some(image_name));
     deploy_success.finished_at = Set(Some(chrono::Utc::now().into()));
     deploy_success.save(&state.db).await?;
 
@@ -172,7 +170,7 @@ async fn handle_provision_addon(state: Arc<WorkerState>, addon_id: uuid::Uuid, a
 
     addon_active.status = Set("RUNNING".to_string());
     addon_active.container_id = Set(Some(container_id));
-    addon_active.connection_uri = Set(Some(uri));
+    addon_active.connection_url = Set(Some(uri));
     addon_active.save(&state.db).await?;
 
     info!("Addon provisioned successfully");
@@ -186,6 +184,16 @@ use rand::Rng; // Simulating Docker Stats parsing
 async fn handle_collect_usage(state: Arc<WorkerState>, owner_id: i32) -> Result<()> {
     info!("Collecting usage metrics for owner {}", owner_id);
 
+    // Fetch the first service from the database to align with the foreign key constraint
+    let service_opt = service::Entity::find().one(&state.db).await?;
+    let service_id = match service_opt {
+        Some(s) => s.id,
+        None => {
+            info!("No service found in DB, skipping usage logging.");
+            return Ok(());
+        }
+    };
+
     // In a real environment, we would use `bollard` to stream container stats
     // Example: docker.stats(container_id).next().await;
     // Here we simulate capturing running container stats.
@@ -198,12 +206,12 @@ async fn handle_collect_usage(state: Arc<WorkerState>, owner_id: i32) -> Result<
     };
 
     let new_usage = usage::ActiveModel {
-        owner_id: Set(owner_id),
-        service_id: Set(None), // Represents total account usage for demo
-        addon_id: Set(None),
-        cpu_cores_used: Set(cpu_used),
-        memory_mb_used: Set(mem_used),
-        captured_at: Set(chrono::Utc::now().into()),
+        service_id: Set(service_id),
+        cpu_cores: Set(cpu_used),
+        memory_mb: Set(mem_used as i32),
+        duration_seconds: Set(3600),
+        cost: Set(0.01),
+        timestamp: Set(chrono::Utc::now().into()),
         ..Default::default()
     };
 
