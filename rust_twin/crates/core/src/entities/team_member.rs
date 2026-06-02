@@ -7,12 +7,11 @@ use serde::{Deserialize, Serialize};
 #[sea_orm(table_name = "teams_teammember")]
 pub struct Model {
     #[sea_orm(primary_key)]
-    pub id: i32,
+    pub id: i64,
     pub team_id: Uuid,
     pub user_id: i32,
     #[sea_orm(column_type = "String(StringLen::N(20))")]
     pub role: String, // OWNER, ADMIN, MEMBER, VIEWER
-    pub joined_at: DateTimeWithTimeZone,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

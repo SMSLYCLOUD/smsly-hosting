@@ -8,21 +8,26 @@ use serde::{Deserialize, Serialize};
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: Uuid,
-    #[sea_orm(column_type = "String(StringLen::N(100))")]
+    pub owner_id: i32,
+    #[sea_orm(column_type = "String(StringLen::N(255))")]
     pub name: String,
-    #[sea_orm(column_type = "String(StringLen::N(120))", unique)]
-    pub slug: String,
     pub created_at: DateTimeWithTimeZone,
-    pub updated_at: DateTimeWithTimeZone,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
     #[sea_orm(has_many = "super::team_member::Entity")]
     Members,
-    // A project can optionally belong to a team instead of a single user
     #[sea_orm(has_many = "super::project::Entity")]
     Projects,
+    #[sea_orm(
+        belongs_to = "super::user::Entity",
+        from = "Column::OwnerId",
+        to = "super::user::Column::Id",
+        on_update = "NoAction",
+        on_delete = "Cascade"
+    )]
+    User,
 }
 
 impl Related<super::team_member::Entity> for Entity {
@@ -34,6 +39,12 @@ impl Related<super::team_member::Entity> for Entity {
 impl Related<super::project::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Projects.def()
+    }
+}
+
+impl Related<super::user::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::User.def()
     }
 }
 

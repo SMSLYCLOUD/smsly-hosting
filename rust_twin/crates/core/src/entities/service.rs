@@ -13,14 +13,13 @@ pub struct Model {
     pub name: String,
     #[sea_orm(column_type = "String(StringLen::N(120))", unique)]
     pub slug: String,
-    #[sea_orm(column_type = "String(StringLen::N(50))")]
-    pub service_type: String, // WEB, WORKER, CRON, ADDON
+    #[sea_orm(column_type = "String(StringLen::N(20))")]
+    pub deploy_type: String, // GIT, DOCKER, UPLOAD, TEMPLATE
+    #[sea_orm(column_type = "String(StringLen::N(200))", nullable)]
+    pub repository_url: Option<String>,
     #[sea_orm(column_type = "String(StringLen::N(255))")]
-    pub repo_url: String,
-    #[sea_orm(column_type = "String(StringLen::N(50))")]
     pub branch: String,
-    #[sea_orm(column_type = "String(StringLen::N(255))")]
-    pub custom_domain: Option<String>,
+    pub custom_domains: serde_json::Value,
     pub public_domain_hidden: bool,
     #[sea_orm(column_type = "String(StringLen::N(255))")]
     pub root_directory: String,

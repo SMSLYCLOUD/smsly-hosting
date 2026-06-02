@@ -4,20 +4,21 @@ use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, Serialize, Deserialize)]
-#[sea_orm(table_name = "cloud_addon")]
+#[sea_orm(table_name = "deployments_addon")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: Uuid,
-    pub project_id: Uuid,
+    pub project_id: Option<Uuid>,
+    pub service_id: Uuid,
     #[sea_orm(column_type = "String(StringLen::N(100))")]
     pub name: String,
-    #[sea_orm(column_type = "String(StringLen::N(50))")]
+    #[sea_orm(column_type = "String(StringLen::N(20))")]
     pub addon_type: String, // POSTGRES, REDIS, MYSQL
     #[sea_orm(column_type = "String(StringLen::N(20))")]
-    pub status: String, // PROVISIONING, RUNNING, FAILED
+    pub status: String, // PROVISIONING, ACTIVE, FAILED
     #[sea_orm(column_type = "Text", nullable)]
-    pub connection_uri: Option<String>,
-    #[sea_orm(column_type = "String(StringLen::N(255))", nullable)]
+    pub connection_url: Option<String>,
+    #[sea_orm(column_name = "coolify_uuid", column_type = "String(StringLen::N(64))", nullable)]
     pub container_id: Option<String>,
     pub created_at: DateTimeWithTimeZone,
     pub updated_at: DateTimeWithTimeZone,
@@ -33,11 +34,25 @@ pub enum Relation {
         on_delete = "Cascade"
     )]
     Project,
+    #[sea_orm(
+        belongs_to = "super::service::Entity",
+        from = "Column::ServiceId",
+        to = "super::service::Column::Id",
+        on_update = "NoAction",
+        on_delete = "Cascade"
+    )]
+    Service,
 }
 
 impl Related<super::project::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Project.def()
+    }
+}
+
+impl Related<super::service::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Service.def()
     }
 }
 

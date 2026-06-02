@@ -8,6 +8,7 @@ asgiref==3.11.1
 attrs==25.4.0
 autobahn==25.12.2
 Automat==25.4.16
+argon2-cffi==23.1.0
 azure-common==1.1.28
 azure-core==1.38.0
 azure-identity==1.25.1

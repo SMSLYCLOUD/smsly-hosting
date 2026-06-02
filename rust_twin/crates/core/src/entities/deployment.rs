@@ -13,12 +13,8 @@ pub struct Model {
     pub commit_hash: String,
     #[sea_orm(column_type = "String(StringLen::N(20))")]
     pub status: String, // PENDING, BUILDING, RUNNING, FAILED, STOPPED
-    #[sea_orm(column_type = "String(StringLen::N(255))")]
-    pub message: Option<String>,
     pub started_at: Option<DateTimeWithTimeZone>,
     pub finished_at: Option<DateTimeWithTimeZone>,
-    #[sea_orm(column_type = "String(StringLen::N(255))")]
-    pub docker_image: Option<String>,
     pub is_rollback: bool,
     pub created_at: DateTimeWithTimeZone,
 }

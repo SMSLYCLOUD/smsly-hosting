@@ -11,13 +11,11 @@ use cn_core::entities::{team, team_member};
 pub struct TeamResponse {
     pub id: Uuid,
     pub name: String,
-    pub slug: String,
 }
 
 #[derive(Deserialize)]
 pub struct CreateTeamRequest {
     pub name: String,
-    pub slug: String,
 }
 
 pub async fn list_teams(
@@ -46,7 +44,6 @@ pub async fn list_teams(
         .map(|t| TeamResponse {
             id: t.id,
             name: t.name,
-            slug: t.slug,
         })
         .collect();
 
@@ -58,24 +55,12 @@ pub async fn create_team(
     auth_user: AuthUser,
     Json(payload): Json<CreateTeamRequest>,
 ) -> Result<(StatusCode, Json<TeamResponse>), (StatusCode, String)> {
-    // 1. Uniqueness check on Slug
-    let existing = team::Entity::find()
-        .filter(team::Column::Slug.eq(&payload.slug))
-        .one(&state.db)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    if existing.is_some() {
-        return Err((StatusCode::BAD_REQUEST, "Team slug already exists".to_string()));
-    }
-
     // 2. Create the Team
     let new_team = team::ActiveModel {
         id: Set(Uuid::new_v4()),
         name: Set(payload.name),
-        slug: Set(payload.slug),
+        owner_id: Set(auth_user.id),
         created_at: Set(chrono::Utc::now().into()),
-        updated_at: Set(chrono::Utc::now().into()),
         ..Default::default()
     };
 
@@ -89,7 +74,6 @@ pub async fn create_team(
         team_id: Set(inserted_team.id),
         user_id: Set(auth_user.id),
         role: Set("OWNER".to_string()),
-        joined_at: Set(chrono::Utc::now().into()),
         ..Default::default()
     };
 
@@ -103,7 +87,6 @@ pub async fn create_team(
         Json(TeamResponse {
             id: inserted_team.id,
             name: inserted_team.name,
-            slug: inserted_team.slug,
         }),
     ))
 }

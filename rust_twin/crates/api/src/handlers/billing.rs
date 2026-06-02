@@ -25,15 +25,22 @@ pub async fn get_license(
     match license {
         Some(l) => Ok(Json(l)),
         None => {
-            // Return a mocked default "COMMUNITY" response
+            // Return a mocked default "community" response
             let default_license = platform_license::Model {
                 id: 0,
-                tier: "COMMUNITY".to_string(),
-                customer_id: None,
-                subscription_id: None,
-                is_active: true,
+                license_key: "".to_string(),
+                tier: "community".to_string(),
+                license_data: "".to_string(),
+                is_valid: true,
+                last_validated: None,
+                validation_error: "".to_string(),
+                licensed_to: "".to_string(),
+                instance_id: "".to_string(),
                 expires_at: None,
-                encrypted_license_key: None,
+                max_services: 3,
+                max_team_members: 1,
+                payment_provider: "".to_string(),
+                subscription_id: "".to_string(),
                 created_at: chrono::Utc::now().into(),
                 updated_at: chrono::Utc::now().into(),
             };
@@ -44,7 +51,7 @@ pub async fn get_license(
 
 #[derive(serde::Deserialize)]
 pub struct UpgradePayload {
-    pub target_tier: String, // "PRO" or "ENTERPRISE"
+    pub target_tier: String, // "pro" or "enterprise"
     pub payment_id: String,  // Mocked ID from external provider
 }
 
@@ -55,8 +62,8 @@ pub async fn upgrade_license(
     Json(payload): Json<UpgradePayload>,
 ) -> Result<Json<platform_license::Model>, (StatusCode, String)> {
 
-    let target_tier = payload.target_tier.to_uppercase();
-    if target_tier != "PRO" && target_tier != "ENTERPRISE" {
+    let target_tier = payload.target_tier.to_lowercase();
+    if target_tier != "pro" && target_tier != "enterprise" {
         return Err((StatusCode::BAD_REQUEST, "Invalid target tier".to_string()));
     }
 
@@ -74,19 +81,27 @@ pub async fn upgrade_license(
         Some(existing) => {
             let mut model: platform_license::ActiveModel = existing.into();
             model.tier = Set(target_tier);
-            model.subscription_id = Set(Some(payload.payment_id));
+            model.subscription_id = Set(payload.payment_id.clone());
             model.expires_at = Set(Some(expiration.into()));
-            model.is_active = Set(true);
+            model.is_valid = Set(true);
             model.updated_at = Set(chrono::Utc::now().into());
             model
         }
         None => {
             platform_license::ActiveModel {
+                license_key: Set("".to_string()),
                 tier: Set(target_tier),
-                customer_id: Set(None),
-                subscription_id: Set(Some(payload.payment_id)),
+                license_data: Set("".to_string()),
+                is_valid: Set(true),
+                last_validated: Set(None),
+                validation_error: Set("".to_string()),
+                licensed_to: Set("".to_string()),
+                instance_id: Set("".to_string()),
                 expires_at: Set(Some(expiration.into())),
-                is_active: Set(true),
+                max_services: Set(100),
+                max_team_members: Set(10),
+                payment_provider: Set("stripe".to_string()),
+                subscription_id: Set(payload.payment_id.clone()),
                 created_at: Set(chrono::Utc::now().into()),
                 updated_at: Set(chrono::Utc::now().into()),
                 ..Default::default()
@@ -101,12 +116,19 @@ pub async fn upgrade_license(
     // Conversion back to Model to return JSON
     let result = platform_license::Model {
         id: saved.id.unwrap(),
+        license_key: saved.license_key.unwrap(),
         tier: saved.tier.unwrap(),
-        customer_id: saved.customer_id.unwrap(),
-        subscription_id: saved.subscription_id.unwrap(),
-        is_active: saved.is_active.unwrap(),
+        license_data: saved.license_data.unwrap(),
+        is_valid: saved.is_valid.unwrap(),
+        last_validated: saved.last_validated.unwrap(),
+        validation_error: saved.validation_error.unwrap(),
+        licensed_to: saved.licensed_to.unwrap(),
+        instance_id: saved.instance_id.unwrap(),
         expires_at: saved.expires_at.unwrap(),
-        encrypted_license_key: saved.encrypted_license_key.unwrap(),
+        max_services: saved.max_services.unwrap(),
+        max_team_members: saved.max_team_members.unwrap(),
+        payment_provider: saved.payment_provider.unwrap(),
+        subscription_id: saved.subscription_id.unwrap(),
         created_at: saved.created_at.unwrap(),
         updated_at: saved.updated_at.unwrap(),
     };

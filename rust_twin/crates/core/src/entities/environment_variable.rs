@@ -12,7 +12,7 @@ pub struct Model {
     #[sea_orm(column_type = "String(StringLen::N(255))")]
     pub key: String,
     #[sea_orm(column_type = "Text")]
-    pub value_encrypted: String, // Stored encrypted via Fernet/AES
+    pub value: String, // Stored encrypted via Fernet/AES
     #[sea_orm(column_type = "String(StringLen::N(20))")]
     pub source: String, // USER, ADDON, SHORTCODE
     pub is_build_arg: bool,
