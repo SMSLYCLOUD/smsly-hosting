@@ -520,9 +520,6 @@ def run_preview_health_check_job(preview_id: str):
         )
         provider_id = str(parent.provider.id) if parent.provider else None
         _dispatch_preview_deployment(deployment, provider_id)
-
-        preview.status = PreviewEnvironment.Status.READY
-        preview.save()
     except Exception as e:
         logger.error(f"Failed to provision preview environment {preview_id}: {e}", exc_info=True)
         try:

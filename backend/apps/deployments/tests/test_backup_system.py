@@ -169,3 +169,83 @@ class BackupSystemTest(TestCase):
             for path in backup_paths:
                 if path and os.path.exists(path):
                     os.remove(path)
+
+    @patch('apps.deployments.services.ssh_client.SSHClient')
+    def test_remote_backup_and_restore(self, mock_ssh_class):
+        import shutil
+        from apps.deployments.models_core import ManagedServer
+        from apps.deployments.models_storage import Volume
+
+        # Create a ManagedServer
+        server = ManagedServer.objects.create(
+            name="Remote Node",
+            host="1.2.3.4",
+            ssh_user="root",
+            ssh_key="-----BEGIN PRIVATE KEY-----\n...",
+            owner=self.user
+        )
+
+        # Set active execution target variables on service
+        self.service.active_target_type = "remote"
+        self.service.active_host_ip = "1.2.3.4"
+        self.service.save()
+
+        # Add a volume
+        Volume.objects.create(
+            service=self.service,
+            name="vol-1",
+            mount_path="/data"
+        )
+
+        # Mock SSH Client instance
+        mock_ssh = MagicMock()
+        mock_ssh.check_docker.return_value = True
+        mock_ssh.exec_command.return_value = ("stdout", "stderr", 0)
+        mock_ssh_class.return_value = mock_ssh
+
+        # Mock download_file to write a valid tar.gz archive
+        def mock_download(remote, local):
+            temp_dir = tempfile.mkdtemp()
+            metadata = {
+                'service_name': self.service.name,
+                'service_id': str(self.service.id),
+                'deploy_type': 'DOCKER',
+                'env_vars': [],
+                'volumes': [{'name': 'vol-1', 'mount_path': '/data', 'filename': 'volume_vol-1.tar.gz'}]
+            }
+            with open(os.path.join(temp_dir, 'metadata.json'), 'w') as f:
+                json.dump(metadata, f)
+            with open(os.path.join(temp_dir, 'image.tar'), 'w') as f:
+                f.write('dummy image')
+            with open(os.path.join(temp_dir, 'volume_vol-1.tar.gz'), 'w') as f:
+                f.write('dummy volume')
+            with tarfile.open(local, "w:gz") as tar:
+                tar.add(temp_dir, arcname="")
+            shutil.rmtree(temp_dir)
+
+        mock_ssh.download_file.side_effect = mock_download
+
+        # Trigger remote backup
+        backup = BackupService().backup_service(self.service.id)
+
+        self.assertEqual(backup.status, 'COMPLETED')
+        self.assertTrue(os.path.exists(backup.file_path))
+        mock_ssh.connect.assert_called_once()
+
+        # Trigger remote restore
+        with patch('apps.deployments.tasks._resolve_provider_for_service') as mock_resolve_provider:
+            provider = MagicMock()
+            provider.id = uuid.uuid4()
+            mock_resolve_provider.return_value = provider
+            
+            # Set server on service to trigger remote restore target resolution
+            self.service.server = server
+            self.service.save()
+
+            success = BackupService().restore_service(backup.id)
+            self.assertTrue(success)
+            mock_ssh.upload_file.assert_called()
+            
+        if os.path.exists(backup.file_path):
+            os.remove(backup.file_path)
+
