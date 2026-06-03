@@ -32,6 +32,23 @@ class PostgresSnapshotManager:
         url = admin_db_url or os.environ.get('DIRECT_DATABASE_URL') or os.environ.get('DATABASE_URL')
         if not url:
             raise ValueError("DATABASE_URL or DIRECT_DATABASE_URL must be set to use PostgresSnapshotManager")
+
+        # Bypass PgCat and connect directly to the database container for administrative queries
+        try:
+            parsed = urlparse(url)
+            if parsed.hostname == 'pgcat':
+                netloc = 'db'
+                if parsed.port:
+                    netloc = f"db:{parsed.port}"
+                if parsed.username:
+                    auth = parsed.username
+                    if parsed.password:
+                        auth += f":{parsed.password}"
+                    netloc = f"{auth}@{netloc}"
+                url = urlunparse(parsed._replace(netloc=netloc))
+        except Exception as e:
+            logger.warning(f"Failed to parse database URL for PgCat bypass: {e}")
+
         self.admin_db_url = url
 
     def _get_maintenance_url(self) -> str:

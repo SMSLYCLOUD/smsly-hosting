@@ -75,6 +75,23 @@ class PostgresSnapshotManagerTestCase(unittest.TestCase):
         self.assertFalse(res3)
         self.assertEqual(mock_run.call_count, 0)
 
+    def test_pgcat_bypass(self):
+        # When pgcat is in the url, it should be mapped to db
+        manager = PostgresSnapshotManager(admin_db_url="postgres://user:pass@pgcat:5432/postgres")
+        self.assertEqual(manager.admin_db_url, "postgres://user:pass@db:5432/postgres")
+
+        # When pgcat is in the url without port
+        manager2 = PostgresSnapshotManager(admin_db_url="postgres://user:pass@pgcat/postgres")
+        self.assertEqual(manager2.admin_db_url, "postgres://user:pass@db/postgres")
+
+        # When pgcat is in the url without auth
+        manager3 = PostgresSnapshotManager(admin_db_url="postgres://pgcat/postgres")
+        self.assertEqual(manager3.admin_db_url, "postgres://db/postgres")
+
+        # When pgcat is NOT in the url, it should remain unchanged
+        manager4 = PostgresSnapshotManager(admin_db_url="postgres://user:pass@otherhost:5432/postgres")
+        self.assertEqual(manager4.admin_db_url, "postgres://user:pass@otherhost:5432/postgres")
+
 
 class SafeDeployTaskHelpersTestCase(unittest.TestCase):
     def test_clone_database_name_is_valid_and_within_postgres_limit(self):
