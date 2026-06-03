@@ -751,7 +751,7 @@ def _restart_pgcat():
 
 
 @shared_task(bind=True, max_retries=0, soft_time_limit=1860, time_limit=1920)
-def provision_server(self, server_id: str):
+def provision_server(self, server_id: str, skip_reboot: bool = False):
     """
     Provision Grid on a remote server via SSH.
 
@@ -1326,7 +1326,7 @@ def provision_server(self, server_id: str):
             except Exception as exc:
                 _append_log(server, f"⚠️ Auto token exchange failed (non-critical): {exc}")
 
-        if _env_bool("SMSLY_PROVISION_REBOOT_ON_SUCCESS", default=True):
+        if not skip_reboot and _env_bool("SMSLY_PROVISION_REBOOT_ON_SUCCESS", default=True):
             _append_log(server, "Scheduling remote reboot after successful provisioning.")
             if _schedule_remote_reboot(ssh, server, "provisioning"):
                 server.status = ManagedServer.Status.UNKNOWN
