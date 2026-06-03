@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 from urllib.parse import quote, urlencode
 
@@ -143,6 +144,50 @@ def github_connect(request):
 # ── NEW: API-based GitHub OAuth (bypasses session cookies) ───────────────────
 
 
+def _get_github_oauth_callback_url(request) -> str:
+    """
+    Resolve the GitHub OAuth callback URL pointing to the frontend SPA.
+    Priority:
+    1. GITHUB_OAUTH_CALLBACK_URL env var/setting
+    2. Dynamic PlatformConfig domain & SSL configuration from database
+    3. settings.SITE_URL
+    4. request-based fallback (origin)
+    """
+    callback_url = getattr(settings, 'GITHUB_OAUTH_CALLBACK_URL', None)
+    if callback_url:
+        return callback_url
+
+    site_url = ""
+    try:
+        from apps.deployments.models_core import PlatformConfig
+        platform_cfg = PlatformConfig.objects.first()
+        if platform_cfg and platform_cfg.domain:
+            db_domain = platform_cfg.domain.strip().lower().rstrip('.')
+            # Only use domain from database if it's a real custom domain (not localhost/loopback)
+            if db_domain and db_domain not in ('localhost', '127.0.0.1', '::1'):
+                db_is_ip = bool(re.fullmatch(r'\d{1,3}(?:\.\d{1,3}){3}', db_domain))
+                # Force HTTPS in production (except IP or localhost or settings.DEBUG)
+                use_ssl = platform_cfg.use_ssl
+                scheme = 'https' if (use_ssl and not db_is_ip and not settings.DEBUG) else 'http'
+                site_url = f"{scheme}://{db_domain}"
+    except Exception as e:
+        logger.warning("Failed to load PlatformConfig for dynamic site_url: %s", e)
+
+    if not site_url:
+        site_url = getattr(settings, 'SITE_URL', '').rstrip('/')
+        if not settings.DEBUG and site_url and not _is_ip_or_localhost(site_url):
+            site_url = site_url.replace('http://', 'https://')
+
+    if not site_url:
+        # Fallback only if SITE_URL is not configured
+        scheme = "https" if request.is_secure() or request.headers.get('X-Forwarded-Proto') == 'https' else "http"
+        origin = f"{scheme}://{request.get_host()}"
+        site_url = origin
+
+    return f"{site_url}/auth/github/callback"
+
+
+
 def _is_ip_or_localhost(url_str: str) -> bool:
     """Return True if the URL contains a raw IP address or localhost."""
     from urllib.parse import urlparse
@@ -182,22 +227,7 @@ def github_oauth_url(request):
         )
 
     # Build callback URL pointing to the FRONTEND callback page
-    # Priority: GITHUB_OAUTH_CALLBACK_URL env var > SITE_URL > request-based fallback
-    callback_url = getattr(settings, 'GITHUB_OAUTH_CALLBACK_URL', None)
-    
-    if not callback_url:
-        site_url = getattr(settings, 'SITE_URL', '').rstrip('/')
-        # Force HTTPS in production to match GitHub App settings (except IP or localhost)
-        if not settings.DEBUG and site_url and not _is_ip_or_localhost(site_url):
-            site_url = site_url.replace('http://', 'https://')
-        
-        if site_url:
-            callback_url = f"{site_url}/auth/github/callback"
-        else:
-            # Fallback only if SITE_URL is not configured
-            scheme = "https" if request.is_secure() or request.headers.get('X-Forwarded-Proto') == 'https' else "http"
-            origin = f"{scheme}://{request.get_host()}"
-            callback_url = f"{origin}/auth/github/callback"
+    callback_url = _get_github_oauth_callback_url(request)
 
     logger.info("GitHub OAuth authorize URL - callback_url=%s, DEBUG=%s", callback_url, settings.DEBUG)
 
@@ -260,21 +290,7 @@ def github_oauth_callback(request):
         )
 
     # Build the same callback URL the frontend used
-    # Priority: GITHUB_OAUTH_CALLBACK_URL env var > SITE_URL > request-based fallback
-    callback_url = getattr(settings, 'GITHUB_OAUTH_CALLBACK_URL', None)
-    
-    if not callback_url:
-        site_url = getattr(settings, 'SITE_URL', '').rstrip('/')
-        # Force HTTPS in production to match GitHub App settings (except IP or localhost)
-        if not settings.DEBUG and site_url and not _is_ip_or_localhost(site_url):
-            site_url = site_url.replace('http://', 'https://')
-        
-        if not site_url:
-            # Fallback only if SITE_URL is not configured
-            scheme = "https" if request.is_secure() else "http"
-            origin = f"{scheme}://{request.get_host()}"
-            site_url = origin
-        callback_url = f"{site_url}/auth/github/callback"
+    callback_url = _get_github_oauth_callback_url(request)
 
     logger.info("GitHub OAuth callback exchange - callback_url=%s, DEBUG=%s", callback_url, settings.DEBUG)
 
