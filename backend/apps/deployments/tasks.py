@@ -1178,7 +1178,12 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
         )
 
         service = deployment.service
-        provider = CloudProvider.objects.get(id=provider_id)
+        if not provider_id or provider_id == "None":
+            provider = _resolve_provider_for_service(service, prefer_local=True)
+            if not provider:
+                raise RuntimeError("Could not resolve cloud provider for deployment.")
+        else:
+            provider = CloudProvider.objects.get(id=provider_id)
 
         # 0. Remote Delegation
         from apps.deployments.models import PlatformConfig
@@ -1297,7 +1302,12 @@ def resume_deploy_task(self, deployment_id: str, provider_id: str):
             return
 
         service = deployment.service
-        provider = CloudProvider.objects.get(id=provider_id)
+        if not provider_id or provider_id == "None":
+            provider = _resolve_provider_for_service(service, prefer_local=True)
+            if not provider:
+                raise RuntimeError("Could not resolve cloud provider for deployment.")
+        else:
+            provider = CloudProvider.objects.get(id=provider_id)
 
         # 0. Remote Delegation
         from apps.deployments.models import PlatformConfig
