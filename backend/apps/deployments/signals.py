@@ -331,3 +331,92 @@ def sync_infrastructure_on_config_change(sender, instance, **kwargs):
 def update_allowed_hosts_on_config_change(sender, instance, **kwargs):
     # This is now handled by sync_infrastructure_on_config_change
     pass
+
+
+@receiver(post_save, sender=Deployment)
+def sync_preview_status_on_deployment_change(sender, instance, created, **kwargs):
+    """Update PreviewEnvironment status when the transient service's deployment changes."""
+    logger = logging.getLogger(__name__)
+    service = instance.service
+    if not service or not service.is_preview:
+        return
+
+    # Find the corresponding PreviewEnvironment
+    if not service.name.startswith("preview-"):
+        return
+
+    try:
+        preview_id_prefix = service.name.split("-")[-1]
+        from apps.deployments.models_safedeploy import PreviewEnvironment
+        # Find the PreviewEnvironment for this parent service matching the unique hex prefix
+        parent_service = service.parent_service
+        previews = PreviewEnvironment.objects.filter(service=parent_service)
+        preview = None
+        for p in previews:
+            if p.id.hex.startswith(preview_id_prefix):
+                preview = p
+                break
+
+        if not preview:
+            logger.warning(
+                "Could not find PreviewEnvironment for transient service %s",
+                service.name
+            )
+            return
+
+        # Map Deployment status to PreviewEnvironment status
+        old_status = preview.status
+        new_status = None
+        error_msg = ""
+
+        if instance.status == Deployment.Status.QUEUED:
+            new_status = PreviewEnvironment.Status.BUILDING
+        elif instance.status == Deployment.Status.BUILDING:
+            new_status = PreviewEnvironment.Status.BUILDING
+        elif instance.status == Deployment.Status.BUILD_FAILED:
+            new_status = PreviewEnvironment.Status.BUILD_FAILED
+            error_msg = instance.ai_diagnosis or "Build failed"
+        elif instance.status in [Deployment.Status.DEPLOYING, Deployment.Status.HEALTH_CHECK]:
+            new_status = PreviewEnvironment.Status.HEALTH_CHECK_RUNNING
+        elif instance.status == Deployment.Status.ACTIVE:
+            new_status = PreviewEnvironment.Status.READY
+        elif instance.status in [Deployment.Status.FAILED, Deployment.Status.CANCELLED]:
+            new_status = PreviewEnvironment.Status.HEALTH_CHECK_FAILED
+            error_msg = instance.ai_diagnosis or f"Deployment {instance.status.lower()}"
+
+        if new_status and old_status != new_status:
+            preview.status = new_status
+            if error_msg:
+                preview.error_message = error_msg
+            preview.save(update_fields=['status', 'error_message', 'updated_at'])
+            logger.info(
+                "Synced PreviewEnvironment %s status from %s to %s via deployment %s",
+                preview.id, old_status, new_status, instance.id
+            )
+            
+            # If the preview transitioned to READY, ensure Caddy is updated
+            if new_status == PreviewEnvironment.Status.READY:
+                try:
+                    from apps.deployments.tasks import _regenerate_caddyfile
+                    _regenerate_caddyfile()
+                except Exception as caddy_exc:
+                    logger.warning("Failed to regenerate Caddyfile on preview ready: %s", caddy_exc)
+
+    except Exception as e:
+        logger.error(
+            "Failed to sync preview status for deployment %s: %s",
+            instance.id, e, exc_info=True
+        )
+
+
+@receiver(post_delete, sender=Service)
+def regenerate_caddyfile_on_service_deletion(sender, instance, **kwargs):
+    """Regenerate Caddyfile when a service is deleted to clean up routes."""
+    logger = logging.getLogger(__name__)
+    try:
+        from apps.deployments.tasks import _regenerate_caddyfile
+        _regenerate_caddyfile()
+        logger.info("Caddyfile regenerated after service %s deletion", instance.name)
+    except Exception as exc:
+        logger.warning("Could not regenerate Caddyfile after service deletion: %s", exc)
+

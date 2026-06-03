@@ -106,14 +106,13 @@ class BackupService:
             from apps.deployments.utils_target import resolve_active_execution_target
             target = resolve_active_execution_target(service)
             if target["target_type"] in ("remote", "lite_agent") and target["server_obj"]:
-                msg = (
-                    "Backups for remote/lite-agent services are not supported "
-                    "until remote backup offload is implemented."
-                )
-                backup.status = 'FAILED'
-                backup.error_message = msg
-                backup.save(update_fields=['status', 'error_message'])
-                raise RuntimeError(msg)
+                include_secret_values = str(backup_type or '').upper() in {
+                    'TRANSFER',
+                    'SERVICE_TRANSFER',
+                    'SERVER_TRANSFER',
+                    'PRE_TRANSFER',
+                }
+                return self._backup_remote_service(service, backup, target["server_obj"], include_secret_values)
         except Exception as e:
             if backup.status == 'FAILED':
                 raise
@@ -339,6 +338,34 @@ class BackupService:
 
         logger.info(f"Restoring backup {backup.id} to service {target_service.name}")
 
+        # Check if the target server is remote or local
+        from django.db.models import Q
+        server_obj = getattr(target_service, 'server', None)
+        if not server_obj:
+            provider = getattr(target_service, 'provider', None)
+            if provider and provider.provider_type in ('REMOTE', 'LITE_AGENT'):
+                from apps.deployments.models_core import ManagedServer
+                host = provider.host or getattr(provider, 'api_url', None)
+                if host:
+                    server_obj = ManagedServer.objects.filter(
+                        Q(host=host) | Q(private_ip=host)
+                    ).first()
+
+        is_remote = server_obj is not None and not server_obj.is_primary
+
+        if is_remote:
+            # Create a pre-restore backup snapshot to ensure we don't lose the active state in case of failure
+            logger.info(f"Creating pre-restore snapshot for remote service {target_service.name}")
+            try:
+                self.backup_service(target_service.id, backup_type='PRE_TRANSFER')
+            except Exception as e:
+                logger.warning(f"Failed to create pre-restore snapshot: {e}")
+
+            archive_path, cleanup_archive = self._prepare_archive_for_restore(backup.file_path)
+            temp_dir = os.path.join(os.path.dirname(archive_path), f"restore_{uuid.uuid4().hex}")
+            os.makedirs(temp_dir, exist_ok=True)
+            return self._restore_remote_service(backup, target_service, server_obj, temp_dir, archive_path, cleanup_archive)
+
         # Create a pre-restore backup snapshot to ensure we don't lose the active state in case of failure
         logger.info(f"Creating pre-restore snapshot for service {target_service.name}")
         try:
@@ -535,6 +562,314 @@ class BackupService:
                 shutil.rmtree(temp_dir)
             if cleanup_archive and os.path.exists(cleanup_archive):
                 os.remove(cleanup_archive)
+
+    def _backup_remote_service(self, service, backup, server, include_secret_values) -> ServiceBackup:
+        """Perform backup of a service running on a remote/lite-agent node via SSH."""
+        logger.info(f"Starting remote backup of service {service.name} on server {server.name}")
+        
+        # Instantiate SSHClient
+        from apps.deployments.services.ssh_client import SSHClient
+        ssh = SSHClient(
+            ip=server.host,
+            port=server.ssh_port,
+            username=server.ssh_user,
+            private_key=server.ssh_key,
+            password=server.ssh_password,
+            wg_address=server.wg_address,
+        )
+        ssh.connect()
+
+        # Check if Docker is running on remote server
+        if not ssh.check_docker():
+            raise RuntimeError(f"Docker is not available on remote server {server.name}")
+
+        temp_dir = None
+        remote_temp_dir = f"/tmp/backup_tmp_{uuid.uuid4().hex[:8]}"
+        image_tag = f"backup/{slugify(service.name)}:{uuid.uuid4().hex[:8]}"
+        remote_image_path = f"{remote_temp_dir}/image.tar"
+        remote_archive_path = f"/tmp/backup_{slugify(service.name)}_{uuid.uuid4().hex[:8]}.tar.gz"
+
+        try:
+            # 1. Create remote temp directory
+            ssh.exec_command(f"mkdir -p {remote_temp_dir}", raise_on_error=True)
+
+            # 2. Backup Docker Image remotely
+            # Try to commit container
+            out, err, code = ssh.exec_command(f"docker commit {service.name} {image_tag}")
+            has_image = False
+            if code == 0:
+                logger.info(f"Committed remote container {service.name} to {image_tag}")
+                # Save committed image to tar
+                logger.info(f"Saving remote image {image_tag}...")
+                out, err, code = ssh.exec_command(f"docker save -o {remote_image_path} {image_tag}")
+                if code == 0:
+                    has_image = True
+                else:
+                    logger.warning(f"Failed to save remote image: {err or out}")
+            else:
+                # If not running, fall back to configured docker_image
+                if service.docker_image:
+                    image_tag = service.docker_image
+                    # Try to pull it on remote if not exists
+                    ssh.exec_command(f"docker image inspect {image_tag} || docker pull {image_tag}")
+                    logger.info(f"Saving remote image {image_tag}...")
+                    out, err, code = ssh.exec_command(f"docker save -o {remote_image_path} {image_tag}")
+                    if code == 0:
+                        has_image = True
+                    else:
+                        logger.warning(f"Failed to save remote image: {err or out}")
+
+            # 3. Backup Volumes remotely
+            volumes = Volume.objects.filter(service=service)
+            volumes_meta = []
+            for vol in volumes:
+                # Check if volume exists remotely
+                out, err, code = ssh.exec_command(f"docker volume inspect {vol.name}")
+                if code != 0:
+                    logger.warning(f"Docker volume {vol.name} not found on remote server, skipping.")
+                    continue
+
+                vol_filename = f"volume_{vol.name}.tar.gz"
+                remote_vol_path = f"{remote_temp_dir}/{vol_filename}"
+                logger.info(f"Backing up remote volume {vol.name}...")
+                
+                # Compress remote volume using alpine helper container
+                compress_cmd = (
+                    f"docker run --rm -v {vol.name}:/volume_data:ro "
+                    f"-v {remote_temp_dir}:/backup alpine:latest "
+                    f"tar -czf /backup/{vol_filename} -C /volume_data ."
+                )
+                out, err, code = ssh.exec_command(compress_cmd)
+                if code == 0:
+                    volumes_meta.append({
+                        'name': vol.name,
+                        'mount_path': vol.mount_path,
+                        'filename': vol_filename,
+                        'size_gb': vol.size_gb
+                    })
+                else:
+                    logger.error(f"Failed to backup remote volume {vol.name}: {err or out}")
+
+            # 4. Prepare Metadata.json locally and upload it
+            env_vars_raw = [
+                {"key": ev.key, "value": ev.value, "is_secret": ev.is_secret}
+                for ev in EnvironmentVariable.objects.filter(service=service).only('key', 'value', 'is_secret')
+            ]
+            env_vars = []
+            for ev in env_vars_raw:
+                entry = dict(ev)
+                if entry.get('is_secret') and not include_secret_values:
+                    entry['value'] = '********'
+                env_vars.append(entry)
+
+            metadata = {
+                'service_name': service.name,
+                'service_id': str(service.id),
+                'deploy_type': service.deploy_type,
+                'env_vars': env_vars,
+                'secrets_included': include_secret_values,
+                'git_url': service.repository_url,
+                'created_at': str(timezone.now()),
+                'volumes': volumes_meta
+            }
+            if has_image:
+                metadata['docker_image'] = image_tag
+
+            # Write metadata to a local temp file
+            backups_dir = self._get_backups_dir('services')
+            temp_dir = os.path.join(backups_dir, f"tmp_{uuid.uuid4().hex}")
+            os.makedirs(temp_dir, exist_ok=True)
+            local_metadata_path = os.path.join(temp_dir, "metadata.json")
+            with open(local_metadata_path, 'w') as f:
+                json.dump(metadata, f, indent=2)
+
+            # Upload metadata.json to remote temp dir
+            ssh.upload_file(local_metadata_path, f"{remote_temp_dir}/metadata.json")
+
+            # 5. Archive remotely
+            logger.info("Packaging remote backup archive...")
+            archive_cmd = f"tar -czf {remote_archive_path} -C {remote_temp_dir} ."
+            ssh.exec_command(archive_cmd, raise_on_error=True)
+
+            # 6. Download final archive to local control plane
+            safe_name = slugify(service.name) or f"service-{str(service.id)[:8]}"
+            local_filename = f"backup_{safe_name}_{uuid.uuid4().hex[:8]}.tar.gz"
+            local_filepath = os.path.join(backups_dir, local_filename)
+
+            logger.info(f"Downloading remote backup archive to local control plane...")
+            ssh.download_file(remote_archive_path, local_filepath)
+
+            # Optional encryption
+            local_filepath = self._maybe_encrypt(local_filepath)
+
+            # Save backup details
+            backup.file_path = local_filepath
+            backup.metadata = metadata
+            backup.status = 'COMPLETED'
+            backup.size_bytes = os.path.getsize(local_filepath)
+            backup.completed_at = timezone.now()
+            backup.save()
+            
+            self._prune_old_backups(ServiceBackup, service_id=service.id)
+            return backup
+
+        finally:
+            # Clean up remote temp files and images
+            logger.info("Cleaning up remote temp files...")
+            ssh.exec_command(f"rm -rf {remote_temp_dir} {remote_archive_path}")
+            if image_tag.startswith("backup/"):
+                ssh.exec_command(f"docker rmi -f {image_tag}")
+            
+            # Clean up local temp files
+            if temp_dir and os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
+            ssh.close()
+
+    def _restore_remote_service(self, backup, target_service, server, temp_dir, archive_path, cleanup_archive):
+        """Restore a service backup to a remote server via SSH."""
+        logger.info(f"Starting remote restore of backup {backup.id} to service {target_service.name} on server {server.name}")
+
+        from apps.deployments.services.ssh_client import SSHClient
+        ssh = SSHClient(
+            ip=server.host,
+            port=server.ssh_port,
+            username=server.ssh_user,
+            private_key=server.ssh_key,
+            password=server.ssh_password,
+            wg_address=server.wg_address,
+        )
+        ssh.connect()
+
+        if not ssh.check_docker():
+            raise RuntimeError(f"Docker is not available on remote server {server.name}")
+
+        try:
+            # 1. Extract Archive locally to read metadata
+            with tarfile.open(archive_path, "r:gz") as tar:
+                # Security: reject members with absolute paths or '..' traversal
+                for member in tar.getmembers():
+                    if member.name.startswith('/') or '..' in member.name:
+                        raise ValueError(f"Unsafe path in backup archive: {member.name}")
+                tar.extractall(path=temp_dir)
+
+            with open(os.path.join(temp_dir, "metadata.json"), 'r') as f:
+                metadata = json.load(f)
+
+            # 2. Restore Env Vars (always local in the database)
+            if 'env_vars' in metadata:
+                for env in metadata['env_vars']:
+                    value = env.get('value', '')
+                    if isinstance(value, str) and value.startswith('gAAAAAB'):
+                        from django.db import connection
+                        with connection.cursor() as cursor:
+                            cursor.execute(
+                                "INSERT INTO deployments_environmentvariable (service_id, key, value, is_secret, created_at, updated_at) "
+                                "VALUES (%s, %s, %s, %s, NOW(), NOW()) "
+                                "ON CONFLICT (service_id, key) DO UPDATE SET value = EXCLUDED.value, is_secret = EXCLUDED.is_secret, updated_at = NOW()",
+                                [str(target_service.id), env['key'], value, env.get('is_secret', False)]
+                            )
+                    else:
+                        EnvironmentVariable.objects.update_or_create(
+                            service=target_service,
+                            key=env['key'],
+                            defaults={'value': value, 'is_secret': env.get('is_secret', False)}
+                        )
+
+            # 3. Load Docker Image remotely
+            image_path = os.path.join(temp_dir, "image.tar")
+            if os.path.exists(image_path):
+                logger.info("Uploading Docker image to remote server...")
+                remote_image_path = f"/tmp/image_{uuid.uuid4().hex[:8]}.tar"
+                ssh.upload_file(image_path, remote_image_path)
+                
+                logger.info("Loading Docker image remotely...")
+                out, err, code = ssh.exec_command(f"docker load -i {remote_image_path}")
+                ssh.exec_command(f"rm -f {remote_image_path}") # clean up immediately
+                if code != 0:
+                    raise RuntimeError(f"Failed to load Docker image remotely: {err or out}")
+
+                if metadata.get('docker_image'):
+                    restored_image = metadata['docker_image']
+                    target_service.docker_image = restored_image
+                    target_service.deploy_type = 'DOCKER'
+                    target_service.save()
+
+            # 4. Restore Volumes remotely
+            if 'volumes' in metadata:
+                for vol_meta in metadata['volumes']:
+                    vol_obj, _ = Volume.objects.get_or_create(
+                        service=target_service,
+                        mount_path=vol_meta['mount_path'],
+                        defaults={
+                            'name': vol_meta['name'],
+                            'size_gb': vol_meta.get('size_gb', 1)
+                        }
+                    )
+
+                    # Ensure remote volume exists
+                    ssh.exec_command(f"docker volume create {vol_obj.name}")
+
+                    vol_tar_path = os.path.join(temp_dir, vol_meta['filename'])
+                    if os.path.exists(vol_tar_path):
+                        logger.info(f"Uploading volume archive {vol_meta['filename']} to remote...")
+                        remote_vol_tar_path = f"/tmp/{vol_meta['filename']}"
+                        ssh.upload_file(vol_tar_path, remote_vol_tar_path)
+
+                        logger.info(f"Extracting volume {vol_obj.name} remotely...")
+                        # Run helper container remotely to extract
+                        extract_cmd = (
+                            f"docker run --rm -v {vol_obj.name}:/dest "
+                            f"-v /tmp:/src alpine:latest "
+                            f"tar -xzf /src/{vol_meta['filename']} -C /dest"
+                        )
+                        out, err, code = ssh.exec_command(extract_cmd)
+                        ssh.exec_command(f"rm -f {remote_vol_tar_path}") # clean up
+                        if code != 0:
+                            raise RuntimeError(f"Failed to extract volume remotely: {err or out}")
+
+            logger.info("Remote restore complete. Queueing deployment.")
+            from apps.deployments.models import Deployment
+            from apps.deployments.tasks import enqueue_smart_deploy_task, _resolve_provider_for_service
+            
+            provider = _resolve_provider_for_service(target_service, prefer_local=False)
+            if provider:
+                deployment = Deployment.objects.create(
+                    service=target_service,
+                    status=Deployment.Status.QUEUED,
+                    commit_hash='latest',
+                    commit_message=f"Restored from backup {backup.id}",
+                )
+                
+                target_service.status = Service.Status.ACTIVE
+                target_service.save()
+                
+                enqueue_smart_deploy_task(
+                    deployment_id=str(deployment.id),
+                    provider_id=str(provider.id),
+                    skip_review=True
+                )
+                
+                from django.core.cache import cache
+                cache.delete(f'service_{target_service.id}_latest_deployment')
+                
+                target_service.active_target_type = target_service.active_target_type or 'remote'
+                target_service.save()
+            else:
+                logger.warning(f"Could not resolve provider to queue deployment for restored service {target_service.id}")
+                target_service.status = Service.Status.ACTIVE
+                target_service.save()
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Remote restore failed: {e}")
+            raise
+        finally:
+            if temp_dir and os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
+            if cleanup_archive and os.path.exists(cleanup_archive):
+                os.remove(cleanup_archive)
+            ssh.close()
 
     @staticmethod
     def _split_image_reference(image_ref):
