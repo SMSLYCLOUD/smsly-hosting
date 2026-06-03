@@ -1988,7 +1988,11 @@ release_install_lock() {
 
 get_migration_database_alias() {
     local migrate_db
-    local direct_url="postgresql://${POSTGRES_USER:-smsly_admin}:${POSTGRES_PASSWORD:-}@${POSTGRES_HOST:-db}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-smsly_hosting}"
+    local direct_url
+    direct_url="$(env_get_value "${INSTALL_DIR:-.}/.env" "DIRECT_DATABASE_URL" 2>/dev/null || true)"
+    if [ -z "$direct_url" ]; then
+        direct_url="postgresql://${POSTGRES_USER:-smsly_admin}:${POSTGRES_PASSWORD:-}@${POSTGRES_HOST:-db}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-smsly_hosting}"
+    fi
     migrate_db="$(
         docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T \
             -e SMSLY_DISABLE_STARTUP_TASKS=true \
@@ -2031,7 +2035,11 @@ run_backend_migrations() {
     migrate_db="$(get_migration_database_alias)"
     timeout_seconds="${MIGRATION_TIMEOUT_SECONDS:-900}"
     echo -e "${BLUE}  -> Migration database: ${migrate_db}${NC}"
-    local direct_url="postgresql://${POSTGRES_USER:-smsly_admin}:${POSTGRES_PASSWORD:-}@${POSTGRES_HOST:-db}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-smsly_hosting}"
+    local direct_url
+    direct_url="$(env_get_value "${INSTALL_DIR:-.}/.env" "DIRECT_DATABASE_URL" 2>/dev/null || true)"
+    if [ -z "$direct_url" ]; then
+        direct_url="postgresql://${POSTGRES_USER:-smsly_admin}:${POSTGRES_PASSWORD:-}@${POSTGRES_HOST:-db}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-smsly_hosting}"
+    fi
     set +e
     docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T \
         "${user_args[@]}" \

@@ -817,7 +817,10 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"], url_path="update-server")
     def update_server(self, request, pk=None):
         """
-        Trigger a remote update (git pull + restart) on a managed server.
+        Trigger a remote update on a managed server.
+
+        Uses the same idempotent provision flow (install.sh) which handles
+        both fresh installs and updates without clearing existing data/volumes.
         """
         server = self.get_object()
 
@@ -835,52 +838,25 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
             server.provision_status = ManagedServer.ProvisionStatus.DONE
             server.save(update_fields=["provision_status", "updated_at"])
 
-        # We only allow updates on nodes that have been provisioned or have SSH access
         if not (server.ssh_key or server.ssh_password):
              return Response(
                  {"error": "Server has no SSH credentials configured for updates."},
                  status=status.HTTP_400_BAD_REQUEST,
              )
 
-        server.provision_logs = (
-            (server.provision_logs or "")
-            + f"\n--- Update started by {request.user.username} at {timezone.now()} ---\n"
+        # Reset status and set log header for update
+        server.provision_status = ManagedServer.ProvisionStatus.PENDING
+        server.provision_logs = f"--- Update started by {request.user.username} at {timezone.now()} ---\n"
+        server.save(update_fields=["provision_status", "provision_logs", "updated_at"])
+
+        # Use the same provision task (idempotent), but skip post-install reboot
+        from .services.provisioner import provision_server
+        provision_server.delay(str(server.id), skip_reboot=True)
+
+        return Response(
+            ManagedServerSerializer(server).data,
+            status=status.HTTP_202_ACCEPTED,
         )
-        server.save(update_fields=["provision_logs", "updated_at"])
-
-        import threading
-        from .tasks import update_remote_server_task
-        try:
-            # Run the update flow directly in a background thread to bypass the Celery task queue,
-            # ensuring that update execution starts immediately on the remote server.
-            thread = threading.Thread(
-                target=update_remote_server_task,
-                args=(str(server.id),),
-                daemon=True
-            )
-            thread.start()
-        except Exception as exc:
-            logger.exception("Failed to start update thread for server %s", server.id)
-            server.provision_status = ManagedServer.ProvisionStatus.FAILED
-            server.provision_logs = (
-                (server.provision_logs or "")
-                + f"\nFATAL ERROR: failed to start update thread: {exc}\n"
-            )
-            server.save(update_fields=["provision_status", "provision_logs", "updated_at"])
-            return Response(
-                {
-                    "error": "Failed to start server update process.",
-                    "server_id": str(server.id),
-                },
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
-        return Response({
-            "success": True,
-            "message": "Update task started. Progress will be visible in provision logs.",
-            "server_id": str(server.id),
-            "provision_status": server.provision_status,
-        })
 
     # ── Health Check ─────────────────────────────────────────────────────
 
