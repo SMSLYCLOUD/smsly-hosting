@@ -1476,6 +1476,69 @@ ensure_env_runtime_defaults() {
 
     [ -f "$env_file" ] || return 1
 
+    # Self-healing and mode detection for Lite Agent
+    if [ -f "$env_file" ]; then
+        local env_node_type
+        env_node_type="$(env_get_value "$env_file" "NODE_TYPE" 2>/dev/null || true)"
+        if [ "$env_node_type" = "agent-lite" ] || [ "$env_node_type" = "agent" ]; then
+            MODE_AGENT_LITE="true"
+        fi
+    fi
+
+    if [ "${MODE_AGENT_LITE:-false}" = "true" ]; then
+        if [ -z "${MASTER_IP:-}" ]; then
+            if [ -f "$env_file" ]; then
+                MASTER_IP="$(env_get_value "$env_file" "MASTER_IP" 2>/dev/null || true)"
+            fi
+            if [ -z "${MASTER_IP:-}" ] && [ -f "/opt/smsly-hosting/.agent_lite_seed" ]; then
+                MASTER_IP="$(env_get_value "/opt/smsly-hosting/.agent_lite_seed" "MASTER_IP" 2>/dev/null || true)"
+            fi
+        fi
+
+        if [ -z "${MASTER_MESH_IP:-}" ]; then
+            if [ -f "$env_file" ]; then
+                MASTER_MESH_IP="$(env_get_value "$env_file" "MASTER_MESH_IP" 2>/dev/null || true)"
+            fi
+            if [ -z "${MASTER_MESH_IP:-}" ] && [ -f "/opt/smsly-hosting/.agent_lite_seed" ]; then
+                MASTER_MESH_IP="$(env_get_value "/opt/smsly-hosting/.agent_lite_seed" "MASTER_MESH_IP" 2>/dev/null || true)"
+            fi
+        fi
+
+        if [ -z "${MASTER_DB_USER:-}" ]; then
+            if [ -f "$env_file" ]; then
+                MASTER_DB_USER="$(env_get_value "$env_file" "MASTER_DB_USER" 2>/dev/null || true)"
+            fi
+            if [ -z "${MASTER_DB_USER:-}" ] && [ -f "/opt/smsly-hosting/.agent_lite_seed" ]; then
+                MASTER_DB_USER="$(env_get_value "/opt/smsly-hosting/.agent_lite_seed" "MASTER_DB_USER" 2>/dev/null || true)"
+            fi
+        fi
+
+        if [ -z "${MASTER_DB_PASSWORD:-}" ]; then
+            if [ -f "$env_file" ]; then
+                MASTER_DB_PASSWORD="$(env_get_value "$env_file" "MASTER_DB_PASSWORD" 2>/dev/null || true)"
+            fi
+            if [ -z "${MASTER_DB_PASSWORD:-}" ] && [ -f "/opt/smsly-hosting/.agent_lite_seed" ]; then
+                MASTER_DB_PASSWORD="$(env_get_value "/opt/smsly-hosting/.agent_lite_seed" "MASTER_DB_PASSWORD" 2>/dev/null || true)"
+            fi
+            if [ -z "${MASTER_DB_PASSWORD:-}" ] && [ -f "$env_file" ]; then
+                local db_url
+                db_url="$(env_get_value "$env_file" "DATABASE_URL" 2>/dev/null || true)"
+                if [[ "$db_url" =~ ://[^:]+:([^@]+)@ ]]; then
+                    MASTER_DB_PASSWORD="${BASH_REMATCH[1]}"
+                fi
+            fi
+        fi
+
+        if [ -z "${MASTER_MQ_PASSWORD:-}" ]; then
+            if [ -f "$env_file" ]; then
+                MASTER_MQ_PASSWORD="$(env_get_value "$env_file" "MASTER_MQ_PASSWORD" 2>/dev/null || true)"
+            fi
+            if [ -z "${MASTER_MQ_PASSWORD:-}" ] && [ -f "/opt/smsly-hosting/.agent_lite_seed" ]; then
+                MASTER_MQ_PASSWORD="$(env_get_value "/opt/smsly-hosting/.agent_lite_seed" "MASTER_MQ_PASSWORD" 2>/dev/null || true)"
+            fi
+        fi
+    fi
+
     env_ensure_var "$env_file" "REDIS_PASSWORD" "$(gen_hex_secret 16)" "Redis authentication password"
     env_ensure_var "$env_file" "RABBITMQ_PASSWORD" "$(gen_hex_secret 16)" "RabbitMQ authentication password"
     env_ensure_var "$env_file" "GATEWAY_SECRET" "$(gen_hex_secret 32)" "Inter-service HMAC authentication secret"
@@ -1571,7 +1634,7 @@ ensure_env_runtime_defaults() {
             expected_database_url="postgresql://${db_user}:${db_pass}@${db_host}:5432/smsly_hosting"
             # DIRECT_DATABASE_URL uses smsly_admin (not node_agent) so management
             # commands can self-heal permissions/passwords when node_agent creds fail.
-            expected_direct_url="postgresql://smsly_admin:${postgres_password}@${db_host}:5432/smsly_hosting"
+            expected_direct_url="postgresql://smsly_admin:${MASTER_DB_PASSWORD:-$postgres_password}@${db_host}:5432/smsly_hosting"
             # Local RabbitMQ is used for Lite Agent node
             expected_celery_broker_url="amqp://smsly_user:${rabbitmq_password}@rabbitmq:5672//"
 
@@ -1629,11 +1692,18 @@ ensure_env_runtime_defaults() {
         # NOTE: Removed no-op pgcat→pgcat migration block (was a no-op that
         # matched all pgcat URLs and wrote the same value back).
 
+        # Direct DB connection for migrations (bypasses PgCat transaction pooling)
+        local expected_direct_url
+        if [ "$MODE_AGENT_LITE" = "true" ]; then
+            expected_direct_url="postgresql://smsly_admin:${MASTER_DB_PASSWORD:-$postgres_password}@${MASTER_MESH_IP:-db}:5432/smsly_hosting"
+        else
+            expected_direct_url="postgresql://smsly_admin:${postgres_password}@db:5432/smsly_hosting"
+        fi
+
         if [ -z "$current_database_url" ]; then
             env_ensure_var "$env_file" "DATABASE_URL" "$expected_database_url" "PostgreSQL connection string (via PgCat)"
 
             # Ensure direct connection bypass for migrations exists
-            local expected_direct_url="postgresql://smsly_admin:${postgres_password}@db:5432/smsly_hosting"
             env_ensure_var "$env_file" "DIRECT_DATABASE_URL" "$expected_direct_url" "Direct connection bypass for migrations"
         elif [[ "$current_database_url" =~ ^postgresql://smsly_admin:.*@pgcat:5432/smsly_hosting$ ]] && [ "$current_database_url" != "$expected_database_url" ]; then
             echo -e "${BLUE}  -> Fixing DATABASE_URL to match POSTGRES_PASSWORD${NC}"
@@ -1642,7 +1712,6 @@ ensure_env_runtime_defaults() {
         fi
 
         # Direct DB connection for migrations (bypasses PgCat transaction pooling)
-        local expected_direct_url="postgresql://smsly_admin:${postgres_password}@db:5432/smsly_hosting"
         env_ensure_var "$env_file" "DIRECT_DATABASE_URL" "$expected_direct_url" "Direct PostgreSQL connection (migrations only)"
     fi
 
