@@ -1632,9 +1632,10 @@ ensure_env_runtime_defaults() {
             # Use WireGuard mesh IP for database connections (public IP is firewalled)
             local db_host="${MASTER_MESH_IP}"
             expected_database_url="postgresql://${db_user}:${db_pass}@${db_host}:5432/smsly_hosting"
-            # DIRECT_DATABASE_URL uses smsly_admin (not node_agent) so management
-            # commands can self-heal permissions/passwords when node_agent creds fail.
-            expected_direct_url="postgresql://smsly_admin:${MASTER_DB_PASSWORD:-$postgres_password}@${db_host}:5432/smsly_hosting"
+            # DIRECT_DATABASE_URL uses the same node_agent credentials as DATABASE_URL.
+            # smsly_admin's password is only available on the master node, so we
+            # can't use it here. fix_node_db_permissions handles fallback gracefully.
+            expected_direct_url="postgresql://${db_user}:${db_pass}@${db_host}:5432/smsly_hosting"
             # Local RabbitMQ is used for Lite Agent node
             expected_celery_broker_url="amqp://smsly_user:${rabbitmq_password}@rabbitmq:5672//"
 
@@ -1695,7 +1696,7 @@ ensure_env_runtime_defaults() {
         # Direct DB connection for migrations (bypasses PgCat transaction pooling)
         local expected_direct_url
         if [ "$MODE_AGENT_LITE" = "true" ]; then
-            expected_direct_url="postgresql://smsly_admin:${MASTER_DB_PASSWORD:-$postgres_password}@${MASTER_MESH_IP:-db}:5432/smsly_hosting"
+            expected_direct_url="postgresql://${MASTER_DB_USER:-smsly_admin}:${MASTER_DB_PASSWORD:-$postgres_password}@${MASTER_MESH_IP:-db}:5432/smsly_hosting"
         else
             expected_direct_url="postgresql://smsly_admin:${postgres_password}@db:5432/smsly_hosting"
         fi
