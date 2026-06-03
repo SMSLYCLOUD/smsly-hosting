@@ -5062,6 +5062,20 @@ def update_remote_server_task(server_id: str):
                 "> Remote reboot scheduled after successful update.\n",
             )
         logger.info("Update Task: Finished successfully for %s", server.host)
+
+        # Dispatch notification to server owner when update completes
+        try:
+            from apps.notifications.tasks import dispatch_notification
+            dispatch_notification.delay(
+                event_type='server_update_success',
+                user_id=server.owner.id,
+                title=f"✅ Server Update Succeeded: {server.name}",
+                message=f"The update process for server '{server.name}' ({server.host}) completed successfully.",
+                metadata={'server_id': str(server.id), 'server_name': server.name, 'host': server.host},
+            )
+        except Exception as notify_exc:
+            logger.warning("Failed to dispatch server update success notification: %s", notify_exc)
+
         return True
 
     except Exception as e:
@@ -5070,6 +5084,20 @@ def update_remote_server_task(server_id: str):
         server.provision_status = ManagedServer.ProvisionStatus.FAILED
         server.save(update_fields=["provision_status", "updated_at"])
         _append_remote_update_log(server, f"\nFATAL ERROR: {str(e)}\n")
+
+        # Dispatch notification to server owner when update fails
+        try:
+            from apps.notifications.tasks import dispatch_notification
+            dispatch_notification.delay(
+                event_type='server_update_failed',
+                user_id=server.owner.id,
+                title=f"❌ Server Update Failed: {server.name}",
+                message=f"The update process for server '{server.name}' ({server.host}) failed.\nReason: {str(e)}",
+                metadata={'server_id': str(server.id), 'server_name': server.name, 'host': server.host, 'error': str(e)},
+            )
+        except Exception as notify_exc:
+            logger.warning("Failed to dispatch server update failure notification: %s", notify_exc)
+
         return False
 
     finally:

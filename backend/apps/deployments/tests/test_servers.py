@@ -720,6 +720,61 @@ class RemoteServerUpdateTaskTests(TestCase):
             f"smsly-node-{server.id}",
         )
 
+    @patch("apps.deployments.services.ssh_client.SSHClient")
+    @patch("apps.notifications.tasks.dispatch_notification.delay")
+    def test_update_task_dispatches_notification_on_success(self, dispatch_mock, ssh_cls):
+        server = ManagedServer.objects.create(
+            owner=self.user,
+            name="NotifySuccess",
+            host="10.0.0.40",
+            ssh_password="secret",
+        )
+        ssh = ssh_cls.return_value
+        ssh.find_hosting_path.return_value = "/opt/smsly-hosting"
+        ssh.exec_command.side_effect = [
+            ("preflight ok\n", "", 0),
+            ("installer ok\n", "", 0),
+            ("postflight ok\n", "", 0),
+        ]
+
+        ok = update_remote_server_task.run(str(server.id))
+
+        self.assertTrue(ok)
+        dispatch_mock.assert_called_once_with(
+            event_type='server_update_success',
+            user_id=self.user.id,
+            title=f"✅ Server Update Succeeded: {server.name}",
+            message=f"The update process for server '{server.name}' ({server.host}) completed successfully.",
+            metadata={'server_id': str(server.id), 'server_name': server.name, 'host': server.host},
+        )
+
+    @patch("apps.deployments.services.ssh_client.SSHClient")
+    @patch("apps.notifications.tasks.dispatch_notification.delay")
+    def test_update_task_dispatches_notification_on_failure(self, dispatch_mock, ssh_cls):
+        server = ManagedServer.objects.create(
+            owner=self.user,
+            name="NotifyFail",
+            host="10.0.0.41",
+            ssh_password="secret",
+        )
+        ssh = ssh_cls.return_value
+        ssh.find_hosting_path.return_value = "/opt/smsly-hosting"
+        ssh.exec_command.side_effect = [
+            ("", "preflight failed\n", 1),
+        ]
+
+        ok = update_remote_server_task.run(str(server.id))
+
+        self.assertFalse(ok)
+        dispatch_mock.assert_called_once()
+        kwargs = dispatch_mock.call_args.kwargs
+        self.assertEqual(kwargs['event_type'], 'server_update_failed')
+        self.assertEqual(kwargs['user_id'], self.user.id)
+        self.assertIn("Server Update Failed", kwargs['title'])
+        self.assertIn("NotifyFail", kwargs['message'])
+        self.assertEqual(kwargs['metadata']['server_id'], str(server.id))
+        self.assertEqual(kwargs['metadata']['server_name'], server.name)
+
 
 class LiteAgentQueueTests(TestCase):
     @patch.dict(
