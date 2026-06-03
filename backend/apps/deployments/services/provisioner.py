@@ -653,7 +653,15 @@ def _provision_node_db_credentials(server: ManagedServer):
     # Node-specific username
     node_id_short = str(server.id).split('-')[0]
     username = f"node_agent_{node_id_short}"
-    password = secrets.token_urlsafe(24)
+
+    # Preserve existing password if already generated/stored
+    metadata = server.provider_metadata or {}
+    existing_pass = metadata.get("node_db_password")
+
+    if existing_pass:
+        password = existing_pass
+    else:
+        password = secrets.token_urlsafe(24)
 
     try:
         import psycopg2
@@ -662,13 +670,20 @@ def _provision_node_db_credentials(server: ManagedServer):
 
         conn = psycopg2.connect(master_db_url)
         conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+
+        is_new_user = False
         with conn.cursor() as cur:
             # Check if user already exists
             cur.execute("SELECT 1 FROM pg_roles WHERE rolname=%s", (username,))
-            if cur.fetchone():
-                cur.execute(sql.SQL("ALTER USER {} WITH PASSWORD %s").format(sql.Identifier(username)), (password,))
-            else:
+            user_exists = bool(cur.fetchone())
+
+            if not user_exists:
                 cur.execute(sql.SQL("CREATE USER {} WITH PASSWORD %s").format(sql.Identifier(username)), (password,))
+                is_new_user = True
+            elif not existing_pass:
+                # If the user exists in DB but we don't have the password stored in metadata, reset it
+                cur.execute(sql.SQL("ALTER USER {} WITH PASSWORD %s").format(sql.Identifier(username)), (password,))
+                is_new_user = True
 
             # Grant access to the primary database
             parsed = urlparse(master_db_url)
@@ -694,13 +709,16 @@ def _provision_node_db_credentials(server: ManagedServer):
                 target_cur.execute(sql.SQL("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO {}").format(sql.Identifier(username)))
                 target_cur.execute(sql.SQL("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO {}").format(sql.Identifier(username)))
 
-        logger.info("Created dedicated Master DB credentials for node %s: %s", server.name, username)
+        logger.info("Provisioned Master DB credentials for node %s: %s (new_user=%s)", server.name, username, is_new_user)
         if not isinstance(server.provider_metadata, dict):
             server.provider_metadata = {}
         server.provider_metadata["node_db_password"] = password
         server.save(update_fields=["provider_metadata"])
 
-        _restart_pgcat()
+        # Only restart PgCat if a new user pool was actually created
+        if is_new_user:
+            _restart_pgcat()
+
         return username, password
     except Exception as e:
         logger.error("Failed to create node DB credentials for %s: %s", server.name, e)
