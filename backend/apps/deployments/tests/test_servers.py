@@ -872,3 +872,46 @@ class LiteAgentQueueTests(TestCase):
             self.assertEqual(cache.get("smsly_fleet_build_lock"), str(current.id))
 
         self.assertIsNone(cache.get("smsly_fleet_build_lock"))
+
+
+class SSHClientCallbackTests(TestCase):
+    @patch("paramiko.SSHClient")
+    def test_exec_command_streams_output_to_callback(self, mock_paramiko_client):
+        from apps.deployments.services.ssh_client import SSHClient
+
+        # Setup mock paramiko client and channel
+        mock_ssh = mock_paramiko_client.return_value
+        mock_transport = MagicMock()
+        mock_ssh.get_transport.return_value = mock_transport
+        mock_transport.is_active.return_value = True
+
+        stdin = MagicMock()
+        stdout = MagicMock()
+        stderr = MagicMock()
+        mock_ssh.exec_command.return_value = (stdin, stdout, stderr)
+
+        # Mock paramiko channel methods to return output dynamically
+        channel = stdout.channel
+        channel.recv_ready.side_effect = [True, False, True, False] + [False] * 10
+        channel.recv.side_effect = [b"hello", b" world"]
+        channel.recv_stderr_ready.side_effect = [True, False, False] + [False] * 10
+        channel.recv_stderr.side_effect = [b"some error"]
+        channel.exit_status_ready.side_effect = [False, True]
+        channel.recv_exit_status.return_value = 0
+
+        client = SSHClient(ip="127.0.0.1", password="test")
+        client.client = mock_ssh
+
+        callback_calls = []
+        def test_callback(out, err):
+            callback_calls.append((out, err))
+
+        out, err, code = client.exec_command("echo", callback=test_callback)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out, "hello world")
+        self.assertEqual(err, "some error")
+        self.assertEqual(len(callback_calls), 2)
+        self.assertEqual(callback_calls[0], ("hello", "some error"))
+        self.assertEqual(callback_calls[1], (" world", ""))
+

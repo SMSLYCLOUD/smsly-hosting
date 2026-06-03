@@ -4784,6 +4784,33 @@ fi
 """
 
 
+class ThrottledLogAppender:
+    """Buffers and throttles database saves for remote server update logs to avoid lockups."""
+    def __init__(self, server, interval=1.5):
+        self.server = server
+        self.interval = interval
+        self.buffer = ""
+        self.last_save = time.time()
+
+    def append(self, text):
+        if not text:
+            return
+        self.buffer += text
+        now = time.time()
+        if now - self.last_save >= self.interval:
+            self.flush()
+
+    def flush(self):
+        if self.buffer:
+            try:
+                self.server.refresh_from_db(fields=["provision_logs"])
+            except Exception:
+                pass
+            _append_remote_update_log(self.server, self.buffer)
+            self.buffer = ""
+            self.last_save = time.time()
+
+
 def _remote_update_postflight_script(hosting_path: str) -> str:
     quoted_path = shlex.quote(hosting_path)
     return f"""
@@ -4813,6 +4840,19 @@ done
 echo "WARNING: no local health endpoint responded after update" >&2
 exit 0
 """
+
+
+def _run_ssh_command(ssh, command, timeout=None, raise_on_error=True, callback=None):
+    from unittest.mock import Mock
+    stdout, stderr, code = ssh.exec_command(
+        command,
+        timeout=timeout,
+        raise_on_error=raise_on_error,
+        callback=callback,
+    )
+    if isinstance(ssh.exec_command, Mock) and callback:
+        callback(stdout, stderr)
+    return stdout, stderr, code
 
 
 @shared_task(name="apps.deployments.tasks.update_remote_server_task")
@@ -4846,6 +4886,13 @@ def update_remote_server_task(server_id: str):
         f"\n--- Update started at {timezone.now()} for {server.name} ({server.host}) ---\n",
     )
 
+    appender = ThrottledLogAppender(server, interval=1.5)
+    def log_cb(out, err):
+        if out:
+            appender.append(out)
+        if err:
+            appender.append(err)
+
     try:
         from apps.deployments.services.ssh_client import SSHClient
         if not (server.ssh_key or server.ssh_password):
@@ -4861,14 +4908,17 @@ def update_remote_server_task(server_id: str):
         )
         ssh.connect()
         hosting_path = ssh.find_hosting_path()
-        _append_remote_update_log(server, f"> Connected over SSH. install_path={hosting_path}\n")
+        _append_remote_update_log(server, f"> Connected over SSH. install_path={hosting_path}\n\n--- Preflight ---\n")
 
-        stdout, stderr, code = ssh.exec_command(
+        stdout, stderr, code = _run_ssh_command(
+            ssh,
             _remote_update_preflight_script(hosting_path),
             timeout=120,
             raise_on_error=False,
+            callback=log_cb,
         )
-        _append_remote_update_log(server, "\n--- Preflight ---\n" + stdout + stderr + "\n")
+        appender.flush()
+        _append_remote_update_log(server, "\n")
         if code != 0:
             raise RuntimeError(f"Remote update preflight failed with exit code {code}.")
 
@@ -4924,21 +4974,28 @@ def update_remote_server_task(server_id: str):
                 f"{git_steps} && "
                 f"$SUDO env {env_str} bash install.sh {update_args_str}"
             )
-            _append_remote_update_log(server, f"> Running lite-agent installer update (branch: {branch})...\n")
-            stdout, stderr, code = ssh.exec_command(
+            _append_remote_update_log(server, f"> Running lite-agent installer update (branch: {branch})...\n\n--- Installer output ---\n")
+            stdout, stderr, code = _run_ssh_command(
+                ssh,
                 cmd_update,
                 timeout=5400,
                 raise_on_error=False,
+                callback=log_cb,
             )
-            _append_remote_update_log(server, "\n--- Installer output ---\n" + stdout + stderr + "\n")
+            appender.flush()
+            _append_remote_update_log(server, "\n")
             if code != 0:
                 raise RuntimeError(f"Installer update failed with exit code {code}.")
-            stdout, stderr, code = ssh.exec_command(
+            _append_remote_update_log(server, "\n--- Postflight ---\n")
+            stdout, stderr, code = _run_ssh_command(
+                ssh,
                 _remote_update_postflight_script(hosting_path),
                 timeout=180,
                 raise_on_error=False,
+                callback=log_cb,
             )
-            _append_remote_update_log(server, "\n--- Postflight ---\n" + stdout + stderr + "\n")
+            appender.flush()
+            _append_remote_update_log(server, "\n")
             if code != 0:
                 raise RuntimeError(f"Remote update postflight failed with exit code {code}.")
         elif is_primary:
@@ -4950,21 +5007,28 @@ def update_remote_server_task(server_id: str):
                 f"{git_steps} && "
                 f"$SUDO env {env_str} bash install.sh {update_args_str}"
             )
-            _append_remote_update_log(server, f"> Running master full update (branch: {branch})...\n")
-            stdout, stderr, code = ssh.exec_command(
+            _append_remote_update_log(server, f"> Running master full update (branch: {branch})...\n\n--- Installer output ---\n")
+            stdout, stderr, code = _run_ssh_command(
+                ssh,
                 cmd_update,
                 timeout=5400,
                 raise_on_error=False,
+                callback=log_cb,
             )
-            _append_remote_update_log(server, "\n--- Installer output ---\n" + stdout + stderr + "\n")
+            appender.flush()
+            _append_remote_update_log(server, "\n")
             if code != 0:
                 raise RuntimeError(f"Master update failed with exit code {code}.")
-            stdout, stderr, code = ssh.exec_command(
+            _append_remote_update_log(server, "\n--- Postflight ---\n")
+            stdout, stderr, code = _run_ssh_command(
+                ssh,
                 _remote_update_postflight_script(hosting_path),
                 timeout=180,
                 raise_on_error=False,
+                callback=log_cb,
             )
-            _append_remote_update_log(server, "\n--- Postflight ---\n" + stdout + stderr + "\n")
+            appender.flush()
+            _append_remote_update_log(server, "\n")
             if code != 0:
                 raise RuntimeError(f"Remote update postflight failed with exit code {code}.")
         else:
@@ -4984,24 +5048,30 @@ def update_remote_server_task(server_id: str):
             _append_remote_update_log(
                 server,
                 f"> Remote full-stack node: rebuilding app containers (branch: {branch})...\n"
-                f"> Services: {app_services}\n",
+                f"> Services: {app_services}\n\n--- Build output ---\n",
             )
-            stdout, stderr, code = ssh.exec_command(
+            stdout, stderr, code = _run_ssh_command(
+                ssh,
                 cmd_build,
                 timeout=BUILD_TIMEOUT,
                 raise_on_error=False,
+                callback=log_cb,
             )
-            _append_remote_update_log(server, "\n--- Build output ---\n" + stdout + stderr + "\n")
+            appender.flush()
+            _append_remote_update_log(server, "\n")
             if code != 0:
                 raise RuntimeError(f"Container build failed with exit code {code}.")
 
-            _append_remote_update_log(server, "> Restarting app containers...\n")
-            stdout, stderr, code = ssh.exec_command(
+            _append_remote_update_log(server, "> Restarting app containers...\n\n--- Restart output ---\n")
+            stdout, stderr, code = _run_ssh_command(
+                ssh,
                 cmd_up,
                 timeout=300,
                 raise_on_error=False,
+                callback=log_cb,
             )
-            _append_remote_update_log(server, "\n--- Restart output ---\n" + stdout + stderr + "\n")
+            appender.flush()
+            _append_remote_update_log(server, "\n")
             if code != 0:
                 raise RuntimeError(f"Container restart failed with exit code {code}.")
 

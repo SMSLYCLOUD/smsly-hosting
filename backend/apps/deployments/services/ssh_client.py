@@ -219,7 +219,7 @@ class SSHClient:
         self.sftp = None
         self.client = None
 
-    def exec_command(self, command, timeout=None, raise_on_error=True):
+    def exec_command(self, command, timeout=None, raise_on_error=True, callback=None):
         if self.client:
             transport = self.client.get_transport()
             if not transport or not transport.is_active():
@@ -242,10 +242,24 @@ class SSHClient:
         timed_out = False
 
         while True:
+            new_out = []
+            new_err = []
             while channel.recv_ready():
-                out_chunks.append(channel.recv(65536))
+                chunk = channel.recv(65536)
+                out_chunks.append(chunk)
+                new_out.append(chunk)
             while channel.recv_stderr_ready():
-                err_chunks.append(channel.recv_stderr(65536))
+                chunk = channel.recv_stderr(65536)
+                err_chunks.append(chunk)
+                new_err.append(chunk)
+
+            if callback and (new_out or new_err):
+                try:
+                    out_str = b"".join(new_out).decode('utf-8', errors='replace')
+                    err_str = b"".join(new_err).decode('utf-8', errors='replace')
+                    callback(out_str, err_str)
+                except Exception as cb_err:
+                    logger.warning("SSH callback error: %s", cb_err)
 
             if channel.exit_status_ready():
                 break
@@ -257,10 +271,24 @@ class SSHClient:
 
             time.sleep(0.05)
 
+        new_out_final = []
+        new_err_final = []
         while channel.recv_ready():
-            out_chunks.append(channel.recv(65536))
+            chunk = channel.recv(65536)
+            out_chunks.append(chunk)
+            new_out_final.append(chunk)
         while channel.recv_stderr_ready():
-            err_chunks.append(channel.recv_stderr(65536))
+            chunk = channel.recv_stderr(65536)
+            err_chunks.append(chunk)
+            new_err_final.append(chunk)
+
+        if callback and (new_out_final or new_err_final):
+            try:
+                out_str = b"".join(new_out_final).decode('utf-8', errors='replace')
+                err_str = b"".join(new_err_final).decode('utf-8', errors='replace')
+                callback(out_str, err_str)
+            except Exception as cb_err:
+                logger.warning("SSH callback error (final): %s", cb_err)
 
         out = b"".join(out_chunks).decode('utf-8', errors='replace')
         err = b"".join(err_chunks).decode('utf-8', errors='replace')
