@@ -252,9 +252,15 @@ export default function NewServicePage() {
   const toggleServer = (id: string) => {
     const server = servers.find(s => s.id === id)
     if (!server || server.is_primary || server.allow_user_workloads === false || server.status !== 'ONLINE') return
-    setSelectedServers(prev =>
-      prev.includes(id) ? prev.filter(s => s !== id) : [...prev, id]
-    )
+    setSelectedServers(prev => {
+      const isSelected = prev.includes(id)
+      if (isSelected) {
+        return []
+      } else {
+        setIncludeLocal(false)
+        return [id]
+      }
+    })
   }
 
   // ── Deploy ─────────────────────────────────────────────────────────────
@@ -1010,14 +1016,22 @@ export default function NewServicePage() {
                       <CardTitle>Target Servers</CardTitle>
                     </div>
                     <CardDescription>
-                      Deploy to your local server by default. Select additional managed servers to fan out the deployment.
+                      Select the target server for your deployment. You can deploy to the local server or select a single managed node.
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-3">
                     {/* Local server selection */}
                     <button
                       type="button"
-                      onClick={() => setIncludeLocal(!includeLocal)}
+                      onClick={() => {
+                        setIncludeLocal(prev => {
+                          const nextVal = !prev
+                          if (nextVal) {
+                            setSelectedServers([])
+                          }
+                          return nextVal
+                        })
+                      }}
                       className={cn(
                         "w-full flex items-center gap-3 p-3 rounded-lg border text-left transition-all",
                         includeLocal
@@ -1132,10 +1146,8 @@ export default function NewServicePage() {
                         <Rocket className="h-4 w-4 text-primary" />
                         <span>
                           Deploying to <strong>
-                            {includeLocal ? 'local' : ''}
-                            {includeLocal && selectedServers.length > 0 ? ' + ' : ''}
-                            {selectedServers.length > 0 ? `${selectedServers.length} remote` : ''}
-                          </strong> server{(selectedServers.length + (includeLocal ? 1 : 0)) > 1 ? 's' : ''}
+                            {includeLocal ? 'Local Server' : `${servers.find(s => s.id === selectedServers[0])?.name || 'Remote Node'}`}
+                          </strong>
                         </span>
                       </div>
                     )}
