@@ -434,3 +434,92 @@ class LocalAdapterHealthcheckCommandTests(SimpleTestCase):
         self.assertEqual(labels["traefik.http.routers.parent-service.entrypoints"], "web")
         self.assertEqual(labels["traefik.http.routers.parent-service.priority"], "0")
         self.assertEqual(labels["traefik.http.services.parent-service.loadbalancer.server.port"], "0")
+
+    @patch.object(LocalAdapter, "_wait_container_healthy", return_value=True)
+    @patch("apps.deployments.models.PlatformConfig.load")
+    @patch("apps.deployments.models.Service.objects.filter")
+    def test_local_preview_disables_traefik_on_initial_deploy(self, mock_filter, mock_load, _wait_mock):
+        adapter, docker_client, _existing = self._build_adapter_with_mock_docker()
+        mock_load.return_value = SimpleNamespace(use_ssl=True)
+
+        # Mock Service object returning a local preview service
+        mock_server = SimpleNamespace(is_primary=True)
+        mock_parent = SimpleNamespace(name="parent-service")
+        mock_svc = SimpleNamespace(is_preview=True, parent_service=mock_parent, server=mock_server)
+        mock_filter.return_value.first.return_value = mock_svc
+
+        adapter._deploy_docker(
+            name="preview-service",
+            image="registry:5000/smsly/parent-service:test",
+            env={
+                "PORT": "8000",
+                "PUBLIC_DOMAIN": "preview-service.example.com",
+            },
+        )
+
+        labels = docker_client.containers.create.call_args.kwargs["labels"]
+        # Ensure Traefik is completely disabled and all Traefik labels are removed
+        self.assertEqual(labels.get("traefik.enable"), "false")
+        for k in labels.keys():
+            if k.startswith("traefik.") and k != "traefik.enable":
+                self.fail(f"Found unexpected Traefik label: {k}")
+
+    @patch.object(LocalAdapter, "_wait_container_healthy", return_value=True)
+    @patch("apps.deployments.models.Service.objects.filter")
+    def test_local_preview_disables_traefik_on_promote(self, mock_filter, _wait_mock):
+        adapter = object.__new__(LocalAdapter)
+        docker_client = MagicMock()
+        docker_client.api.create_endpoint_config.return_value = {}
+        docker_client.api.create_networking_config.return_value = {}
+        adapter.docker_client = docker_client
+        adapter.k8s_client = None
+        adapter.batch_v1 = None
+
+        green = MagicMock()
+        green.name = "preview-service-green-abc123"
+        green.id = "green-id"
+        green.labels = {
+            "smsly.blue_green.is_public": "True",
+            "smsly.blue_green.port": "8000",
+            "smsly.blue_green.host_rule": "Host(`preview-service.example.com`)",
+            "traefik.enable": "false",
+        }
+        green.attrs = {
+            "State": {"Status": "running", "Health": {"Status": "healthy"}},
+            "Config": {
+                "Env": [],
+                "Cmd": None,
+                "Entrypoint": None,
+                "Healthcheck": None,
+            },
+            "HostConfig": {
+                "Binds": None,
+                "RestartPolicy": {},
+            },
+        }
+        green.image.tags = ["registry:5000/smsly/parent-service:test"]
+
+        old_live = MagicMock()
+        promoted = MagicMock()
+        promoted.id = "promoted-id"
+        docker_client.containers.create.return_value = promoted
+        docker_client.containers.get.side_effect = lambda value: (
+            green if value == "green-id" else old_live
+        )
+        docker_client.networks.get.return_value = MagicMock()
+
+        # Mock Service object returning a local preview service
+        mock_server = SimpleNamespace(is_primary=True)
+        mock_parent = SimpleNamespace(name="parent-service")
+        mock_svc = SimpleNamespace(is_preview=True, parent_service=mock_parent, server=mock_server)
+        mock_filter.return_value.first.return_value = mock_svc
+
+        result = adapter.promote_container("preview-service", "green-id")
+
+        self.assertEqual(result, "promoted-id")
+        labels = docker_client.containers.create.call_args.kwargs["labels"]
+        # Ensure Traefik is completely disabled and all Traefik labels are removed
+        self.assertEqual(labels.get("traefik.enable"), "false")
+        for k in labels.keys():
+            if k.startswith("traefik.") and k != "traefik.enable":
+                self.fail(f"Found unexpected Traefik label: {k}")

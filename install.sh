@@ -6556,6 +6556,18 @@ systemctl enable smsly-autoscaler 2>/dev/null || true
 systemctl restart smsly-autoscaler 2>/dev/null || true
 echo -e "${GREEN}  ✓ smsly-autoscaler service installed and started${NC}"
 
+# Install infrastructure monitor
+if [ -f "$INSTALL_DIR/scripts/monitor_infra.sh" ]; then
+    echo -e "${BLUE}  → Installing critical infrastructure monitoring timer...${NC}"
+    chmod +x "$INSTALL_DIR/scripts/monitor_infra.sh"
+    cp "$INSTALL_DIR/scripts/smsly-infra-monitor.service" /etc/systemd/system/smsly-infra-monitor.service 2>/dev/null || true
+    cp "$INSTALL_DIR/scripts/smsly-infra-monitor.timer" /etc/systemd/system/smsly-infra-monitor.timer 2>/dev/null || true
+    systemctl daemon-reload
+    systemctl enable smsly-infra-monitor.timer 2>/dev/null || true
+    systemctl restart smsly-infra-monitor.timer 2>/dev/null || true
+    echo -e "${GREEN}  ✓ smsly-infra-monitor timer installed and started${NC}"
+fi
+
 # -----------------------------------------------------------------------------
 # 10. CLI Integration
 # -----------------------------------------------------------------------------

@@ -1,0 +1,8 @@
+[Unit]
+Description=SMSLY Hosting Critical Infrastructure Monitor
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/smsly-hosting/scripts/monitor_infra.sh
