@@ -92,3 +92,22 @@ class GitHubOAuthUrlTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertIn("redirect_uri=http%3A%2F%2Flocalhost%3A3000%2Fauth%2Fgithub%2Fcallback", resp.data.get("url", ""))
 
+    def test_github_oauth_url_uses_platform_config_dynamically(self):
+        if SocialApp is None:
+            self.skipTest("allauth not installed/available")
+        
+        # Create a PlatformConfig in the database with a custom domain
+        from apps.deployments.models_core import PlatformConfig
+        PlatformConfig.objects.create(
+            pk=1,
+            domain="my-custom-domain.com",
+            use_ssl=True
+        )
+        
+        # Even if SITE_URL is set to an IP address, it should prioritize the DB domain and force HTTPS
+        with override_settings(DEBUG=False, SITE_URL="http://209.159.152.123"):
+            resp = self.client.get("/api/v1/integrations/github/oauth-url/")
+            self.assertEqual(resp.status_code, 200)
+            self.assertIn("redirect_uri=https%3A%2F%2Fmy-custom-domain.com%2Fauth%2Fgithub%2Fcallback", resp.data.get("url", ""))
+
+
