@@ -715,6 +715,10 @@ CELERY_TASK_ROUTES = {
 # Allow heavy Docker builds (e.g. torch, playwright) up to 2 hours
 CELERY_TASK_SOFT_TIME_LIMIT = 7200  # 2 hours
 CELERY_TASK_TIME_LIMIT = 7500       # 2h 5m hard kill
+
+# Prevent Celery worker OOM/memory leaks
+CELERY_WORKER_MAX_MEMORY_PER_CHILD = 250000  # 250MB (in Kilobytes)
+CELERY_WORKER_MAX_TASKS_PER_CHILD = 500
 # NOTE: Beat schedule is defined in config/celery.py (the authoritative source)
 
 # CORS - allow "*" only in DEBUG when explicitly enabled.

@@ -415,11 +415,14 @@ def _get_wildcard_known_hosts(wildcard_domain: str) -> list[str]:
             return []
 
         suffix = f".{wildcard_domain}"
-        for service in Service.objects.select_related("server").only("id", "public_domain", "custom_domains", "public_domain_hidden", "server__is_primary").all():
+        for service in Service.objects.select_related("server").only("id", "public_domain", "custom_domains", "public_domain_hidden", "server__is_primary", "is_preview").all():
             # Skip services assigned to remote nodes — they are served via
             # _get_wildcard_remote_host_map and its @remote_hosts blocks.
             svr = getattr(service, "server", None)
             if svr and not svr.is_primary:
+                continue
+            # Skip local preview services - they are proxied directly to the container
+            if getattr(service, "is_preview", False):
                 continue
             public_domain = ""
             if getattr(service, "public_domain_hidden", False):
@@ -778,6 +781,38 @@ def generate_caddyfile(config) -> str:
                 wildcard_lines.append("    tls {")
                 wildcard_lines.append(f"        dns cloudflare {cloudflare_token}")
                 wildcard_lines.append("    }")
+
+            # Direct routing for local preview environments (bypass Traefik)
+            local_previews = []
+            try:
+                from apps.deployments.models import Service
+                if _table_exists(Service._meta.db_table):
+                    local_previews = list(
+                        Service.objects.select_related("server")
+                        .filter(is_preview=True, server__is_primary=True, status=Service.Status.ACTIVE)
+                        .only("name", "public_domain", "internal_port", "server__is_primary")
+                    )
+            except Exception as e:
+                logger.warning("Failed to fetch local previews for Caddy: %s", e)
+
+            for index, p_service in enumerate(local_previews):
+                if not p_service.public_domain:
+                    continue
+                try:
+                    p_domain = normalize_domain(p_service.public_domain)
+                except ValueError:
+                    continue
+                if p_domain.endswith(f".{domain}"):
+                    matcher = f"@local_preview_{index}"
+                    port = getattr(p_service, "internal_port", 8000) or 8000
+                    wildcard_lines.extend(
+                        [
+                            f"    {matcher} host {p_domain}",
+                            f"    handle {matcher} {{",
+                            f"        reverse_proxy {p_service.name}:{port}",
+                            f"    }}",
+                        ]
+                    )
 
             for index, (upstream_url, hosts) in enumerate(sorted(wildcard_remote_hosts.items())):
                 if not hosts:

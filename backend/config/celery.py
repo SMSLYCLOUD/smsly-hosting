@@ -100,86 +100,103 @@ app.conf.beat_schedule = {
     'collect-metrics-every-60s': {
         'task': 'apps.deployments.tasks_metrics.collect_metrics_task',
         'schedule': 60.0,
+        'options': {'expires': 60.0},
     },
     # Check service health every 30 seconds
     'monitor-health-every-30s': {
         'task': 'apps.deployments.services.health_monitor.monitor_health_task',
         'schedule': 30.0,
+        'options': {'expires': 30.0},
     },
     # Check autoscale thresholds every 30 seconds
     'check-autoscale-every-30s': {
         'task': 'apps.deployments.services.autoscaler.check_autoscale_task',
         'schedule': 30.0,
+        'options': {'expires': 30.0},
     },
     # Collect stats for inline autoscaler dashboard every 60 seconds
     'autoscaler-collect-stats-every-60s': {
         'task': 'apps.autoscaler.tasks.autoscaler_collect_stats',
         'schedule': 60.0,
+        'options': {'expires': 60.0},
     },
     # Mark interrupted/stale server provisioning runs as failed
     'cleanup-stale-server-provisioning-every-5m': {
         'task': 'apps.deployments.services.provisioner.cleanup_stale_server_provisioning',
         'schedule': 300.0,
+        'options': {'expires': 300.0},
     },
     # Intelligence runtime anomaly scan every 3 minutes
     'detect-runtime-anomalies-every-180s': {
         'task': 'apps.intelligence.tasks.detect_anomalies_task',
         'schedule': 180.0,
+        'options': {'expires': 180.0},
     },
     # SSL certificate expiry scan every 6 hours
     'check-ssl-certificates-every-6h': {
         'task': 'apps.cloud.services.ssl_monitor.check_ssl_certificates_task',
         'schedule': 21600.0,
+        'options': {'expires': 1800.0},
     },
     # Cleanup Docker build cache daily
     'cleanup-build-cache-daily': {
         'task': 'apps.deployments.tasks_metrics.cleanup_build_cache_task',
         'schedule': 86400.0,  # 24 hours
+        'options': {'expires': 86400.0},
     },
     # WireGuard mesh health check every 60 seconds
     'mesh-health-check-every-60s': {
         'task': 'apps.deployments.tasks_mesh.check_mesh_health_task',
         'schedule': 60.0,
+        'options': {'expires': 60.0},
     },
     # Leader election heartbeat every 5 seconds
     'cluster-heartbeat-every-5s': {
         'task': 'apps.deployments.tasks_election.heartbeat_task',
         'schedule': 5.0,
+        'options': {'expires': 10.0},
     },
     # Replication health check every 30 seconds
     'replication-health-every-30s': {
         'task': 'apps.deployments.tasks_replication.check_replication_health_task',
         'schedule': 30.0,
+        'options': {'expires': 30.0},
     },
     # Daily intelligence report at 06:00 UTC
     'daily-intelligence-report': {
         'task': 'apps.intelligence.tasks.daily_intelligence_report_task',
         'schedule': crontab(hour=6, minute=0),
+        'options': {'expires': 3600.0},
     },
     # Scan running containers for errors every 5 minutes
     'scan-running-containers-logs-every-5m': {
         'task': 'apps.deployments.tasks_alerts.scan_running_containers_logs_task',
         'schedule': 300.0,
+        'options': {'expires': 300.0},
     },
     # Proactive health scan every 5 minutes
     'proactive-health-scan-every-5m': {
         'task': 'apps.intelligence.tasks.proactive_health_scan_task',
         'schedule': 300.0,
+        'options': {'expires': 300.0},
     },
     # Auto-repair inter-node auth every 5 minutes
     'auto-auth-nodes-every-5m': {
         'task': 'apps.deployments.tasks.auto_authenticate_nodes_task',
         'schedule': 300.0,
+        'options': {'expires': 300.0},
     },
     # Check health of all managed servers every 5 minutes
     'check-managed-servers-health-every-5m': {
         'task': 'apps.deployments.tasks.check_managed_servers_health_task',
         'schedule': 300.0,
+        'options': {'expires': 300.0},
     },
     # Node watchdog — checks all remote servers and auto-heals every 5 minutes
     'node-watchdog-every-5m': {
         'task': 'apps.deployments.tasks.node_watchdog_task',
         'schedule': 300.0,
+        'options': {'expires': 300.0},
     },
 }
 

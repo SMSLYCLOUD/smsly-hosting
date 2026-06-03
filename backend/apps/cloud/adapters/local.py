@@ -411,22 +411,30 @@ class LocalAdapter(BaseCloudAdapter):
                 labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.interval'] = f"{hc_interval}s"
                 labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.timeout'] = f"{hc_timeout}s"
 
-        # Neutralize parent labels for preview environments to avoid Traefik routing conflicts
+        # For preview environments running on the primary (local) server, disable Traefik completely
+        # to avoid conflicts. Otherwise, neutralize parent router labels on remote nodes.
         try:
             from apps.deployments.models import Service
             svc_obj = Service.objects.filter(name=name).first()
-            if svc_obj is not None and svc_obj.is_preview and svc_obj.parent_service:
-                parent_name = svc_obj.parent_service.name
-                if parent_name:
-                    parent_router_name = parent_name.replace('.', '-').replace('_', '-')
-                    labels.update({
-                        f'traefik.http.routers.{parent_router_name}.rule': 'Host(`disabled.localhost`)',
-                        f'traefik.http.routers.{parent_router_name}.entrypoints': 'web',
-                        f'traefik.http.routers.{parent_router_name}.priority': '0',
-                        f'traefik.http.services.{parent_router_name}.loadbalancer.server.port': '0',
-                    })
+            if svc_obj is not None and svc_obj.is_preview:
+                server = getattr(svc_obj, 'server', None)
+                if server and server.is_primary:
+                    for k in list(labels.keys()):
+                        if k.startswith('traefik.'):
+                            del labels[k]
+                    labels['traefik.enable'] = 'false'
+                elif svc_obj.parent_service:
+                    parent_name = svc_obj.parent_service.name
+                    if parent_name:
+                        parent_router_name = parent_name.replace('.', '-').replace('_', '-')
+                        labels.update({
+                            f'traefik.http.routers.{parent_router_name}.rule': 'Host(`disabled.localhost`)',
+                            f'traefik.http.routers.{parent_router_name}.entrypoints': 'web',
+                            f'traefik.http.routers.{parent_router_name}.priority': '0',
+                            f'traefik.http.services.{parent_router_name}.loadbalancer.server.port': '0',
+                        })
         except Exception as exc:
-            logger.warning("Could not resolve parent service name for %s: %s", name, exc)
+            logger.warning("Could not process preview environment routing labels for %s: %s", name, exc)
 
         container_name = name
         aliases = [name, f"{name}.default.internal"]
@@ -654,22 +662,30 @@ class LocalAdapter(BaseCloudAdapter):
             if k.startswith('smsly.'):
                 live_labels[k] = v
 
-        # Neutralize parent labels for preview environments to avoid Traefik routing conflicts
+        # For preview environments running on the primary (local) server, disable Traefik completely
+        # to avoid conflicts. Otherwise, neutralize parent router labels on remote nodes.
         try:
             from apps.deployments.models import Service
             svc_obj = Service.objects.filter(name=name).first()
-            if svc_obj is not None and svc_obj.is_preview and svc_obj.parent_service:
-                parent_name = svc_obj.parent_service.name
-                if parent_name:
-                    parent_router_name = parent_name.replace('.', '-').replace('_', '-')
-                    live_labels.update({
-                        f'traefik.http.routers.{parent_router_name}.rule': 'Host(`disabled.localhost`)',
-                        f'traefik.http.routers.{parent_router_name}.entrypoints': 'web',
-                        f'traefik.http.routers.{parent_router_name}.priority': '0',
-                        f'traefik.http.services.{parent_router_name}.loadbalancer.server.port': '0',
-                    })
+            if svc_obj is not None and svc_obj.is_preview:
+                server = getattr(svc_obj, 'server', None)
+                if server and server.is_primary:
+                    for k in list(live_labels.keys()):
+                        if k.startswith('traefik.'):
+                            del live_labels[k]
+                    live_labels['traefik.enable'] = 'false'
+                elif svc_obj.parent_service:
+                    parent_name = svc_obj.parent_service.name
+                    if parent_name:
+                        parent_router_name = parent_name.replace('.', '-').replace('_', '-')
+                        live_labels.update({
+                            f'traefik.http.routers.{parent_router_name}.rule': 'Host(`disabled.localhost`)',
+                            f'traefik.http.routers.{parent_router_name}.entrypoints': 'web',
+                            f'traefik.http.routers.{parent_router_name}.priority': '0',
+                            f'traefik.http.services.{parent_router_name}.loadbalancer.server.port': '0',
+                        })
         except Exception as exc:
-            logger.warning("Could not resolve parent service name for %s: %s", name, exc)
+            logger.warning("Could not process preview environment routing labels for %s: %s", name, exc)
 
         # Add Traefik load balancer healthcheck if configured
         hc_path = green_labels.get('smsly.blue_green.hc_path')
