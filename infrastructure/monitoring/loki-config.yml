@@ -36,9 +36,6 @@ schema_config:
         prefix: index_
         period: 24h
 
-ruler:
-  alertmanager_url: http://localhost:9093
-
 limits_config:
   retention_period: 30d
   ingestion_rate_mb: 10

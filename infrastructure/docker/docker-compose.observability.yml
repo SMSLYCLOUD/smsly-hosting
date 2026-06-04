@@ -31,6 +31,7 @@ services:
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ../monitoring/promtail-config.yml:/etc/promtail/config.yml:ro
+      - promtail-positions:/tmp
     command: -config.file=/etc/promtail/config.yml
     networks:
       - smsly-net
@@ -47,6 +48,7 @@ services:
     volumes:
       - ../monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
+      - prometheus-targets:/etc/prometheus/paas-targets
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
@@ -129,7 +131,9 @@ services:
 volumes:
   loki-data:
   prometheus-data:
+  prometheus-targets:
   grafana-data:
+  promtail-positions:
 
 networks:
   smsly-net:
