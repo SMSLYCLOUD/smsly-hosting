@@ -22,8 +22,8 @@
       "type": "timeseries",
       "targets": [
         {
-          "expr": "sum by (container_label_smsly_blue_green_canonical_name) (rate(container_cpu_usage_seconds_total{container_label_smsly_blue_green_canonical_name=~\"$service\"}[5m])) * 100",
-          "legendFormat": "{{container_label_smsly_blue_green_canonical_name}}",
+          "expr": "sum by (service_name) (rate(container_cpu_usage_seconds_total[5m]) * 100 * on(docker_id) group_left(service_name) docker_container_labels{service_name=~\"$service\"})",
+          "legendFormat": "{{service_name}}",
           "refId": "A"
         }
       ]
@@ -44,8 +44,8 @@
       "type": "timeseries",
       "targets": [
         {
-          "expr": "sum by (container_label_smsly_blue_green_canonical_name) (container_memory_usage_bytes{container_label_smsly_blue_green_canonical_name=~\"$service\"}) / 1024 / 1024",
-          "legendFormat": "{{container_label_smsly_blue_green_canonical_name}}",
+          "expr": "sum by (service_name) (container_memory_usage_bytes * on(docker_id) group_left(service_name) docker_container_labels{service_name=~\"$service\"}) / 1024 / 1024",
+          "legendFormat": "{{service_name}}",
           "refId": "A"
         }
       ]
@@ -66,8 +66,8 @@
       "type": "timeseries",
       "targets": [
         {
-          "expr": "sum by (container_label_smsly_blue_green_canonical_name) (rate(container_network_receive_bytes_total{container_label_smsly_blue_green_canonical_name=~\"$service\"}[5m]))",
-          "legendFormat": "{{container_label_smsly_blue_green_canonical_name}}",
+          "expr": "sum by (service_name) (rate(container_network_receive_bytes_total[5m]) * on(docker_id) group_left(service_name) docker_container_labels{service_name=~\"$service\"})",
+          "legendFormat": "{{service_name}}",
           "refId": "A"
         }
       ]
@@ -88,8 +88,8 @@
       "type": "timeseries",
       "targets": [
         {
-          "expr": "sum by (container_label_smsly_blue_green_canonical_name) (rate(container_network_transmit_bytes_total{container_label_smsly_blue_green_canonical_name=~\"$service\"}[5m]))",
-          "legendFormat": "{{container_label_smsly_blue_green_canonical_name}}",
+          "expr": "sum by (service_name) (rate(container_network_transmit_bytes_total[5m]) * on(docker_id) group_left(service_name) docker_container_labels{service_name=~\"$service\"})",
+          "legendFormat": "{{service_name}}",
           "refId": "A"
         }
       ]
@@ -105,7 +105,7 @@
         "name": "service",
         "type": "query",
         "datasource": { "type": "prometheus", "uid": "prometheus" },
-        "query": "label_values(container_label_smsly_blue_green_canonical_name, container_label_smsly_blue_green_canonical_name)",
+        "query": "label_values(docker_container_labels, service_name)",
         "refresh": 1,
         "includeAll": true,
         "multi": true
@@ -117,6 +117,6 @@
   "timezone": "",
   "title": "SMSLY Services",
   "uid": "smsly-services",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

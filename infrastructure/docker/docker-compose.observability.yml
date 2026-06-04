@@ -49,6 +49,7 @@ services:
       - ../monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
       - prometheus-targets:/etc/prometheus/paas-targets
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
@@ -94,6 +95,18 @@ services:
       - '--path.rootfs=/rootfs'
       - '--path.sysfs=/host/sys'
       - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    networks:
+      - smsly-net
+
+  # Docker Labels Exporter - maps container IDs to service names
+  docker-labels:
+    image: python:3.12-alpine
+    container_name: smsly-docker-labels
+    restart: unless-stopped
+    command: python3 /app/exporter.py
+    volumes:
+      - ../monitoring/docker-labels-exporter.py:/app/exporter.py:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       - smsly-net
 

@@ -35,10 +35,26 @@ scrape_configs:
     metrics_path: /metrics
     scrape_interval: 30s
 
-  # Docker containers using cAdvisor
+  # Container metrics via cAdvisor
   - job_name: 'cadvisor'
     static_configs:
       - targets: ['cadvisor:8080']
+    metric_relabel_configs:
+      # Extract Docker container ID from cgroup path
+      - source_labels: [id]
+        regex: '.*/docker-([a-f0-9]+)\.scope.*'
+        target_label: docker_id
+        replacement: '${1}'
+      # Drop system cgroup metrics (no docker_id = not a container)
+      - source_labels: [docker_id]
+        regex: ''
+        action: drop
+
+  # Docker container labels (docker_id -> service_name mapping)
+  - job_name: 'docker-labels'
+    static_configs:
+      - targets: ['docker-labels:9234']
+    scrape_interval: 30s
 
   # Node metrics
   - job_name: 'node'
