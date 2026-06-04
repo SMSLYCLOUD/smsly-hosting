@@ -123,7 +123,7 @@ for arg in "$@"; do
     --wipe)            NO_SCREEN=true; rm -f "/opt/smsly-hosting/.smsly_install_state" "/opt/smsly-hosting/.smsly_install_state.mode" ;;
     --fix-domain)      NO_SCREEN=true ;;
     --fix-permissions) NO_SCREEN=true ;;
-    --recover|--refresh|--debug|--verify|--clear|--help|-h)
+    --recover|--refresh|--debug|--verify|--clear|--help|-h|--recreate-traefik)
                        NO_SCREEN=true ;;
   esac
 done
@@ -2190,6 +2190,55 @@ install_caddyfile_atomically() {
     return 0
 }
 
+recreate_traefik_preserving_certs() {
+    should_manage_caddy || return 0
+    local compose_f="${COMPOSE_FILE:-docker-compose.prod.yml}"
+    local acme_src="/var/lib/docker/volumes/smsly-hosting_letsencrypt_data/_data/acme.json"
+
+    if ! docker compose -f "$compose_f" ps -q traefik 2>/dev/null | grep -q .; then
+        echo -e "${YELLOW}  WARN traefik not running; skipping one-time recreate.${NC}"
+        return 1
+    fi
+
+    echo -e "${BLUE}  → Backing up acme.json...${NC}"
+    local acme_backup=""
+    if [ -f "$acme_src" ]; then
+        acme_backup="/tmp/smsly-acme-$(date +%s).json"
+        cp "$acme_src" "$acme_backup" && chmod 600 "$acme_backup"
+        echo -e "${GREEN}    OK saved to $acme_backup${NC}"
+    else
+        echo -e "${YELLOW}    WARN no existing acme.json; new container will request fresh certs.${NC}"
+    fi
+
+    echo -e "${BLUE}  → Recreating traefik (preserves volume, picks up new entrypoints/volume)...${NC}"
+    docker compose -f "$compose_f" up -d --force-recreate --no-deps traefik 2>&1 | sed 's/^/    /'
+
+    if [ -n "$acme_backup" ] && [ -f "$acme_backup" ]; then
+        sleep 2
+        if [ -f "$acme_src" ]; then
+            cp "$acme_backup" "$acme_src" && chmod 600 "$acme_src"
+            echo -e "${GREEN}    OK restored acme.json perms to 0600${NC}"
+        else
+            echo -e "${YELLOW}    WARN acme.json not present after recreate; restoring backup.${NC}"
+            docker compose -f "$compose_f" exec -T traefik sh -c "mkdir -p /letsencrypt && cat > /letsencrypt/acme.json" < "$acme_backup" 2>/dev/null || true
+        fi
+        rm -f "$acme_backup"
+    fi
+
+    echo -e "${BLUE}  → Waiting for traefik healthcheck...${NC}"
+    local i=0
+    while [ $i -lt 30 ]; do
+        if docker inspect --format='{{.State.Health.Status}}' smsly-hosting-traefik-1 2>/dev/null | grep -q healthy; then
+            echo -e "${GREEN}  OK traefik healthy with new config${NC}"
+            return 0
+        fi
+        sleep 2
+        i=$((i + 1))
+    done
+    echo -e "${YELLOW}  WARN traefik healthcheck timeout; check 'docker logs smsly-hosting-traefik-1'${NC}"
+    return 1
+}
+
 # ─── Parse Arguments ─────────────────────────────────────────────────────────
 UPDATE_MODE=""
 WIPE_MODE="false"
@@ -2198,6 +2247,7 @@ REFRESH_MODE="false"
 DEBUG_MODE="false"
 RUST_TWIN_MODE="${RUST_TWIN_MODE:-false}"
 FORCE_REDEPLOY="false"
+RECREATE_TRAEFIK="false"
 
 # Simple loop to parse multiple arguments like `--update --rust`
 for arg in "$@"; do
@@ -2217,6 +2267,7 @@ for arg in "$@"; do
         --fix-domain)      FIX_DOMAIN_MODE="true" ;;
         --fix-permissions) FIX_PERMISSIONS_MODE="true" ;;
         --force-redeploy)  FORCE_REDEPLOY="true" ;;
+        --recreate-traefik) RECREATE_TRAEFIK="true" ;;
         --help|-h)
             echo "Usage: sudo bash install.sh [--rust] [--mode=agent-lite|--mode=node] [--update|--update-half|--update-frontend|--update-backend|--refresh|--recover|--debug|--wipe|--clear|--fix-domain|--fix-permissions]"
             echo ""
@@ -2230,6 +2281,8 @@ for arg in "$@"; do
             echo "  --fix-domain       Fix domain/IP sync between .env, DB PlatformConfig, and Caddy"
             echo "  --fix-permissions  Fix .env and shared directory permissions for container write access"
             echo "  --force-redeploy   Always redeploy active services after update, even if code hasn't changed"
+            echo "  --recreate-traefik One-time safe recreate of traefik (preserves acme.json + certs); use after"
+            echo "                     updating docker-compose.prod.yml to pick up new entrypoints/flags"
             exit 0
             ;;
     esac
@@ -3187,7 +3240,18 @@ refresh_runtime_services() {
     if [ "$MODE_AGENT_LITE" != "true" ]; then
         echo -e "${BLUE}  → Refreshing Observability Stack...${NC}"
         if [ -f "infrastructure/docker/docker-compose.observability.yml" ]; then
+            docker compose -f infrastructure/docker/docker-compose.observability.yml pull >/dev/null 2>&1 || true
             docker compose -f infrastructure/docker/docker-compose.observability.yml up -d >/dev/null 2>&1 || true
+            for obs_ctr in smsly-loki smsly-promtail smsly-prometheus smsly-cadvisor smsly-node-exporter smsly-grafana; do
+                i=0
+                while [ $i -lt 30 ]; do
+                    if docker inspect --format='{{.State.Health.Status}}' "$obs_ctr" 2>/dev/null | grep -qE 'healthy|^$'; then
+                        break
+                    fi
+                    sleep 2
+                    i=$((i + 1))
+                done
+            done
         fi
     fi
 
@@ -3415,6 +3479,30 @@ if [ "$REFRESH_MODE" = "true" ]; then
     refresh_runtime_services || REFRESH_STATUS=$?
     debug_platform_status
     exit "$REFRESH_STATUS"
+fi
+
+# =============================================================================
+# RECREATE-TRAEFIK MODE — One-time safe recreate of the traefik container.
+# Preserves letsencrypt volume + acme.json; only forces recreate when needed
+# to pick up new entrypoints/flags (e.g. websecure:443, metrics:8082).
+# Bypassed by --update to avoid downtime. Caddy is also NOT recreated here.
+# =============================================================================
+if [ "$RECREATE_TRAEFIK" = "true" ]; then
+    if [ "$EUID" -ne 0 ]; then
+        echo -e "${RED}x Please run as root (sudo bash install.sh --recreate-traefik)${NC}"
+        exit 1
+    fi
+    if [ ! -f "$INSTALL_DIR/$COMPOSE_FILE" ]; then
+        echo -e "${RED}x Missing $INSTALL_DIR/$COMPOSE_FILE. Run fresh install first.${NC}"
+        exit 1
+    fi
+    cd "$INSTALL_DIR"
+    should_manage_caddy || {
+        echo -e "${YELLOW}  WARN should_manage_caddy=false; aborting to avoid clobbering.${NC}"
+        exit 1
+    }
+    recreate_traefik_preserving_certs
+    exit $?
 fi
 
 # =============================================================================
@@ -5779,6 +5867,7 @@ fi
     else
         echo -e "${BLUE}  → Deploying Observability Stack...${NC}"
         if [ -f "infrastructure/docker/docker-compose.observability.yml" ]; then
+            docker compose -f infrastructure/docker/docker-compose.observability.yml pull >/dev/null 2>&1 || true
             docker compose -f infrastructure/docker/docker-compose.observability.yml up -d >/dev/null 2>&1 || true
         fi
     fi
