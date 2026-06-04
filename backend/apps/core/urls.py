@@ -2,6 +2,9 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from apps.core.views import ContactView, DashboardOverviewView, APIKeyViewSet, SubdomainStubViewSet, AdminUserViewSet, SystemResourcesView
+from apps.core.views_observability import (
+    grafana_embed_url, loki_query, loki_label_values, prometheus_query,
+)
 
 router = DefaultRouter()
 router.register(r'api-keys', APIKeyViewSet, basename='api-keys')
@@ -12,5 +15,9 @@ urlpatterns = [
     path('contact/', ContactView.as_view(), name='contact'),
     path('dashboard/overview/', DashboardOverviewView.as_view(), name='dashboard-overview'),
     path('system/resources/', SystemResourcesView.as_view(), name='system-resources'),
+    path('observability/grafana/embed/<str:dashboard_uid>/', grafana_embed_url, name='observability-grafana-embed'),
+    path('observability/loki/query/', loki_query, name='observability-loki-query'),
+    path('observability/loki/label/<str:label>/values/', loki_label_values, name='observability-loki-label-values'),
+    path('observability/prometheus/query/', prometheus_query, name='observability-prometheus-query'),
     path('', include(router.urls)),
 ]

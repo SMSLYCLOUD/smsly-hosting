@@ -338,6 +338,34 @@ class AddonViewSet(viewsets.ModelViewSet):
             logger.error(f"Error toggling MinIO public access for {addon.id}: {e}")
             return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    @action(detail=True, methods=['get'], url_path='metrics')
+    def metrics(self, request, pk=None):
+        """Return real addon container metrics backed by Prometheus (with fallbacks)."""
+        addon = self.get_object()
+        duration = request.query_params.get('duration', '1h')
+        try:
+            from .metrics.adapter import MetricsAdapter
+            adapter = MetricsAdapter()
+            return Response(adapter.get_addon_metrics(addon, duration))
+        except Exception as exc:
+            logger.error("Addon metrics failed for %s: %s", addon.id, exc, exc_info=True)
+            return Response({
+                'cpu': [],
+                'memory': [],
+                'network': [],
+                'disk': [],
+                'current': {
+                    'cpu_percent': 0.0,
+                    'memory_usage': 0.0,
+                    'memory_limit': 0.0,
+                    'memory_percent': 0.0,
+                    'network_rx_kb': 0.0,
+                    'network_tx_kb': 0.0,
+                },
+                'source': 'unavailable',
+                'error': 'Metrics temporarily unavailable',
+            }, status=status.HTTP_200_OK)
+
 
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated

@@ -55,7 +55,30 @@ def sync_service_status_on_deployment_change(sender, instance, created, **kwargs
     service = instance.service
     if not service:
         return
-    
+
+    # Emit Prometheus metric for the deployment outcome.
+    try:
+        from config.metrics import (
+            DEPLOYMENT_DURATION,
+            SERVICE_BUILDS_TOTAL,
+            SERVICE_DEPLOYMENTS_TOTAL,
+            SERVICES_ACTIVE,
+        )
+        SERVICE_DEPLOYMENTS_TOTAL.labels(
+            service_id=str(service.id),
+            status=instance.status,
+        ).inc()
+        if instance.status in (Deployment.Status.ACTIVE, Deployment.Status.FAILED):
+            result = 'success' if instance.status == Deployment.Status.ACTIVE else 'failure'
+            SERVICE_BUILDS_TOTAL.labels(result=result).inc()
+            if instance.duration_seconds and instance.duration_seconds > 0:
+                DEPLOYMENT_DURATION.observe(float(instance.duration_seconds))
+        SERVICES_ACTIVE.set(
+            Service.objects.filter(status=Service.Status.ACTIVE).count()
+        )
+    except Exception as exc:  # never let metrics break the request path
+        logging.getLogger(__name__).debug("smsly metric emission failed: %s", exc)
+
     # Get the latest deployment for this service
     latest_deployment = service.deployments.order_by('-created_at').first()
     
@@ -123,14 +146,23 @@ def sync_service_status_on_deployment_change(sender, instance, created, **kwargs
 @receiver(post_save, sender=Service)
 def broadcast_service_status_change(sender, instance, created, **kwargs):
     """Broadcast service status changes via WebSocket."""
+    if not created:
+        try:
+            from config.metrics import SERVICES_ACTIVE
+            SERVICES_ACTIVE.set(
+                Service.objects.filter(status=Service.Status.ACTIVE).count()
+            )
+        except Exception as exc:
+            logging.getLogger(__name__).debug("smsly_services_active update failed: %s", exc)
+
     if created:
         return  # Skip creation - handled by other signals
-    
+
     # Only broadcast if status actually changed
     update_fields = kwargs.get('update_fields')
     if update_fields is not None and 'status' not in update_fields:
         return
-    
+
     # Get the latest deployment for this service
     latest_deployment = instance.deployments.order_by('-created_at').first()
     
