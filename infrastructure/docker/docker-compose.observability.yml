@@ -67,9 +67,12 @@ services:
     container_name: smsly-cadvisor
     restart: unless-stopped
     privileged: true
+    command:
+      - --containerd=unix:///var/run/containerd/containerd.sock
     volumes:
       - /:/rootfs:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/run/containerd/containerd.sock:/var/run/containerd/containerd.sock:ro
       - /sys:/sys:ro
       - /var/lib/docker/:/var/lib/docker:ro
       - /dev/disk/:/dev/disk:ro
