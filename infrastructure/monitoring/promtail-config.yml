@@ -9,38 +9,21 @@ clients:
   - url: http://loki:3100/loki/api/v1/push
 
 scrape_configs:
-  # Docker container logs
+  # Docker container logs via direct file glob (avoids docker_sd edge cases)
   - job_name: docker
-    docker_sd_configs:
-      - host: unix:///var/run/docker.sock
-        refresh_interval: 5s
-        filters:
-          - name: status
-            values: [running]
-    relabel_configs:
-      - source_labels: ['__meta_docker_container_name']
-        regex: '/(.*)'
-        target_label: 'container'
-      - source_labels: ['__meta_docker_container_log_stream']
-        target_label: 'stream'
-      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
-        target_label: 'compose_service'
-      - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
-        target_label: 'project'
-      - source_labels: ['__meta_docker_container_label_smsly_service_id']
-        target_label: 'service_id'
-      # Drop targets without a container name (Docker socket, daemon, etc.)
-      - action: keep
-        source_labels: ['container']
-        regex: '.+'
-      # Exclude logs from promtail itself to avoid loop
-      - source_labels: ['container']
-        regex: '.*promtail.*'
-        action: drop
-      # Ensure every entry has at least the 'job' label
-      - target_label: 'job'
-        replacement: 'docker'
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: docker
+          __path__: /var/lib/docker/containers/**/*-json.log
     pipeline_stages:
+      # Extract container ID from path: /var/lib/docker/containers/<id>/<id>-json.log
+      - regex:
+          expression: '/var/lib/docker/containers/(?P<container_id>[a-f0-9]{64})/'
+      - labels:
+          container:
+      # Parse Docker json-file log driver format
       - json:
           expressions:
             output: log
