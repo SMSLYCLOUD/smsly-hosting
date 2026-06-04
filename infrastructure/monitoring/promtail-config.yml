@@ -20,7 +20,7 @@ scrape_configs:
     pipeline_stages:
       # Extract container ID from path: /var/lib/docker/containers/<id>/<id>-json.log
       - regex:
-          expression: '/var/lib/docker/containers/(?P<container_id>[a-f0-9]{64})/'
+          expression: '/var/lib/docker/containers/(?P<container>[a-f0-9]{64})/'
       - labels:
           container:
       # Parse Docker json-file log driver format
@@ -36,3 +36,7 @@ scrape_configs:
           format: RFC3339Nano
       - output:
           source: output
+      # Safety net: ensure every entry has at least one label
+      - match:
+          selector: '{container=""}'
+          action: drop
