@@ -57,7 +57,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 continue
 
             service_name = labels.get("smsly.blue_green.canonical_name", name)
-            container_id = c.get("Id", "")[:12]
+            container_id = c.get("Id", "")
 
             label_pairs = (
                 f'docker_id="{container_id}",'
