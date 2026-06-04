@@ -750,6 +750,12 @@ def generate_caddyfile(config) -> str:
                 "    handle /media/* {",
                 "        reverse_proxy backend:8000",
                 "    }",
+                "    handle /grafana/* {",
+                "        reverse_proxy grafana:3000",
+                "    }",
+                "    handle /grafana {",
+                "        redir /grafana/ 301",
+                "    }",
                 "    handle /ui {",
                 "        redir / 301",
                 "    }",
@@ -885,6 +891,12 @@ def generate_caddyfile(config) -> str:
     handle /media/* {{
         reverse_proxy backend:8000
     }}
+    handle /grafana/* {{
+        reverse_proxy grafana:3000
+    }}
+    handle /grafana {{
+        redir /grafana/ 301
+    }}
     handle /accounts/github/* {{
         reverse_proxy backend:8000
     }}
@@ -1011,6 +1023,12 @@ def generate_caddyfile(config) -> str:
     }
     handle /media/* {
         reverse_proxy backend:8000
+    }
+    handle /grafana/* {
+        reverse_proxy grafana:3000
+    }
+    handle /grafana {
+        redir /grafana/ 301
     }
     handle {
         reverse_proxy frontend:3000
