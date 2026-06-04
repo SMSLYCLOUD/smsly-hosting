@@ -1,7 +1,9 @@
 """Observability proxy views — bridge Django to the in-cluster Grafana/Loki/Prometheus."""
 import base64
 import logging
+import re
 import urllib.parse
+from datetime import datetime, timedelta, timezone
 
 import requests
 from decouple import config
@@ -18,6 +20,33 @@ LOKI_INTERNAL_URL = config('LOKI_INTERNAL_URL', default='http://loki:3100')
 PROMETHEUS_INTERNAL_URL = config('PROMETHEUS_INTERNAL_URL', default='http://prometheus:9090')
 
 PROXY_TIMEOUT = 15
+
+_LOKI_RELATIVE_RE = re.compile(r'^now(?:[-+](\d+)([smhd]))?$')
+
+
+def _loki_time_to_ns(value: str) -> str:
+    """Convert 'now', 'now-1h', 'now-15m' (or a raw Unix timestamp) to nanosecond string for Loki."""
+    if not value:
+        return value
+    match = _LOKI_RELATIVE_RE.match(value)
+    if match:
+        amount = int(match.group(1)) if match.group(1) else 0
+        unit = match.group(2) or 's'
+        delta = {
+            's': timedelta(seconds=amount),
+            'm': timedelta(minutes=amount),
+            'h': timedelta(hours=amount),
+            'd': timedelta(days=amount),
+        }[unit]
+        ts = datetime.now(timezone.utc) - delta
+        return str(int(ts.timestamp() * 1_000_000_000))
+    try:
+        ts = float(value)
+    except ValueError:
+        return value
+    if ts < 1e12:
+        return str(int(ts * 1_000_000_000))
+    return str(int(ts))
 
 
 def _grafana_auth_header() -> dict:
@@ -114,7 +143,11 @@ def loki_query(request):
         ('direction', 'direction'),
     ):
         value = request.query_params.get(src_key)
-        if value:
+        if not value:
+            continue
+        if src_key in ('start', 'end'):
+            payload[dst_key] = _loki_time_to_ns(value)
+        else:
             payload[dst_key] = value
 
     try:
