@@ -659,19 +659,16 @@ class LocalAdapter(BaseCloudAdapter):
             if k.startswith('smsly.'):
                 live_labels[k] = v
 
-        # For preview environments running on the primary (local) server, disable Traefik completely
-        # to avoid conflicts. Otherwise, neutralize parent router labels on remote nodes.
+        # For preview environments on remote nodes, neutralize parent router labels
+        # to prevent Traefik from routing the parent's domain to the preview container.
+        # Local previews keep their Traefik labels so they route consistently with
+        # remote services (Caddy → Traefik → container).
         try:
             from apps.deployments.models import Service
             svc_obj = Service.objects.filter(name=name).first()
-            if svc_obj is not None and svc_obj.is_preview:
+            if svc_obj is not None and svc_obj.is_preview and svc_obj.parent_service:
                 server = getattr(svc_obj, 'server', None)
-                if server and server.is_primary:
-                    for k in list(live_labels.keys()):
-                        if k.startswith('traefik.'):
-                            del live_labels[k]
-                    live_labels['traefik.enable'] = 'false'
-                elif svc_obj.parent_service:
+                if server and not server.is_primary:
                     parent_name = svc_obj.parent_service.name
                     if parent_name:
                         parent_router_name = parent_name.replace('.', '-').replace('_', '-')
