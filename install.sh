@@ -1548,6 +1548,7 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "SMSLY_DISABLE_TIER_GATES" "true" "Disable owner-tier paywall gates in this edition"
     env_ensure_var "$env_file" "SMSLY_ENABLE_STARTUP_CADDY_SYNC" "false" "Keep AppConfig.ready side-effect free; installer/watchers sync edge config"
     env_ensure_var "$env_file" "PGCAT_ADMIN_PASSWORD" "$(gen_hex_secret 24)" "PgCat administration password (mandatory for 1.2+)"
+    env_ensure_var "$env_file" "GRAFANA_PASSWORD" "$(python3 -c "import secrets,string; print(''.join(secrets.choice(string.ascii_letters+string.digits+'-_') for _ in range(40)))" 2>/dev/null || openssl rand -base64 30 | tr -d '+/=')" "Grafana admin password (used by the standalone observability stack)"
     # SSH host key check: false by default to support bootstrap/trusted labs without manual known_hosts populating.
     env_ensure_var "$env_file" "SMSLY_STRICT_SSH_HOST_KEY_CHECK" "false" "SSH host key verification (True=strict, False=accept-first)"
     sync_install_mode_env_file "$env_file"
@@ -5475,6 +5476,7 @@ else
     [ -n "${AUTOSCALER_API_TOKEN:-}" ] || AUTOSCALER_API_TOKEN="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
     [ -n "${FRP_AUTH_TOKEN:-}" ] || FRP_AUTH_TOKEN="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
     [ -n "${PGCAT_ADMIN_PASSWORD:-}" ] || PGCAT_ADMIN_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(24))" 2>/dev/null || true)"
+    [ -n "${GRAFANA_PASSWORD:-}" ] || GRAFANA_PASSWORD="$(python3 -c "import secrets,string; print(''.join(secrets.choice(string.ascii_letters+string.digits+'-_') for _ in range(40)))" 2>/dev/null || openssl rand -base64 30 | tr -d '+/=' )"
 
     # Validate Fernet key format
     if ! echo "$FIELD_ENCRYPTION_KEY" | python3 -c "
@@ -5587,6 +5589,9 @@ FRP_AUTH_TOKEN=$FRP_AUTH_TOKEN
 
 # PgCat administration password
 PGCAT_ADMIN_PASSWORD=$PGCAT_ADMIN_PASSWORD
+
+# Grafana admin password (used by the standalone observability stack)
+GRAFANA_PASSWORD=${GRAFANA_PASSWORD:-}
 
 # Direct database connection for migrations (bypasses PgCat pooler)
 DIRECT_DATABASE_URL=postgresql://smsly_admin:$POSTGRES_PASSWORD@db:5432/smsly_hosting

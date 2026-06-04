@@ -1,0 +1,122 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "fillOpacity": 20, "lineWidth": 2 },
+          "unit": "percent"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "CPU per Service",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (container_label_smsly_blue_green_canonical_name) (rate(container_cpu_usage_seconds_total{container_label_smsly_blue_green_canonical_name=~\"$service\"}[5m])) * 100",
+          "legendFormat": "{{container_label_smsly_blue_green_canonical_name}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "fillOpacity": 20, "lineWidth": 2 },
+          "unit": "decmbytes"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "Memory per Service",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (container_label_smsly_blue_green_canonical_name) (container_memory_usage_bytes{container_label_smsly_blue_green_canonical_name=~\"$service\"}) / 1024 / 1024",
+          "legendFormat": "{{container_label_smsly_blue_green_canonical_name}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "fillOpacity": 20, "lineWidth": 2 },
+          "unit": "Bps"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "id": 3,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "Network Receive (per Service)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (container_label_smsly_blue_green_canonical_name) (rate(container_network_receive_bytes_total{container_label_smsly_blue_green_canonical_name=~\"$service\"}[5m]))",
+          "legendFormat": "{{container_label_smsly_blue_green_canonical_name}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "fillOpacity": 20, "lineWidth": 2 },
+          "unit": "Bps"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "id": 4,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "title": "Network Transmit (per Service)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (container_label_smsly_blue_green_canonical_name) (rate(container_network_transmit_bytes_total{container_label_smsly_blue_green_canonical_name=~\"$service\"}[5m]))",
+          "legendFormat": "{{container_label_smsly_blue_green_canonical_name}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["smsly", "services"],
+  "templating": {
+    "list": [
+      {
+        "name": "service",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(container_label_smsly_blue_green_canonical_name, container_label_smsly_blue_green_canonical_name)",
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true
+      }
+    ]
+  },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "SMSLY Services",
+  "uid": "smsly-services",
+  "version": 1,
+  "weekStart": ""
+}

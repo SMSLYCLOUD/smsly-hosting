@@ -52,6 +52,26 @@ scrape_configs:
     metrics_path: /metrics
     scrape_interval: 30s
 
+  # Traefik (internal Prometheus metrics endpoint)
+  - job_name: 'traefik'
+    static_configs:
+      - targets: ['traefik:8082']
+    scrape_interval: 30s
+
+  # Loki (process metrics)
+  - job_name: 'loki'
+    static_configs:
+      - targets: ['loki:3100']
+    metrics_path: /metrics
+    scrape_interval: 30s
+
+  # Promtail (process metrics)
+  - job_name: 'promtail'
+    static_configs:
+      - targets: ['promtail:9080']
+    metrics_path: /metrics
+    scrape_interval: 30s
+
   # PaaS User Services - dynamically discovered
   # Backend writes target files to /etc/prometheus/paas-targets/
   - job_name: 'paas-services'
