@@ -67,12 +67,17 @@ services:
     container_name: smsly-cadvisor
     restart: unless-stopped
     privileged: true
+    command:
+      - --housekeeping_interval=30s
+      - --docker_only=true
+      - --store_container_labels=true
     volumes:
       - /:/rootfs:ro
       - /var/run:/var/run:ro
       - /sys:/sys:ro
       - /var/lib/docker/:/var/lib/docker:ro
       - /dev/disk/:/dev/disk:ro
+      - /sys/fs/cgroup:/sys/fs/cgroup:ro
     networks:
       - smsly-net
 
