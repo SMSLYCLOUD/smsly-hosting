@@ -411,19 +411,16 @@ class LocalAdapter(BaseCloudAdapter):
                 labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.interval'] = f"{hc_interval}s"
                 labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.timeout'] = f"{hc_timeout}s"
 
-        # For preview environments running on the primary (local) server, disable Traefik completely
-        # to avoid conflicts. Otherwise, neutralize parent router labels on remote nodes.
+        # For preview environments on remote nodes, neutralize parent router labels
+        # to prevent Traefik from routing the parent's domain to the preview container.
+        # Local previews keep their Traefik labels so they route consistently with
+        # remote services (Caddy → Traefik → container).
         try:
             from apps.deployments.models import Service
             svc_obj = Service.objects.filter(name=name).first()
-            if svc_obj is not None and svc_obj.is_preview:
+            if svc_obj is not None and svc_obj.is_preview and svc_obj.parent_service:
                 server = getattr(svc_obj, 'server', None)
-                if server and server.is_primary:
-                    for k in list(labels.keys()):
-                        if k.startswith('traefik.'):
-                            del labels[k]
-                    labels['traefik.enable'] = 'false'
-                elif svc_obj.parent_service:
+                if server and not server.is_primary:
                     parent_name = svc_obj.parent_service.name
                     if parent_name:
                         parent_router_name = parent_name.replace('.', '-').replace('_', '-')
