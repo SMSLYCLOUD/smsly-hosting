@@ -2194,14 +2194,29 @@ recreate_traefik_preserving_certs() {
     should_manage_caddy || return 0
     local compose_f="${COMPOSE_FILE:-docker-compose.prod.yml}"
     local acme_src="/var/lib/docker/volumes/smsly-hosting_letsencrypt_data/_data/acme.json"
+    local acme_backup=""
 
     if ! docker compose -f "$compose_f" ps -q traefik 2>/dev/null | grep -q .; then
         echo -e "${YELLOW}  WARN traefik not running; skipping one-time recreate.${NC}"
         return 1
     fi
 
+    echo -e "${BLUE}  → Verifying socket-proxy is healthy (traefik Docker provider depends on it)...${NC}"
+    local i=0
+    while [ $i -lt 30 ]; do
+        if docker inspect --format='{{.State.Health.Status}}' smsly-hosting-socket-proxy-1 2>/dev/null | grep -q healthy; then
+            break
+        fi
+        sleep 2
+        i=$((i + 1))
+    done
+    if [ $i -ge 30 ]; then
+        echo -e "${RED}  x socket-proxy not healthy; aborting to avoid 503 on deployed services.${NC}"
+        echo -e "${RED}    Fix: docker logs smsly-hosting-socket-proxy-1${NC}"
+        return 1
+    fi
+
     echo -e "${BLUE}  → Backing up acme.json...${NC}"
-    local acme_backup=""
     if [ -f "$acme_src" ]; then
         acme_backup="/tmp/smsly-acme-$(date +%s).json"
         cp "$acme_src" "$acme_backup" && chmod 600 "$acme_backup"
@@ -2210,32 +2225,85 @@ recreate_traefik_preserving_certs() {
         echo -e "${YELLOW}    WARN no existing acme.json; new container will request fresh certs.${NC}"
     fi
 
-    echo -e "${BLUE}  → Recreating traefik (preserves volume, picks up new entrypoints/volume)...${NC}"
-    docker compose -f "$compose_f" up -d --force-recreate --no-deps traefik 2>&1 | sed 's/^/    /'
+    echo -e "${BLUE}  → Recording pre-recreate router count from Traefik API...${NC}"
+    sleep 2
+    local pre_routers=0
+    if docker exec smsly-hosting-traefik-1 sh -c 'command -v wget >/dev/null 2>&1' 2>/dev/null; then
+        pre_routers=$(docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers 2>/dev/null | grep -o '"name"' | wc -l)
+    else
+        pre_routers=$(docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers 2>/dev/null | grep -o '"name"' | wc -l)
+    fi
+    echo -e "${BLUE}    pre-recreate routers: $pre_routers${NC}"
+    if [ "$pre_routers" -le 1 ]; then
+        echo -e "${YELLOW}    WARN only $pre_routers router(s) before recreate (expected route-fallback + deployed services).${NC}"
+        echo -e "${YELLOW}          Deployed services may already have stale labels.${NC}"
+    fi
+
+    echo -e "${BLUE}  → Recreating traefik (preserves letsencrypt_data volume + acme.json)...${NC}"
+    docker compose -f "$compose_f" up -d --force-recreate traefik 2>&1 | sed 's/^/    /'
+
+    echo -e "${BLUE}  → Reconnecting traefik to smsly-proxy network (recreate can drop external nets)...${NC}"
+    ensure_container_on_network "smsly-proxy" "smsly-hosting-traefik-1"
 
     if [ -n "$acme_backup" ] && [ -f "$acme_backup" ]; then
-        sleep 2
+        sleep 3
         if [ -f "$acme_src" ]; then
             cp "$acme_backup" "$acme_src" && chmod 600 "$acme_src"
             echo -e "${GREEN}    OK restored acme.json perms to 0600${NC}"
-        else
-            echo -e "${YELLOW}    WARN acme.json not present after recreate; restoring backup.${NC}"
-            docker compose -f "$compose_f" exec -T traefik sh -c "mkdir -p /letsencrypt && cat > /letsencrypt/acme.json" < "$acme_backup" 2>/dev/null || true
         fi
         rm -f "$acme_backup"
     fi
 
     echo -e "${BLUE}  → Waiting for traefik healthcheck...${NC}"
-    local i=0
+    i=0
     while [ $i -lt 30 ]; do
         if docker inspect --format='{{.State.Health.Status}}' smsly-hosting-traefik-1 2>/dev/null | grep -q healthy; then
-            echo -e "${GREEN}  OK traefik healthy with new config${NC}"
+            break
+        fi
+        sleep 2
+        i=$((i + 1))
+    done
+    if [ $i -ge 30 ]; then
+        echo -e "${YELLOW}  WARN traefik healthcheck timeout; check 'docker logs smsly-hosting-traefik-1'${NC}"
+    fi
+
+    echo -e "${BLUE}  → Waiting for Traefik routing table to repopulate (CRITICAL — prevents 503 on deployed services)...${NC}"
+    i=0
+    local post_routers=0
+    while [ $i -lt 60 ]; do
+        if docker exec smsly-hosting-traefik-1 sh -c 'command -v wget >/dev/null 2>&1' 2>/dev/null; then
+            post_routers=$(docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers 2>/dev/null | grep -o '"name"' | wc -l)
+        else
+            post_routers=$(docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers 2>/dev/null | grep -o '"name"' | wc -l)
+        fi
+        if [ "$post_routers" -ge "$pre_routers" ] && [ "$post_routers" -gt 0 ]; then
+            echo -e "${GREEN}    OK post-recreate routers: $post_routers (matches or exceeds pre-recreate)${NC}"
+
+            local eps
+            if docker exec smsly-hosting-traefik-1 sh -c 'command -v wget >/dev/null 2>&1' 2>/dev/null; then
+                eps=$(docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/entrypoints 2>/dev/null)
+            else
+                eps=$(docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/entrypoints 2>/dev/null)
+            fi
+            if echo "$eps" | grep -q '"name":"websecure"'; then
+                echo -e "${GREEN}    OK websecure entrypoint is active${NC}"
+            else
+                echo -e "${YELLOW}    WARN websecure entrypoint not detected${NC}"
+            fi
+            if echo "$eps" | grep -q '"name":"metrics"'; then
+                echo -e "${GREEN}    OK metrics entrypoint is active${NC}"
+            else
+                echo -e "${YELLOW}    WARN metrics entrypoint not detected${NC}"
+            fi
+
             return 0
         fi
         sleep 2
         i=$((i + 1))
     done
-    echo -e "${YELLOW}  WARN traefik healthcheck timeout; check 'docker logs smsly-hosting-traefik-1'${NC}"
+    echo -e "${YELLOW}  WARN Traefik has fewer routers than before ($post_routers vs $pre_routers).${NC}"
+    echo -e "${YELLOW}        Deployed services have stale Traefik labels (from before the routing fix).${NC}"
+    echo -e "${YELLOW}        Redeploy them via the SMSLY dashboard to refresh labels.${NC}"
     return 1
 }
 
