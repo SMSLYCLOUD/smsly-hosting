@@ -29,6 +29,10 @@ scrape_configs:
         target_label: 'project'
       - source_labels: ['__meta_docker_container_label_smsly_service_id']
         target_label: 'service_id'
+      # Drop targets without a container name (Docker socket, daemon, etc.)
+      - action: keep
+        source_labels: ['container']
+        regex: '.+'
       # Exclude logs from promtail itself to avoid loop
       - source_labels: ['container']
         regex: '.*promtail.*'
