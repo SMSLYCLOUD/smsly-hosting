@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 from decouple import config
+from django.conf import settings
 from rest_framework import permissions, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
@@ -14,7 +15,6 @@ from rest_framework.response import Response
 logger = logging.getLogger(__name__)
 
 GRAFANA_INTERNAL_URL = config('GRAFANA_INTERNAL_URL', default='http://grafana:3000')
-GRAFANA_EXTERNAL_URL = config('GRAFANA_EXTERNAL_URL', default='https://localhost/grafana')
 GRAFANA_USER = config('GRAFANA_ADMIN_USER', default='admin')
 GRAFANA_PASSWORD = config('GRAFANA_PASSWORD', default='')
 LOKI_INTERNAL_URL = config('LOKI_INTERNAL_URL', default='http://loki:3100')
@@ -103,8 +103,9 @@ def grafana_embed_url(request, dashboard_uid: str):
             value = value[0]
         query[key] = value
 
+    grafana_external = getattr(settings, 'GRAFANA_EXTERNAL_URL', 'https://localhost/grafana')
     embed_url = (
-        f"{GRAFANA_EXTERNAL_URL}/d/{dashboard.get('uid', dashboard_uid)}"
+        f"{grafana_external}/d/{dashboard.get('uid', dashboard_uid)}"
         f"/{urllib.parse.quote(dashboard.get('title', dashboard_uid), safe='')}"
     )
     if query:

@@ -62,8 +62,12 @@ def patch_runtime_settings():
         # 4. Patch SITE_URL and allauth protocol
         settings.SITE_URL = origin
         settings.ACCOUNT_DEFAULT_HTTP_PROTOCOL = scheme
-        
-        # 5. Sync Django Site table (required for allauth)
+
+        # 5. Patch GRAFANA_EXTERNAL_URL for observability embeds
+        grafana_base = f'{scheme}://{effective_domain}'
+        settings.GRAFANA_EXTERNAL_URL = f'{grafana_base}/grafana'
+
+        # 6. Sync Django Site table (required for allauth)
         try:
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", message="Accessing the database during app initialization")
