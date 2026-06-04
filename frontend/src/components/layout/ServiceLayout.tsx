@@ -1,7 +1,7 @@
-import { 
-    ArrowLeft, GitCommit, Activity, Terminal, Shield, Settings, 
+import {
+    ArrowLeft, GitCommit, Activity, Terminal, Shield, Settings,
     Clock, Globe, Database, List, Timer, HardDrive, Puzzle, Network, Route,
-    HeartPulse, Cpu, BarChart3, Box, FolderOpen, ShieldCheck, Sparkles
+    HeartPulse, Cpu, BarChart3, Box, FolderOpen, ShieldCheck, Sparkles, FileSearch
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -35,6 +35,8 @@ export function ServiceLayout({ service, activeTab, setActiveTab, children }: Se
         { id: 'metrics', label: 'Metrics', icon: BarChart3 },
         { id: 'resources', label: 'Resources', icon: Cpu },
         { id: 'health', label: 'Health', icon: HeartPulse },
+        { id: 'container-logs', label: 'Container Logs', icon: FileSearch, href: `/logs?service=${service.id}` },
+        { id: 'cluster-metrics', label: 'Cluster Metrics', icon: BarChart3, href: `/grafana?dashboard=smsly-services&service=${service.id}` },
         { id: 'topology', label: 'Topology', icon: Network, href: '/topology' },
         { id: 'cron', label: 'Cron Jobs', icon: Timer },
         { id: 'backups', label: 'Backups', icon: HardDrive },
