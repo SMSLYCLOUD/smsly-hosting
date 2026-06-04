@@ -14,6 +14,7 @@ from rest_framework.response import Response
 logger = logging.getLogger(__name__)
 
 GRAFANA_INTERNAL_URL = config('GRAFANA_INTERNAL_URL', default='http://grafana:3000')
+GRAFANA_EXTERNAL_URL = config('GRAFANA_EXTERNAL_URL', default='https://localhost/grafana')
 GRAFANA_USER = config('GRAFANA_ADMIN_USER', default='admin')
 GRAFANA_PASSWORD = config('GRAFANA_PASSWORD', default='')
 LOKI_INTERNAL_URL = config('LOKI_INTERNAL_URL', default='http://loki:3100')
@@ -103,7 +104,7 @@ def grafana_embed_url(request, dashboard_uid: str):
         query[key] = value
 
     embed_url = (
-        f"{GRAFANA_INTERNAL_URL}/d/{dashboard.get('uid', dashboard_uid)}"
+        f"{GRAFANA_EXTERNAL_URL}/d/{dashboard.get('uid', dashboard_uid)}"
         f"/{urllib.parse.quote(dashboard.get('title', dashboard_uid), safe='')}"
     )
     if query:
