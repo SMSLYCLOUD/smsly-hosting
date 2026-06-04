@@ -95,7 +95,7 @@ services:
 
   # Grafana - Visualization
   grafana:
-    image: grafana/grafana:10.2.2
+    image: grafana/grafana:11.0.0
     container_name: smsly-grafana
     restart: unless-stopped
     ports:
@@ -105,7 +105,7 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_SERVER_ROOT_URL=https://${DOMAIN:-localhost}/grafana/
-      - GF_SERVER_SERVE_FROM_SUB_PATH=false
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
       - GF_AUTH_ANONYMOUS_ENABLED=true
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
       - GF_SECURITY_ALLOW_EMBEDDING=true
