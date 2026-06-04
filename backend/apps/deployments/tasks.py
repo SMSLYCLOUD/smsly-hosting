@@ -4050,6 +4050,8 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
 @shared_task(bind=True, max_retries=3)
 def provision_addon_task(self, addon_id: str):
     """Provision an addon Docker container and inject env vars."""
+    import time as _time
+    _start_ts = _time.monotonic()
     try:
         addon = Addon.objects.get(id=addon_id)
         cid, url = addon_provisioner.provision_dispatch(addon)
@@ -4057,6 +4059,13 @@ def provision_addon_task(self, addon_id: str):
         addon.status = Addon.Status.ACTIVE
         addon.coolify_uuid = cid
         addon.save()
+        try:
+            from config.metrics import ADDON_PROVISION_DURATION
+            ADDON_PROVISION_DURATION.labels(addon_type=addon.addon_type).observe(
+                _time.monotonic() - _start_ts
+            )
+        except Exception as _metric_exc:
+            logger.debug("addon provision metric failed: %s", _metric_exc)
 
         # If public domain is assigned, regenerate Caddy configuration
         if addon.public_domain:

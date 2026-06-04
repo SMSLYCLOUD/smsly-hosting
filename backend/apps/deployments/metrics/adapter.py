@@ -146,6 +146,128 @@ class MetricsAdapter:
         }
 
     # ------------------------------------------------------------------
+    # Addon metrics — query by addon container_name / compose_service
+    # ------------------------------------------------------------------
+
+    def get_addon_metrics(self, addon_ref, duration: str = '1h') -> Dict[str, Any]:
+        """Return the same shape as the service metrics for an addon container."""
+        name = getattr(addon_ref, 'name', '') or ''
+        compose_service = re.escape(name)
+        container_name = re.escape(name)
+        if not compose_service:
+            compose_service = re.escape(str(getattr(addon_ref, 'id', '')))
+
+        cpu_queries = [
+            (
+                'rate(container_cpu_usage_seconds_total'
+                f'{{name=~"{container_name}"}}[5m]) * 100'
+            ),
+            (
+                'rate(container_cpu_usage_seconds_total'
+                f'{{container_label_com_docker_compose_service=~"{compose_service}"}}[5m]) * 100'
+            ),
+        ]
+        memory_queries = [
+            (
+                'container_memory_usage_bytes'
+                f'{{name=~"{container_name}"}} / 1024 / 1024'
+            ),
+            (
+                'container_memory_usage_bytes'
+                f'{{container_label_com_docker_compose_service=~"{compose_service}"}} / 1024 / 1024'
+            ),
+        ]
+
+        cpu = self._query_first_non_empty(cpu_queries, duration)
+        memory = self._query_first_non_empty(memory_queries, duration)
+        network = self.get_network_history(addon_ref, duration)
+        disk = self.get_disk_history(addon_ref, duration)
+
+        if not any([cpu, memory, network, disk]):
+            return self._addon_live_fallback(addon_ref)
+
+        current = self.get_current(addon_ref)
+        return {
+            'cpu': cpu,
+            'memory': memory,
+            'network': network,
+            'disk': disk,
+            'current': current,
+            'source': 'prometheus',
+        }
+
+    def _addon_live_fallback(self, addon_ref) -> Dict[str, Any]:
+        """Last-resort: sample the live Docker container for an addon."""
+        container_id = getattr(addon_ref, 'coolify_uuid', None) or getattr(addon_ref, 'name', None)
+        if not container_id:
+            return {
+                'cpu': [],
+                'memory': [],
+                'network': [],
+                'disk': [],
+                'current': {
+                    'cpu_percent': 0.0,
+                    'memory_usage': 0.0,
+                    'memory_limit': 0.0,
+                    'memory_percent': 0.0,
+                    'network_rx_kb': 0.0,
+                    'network_tx_kb': 0.0,
+                },
+                'source': 'unavailable',
+            }
+
+        try:
+            from .tasks_metrics import _collect_container_stats
+            stats = _collect_container_stats(str(container_id))
+        except Exception:
+            stats = None
+        if not stats:
+            return {
+                'cpu': [],
+                'memory': [],
+                'network': [],
+                'disk': [],
+                'current': {
+                    'cpu_percent': 0.0,
+                    'memory_usage': 0.0,
+                    'memory_limit': 0.0,
+                    'memory_percent': 0.0,
+                    'network_rx_kb': 0.0,
+                    'network_tx_kb': 0.0,
+                },
+                'source': 'unavailable',
+            }
+
+        cpu_limit = float(stats.get('cpu_limit') or 0.0)
+        cpu_usage = float(stats.get('cpu_usage') or 0.0)
+        cpu_percent = (cpu_usage / cpu_limit * 100.0) if cpu_limit > 0 else 0.0
+        mem_usage = float(stats.get('memory_usage') or 0.0)
+        mem_limit = float(stats.get('memory_limit') or 0.0)
+        mem_percent = (mem_usage / mem_limit * 100.0) if mem_limit > 0 else 0.0
+        rx_kb = float(stats.get('network_rx_bytes') or 0.0) / 1024
+        tx_kb = float(stats.get('network_tx_bytes') or 0.0) / 1024
+        now = datetime.now(tz=timezone.utc).isoformat()
+
+        return {
+            'cpu': [{'timestamp': now, 'value': round(cpu_percent, 2)}],
+            'memory': [{'timestamp': now, 'value': round(mem_usage, 2)}],
+            'network': [{'timestamp': now, 'value': round(rx_kb + tx_kb, 2)}],
+            'disk': [{'timestamp': now, 'value': round(
+                (float(stats.get('disk_read_bytes') or 0.0) + float(stats.get('disk_write_bytes') or 0.0)) / 1024,
+                2,
+            )}],
+            'current': {
+                'cpu_percent': round(cpu_percent, 2),
+                'memory_usage': round(mem_usage, 2),
+                'memory_limit': round(mem_limit, 2),
+                'memory_percent': round(mem_percent, 2),
+                'network_rx_kb': round(rx_kb, 2),
+                'network_tx_kb': round(tx_kb, 2),
+            },
+            'source': 'docker_live',
+        }
+
+    # ------------------------------------------------------------------
     # Prometheus Query
     # ------------------------------------------------------------------
 
