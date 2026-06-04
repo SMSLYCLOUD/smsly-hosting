@@ -18,11 +18,11 @@
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
       "id": 1,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
-      "title": "CPU per Service",
+      "title": "CPU Usage per Service",
       "type": "timeseries",
       "targets": [
         {
-          "expr": "sum by (service_name) (rate(container_cpu_usage_seconds_total[5m]) * 100 * on(docker_id) group_left(service_name) docker_container_labels{service_name=~\"$service\"})",
+          "expr": "docker_container_cpu_usage_seconds_total{service_name=~\"$service\"} * 100",
           "legendFormat": "{{service_name}}",
           "refId": "A"
         }
@@ -34,17 +34,17 @@
         "defaults": {
           "color": { "mode": "palette-classic" },
           "custom": { "fillOpacity": 20, "lineWidth": 2 },
-          "unit": "decmbytes"
+          "unit": "bytes"
         }
       },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
       "id": 2,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
-      "title": "Memory per Service",
+      "title": "Memory Usage per Service",
       "type": "timeseries",
       "targets": [
         {
-          "expr": "sum by (service_name) (container_memory_usage_bytes * on(docker_id) group_left(service_name) docker_container_labels{service_name=~\"$service\"}) / 1024 / 1024",
+          "expr": "docker_container_memory_usage_bytes{service_name=~\"$service\"}",
           "legendFormat": "{{service_name}}",
           "refId": "A"
         }
@@ -66,7 +66,7 @@
       "type": "timeseries",
       "targets": [
         {
-          "expr": "sum by (service_name) (rate(container_network_receive_bytes_total[5m]) * on(docker_id) group_left(service_name) docker_container_labels{service_name=~\"$service\"})",
+          "expr": "rate(docker_container_network_receive_bytes_total{service_name=~\"$service\"}[5m])",
           "legendFormat": "{{service_name}}",
           "refId": "A"
         }
@@ -88,7 +88,7 @@
       "type": "timeseries",
       "targets": [
         {
-          "expr": "sum by (service_name) (rate(container_network_transmit_bytes_total[5m]) * on(docker_id) group_left(service_name) docker_container_labels{service_name=~\"$service\"})",
+          "expr": "rate(docker_container_network_transmit_bytes_total{service_name=~\"$service\"}[5m])",
           "legendFormat": "{{service_name}}",
           "refId": "A"
         }
@@ -117,6 +117,6 @@
   "timezone": "",
   "title": "SMSLY Services",
   "uid": "smsly-services",
-  "version": 2,
+  "version": 3,
   "weekStart": ""
 }
