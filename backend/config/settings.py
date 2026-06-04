@@ -88,6 +88,7 @@ if not DEBUG and not IS_TESTING:
     SECURE_REDIRECT_EXEMPT = [
         r'^api/',
         r'^health',
+        r'^metrics',
     ]
     SESSION_COOKIE_SECURE = _ssl_enabled
     CSRF_COOKIE_SECURE = _ssl_enabled

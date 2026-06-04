@@ -12,19 +12,6 @@ import {
 import { serversApi, type ManagedServer } from "@/lib/api";
 import TeamSwitcher from "@/components/team-switcher";
 
-import { shouldShowAllNav } from "@/lib/nav-visibility";
-import { featureFlags } from "@/lib/featureFlags";
-
-const HIDDEN_BY_FLAG = new Set<string>([
-  ...(featureFlags.transfers ? [] : ['/transfers']),
-  ...(featureFlags.autoscaler ? [] : ['/autoscaler']),
-  ...(featureFlags.tunnels ? [] : ['/tunnels']),
-  ...(featureFlags.replication ? [] : ['/replication']),
-  ...(featureFlags.vpnMesh ? [] : ['/network']),
-  ...(featureFlags.functions ? [] : ['/functions']),
-  ...(featureFlags.grafana ? [] : ['/grafana/']),
-]);
-
 export function Sidebar() {
   const pathname = usePathname();
   const [servers, setServers] = React.useState<ManagedServer[]>([]);
@@ -134,9 +121,8 @@ export function Sidebar() {
   const isActive = (href: string) =>
     href === "/dashboard" ? pathname === href : pathname?.startsWith(href);
 
-  const showAll = shouldShowAllNav();
   const renderLinks = (routes: typeof mainRoutes) =>
-    routes.filter((route) => showAll || !HIDDEN_BY_FLAG.has(route.href)).map((route) => (
+    routes.map((route) => (
       <Link
         key={route.href}
         href={route.href}
