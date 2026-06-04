@@ -196,7 +196,7 @@ export default function LogsPage({
                                             {new Date(event.timestamp).toLocaleString()}
                                         </span>
                                         <span className="shrink-0 truncate">
-                                            {event.labels?.compose_service || event.labels?.container || '—'}
+                                            {event.labels?.compose_service || event.labels?.container_name || event.labels?.container?.slice(0, 12) || '—'}
                                         </span>
                                     </div>
                                     <pre className="whitespace-pre-wrap break-all text-zinc-200 mt-0.5">
