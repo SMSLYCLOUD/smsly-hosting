@@ -411,12 +411,25 @@ services:
     - --providers.docker.httpClientTimeout=300s
     - --entrypoints.web.address=:80
     - --entrypoints.web.forwardedHeaders.trustedIPs=127.0.0.1/32,172.16.0.0/12,10.0.0.0/8
+    - --entrypoints.websecure.address=:443
+    - --entrypoints.websecure.http.tls=true
+    - --entrypoints.websecure.forwardedHeaders.trustedIPs=127.0.0.1/32,172.16.0.0/12,10.0.0.0/8
+    - --entrypoints.metrics.address=:8082
     - --api.insecure=true
+    - --metrics.prometheus=true
+    - --metrics.prometheus.entrypoint=metrics
+    - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-admin@${DOMAIN:-localhost}}
+    - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+    - --certificatesresolvers.letsencrypt.acme.tlschallenge=true
+    - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
     - --log.level=WARN
     - --ping=true
     ports:
     - "${TRAEFIK_HTTP_BIND:-127.0.0.1:8081}:80"
-    - 127.0.0.1:8082:8080
+    - "${TRAEFIK_HTTPS_BIND:-127.0.0.1:8443}:443"
+    - 127.0.0.1:8082:8082
+    volumes:
+    - letsencrypt_data:/letsencrypt
     depends_on:
       socket-proxy:
         condition: service_healthy
@@ -513,118 +526,6 @@ services:
       start_period: 15s
     networks:
       - smsly-net
-  loki:
-    image: grafana/loki:2.9.3
-    container_name: smsly-loki
-    restart: unless-stopped
-    ports:
-      - "3100:3100"
-    volumes:
-      - loki_data:/loki
-      - ./infrastructure/monitoring/loki-config.yml:/etc/loki/local-config.yaml:ro
-    command: -config.file=/etc/loki/local-config.yaml
-    networks:
-      - smsly-net
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:3100/ready || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-  promtail:
-    image: grafana/promtail:2.9.3
-    container_name: smsly-promtail
-    restart: unless-stopped
-    volumes:
-      - /var/log:/var/log:ro
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./infrastructure/monitoring/promtail-config.yml:/etc/promtail/config.yml:ro
-    command: -config.file=/etc/promtail/config.yml
-    networks:
-      - smsly-net
-    depends_on:
-      - loki
-  prometheus:
-    image: prom/prometheus:v2.48.0
-    container_name: smsly-prometheus
-    restart: unless-stopped
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./infrastructure/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus_data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--storage.tsdb.retention.time=30d'
-    networks:
-      - smsly-net
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-  cadvisor:
-    image: gcr.io/cadvisor/cadvisor:v0.47.2
-    container_name: smsly-cadvisor
-    restart: unless-stopped
-    privileged: true
-    volumes:
-      - /:/rootfs:ro
-      - /var/run:/var/run:ro
-      - /sys:/sys:ro
-      - /var/lib/docker/:/var/lib/docker:ro
-      - /dev/disk/:/dev/disk:ro
-    networks:
-      - smsly-net
-  node-exporter:
-    image: prom/node-exporter:v1.6.1
-    container_name: smsly-node-exporter
-    restart: unless-stopped
-    volumes:
-      - /proc:/host/proc:ro
-      - /sys:/host/sys:ro
-      - /:/rootfs:ro
-    command:
-      - '--path.procfs=/host/proc'
-      - '--path.rootfs=/rootfs'
-      - '--path.sysfs=/host/sys'
-      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
-    networks:
-      - smsly-net
-  grafana:
-    image: grafana/grafana:10.2.2
-    container_name: smsly-grafana
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:3001:3000"
-    environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
-      - GF_USERS_ALLOW_SIGN_UP=false
-      - GF_SERVER_ROOT_URL=https://${DOMAIN:-localhost}/grafana/
-      - GF_SERVER_SERVE_FROM_SUB_PATH=true
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ./infrastructure/docker/grafana/provisioning:/etc/grafana/provisioning:ro
-    networks:
-      - smsly-net
-      - smsly-proxy
-    depends_on:
-      - loki
-      - prometheus
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/api/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.grafana.rule=Host(`${DOMAIN:-localhost}`) && PathPrefix(`/grafana`)"
-      - "traefik.http.routers.grafana.entrypoints=websecure"
-      - "traefik.http.routers.grafana.tls.certresolver=letsencrypt"
-      - "traefik.http.services.grafana.loadbalancer.server.port=3000"
-      - "traefik.docker.network=smsly-proxy"
 networks:
   smsly-net:
     external: true
@@ -650,7 +551,5 @@ volumes:
   caddy_data:
     driver: local
   backups_data: null
-  loki_data: null
-  prometheus_data: null
-  grafana_data: null
   rabbitmq_data: null
+  letsencrypt_data: null

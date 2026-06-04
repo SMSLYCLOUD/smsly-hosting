@@ -8,7 +8,7 @@ services:
     container_name: smsly-loki
     restart: unless-stopped
     ports:
-      - "3100:3100"
+      - "127.0.0.1:3100:3100"
     volumes:
       - loki-data:/loki
       - ../monitoring/loki-config.yml:/etc/loki/local-config.yaml:ro
@@ -43,7 +43,7 @@ services:
     container_name: smsly-prometheus
     restart: unless-stopped
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     volumes:
       - ../monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
@@ -97,7 +97,7 @@ services:
     container_name: smsly-grafana
     restart: unless-stopped
     ports:
-      - "3001:3000"  # Using 3001 to avoid conflict with frontend
+      - "127.0.0.1:3001:3000"  # Loopback only — exposed via Traefik at /grafana
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
