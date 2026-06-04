@@ -4500,6 +4500,23 @@ CFCADDY
 
         reload_container_caddy 2>/dev/null || true
 
+        # ─── Python-based Caddyfile overlay (preview-aware routing) ─────────────
+        # The bash heredoc above generates a static template without preview
+        # environment routing. Django's generate_caddyfile() includes direct
+        # container routing for local preview environments, so we overlay it.
+        echo -e "${BLUE}  → Overlaying preview-aware Caddyfile from Django...${NC}"
+        docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+from apps.deployments.models import PlatformConfig
+from services.caddy_manager import generate_caddyfile, apply_caddyfile
+config = PlatformConfig.load()
+content = generate_caddyfile(config)
+token = (getattr(config, 'cloudflare_api_token', '') or '').strip()
+result = apply_caddyfile(content, cloudflare_token=token, preserve_existing_token=True)
+print(result.get('message', 'ok'))
+" 2>/dev/null && echo -e "${GREEN}  ✓ Preview-aware Caddyfile applied${NC}" || \
+            echo -e "${YELLOW}  ⚠ Python Caddyfile overlay failed (non-fatal, static template still active)${NC}"
+
+        reload_container_caddy 2>/dev/null || true
 
         # Verify Caddy is running
         sleep 2
@@ -4811,6 +4828,18 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
 
     # ─── Fix .env permissions (ensures domain signal can write back) ─────
     fix_env_permissions "$INSTALL_DIR/.env" || true
+
+    # ─── Install/update infrastructure monitor timer ─────────────────────
+    if [ -f "$INSTALL_DIR/scripts/monitor_infra.sh" ]; then
+        echo -e "${BLUE}  → Installing critical infrastructure monitoring timer...${NC}"
+        chmod +x "$INSTALL_DIR/scripts/monitor_infra.sh"
+        cp "$INSTALL_DIR/scripts/smsly-infra-monitor.service" /etc/systemd/system/smsly-infra-monitor.service 2>/dev/null || true
+        cp "$INSTALL_DIR/scripts/smsly-infra-monitor.timer" /etc/systemd/system/smsly-infra-monitor.timer 2>/dev/null || true
+        systemctl daemon-reload
+        systemctl enable smsly-infra-monitor.timer 2>/dev/null || true
+        systemctl restart smsly-infra-monitor.timer 2>/dev/null || true
+        echo -e "${GREEN}  ✓ smsly-infra-monitor timer installed and started${NC}"
+    fi
 
     echo -e "${GREEN}   ✓ UPDATE SUCCESSFUL ($UPDATE_MODE)${NC}"
 
