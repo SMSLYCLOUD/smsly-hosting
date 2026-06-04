@@ -275,6 +275,7 @@ def sync_infrastructure_on_config_change(sender, instance, **kwargs):
         _new_ssl = instance.use_ssl
         _new_scheme = 'https' if _new_ssl else 'http'
         _new_origin = f'{_new_scheme}://{_new_domain}' if _new_domain else ''
+        _new_grafana_url = f'{_new_origin}/grafana' if _new_domain else None
 
         # Env vars to sync (value providers mapped to (line_prefix, value_or_none))
         # When value is None, the existing line is preserved as-is (not synced).
@@ -285,6 +286,7 @@ def sync_infrastructure_on_config_change(sender, instance, **kwargs):
             'DOMAIN=': _new_domain,
             'USE_SSL=': 'true' if _new_ssl else 'false',
             'SITE_URL=': _new_origin or None,
+            'GRAFANA_EXTERNAL_URL=': _new_grafana_url,
             'ALLOWED_HOSTS=': None,
             'CSRF_TRUSTED_ORIGINS=': None,
             'CORS_ALLOWED_ORIGINS=': None,

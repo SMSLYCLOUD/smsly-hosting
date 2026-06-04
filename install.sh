@@ -1175,6 +1175,21 @@ apply_env_platform_overrides() {
         changed=true
     fi
 
+    # Sync GRAFANA_EXTERNAL_URL when domain or SSL changes
+    if [ -n "$desired_domain" ]; then
+        if echo "$desired_domain" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' || [ "$desired_use_ssl" != "true" ]; then
+            _grafana_scheme="http"
+        else
+            _grafana_scheme="https"
+        fi
+        _desired_grafana_url="${_grafana_scheme}://${desired_domain}/grafana"
+        _current_grafana_url="$(env_get_value "$env_file" "GRAFANA_EXTERNAL_URL")"
+        if [ "$_desired_grafana_url" != "$_current_grafana_url" ]; then
+            env_set_value "$env_file" "GRAFANA_EXTERNAL_URL" "$_desired_grafana_url"
+            changed=true
+        fi
+    fi
+
     DOMAIN="$desired_domain"
     USE_SSL="$desired_use_ssl"
     ACME_EMAIL="$desired_acme_email"
@@ -5748,6 +5763,9 @@ PGCAT_ADMIN_PASSWORD=$PGCAT_ADMIN_PASSWORD
 
 # Grafana admin password (used by the standalone observability stack)
 GRAFANA_PASSWORD=${GRAFANA_PASSWORD:-}
+
+# Grafana external URL for browser embeds (auto-derived from domain)
+GRAFANA_EXTERNAL_URL=${DOMAIN_ORIGINS}/grafana
 
 # Direct database connection for migrations (bypasses PgCat pooler)
 DIRECT_DATABASE_URL=postgresql://smsly_admin:$POSTGRES_PASSWORD@db:5432/smsly_hosting
