@@ -4,6 +4,8 @@ import http.server
 import json
 import os
 import socket
+import sys
+import traceback
 
 DOCKER_SOCK = os.environ.get("DOCKER_SOCK", "/var/run/docker.sock")
 LISTEN_PORT = int(os.environ.get("LISTEN_PORT", "9234"))
@@ -12,6 +14,7 @@ LISTEN_PORT = int(os.environ.get("LISTEN_PORT", "9234"))
 def _query_docker(path):
     """Query Docker API via Unix socket."""
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(5)
     sock.connect(DOCKER_SOCK)
     sock.sendall(f"GET {path} HTTP/1.0\r\nHost: localhost\r\n\r\n".encode())
     data = b""
@@ -70,10 +73,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.write("\n".join(lines).encode())
 
     def log_message(self, format, *args):
-        pass  # suppress access logs
+        pass
 
 
 if __name__ == "__main__":
-    server = http.server.HTTPServer(("0.0.0.0", LISTEN_PORT), Handler)
-    print(f"Docker labels exporter listening on :{LISTEN_PORT}")
-    server.serve_forever()
+    try:
+        print(f"Docker labels exporter listening on :{LISTEN_PORT}", flush=True)
+        server = http.server.HTTPServer(("0.0.0.0", LISTEN_PORT), Handler)
+        server.serve_forever()
+    except Exception:
+        traceback.print_exc(file=sys.stdout)
+        sys.stdout.flush()
