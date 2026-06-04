@@ -103,7 +103,7 @@ services:
     image: python:3.12-alpine
     container_name: smsly-docker-labels
     restart: unless-stopped
-    command: python3 /app/exporter.py
+    command: python3 -u /app/exporter.py
     volumes:
       - ../monitoring/docker-labels-exporter.py:/app/exporter.py:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
