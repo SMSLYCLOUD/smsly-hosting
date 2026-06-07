@@ -92,10 +92,10 @@
       "gridPos": { "h": 6, "w": 12, "x": 0, "y": 14 },
       "id": 5,
       "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
-      "title": "Active Containers (cAdvisor)",
+      "title": "Active Containers",
       "type": "stat",
       "targets": [
-        { "expr": "count(container_last_seen{name!=\"\"})", "refId": "A" }
+        { "expr": "count(docker_container_labels)", "refId": "A" }
       ]
     },
     {

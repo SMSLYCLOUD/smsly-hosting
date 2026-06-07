@@ -96,6 +96,14 @@ class DeploymentsConfig(AppConfig):
         except ImportError:
             pass
 
+        # Initialize prometheus gauge for active services (resets on restart)
+        try:
+            from config.metrics import SERVICES_ACTIVE
+            from .models import Service
+            SERVICES_ACTIVE.set(Service.objects.filter(status=Service.Status.ACTIVE).count())
+        except Exception:
+            pass
+
         # 3. Dynamic Domain Patching (Zero Trust Whitelisting)
         try:
             from .patching import patch_runtime_settings
