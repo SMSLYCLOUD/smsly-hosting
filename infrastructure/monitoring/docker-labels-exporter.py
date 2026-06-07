@@ -12,6 +12,7 @@ import traceback
 DOCKER_SOCK = os.environ.get("DOCKER_SOCK", "/var/run/docker.sock")
 LISTEN_PORT = int(os.environ.get("LISTEN_PORT", "9234"))
 REFRESH_INTERVAL = int(os.environ.get("REFRESH_INTERVAL", "10"))
+NODE_NAME = os.environ.get("NODE_NAME", "local")
 
 _metrics_cache = {"data": "", "ts": 0}
 _lock = threading.Lock()
@@ -68,7 +69,8 @@ def _collect_metrics():
         base_labels = (
             f'docker_id="{cid}",'
             f'container_name="{name}",'
-            f'service_name="{service_name}"'
+            f'service_name="{service_name}",'
+            f'node="{NODE_NAME}"'
         )
 
         lines.append(f'docker_container_labels{{{base_labels}}} 1')

@@ -134,6 +134,7 @@ services:
     - ./:/platform-src:ro
     - /opt/smsly-cache:/opt/smsly-cache
     - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds
+    - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets
     - backups_data:/app/backups
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/health/live || exit 1"]
@@ -184,6 +185,7 @@ services:
     - ./:/platform-src:ro
     - /opt/smsly-cache:/opt/smsly-cache
     - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds
+    - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets
     - backups_data:/app/backups
     healthcheck:
       test:

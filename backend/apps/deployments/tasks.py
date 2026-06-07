@@ -5209,6 +5209,14 @@ def node_watchdog_task(self):
 
     Runs every 5 minutes via Celery beat.
     """
+    # Update Prometheus target files for docker-labels exporters
+    try:
+        from apps.deployments.services.prometheus_targets import (
+            write_docker_labels_targets,
+        )
+        write_docker_labels_targets()
+    except Exception as exc:
+        logger.warning("Failed to update Prometheus targets: %s", exc)
     try:
         from apps.deployments.models_core import ManagedServer
         from apps.deployments.services.self_healing_orchestrator import (
