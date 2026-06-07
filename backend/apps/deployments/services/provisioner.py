@@ -1296,6 +1296,21 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
         _append_log(server, "✅ Grid provisioning complete!")
         _append_log(server, f"🖥️ Server '{server.name}' is now online at {api_url}")
 
+        # Deploy docker-labels exporter on the newly provisioned node
+        try:
+            from apps.deployments.services.prometheus_targets import (
+                deploy_docker_labels_exporter_on_node,
+                write_docker_labels_targets,
+            )
+            _append_log(server, "Deploying docker-labels exporter...")
+            if deploy_docker_labels_exporter_on_node(server):
+                _append_log(server, "✓ docker-labels exporter deployed")
+            else:
+                _append_log(server, "⚠ docker-labels exporter deployment failed (non-critical)")
+            write_docker_labels_targets()
+        except Exception as exc:
+            _append_log(server, f"⚠ docker-labels exporter skipped: {exc}")
+
         # The token from provisioning may be a DRF session token.
         # Try to exchange it for a long-lived smsly_ API token via the
         # node-token-exchange endpoint on the new server.

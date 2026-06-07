@@ -4732,6 +4732,21 @@ def check_managed_servers_health_task():
         except Exception as exc:
             logger.warning("Health check failed for %s (%s): %s", server.name, server.host, exc)
 
+    # Update Prometheus target files after health checks
+    try:
+        from apps.deployments.services.prometheus_targets import (
+            deploy_docker_labels_exporter_on_node,
+            write_docker_labels_targets,
+        )
+        for server in servers.filter(status=ManagedServer.Status.ONLINE):
+            try:
+                deploy_docker_labels_exporter_on_node(server)
+            except Exception:
+                pass
+        write_docker_labels_targets()
+    except Exception as exc:
+        logger.debug("Prometheus target update skipped: %s", exc)
+
     if checked:
         logger.info("Health check task: refreshed %d/%d servers", checked, servers.count())
     return checked
@@ -5252,6 +5267,16 @@ def node_watchdog_task(self):
 
             server.last_health_check = timezone.now()
             server.save(update_fields=["status", "last_health_check", "updated_at"])
+
+            # Auto-deploy docker-labels exporter on online nodes
+            if server.status == ManagedServer.Status.ONLINE:
+                try:
+                    from apps.deployments.services.prometheus_targets import (
+                        deploy_docker_labels_exporter_on_node,
+                    )
+                    deploy_docker_labels_exporter_on_node(server)
+                except Exception as exc:
+                    logger.debug("docker-labels deploy skipped for %s: %s", server.name, exc)
 
             if diagnostics.docker_running and old_status != ManagedServer.Status.ONLINE:
                 logger.info("Server %s recovered — status: ONLINE", server.name)
