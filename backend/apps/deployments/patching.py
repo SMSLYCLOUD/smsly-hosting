@@ -90,6 +90,13 @@ def patch_runtime_settings():
             # the in-memory patches above are still applied.
             logger.debug("[patch] Skipped django_site sync (table may not exist yet): %s", site_exc)
         logger.info("[patch] Runtime settings synchronized successfully.")
+
+        # Write initial Prometheus target files for docker-labels
+        try:
+            from apps.deployments.services.prometheus_targets import write_docker_labels_targets
+            write_docker_labels_targets()
+        except Exception as exc:
+            logger.debug("[patch] Prometheus target init skipped: %s", exc)
     except Exception as exc:
         logger.warning("[patch] Runtime patching skipped or failed: %s", exc)
     finally:
