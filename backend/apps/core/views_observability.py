@@ -120,13 +120,32 @@ def grafana_embed_url(request, dashboard_uid: str):
     })
 
 
-@api_view(['GET'])
-@permission_classes([permissions.IsAuthenticated])
+def _resolve_service_var(var_service: str) -> str:
+    """Resolve a var-service parameter (UUID or name) to a compose_service filter."""
+    try:
+        # If it looks like a UUID, try to fetch the service
+        uuid.UUID(var_service)
+        from apps.deployments.models import Service
+        svc = Service.objects.filter(id=var_service).first()
+        if svc and svc.name:
+            return svc.name
+    except (ValueError, Exception):
+        pass
+    return var_service
+
+
 def loki_query(request):
     """Proxy a range query to Loki with the auth boundary at the Django layer."""
     query = request.query_params.get('query', '').strip()
     if not query:
         return Response({'error': 'query parameter is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Resolve var-service parameter (UUID → service name)
+    var_service = request.query_params.get('var-service', '').strip()
+    if var_service:
+        resolved = _resolve_service_var(var_service)
+        if resolved != var_service:
+            query = f'{{compose_service=~"{resolved}.*"}}'
 
     try:
         limit = int(request.query_params.get('limit', '100'))
