@@ -90,6 +90,16 @@ def deploy_docker_labels_exporter_on_node(server):
 
     tmp = None
     try:
+        # 0. Check if exporter is already running
+        stdin, stdout, stderr = client.exec_command(
+            "docker inspect smsly-docker-labels --format='{{.State.Status}}' 2>/dev/null",
+            raise_on_error=False,
+        )
+        existing_status = stdout.read().decode().strip()
+        if existing_status == "running":
+            logger.debug("docker-labels exporter already running on %s", server.name)
+            return True
+
         # 1. Write exporter script to temp file and upload
         exporter_script = _get_exporter_script_content()
         tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False)
@@ -100,8 +110,9 @@ def deploy_docker_labels_exporter_on_node(server):
         client.exec_command(f"mkdir -p /opt/smsly-hosting")
         client.upload_file(tmp.name, remote_path)
 
-        # 2. Kill any existing container with the same name
+        # 2. Remove any stale container and pull image
         client.exec_command("docker rm -f smsly-docker-labels 2>/dev/null")
+        client.exec_command("docker pull python:3.12-alpine 2>/dev/null", raise_on_error=False)
 
         # 3. Run the exporter container
         cmd = (
