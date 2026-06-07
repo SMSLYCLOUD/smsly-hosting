@@ -42,8 +42,10 @@ scrape_configs:
 
   # Docker container labels (docker_id -> service_name mapping)
   - job_name: 'docker-labels'
-    static_configs:
-      - targets: ['docker-labels:9234']
+    file_sd_configs:
+      - files:
+          - '/etc/prometheus/docker-labels-targets/*.json'
+        refresh_interval: 60s
     scrape_interval: 30s
 
   # Node metrics
