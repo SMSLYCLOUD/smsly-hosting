@@ -2848,6 +2848,7 @@ ensure_infrastructure_permissions() {
     local caddy_config_dir="/opt/smsly-hosting/caddy-config"
     local staticfiles_dir="/opt/smsly-hosting/backend/staticfiles"
     local builds_dir="/opt/smsly-hosting/builds"
+    local prometheus_targets_dir="/opt/smsly-hosting/prometheus-targets"
 
     echo -e "${BLUE}  -> Ensuring infrastructure permissions...${NC}"
 
@@ -2855,12 +2856,13 @@ ensure_infrastructure_permissions() {
     mkdir -p "$caddy_config_dir"
     mkdir -p "$staticfiles_dir"
     mkdir -p "$builds_dir"
+    mkdir -p "$prometheus_targets_dir"
 
     # UID 1000 is the "smsly" user inside the containers.
     if id smsly >/dev/null 2>&1; then
-        chown -R smsly:smsly "$caddy_config_dir" "$staticfiles_dir" "$builds_dir" 2>/dev/null || true
+        chown -R smsly:smsly "$caddy_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir" 2>/dev/null || true
     else
-        chown -R 1000:1000 "$caddy_config_dir" "$staticfiles_dir" "$builds_dir" 2>/dev/null || true
+        chown -R 1000:1000 "$caddy_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir" 2>/dev/null || true
     fi
 
     chmod -R u+rwX,g+rwX "$caddy_config_dir" "$staticfiles_dir" "$builds_dir" 2>/dev/null || true
