@@ -29,6 +29,7 @@ export default function LogsPage({
     const [query, setQuery] = useState(searchParams?.query || DEFAULT_QUERY);
     const [draftQuery, setDraftQuery] = useState(searchParams?.query || DEFAULT_QUERY);
     const [serviceFilter, setServiceFilter] = useState<string | undefined>(searchParams?.service);
+    const [resolvedService, setResolvedService] = useState<string | undefined>(undefined);
     const [events, setEvents] = useState<LokiEvent[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -36,12 +37,40 @@ export default function LogsPage({
     const [limit, setLimit] = useState(200);
     const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
+    // Resolve service UUID from URL param to actual service name
+    useEffect(() => {
+        const raw = searchParams?.service;
+        if (!raw) {
+            setServiceFilter(undefined);
+            setResolvedService(undefined);
+            return;
+        }
+        setServiceFilter(raw);
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        if (!uuidRegex.test(raw)) {
+            setResolvedService(raw);
+            return;
+        }
+        const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+        fetch(`/api/v1/services/${encodeURIComponent(raw)}/`, {
+            headers: token ? { 'Authorization': `Token ${token}` } : {},
+        })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((svc) => {
+                if (svc?.name) {
+                    setResolvedService(svc.name);
+                }
+            })
+            .catch(() => {});
+    }, [searchParams?.service]);
+
     const effectiveQuery = useMemo(() => {
-        if (serviceFilter) {
-            return `{compose_service=~"${serviceFilter}.*"}`;
+        const filter = resolvedService || serviceFilter;
+        if (filter) {
+            return `{compose_service=~"${filter}.*"}`;
         }
         return query;
-    }, [query, serviceFilter]);
+    }, [query, serviceFilter, resolvedService]);
 
     const fetchLogs = useCallback(async () => {
         setLoading(true);
