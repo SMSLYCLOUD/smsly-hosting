@@ -46,9 +46,6 @@ import {
     Waypoints,
     AppWindow,
     Cable,
-    Clock,
-    Layers,
-    Palette,
     GanttChartSquare
 } from 'lucide-react';
 import { motion } from 'framer-motion';
@@ -147,11 +144,46 @@ const features = [
         bg: "bg-pink-500/10"
     },
     {
-        icon: Layers,
-        title: "CI/CD Pipeline",
-        description: "Auto-deploy on git push, preview environments per branch, blue-green/canary rollouts, and instant rollback.",
+        icon: Blocks,
+        title: "Multi-Git Providers",
+        description: "Connect GitHub, GitLab, and Bitbucket. Deploy from any provider with unified CI/CD, auto-deploy on push, and instant rollbacks.",
         color: "text-sky-500",
         bg: "bg-sky-500/10"
+    },
+    {
+        icon: Boxes,
+        title: "Nixpacks Build Support",
+        description: "Auto-detect and build any language with Nixpacks. No Dockerfile needed — Python, Node, Go, Rust, Elixir, and more just work.",
+        color: "text-fuchsia-500",
+        bg: "bg-fuchsia-500/10"
+    },
+    {
+        icon: Cloud,
+        title: "S3 Backup Destinations",
+        description: "Back up databases, volumes, and configs to S3, Cloudflare R2, or MinIO. Automated schedules with point-in-time recovery.",
+        color: "text-amber-500",
+        bg: "bg-amber-500/10"
+    },
+    {
+        icon: AppWindow,
+        title: "Serverless Functions (FaaS)",
+        description: "In-browser Monaco editor to write and deploy Node.js or Python functions instantly — no repo, no Dockerfile, no config.",
+        color: "text-violet-500",
+        bg: "bg-violet-500/10"
+    },
+    {
+        icon: TrendingUp,
+        title: "Predictive Auto-Scaling",
+        description: "AI-driven scaling that predicts load spikes before they hit. Proactively provisions resources using historical patterns and real-time metrics.",
+        color: "text-rose-500",
+        bg: "bg-rose-500/10"
+    },
+    {
+        icon: Terminal,
+        title: "Container Terminal",
+        description: "Web-based SSH into any running container. Debug, inspect logs, run migrations, and manage state without leaving the dashboard.",
+        color: "text-teal-500",
+        bg: "bg-teal-500/10"
     }
 ];
 
@@ -167,7 +199,7 @@ const battleCards = [
         description: "The Sovereign PaaS",
         price: "$0",
         priceDetail: "Open Source & Free",
-        features: ["Full Ecosystem Deployment", "AI Auto-Remediation Engine", "35+ Managed Addon Services", "100% Open Source"],
+        features: ["Full Ecosystem Deployment", "AI Auto-Remediation Engine", "Multi-Git (GitHub, GitLab, Bitbucket)", "Nixpacks Any-Language Builds", "Predictive AI Auto-Scaling", "S3/R2/MinIO Backups", "Web Container Terminal", "100% Open Source"],
         color: "bg-emerald-500",
         textColor: "text-emerald-500",
         borderColor: "border-emerald-500",
