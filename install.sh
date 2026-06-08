@@ -4381,6 +4381,19 @@ PYEOF
                 docker compose -f "$COMPOSE_FILE" restart $restart_svcs 2>/dev/null || true
             fi
             set_checkpoint "update_db_migrated"
+
+            # Custom Domain SSL Setup for Full Update
+            if should_manage_caddy; then
+                echo -e "\n${YELLOW}[UPDATE] Setting up Custom Domain SSL Services...${NC}"
+                if [ -f "install-custom-domain-ssl.sh" ]; then
+                    bash install-custom-domain-ssl.sh install
+                    /opt/smsly-hosting/smsly-domain-ssl-manager.sh start
+                    /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable
+                    echo -e "${GREEN}  ✓ Custom domain SSL services configured${NC}"
+                else
+                    echo -e "${YELLOW}  ⚠ Custom domain SSL manager not found, skipping setup${NC}"
+                fi
+            fi
             ;;
     esac
 
@@ -5001,6 +5014,49 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
         fi
     done
     echo -e "${GREEN}  ✓ OOM protection set (core, database, celery, proxy)${NC}"
+
+    # ─── Ensure iptables-restore systemd service exists ─────────────────────
+    if command -v iptables-save >/dev/null 2>&1; then
+        mkdir -p /etc/iptables
+        iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+        if [ ! -f /etc/systemd/system/iptables-restore.service ]; then
+            echo -e "${BLUE}  → Installing iptables-restore systemd service...${NC}"
+            cat > /etc/systemd/system/iptables-restore.service <<'RESTORE_EOF'
+[Unit]
+Description=Restore iptables rules
+Before=docker.service
+After=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/sbin/iptables-restore /etc/iptables/rules.v4
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+RESTORE_EOF
+            systemctl daemon-reload 2>/dev/null || true
+            systemctl enable iptables-restore 2>/dev/null || true
+            echo -e "${GREEN}  ✓ iptables-restore service installed and enabled${NC}"
+        fi
+    fi
+
+    # ─── Ensure WireGuard mesh service is enabled ───────────────────────────
+    if [ -d /etc/wireguard ]; then
+        for wg_conf in /etc/wireguard/*.conf; do
+            [ -f "$wg_conf" ] || continue
+            wg_iface=$(basename "$wg_conf" .conf)
+            if ! systemctl is-enabled "wg-quick@${wg_iface}" >/dev/null 2>&1; then
+                echo -e "${BLUE}  → Re-enabling WireGuard mesh ($wg_iface)...${NC}"
+                systemctl enable --now "wg-quick@${wg_iface}" 2>/dev/null || true
+                echo -e "${GREEN}  ✓ WireGuard $wg_iface re-enabled${NC}"
+            fi
+            if ! systemctl is-active "wg-quick@${wg_iface}" >/dev/null 2>&1; then
+                echo -e "${YELLOW}  ⚠ WireGuard $wg_iface is not running, attempting restart...${NC}"
+                systemctl start "wg-quick@${wg_iface}" 2>/dev/null || true
+            fi
+        done
+    fi
 
     trap - EXIT
     release_install_lock
