@@ -23,6 +23,12 @@ log() {
 # ─── Systemd services to keep alive ────────────────────────────────────
 SYSTEMD_SERVICES=(
     "smsly-autoscaler.service"
+    "smsly-domain-ssl.service"
+)
+
+# ─── Systemd timers that must be active ────────────────────────────────
+SYSTEMD_TIMERS=(
+    "smsly-domain-ssl.timer"
 )
 
 # ─── Production stack ──────────────────────────────────────────────────
@@ -87,6 +93,17 @@ for svc in "${SYSTEMD_SERVICES[@]}"; do
         if [ "$state" != "active" ]; then
             log "Alert: systemd service $svc is $state. Restarting..."
             systemctl restart "$svc" 2>/dev/null || true
+        fi
+    fi
+done
+
+# Systemd timers — must stay active even if the triggered service is oneshot
+for tmr in "${SYSTEMD_TIMERS[@]}"; do
+    if systemctl is-enabled "$tmr" >/dev/null 2>&1; then
+        tmr_state=$(systemctl is-active "$tmr" 2>/dev/null || echo "unknown")
+        if [ "$tmr_state" != "active" ]; then
+            log "Alert: systemd timer $tmr is $tmr_state. Restarting..."
+            systemctl restart "$tmr" 2>/dev/null || true
         fi
     fi
 done
