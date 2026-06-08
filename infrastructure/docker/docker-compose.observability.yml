@@ -49,6 +49,10 @@ services:
       retries: 3
     labels:
       - managed_by=smsly-hosting
+    deploy:
+      resources:
+        limits:
+          memory: ${PROMTAIL_MEMORY_LIMIT:-512M}
     depends_on:
       - loki
 
@@ -109,6 +113,10 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: ${CADVISOR_MEMORY_LIMIT:-256M}
 
   # Node Exporter - Host metrics
   node-exporter:
@@ -133,6 +141,10 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: ${NODE_EXPORTER_MEMORY_LIMIT:-128M}
 
   # Docker Labels Exporter - maps container IDs to service names
   docker-labels:
@@ -154,6 +166,10 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: ${DOCKER_LABELS_MEMORY_LIMIT:-256M}
 
   # Grafana - Visualization
   grafana:
@@ -194,6 +210,10 @@ services:
       - "traefik.http.services.grafana.loadbalancer.server.port=3000"
       - "traefik.docker.network=smsly-proxy"
       - "managed_by=smsly-hosting"
+    deploy:
+      resources:
+        limits:
+          memory: ${GRAFANA_MEMORY_LIMIT:-1G}
 
 volumes:
   loki-data:
