@@ -11,7 +11,7 @@ import traceback
 
 DOCKER_SOCK = os.environ.get("DOCKER_SOCK", "/var/run/docker.sock")
 LISTEN_PORT = int(os.environ.get("LISTEN_PORT", "9234"))
-REFRESH_INTERVAL = int(os.environ.get("REFRESH_INTERVAL", "10"))
+REFRESH_INTERVAL = int(os.environ.get("REFRESH_INTERVAL", "30"))
 NODE_NAME = os.environ.get("NODE_NAME", "local")
 
 _metrics_cache = {"data": "", "ts": 0}

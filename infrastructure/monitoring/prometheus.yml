@@ -4,6 +4,7 @@
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
+  scrape_timeout: 10s
   external_labels:
     cluster: 'smsly-hosting'
     environment: 'production'

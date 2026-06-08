@@ -20,6 +20,11 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2048M
     labels:
       - managed_by=smsly-hosting
 
@@ -66,6 +71,11 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 3072M
     labels:
       - managed_by=smsly-hosting
 
