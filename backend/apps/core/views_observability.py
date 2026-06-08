@@ -134,6 +134,8 @@ def _resolve_service_var(var_service: str) -> str:
     return var_service
 
 
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
 def loki_query(request):
     """Proxy a range query to Loki with the auth boundary at the Django layer."""
     query = request.GET.get('query', '').strip()
