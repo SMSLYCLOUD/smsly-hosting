@@ -720,6 +720,9 @@ CELERY_TASK_TIME_LIMIT = 7500       # 2h 5m hard kill
 # Prevent Celery worker OOM/memory leaks
 CELERY_WORKER_MAX_MEMORY_PER_CHILD = 250000  # 250MB (in Kilobytes)
 CELERY_WORKER_MAX_TASKS_PER_CHILD = 500
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1  # fair dispatch — don't hoard tasks
+CELERY_TASK_ACKS_LATE = True           # ack after execution — prevents lost tasks on crash
+CELERY_TASK_TRACK_STARTED = True       # report STARTED state for monitoring
 # NOTE: Beat schedule is defined in config/celery.py (the authoritative source)
 
 # CORS - allow "*" only in DEBUG when explicitly enabled.
