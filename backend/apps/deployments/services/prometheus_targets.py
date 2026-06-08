@@ -159,8 +159,8 @@ def deploy_promtail_on_node(server):
     from apps.deployments.models_core import ManagedServer
     from apps.deployments.services.ssh_client import SSHClient
 
-    # Determine the Loki URL for the remote node.
-    # Priority: explicit env → wg_address → platform domain → public IP
+    # Determine the Loki URL — must go through the WireGuard VPN mesh.
+    # Priority: explicit env → primary wg_address → MeshPeer → host wg_iface
     import os as _os
     loki_ip = (_os.environ.get("SMSLY_LOKI_PUBLIC_URL") or "").strip()
     if not loki_ip:
@@ -168,19 +168,25 @@ def deploy_promtail_on_node(server):
         if not primary:
             logger.error("No primary server found — cannot deploy remote Promtail")
             return False
-        loki_ip = (primary.wg_address or primary.private_ip or primary.host or "").strip()
+        loki_ip = (primary.wg_address or primary.private_ip or "").strip()
+        if not loki_ip:
+            # Try to find the primary's WireGuard IP from mesh peers
+            try:
+                from apps.deployments.models import MeshPeer
+                peer = MeshPeer.objects.filter(
+                    server=primary, is_active=True
+                ).first()
+                if peer and peer.wg_address:
+                    loki_ip = peer.wg_address.strip()
+            except Exception:
+                pass
+        if not loki_ip:
+            loki_ip = (primary.host or "").strip()
     if not loki_ip:
-        try:
-            from apps.deployments.models import PlatformConfig
-            cfg = PlatformConfig.load()
-            loki_ip = (cfg.domain or "").strip()
-        except Exception:
-            pass
-    if not loki_ip:
-        logger.error("Primary server has no reachable IP — cannot deploy remote Promtail")
+        logger.error("Primary server has no WireGuard IP — cannot deploy remote Promtail")
         return False
     loki_url = f"http://{loki_ip}:3100/loki/api/v1/push"
-    logger.info("Remote Promtail Loki URL: %s", loki_url)
+    logger.info("Remote Promtail Loki URL (via VPN): %s", loki_url)
 
     client = SSHClient(
         ip=server.host,
