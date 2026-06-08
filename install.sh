@@ -2865,10 +2865,11 @@ ensure_infrastructure_permissions() {
         chown -R 1000:1000 "$caddy_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir" 2>/dev/null || true
     fi
 
-    chmod -R u+rwX,g+rwX "$caddy_config_dir" "$staticfiles_dir" "$builds_dir" 2>/dev/null || true
+    chmod -R u+rwX,g+rwX "$caddy_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir" 2>/dev/null || true
     find "$caddy_config_dir" -type d -exec chmod 2775 {} + 2>/dev/null || true
     find "$staticfiles_dir" -type d -exec chmod 2775 {} + 2>/dev/null || true
     find "$builds_dir" -type d -exec chmod 2775 {} + 2>/dev/null || true
+    find "$prometheus_targets_dir" -type d -exec chmod 2775 {} + 2>/dev/null || true
 
     # Caddy-specific file permissions
     [ -f "$caddy_config_dir/Caddyfile" ] && chmod 664 "$caddy_config_dir/Caddyfile" 2>/dev/null || true
