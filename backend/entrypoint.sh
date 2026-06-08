@@ -132,9 +132,8 @@ setup_social_apps_nonfatal() {
 
 ensure_caddy_config_writable() {
     if [ -d /caddy-config ]; then
-        chown -R smsly:smsly /caddy-config 2>/dev/null || true
-        chmod -R u+rwX,g+rwX,o+rX /caddy-config 2>/dev/null || true
-        find /caddy-config -type d -exec chmod 2775 {} + 2>/dev/null || true
+        chmod -R u+rwX,g+rwX /caddy-config 2>/dev/null || true
+        find /caddy-config -type d -exec chmod 2770 {} + 2>/dev/null || true
     fi
 }
 ensure_caddy_config_writable
