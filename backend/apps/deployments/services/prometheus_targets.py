@@ -148,6 +148,149 @@ def deploy_docker_labels_exporter_on_node(server):
             pass
 
 
+PROMTAIL_PORT = 9080
+
+
+def deploy_promtail_on_node(server):
+    """SSH into a remote ManagedServer and deploy a Promtail log collector container.
+
+    The Promtail pushes container logs to the primary (VPS) Loki instance.
+    """
+    from apps.deployments.models_core import ManagedServer
+    from apps.deployments.services.ssh_client import SSHClient
+
+    # Determine the Loki URL that the remote node can reach
+    primary = ManagedServer.objects.filter(is_primary=True).first()
+    if not primary:
+        logger.error("No primary server found — cannot deploy remote Promtail")
+        return False
+    loki_ip = primary.wg_address or primary.private_ip or primary.host
+    if not loki_ip:
+        logger.error("Primary server %s has no reachable IP", primary.name)
+        return False
+    loki_url = f"http://{loki_ip}:3100/loki/api/v1/push"
+
+    client = SSHClient(
+        ip=server.host,
+        key_content=server.ssh_key,
+        user=server.ssh_user,
+        port=server.ssh_port,
+        password=server.ssh_password,
+        wg_address=server.wg_address,
+    )
+
+    try:
+        client.connect()
+    except Exception as exc:
+        logger.error("SSH connection failed for %s: %s", server.name, exc)
+        return False
+
+    tmp = None
+    try:
+        # 0. Check if Promtail is already running
+        out, _err, _code = client.exec_command(
+            "docker inspect smsly-promtail --format='{{.State.Status}}' 2>/dev/null",
+            raise_on_error=False,
+        )
+        if out.strip() == "running":
+            logger.debug("Promtail already running on %s", server.name)
+            return True
+
+        # 1. Generate Promtail config with correct Loki URL
+        config = _generate_remote_promtail_config(loki_url)
+        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False)
+        tmp.write(config)
+        tmp.close()
+
+        remote_dir = "/opt/smsly-hosting"
+        remote_config = f"{remote_dir}/promtail-config.yml"
+        client.exec_command(f"mkdir -p {remote_dir}")
+        client.upload_file(tmp.name, remote_config)
+
+        # 2. Remove stale container and pull image
+        client.exec_command("docker rm -f smsly-promtail 2>/dev/null")
+        client.exec_command("docker pull grafana/promtail:2.9.3 2>/dev/null", raise_on_error=False)
+
+        # 3. Run Promtail container
+        cmd = (
+            f"docker run -d --name smsly-promtail --restart unless-stopped "
+            f"-v /var/log:/var/log:ro "
+            f"-v /var/lib/docker/containers:/var/lib/docker/containers:ro "
+            f"-v /var/run/docker.sock:/var/run/docker.sock:ro "
+            f"-v {remote_config}:/etc/promtail/config.yml:ro "
+            f"grafana/promtail:2.9.3 "
+            f"-config.file=/etc/promtail/config.yml"
+        )
+        _out, err, exit_code = client.exec_command(cmd, raise_on_error=False)
+        if exit_code != 0:
+            error = err.strip()
+            logger.error("Failed to start Promtail on %s: %s", server.name, error)
+            return False
+
+        logger.info("Deployed Promtail on %s (Loki: %s)", server.name, loki_url)
+        return True
+
+    except Exception as exc:
+        logger.error("Promtail deploy failed for %s: %s", server.name, exc)
+        return False
+    finally:
+        if tmp:
+            try:
+                os.unlink(tmp.name)
+            except Exception:
+                pass
+        try:
+            client.close()
+        except Exception:
+            pass
+
+
+def _generate_remote_promtail_config(loki_url: str) -> str:
+    """Generate a Promtail config for a remote node that pushes to the central Loki."""
+    return f"""server:
+  http_listen_port: {PROMTAIL_PORT}
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: {loki_url}
+
+scrape_configs:
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+    relabel_configs:
+      - source_labels: ['__meta_docker_container_label_managed_by']
+        regex: 'smsly-hosting'
+        action: keep
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        target_label: 'compose_service'
+      - source_labels: ['__meta_docker_container_label_smsly_blue_green_canonical_name']
+        target_label: 'compose_service'
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: 'container_name'
+      - source_labels: ['__meta_docker_container_id']
+        target_label: 'container'
+    pipeline_stages:
+      - json:
+          expressions:
+            output: log
+            stream: stream
+            timestamp: time
+      - labels:
+          stream:
+      - timestamp:
+          source: timestamp
+          format: RFC3339Nano
+      - output:
+          source: output
+"""
+
+
 def _write_target_file(filename, targets):
     """Write a JSON target file to TARGETS_DIR."""
     filepath = os.path.join(TARGETS_DIR, filename)

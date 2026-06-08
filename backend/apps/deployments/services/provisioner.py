@@ -1300,6 +1300,7 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
         try:
             from apps.deployments.services.prometheus_targets import (
                 deploy_docker_labels_exporter_on_node,
+                deploy_promtail_on_node,
                 write_docker_labels_targets,
             )
             _append_log(server, "Deploying docker-labels exporter...")
@@ -1307,9 +1308,14 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                 _append_log(server, "✓ docker-labels exporter deployed")
             else:
                 _append_log(server, "⚠ docker-labels exporter deployment failed (non-critical)")
+            _append_log(server, "Deploying Promtail log collector...")
+            if deploy_promtail_on_node(server):
+                _append_log(server, "✓ Promtail deployed")
+            else:
+                _append_log(server, "⚠ Promtail deployment failed (non-critical)")
             write_docker_labels_targets()
         except Exception as exc:
-            _append_log(server, f"⚠ docker-labels exporter skipped: {exc}")
+            _append_log(server, f"⚠ exporter/Promtail deployment skipped: {exc}")
 
         # The token from provisioning may be a DRF session token.
         # Try to exchange it for a long-lived smsly_ API token via the
