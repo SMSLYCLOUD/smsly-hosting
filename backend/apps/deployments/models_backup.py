@@ -43,3 +43,17 @@ class BackupSchedule(models.Model):
     enabled = models.BooleanField(default=True)
     last_run = models.DateTimeField(null=True)
     next_run = models.DateTimeField(null=True)
+    # ── S3 / object storage destination (optional) ──────────────────────────
+    storage_backend = models.CharField(
+        max_length=20,
+        choices=[('local', 'Local'), ('s3', 'S3 / R2 / MinIO')],
+        default='local',
+    )
+    s3_bucket = models.CharField(max_length=255, blank=True, default='')
+    s3_region = models.CharField(max_length=100, blank=True, default='us-east-1')
+    s3_endpoint = models.CharField(
+        max_length=500, blank=True, default='',
+        help_text='Custom endpoint for R2/MinIO. Leave blank for AWS S3.',
+    )
+    s3_access_key = models.CharField(max_length=255, blank=True, default='')
+    s3_secret_key = models.CharField(max_length=255, blank=True, default='')

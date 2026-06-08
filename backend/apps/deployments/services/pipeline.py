@@ -84,6 +84,16 @@ def _get_builds_root():
 _BUILDS_ROOT = _get_builds_root()
 
 
+def _read_env_file(path):
+    """Read a docker-compose .env file, yielding non-comment key=value lines."""
+    with open(path, 'r') as fh:
+        for line in fh:
+            stripped = line.strip()
+            if not stripped or stripped.startswith('#'):
+                continue
+            yield stripped
+
+
 # pylint: disable=too-few-public-methods
 class PipelineError(Exception):
     """Base class for pipeline failures."""
@@ -1633,6 +1643,13 @@ class PipelineManager:
         # Build env vars to inject (addons, runtime config)
         env = os.environ.copy()
         env['DOCKER_BUILDKIT'] = '1'
+        # Merge compose .env file if present (Coolify parity: supports ${VAR} interpolation)
+        compose_env_file = os.path.join(self.source_dir, '.env')
+        if os.path.isfile(compose_env_file):
+            for line in _read_env_file(compose_env_file):
+                key, _, val = line.partition('=')
+                if key and not key.startswith('#'):
+                    env.setdefault(key.strip(), val.strip())
         for ev in self.service.env_vars.all():
             env[ev.key] = ev.value
 
