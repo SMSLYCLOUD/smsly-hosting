@@ -33,6 +33,9 @@
 
 set -euo pipefail
 
+# ─── Defaults for unset env vars (prevents set -u crashes) ────────────────────
+export SMSLY_SERVICE_PROXY_UPSTREAM=${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
+
 # ─── Root Check ─────────────────────────────────────────────────────────────
 if [ "$EUID" -ne 0 ]; then
     echo -e "\033[0;31mERROR: This script must be run as root.\033[0m"
