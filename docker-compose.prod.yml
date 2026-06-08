@@ -16,7 +16,7 @@ services:
       timeout: 10s
       retries: 10
       start_period: 60s
-    command: -c max_connections=200
+    command: -c max_connections=${DB_MAX_CONNECTIONS:-200}
     labels:
     - managed_by=smsly-hosting
     networks:
@@ -143,7 +143,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     command: gunicorn config.asgi:application --bind 0.0.0.0:8000 --workers ${GUNICORN_WORKERS:-4} --worker-class
-      uvicorn.workers.UvicornWorker --timeout 600
+      uvicorn.workers.UvicornWorker --timeout ${GUNICORN_TIMEOUT:-600}
     restart: unless-stopped
     cap_add:
       - NET_ADMIN
@@ -210,7 +210,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: celery -A config worker -l info --autoscale=12,4 -Q celery
+    command: celery -A config worker -l info --autoscale=${CELERY_AUTOSCALE:-12,4} -Q celery
     restart: unless-stopped
     env_file: .env
     environment:
@@ -325,7 +325,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: celery -A config worker -l info --autoscale=8,2 -Q fast
+    command: celery -A config worker -l info --autoscale=${CELERY_FAST_AUTOSCALE:-8,2} -Q fast
     restart: always
     env_file: .env
     environment:
@@ -370,7 +370,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: celery -A config worker -l info --autoscale=8,2 -Q deploy --hostname=deploy@%h
+    command: celery -A config worker -l info --autoscale=${CELERY_DEPLOY_AUTOSCALE:-8,2} -Q deploy --hostname=deploy@%h
     restart: unless-stopped
     env_file: .env
     environment:
@@ -445,8 +445,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.50'
-          memory: 256M
+          memory: ${SOCKET_PROXY_MEMORY_LIMIT:-256M}
   route-fallback:
     image: caddy:2-alpine
     restart: unless-stopped
@@ -523,8 +522,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.50'
-          memory: 512M
+          cpus: '${TRAEFIK_CPU_LIMIT:-0.50}'
+          memory: ${TRAEFIK_MEMORY_LIMIT:-512M}
   frps:
     image: snowdreamtech/frps:latest
     restart: unless-stopped
