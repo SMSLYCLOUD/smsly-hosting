@@ -4219,7 +4219,7 @@ PYEOF
         chown -R 1000:1000 /opt/smsly-hosting/prometheus-targets 2>/dev/null || true
         chmod 2777 /opt/smsly-hosting/prometheus-targets 2>/dev/null || true
         if [ -f "infrastructure/docker/docker-compose.observability.yml" ]; then
-            docker compose -f infrastructure/docker/docker-compose.observability.yml up -d --build prometheus docker-labels 2>/dev/null || true
+            docker compose -f infrastructure/docker/docker-compose.observability.yml up -d --build 2>/dev/null || true
             docker restart smsly-grafana 2>/dev/null || true
             docker restart smsly-docker-labels 2>/dev/null || true
             docker restart smsly-promtail 2>/dev/null || true
