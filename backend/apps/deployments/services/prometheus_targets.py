@@ -92,11 +92,11 @@ def deploy_docker_labels_exporter_on_node(server):
     tmp = None
     try:
         # 0. Check if exporter is already running
-        stdin, stdout, stderr = client.exec_command(
+        out, _err, _code = client.exec_command(
             "docker inspect smsly-docker-labels --format='{{.State.Status}}' 2>/dev/null",
             raise_on_error=False,
         )
-        existing_status = stdout.read().decode().strip()
+        existing_status = out.strip()
         if existing_status == "running":
             logger.debug("docker-labels exporter already running on %s", server.name)
             return True
@@ -124,10 +124,9 @@ def deploy_docker_labels_exporter_on_node(server):
             f"-v {remote_path}:/app/exporter.py:ro "
             f"python:3.12-alpine python3 -u /app/exporter.py"
         )
-        stdin, stdout, stderr = client.exec_command(cmd, raise_on_error=False)
-        exit_code = stdout.channel.recv_exit_status()
+        _out, err, exit_code = client.exec_command(cmd, raise_on_error=False)
         if exit_code != 0:
-            error = stderr.read().decode().strip()
+            error = err.strip()
             logger.error("Failed to start docker-labels on %s: %s", server.name, error)
             return False
 
