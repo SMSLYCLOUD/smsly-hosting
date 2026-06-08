@@ -2886,8 +2886,31 @@ ensure_infrastructure_permissions() {
         done
     fi
 
-    # Fast write probe for Caddy
-    echo "perm-check $(date +%s)" > "$caddy_config_dir/.perm_probe" 2>/dev/null || true
+    # Write probe for all bind-mount directories
+    local probe_failed=0
+    for probe_dir in "$caddy_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir"; do
+        if ! echo "perm-ok" > "$probe_dir/.perm_probe" 2>/dev/null; then
+            echo -e "${YELLOW}  ⚠ Write probe failed for $probe_dir — retrying with chown...${NC}"
+            chown -R 1000:1000 "$probe_dir" 2>/dev/null || true
+            chmod -R u+rwX,g+rwX "$probe_dir" 2>/dev/null || true
+            if echo "perm-ok" > "$probe_dir/.perm_probe" 2>/dev/null; then
+                echo -e "${GREEN}    ✓ Fixed${NC}"
+            else
+                echo -e "${RED}    ✗ Still cannot write to $probe_dir — check host permissions${NC}"
+                probe_failed=1
+            fi
+        fi
+        rm -f "$probe_dir/.perm_probe" 2>/dev/null || true
+    done
+    # Probe the .env file (mounted as a file, not a dir)
+    if [ -f "/opt/smsly-hosting/.env" ] && ! touch "/opt/smsly-hosting/.env" 2>/dev/null; then
+        echo -e "${YELLOW}  ⚠ .env not writable — fixing...${NC}"
+        chown 1000:1000 "/opt/smsly-hosting/.env" 2>/dev/null || true
+        chmod 664 "/opt/smsly-hosting/.env" 2>/dev/null || true
+    fi
+    if [ "$probe_failed" -ne 0 ]; then
+        echo -e "${RED}  ✗ Some bind-mount directories are not writable — containers may fail${NC}"
+    fi
 }
 
 resolve_container_target() {
