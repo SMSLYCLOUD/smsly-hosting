@@ -113,10 +113,12 @@ const comparisonRows = [
     {
         category: "Features",
         items: [
-            { name: "AI Auto-Scaling", cn: "Predictive (Proactive)", rw: "Reactive", vc: "Reactive (Serverless)", rn: "Reactive / Expensive" },
+            { name: "AI Auto-Scaling", cn: "Predictive (AI-Driven)", rw: "Reactive", vc: "Reactive (Serverless)", rn: "Reactive / Expensive" },
             { name: "Persistent Storage", cn: "Native Volumes (Zero Cost)", rw: "Volumes (Beta / $$$)", vc: "3rd Party Integrations Only", rn: "Volumes ($$$)" },
             { name: "Private Networking", cn: "Included (WireGuard Mesh)", rw: "Included", vc: "Enterprise Only", rn: "Included (VPC)" },
             { name: "Docker Support", cn: "Native (Dockerfile / Compose)", rw: "Native", vc: "Limited (Next.js focused)", rn: "Native" },
+            { name: "Serverless Functions (FaaS)", cn: "Monaco Editor + Node/Python", rw: false, vc: "Serverless Functions (JS/TS)", rn: false },
+            { name: "Container Terminal", cn: "Web SSH into containers", rw: false, vc: false, rn: false },
         ]
     },
     {
@@ -125,6 +127,7 @@ const comparisonRows = [
             { name: "Managed Postgres", cn: "Included (Patroni HA)", rw: "Included (No HA)", vc: "Vercel Postgres ($)", rn: "Render Postgres ($$$)" },
             { name: "Vector Search (pgvector)", cn: "Included by default", rw: "Manual setup", vc: "3rd party integrations", rn: "Manual setup" },
             { name: "Redis / In-Memory", cn: "Included", rw: "Included", vc: "Vercel KV ($)", rn: "Render Redis ($$)" },
+            { name: "S3-Compatible Backups", cn: "S3, R2, MinIO (Built-in)", rw: false, vc: false, rn: false },
         ]
     },
     {
@@ -147,6 +150,8 @@ const comparisonRows = [
         category: "Deployment & DX",
         items: [
             { name: "Git Push to Deploy", cn: true, rw: true, vc: true, rn: true },
+            { name: "Multi-Git Providers", cn: "GitHub, GitLab, Bitbucket", rw: "GitHub Only", vc: "GitHub, GitLab, Bitbucket", rn: "GitHub Only" },
+            { name: "Nixpacks Build Support", cn: "Auto-detect any language", rw: false, vc: false, rn: false },
             { name: "One-Click Blueprints", cn: "100+ Apps & Addons", rw: "Templates Available", vc: "Templates Available", rn: "Blueprints Available" },
             { name: "CLI Tooling", cn: "grid CLI", rw: "railway CLI", vc: "vercel CLI", rn: "render CLI" },
         ]
