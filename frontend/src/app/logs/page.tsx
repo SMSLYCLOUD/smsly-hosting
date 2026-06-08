@@ -49,9 +49,9 @@ export default function LogsPage({
         const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
 
         const applyFilter = (svcName: string, composeName?: string) => {
-            const resolved = composeName || svcName.toLowerCase().replace(/\s+/g, '-');
+            const resolved = composeName || svcName;
             setServiceFilter(svcName);
-            const filteredQuery = `{compose_service=~"${resolved}.*"}`;
+            const filteredQuery = `{compose_service="${resolved}"}`;
             setQuery(filteredQuery);
             setDraftQuery(filteredQuery);
         };
