@@ -179,6 +179,13 @@ services:
     - traefik.http.routers.backend.rule=PathPrefix(`/api/v1/`) || PathPrefix(`/admin/`) || PathPrefix(`/health/`) || PathPrefix(`/accounts/`) || PathPrefix(`/dj-rest-auth/`)
     - traefik.http.routers.backend.entrypoints=web
     - traefik.http.routers.backend.priority=10
+    - traefik.http.routers.backend.middlewares=api-ratelimit,backend-cb
+    - traefik.http.middlewares.api-ratelimit.ratelimit.average=200
+    - traefik.http.middlewares.api-ratelimit.ratelimit.period=1s
+    - traefik.http.middlewares.api-ratelimit.ratelimit.burst=50
+    - traefik.http.middlewares.backend-cb.circuitbreaker.expression=ResponseCodeRatio(500, 600, 0, 600) > 0.30
+    - traefik.http.middlewares.backend-cb.circuitbreaker.checkperiod=10s
+    - traefik.http.middlewares.backend-cb.circuitbreaker.fallbackduration=30s
     - traefik.http.services.backend.loadbalancer.server.port=8000
     - traefik.docker.network=smsly-net
     - managed_by=smsly-hosting
@@ -231,7 +238,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: celery -A config beat -l info --pidfile=/tmp/celerybeat.pid --schedule=/tmp/celerybeat-schedule
+    command: celery -A config beat -l info --pidfile=/app/celerybeat.pid --schedule=/app/celerybeat-schedule
     restart: unless-stopped
     env_file: .env
     environment:
