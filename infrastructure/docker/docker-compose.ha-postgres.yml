@@ -1,5 +1,8 @@
 # SMSLY Hosting High-Availability PostgreSQL Stack
-# Primary-Replica setup with PgBouncer connection pooling
+# Primary-Replica setup with PgBouncer connection pooling.
+#
+# Usage:  docker compose -f docker-compose.ha-postgres.yml up -d
+# Requires: REPLICATION_PASSWORD in .env or environment
 
 services:
   # Primary PostgreSQL
@@ -10,22 +13,23 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-smsly_hosting}
       POSTGRES_USER: ${POSTGRES_USER:-smsly_admin}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      # Replication settings
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       POSTGRES_INITDB_ARGS: "--data-checksums"
+      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD:-}
     volumes:
       - postgres-primary-data:/var/lib/postgresql/data
       - ./postgres/init-primary.sh:/docker-entrypoint-initdb.d/init-primary.sh:ro
-      - ./postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
     command: >
       postgres
       -c wal_level=replica
       -c max_wal_senders=10
       -c max_replication_slots=10
+      -c wal_log_hints=on
       -c hot_standby=on
       -c wal_keep_size=1GB
+      -c wal_sender_timeout=60s
       -c archive_mode=on
-      -c archive_command='cp %p /var/lib/postgresql/archive/%f'
+      -c archive_command='mkdir -p /var/lib/postgresql/archive && cp %p /var/lib/postgresql/archive/%f'
       -c max_connections=200
       -c shared_buffers=256MB
       -c effective_cache_size=768MB
@@ -34,10 +38,19 @@ services:
     networks:
       - smsly-net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-smsly_admin} -d ${POSTGRES_DB:-smsly_hosting}"]
+      test: ["CMD-SHELL", "PGPASSWORD=$${POSTGRES_PASSWORD} pg_isready -U ${POSTGRES_USER:-smsly_admin} -d ${POSTGRES_DB:-smsly_hosting}"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        reservations:
+          memory: ${DB_REPL_PRIMARY_RESERVATION:-2G}
+        limits:
+          memory: ${DB_REPL_PRIMARY_LIMIT:-8G}
+    labels:
+      - managed_by=smsly-hosting
 
   # Read Replica
   postgres-replica:
@@ -47,10 +60,9 @@ services:
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       PGUSER: replicator
-      PGPASSWORD: ${REPLICATION_PASSWORD:-repl_secret_2024}
+      PGPASSWORD: ${REPLICATION_PASSWORD:-}
     volumes:
       - postgres-replica-data:/var/lib/postgresql/data
-      - ./postgres/init-replica.sh:/init-replica.sh:ro
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -58,12 +70,26 @@ services:
           echo "Initializing replica from primary..."
           pg_basebackup -h postgres-primary -D /var/lib/postgresql/data -U replicator -Fp -Xs -P -R
         fi
-        exec docker-entrypoint.sh postgres -c hot_standby=on
+        exec docker-entrypoint.sh postgres -c hot_standby=on -c max_connections=300
     networks:
       - smsly-net
     depends_on:
       postgres-primary:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "PGPASSWORD=$${POSTGRES_PASSWORD} pg_isready -U ${POSTGRES_USER:-smsly_admin} -d ${POSTGRES_DB:-smsly_hosting}"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
+    deploy:
+      resources:
+        reservations:
+          memory: ${DB_REPL_REPLICA_RESERVATION:-1G}
+        limits:
+          memory: ${DB_REPL_REPLICA_LIMIT:-4G}
+    labels:
+      - managed_by=smsly-hosting
 
   # PgBouncer Connection Pooler
   pgbouncer:
@@ -74,8 +100,8 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-smsly_admin}:${POSTGRES_PASSWORD}@postgres-primary:5432/${POSTGRES_DB:-smsly_hosting}
       POOL_MODE: transaction
       MAX_CLIENT_CONN: 1000
-      DEFAULT_POOL_SIZE: 50
-      MIN_POOL_SIZE: 10
+      DEFAULT_POOL_SIZE: ${PGBOUNCER_POOL_SIZE:-50}
+      MIN_POOL_SIZE: ${PGBOUNCER_MIN_POOL:-10}
       RESERVE_POOL_SIZE: 25
       RESERVE_POOL_TIMEOUT: 5
       MAX_DB_CONNECTIONS: 100
@@ -92,6 +118,12 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: ${PGBOUNCER_MEMORY_LIMIT:-256M}
+    labels:
+      - managed_by=smsly-hosting
 
   # Read-only PgBouncer for replicas
   pgbouncer-readonly:
@@ -102,7 +134,7 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-smsly_admin}:${POSTGRES_PASSWORD}@postgres-replica:5432/${POSTGRES_DB:-smsly_hosting}
       POOL_MODE: transaction
       MAX_CLIENT_CONN: 500
-      DEFAULT_POOL_SIZE: 25
+      DEFAULT_POOL_SIZE: ${PGBOUNCER_RO_POOL_SIZE:-25}
       AUTH_TYPE: scram-sha-256
     ports:
       - "6433:6432"
@@ -110,6 +142,12 @@ services:
       - smsly-net
     depends_on:
       - postgres-replica
+    deploy:
+      resources:
+        limits:
+          memory: ${PGBOUNCER_RO_MEMORY_LIMIT:-128M}
+    labels:
+      - managed_by=smsly-hosting
 
 volumes:
   postgres-primary-data:
