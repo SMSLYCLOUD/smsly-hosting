@@ -1350,6 +1350,24 @@ if os.path.exists(services_dir):
                 # causing HTTP 502 errors.
                 self._regenerate_master_caddyfile()
 
+                # Stop source service — DNS/Caddy now routes to target
+                service_name = shlex.quote(_safe_service_name(self.transfer.service.name))
+                if self.source_ssh:
+                    self.source_ssh.exec_command(
+                        f"docker stop {service_name} 2>/dev/null; docker rm -f {service_name} 2>/dev/null",
+                        raise_on_error=False,
+                    )
+                else:
+                    # Source is local
+                    try:
+                        import docker as docker_lib
+                        client = docker_lib.from_env()
+                        container = client.containers.get(self.transfer.service.name)
+                        container.stop(timeout=10)
+                        container.remove()
+                    except Exception:
+                        pass
+
         self.transfer.save()
         self._update(100, 'Transfer complete!')
 
@@ -1405,7 +1423,9 @@ if os.path.exists(services_dir):
         self.transfer.error_message = _redact_transfer_text(str(error))[:TRANSFER_ERROR_LIMIT]
         self.transfer.target_ssh_key = ''
         self.transfer.target_ssh_password = ''
-        self.transfer.save(update_fields=['status', 'error_message', 'target_ssh_key', 'target_ssh_password'])
+        self.transfer.source_ssh_key = ''
+        self.transfer.source_ssh_password = ''
+        self.transfer.save(update_fields=['status', 'error_message', 'target_ssh_key', 'target_ssh_password', 'source_ssh_key', 'source_ssh_password'])
         self._log(f"CRITICAL FAILURE: {error}")
 
     def _generate_docker_run_command(self, service, metadata):
