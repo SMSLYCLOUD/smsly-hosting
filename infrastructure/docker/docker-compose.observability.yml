@@ -23,8 +23,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '${LOKI_CPU_LIMIT:-1}'
-          memory: ${LOKI_MEMORY_LIMIT:-1024M}
+          cpus: '${LOKI_CPU_LIMIT:-0.5}'
+          memory: ${LOKI_MEMORY_LIMIT:-512M}
     labels:
       - managed_by=smsly-hosting
 
@@ -83,8 +83,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '${PROMETHEUS_CPU_LIMIT:-1}'
-          memory: ${PROMETHEUS_MEMORY_LIMIT:-2048M}
+          cpus: '${PROMETHEUS_CPU_LIMIT:-0.5}'
+          memory: ${PROMETHEUS_MEMORY_LIMIT:-512M}
     labels:
       - managed_by=smsly-hosting
 
