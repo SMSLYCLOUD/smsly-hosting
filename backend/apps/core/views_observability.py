@@ -127,16 +127,15 @@ def grafana_embed_url(request, dashboard_uid: str):
 
 
 def _resolve_service_var(var_service: str) -> str:
-    """Resolve a var-service parameter (UUID or name) to a compose_service filter."""
+    """Resolve a var-service parameter (UUID or name) to a compose service name."""
+    from apps.deployments.models import Service
     try:
-        # If it looks like a UUID, try to fetch the service
         uuid.UUID(var_service)
-        from apps.deployments.models import Service
         svc = Service.objects.filter(id=var_service).first()
-        if svc and svc.name:
-            return svc.name
     except (ValueError, Exception):
-        pass
+        svc = Service.objects.filter(name=var_service).first()
+    if svc:
+        return svc.compose_main_service or svc.name.lower().replace(' ', '-')
     return var_service
 
 
