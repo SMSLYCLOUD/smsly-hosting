@@ -138,5 +138,18 @@ ensure_caddy_config_writable() {
 }
 ensure_caddy_config_writable
 
+ensure_prometheus_targets_writable() {
+    mkdir -p /opt/smsly-hosting/prometheus-targets
+    chmod 2777 /opt/smsly-hosting/prometheus-targets 2>/dev/null || true
+}
+ensure_prometheus_targets_writable
+
+# Write local docker-labels target files on every web container start
+if is_web_container "$@"; then
+    python manage.py deploy_docker_labels_exporters --targets-only 2>&1 | \
+        awk '{print "[deploy-docker-labels]", $0}' || \
+        echo "[deploy-docker-labels] WARNING: failed to write target files" >&2
+fi
+
 echo "Starting: $*"
 exec "$@"
