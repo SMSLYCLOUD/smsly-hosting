@@ -159,19 +159,22 @@ def deploy_promtail_on_node(server):
     from apps.deployments.models_core import ManagedServer
     from apps.deployments.services.ssh_client import SSHClient
 
-    # Determine the Loki URL that the remote node can reach.
-    # Priority: WireGuard mesh IP → platform domain → public IP → host
+    # Determine the Loki URL that the remote node can reach via the VPN mesh.
+    # Priority: WireGuard mesh IP → private IP → find from mesh config → public IP
     primary = ManagedServer.objects.filter(is_primary=True).first()
     if not primary:
         logger.error("No primary server found — cannot deploy remote Promtail")
         return False
-    # Use WireGuard address first (VPN mesh), then try PlatformConfig, then fallback
-    loki_ip = (primary.wg_address or "").strip()
+    loki_ip = (primary.wg_address or "").strip() or (primary.private_ip or "").strip()
     if not loki_ip:
+        # Try to find the primary's WireGuard IP from the mesh configuration
         try:
-            from apps.deployments.models import PlatformConfig
-            cfg = PlatformConfig.load()
-            loki_ip = (cfg.domain or "").strip()
+            from apps.deployments.models import MeshPeer
+            peer = MeshPeer.objects.filter(
+                server=primary, is_active=True
+            ).select_related('mesh').first()
+            if peer and peer.wg_address:
+                loki_ip = peer.wg_address.strip()
         except Exception:
             pass
     if not loki_ip:
@@ -180,6 +183,7 @@ def deploy_promtail_on_node(server):
         logger.error("Primary server has no reachable IP — cannot deploy remote Promtail")
         return False
     loki_url = f"http://{loki_ip}:3100/loki/api/v1/push"
+    logger.info("Remote Promtail Loki URL: %s", loki_url)
 
     client = SSHClient(
         ip=server.host,
