@@ -135,7 +135,7 @@ def _resolve_service_var(var_service: str) -> str:
     except (ValueError, Exception):
         svc = Service.objects.filter(name=var_service).first()
     if svc:
-        return svc.compose_main_service or svc.name.lower().replace(' ', '-')
+        return svc.compose_main_service or svc.name
     return var_service
 
 
@@ -148,11 +148,11 @@ def loki_query(request):
         return Response({'error': 'query parameter is required'}, status=status.HTTP_400_BAD_REQUEST)
 
     # Resolve UUID in compose_service filter (safety net for unresolved UUIDs)
-    uuid_match = re.search(r'\{compose_service=~"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})', query)
+    uuid_match = re.search(r'\{compose_service(?:=|~)"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})', query)
     if uuid_match:
         resolved = _resolve_service_var(uuid_match.group(1))
         if resolved != uuid_match.group(1):
-            query = f'{{compose_service=~"{resolved}.*"}}'
+            query = f'{{compose_service="{resolved}"}}'
 
     try:
         limit = int(request.GET.get('limit', '100'))
