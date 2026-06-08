@@ -20,6 +20,26 @@ if [ ! -f "$COMPOSE_FILE" ]; then
     exit 1
 fi
 
+# ─── Zombie Process Cleanup ─────────────────────────────────────────────
+zombies=$(ps -eo pid=,ppid=,stat=,comm= 2>/dev/null | awk '$3 ~ /^Z/ {print $1":"$2":"$4}' || true)
+if [ -n "$zombies" ]; then
+    zombie_count=$(echo "$zombies" | wc -l)
+    log "Zombie processes: $zombie_count. Sending SIGCHLD to parents..."
+    echo "$zombies" | while IFS=: read -r pid ppid comm; do
+        kill -s SIGCHLD "$ppid" 2>/dev/null || true
+    done
+    sleep 1
+    remaining=$(ps -eo pid=,stat= 2>/dev/null | awk '$2 ~ /^Z/' | wc -l)
+    if [ "$remaining" -gt 0 ]; then
+        log "Warning: $remaining zombie(s) remain. Unreapable zombies:"
+        ps -eo pid=,ppid=,stat=,comm= 2>/dev/null | awk '$3 ~ /^Z/ {print "  PID="$1" PPID="$2" CMD="$4}' | while read -r line; do
+            log "$line"
+        done
+    else
+        log "All zombie processes reaped successfully"
+    fi
+fi
+
 for service in "${SERVICES[@]}"; do
     container_id=$(docker compose -f "$COMPOSE_FILE" ps -q "$service" 2>/dev/null || true)
     
