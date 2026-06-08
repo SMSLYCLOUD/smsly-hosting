@@ -5244,7 +5244,8 @@ def node_watchdog_task(self):
 
     servers = ManagedServer.objects.filter(
         is_primary=False,
-    ).exclude(status=ManagedServer.Status.DELETED)
+        status=ManagedServer.Status.ONLINE,
+    )
 
     results = {"checked": 0, "healed": 0, "failed": 0, "offline": 0}
 

@@ -37,13 +37,15 @@ class Command(BaseCommand):
         if node_filter:
             servers = ManagedServer.objects.filter(
                 is_primary=False,
-            ).exclude(status=ManagedServer.Status.DELETED).filter(
+                status=ManagedServer.Status.ONLINE,
+            ).filter(
                 name__icontains=node_filter,
             )
         else:
             servers = ManagedServer.objects.filter(
                 is_primary=False,
-            ).exclude(status=ManagedServer.Status.DELETED)
+                status=ManagedServer.Status.ONLINE,
+            )
 
         if options.get("targets_only"):
             write_docker_labels_targets()
