@@ -263,6 +263,13 @@ def _build_service_domain_block(domain: str, upstream_host: str, upstream_url: s
     lines.extend(
         [
             "    encode gzip",
+            "    rate_limit {",
+            "        zone service {",
+            "            key {remote_host}",
+            "            events 500",
+            "            window 10s",
+            "        }",
+            "    }",
             "    log {",
             "        output file /var/log/caddy/access.log",
             "    }",
@@ -723,6 +730,13 @@ def generate_caddyfile(config) -> str:
         platform_block.extend(
             [
                 "    encode gzip",
+                "    rate_limit {",
+                "        zone platform_api {",
+                "            key {remote_host}",
+                "            events 200",
+                "            window 10s",
+                "        }",
+                "    }",
                 "    log {",
                 "        output file /var/log/caddy/access.log",
                 "    }",

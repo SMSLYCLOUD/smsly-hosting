@@ -54,6 +54,10 @@ services:
       - "10.100.0.1:5432:5432"
     networks:
     - smsly-net
+    deploy:
+      resources:
+        limits:
+          memory: ${PGCAT_MEMORY_LIMIT:-256M}
   redis:
     image: redis:7-alpine
     command: redis-server --requirepass ${REDIS_PASSWORD} --maxmemory 400mb --maxmemory-policy allkeys-lru
@@ -99,6 +103,10 @@ services:
     - managed_by=smsly-hosting
     networks:
       - smsly-net
+    deploy:
+      resources:
+        limits:
+          memory: ${REGISTRY_MEMORY_LIMIT:-1G}
   docker-mirror:
     image: registry:2
     restart: unless-stopped
@@ -121,6 +129,10 @@ services:
     - managed_by=smsly-hosting
     networks:
       - smsly-net
+    deploy:
+      resources:
+        limits:
+          memory: ${DOCKER_MIRROR_MEMORY_LIMIT:-512M}
   backend:
     build:
       context: ./backend
@@ -293,6 +305,9 @@ services:
     deploy:
       update_config:
         order: start-first
+      resources:
+        limits:
+          memory: ${FRONTEND_MEMORY_LIMIT:-1G}
     labels:
     - traefik.enable=true
     - traefik.http.routers.frontend.rule=Host(`${DOMAIN}`) || Host(`${PUBLIC_IP}`) || Host(`localhost`) || Host(`127.0.0.1`)
@@ -450,6 +465,10 @@ services:
       start_period: 10s
     networks:
     - smsly-net
+    deploy:
+      resources:
+        limits:
+          memory: ${ROUTE_FALLBACK_MEMORY_LIMIT:-128M}
   traefik:
     image: traefik:v3.6
     restart: unless-stopped
@@ -531,6 +550,10 @@ services:
     - managed_by=smsly-hosting
     networks:
     - smsly-net
+    deploy:
+      resources:
+        limits:
+          memory: ${FRPS_MEMORY_LIMIT:-256M}
   rabbitmq:
     image: rabbitmq:3-management-alpine
     ports:
@@ -591,6 +614,10 @@ services:
     - managed_by=smsly-hosting
     networks:
       - smsly-net
+    deploy:
+      resources:
+        limits:
+          memory: ${CADDY_MEMORY_LIMIT:-512M}
 networks:
   smsly-net:
     external: true
