@@ -2606,7 +2606,6 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 timeout (int, optional, default 30),
                 on_success (callable(resp)->Response, optional),
                 on_error (callable(resp|None)->Response, optional),
-                fallthrough_on_exception (bool, optional, default False),
                 retry (callable(resp, orchestrator, remote_id, config)->Response|None, optional),
                 k8s_handler (callable(container_id, path)->Response, optional),
                 k8s_command (list, optional).
@@ -2617,9 +2616,9 @@ class ServiceViewSet(viewsets.ModelViewSet):
             Response
         """
         target_type, active_server = self._resolve_target_type(service, latest_deploy)
-        fallthrough = remote_config.get('fallthrough_on_exception', False)
+        attempted_remote = target_type in ("remote", "lite_agent") and active_server
 
-        if target_type in ("remote", "lite_agent") and active_server:
+        if attempted_remote:
             from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
             orchestrator = RemoteOrchestrator(active_server)
             remote_id = orchestrator._search_remote_service(service, "/api/v1/services/")
@@ -2643,31 +2642,20 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     retry_result = retry_handler(resp, orchestrator, remote_id, remote_config)
                     if retry_result is not None:
                         return retry_result
-                if fallthrough:
-                    logger.warning(
-                        f"Remote {remote_config['path_suffix']} returned non-200 for {service.id}, "
-                        f"falling back to local: {resp.status_code if resp else 'Timeout'}"
-                    )
-                else:
-                    on_error = remote_config.get('on_error')
-                    if on_error:
-                        return on_error(resp)
-                    return Response(
-                        {'error': 'Remote node returned an error', 'details': resp.text if resp else 'Timeout'},
-                        status=status.HTTP_502_BAD_GATEWAY,
-                    )
+                on_error = remote_config.get('on_error')
+                if on_error:
+                    return on_error(resp)
+                return Response(
+                    {'error': 'Remote node returned an error', 'details': resp.text if resp else 'Timeout'},
+                    status=resp.status_code if resp else status.HTTP_502_BAD_GATEWAY,
+                )
             except Exception as e:
-                if fallthrough:
-                    logger.warning(
-                        f"Remote {remote_config['path_suffix']} failed for {service.id}, falling back to local: {e}"
-                    )
-                else:
-                    on_error = remote_config.get('on_error')
-                    if on_error:
-                        return on_error(None)
-                    return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                on_error = remote_config.get('on_error')
+                if on_error:
+                    return on_error(None)
+                return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        # Local execution
+        # Local execution (only reached when target is local)
         container = resolve_running_container(service, latest_deploy)
         if container is None:
             container_id = (latest_deploy.container_id or "")
@@ -2749,7 +2737,6 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 'path_suffix': 'file-browse',
                 'params': {'path': path},
                 'timeout': 30,
-                'fallthrough_on_exception': True,
                 'retry': _retry_browse,
                 'k8s_handler': lambda cid, p: self._k8s_file_browse(cid, p),
             },
@@ -3010,7 +2997,6 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     {'error': 'Failed to download from remote node', 'details': resp.text if resp else 'Timeout'},
                     status=status.HTTP_400_BAD_REQUEST,
                 ),
-                'fallthrough_on_exception': True,
             },
             local_action=lambda container, path=None: self._local_file_download(container, path),
             path=path,
@@ -3055,7 +3041,6 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     {'error': 'Failed to delete on remote node', 'details': resp.text if resp else 'Timeout'},
                     status=status.HTTP_400_BAD_REQUEST,
                 ),
-                'fallthrough_on_exception': True,
                 'k8s_command': ['rm', '-rf', path],
             },
             local_action=lambda container, path=None: self._local_file_delete(container, path),
@@ -3100,7 +3085,6 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     {'error': 'Failed to mkdir on remote node', 'details': resp.text if resp else 'Timeout'},
                     status=status.HTTP_400_BAD_REQUEST,
                 ),
-                'fallthrough_on_exception': True,
                 'k8s_command': ['mkdir', '-p', path],
             },
             local_action=lambda container, path=None: self._local_file_mkdir(container, path),
@@ -3146,7 +3130,6 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     {'error': 'Failed to read file on remote node', 'details': resp.text if resp else 'Timeout'},
                     status=status.HTTP_400_BAD_REQUEST,
                 ),
-                'fallthrough_on_exception': True,
                 'k8s_command': ['cat', path],
             },
             local_action=lambda container, path=None: self._local_file_read(container, path),
@@ -3199,7 +3182,6 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     {'error': 'Failed to write file on remote node', 'details': resp.text if resp else 'Timeout'},
                     status=status.HTTP_400_BAD_REQUEST,
                 ),
-                'fallthrough_on_exception': True,
                 'k8s_command': ['sh', '-c', f'cat > {path}'],
             },
             local_action=lambda container, path=None: self._local_file_write(container, path, content),
