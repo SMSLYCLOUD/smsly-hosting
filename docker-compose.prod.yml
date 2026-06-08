@@ -16,10 +16,17 @@ services:
       timeout: 10s
       retries: 10
       start_period: 60s
+    command: -c max_connections=200
     labels:
     - managed_by=smsly-hosting
     networks:
     - smsly-net
+    deploy:
+      resources:
+        reservations:
+          memory: ${DB_MEMORY_RESERVATION:-1G}
+        limits:
+          memory: ${DB_MEMORY_LIMIT:-4G}
   pgcat:
     build:
       context: ./infrastructure/pgcat
@@ -49,7 +56,7 @@ services:
     - smsly-net
   redis:
     image: redis:7-alpine
-    command: redis-server --requirepass ${REDIS_PASSWORD}
+    command: redis-server --requirepass ${REDIS_PASSWORD} --maxmemory 400mb --maxmemory-policy allkeys-lru
     restart: unless-stopped
     volumes:
     - redis_data:/data
@@ -65,7 +72,12 @@ services:
     - managed_by=smsly-hosting
     networks:
     - smsly-net
-    # No external ports — internal network only (security hardening)
+    deploy:
+      resources:
+        reservations:
+          memory: ${REDIS_MEMORY_RESERVATION:-256M}
+        limits:
+          memory: ${REDIS_MEMORY_LIMIT:-512M}
   registry:
     image: registry:2
     restart: unless-stopped
@@ -113,7 +125,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: gunicorn config.asgi:application --bind 0.0.0.0:8000 --workers 2 --worker-class
+    command: gunicorn config.asgi:application --bind 0.0.0.0:8000 --workers ${GUNICORN_WORKERS:-4} --worker-class
       uvicorn.workers.UvicornWorker --timeout 600
     restart: unless-stopped
     cap_add:
@@ -157,6 +169,11 @@ services:
     deploy:
       update_config:
         order: start-first
+      resources:
+        reservations:
+          memory: ${BACKEND_MEMORY_RESERVATION:-512M}
+        limits:
+          memory: ${BACKEND_MEMORY_LIMIT:-2G}
     labels:
     - traefik.enable=true
     - traefik.http.routers.backend.rule=PathPrefix(`/api/v1/`) || PathPrefix(`/admin/`) || PathPrefix(`/health/`) || PathPrefix(`/accounts/`) || PathPrefix(`/dj-rest-auth/`)
@@ -510,11 +527,12 @@ services:
   rabbitmq:
     image: rabbitmq:3-management-alpine
     ports:
-      - "5672:5672" # Required for Lite Agents
+      - "5672:5672"
     restart: unless-stopped
     environment:
       RABBITMQ_DEFAULT_USER: smsly_user
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+      RABBITMQ_VM_MEMORY_HIGH_WATERMARK: ${RABBITMQ_MEMORY_WATERMARK:-0.6}
     volumes:
     - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
@@ -529,6 +547,12 @@ services:
     - managed_by=smsly-hosting
     networks:
       - smsly-net
+    deploy:
+      resources:
+        reservations:
+          memory: ${RABBITMQ_MEMORY_RESERVATION:-256M}
+        limits:
+          memory: ${RABBITMQ_MEMORY_LIMIT:-1G}
   caddy:
     build:
       context: .
