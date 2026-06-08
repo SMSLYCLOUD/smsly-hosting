@@ -4211,7 +4211,20 @@ PYEOF
             set_checkpoint "update_db_migrated"
             ;;
     esac
-     set_checkpoint "update_containers_rebuilt"
+
+    # ─── Observability Stack Update (master mode only) ──────────────────────
+    if [ "$MODE_AGENT_LITE" != "true" ] && [ "$MODE_NODE" != "true" ]; then
+        echo -e "${BLUE}  → Updating observability stack...${NC}"
+        mkdir -p /opt/smsly-hosting/prometheus-targets
+        chown 1000:1000 /opt/smsly-hosting/prometheus-targets 2>/dev/null || true
+        chmod 2775 /opt/smsly-hosting/prometheus-targets 2>/dev/null || true
+        if [ -f "infrastructure/docker/docker-compose.observability.yml" ]; then
+            docker compose -f infrastructure/docker/docker-compose.observability.yml up -d --build prometheus docker-labels 2>/dev/null || true
+            docker restart smsly-grafana 2>/dev/null || true
+        fi
+        echo -e "${GREEN}  ✓ Observability stack updated${NC}"
+    fi
+    set_checkpoint "update_containers_rebuilt"
 fi
 
     # ─── Ensure Local Docker cloud provider exists ──────────────────────────

@@ -4389,6 +4389,7 @@ PYEOF
         echo -e "${BLUE}  → Updating observability stack...${NC}"
         mkdir -p /opt/smsly-hosting/prometheus-targets
         chown 1000:1000 /opt/smsly-hosting/prometheus-targets 2>/dev/null || true
+        chmod 2775 /opt/smsly-hosting/prometheus-targets 2>/dev/null || true
         docker compose -f infrastructure/docker/docker-compose.observability.yml up -d --build prometheus docker-labels 2>/dev/null || true
         docker restart smsly-grafana 2>/dev/null || true
         echo -e "${GREEN}  ✓ Observability stack updated${NC}"
