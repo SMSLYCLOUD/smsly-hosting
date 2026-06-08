@@ -1,0 +1,88 @@
+# SMSLY Hosting High-Availability Redis Stack
+# Primary-Replica setup for read scaling and warm failover.
+#
+# Usage:  docker compose -f docker-compose.ha-redis.yml up -d
+# Requires: REDIS_PASSWORD in .env
+#
+# NOTE: For full auto-failover, Redis Sentinel is needed (3+ nodes).
+# This compose provides replication only — manual failover required.
+
+services:
+  # Primary Redis (write)
+  redis-primary:
+    image: redis:7-alpine
+    container_name: smsly-redis-primary
+    restart: unless-stopped
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+      --maxmemory ${REDIS_MAXMEMORY:-400mb}
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+      --repl-backlog-size 64mb
+      --repl-backlog-ttl 3600
+      --min-replicas-to-write 1
+      --min-replicas-max-lag 10
+    volumes:
+      - redis-primary-data:/data
+    networks:
+      - smsly-net
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a $${REDIS_PASSWORD} ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        reservations:
+          memory: ${REDIS_PRIMARY_RESERVATION:-256M}
+        limits:
+          memory: ${REDIS_PRIMARY_LIMIT:-1G}
+    labels:
+      - managed_by=smsly-hosting
+
+  # Replica Redis (read-only)
+  redis-replica:
+    image: redis:7-alpine
+    container_name: smsly-redis-replica
+    restart: unless-stopped
+    command: >
+      redis-server
+      --replicaof redis-primary 6379
+      --masterauth ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+      --requirepass ${REDIS_PASSWORD}
+      --maxmemory ${REDIS_MAXMEMORY:-400mb}
+      --maxmemory-policy allkeys-lru
+      --replica-read-only yes
+      --repl-diskless-sync yes
+      --repl-diskless-sync-delay 5
+      --repl-ping-replica-period 5
+    volumes:
+      - redis-replica-data:/data
+    networks:
+      - smsly-net
+    depends_on:
+      redis-primary:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a $${REDIS_PASSWORD} ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        reservations:
+          memory: ${REDIS_REPLICA_RESERVATION:-128M}
+        limits:
+          memory: ${REDIS_REPLICA_LIMIT:-512M}
+    labels:
+      - managed_by=smsly-hosting
+
+volumes:
+  redis-primary-data:
+  redis-replica-data:
+
+networks:
+  smsly-net:
+    external: true
