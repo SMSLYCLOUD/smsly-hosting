@@ -45,9 +45,9 @@ export default function LogsPage({
             setResolvedService(undefined);
             return;
         }
-        setServiceFilter(raw);
         const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
         if (!uuidRegex.test(raw)) {
+            setServiceFilter(raw);
             setResolvedService(raw);
             return;
         }
@@ -58,6 +58,7 @@ export default function LogsPage({
             .then((r) => (r.ok ? r.json() : null))
             .then((svc) => {
                 if (svc?.name) {
+                    setServiceFilter(svc.name);
                     setResolvedService(svc.name);
                 }
             })
@@ -65,12 +66,11 @@ export default function LogsPage({
     }, [searchParams?.service]);
 
     const effectiveQuery = useMemo(() => {
-        const filter = resolvedService || serviceFilter;
-        if (filter) {
-            return `{compose_service=~"${filter}.*"}`;
+        if (resolvedService) {
+            return `{compose_service=~"${resolvedService}.*"}`;
         }
         return query;
-    }, [query, serviceFilter, resolvedService]);
+    }, [query, resolvedService]);
 
     const fetchLogs = useCallback(async () => {
         setLoading(true);

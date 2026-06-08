@@ -147,11 +147,11 @@ def loki_query(request):
     if not query:
         return Response({'error': 'query parameter is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-    # Resolve var-service parameter (UUID → service name)
-    var_service = request.GET.get('var-service', '').strip()
-    if var_service:
-        resolved = _resolve_service_var(var_service)
-        if resolved != var_service:
+    # Resolve UUID in compose_service filter (safety net for unresolved UUIDs)
+    uuid_match = re.search(r'\{compose_service=~"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})', query)
+    if uuid_match:
+        resolved = _resolve_service_var(uuid_match.group(1))
+        if resolved != uuid_match.group(1):
             query = f'{{compose_service=~"{resolved}.*"}}'
 
     try:

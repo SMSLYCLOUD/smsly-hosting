@@ -2732,7 +2732,7 @@ ensure_infrastructure_permissions() {
     find "$caddy_config_dir" -type d -exec chmod 2775 {} + 2>/dev/null || true
     find "$staticfiles_dir" -type d -exec chmod 2775 {} + 2>/dev/null || true
     find "$builds_dir" -type d -exec chmod 2775 {} + 2>/dev/null || true
-    find "$prometheus_targets_dir" -type d -exec chmod 2775 {} + 2>/dev/null || true
+    find "$prometheus_targets_dir" -type d -exec chmod 2777 {} + 2>/dev/null || true
 
     # Caddy-specific file permissions
     [ -f "$caddy_config_dir/Caddyfile" ] && chmod 664 "$caddy_config_dir/Caddyfile" 2>/dev/null || true
@@ -4217,7 +4217,7 @@ PYEOF
         echo -e "${BLUE}  → Updating observability stack...${NC}"
         mkdir -p /opt/smsly-hosting/prometheus-targets
         chown -R 1000:1000 /opt/smsly-hosting/prometheus-targets 2>/dev/null || true
-        chmod 2775 /opt/smsly-hosting/prometheus-targets 2>/dev/null || true
+        chmod 2777 /opt/smsly-hosting/prometheus-targets 2>/dev/null || true
         if [ -f "infrastructure/docker/docker-compose.observability.yml" ]; then
             docker compose -f infrastructure/docker/docker-compose.observability.yml up -d --build prometheus docker-labels 2>/dev/null || true
             docker restart smsly-grafana 2>/dev/null || true
