@@ -167,8 +167,14 @@ class ServerTransferService:
 
     def execute(self):
         """Run transfer pipeline with explicit stage transitions."""
+        self.source_ssh = None
         try:
             self._init_ssh()
+            # Open source SSH if source is a remote node
+            if self.transfer.source_server_ip and self.transfer.source_server_ip != self.transfer.target_server_ip:
+                local_ips = {'127.0.0.1', 'localhost', ''}
+                if self.transfer.source_server_ip not in local_ips and not self.transfer.source_server_ip.startswith('10.100.0.'):
+                    self._init_source_ssh()
 
             self.transfer.status = 'PREPARING'
             self.transfer.save(update_fields=['status'])
@@ -197,6 +203,8 @@ class ServerTransferService:
         finally:
             if self.ssh:
                 self.ssh.close()
+            if self.source_ssh:
+                self.source_ssh.close()
 
     def _init_ssh(self):
         key = (self.transfer.target_ssh_key or '').strip()
@@ -236,6 +244,48 @@ class ServerTransferService:
             self.ssh.connect()
         except Exception as e:
             raise ConnectionError(f"Could not connect to target server: {e}") from e
+
+    def _init_source_ssh(self):
+        """Open an SSH connection to the source server for direct node-to-node transfers."""
+        if not self.transfer.source_server_ip:
+            return  # Source is local
+
+        key = (self.transfer.source_ssh_key or '').strip()
+        password = (self.transfer.source_ssh_password or '').strip()
+        has_key = bool(key) and key.startswith("-----BEGIN ")
+        has_password = bool(password)
+
+        if not has_key and not has_password:
+            # Try ManagedServer credentials
+            from ..models_core import ManagedServer
+            q = Q(host=self.transfer.source_server_ip)
+            if self.transfer.source_server_id:
+                q |= Q(id=self.transfer.source_server_id)
+            server = ManagedServer.objects.filter(q).first()
+            if server:
+                pw = (server.ssh_password or '').strip()
+                k = (server.ssh_key or '').strip()
+                has_password = bool(pw)
+                has_key = bool(k) and k.startswith("-----BEGIN ")
+                if has_password:
+                    password = pw
+                elif has_key:
+                    key = k
+
+        if not has_key and not has_password:
+            raise ValueError("Source SSH credentials required for node-to-node transfer.")
+
+        ssh_kwargs = {'ip': self.transfer.source_server_ip}
+        if has_password:
+            ssh_kwargs['password'] = password
+        elif has_key:
+            ssh_kwargs['key_content'] = key
+
+        self.source_ssh = SSHClient(**ssh_kwargs)
+        try:
+            self.source_ssh.connect()
+        except Exception as e:
+            raise ConnectionError(f"Could not connect to source server: {e}") from e
 
     def _prepare(self):
         """Step 1: create source backup and provision target."""
