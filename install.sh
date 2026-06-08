@@ -4428,6 +4428,11 @@ PYEOF
         chmod 2777 /opt/smsly-hosting/prometheus-targets 2>/dev/null || true
         docker compose -f infrastructure/docker/docker-compose.observability.yml up -d --build prometheus docker-labels 2>/dev/null || true
         docker restart smsly-grafana 2>/dev/null || true
+        # Deploy docker-labels exporter to all remote nodes and regenerate target files
+        backend_container=$(docker ps --format '{{.Names}}' | grep -E '^smsly-hosting-backend(-1)?$' | head -1)
+        if [ -n "$backend_container" ]; then
+            docker exec "$backend_container" python manage.py deploy_docker_labels_exporters 2>/dev/null || true
+        fi
         echo -e "${GREEN}  ✓ Observability stack updated${NC}"
     fi
     set_checkpoint "update_containers_rebuilt"
