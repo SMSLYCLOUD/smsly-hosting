@@ -72,4 +72,4 @@ class AIProviderStatusResilienceTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.data.get("degraded"))
         self.assertEqual(response.data["providers"], [])
-        self.assertEqual(response.data["mode"], "mock")
+        self.assertEqual(response.data["mode"], "unconfigured")

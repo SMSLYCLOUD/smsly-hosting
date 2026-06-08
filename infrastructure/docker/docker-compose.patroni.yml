@@ -16,9 +16,9 @@ services:
       SCOPE: smsly-cluster
       ETCD3_HOST: "etcd:2379"
       PGUSER_SUPERUSER: postgres
-      PGPASSWORD_SUPERUSER: admin
+      PGPASSWORD_SUPERUSER: ${PATRONI_SUPERUSER_PASSWORD:?must be set}
       PGUSER_ADMIN: smsly_admin
-      PGPASSWORD_ADMIN: smsly_secure_pass
+      PGPASSWORD_ADMIN: ${PATRONI_ADMIN_PASSWORD:?must be set}
       PG_HMAC: sha256
     ports:
       - "5432:5432"
@@ -35,9 +35,9 @@ services:
       SCOPE: smsly-cluster
       ETCD3_HOST: "etcd:2379"
       PGUSER_SUPERUSER: postgres
-      PGPASSWORD_SUPERUSER: admin
+      PGPASSWORD_SUPERUSER: ${PATRONI_SUPERUSER_PASSWORD:?must be set}
       PGUSER_ADMIN: smsly_admin
-      PGPASSWORD_ADMIN: smsly_secure_pass
+      PGPASSWORD_ADMIN: ${PATRONI_ADMIN_PASSWORD:?must be set}
       PG_HMAC: sha256
     ports:
       - "5433:5432"
@@ -54,9 +54,9 @@ services:
       SCOPE: smsly-cluster
       ETCD3_HOST: "etcd:2379"
       PGUSER_SUPERUSER: postgres
-      PGPASSWORD_SUPERUSER: admin
+      PGPASSWORD_SUPERUSER: ${PATRONI_SUPERUSER_PASSWORD:?must be set}
       PGUSER_ADMIN: smsly_admin
-      PGPASSWORD_ADMIN: smsly_secure_pass
+      PGPASSWORD_ADMIN: ${PATRONI_ADMIN_PASSWORD:?must be set}
       PG_HMAC: sha256
     ports:
       - "5434:5432"
