@@ -231,6 +231,7 @@ services:
     volumes:
     - media_volume:/app/media
     - caddy_config:/caddy-config
+    - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets
     tmpfs:
     - /tmp
     healthcheck:

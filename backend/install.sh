@@ -4221,6 +4221,7 @@ PYEOF
         if [ -f "infrastructure/docker/docker-compose.observability.yml" ]; then
             docker compose -f infrastructure/docker/docker-compose.observability.yml up -d --build prometheus docker-labels 2>/dev/null || true
             docker restart smsly-grafana 2>/dev/null || true
+            docker restart smsly-docker-labels 2>/dev/null || true
             # Deploy docker-labels exporter to all remote nodes and regenerate target files
             backend_container=$(docker ps --format '{{.Names}}' | grep -E '^smsly-hosting-backend(-1)?$' | head -1)
             if [ -n "$backend_container" ]; then
@@ -5767,6 +5768,13 @@ fi
         echo -e "${BLUE}  → Deploying Observability Stack...${NC}"
         if [ -f "infrastructure/docker/docker-compose.observability.yml" ]; then
             docker compose -f infrastructure/docker/docker-compose.observability.yml up -d >/dev/null 2>&1 || true
+        fi
+    fi
+    # Deploy docker-labels exporter to all remote nodes and regenerate target files
+    if [ "$MODE_AGENT_LITE" != "true" ]; then
+        backend_container=$(docker ps --format '{{.Names}}' | grep -E '^smsly-hosting-backend(-1)?$' | head -1)
+        if [ -n "$backend_container" ]; then
+            docker exec "$backend_container" python manage.py deploy_docker_labels_exporters 2>/dev/null || true
         fi
     fi
     set_checkpoint "stack_deployed"
