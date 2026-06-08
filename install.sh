@@ -5855,7 +5855,7 @@ FRP_AUTH_TOKEN=$FRP_AUTH_TOKEN
 PGCAT_ADMIN_PASSWORD=$PGCAT_ADMIN_PASSWORD
 
 # Grafana admin password (used by the standalone observability stack)
-GRAFANA_PASSWORD=${GRAFANA_PASSWORD:-}
+[ -n "${GRAFANA_PASSWORD:-}" ] || GRAFANA_PASSWORD="$(python3 -c "import secrets,string; print(''.join(secrets.choice(string.ascii_letters+string.digits+'-_') for _ in range(40)))" 2>/dev/null || openssl rand -base64 30 | tr -d '+/=' )"
 
 # Grafana external URL for browser embeds (auto-derived from domain)
 GRAFANA_EXTERNAL_URL=${DOMAIN_ORIGINS}/grafana
