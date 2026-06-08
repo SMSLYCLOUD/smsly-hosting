@@ -569,6 +569,7 @@ services:
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
     volumes:
     - rabbitmq_data:/var/lib/rabbitmq
+    - ./infrastructure/docker/rabbitmq.conf:/etc/rabbitmq/conf.d/10-smsly.conf:ro
     healthcheck:
       test:
       - CMD-SHELL
