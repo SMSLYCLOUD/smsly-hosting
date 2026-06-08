@@ -29,6 +29,7 @@ class Command(BaseCommand):
         from apps.deployments.models_core import ManagedServer
         from apps.deployments.services.prometheus_targets import (
             deploy_docker_labels_exporter_on_node,
+            deploy_promtail_on_node,
             write_docker_labels_targets,
         )
 
@@ -55,6 +56,8 @@ class Command(BaseCommand):
         deployed = 0
         skipped = 0
         failed = 0
+        promtail_deployed = 0
+        promtail_failed = 0
 
         for server in servers:
             if not server.ssh_key and not server.ssh_password:
@@ -68,16 +71,26 @@ class Command(BaseCommand):
             success = deploy_docker_labels_exporter_on_node(server)
             if success:
                 deployed += 1
-                self.stdout.write(self.style.SUCCESS(f"  ✓ {server.name}"))
+                self.stdout.write(self.style.SUCCESS(f"  ✓ docker-labels on {server.name}"))
             else:
                 failed += 1
-                self.stdout.write(self.style.ERROR(f"  ✗ {server.name}"))
+                self.stdout.write(self.style.ERROR(f"  ✗ docker-labels on {server.name}"))
+
+            # Also deploy Promtail for log collection
+            self.stdout.write(f"  → Deploying Promtail on {server.name}...")
+            if deploy_promtail_on_node(server):
+                promtail_deployed += 1
+                self.stdout.write(self.style.SUCCESS(f"  ✓ Promtail on {server.name}"))
+            else:
+                promtail_failed += 1
+                self.stdout.write(self.style.WARNING(f"  ⚠ Promtail on {server.name} (will retry via watchdog)"))
 
         # Update target files after deployment
         write_docker_labels_targets()
 
         self.stdout.write(
             self.style.SUCCESS(
-                f"Done: {deployed} deployed, {skipped} skipped, {failed} failed"
+                f"Done: docker-labels ({deployed} ok, {skipped} skipped, {failed} failed), "
+                f"Promtail ({promtail_deployed} ok, {promtail_failed} failed)"
             )
         )

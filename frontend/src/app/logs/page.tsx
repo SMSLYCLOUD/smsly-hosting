@@ -29,7 +29,6 @@ export default function LogsPage({
     const [query, setQuery] = useState(searchParams?.query || DEFAULT_QUERY);
     const [draftQuery, setDraftQuery] = useState(searchParams?.query || DEFAULT_QUERY);
     const [serviceFilter, setServiceFilter] = useState<string | undefined>(searchParams?.service);
-    const [resolvedService, setResolvedService] = useState<string | undefined>(undefined);
     const [events, setEvents] = useState<LokiEvent[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -37,41 +36,39 @@ export default function LogsPage({
     const [limit, setLimit] = useState(200);
     const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
-    // Resolve service UUID from URL param to actual service name
+    // Resolve service UUID (or name) from URL param to compose service name
+    // and set the query accordingly so the query box reflects reality.
     useEffect(() => {
         const raw = searchParams?.service;
         if (!raw) {
             setServiceFilter(undefined);
-            setResolvedService(undefined);
             return;
         }
         const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-        if (!uuidRegex.test(raw)) {
-            setServiceFilter(raw);
-            setResolvedService(raw);
-            return;
-        }
+        const isUuid = uuidRegex.test(raw);
         const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
-        fetch(`/api/v1/services/${encodeURIComponent(raw)}/`, {
-            headers: token ? { 'Authorization': `Token ${token}` } : {},
-        })
-            .then((r) => (r.ok ? r.json() : null))
-            .then((svc) => {
-                if (svc?.name) {
-                    const resolved = svc.compose_main_service || svc.name.toLowerCase().replace(/\s+/g, '-');
-                    setServiceFilter(svc.name);
-                    setResolvedService(resolved);
-                }
-            })
-            .catch(() => {});
-    }, [searchParams?.service]);
 
-    const effectiveQuery = useMemo(() => {
-        if (resolvedService) {
-            return `{compose_service=~"${resolvedService}.*"}`;
+        const applyFilter = (svcName: string, composeName?: string) => {
+            const resolved = composeName || svcName.toLowerCase().replace(/\s+/g, '-');
+            setServiceFilter(svcName);
+            const filteredQuery = `{compose_service=~"${resolved}.*"}`;
+            setQuery(filteredQuery);
+            setDraftQuery(filteredQuery);
+        };
+
+        if (isUuid) {
+            fetch(`/api/v1/services/${encodeURIComponent(raw)}/`, {
+                headers: token ? { 'Authorization': `Token ${token}` } : {},
+            })
+                .then((r) => (r.ok ? r.json() : null))
+                .then((svc) => {
+                    if (svc?.name) applyFilter(svc.name, svc.compose_main_service);
+                })
+                .catch(() => {});
+        } else {
+            applyFilter(raw);
         }
-        return query;
-    }, [query, resolvedService]);
+    }, [searchParams?.service]);
 
     const fetchLogs = useCallback(async () => {
         setLoading(true);
@@ -79,7 +76,7 @@ export default function LogsPage({
         try {
             const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
             const params = new URLSearchParams();
-            params.set('query', effectiveQuery);
+            params.set('query', query);
             params.set('start', range);
             params.set('end', 'now');
             params.set('limit', String(limit));
@@ -99,7 +96,7 @@ export default function LogsPage({
         } finally {
             setLoading(false);
         }
-    }, [effectiveQuery, range, limit]);
+    }, [query, range, limit]);
 
     useEffect(() => {
         fetchLogs();

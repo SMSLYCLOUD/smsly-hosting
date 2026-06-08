@@ -4736,11 +4736,16 @@ def check_managed_servers_health_task():
     try:
         from apps.deployments.services.prometheus_targets import (
             deploy_docker_labels_exporter_on_node,
+            deploy_promtail_on_node,
             write_docker_labels_targets,
         )
         for server in servers.filter(status=ManagedServer.Status.ONLINE):
             try:
                 deploy_docker_labels_exporter_on_node(server)
+            except Exception:
+                pass
+            try:
+                deploy_promtail_on_node(server)
             except Exception:
                 pass
         write_docker_labels_targets()
@@ -5274,10 +5279,12 @@ def node_watchdog_task(self):
                 try:
                     from apps.deployments.services.prometheus_targets import (
                         deploy_docker_labels_exporter_on_node,
+                        deploy_promtail_on_node,
                     )
                     deploy_docker_labels_exporter_on_node(server)
+                    deploy_promtail_on_node(server)
                 except Exception as exc:
-                    logger.debug("docker-labels deploy skipped for %s: %s", server.name, exc)
+                    logger.debug("docker-labels/promtail deploy skipped for %s: %s", server.name, exc)
 
             if diagnostics.docker_running and old_status != ManagedServer.Status.ONLINE:
                 logger.info("Server %s recovered — status: ONLINE", server.name)
