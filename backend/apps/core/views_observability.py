@@ -67,7 +67,7 @@ def grafana_embed_url(request, dashboard_uid: str):
             status=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
 
-    params = dict(request.query_params)
+    params = dict(request.GET)
     params.setdefault('theme', 'dark')
     params.setdefault('kiosk', 'tv')
 
@@ -136,19 +136,19 @@ def _resolve_service_var(var_service: str) -> str:
 
 def loki_query(request):
     """Proxy a range query to Loki with the auth boundary at the Django layer."""
-    query = request.query_params.get('query', '').strip()
+    query = request.GET.get('query', '').strip()
     if not query:
         return Response({'error': 'query parameter is required'}, status=status.HTTP_400_BAD_REQUEST)
 
     # Resolve var-service parameter (UUID → service name)
-    var_service = request.query_params.get('var-service', '').strip()
+    var_service = request.GET.get('var-service', '').strip()
     if var_service:
         resolved = _resolve_service_var(var_service)
         if resolved != var_service:
             query = f'{{compose_service=~"{resolved}.*"}}'
 
     try:
-        limit = int(request.query_params.get('limit', '100'))
+        limit = int(request.GET.get('limit', '100'))
     except ValueError:
         limit = 100
     limit = max(1, min(limit, 1000))
@@ -163,7 +163,7 @@ def loki_query(request):
         ('since', 'start'),
         ('direction', 'direction'),
     ):
-        value = request.query_params.get(src_key)
+        value = request.GET.get(src_key)
         if not value:
             continue
         if src_key in ('start', 'end'):
@@ -214,7 +214,7 @@ def loki_label_values(request, label: str):
     try:
         resp = requests.get(
             f"{LOKI_INTERNAL_URL}/loki/api/v1/label/{label}/values",
-            params=dict(request.query_params),
+            params=dict(request.GET),
             timeout=PROXY_TIMEOUT,
         )
         resp.raise_for_status()
@@ -233,14 +233,14 @@ def loki_label_values(request, label: str):
 @permission_classes([permissions.IsAuthenticated])
 def prometheus_query(request):
     """Proxy an instant PromQL query to Prometheus."""
-    query = request.query_params.get('query', '').strip()
+    query = request.GET.get('query', '').strip()
     if not query:
         return Response({'error': 'query parameter is required'}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
         resp = requests.get(
             f"{PROMETHEUS_INTERNAL_URL}/api/v1/query",
-            params={'query': query, 'time': request.query_params.get('time')},
+            params={'query': query, 'time': request.GET.get('time')},
             timeout=PROXY_TIMEOUT,
         )
         resp.raise_for_status()
