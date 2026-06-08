@@ -16,6 +16,8 @@ services:
       timeout: 10s
       retries: 10
       start_period: 60s
+    labels:
+    - managed_by=smsly-hosting
     networks:
     - smsly-net
   pgcat:
@@ -39,6 +41,8 @@ services:
       timeout: 10s
       retries: 10
       start_period: 60s
+    labels:
+    - managed_by=smsly-hosting
     ports:
       - "10.100.0.1:5432:5432"
     networks:
@@ -57,6 +61,8 @@ services:
       timeout: 10s
       retries: 10
       start_period: 60s
+    labels:
+    - managed_by=smsly-hosting
     networks:
     - smsly-net
     # No external ports — internal network only (security hardening)
@@ -77,6 +83,8 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+    labels:
+    - managed_by=smsly-hosting
     networks:
       - smsly-net
   docker-mirror:
@@ -97,6 +105,8 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+    labels:
+    - managed_by=smsly-hosting
     networks:
       - smsly-net
   backend:
@@ -154,6 +164,7 @@ services:
     - traefik.http.routers.backend.priority=10
     - traefik.http.services.backend.loadbalancer.server.port=8000
     - traefik.docker.network=smsly-net
+    - managed_by=smsly-hosting
   celery:
     build:
       context: ./backend
@@ -195,6 +206,8 @@ services:
       timeout: 20s
       retries: 5
       start_period: 300s
+    labels:
+    - managed_by=smsly-hosting
     networks:
     - smsly-net
   celery-beat:
@@ -228,6 +241,8 @@ services:
       timeout: 20s
       retries: 5
       start_period: 300s
+    labels:
+    - managed_by=smsly-hosting
     networks:
     - smsly-net
   frontend:
@@ -260,6 +275,7 @@ services:
     - traefik.http.routers.frontend.priority=5
     - traefik.http.services.frontend.loadbalancer.server.port=3000
     - traefik.docker.network=smsly-net
+    - managed_by=smsly-hosting
   celery-fast:
     build:
       context: ./backend
@@ -300,6 +316,8 @@ services:
       timeout: 20s
       retries: 5
       start_period: 300s
+    labels:
+    - managed_by=smsly-hosting
     networks:
     - smsly-net
     - socket-proxy
@@ -343,6 +361,8 @@ services:
       timeout: 20s
       retries: 5
       start_period: 300s
+    labels:
+    - managed_by=smsly-hosting
     networks:
     - smsly-net
     - socket-proxy
@@ -372,6 +392,8 @@ services:
       timeout: 3s
       retries: 5
       start_period: 5s
+    labels:
+    - managed_by=smsly-hosting
     networks:
     - smsly-net
     - socket-proxy
@@ -392,6 +414,7 @@ services:
     - traefik.http.routers.route-fallback.entrypoints=web
     - traefik.http.routers.route-fallback.priority=1
     - traefik.http.services.route-fallback.loadbalancer.server.port=80
+    - managed_by=smsly-hosting
     healthcheck:
       test:
       - CMD-SHELL
@@ -443,6 +466,8 @@ services:
       start_period: 10s
     security_opt:
     - no-new-privileges:true
+    labels:
+    - managed_by=smsly-hosting
     networks:
     - smsly-net
     - socket-proxy
@@ -477,6 +502,8 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    labels:
+    - managed_by=smsly-hosting
     networks:
     - smsly-net
   rabbitmq:
@@ -497,6 +524,8 @@ services:
       timeout: 10s
       retries: 10
       start_period: 60s
+    labels:
+    - managed_by=smsly-hosting
     networks:
       - smsly-net
   caddy:
@@ -526,6 +555,8 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
+    labels:
+    - managed_by=smsly-hosting
     networks:
       - smsly-net
 networks:

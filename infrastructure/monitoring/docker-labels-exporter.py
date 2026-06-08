@@ -63,7 +63,7 @@ def _collect_metrics():
         if managed_by != "smsly-hosting":
             continue
 
-        service_name = labels.get("smsly.blue_green.canonical_name", name)
+        service_name = labels.get("smsly.blue_green.canonical_name", labels.get("com.docker.compose.service", name))
         cid = c.get("Id", "")
 
         base_labels = (

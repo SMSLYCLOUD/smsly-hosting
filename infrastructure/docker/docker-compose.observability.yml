@@ -20,6 +20,8 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+    labels:
+      - managed_by=smsly-hosting
 
   # Promtail - Log collector
   promtail:
@@ -35,6 +37,8 @@ services:
     command: -config.file=/etc/promtail/config.yml
     networks:
       - smsly-net
+    labels:
+      - managed_by=smsly-hosting
     depends_on:
       - loki
 
@@ -62,6 +66,8 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+    labels:
+      - managed_by=smsly-hosting
 
   # cAdvisor - Container metrics
   cadvisor:
@@ -79,6 +85,8 @@ services:
       - /var/lib/docker/:/var/lib/docker:ro
       - /dev/disk/:/dev/disk:ro
       - /sys/fs/cgroup:/sys/fs/cgroup:ro
+    labels:
+      - managed_by=smsly-hosting
     networks:
       - smsly-net
 
@@ -96,6 +104,8 @@ services:
       - '--path.rootfs=/rootfs'
       - '--path.sysfs=/host/sys'
       - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    labels:
+      - managed_by=smsly-hosting
     networks:
       - smsly-net
 
@@ -110,6 +120,8 @@ services:
     volumes:
       - ../monitoring/docker-labels-exporter.py:/app/exporter.py:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
+    labels:
+      - managed_by=smsly-hosting
     networks:
       - smsly-net
 
@@ -151,6 +163,7 @@ services:
       - "traefik.http.routers.grafana.tls=true"
       - "traefik.http.services.grafana.loadbalancer.server.port=3000"
       - "traefik.docker.network=smsly-proxy"
+      - "managed_by=smsly-hosting"
 
 volumes:
   loki-data:
