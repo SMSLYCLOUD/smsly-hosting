@@ -58,8 +58,9 @@ export default function LogsPage({
             .then((r) => (r.ok ? r.json() : null))
             .then((svc) => {
                 if (svc?.name) {
+                    const resolved = svc.compose_main_service || svc.name.toLowerCase().replace(/\s+/g, '-');
                     setServiceFilter(svc.name);
-                    setResolvedService(svc.name);
+                    setResolvedService(resolved);
                 }
             })
             .catch(() => {});
