@@ -40,7 +40,8 @@ def write_docker_labels_targets():
     # Remote node targets
     remote_servers = ManagedServer.objects.filter(
         is_primary=False,
-    ).exclude(status=ManagedServer.Status.DELETED)
+        status=ManagedServer.Status.ONLINE,
+    )
 
     remote_targets = []
     for server in remote_servers:
