@@ -70,6 +70,12 @@ def grafana_embed_url(request, dashboard_uid: str):
     params = dict(request.GET)
     params.setdefault('theme', 'dark')
     params.setdefault('kiosk', 'tv')
+    # Resolve var-service UUID to service name for Grafana template variable
+    var_service = params.get('var-service', '')
+    if var_service:
+        resolved = _resolve_service_var(var_service)
+        if resolved != var_service:
+            params['var-service'] = resolved
 
     try:
         resp = requests.get(

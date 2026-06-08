@@ -21,13 +21,37 @@ export function GrafanaEmbed({ dashboard, service, time }: GrafanaEmbedProps) {
     const [data, setData] = useState<EmbedResponse | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
+    const [resolvedService, setResolvedService] = useState<string | undefined>(undefined);
+
+    // Resolve service UUID to service name for Grafana template variable
+    useEffect(() => {
+        if (!service) {
+            setResolvedService(undefined);
+            return;
+        }
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        if (!uuidRegex.test(service)) {
+            setResolvedService(service);
+            return;
+        }
+        const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+        fetch(`/api/v1/services/${encodeURIComponent(service)}/`, {
+            headers: token ? { 'Authorization': `Token ${token}` } : {},
+        })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((svc) => {
+                if (svc?.name) setResolvedService(svc.name);
+            })
+            .catch(() => {});
+    }, [service]);
 
     const params = useMemo(() => {
         const p = new URLSearchParams();
         p.set('time', time || 'now-1h');
-        if (service) p.set('var-service', service);
+        const svc = resolvedService || service;
+        if (svc) p.set('var-service', svc);
         return p.toString();
-    }, [time, service]);
+    }, [time, service, resolvedService]);
 
     useEffect(() => {
         let cancelled = false;
