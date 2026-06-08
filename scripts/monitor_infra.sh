@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
-# Monitor critical SMSLY hosting containers on the primary server
-# and restart them if they are not running or are unhealthy.
+# Monitor critical SMSLY hosting infrastructure on the primary server:
+#   - Docker daemon
+#   - Systemd services (autoscaler, wireguard)
+#   - iptables firewall rules
+#   - All production + observability Docker containers
+#   - Zombie processes
+#
+# Runs every 60 seconds via smsly-infra-monitor.timer
 
 set -euo pipefail
 
@@ -13,6 +19,11 @@ log() {
     logger -t "$LOG_TAG" "$*" 2>/dev/null || true
     printf '[%s] %s\n' "$LOG_TAG" "$*"
 }
+
+# ─── Systemd services to keep alive ────────────────────────────────────
+SYSTEMD_SERVICES=(
+    "smsly-autoscaler.service"
+)
 
 # ─── Production stack ──────────────────────────────────────────────────
 PROD_SERVICES=(
@@ -27,12 +38,9 @@ OBS_SERVICES=(
     "cadvisor" "node-exporter"
 )
 
-if [ ! -f "$COMPOSE_FILE" ]; then
-    log "Error: Compose file not found at $COMPOSE_FILE"
-    exit 1
-fi
-
-# ─── Zombie Process Cleanup ─────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+# 1. Zombie Process Cleanup
+# ══════════════════════════════════════════════════════════════════════════
 zombies=$(ps -eo pid=,ppid=,stat=,comm= 2>/dev/null | awk '$3 ~ /^Z/ {print $1":"$2":"$4}' || true)
 if [ -n "$zombies" ]; then
     zombie_count=$(echo "$zombies" | wc -l)
@@ -52,7 +60,75 @@ if [ -n "$zombies" ]; then
     fi
 fi
 
-# ─── Shared health-check function ──────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+# 2. Docker Daemon Health (MUST run before container checks)
+# ══════════════════════════════════════════════════════════════════════════
+DOCKER_OK=false
+if docker info >/dev/null 2>&1; then
+    DOCKER_OK=true
+else
+    log "Alert: Docker daemon is not responding. Attempting restart..."
+    systemctl restart docker 2>/dev/null || true
+    sleep 5
+    if docker info >/dev/null 2>&1; then
+        log "Docker daemon recovered after restart"
+        DOCKER_OK=true
+    else
+        log "CRITICAL: Docker daemon failed to restart. Skipping container checks."
+    fi
+fi
+
+# ══════════════════════════════════════════════════════════════════════════
+# 3. Systemd Service Health
+# ══════════════════════════════════════════════════════════════════════════
+for svc in "${SYSTEMD_SERVICES[@]}"; do
+    if systemctl is-enabled "$svc" >/dev/null 2>&1; then
+        state=$(systemctl is-active "$svc" 2>/dev/null || echo "unknown")
+        if [ "$state" != "active" ]; then
+            log "Alert: systemd service $svc is $state. Restarting..."
+            systemctl restart "$svc" 2>/dev/null || true
+        fi
+    fi
+done
+
+# WireGuard interfaces — check if any are configured and running
+if command -v wg >/dev/null 2>&1; then
+    wg_ifaces=$(wg show interfaces 2>/dev/null || true)
+    if [ -n "$wg_ifaces" ]; then
+        for iface in $wg_ifaces; do
+            wg_state=$(systemctl is-active "wg-quick@${iface}.service" 2>/dev/null || echo "unknown")
+            if [ "$wg_state" != "active" ] && [ "$wg_state" != "unknown" ]; then
+                log "Alert: WireGuard interface $iface service is $wg_state. Restarting..."
+                systemctl restart "wg-quick@${iface}.service" 2>/dev/null || true
+            fi
+        done
+    fi
+fi
+
+# ══════════════════════════════════════════════════════════════════════════
+# 4. iptables Firewall Rule Verification
+# ══════════════════════════════════════════════════════════════════════════
+if command -v iptables >/dev/null 2>&1; then
+    rule_count=$(iptables -L INPUT -n 2>/dev/null | grep -cE '^ACCEPT|^DROP|^REJECT' || echo "0")
+    if [ "$rule_count" -eq 0 ] 2>/dev/null; then
+        if [ -f /etc/iptables/rules.v4 ]; then
+            log "Alert: iptables INPUT chain has 0 rules. Restoring from /etc/iptables/rules.v4..."
+            iptables-restore < /etc/iptables/rules.v4 2>/dev/null || \
+                log "Warning: Failed to restore iptables rules"
+        else
+            log "Warning: iptables INPUT chain empty and /etc/iptables/rules.v4 not found"
+        fi
+    fi
+fi
+
+# ══════════════════════════════════════════════════════════════════════════
+# 5. Docker Container Health
+# ══════════════════════════════════════════════════════════════════════════
+if [ "$DOCKER_OK" != "true" ]; then
+    log "Skipping container checks — Docker daemon is not available"
+    exit 0
+fi
+
 check_and_heal() {
     local compose_file=$1
     local service=$2
@@ -85,12 +161,10 @@ check_and_heal() {
     fi
 }
 
-# ─── Check production stack ────────────────────────────────────────────
 for service in "${PROD_SERVICES[@]}"; do
     check_and_heal "$COMPOSE_FILE" "$service"
 done
 
-# ─── Check observability stack ─────────────────────────────────────────
 if [ -f "$OBS_COMPOSE_FILE" ]; then
     for service in "${OBS_SERVICES[@]}"; do
         check_and_heal "$OBS_COMPOSE_FILE" "$service"
