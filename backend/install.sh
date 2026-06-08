@@ -2736,6 +2736,8 @@ ensure_infrastructure_permissions() {
     find "$staticfiles_dir" -type d -exec chmod 2775 {} + 2>/dev/null || true
     find "$builds_dir" -type d -exec chmod 2775 {} + 2>/dev/null || true
     find "$prometheus_targets_dir" -type d -exec chmod 2777 {} + 2>/dev/null || true
+    # Ensure the directory itself has the right permissions (not just children)
+    chmod 2777 "$prometheus_targets_dir" 2>/dev/null || true
 
     # Caddy-specific file permissions
     [ -f "$caddy_config_dir/Caddyfile" ] && chmod 664 "$caddy_config_dir/Caddyfile" 2>/dev/null || true
@@ -6358,6 +6360,9 @@ if command -v iptables >/dev/null 2>&1; then
     else
         echo -e "${GREEN}  ✓ Registry port 5000 rules refreshed (trusted sources only)${NC}"
     fi
+
+    # Allow remote Promtail → Loki on WireGuard interface (VPN mesh)
+    iptables -A INPUT -i wg+ -p tcp --dport 3100 -j ACCEPT 2>/dev/null || true
 
     # Persist iptables rules across reboots
     if command -v iptables-save >/dev/null 2>&1; then
