@@ -6,6 +6,7 @@ set -euo pipefail
 
 INSTALL_DIR="/opt/smsly-hosting"
 COMPOSE_FILE="$INSTALL_DIR/docker-compose.prod.yml"
+OBS_COMPOSE_FILE="$INSTALL_DIR/infrastructure/docker/docker-compose.observability.yml"
 LOG_TAG="smsly-infra-monitor"
 
 log() {
@@ -13,7 +14,18 @@ log() {
     printf '[%s] %s\n' "$LOG_TAG" "$*"
 }
 
-SERVICES=("db" "redis" "rabbitmq" "pgcat" "backend" "celery" "caddy")
+# ─── Production stack ──────────────────────────────────────────────────
+PROD_SERVICES=(
+    "db" "pgcat" "redis" "registry" "rabbitmq"
+    "backend" "celery" "celery-fast" "celery-deploy" "celery-beat"
+    "frontend" "socket-proxy" "caddy"
+)
+
+# ─── Observability stack (separate compose file) ────────────────────────
+OBS_SERVICES=(
+    "loki" "promtail" "prometheus" "docker-labels" "grafana"
+    "cadvisor" "node-exporter"
+)
 
 if [ ! -f "$COMPOSE_FILE" ]; then
     log "Error: Compose file not found at $COMPOSE_FILE"
@@ -40,31 +52,47 @@ if [ -n "$zombies" ]; then
     fi
 fi
 
-for service in "${SERVICES[@]}"; do
-    container_id=$(docker compose -f "$COMPOSE_FILE" ps -q "$service" 2>/dev/null || true)
-    
+# ─── Shared health-check function ──────────────────────────────────────
+check_and_heal() {
+    local compose_file=$1
+    local service=$2
+
+    container_id=$(docker compose -f "$compose_file" ps -q "$service" 2>/dev/null || true)
+
     if [ -z "$container_id" ]; then
         log "Warning: Container for service '$service' is missing. Attempting to start..."
-        docker compose -f "$COMPOSE_FILE" up -d "$service"
-        continue
+        docker compose -f "$compose_file" up -d "$service" 2>/dev/null || true
+        return
     fi
-    
+
     inspect_data=$(docker inspect --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id" 2>/dev/null || true)
-    
+
     if [ -z "$inspect_data" ]; then
         log "Warning: Failed to inspect container '$container_id' for service '$service'. Attempting restart..."
-        docker compose -f "$COMPOSE_FILE" restart "$service"
-        continue
+        docker compose -f "$compose_file" restart "$service" 2>/dev/null || true
+        return
     fi
-    
+
     status=$(echo "$inspect_data" | awk '{print $1}')
     health=$(echo "$inspect_data" | awk '{print $2}')
-    
+
     if [ "$status" != "running" ]; then
         log "Alert: Container for service '$service' is not running (status: $status). Restarting..."
-        docker compose -f "$COMPOSE_FILE" restart "$service"
+        docker compose -f "$compose_file" restart "$service" 2>/dev/null || true
     elif [ "$health" = "unhealthy" ]; then
         log "Alert: Container for service '$service' is running but UNHEALTHY. Restarting..."
-        docker compose -f "$COMPOSE_FILE" restart "$service"
+        docker compose -f "$compose_file" restart "$service" 2>/dev/null || true
     fi
+}
+
+# ─── Check production stack ────────────────────────────────────────────
+for service in "${PROD_SERVICES[@]}"; do
+    check_and_heal "$COMPOSE_FILE" "$service"
 done
+
+# ─── Check observability stack ─────────────────────────────────────────
+if [ -f "$OBS_COMPOSE_FILE" ]; then
+    for service in "${OBS_SERVICES[@]}"; do
+        check_and_heal "$OBS_COMPOSE_FILE" "$service"
+    done
+fi
