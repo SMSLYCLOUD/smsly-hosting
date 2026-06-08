@@ -193,7 +193,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: celery -A config worker -l info --concurrency=8 -Q celery
+    command: celery -A config worker -l info --autoscale=12,4 -Q celery
     restart: unless-stopped
     env_file: .env
     environment:
@@ -305,7 +305,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: celery -A config worker -l info --concurrency=8 -Q fast
+    command: celery -A config worker -l info --autoscale=8,2 -Q fast
     restart: always
     env_file: .env
     environment:
@@ -350,7 +350,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: celery -A config worker -l info --concurrency=8 -Q deploy --hostname=deploy@%h
+    command: celery -A config worker -l info --autoscale=8,2 -Q deploy --hostname=deploy@%h
     restart: unless-stopped
     env_file: .env
     environment:
