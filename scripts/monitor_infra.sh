@@ -126,6 +126,11 @@ fi
 # 4. iptables Firewall Rule Verification
 # ══════════════════════════════════════════════════════════════════════════
 if command -v iptables >/dev/null 2>&1; then
+    # Ensure remote Promtail → Loki is allowed on WireGuard interfaces
+    if command -v wg >/dev/null 2>&1 && wg show interfaces 2>/dev/null | grep -q .; then
+        iptables -C INPUT -i wg+ -p tcp --dport 3100 -j ACCEPT 2>/dev/null || \
+            iptables -A INPUT -i wg+ -p tcp --dport 3100 -j ACCEPT 2>/dev/null || true
+    fi
     rule_count=$(iptables -L INPUT -n 2>/dev/null | grep -cE '^ACCEPT|^DROP|^REJECT' || echo "0")
     if [ "$rule_count" -eq 0 ] 2>/dev/null; then
         if [ -f /etc/iptables/rules.v4 ]; then

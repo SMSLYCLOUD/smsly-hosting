@@ -159,8 +159,8 @@ def deploy_promtail_on_node(server):
     from apps.deployments.models_core import ManagedServer
     from apps.deployments.services.ssh_client import SSHClient
 
-    # Determine the Loki URL — must go through the WireGuard VPN mesh.
-    # Priority: explicit env → primary wg_address → MeshPeer → host wg_iface
+    # Determine the Loki URL for the remote node.
+    # Set SMSLY_LOKI_PUBLIC_URL in .env to override (e.g. WireGuard IP or public IP).
     import os as _os
     loki_ip = (_os.environ.get("SMSLY_LOKI_PUBLIC_URL") or "").strip()
     if not loki_ip:
@@ -168,25 +168,12 @@ def deploy_promtail_on_node(server):
         if not primary:
             logger.error("No primary server found — cannot deploy remote Promtail")
             return False
-        loki_ip = (primary.wg_address or primary.private_ip or "").strip()
-        if not loki_ip:
-            # Try to find the primary's WireGuard IP from mesh peers
-            try:
-                from apps.deployments.models import MeshPeer
-                peer = MeshPeer.objects.filter(
-                    server=primary, is_active=True
-                ).first()
-                if peer and peer.wg_address:
-                    loki_ip = peer.wg_address.strip()
-            except Exception:
-                pass
-        if not loki_ip:
-            loki_ip = (primary.host or "").strip()
+        loki_ip = (primary.wg_address or primary.private_ip or primary.host or "").strip()
     if not loki_ip:
-        logger.error("Primary server has no WireGuard IP — cannot deploy remote Promtail")
+        logger.error("Primary server has no reachable IP — cannot deploy remote Promtail")
         return False
     loki_url = f"http://{loki_ip}:3100/loki/api/v1/push"
-    logger.info("Remote Promtail Loki URL (via VPN): %s", loki_url)
+    logger.info("Remote Promtail Loki URL: %s", loki_url)
 
     client = SSHClient(
         ip=server.host,
@@ -205,16 +192,7 @@ def deploy_promtail_on_node(server):
 
     tmp = None
     try:
-        # 0. Check if Promtail is already running
-        out, _err, _code = client.exec_command(
-            "docker inspect smsly-promtail --format='{{.State.Status}}' 2>/dev/null",
-            raise_on_error=False,
-        )
-        if out.strip() == "running":
-            logger.debug("Promtail already running on %s", server.name)
-            return True
-
-        # 1. Generate Promtail config with correct Loki URL
+        # 0. Generate and upload the latest Promtail config
         config = _generate_remote_promtail_config(loki_url)
         tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False)
         tmp.write(config)
@@ -225,11 +203,24 @@ def deploy_promtail_on_node(server):
         client.exec_command(f"mkdir -p {remote_dir}")
         client.upload_file(tmp.name, remote_config)
 
-        # 2. Remove stale container and pull image
-        client.exec_command("docker rm -f smsly-promtail 2>/dev/null")
+        # 1. Check if container exists — if so, just reload config
+        out, _err, _code = client.exec_command(
+            "docker inspect smsly-promtail --format='{{.State.Status}}' 2>/dev/null",
+            raise_on_error=False,
+        )
+        if out.strip() == "running":
+            # Container already running — hot-reload the updated config
+            client.exec_command(
+                "docker exec smsly-promtail kill -HUP 1 2>/dev/null || "
+                "docker restart smsly-promtail 2>/dev/null",
+                raise_on_error=False,
+            )
+            logger.info("Promtail config updated + reloaded on %s", server.name)
+            return True
+
+        # 2. Container doesn't exist — create it
         client.exec_command("docker pull grafana/promtail:2.9.3 2>/dev/null", raise_on_error=False)
 
-        # 3. Run Promtail container
         cmd = (
             f"docker run -d --name smsly-promtail --restart unless-stopped "
             f"-v /var/log:/var/log:ro "
