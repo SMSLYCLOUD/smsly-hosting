@@ -29,6 +29,9 @@ class ServerTransfer(models.Model):
 
     # Source
     source_server_ip = models.GenericIPAddressField()
+    source_server_id = models.CharField(max_length=255, blank=True, default='', help_text='ManagedServer UUID when source is a known node')
+    source_ssh_key = EncryptedTextField(blank=True, default='')
+    source_ssh_password = EncryptedCharField(max_length=255, blank=True, default='')
     source_backup = models.ForeignKey(ServiceBackup, on_delete=models.SET_NULL, null=True, blank=True)
     source_server_backup = models.ForeignKey(ServerBackup, on_delete=models.SET_NULL, null=True, blank=True)
 

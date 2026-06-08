@@ -104,12 +104,6 @@ export default function TransfersPage() {
     // DnD Handlers
     // ─────────────────────────────────────────────────────────────────
     const handleDragStart = (e: React.DragEvent, itemId: string, itemType: string, sourceServerId: string) => {
-        // Only allow dragging from the local server
-        if (sourceServerId !== 'local') {
-            e.preventDefault();
-            toast.error("Transfers must originate from the Local Server.");
-            return;
-        }
         e.dataTransfer.setData('itemId', itemId);
         e.dataTransfer.setData('itemType', itemType);
         e.dataTransfer.setData('sourceServerId', sourceServerId);
@@ -127,19 +121,9 @@ export default function TransfersPage() {
 
         if (!itemId || sourceServerId === targetServerId) return;
 
-        if (sourceServerId !== 'local') {
-            toast.error("Transfers must originate from the Local Server.");
-            return;
-        }
-
-        if (targetServerId === 'local') {
-            toast.error("Cannot transfer to the Local Server. Select a remote server.");
-            return;
-        }
-
         const targetServer = servers.find(server => server.id === targetServerId);
-        if (!targetServer || targetServer.is_primary || targetServer.allow_user_workloads === false) {
-            toast.error("Select a workload-enabled remote server.");
+        if (targetServerId !== 'local' && (!targetServer || targetServer.allow_user_workloads === false)) {
+            toast.error("Select a workload-enabled server.");
             return;
         }
 
@@ -414,12 +398,12 @@ function ServerColumn({
                     items.map((item: any) => (
                         <div
                             key={item.id}
-                            draggable={isLocal}
-                            onDragStart={(e) => isLocal ? onDragStart(e, item.id, item.type, id) : e.preventDefault()}
-                            className={`group relative border rounded-xl p-4 flex items-center justify-between transition-all duration-300 ${
+                            draggable={true}
+                            onDragStart={(e) => onDragStart(e, item.id, item.type, id)}
+                            className={`group relative border rounded-xl p-4 flex items-center justify-between transition-all duration-300 cursor-grab active:cursor-grabbing ${
                                 isLocal 
-                                ? "bg-zinc-900/60 border-zinc-800 cursor-grab active:cursor-grabbing hover:border-emerald-500/40 hover:bg-zinc-800/80 hover:shadow-[0_0_20px_rgba(16,185,129,0.1)]" 
-                                : "bg-black/20 border-zinc-800/50 opacity-60 cursor-not-allowed"
+                                ? "bg-zinc-900/60 border-zinc-800 hover:border-emerald-500/40 hover:bg-zinc-800/80 hover:shadow-[0_0_20px_rgba(16,185,129,0.1)]" 
+                                : "bg-zinc-900/60 border-zinc-800 hover:border-violet-500/40 hover:bg-zinc-800/80 hover:shadow-[0_0_20px_rgba(139,92,246,0.1)]"
                             }`}
                         >
                             <div className="flex items-center gap-3.5">
@@ -478,9 +462,7 @@ function ServerColumn({
             {/* Footer */}
             <div className="px-5 py-3 border-t border-zinc-800/50 bg-black/10 flex items-center justify-between">
                 <span className="text-[10px] font-bold text-zinc-500 uppercase">{items.length} Workloads</span>
-                {isLocal && (
-                    <p className="text-[9px] text-zinc-600 font-medium">DRAG TO MOVE</p>
-                )}
+                <p className="text-[9px] text-zinc-600 font-medium">DRAG TO MOVE</p>
             </div>
         </div>
     );

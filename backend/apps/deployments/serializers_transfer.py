@@ -10,6 +10,7 @@ class ServerTransferSerializer(serializers.ModelSerializer):
             'owner',
             'status',
             'source_server_ip',
+            'source_server_id',
             'source_backup',
             'target_server_ip',
             'transfer_type',
@@ -46,6 +47,13 @@ class ServerTransferSerializer(serializers.ModelSerializer):
 
 class ServerTransferCreateSerializer(serializers.Serializer):
     source_server_ip = serializers.IPAddressField(required=False)
+    source_server_id = serializers.UUIDField(required=False)
+    source_ssh_key = serializers.CharField(
+        write_only=True, trim_whitespace=False, required=False, default='', allow_blank=True,
+    )
+    source_ssh_password = serializers.CharField(
+        write_only=True, required=False, default='', allow_blank=True,
+    )
     target_server_ip = serializers.IPAddressField(required=False)
     target_server_id = serializers.UUIDField(required=False)
     target_ssh_key = serializers.CharField(

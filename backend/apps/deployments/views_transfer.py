@@ -246,6 +246,10 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         if not source_server_ip:
             source_server_ip = PlatformConfig.load().server_ip
 
+        source_ssh_key = (payload.get('source_ssh_key') or '').strip()
+        source_ssh_password = (payload.get('source_ssh_password') or '').strip()
+        source_server_id = str(payload.get('source_server_id') or '')
+
         if not source_server_ip:
             logger.warning("Transfer failed: Source server IP (local node IP) not set in PlatformConfig.")
             return Response(
@@ -365,6 +369,9 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         # Create transfer object
         transfer = ServerTransfer.objects.create(
             source_server_ip=source_server_ip,
+            source_server_id=source_server_id,
+            source_ssh_key=source_ssh_key,
+            source_ssh_password=source_ssh_password,
             target_server_ip=target_server_ip,
             target_ssh_key=target_ssh_key,
             target_ssh_password=target_ssh_password,
@@ -381,11 +388,15 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
             transfer.error_message = 'Transfer could not be queued. Please retry after checking worker availability.'
             transfer.target_ssh_key = ''
             transfer.target_ssh_password = ''
+            transfer.source_ssh_key = ''
+            transfer.source_ssh_password = ''
             transfer.save(update_fields=[
                 'status',
                 'error_message',
                 'target_ssh_key',
                 'target_ssh_password',
+                'source_ssh_key',
+                'source_ssh_password',
             ])
             return Response(
                 {'error': transfer.error_message, 'id': str(transfer.id)},
