@@ -567,7 +567,6 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: smsly_user
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
-      RABBITMQ_VM_MEMORY_HIGH_WATERMARK: ${RABBITMQ_MEMORY_WATERMARK:-0.6}
     volumes:
     - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
