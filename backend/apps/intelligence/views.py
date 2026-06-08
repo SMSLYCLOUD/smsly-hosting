@@ -90,7 +90,7 @@ def ai_providers_status(request):
             configured = []
             degraded_reason = degraded_reason or "configured_provider_lookup_failed"
 
-        mode = "mock"
+        mode = "unconfigured"
         if len(configured) >= 2:
             mode = "senate_committee"
         elif len(configured) == 1:
@@ -102,7 +102,7 @@ def ai_providers_status(request):
             "providers": providers,
             "mode": mode,
             "mode_label": {
-                "mock": "Mock AI (no providers configured)",
+                "unconfigured": "No AI providers configured",
                 "solo": f"Solo Mode ({member_names[0] if member_names else 'N/A'})",
                 "senate_committee": f"Senate Committee ({' + '.join(member_names)})",
             }.get(mode, mode),
@@ -120,8 +120,8 @@ def ai_providers_status(request):
         return Response(
             {
                 "providers": [],
-                "mode": "mock",
-                "mode_label": "Mock AI (no providers configured)",
+                "mode": "unconfigured",
+                "mode_label": "No AI providers configured",
                 "active_count": 0,
                 "total_available": 0,
                 "degraded": True,
@@ -219,7 +219,7 @@ def ai_test_prompt(request):
     try:
         response, provider_name = _cached_ask(prompt, system_prompt=system_prompt, cache_bypass=True)
         configured = get_configured_providers()
-        mode = "senate_committee" if len(configured) >= 2 else ("solo" if len(configured) == 1 else "mock")
+        mode = "senate_committee" if len(configured) >= 2 else ("solo" if len(configured) == 1 else "unconfigured")
 
         return Response({
             "response": response,

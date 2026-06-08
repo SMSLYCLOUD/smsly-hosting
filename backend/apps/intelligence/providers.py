@@ -1841,21 +1841,7 @@ class MockProvider(AIProvider):
         return True  # Always available as last resort
 
     def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
-        if "deploy" in prompt.lower() or "error" in prompt.lower():
-            return (
-                "Based on my analysis, here are some suggestions:\n\n"
-                "1. **Check your Dockerfile** - ensure the build command completes successfully\n"
-                "2. **Verify environment variables** - missing DB_URL or SECRET_KEY crash apps\n"
-                "3. **Review memory limits** - OOM kills are common with default 256MB\n\n"
-                "Would you like me to analyze your deployment logs?"
-            )
-        return (
-            "I'm your SMSLY AI Assistant. I can help with:\n\n"
-            "- **Deployment troubleshooting** - paste your logs and I'll diagnose issues\n"
-            "- **Configuration advice** - optimal Docker, env vars, and resource settings\n"
-            "- **Cost optimization** - compare cloud providers and reduce spend\n\n"
-            "How can I help?"
-        )
+        raise NotImplementedError("No AI provider is configured. Add an API key in Settings > AI to use this feature.")
 
 
 # ---------------------------------------------------------------------------
@@ -2212,11 +2198,11 @@ def get_configured_providers() -> List[AIProvider]:
 
 
 def get_provider() -> AIProvider:
-    """Return the first configured AI provider, falling back to mock."""
+    """Return the first configured AI provider, or raise."""
     configured = get_configured_providers()
     if configured:
         return configured[0]
-    return MockProvider()
+    raise RuntimeError("No AI providers configured.")
 
 
 # ---------------------------------------------------------------------------
@@ -2301,8 +2287,7 @@ def ask_collaborative(prompt: str, system_prompt: Optional[str] = None) -> Tuple
     configured = [p for p in get_configured_providers() if not _is_circuit_open(getattr(p, "id", ""))]
 
     if not configured:
-        mock = MockProvider()
-        return mock.ask(prompt, system_prompt=system_prompt), mock.name()
+        raise RuntimeError("No AI providers configured. Add an API key in Settings > AI.")
 
     if len(configured) == 1:
         provider = configured[0]
@@ -2311,9 +2296,7 @@ def ask_collaborative(prompt: str, system_prompt: Optional[str] = None) -> Tuple
         except Exception as e: # pylint: disable=broad-exception-caught
             _record_provider_failure(getattr(provider, "id", ""))
             logger.warning("Single provider %s failed: %s", provider.name(), e)
-            mock = MockProvider()
-            return mock.ask(prompt, system_prompt=system_prompt), \
-                f"Mock AI ({provider.name()} failed)"
+            raise
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # PHASE 1 — PROPOSE: Each provider answers independently
@@ -2322,9 +2305,7 @@ def ask_collaborative(prompt: str, system_prompt: Optional[str] = None) -> Tuple
     proposals = _parallel_ask(configured, prompt, system_prompt or COMMITTEE_SYSTEM_PROMPT)
 
     if not proposals:
-        mock = MockProvider()
-        return mock.ask(prompt, system_prompt=system_prompt), \
-            f"Mock AI (all {len(configured)} senators failed)"
+        raise RuntimeError(f"All {len(configured)} AI providers failed to respond.")
 
     if len(proposals) == 1:
         return proposals[0]
@@ -2534,7 +2515,7 @@ def ask_with_fallback(
     - If provider_id specified -> try that one first, fallback to others
     - If 2+ providers configured -> collaborative consensus mode
     - If 1 provider -> single provider mode
-    - If 0 providers -> mock fallback
+    - If 0 providers -> error
 
     Returns (response_text, provider_name).
     """
@@ -2575,20 +2556,20 @@ def ask_with_fallback(
 
     senate_enabled = os.environ.get("SENATE_ENABLED", "True").lower() == "true"
     if len(configured) >= 2 and senate_enabled:
-        response, provider_name = ask_collaborative(prompt, system_prompt)
-        if not provider_name.startswith("Mock AI (all"):
-            return response, provider_name
+        try:
+            return ask_collaborative(prompt, system_prompt)
+        except Exception as exc:
+            logger.warning("ask_collaborative failed: %s", exc)
 
-        # Committee phase can fail even when at least one provider is
-        # recoverable (e.g., transient endpoint/model errors). Try a direct
-        # sequential pass before returning full mock mode.
+        # Committee phase failed across all members. Try a direct
+        # sequential pass before giving up.
         for provider in configured:
             try:
                 return _ask_single(provider, prompt, system_prompt)
             except Exception as exc:  # noqa: BLE001
                 _record_provider_failure(getattr(provider, "id", ""))
                 logger.warning("Committee rescue with %s failed: %s", provider.name(), exc)
-        return response, provider_name
+        raise RuntimeError("All configured AI providers failed to respond.")
 
     if len(configured) == 1:
         provider = configured[0]
@@ -2596,14 +2577,9 @@ def ask_with_fallback(
             return _ask_single(provider, prompt, system_prompt)
         except Exception as e: # pylint: disable=broad-exception-caught
             _record_provider_failure(getattr(provider, "id", ""))
-            logger.warning("Provider %s failed, falling back to mock: %s", provider.name(), e)
-            mock = MockProvider()
-            return mock.ask(prompt, system_prompt=system_prompt), \
-                f"Mock AI ({provider.name()} failed)"
+            raise RuntimeError(f"AI provider {provider.name()} failed: {e}")
 
-    # No providers configured
-    mock = MockProvider()
-    return mock.ask(prompt, system_prompt=system_prompt), mock.name()
+    raise RuntimeError("No AI providers configured. Add an API key in Settings > AI.")
 
 
 def _cached_ask(

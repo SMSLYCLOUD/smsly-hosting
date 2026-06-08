@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 
 const MODE_BADGE: Record<string, { label: string; variant: "default" | "secondary" | "outline" | "destructive"; icon: React.ReactNode }> = {
-  mock:             { label: 'Mock Mode',        variant: 'secondary', icon: <Bot className="w-3 h-3 mr-1" /> },
+  unconfigured:     { label: 'Not Configured',   variant: 'outline',   icon: <AlertCircle className="w-3 h-3 mr-1" /> },
   solo:             { label: 'Solo Mode',         variant: 'default',   icon: <Zap className="w-3 h-3 mr-1" /> },
   senate_committee: { label: 'Senate Committee',  variant: 'default',   icon: <Shield className="w-3 h-3 mr-1" /> },
 };

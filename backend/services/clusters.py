@@ -87,9 +87,8 @@ class ClusterManager:
         name = self._sanitize_name(name)
 
         if not self.k8s_available:
-            self._log(f"Kubernetes not available. Mocking deployment to {name}.")
-            time.sleep(1)
-            return f"mock-pod-{name}"
+            self._log(f"Kubernetes not available. Cannot deploy {name}.")
+            raise RuntimeError("Kubernetes is not available. Cannot deploy without a cluster.")
 
         # Ensure Namespace exists
         self._ensure_namespace(namespace)
