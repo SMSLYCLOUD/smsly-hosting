@@ -1,11 +1,12 @@
 # SMSLY Hosting High-Availability Redis Stack
-# Primary-Replica setup for read scaling and warm failover.
+# Primary-Replica with 3 Sentinel instances for auto-failover.
 #
 # Usage:  docker compose -f docker-compose.ha-redis.yml up -d
 # Requires: REDIS_PASSWORD in .env
 #
-# NOTE: For full auto-failover, Redis Sentinel is needed (3+ nodes).
-# This compose provides replication only — manual failover required.
+# Sentinel auto-promotes replica → primary on failure.
+# Clients query Sentinel at redis-sentinel:26379 to discover the current primary.
+# Quorum: 2 of 3 Sentinels must agree to trigger failover.
 
 services:
   # Primary Redis (write)
@@ -76,6 +77,68 @@ services:
           memory: ${REDIS_REPLICA_RESERVATION:-128M}
         limits:
           memory: ${REDIS_REPLICA_LIMIT:-512M}
+    labels:
+      - managed_by=smsly-hosting
+
+  # ── Redis Sentinel (3 instances for quorum=2) ──────────────────────
+
+  redis-sentinel-1:
+    image: redis:7-alpine
+    container_name: smsly-redis-sentinel-1
+    restart: unless-stopped
+    command: >
+      sh -c '
+      printf "sentinel monitor smsly-redis redis-primary 6379 2\nsentinel auth-pass smsly-redis $${REDIS_PASSWORD}\nsentinel down-after-milliseconds smsly-redis 5000\nsentinel failover-timeout smsly-redis 15000\nsentinel parallel-syncs smsly-redis 1\nsentinel resolve-hostnames yes\nsentinel announce-hostnames yes\n" > /tmp/sentinel.conf
+      && redis-sentinel /tmp/sentinel.conf'
+    networks:
+      - smsly-net
+    depends_on:
+      - redis-primary
+      - redis-replica
+    deploy:
+      resources:
+        limits:
+          memory: 32M
+    labels:
+      - managed_by=smsly-hosting
+
+  redis-sentinel-2:
+    image: redis:7-alpine
+    container_name: smsly-redis-sentinel-2
+    restart: unless-stopped
+    command: >
+      sh -c '
+      printf "sentinel monitor smsly-redis redis-primary 6379 2\nsentinel auth-pass smsly-redis $${REDIS_PASSWORD}\nsentinel down-after-milliseconds smsly-redis 5000\nsentinel failover-timeout smsly-redis 15000\nsentinel parallel-syncs smsly-redis 1\nsentinel resolve-hostnames yes\nsentinel announce-hostnames yes\n" > /tmp/sentinel.conf
+      && redis-sentinel /tmp/sentinel.conf'
+    networks:
+      - smsly-net
+    depends_on:
+      - redis-primary
+      - redis-replica
+    deploy:
+      resources:
+        limits:
+          memory: 32M
+    labels:
+      - managed_by=smsly-hosting
+
+  redis-sentinel-3:
+    image: redis:7-alpine
+    container_name: smsly-redis-sentinel-3
+    restart: unless-stopped
+    command: >
+      sh -c '
+      printf "sentinel monitor smsly-redis redis-primary 6379 2\nsentinel auth-pass smsly-redis $${REDIS_PASSWORD}\nsentinel down-after-milliseconds smsly-redis 5000\nsentinel failover-timeout smsly-redis 15000\nsentinel parallel-syncs smsly-redis 1\nsentinel resolve-hostnames yes\nsentinel announce-hostnames yes\n" > /tmp/sentinel.conf
+      && redis-sentinel /tmp/sentinel.conf'
+    networks:
+      - smsly-net
+    depends_on:
+      - redis-primary
+      - redis-replica
+    deploy:
+      resources:
+        limits:
+          memory: 32M
     labels:
       - managed_by=smsly-hosting
 
