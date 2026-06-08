@@ -723,6 +723,7 @@ CELERY_WORKER_MAX_TASKS_PER_CHILD = 500
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1  # fair dispatch — don't hoard tasks
 CELERY_TASK_ACKS_LATE = True           # ack after execution — prevents lost tasks on crash
 CELERY_TASK_TRACK_STARTED = True       # report STARTED state for monitoring
+CELERY_BEAT_SCHEDULER = 'redbeat.RedBeatScheduler'  # Redis-locked beat — multiple instances safe
 # NOTE: Beat schedule is defined in config/celery.py (the authoritative source)
 
 # CORS - allow "*" only in DEBUG when explicitly enabled.

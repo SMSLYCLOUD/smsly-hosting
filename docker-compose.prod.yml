@@ -250,7 +250,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: celery -A config beat -l info --pidfile=/app/celerybeat.pid --schedule=/app/celerybeat-schedule
+    command: celery -A config beat -l info -S redbeat.RedBeatScheduler --pidfile=/app/celerybeat.pid
     restart: unless-stopped
     env_file: .env
     environment:
