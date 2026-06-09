@@ -4160,8 +4160,7 @@ def restore_addon_task(self, backup_id: str):
     except Exception as e:
         raise e
 
-@shared_task(bind=True, soft_time_limit=3600, time_limit=3900)
-@shared_task(bind=True, soft_time_limit=3600, max_retries=3, default_retry_delay=300)
+@shared_task(bind=True, soft_time_limit=3600, time_limit=3900, max_retries=3, default_retry_delay=300)
 def create_service_backup_task(self, service_id, backup_type='MANUAL', backup_id=None):
     from .services.backup_service import BackupService
     try:
@@ -4223,6 +4222,10 @@ def cleanup_old_backups_task():
         except Exception as exc:
             logger.warning("Backup cleanup failed for schedule %s: %s", sched.id, exc)
     return cleaned
+
+
+@shared_task
+def run_scheduled_backups_task():
     """Execute all due BackupSchedule entries."""
     from .models_backup import BackupSchedule
     from .services.backup_service import BackupService
@@ -4251,40 +4254,9 @@ def cleanup_old_backups_task():
         except Exception as exc:
             logger.warning("Scheduled backup failed for schedule %s: %s", sched.id, exc)
     return ran
-    """Delete backups older than retention_days per schedule."""
-    from datetime import timedelta
 
-    schedules = BackupSchedule.objects.filter(enabled=True)
-    for schedule in schedules:
-        if schedule.service:
-            # Service level
-            cutoff = timezone.now() - timedelta(days=schedule.retention_days)
-            old_backups = ServiceBackup.objects.filter(
-                service=schedule.service,
-                created_at__lt=cutoff,
-                status='COMPLETED'
-            ).order_by('-created_at')
 
-            # Keep at least the latest 1 valid backup, regardless of age
-            all_valid_backups = ServiceBackup.objects.filter(
-                service=schedule.service,
-                status='COMPLETED'
-            ).order_by('-created_at')
-
-            if all_valid_backups.count() <= 1:
-                old_backups = []
-            elif all_valid_backups.first() in old_backups:
-                old_backups = old_backups.exclude(id=all_valid_backups.first().id)
-
-            for backup in old_backups:
-                # Delete file
-                if backup.file_path and os.path.exists(backup.file_path):
-                    try:
-                        os.remove(backup.file_path)
-                    except OSError as e:
-                        logger.warning(f"Error deleting backup file {backup.file_path}: {e}")
-                backup.delete()
-
+@shared_task
 @shared_task(bind=True, soft_time_limit=3600, time_limit=4200)
 def execute_server_transfer_task(self, transfer_id):
     from .models_transfer import ServerTransfer as TransferModel
