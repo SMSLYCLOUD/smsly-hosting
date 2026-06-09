@@ -236,6 +236,7 @@ class BackupService:
                         os.remove(image_path)
 
             # 2. Database dump (if container runs a DB — ensures consistent data)
+            container_name = service.name
             _dump_container_database(container_name, image_tag, temp_dir)
 
             # 3. Backup Volumes
