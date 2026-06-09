@@ -1,10 +1,10 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { servicesApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { FolderOpen, FileText, ChevronRight, Save, Loader2, ArrowLeft, Trash2, Download, Plus, RefreshCw } from 'lucide-react';
+import { FolderOpen, FileText, ChevronRight, Save, Loader2, ArrowLeft, Trash2, Download, Plus, RefreshCw, Upload, Server } from 'lucide-react';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { toast } from '@/components/ui/use-toast';
 import dynamic from 'next/dynamic';
@@ -20,6 +20,9 @@ export function FilesTab({ serviceId }: { serviceId: string }) {
     const [originalContent, setOriginalContent] = useState<string>('');
     const [loadingFile, setLoadingFile] = useState(false);
     const [saving, setSaving] = useState(false);
+    const [uploading, setUploading] = useState(false);
+    const [serverName, setServerName] = useState<string>('');
+    const fileInputRef = useRef<HTMLInputElement>(null);
     const confirm = useConfirm();
 
     const loadDirectory = useCallback(async (path: string) => {
@@ -41,6 +44,17 @@ export function FilesTab({ serviceId }: { serviceId: string }) {
     useEffect(() => {
         void loadDirectory('/app');
     }, [loadDirectory]);
+
+    useEffect(() => {
+        servicesApi.get(serviceId).then((svc: any) => {
+            const nodeName = svc?.node_metadata?.name;
+            if (nodeName) {
+                setServerName(`Node: ${nodeName}`);
+            } else {
+                setServerName('Local');
+            }
+        }).catch(() => {});
+    }, [serviceId]);
 
     const handleNavigate = (file: any) => {
         const nextPath = currentPath.endsWith('/')
@@ -127,6 +141,23 @@ export function FilesTab({ serviceId }: { serviceId: string }) {
         }
     };
 
+    const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const destPath = currentPath.endsWith('/') ? `${currentPath}${file.name}` : `${currentPath}/${file.name}`;
+        try {
+            setUploading(true);
+            await servicesApi.uploadFile(serviceId, destPath, file);
+            toast({ title: "File uploaded successfully" });
+            loadDirectory(currentPath);
+        } catch (err: any) {
+            toast({ title: "Failed to upload file", description: err.response?.data?.error || 'An error occurred', variant: "destructive" });
+        } finally {
+            setUploading(false);
+            if (fileInputRef.current) fileInputRef.current.value = '';
+        }
+    };
+
     const isDirty = fileContent !== originalContent;
 
     return (
@@ -140,9 +171,24 @@ export function FilesTab({ serviceId }: { serviceId: string }) {
                             <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={goUp} disabled={currentPath === '/'}>
                                 <ArrowLeft className="w-4 h-4" />
                             </Button>
-                            <span className="font-mono text-sm truncate opacity-70" title={currentPath}>{currentPath}</span>
-                        </div>
+                                            <span className="font-mono text-sm truncate opacity-70" title={currentPath}>{currentPath}</span>
+                                            {serverName && (
+                                                <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full flex items-center gap-1 shrink-0">
+                                                    <Server className="w-3 h-3" />
+                                                    {serverName}
+                                                </span>
+                                            )}
+                                        </div>
                         <div className="flex items-center gap-1">
+                            <input
+                                type="file"
+                                ref={fileInputRef}
+                                onChange={handleFileUpload}
+                                className="hidden"
+                            />
+                            <Button variant="ghost" size="icon" className="h-8 w-8 text-green-400" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
+                                {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                            </Button>
                             <Button variant="ghost" size="icon" className="h-8 w-8 text-blue-400" onClick={handleMkdir}>
                                 <Plus className="w-4 h-4" />
                             </Button>
