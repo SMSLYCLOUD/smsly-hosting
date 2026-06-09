@@ -1301,21 +1301,26 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
             from apps.deployments.services.prometheus_targets import (
                 deploy_docker_labels_exporter_on_node,
                 deploy_promtail_on_node,
+                deploy_cadvisor_on_node,
+                deploy_node_exporter_on_node,
                 write_docker_labels_targets,
             )
-            _append_log(server, "Deploying docker-labels exporter...")
+            _append_log(server, "Deploying observability agents...")
             if deploy_docker_labels_exporter_on_node(server):
                 _append_log(server, "✓ docker-labels exporter deployed")
-            else:
-                _append_log(server, "⚠ docker-labels exporter deployment failed (non-critical)")
-            _append_log(server, "Deploying Promtail log collector...")
             if deploy_promtail_on_node(server):
                 _append_log(server, "✓ Promtail deployed")
+            if deploy_cadvisor_on_node(server):
+                _append_log(server, "✓ cAdvisor deployed")
             else:
-                _append_log(server, "⚠ Promtail deployment failed (non-critical)")
+                _append_log(server, "⚠ cAdvisor deployment failed (non-critical)")
+            if deploy_node_exporter_on_node(server):
+                _append_log(server, "✓ Node Exporter deployed")
+            else:
+                _append_log(server, "⚠ Node Exporter deployment failed (non-critical)")
             write_docker_labels_targets()
         except Exception as exc:
-            _append_log(server, f"⚠ exporter/Promtail deployment skipped: {exc}")
+            _append_log(server, f"⚠ observability deployment skipped: {exc}")
 
         # The token from provisioning may be a DRF session token.
         # Try to exchange it for a long-lived smsly_ API token via the

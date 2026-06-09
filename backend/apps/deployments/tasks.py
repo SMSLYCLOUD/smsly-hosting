@@ -5318,9 +5318,13 @@ def node_watchdog_task(self):
                     from apps.deployments.services.prometheus_targets import (
                         deploy_docker_labels_exporter_on_node,
                         deploy_promtail_on_node,
+                        deploy_cadvisor_on_node,
+                        deploy_node_exporter_on_node,
                     )
                     deploy_docker_labels_exporter_on_node(server)
                     deploy_promtail_on_node(server)
+                    deploy_cadvisor_on_node(server)
+                    deploy_node_exporter_on_node(server)
                 except Exception as exc:
                     logger.debug("docker-labels/promtail deploy skipped for %s: %s", server.name, exc)
 
