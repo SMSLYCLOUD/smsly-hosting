@@ -609,6 +609,27 @@ if svc:
         "CELERY_BROKER_URL": platform_redis_url,
         "CELERY_RESULT_BACKEND": platform_redis_url,
     }
+    # ── Domain/env remaps for cross-platform migration ─────────────────
+    target_domain = os.environ.get("DOMAIN", "").strip()
+    if target_domain:
+        domain_remaps = {
+            "PUBLIC_DOMAIN": target_domain,
+            "ALLOWED_HOSTS": f"{target_domain},localhost,127.0.0.1",
+            "DJANGO_ALLOWED_HOSTS": target_domain,
+            "SITE_URL": f"https://{target_domain}",
+        }
+        for dk, dv in domain_remaps.items():
+            # Only update if the current value references the old platform
+            env = EnvironmentVariable.objects.filter(service=svc, key=dk).first()
+            if env and env.value and str(env.value).strip():
+                old_val = str(env.value).strip()
+                old_base = os.environ.get("DOMAIN_OLD", "").strip() or "localhost"
+                if old_base in old_val or old_val == "********":
+                    EnvironmentVariable.objects.update_or_create(
+                        service=svc, key=dk,
+                        defaults={"value": dv, "source": "SYSTEM"},
+                    )
+
     for key, replacement_url in url_remaps.items():
         if not replacement_url:
             continue
@@ -1334,14 +1355,14 @@ if os.path.exists(services_dir):
                     or self.transfer.target_server_ip
                 )
                 self.transfer.service.active_runtime_id = self.transfer.service.name
-                self.transfer.service.save(
-                    update_fields=[
-                        'server',
-                        'active_target_type',
-                        'active_host_ip',
-                        'active_runtime_id',
-                    ]
-                )
+
+                # ── Cross-platform migration: remap domain to target platform ──
+                domain_fields = self._remap_service_domain_for_target(target_server)
+                update_fields = [
+                    'server', 'active_target_type', 'active_host_ip', 'active_runtime_id',
+                ] + domain_fields
+
+                self.transfer.service.save(update_fields=update_fields)
 
                 # Regenerate Caddyfile on the master node so it knows to
                 # route traffic for this service to the remote node via
@@ -1370,6 +1391,45 @@ if os.path.exists(services_dir):
 
         self.transfer.save()
         self._update(100, 'Transfer complete!')
+
+    def _remap_service_domain_for_target(self, target_server):
+        """Regenerate public_domain to match target platform's base domain."""
+        fields = []
+        svc = self.transfer.service
+        old_domain = (svc.public_domain or '').strip()
+
+        # Get the target platform's base domain from its config
+        new_base = None
+        try:
+            # Try querying the target server's PlatformConfig via SSH
+            if self.ssh:
+                out, _, _ = self.ssh.exec_command(
+                    "grep -m1 '^DOMAIN=' /opt/smsly-hosting/.env 2>/dev/null | cut -d= -f2",
+                    raise_on_error=False,
+                )
+                new_base = out.strip()
+        except Exception:
+            pass
+
+        if not new_base and target_server:
+            new_base = getattr(target_server, 'domain_override', None)
+
+        if not new_base or new_base == 'auto':
+            return fields  # can't determine target domain — keep existing
+
+        # Extract the subdomain part from old domain
+        old_base = svc.default_public_base_domain()
+        subdomain = old_domain.replace(f'.{old_base}', '') if old_domain.endswith(f'.{old_base}') else ''
+        if not subdomain or subdomain == old_domain:
+            subdomain = svc.name.lower().replace(' ', '-')
+
+        new_domain = f"{subdomain}.{new_base}"
+        if new_domain != old_domain:
+            svc.public_domain = new_domain
+            fields.append('public_domain')
+            self._log(f"Domain remapped: {old_domain} → {new_domain}")
+
+        return fields
 
     def rollback(self):
         if not self.transfer.can_rollback:
