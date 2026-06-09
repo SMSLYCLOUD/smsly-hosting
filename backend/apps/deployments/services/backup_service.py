@@ -8,6 +8,7 @@ import shutil
 import traceback
 import docker
 import tempfile
+import hashlib
 import base64
 import binascii
 import struct
@@ -66,11 +67,28 @@ class BackupService:
             os.makedirs(fallback, exist_ok=True)
             return fallback
 
-    @staticmethod
-    def _prepare_archive_for_restore(path: str) -> tuple[str, str | None]:
-        """Return a readable tar.gz path, decrypting encrypted backups if needed."""
+    def _prepare_archive_for_restore(self, backup) -> tuple[str, str | None]:
+        """Return readable tar.gz path, verifying checksum if backup object has metadata."""
+        # Accept both a backup object or a raw filepath string
+        if isinstance(backup, str):
+            path = backup
+            expected_hash = None
+            expected_size = 0
+        else:
+            path = backup.file_path
+            expected_hash = (backup.metadata or {}).get('checksum_sha256', '')
+            expected_size = backup.size_bytes
         if not path or not os.path.exists(path):
             raise FileNotFoundError("Backup archive file not found.")
+        if expected_size and os.path.getsize(path) != expected_size:
+            raise ValueError(f"Size mismatch: expected {expected_size}, got {os.path.getsize(path)}")
+        if expected_hash:
+            sha = hashlib.sha256()
+            with open(path, 'rb') as f:
+                for chunk in iter(lambda: f.read(8192), b''):
+                    sha.update(chunk)
+            if sha.hexdigest() != expected_hash:
+                raise ValueError("Checksum mismatch — backup may be corrupted")
         if not path.endswith(".enc"):
             return path, None
 
@@ -290,6 +308,11 @@ class BackupService:
             backup.metadata = metadata
             backup.status = 'COMPLETED'
             backup.size_bytes = os.path.getsize(filepath)
+            sha = hashlib.sha256()
+            with open(filepath, 'rb') as f:
+                for chunk in iter(lambda: f.read(8192), b''):
+                    sha.update(chunk)
+            backup.metadata['checksum_sha256'] = sha.hexdigest()
             backup.completed_at = timezone.now()
             backup.save()
             self._prune_old_backups(ServiceBackup, service_id=service.id)
@@ -361,7 +384,7 @@ class BackupService:
             except Exception as e:
                 logger.warning(f"Failed to create pre-restore snapshot: {e}")
 
-            archive_path, cleanup_archive = self._prepare_archive_for_restore(backup.file_path)
+            archive_path, cleanup_archive = self._prepare_archive_for_restore(backup)
             temp_dir = os.path.join(os.path.dirname(archive_path), f"restore_{uuid.uuid4().hex}")
             os.makedirs(temp_dir, exist_ok=True)
             return self._restore_remote_service(backup, target_service, server_obj, temp_dir, archive_path, cleanup_archive)
@@ -374,7 +397,7 @@ class BackupService:
             logger.warning(f"Failed to create pre-restore snapshot: {e}")
             # We don't fail the restore if snapshot fails, but we log it
 
-        archive_path, cleanup_archive = self._prepare_archive_for_restore(backup.file_path)
+        archive_path, cleanup_archive = self._prepare_archive_for_restore(backup)
         temp_dir = os.path.join(os.path.dirname(archive_path), f"restore_{uuid.uuid4().hex}")
         os.makedirs(temp_dir, exist_ok=True)
 
@@ -1056,7 +1079,7 @@ class BackupService:
         backup = ServerBackup.objects.get(id=backup_id)
         if backup.status != 'COMPLETED':
             raise ValueError("Only COMPLETED server backups can be restored.")
-        archive_path, cleanup_archive = self._prepare_archive_for_restore(backup.file_path)
+        archive_path, cleanup_archive = self._prepare_archive_for_restore(backup)
         temp_dir = os.path.join(os.path.dirname(archive_path), f"restore_srv_{uuid.uuid4().hex}")
         os.makedirs(temp_dir, exist_ok=True)
 
