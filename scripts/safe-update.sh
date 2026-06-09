@@ -40,6 +40,14 @@ safe_update_preflight() {
     docker info >/dev/null 2>&1 || { _fail "Docker not responding"; return 1; }
     _ok "Docker: responsive"
 
+    # Clean up orphaned containers from failed previous builds
+    local orphaned
+    orphaned=$(docker ps -a --filter "status=created" --filter "status=exited" --filter "status=dead" -q 2>/dev/null || true)
+    if [ -n "$orphaned" ]; then
+        docker rm -f $orphaned 2>/dev/null || true
+        _ok "Cleaned up orphaned containers"
+    fi
+
     for cf in "$COMPOSE_FILE" "$INSTALL_DIR/infrastructure/docker/docker-compose.observability.yml"; do
         [ -f "$cf" ] || { _fail "Missing: $cf"; return 1; }
     done
@@ -55,6 +63,7 @@ safe_update_preflight() {
 safe_update_snapshot() {
     _step "Snapshot + DB Backup"
     mkdir -p "$BACKUP_DIR"
+    export SNAPSHOT_FILE BACKUP_DIR
 
     local prev_hash; prev_hash=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
     local prev_branch; prev_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
