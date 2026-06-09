@@ -87,6 +87,7 @@ class DeploymentsConfig(AppConfig):
         from . import models_backup
         from . import models_transfer
         from . import models_replica
+        from . import models_cloud_storage
         from . import openapi
 
         # Import signals

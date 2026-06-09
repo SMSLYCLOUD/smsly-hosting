@@ -320,6 +320,10 @@ class BackupService:
             backup.save()
             self._prune_old_backups(ServiceBackup, service_id=service.id)
 
+            # Upload to S3 if a scheduled backup with cloud config
+            if backup_type == 'SCHEDULED':
+                _upload_to_cloud_if_configured(service, filepath)
+
             # Clean up temp image if we created one
             if image_tag and image_tag.startswith("backup/"):
                 try:
@@ -1632,6 +1636,25 @@ def backup_addon(addon_id: str) -> str | None:
 
 
 def upload_backup_to_s3(local_path: str, s3_bucket: str, s3_key: str,
+
+
+def _upload_to_cloud_if_configured(service, filepath):
+    """If the service has a BackupSchedule with S3 config, upload the backup."""
+    try:
+        from apps.deployments.models_backup import BackupSchedule
+        sched = BackupSchedule.objects.filter(
+            service=service, enabled=True, storage_backend='s3',
+        ).first()
+        if not sched or not sched.s3_bucket or not sched.s3_access_key:
+            return
+        s3_key = f"smsly-backups/{service.name}/{os.path.basename(filepath)}"
+        upload_backup_to_s3(
+            filepath, sched.s3_bucket, s3_key,
+            endpoint=sched.s3_endpoint, region=sched.s3_region,
+            access_key=sched.s3_access_key, secret_key=sched.s3_secret_key,
+        )
+    except Exception as exc:
+        logger.warning("Cloud upload skipped for %s: %s", service.name, exc)
                         endpoint: str = '', region: str = 'us-east-1',
                         access_key: str = '', secret_key: str = '') -> bool:
     """Upload a backup file to S3 (or R2/MinIO via custom endpoint)."""
