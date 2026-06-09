@@ -100,12 +100,15 @@ def _resolve_incoming_owner(request, source_ip):
     if server and server.owner_id:
         return server.owner
 
-    # If HMAC was verified against GATEWAY_SECRET, the global auth class would have
-    # set request.user to admin. If we reach here (per-server secret, no server owner),
-    # reject rather than silently assigning a superuser.
+    # No owner found — fall back to the first admin user
+    from django.contrib.auth import get_user_model
+    admin = get_user_model().objects.filter(is_superuser=True).first()
+    if admin:
+        return admin
+
     raise RuntimeError(
         f"Cannot resolve owner for incoming transfer from {source_ip}. "
-        "The source ManagedServer has no owner assigned."
+        "The source ManagedServer has no owner assigned and no admin user exists."
     )
 
 
