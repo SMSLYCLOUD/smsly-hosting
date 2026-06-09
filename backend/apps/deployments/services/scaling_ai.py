@@ -34,12 +34,12 @@ LOKI_URL = getattr(settings, 'LOKI_INTERNAL_URL', 'http://loki:3100')
 TIMEOUT = 12
 
 # ── Deterministic thresholds ──────────────────────────────────────────────
-CPU_HIGH = float(os.environ.get("SCALE_CPU_HIGH", "85"))          # %
-CPU_CRITICAL = float(os.environ.get("SCALE_CPU_CRITICAL", "95"))  # %
-CPU_LOW = float(os.environ.get("SCALE_CPU_LOW", "30"))            # %
-MEM_GROWTH_MB_MIN = float(os.environ.get("SCALE_MEM_TREND_MB", "50"))  # MB/min
+CPU_HIGH = float(os.environ.get("SCALE_CPU_HIGH", "70"))          # % — trigger early, before saturation
+CPU_CRITICAL = float(os.environ.get("SCALE_CPU_CRITICAL", "90"))  # % — aggressive action
+CPU_LOW = float(os.environ.get("SCALE_CPU_LOW", "25"))            # % — below this, consider scale down
+MEM_GROWTH_MB_MIN = float(os.environ.get("SCALE_MEM_TREND_MB", "25"))  # MB/min — catch slow leaks
 MAX_REPLICAS = int(os.environ.get("SCALE_MAX_REPLICAS", "5"))
-COOLDOWN_MINUTES = int(os.environ.get("SCALE_COOLDOWN_MIN", "5"))
+COOLDOWN_MINUTES = int(os.environ.get("SCALE_COOLDOWN_MIN", "3"))       # shorter cooldown for faster response
 COOLDOWN_DOWN_MINUTES = int(os.environ.get("SCALE_COOLDOWN_DOWN_MIN", "10"))
 
 

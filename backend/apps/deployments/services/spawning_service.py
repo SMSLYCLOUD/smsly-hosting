@@ -30,7 +30,7 @@ class SpawningService:
 
     def spawn(self, service, node, replica):
         """SSH into node, pull image, run container with Traefik labels.
-        
+
         The replica gets identical Traefik labels so Traefik on the
         target node auto-discovers it and adds it to the load-balancer.
         """
@@ -38,7 +38,13 @@ class SpawningService:
         config = PlatformConfig.load()
         ssh = self._get_ssh(node)
 
-        # Build docker run command with Traefik labels matching the source
+        # Pre-flight: check node has enough free resources
+        if not self._check_node_capacity(ssh, node, service):
+            raise RuntimeError(
+                f"Node {node.name} has insufficient free resources "
+                f"to spawn a replica for {service.name}"
+            )
+
         name = self._safe_name(f"{service.name}-replica-{replica.id.hex[:8]}")
         image = service.docker_image or ''
         if not image:
@@ -132,6 +138,31 @@ class SpawningService:
             except Exception:
                 pass
         self._ssh_clients.clear()
+
+    def _check_node_capacity(self, ssh, node, service):
+        """Verify node has enough free RAM to run another replica."""
+        min_ram_mb = getattr(service, 'memory_mb', None) or 128
+        try:
+            out, _, _ = ssh.exec_command(
+                "free -m | awk '/^Mem:/{print ($4+$7) \" \" $2}'",
+                raise_on_error=False,
+            )
+            parts = out.strip().split()
+            if len(parts) >= 2:
+                available_mb, total_mb = int(parts[0]), int(parts[1])
+                free_pct = (available_mb / total_mb * 100) if total_mb > 0 else 0
+                if available_mb < min_ram_mb:
+                    logger.warning("Node %s: %d MB free (need %d)", node.name, available_mb, min_ram_mb)
+                    return False
+                if free_pct < 10:
+                    logger.warning("Node %s: only %.0f%% RAM free", node.name, free_pct)
+                    return False
+                logger.info("Node %s OK: %d MB free (%.0f%%), %s needs %d MB",
+                            node.name, available_mb, free_pct, service.name, min_ram_mb)
+                return True
+        except Exception as exc:
+            logger.warning("Capacity check failed for %s: %s", node.name, exc)
+        return False  # safer to refuse if we can't check
 
     @staticmethod
     def _safe_name(name: str) -> str:
