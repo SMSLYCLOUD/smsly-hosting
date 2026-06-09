@@ -81,13 +81,15 @@ class SSLMonitorService:
 
         except Exception as e:
             domain_obj.ssl_active = False
-            # If it's DNS verified, give Caddy time to provision (on demand TLS).
-            # We won't strictly mark it SSL_FAILED immediately unless we want to. Let's just track the error.
-            if domain_obj.status == DomainStatus.ACTIVE:
-                domain_obj.status = DomainStatus.SSL_FAILED
             domain_obj.last_error = str(e)
-            domain_obj.save(update_fields=['ssl_active', 'status', 'last_error'])
-            logger.warning(f"SSL check failed for {domain}: {e}")
+            # Only mark SSL_FAILED after consecutive failures (transient protection)
+            fail_count = getattr(domain_obj, '_ssl_fail_count', 0) + 1
+            if fail_count >= 3:
+                if domain_obj.status == DomainStatus.ACTIVE:
+                    domain_obj.status = DomainStatus.SSL_FAILED
+            domain_obj._ssl_fail_count = fail_count
+            domain_obj.save(update_fields=['ssl_active', 'status', 'last_error', 'checked_at'])
+            logger.warning(f"SSL check failed for {domain} (attempt {fail_count}): {e}")
 
     def _alert(self, domain, days, owner):
         msg = f"SSL Certificate for {domain} expires in {days} days."

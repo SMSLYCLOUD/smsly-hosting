@@ -137,12 +137,16 @@ class BillingSummaryView(GenericAPIView):
             service_cost = (
                 service.usage_records.aggregate(total=Sum("cost"))["total"] or Decimal("0.00")
             )
+            from django.db.models import Sum
+            cpu_hours = service.usage_records.filter(
+                resource_type='cpu_hours'
+            ).aggregate(s=Sum('quantity'))['s'] or 0
             services_out.append(
                 {
                     "id": str(service.id),
                     "name": service.name,
                     "cost": float(service_cost),
-                    "cpu_usage_hours": service.usage_records.count(),
+                    "cpu_usage_hours": float(cpu_hours),
                 }
             )
 

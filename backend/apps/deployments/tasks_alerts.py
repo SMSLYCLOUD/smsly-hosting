@@ -282,6 +282,12 @@ def _dispatch_failure_alert(deployment, error_message: str) -> Dict[str, Any]:
     if _service_flag(env_map, "JULES_NOTIFY_WHATSAPP", default=False):
         channel_results["whatsapp"] = _send_whatsapp_alert(message, env_map)
 
+    if _service_flag(env_map, "JULES_NOTIFY_SLACK", default=False):
+        channel_results["slack"] = _send_slack_alert(message, env_map)
+
+    if _service_flag(env_map, "JULES_NOTIFY_DISCORD", default=False):
+        channel_results["discord"] = _send_discord_alert(message, env_map)
+
     delivered = [name for name, result in channel_results.items() if result.get("ok")]
     failed = [name for name, result in channel_results.items() if not result.get("ok")]
 
@@ -457,3 +463,27 @@ def notify_deployment_success(deployment_id: str):
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.exception("Failed to send success notification: %s", exc)
         return {"status": "error", "reason": str(exc)}
+
+
+def _send_slack_alert(message, env_map):
+    """Send alert to Slack webhook."""
+    try:
+        webhook = env_map.get("JULES_SLACK_WEBHOOK", "").strip()
+        if not webhook: return {"ok": False, "reason": "No webhook URL"}
+        resp = requests.post(webhook, json={"text": message}, timeout=10)
+        return {"ok": resp.ok, "status": resp.status_code}
+    except Exception as exc:
+        logger.warning("Slack alert failed: %s", exc)
+        return {"ok": False, "reason": str(exc)}
+
+
+def _send_discord_alert(message, env_map):
+    """Send alert to Discord webhook."""
+    try:
+        webhook = env_map.get("JULES_DISCORD_WEBHOOK", "").strip()
+        if not webhook: return {"ok": False, "reason": "No webhook URL"}
+        resp = requests.post(webhook, json={"content": message[:2000]}, timeout=10)
+        return {"ok": resp.ok, "status": resp.status_code}
+    except Exception as exc:
+        logger.warning("Discord alert failed: %s", exc)
+        return {"ok": False, "reason": str(exc)}
