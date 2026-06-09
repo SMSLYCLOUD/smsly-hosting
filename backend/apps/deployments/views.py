@@ -4315,6 +4315,9 @@ class SystemConfigView(GenericAPIView):
             # Webhook
             'GITHUB_WEBHOOK_SECRET_SET': bool(getattr(settings, 'GITHUB_WEBHOOK_SECRET', '')),
 
+            # Safe Update
+            'safe_update_available': os.path.exists('/opt/smsly-hosting/scripts/safe-update.sh'),
+
             # Storage
             **self._get_storage_metrics(),
         })
