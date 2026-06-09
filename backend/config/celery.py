@@ -198,6 +198,12 @@ app.conf.beat_schedule = {
         'schedule': 300.0,
         'options': {'expires': 300.0},
     },
+    # Auto-scaling analysis — Prometheus + Loki → spawn/destroy replicas
+    'auto-scaling-analyze-every-3m': {
+        'task': 'apps.deployments.tasks_autoscale.analyze_all_services_task',
+        'schedule': 180.0,
+        'options': {'expires': 180.0},
+    },
 }
 
 

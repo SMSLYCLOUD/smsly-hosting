@@ -86,6 +86,7 @@ class DeploymentsConfig(AppConfig):
         from . import models_tunnels
         from . import models_backup
         from . import models_transfer
+        from . import models_replica
         from . import openapi
 
         # Import signals
