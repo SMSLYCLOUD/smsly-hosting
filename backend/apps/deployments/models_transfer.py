@@ -64,3 +64,9 @@ class ServerTransfer(models.Model):
     # Rollback
     can_rollback = models.BooleanField(default=True)
     rollback_deadline = models.DateTimeField(null=True)  # after this, source cleaned up
+
+    # Cross-platform migration target domain
+    target_public_domain = models.CharField(
+        max_length=500, blank=True, default='',
+        help_text='Target platform domain for cross-platform migration (e.g., app.interserver.com)',
+    )

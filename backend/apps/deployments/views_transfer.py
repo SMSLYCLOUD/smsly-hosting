@@ -375,6 +375,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
             target_server_ip=target_server_ip,
             target_ssh_key=target_ssh_key,
             target_ssh_password=target_ssh_password,
+            target_public_domain=payload.get('target_public_domain', ''),
             transfer_type=transfer_type,
             service=service,
             owner=request.user,
