@@ -37,7 +37,7 @@ const PROVIDER_TEMPLATES: Record<string, { name: string; endpoint: string; regio
   vps: { name: "Custom Storage VPS", endpoint: "https://your-vps:9000", region: "us-east-1" },
 };
 
-export function CloudStorageTab() {
+export function CloudStorageTab({ serviceId }: { serviceId?: string }) {
   const { toast } = useToast();
   const [destinations, setDestinations] = useState<CloudDestination[]>([]);
   const [loading, setLoading] = useState(true);
