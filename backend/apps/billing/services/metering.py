@@ -14,8 +14,13 @@ class UsageMeter:
 
     def record_usage(self, user, resource_type, quantity, timestamp=None):
         """Record a usage data point (called by Celery tasks)."""
-        # Future implementation
-        return
+        from ..models import UsageRecord
+        UsageRecord.objects.create(
+            user=user,
+            resource_type=resource_type,
+            quantity=quantity,
+            recorded_at=timestamp or timezone.now(),
+        )
 
     def get_usage_summary(self, user, period_start, period_end):
         """Aggregate usage for billing period."""
