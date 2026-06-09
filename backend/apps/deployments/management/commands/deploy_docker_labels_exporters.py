@@ -30,6 +30,8 @@ class Command(BaseCommand):
         from apps.deployments.services.prometheus_targets import (
             deploy_docker_labels_exporter_on_node,
             deploy_promtail_on_node,
+            deploy_cadvisor_on_node,
+            deploy_node_exporter_on_node,
             write_docker_labels_targets,
         )
 
@@ -84,6 +86,14 @@ class Command(BaseCommand):
             else:
                 promtail_failed += 1
                 self.stdout.write(self.style.WARNING(f"  ⚠ Promtail on {server.name} (will retry via watchdog)"))
+
+            self.stdout.write(f"  → Deploying cAdvisor + Node Exporter on {server.name}...")
+            cadvisor_ok = deploy_cadvisor_on_node(server)
+            node_ok = deploy_node_exporter_on_node(server)
+            if cadvisor_ok and node_ok:
+                self.stdout.write(self.style.SUCCESS(f"  ✓ cAdvisor + Node Exporter on {server.name}"))
+            else:
+                self.stdout.write(self.style.WARNING(f"  ⚠ Observer agents on {server.name}"))
 
         # Update target files after deployment
         write_docker_labels_targets()

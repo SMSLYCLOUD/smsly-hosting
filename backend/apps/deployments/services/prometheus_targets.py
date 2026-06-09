@@ -148,6 +148,64 @@ def deploy_docker_labels_exporter_on_node(server):
             pass
 
 
+def deploy_cadvisor_on_node(server):
+    """SSH into a remote server and deploy cAdvisor for container metrics."""
+    from apps.deployments.services.ssh_client import SSHClient
+    client = SSHClient(
+        ip=server.host, key_content=server.ssh_key, user=server.ssh_user,
+        port=server.ssh_port, password=server.ssh_password, wg_address=server.wg_address,
+    )
+    try:
+        client.connect()
+        client.exec_command(
+            "docker rm -f smsly-cadvisor 2>/dev/null; "
+            "docker run -d --name smsly-cadvisor --restart unless-stopped "
+            "--privileged "
+            "-v /:/rootfs:ro -v /var/run/docker.sock:/var/run/docker.sock:ro "
+            "-v /sys:/sys:ro -v /var/lib/docker/:/var/lib/docker:ro "
+            "-v /dev/disk/:/dev/disk:ro "
+            "gcr.io/cadvisor/cadvisor:v0.49.1 "
+            "--containerd=unix:///var/run/containerd/containerd.sock",
+            raise_on_error=False,
+        )
+        logger.info("Deployed cAdvisor on %s", server.name)
+        return True
+    except Exception as exc:
+        logger.error("cAdvisor deploy failed for %s: %s", server.name, exc)
+        return False
+    finally:
+        try: client.close()
+        except Exception: pass
+
+
+def deploy_node_exporter_on_node(server):
+    """SSH into a remote server and deploy Node Exporter for host metrics."""
+    from apps.deployments.services.ssh_client import SSHClient
+    client = SSHClient(
+        ip=server.host, key_content=server.ssh_key, user=server.ssh_user,
+        port=server.ssh_port, password=server.ssh_password, wg_address=server.wg_address,
+    )
+    try:
+        client.connect()
+        client.exec_command(
+            "docker rm -f smsly-node-exporter 2>/dev/null; "
+            "docker run -d --name smsly-node-exporter --restart unless-stopped "
+            "-v /proc:/host/proc:ro -v /sys:/host/sys:ro -v /:/rootfs:ro "
+            "prom/node-exporter:v1.6.1 "
+            "--path.procfs=/host/proc --path.rootfs=/rootfs --path.sysfs=/host/sys "
+            "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)",
+            raise_on_error=False,
+        )
+        logger.info("Deployed Node Exporter on %s", server.name)
+        return True
+    except Exception as exc:
+        logger.error("Node Exporter deploy failed for %s: %s", server.name, exc)
+        return False
+    finally:
+        try: client.close()
+        except Exception: pass
+
+
 PROMTAIL_PORT = 9080
 
 
