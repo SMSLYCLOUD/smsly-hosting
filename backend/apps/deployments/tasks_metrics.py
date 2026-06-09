@@ -125,6 +125,9 @@ def collect_metrics_task():
         )
         collected += 1
 
+        # Check resource thresholds and fire alerts
+        _check_metric_thresholds(service, stats, now)
+
     # Prune old metrics (keep 7 days)
     cutoff = now - timezone.timedelta(days=7)
     deleted, _ = ServiceMetric.objects.filter(timestamp__lt=cutoff).delete()
@@ -148,3 +151,36 @@ def cleanup_build_cache_task():
         logger.info("Build cache cleanup: reclaimed %d MB", reclaimed)
     except Exception as e:
         logger.warning("Build cache cleanup failed: %s", e)
+
+
+def _check_metric_thresholds(service, stats, now):
+    """Fire resource alerts when metrics breach thresholds."""
+    try:
+        cpu = stats.get('cpu_percent', 0)
+        mem_mb = stats.get('memory_usage_mb', 0)
+        disk_pct = stats.get('disk_percent', 0)
+
+        alerts = []
+        if cpu > 90:
+            alerts.append(f"CPU at {cpu:.0f}%")
+        if mem_mb > 0 and mem_mb > 2000:
+            alerts.append(f"Memory at {mem_mb:.0f}MB")
+        if disk_pct > 90:
+            alerts.append(f"Disk at {disk_pct:.0f}%")
+
+        if alerts:
+            from apps.notifications.tasks import notify_health_alert
+            from django.utils import timezone
+            cache_key = f"metrics_alert:{service.id}:{now.strftime('%Y%m%d%H')}"
+            from django.core.cache import cache
+            if cache.get(cache_key):
+                return
+            cache.set(cache_key, 1, 3600)  # 1 hour dedup
+
+            notify_health_alert.delay(
+                str(service.id),
+                severity='WARNING',
+                message='; '.join(alerts),
+            )
+    except Exception:
+        pass

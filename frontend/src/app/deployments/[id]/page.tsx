@@ -190,7 +190,13 @@ export default function DeploymentWatchPage() {
                                                 });
                                                 if (confirmed) {
                                                     setSpaceOpsState({ mode: 'recovering', intensity: 'high' });
-                                                    // Placeholder: call API here in real implementation
+                                                    try {
+                                                        await api.post(`/deployments/${id}/rollback/`, { confirm: true });
+                                                        setSpaceOpsState({ mode: 'success', intensity: 'low' });
+                                                    } catch (err: any) {
+                                                        setSpaceOpsState({ mode: 'error', intensity: 'high' });
+                                                        console.error("Rollback failed", err);
+                                                    }
                                                 }
                                             }}>
                                                 Initiate Rollback
