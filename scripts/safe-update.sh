@@ -18,11 +18,11 @@ INSTALL_DIR="${INSTALL_DIR:-/opt/smsly-hosting}"
 COMPOSE_FILE="${COMPOSE_FILE:-$INSTALL_DIR/docker-compose.prod.yml}"
 SNAPSHOT_FILE="$INSTALL_DIR/.update-safe-snapshot"
 BACKUP_DIR="$INSTALL_DIR/.update-backups"
-LOG_FILE="/var/log/smsly-clean.log"
+CLEAN_LOG="/var/log/smsly-clean.log"
 MIN_DISK_MB=5120
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; BLUE='\033[0;34m'; NC='\033[0m'
-_log()  { printf "[%s] %s\n" "$(date +%H:%M:%S)" "$*" >> "$LOG_FILE"; }
+_log()  { printf "[%s] %s\n" "$(date +%H:%M:%S)" "$*" >> "$CLEAN_LOG"; }
 _ok()   { echo -e "${GREEN}  ✓${NC} $*"; _log "OK: $*"; }
 _warn() { echo -e "${YELLOW}  ⚠${NC} $*"; _log "WARN: $*"; }
 _fail() { echo -e "${RED}  ✗${NC} $*"; _log "FAIL: $*"; }
@@ -154,7 +154,7 @@ safe_update_rollback() {
 if [ "$SAFE_UPDATE_SOURCED" = "false" ]; then
     safe_update_preflight || exit 1
     safe_update_snapshot
-    bash "$INSTALL_DIR/install.sh" --update >> "$LOG_FILE" 2>&1 || { _warn "Update failed — rolling back"; safe_update_rollback; exit 1; }
+    bash "$INSTALL_DIR/install.sh" --update >> "$CLEAN_LOG" 2>&1 || { _warn "Update failed — rolling back"; safe_update_rollback; exit 1; }
     sleep 30
     safe_update_post_verify || { _warn "Post-verify failed — rolling back"; safe_update_rollback; exit 1; }
     echo -e "\n${GREEN}═══════════════════════════════════════════════════════════════${NC}"
