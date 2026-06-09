@@ -83,7 +83,7 @@ const features = [
     {
         icon: Bot,
         title: "Multi-Provider AI Engine",
-        description: "11 AI providers with Senate Committee deliberation. Auto-diagnose failures, recommend fixes, and apply remediation.",
+        description: "17 AI providers with Senate Committee deliberation. Auto-diagnose failures, recommend fixes, and apply remediation.",
         color: "text-violet-500",
         bg: "bg-violet-500/10"
     },

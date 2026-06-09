@@ -57,22 +57,48 @@ class FixResult:
     deployment_id: Optional[str] = None
 
 
-def _collect_failure_context(deployment_id: str, logs: str) -> str:
-    """Build a prompt context from deployment logs."""
-    return f"""Deployment failed. Deployment ID: {deployment_id}
+def _collect_failure_context(deployment_id: str, logs: str, service=None) -> str:
+    """Build a prompt context from deployment logs + Prometheus/Loki metrics."""
+    context = f"""Deployment failed. Deployment ID: {deployment_id}
 Logs:
 {logs[:10000]}
+"""
+    # ── Enrich with monitoring data if service is available ────────────────
+    if service:
+        try:
+            from apps.deployments.services.scaling_ai import ScalingAnalyzer
+            analyzer = ScalingAnalyzer(service)
+            result = analyzer.analyze()
+            metrics = result.get('metrics', {})
+            errors = result.get('error_analysis', {})
+            if any(metrics.values()) or any(errors.values()):
+                context += "\n--- Monitoring Context (last 5min) ---\n"
+                if metrics.get('cpu_percent'):
+                    context += f"CPU: {metrics['cpu_percent']:.1f}%\n"
+                if metrics.get('memory_mb'):
+                    context += f"Memory: {metrics['memory_mb']:.1f}MB\n"
+                if metrics.get('memory_trend') and metrics['memory_trend'] > 0:
+                    context += f"Memory trend: +{metrics['memory_trend']:.1f} MB/min (possible leak)\n"
+                if errors.get('oom_detected'):
+                    context += "OOM detected in recent logs\n"
+                if errors.get('crash_loop'):
+                    context += "Crash loop detected\n"
+                context += "--- End Monitoring ---\n"
+        except Exception:
+            pass  # monitoring is optional enrichment
 
+    context += """
 Please analyse the error and provide a concrete fix. Return ONLY valid JSON
 with this exact structure:
 {{
-    "fix_description": "<brief description of the fix>",
+    "fix_description": "<brief description>",
     "files_to_change": ["<path/to/file.py>"],
     "suggested_changes": {{
-        "<path/to/file.py>": "<code to replace or the fix>"
+        "<path/to/file.py>": "<code to replace>"
     }}
 }}
 """
+    return context
 
 
 @backoff.on_exception(
@@ -284,7 +310,14 @@ def jules_fix_deployment_failure(
     result = FixResult(success=False, deployment_id=deployment_id)
 
     try:
-        context = _collect_failure_context(deployment_id, logs)
+        # Enrich context with Prometheus/Loki metrics
+        try:
+            from apps.deployments.models import Deployment as DeployModel
+            dep = DeployModel.objects.select_related('service').only('service').get(id=deployment_id)
+            svc = dep.service
+        except Exception:
+            svc = None
+        context = _collect_failure_context(deployment_id, logs, service=svc)
 
         jules_response = _ask_jules_for_fix(context)
         fix_payload = _parse_jules_response(jules_response)
