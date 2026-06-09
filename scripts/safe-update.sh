@@ -41,8 +41,10 @@ safe_update_preflight() {
     _ok "Docker: responsive"
 
     # Clean up orphaned containers from failed previous builds
+    # Remove ALL stopped/created/exited containers from this project to prevent name conflicts
+    docker compose -f "$COMPOSE_FILE" down --remove-orphans 2>/dev/null || true
     local orphaned
-    orphaned=$(docker ps -a --filter "status=created" --filter "status=exited" --filter "status=dead" -q 2>/dev/null || true)
+    orphaned=$(docker ps -a -q --filter "status=created" --filter "status=exited" --filter "status=dead" 2>/dev/null || true)
     if [ -n "$orphaned" ]; then
         docker rm -f $orphaned 2>/dev/null || true
         _ok "Cleaned up orphaned containers"
