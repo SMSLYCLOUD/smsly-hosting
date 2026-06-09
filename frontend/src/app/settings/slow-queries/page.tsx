@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, Database, Clock, Hash, Zap, RefreshCw, Trash2, BarChart3 } from "lucide-react";
+import { Loader2, Database, Clock, Hash, Zap, RefreshCcw, Trash2, BarChart3 } from "lucide-react";
 import api from "@/lib/api";
 
 interface SlowQuery {
