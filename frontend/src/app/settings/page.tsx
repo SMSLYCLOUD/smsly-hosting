@@ -18,6 +18,7 @@ import { DashboardShell } from "@/components/layout/DashboardShell";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { OAuthTab } from "@/components/settings/OAuthTab";
 import { GitHubIntegrationCard } from "@/components/settings/GitHubIntegrationCard";
+import { CloudStorageTab } from "@/components/settings/CloudStorageTab";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -87,6 +88,8 @@ const SETTINGS_SECTIONS = [
   { value: "ai", label: "AI", icon: Sparkles },
   { value: "oauth", label: "OAuth", icon: Key },
   { value: "autoscaling", label: "Auto-Scaling", icon: Cloud },
+  { value: "cloud-storage", label: "Cloud Storage", icon: Cloud },
+  { value: "backups", label: "Backups", icon: Cloud },
   { value: "infra", label: "Infra", icon: Server },
   { value: "maintenance", label: "Maintenance", icon: Server },
 ] as const;
@@ -1278,6 +1281,11 @@ export default function SettingsPage() {
               </CardContent>
             </Card>
           </div>
+        </TabsContent>
+
+        {/* Cloud Storage Tab */}
+        <TabsContent value="cloud-storage">
+          <CloudStorageTab />
         </TabsContent>
 
         {/* OAuth Configuration Tab */}
