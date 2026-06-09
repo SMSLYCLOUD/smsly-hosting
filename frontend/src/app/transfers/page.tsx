@@ -4,7 +4,7 @@ import React, { useCallback, useState, useEffect } from 'react';
 import { PageHeader } from '@/components/ui/page-header';
 import api, { servicesApi, addonsApi, serversApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
-import { Database, LayoutTemplate, Box, Server, CheckCircle2, ServerCog, MessagesSquare, Orbit, Globe } from 'lucide-react';
+import { Database, LayoutTemplate, Box, Server, ServerCog, MessagesSquare, Orbit, Globe } from 'lucide-react';
 import { toast } from 'sonner';
 import { featureFlags, featureDisabledReason } from '@/lib/featureFlags';
 import { shouldShowAllNav } from '@/lib/nav-visibility';
