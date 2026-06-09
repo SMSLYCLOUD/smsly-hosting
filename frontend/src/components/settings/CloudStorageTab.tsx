@@ -50,11 +50,13 @@ export function CloudStorageTab() {
 
   const fetchDestinations = useCallback(async () => {
     try {
-      const res = await api.get("/cloud-storage/");
+      const params = new URLSearchParams();
+      if (serviceId) params.set('service', serviceId);
+      const res = await api.get(`/cloud-storage/?${params.toString()}`);
       setDestinations(Array.isArray(res.data) ? res.data : res.data?.results || []);
     } catch { toast({ title: "Failed to load destinations", variant: "destructive" }); }
     finally { setLoading(false); }
-  }, []);
+  }, [serviceId]);
 
   useEffect(() => { fetchDestinations(); }, [fetchDestinations]);
 
@@ -68,7 +70,9 @@ export function CloudStorageTab() {
       toast({ title: "Fill all required fields", variant: "destructive" }); return;
     }
     try {
-      await api.post("/cloud-storage/", form);
+      const payload: any = { ...form };
+      if (serviceId) payload.service = serviceId;
+      await api.post("/cloud-storage/", payload);
       toast({ title: "Destination added" });
       setForm({ name: "", provider: "r2", bucket: "", region: "auto", endpoint: "", access_key: "", secret_key: "" });
       setAdding(false);

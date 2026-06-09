@@ -1,11 +1,16 @@
 """Cloud storage destinations for backup offloading — R2, S3, MinIO, B2."""
 import uuid
+from django.conf import settings
 from django.db import models
 from encrypted_model_fields.fields import EncryptedCharField
 
 
 class CloudStorageDestination(models.Model):
-    """Pre-configured cloud storage target for backup offloading."""
+    """Pre-configured cloud storage target for backup offloading.
+
+    When `service` is NULL → platform-wide destination (visible everywhere).
+    When `service` is set → per-service destination (only for that service).
+    """
 
     TEMPLATES = {
         'r2': {
@@ -62,6 +67,11 @@ class CloudStorageDestination(models.Model):
     secret_key = EncryptedCharField(max_length=255, blank=False)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    service = models.ForeignKey(
+        'deployments.Service', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='cloud_destinations',
+        help_text='NULL = platform-wide; set = per-service only',
+    )
 
     class Meta:
         ordering = ['name']
