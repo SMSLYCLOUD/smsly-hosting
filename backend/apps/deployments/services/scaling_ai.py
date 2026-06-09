@@ -242,19 +242,20 @@ class ScalingAnalyzer:
 
     def _decide(self, metrics, errors, guardrails):
         cpu = metrics.get('cpu_percent', 0) or 0
-        mem = metrics.get('memory_mb', 0) or 0
         mem_trend = metrics.get('memory_trend', 0) or 0
         oom = errors.get('oom_detected', False)
         crash = errors.get('crash_loop', False)
+        running = guardrails['running_replicas']
 
         r = {'action': 'none', 'reason': 'Metrics within normal range.',
              'scale_up_by': 0, 'urgency': 'low'}
 
+        # ── Emergency: OOM or crash ──────────────────────────────────
         if oom or crash:
             if guardrails['can_scale_up']:
                 r.update(action='scale_up', urgency='critical',
                          reason='OOM/crash detected — immediate scaling.',
-                         scale_up_by=2)
+                         scale_up_by=max(2, running + 2))
             else:
                 r['reason'] = 'OOM/crash detected but guardrails prevent scaling.'
             return r
@@ -263,21 +264,33 @@ class ScalingAnalyzer:
             r['reason'] = 'Replica spawn in progress — waiting.'
             return r
 
-        if cpu >= CPU_CRITICAL and guardrails['can_scale_up']:
-            r.update(action='scale_up', urgency='high',
-                     reason=f'CPU at {cpu:.0f}% — critical threshold.',
-                     scale_up_by=max(1, min(int(cpu / 25), MAX_REPLICAS - guardrails['running_replicas'])))
-        elif cpu >= CPU_HIGH and guardrails['can_scale_up']:
-            r.update(action='scale_up', urgency='medium',
-                     reason=f'CPU at {cpu:.0f}% — sustained high load.',
-                     scale_up_by=1)
-        elif mem_trend > MEM_GROWTH_MB_MIN and guardrails['can_scale_up']:
-            r.update(action='scale_up', urgency='medium',
-                     reason=f'Memory growing at {mem_trend:.1f} MB/min — possible leak.',
-                     scale_up_by=1)
-        elif cpu <= CPU_LOW and mem < 100 and guardrails['can_scale_down']:
+        if not guardrails['can_scale_up']:
+            r['reason'] = 'Guardrails prevent scaling (at capacity or in cooldown).'
+            return r
+
+        # ── Horizontal scaling: CPU-based ───────────────────────────
+        # Target: each instance at ~50% CPU. Home service counts as 1 instance.
+        # Formula: needed = ceil(cpu / target) - (running + 1 home)
+        TARGET_CPU = 50
+        total_instances = running + 1  # home service + replicas
+        if cpu > CPU_HIGH or mem_trend > MEM_GROWTH_MB_MIN:
+            needed = max(0, int(cpu / TARGET_CPU) - total_instances + 1)
+            if needed <= 0 and cpu > CPU_HIGH:
+                needed = 1  # at least one if above threshold
+            if needed > 0:
+                reason = (f'CPU at {cpu:.0f}% — '
+                          f'{total_instances} instances → need {needed} more '
+                          f'(target ≤{TARGET_CPU}% per instance)')
+                if mem_trend > MEM_GROWTH_MB_MIN:
+                    reason = f'Memory growing at {mem_trend:.1f} MB/min — {reason}'
+                r.update(action='scale_up', urgency='high' if cpu > 80 else 'medium',
+                         reason=reason, scale_up_by=needed)
+                return r
+
+        # ── Scale down: idle check ──────────────────────────────────
+        if cpu <= SCALE_DOWN_CPU and running > 0 and guardrails['can_scale_down']:
             r.update(action='scale_down', urgency='low',
-                     reason=f'CPU below {CPU_LOW}% — idle replicas can be removed.')
+                     reason=f'CPU at {cpu:.0f}% with {running} extra replicas — removing 1.')
 
         return r
 
