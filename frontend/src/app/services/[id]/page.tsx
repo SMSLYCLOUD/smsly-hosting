@@ -3,6 +3,7 @@ import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { servicesApi, serversApi, Service, Deployment, EnvVar, ManagedServer } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useParams, useSearchParams } from 'next/navigation';
+import ScalingTab from '@/components/settings/ScalingTab';
 import { ServiceLayout } from '@/components/layout/ServiceLayout';
 import { Activity, Shield, Terminal, Zap, DollarSign, Globe, Rocket, Loader2 as Spinner, Server, Wrench } from 'lucide-react';
 import Editor from "@monaco-editor/react";
@@ -643,6 +644,13 @@ export default function ServiceDetailPage() {
             {activeTab === 'resources' && <ResourcesTab serviceId={service.id} service={service} />}
 
             {activeTab === 'health' && <HealthTab serviceId={service.id} service={service} />}
+
+            {activeTab === 'scaling' && <ScalingTab service={service} onUpdate={async () => {
+                try {
+                    const s = await servicesApi.get(id);
+                    setService(s);
+                } catch (e) { console.error(e); }
+            }} />}
 
             {activeTab === 'cron' && <CronTab serviceId={service.id} />}
 

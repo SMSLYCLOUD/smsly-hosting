@@ -86,6 +86,7 @@ const SETTINGS_SECTIONS = [
   { value: "providers", label: "Cloud", icon: Cloud },
   { value: "ai", label: "AI", icon: Sparkles },
   { value: "oauth", label: "OAuth", icon: Key },
+  { value: "autoscaling", label: "Auto-Scaling", icon: Cloud },
   { value: "infra", label: "Infra", icon: Server },
   { value: "maintenance", label: "Maintenance", icon: Server },
 ] as const;
@@ -1215,6 +1216,70 @@ export default function SettingsPage() {
             </Card>
           </div>
         </TabsContent>
+        {/* Auto-Scaling Configuration Tab */}
+        <TabsContent value="autoscaling">
+          <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2"><Cloud className="h-5 w-5 text-sky-500" /> Auto-Scaling Configuration</CardTitle>
+                <CardDescription>
+                  These environment variables control how the SMSLY autoscaler adjusts replicas across your services.
+                  They are set in your <code className="text-xs font-mono bg-muted px-1 rounded">.env</code> file on the host.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Variable</TableHead>
+                      <TableHead>Purpose</TableHead>
+                      <TableHead>Current Value</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    <TableRow>
+                      <TableCell className="font-mono text-xs">SCALE_MAX_REPLICAS</TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        Maximum number of replica containers allowed per service
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className="font-mono">
+                          {systemConfig?.SCALE_MAX_REPLICAS ?? 'Not set'}
+                        </Badge>
+                      </TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell className="font-mono text-xs">SCALE_CPU_HIGH</TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        CPU usage percentage above which a new replica is spawned
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className="font-mono">
+                          {systemConfig?.SCALE_CPU_HIGH != null ? `${systemConfig.SCALE_CPU_HIGH}%` : 'Not set'}
+                        </Badge>
+                      </TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell className="font-mono text-xs">SCALE_COOLDOWN_MIN</TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        Minimum minutes between consecutive scale-up operations
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className="font-mono">
+                          {systemConfig?.SCALE_COOLDOWN_MIN != null ? `${systemConfig.SCALE_COOLDOWN_MIN} min` : 'Not set'}
+                        </Badge>
+                      </TableCell>
+                    </TableRow>
+                  </TableBody>
+                </Table>
+                <p className="text-xs text-muted-foreground mt-4">
+                  These values are read from the <code className="font-mono bg-muted px-1 rounded">.env</code> file at startup. To change them, edit the file and restart the SMSLY platform.
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
         {/* OAuth Configuration Tab */}
         <TabsContent value="oauth">
           <div className="space-y-6">
