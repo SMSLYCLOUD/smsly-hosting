@@ -663,6 +663,14 @@ export const servicesApi = {
   createVolumeFolder: async (serviceId: string, volumeId: string, path: string): Promise<void> => {
       await api.post(`/services/${serviceId}/volumes/${volumeId}/mkdir/`, { path });
   },
+  readVolumeFile: async (serviceId: string, volumeId: string, path: string): Promise<{ path: string; content: string }> => {
+      const res = await api.get(`/services/${serviceId}/volumes/${volumeId}/file-read/`, { params: { path } });
+      return res.data;
+  },
+  writeVolumeFile: async (serviceId: string, volumeId: string, path: string, content: string): Promise<{ message: string; path: string }> => {
+      const res = await api.post(`/services/${serviceId}/volumes/${volumeId}/file-write/`, { path, content });
+      return res.data;
+  },
   downloadVolumeFile: async (serviceId: string, volumeId: string, path: string) => {
       const response = await api.get(`/services/${serviceId}/volumes/${volumeId}/download-file/`, {
           params: { path },
@@ -708,6 +716,15 @@ export const servicesApi = {
       link.click();
       link.remove();
       window.URL.revokeObjectURL(url);
+  },
+  uploadFile: async (serviceId: string, path: string, file: File): Promise<{ message: string; path: string }> => {
+      const formData = new FormData();
+      formData.append('path', path);
+      formData.append('file', file);
+      const response = await api.post(`/services/${serviceId}/file-upload/`, formData, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      return response.data;
   }
 };
 

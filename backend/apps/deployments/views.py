@@ -3223,6 +3223,78 @@ class ServiceViewSet(viewsets.ModelViewSet):
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    @action(detail=True, methods=['post'], url_path='file-upload')
+    def file_upload(self, request, pk=None):
+        """Upload a file to the running container."""
+        import base64
+        service = self.get_object()
+        path = request.data.get('path')
+
+        if 'file' in request.FILES:
+            uploaded_file = request.FILES['file']
+            file_bytes = uploaded_file.read()
+        elif 'content' in request.data:
+            file_bytes = base64.b64decode(request.data['content'])
+        else:
+            return Response({'error': 'Path and file are required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not path:
+            return Response({'error': 'Path is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            path = _validate_and_sanitize_path(path)
+        except Exception as e:
+            return Response({'error': 'Path validation failed', 'details': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        latest_deploy = service.deployments.filter(status='ACTIVE').first()
+        if not latest_deploy:
+            return Response({'error': 'No active deployment'}, status=status.HTTP_400_BAD_REQUEST)
+
+        return self._dispatch_file_operation(
+            service,
+            latest_deploy,
+            remote_config={
+                'method': 'POST',
+                'path_suffix': 'file-upload',
+                'payload': {'path': path, 'content': base64.b64encode(file_bytes).decode('ascii')},
+                'timeout': 60,
+                'on_error': lambda resp: Response(
+                    {'error': 'Failed to upload file on remote node', 'details': resp.text if resp else 'Timeout'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                ),
+                'k8s_command': ['sh', '-c', f'base64 -d > {path}'],
+            },
+            local_action=lambda container, path=None: self._local_file_upload(container, path, file_bytes),
+            path=path,
+        )
+
+    def _local_file_upload(self, container, path: str, file_bytes: bytes):
+        try:
+            import tarfile
+            import io
+            import time
+
+            tar_stream = io.BytesIO()
+            with tarfile.open(fileobj=tar_stream, mode='w') as tar:
+                tarinfo = tarfile.TarInfo(name=os.path.basename(path))
+                tarinfo.size = len(file_bytes)
+                tarinfo.mtime = int(time.time())
+                tar.addfile(tarinfo, io.BytesIO(file_bytes))
+
+            tar_stream.seek(0)
+            dir_name = os.path.dirname(path)
+            exit_code, output = container.exec_run(["mkdir", "-p", dir_name])
+            if exit_code != 0:
+                return Response({'error': 'Failed to create parent directory', 'details': output.decode()}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            success = container.put_archive(dir_name, tar_stream)
+
+            if not success:
+                return Response({'error': 'Failed to upload file via put_archive'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            return Response({'message': 'File uploaded successfully', 'path': path})
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 class DeploymentViewSet(viewsets.ModelViewSet):
     """

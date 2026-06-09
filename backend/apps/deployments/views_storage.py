@@ -370,3 +370,116 @@ class VolumeViewSet(viewsets.ModelViewSet):
             return Response({'message': 'Created successfully'})
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=['get'], url_path='file-read')
+    def file_read(self, request, pk=None, service_pk=None):
+        """Read a file's contents from the volume."""
+        volume = self.get_object()
+        path = request.query_params.get('path')
+        if not path:
+            return Response({'error': 'Path required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            path = validate_and_sanitize_path(path, skip_system_check=True)
+        except ValueError as e:
+            return Response({'error': 'Invalid path', 'details': str(e)}, status=status.HTTP_403_FORBIDDEN)
+
+        mount = posixpath.normpath(volume.mount_path)
+        if not (path == mount or path.startswith(mount + "/")):
+            return Response({'error': 'Invalid path'}, status=status.HTTP_403_FORBIDDEN)
+
+        return self._volume_dispatch(
+            volume,
+            {
+                'method': 'GET',
+                'path_suffix': 'file-read',
+                'params': {'path': path},
+                'timeout': 15,
+                'fallthrough_on_exception': True,
+                'on_error': lambda resp: Response(
+                    {'error': 'Failed to read file on remote node', 'details': resp.text if resp else 'Timeout'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                ),
+            },
+            local_action=lambda container, p: self._local_volume_file_read(container, p),
+            path=path,
+        )
+
+    def _local_volume_file_read(self, container, path):
+        try:
+            exit_code, output = container.exec_run(["cat", path])
+            if exit_code != 0:
+                return Response({'error': 'Failed to read file', 'details': output.decode()}, status=status.HTTP_400_BAD_REQUEST)
+
+            from django.conf import settings
+            max_read_size = getattr(settings, 'SMSLY_MAX_FILE_READ_SIZE', 10 * 1024 * 1024)
+            if len(output) > max_read_size:
+                return Response({'error': 'File too large to read. Use download instead.'}, status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
+
+            return Response({'path': path, 'content': output.decode('utf-8')})
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=['post'], url_path='file-write')
+    def file_write(self, request, pk=None, service_pk=None):
+        """Write contents to a file in the volume."""
+        volume = self.get_object()
+        path = request.data.get('path')
+        content = request.data.get('content')
+
+        if not path or content is None:
+            return Response({'error': 'Path and content are required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            path = validate_and_sanitize_path(path, skip_system_check=True)
+        except ValueError as e:
+            return Response({'error': 'Invalid path', 'details': str(e)}, status=status.HTTP_403_FORBIDDEN)
+
+        mount = posixpath.normpath(volume.mount_path)
+        if not (path == mount or path.startswith(mount + "/")):
+            return Response({'error': 'Invalid path'}, status=status.HTTP_403_FORBIDDEN)
+
+        return self._volume_dispatch(
+            volume,
+            {
+                'method': 'POST',
+                'path_suffix': 'file-write',
+                'payload': {'path': path, 'content': content},
+                'timeout': 30,
+                'fallthrough_on_exception': True,
+                'on_error': lambda resp: Response(
+                    {'error': 'Failed to write file on remote node', 'details': resp.text if resp else 'Timeout'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                ),
+            },
+            local_action=lambda container, p: self._local_volume_file_write(container, p, content),
+            path=path,
+        )
+
+    def _local_volume_file_write(self, container, path, content):
+        try:
+            import tarfile
+            import io
+            import time
+
+            tar_stream = io.BytesIO()
+            with tarfile.open(fileobj=tar_stream, mode='w') as tar:
+                file_data = content.encode('utf-8')
+                tarinfo = tarfile.TarInfo(name=os.path.basename(path))
+                tarinfo.size = len(file_data)
+                tarinfo.mtime = int(time.time())
+                tar.addfile(tarinfo, io.BytesIO(file_data))
+
+            tar_stream.seek(0)
+            dir_name = os.path.dirname(path)
+            exit_code, output = container.exec_run(["mkdir", "-p", dir_name])
+            if exit_code != 0:
+                return Response({'error': 'Failed to create parent directory', 'details': output.decode()}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            success = container.put_archive(dir_name, tar_stream)
+
+            if not success:
+                return Response({'error': 'Failed to write file via put_archive'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            return Response({'message': 'File written successfully', 'path': path})
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
