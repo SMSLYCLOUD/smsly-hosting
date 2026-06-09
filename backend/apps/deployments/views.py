@@ -2623,7 +2623,10 @@ class ServiceViewSet(viewsets.ModelViewSet):
             orchestrator = RemoteOrchestrator(active_server)
             remote_id = orchestrator._search_remote_service(service, "/api/v1/services/")
             if not remote_id:
-                return Response({'error': 'Service not found on remote node'}, status=status.HTTP_404_NOT_FOUND)
+                return Response(
+                    {'error': f'Service not found on remote node {active_server.name or active_server.host}'},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
             try:
                 resp = orchestrator._request(
                     method=remote_config['method'],
@@ -2646,14 +2649,18 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 if on_error:
                     return on_error(resp)
                 return Response(
-                    {'error': 'Remote node returned an error', 'details': resp.text if resp else 'Timeout'},
+                    {'error': f'Remote node {active_server.name or active_server.host} returned an error',
+                     'details': resp.text[:500] if resp else 'Timeout'},
                     status=resp.status_code if resp else status.HTTP_502_BAD_GATEWAY,
                 )
             except Exception as e:
                 on_error = remote_config.get('on_error')
                 if on_error:
                     return on_error(None)
-                return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                return Response(
+                    {'error': f'Failed to reach {active_server.name or active_server.host}: {str(e)[:200]}'},
+                    status=status.HTTP_502_BAD_GATEWAY,
+                )
 
         # Local execution (only reached when target is local)
         container = resolve_running_container(service, latest_deploy)
