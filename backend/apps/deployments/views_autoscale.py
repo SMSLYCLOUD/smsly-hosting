@@ -1,0 +1,97 @@
+"""Auto-scaling API: analyze services and manage replicas."""
+from rest_framework import viewsets, permissions, status, serializers
+from rest_framework.decorators import action
+from rest_framework.response import Response
+
+from apps.deployments.models_core import Service, ManagedServer
+from apps.deployments.models_replica import ServiceReplica
+from apps.deployments.services.scaling_ai import ScalingAnalyzer
+from apps.deployments.services.node_scorer import NodeScorer
+from apps.deployments.services.spawning_service import SpawningService
+
+
+class ServiceReplicaSerializer(serializers.ModelSerializer):
+    node_name = serializers.CharField(source='node.name', read_only=True)
+    node_host = serializers.CharField(source='node.host', read_only=True)
+
+    class Meta:
+        model = ServiceReplica
+        fields = ['id', 'service', 'node', 'node_name', 'node_host',
+                  'container_name', 'status', 'metrics_snapshot',
+                  'spawn_reason', 'created_at', 'destroyed_at']
+        read_only_fields = ['id', 'container_name', 'status',
+                           'metrics_snapshot', 'created_at', 'destroyed_at']
+
+
+class ScalingViewSet(viewsets.GenericViewSet):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @action(detail=True, methods=['post'])
+    def analyze(self, request, pk=None):
+        """Analyze a service and return scaling recommendation."""
+        service = Service.objects.get(id=pk, owner=request.user)
+        analyzer = ScalingAnalyzer(service)
+        result = analyzer.analyze()
+        return Response(result)
+
+    @action(detail=True, methods=['post'])
+    def spawn(self, request, pk=None):
+        """Manually spawn a replica on the best available node."""
+        service = Service.objects.get(id=pk, owner=request.user)
+
+        candidates = ManagedServer.objects.filter(
+            status=ManagedServer.Status.ONLINE,
+            allow_user_workloads=True,
+        ).exclude(is_primary=True)
+
+        if not candidates.exists():
+            return Response({'error': 'No available nodes'}, status=400)
+
+        scorer = NodeScorer()
+        best = scorer.best(candidates)
+        if not best:
+            return Response({'error': 'All nodes too loaded'}, status=400)
+
+        replica = ServiceReplica.objects.create(
+            service=service, node=best, status='SPAWNING',
+            spawn_reason='Manual spawn via API',
+        )
+
+        spawner = SpawningService()
+        try:
+            spawner.spawn(service, best, replica)
+            return Response(ServiceReplicaSerializer(replica).data)
+        except Exception as exc:
+            replica.status = 'DESTROYED'
+            replica.save(update_fields=['status'])
+            return Response({'error': str(exc)}, status=500)
+        finally:
+            spawner.cleanup()
+
+    @action(detail=False, methods=['get'])
+    def replicas(self, request):
+        """List replicas for a service. Pass ?service=<uuid>."""
+        service_id = request.GET.get('service')
+        if not service_id:
+            return Response({'error': '?service=UUID required'}, status=400)
+        replicas = ServiceReplica.objects.filter(
+            service__id=service_id,
+            service__owner=request.user,
+        ).order_by('-created_at')
+        return Response(ServiceReplicaSerializer(replicas, many=True).data)
+
+    @action(detail=False, methods=['delete'])
+    def destroy_replica(self, request):
+        """Destroy a specific replica. Pass ?id=<replica_uuid>."""
+        replica_id = request.GET.get('id')
+        if not replica_id:
+            return Response({'error': '?id=UUID required'}, status=400)
+        replica = ServiceReplica.objects.get(
+            id=replica_id, service__owner=request.user, status='RUNNING',
+        )
+        spawner = SpawningService()
+        try:
+            spawner.destroy(replica)
+            return Response({'status': 'destroyed'})
+        finally:
+            spawner.cleanup()
