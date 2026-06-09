@@ -4,7 +4,7 @@ import React, { useCallback, useState, useEffect } from 'react';
 import { PageHeader } from '@/components/ui/page-header';
 import api, { servicesApi, addonsApi, serversApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
-import { Database, LayoutTemplate, Box, Server, CheckCircle2, ServerCog, MessagesSquare, Orbit } from 'lucide-react';
+import { Database, LayoutTemplate, Box, Server, CheckCircle2, ServerCog, MessagesSquare, Orbit, Globe } from 'lucide-react';
 import { toast } from 'sonner';
 import { featureFlags, featureDisabledReason } from '@/lib/featureFlags';
 import { shouldShowAllNav } from '@/lib/nav-visibility';
@@ -17,6 +17,7 @@ export default function TransfersPage() {
     const [loading, setLoading] = useState(true);
     const [transfers, setTransfers] = useState<any[]>([]);
     const [transfersLoading, setTransfersLoading] = useState(false);
+    const [targetDomain, setTargetDomain] = useState('');
 
     // Grouping structure for DnD
     const [groupedServices, setGroupedServices] = useState<Record<string, any[]>>({});
@@ -138,7 +139,7 @@ export default function TransfersPage() {
             return next;
         });
 
-        // Trigger API transfer request
+            // Trigger API transfer request
         try {
             const endpoint = `/transfers/`;
             const payload: any = {
@@ -150,10 +151,12 @@ export default function TransfersPage() {
             if (itemType === 'service') {
                 payload.service_id = itemId;
             } else if (itemType === 'addon') {
-                // For addons, we transfer the parent service
                 const addon = addons.find((a: any) => a.id === itemId);
                 payload.service_id = addon?.service;
             }
+
+            // If cross-platform migration, prompt for target domain
+            if (targetDomain) payload.target_public_domain = targetDomain;
 
             await api.post(endpoint, payload);
             toast.success(`Transfer initiated to ${getServerName(targetServerId)}`);
@@ -208,6 +211,15 @@ export default function TransfersPage() {
                         <div className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-900/50 border border-zinc-800">
                             <Server className="w-3.5 h-3.5 text-zinc-500" />
                             <span className="text-[11px] font-medium text-zinc-400">Transfer Targets: {workloadServers.length}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-900/20 border border-violet-500/20">
+                            <Globe className="w-3.5 h-3.5 text-violet-400" />
+                            <input
+                                value={targetDomain}
+                                onChange={e => setTargetDomain(e.target.value)}
+                                placeholder="New domain (optional)"
+                                className="bg-transparent text-[11px] text-violet-300 placeholder:text-zinc-600 outline-none w-40"
+                            />
                         </div>
                         <Button 
                             variant="outline" 

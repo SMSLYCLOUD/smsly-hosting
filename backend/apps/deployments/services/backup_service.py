@@ -172,10 +172,12 @@ class BackupService:
             metadata = {
                 'service_name': service.name,
                 'service_id': str(service.id),
+                'platform_domain': os.environ.get('DOMAIN', ''),
                 'deploy_type': service.deploy_type,
                 'env_vars': env_vars,
                 'secrets_included': include_secret_values,
                 'git_url': service.repository_url,
+                'public_domain': service.public_domain,
                 'created_at': str(timezone.now()),
                 'volumes': []
             }
@@ -562,8 +564,12 @@ class BackupService:
                 
                 # Ensure the service is properly marked as active before deployment
                 target_service.status = Service.Status.ACTIVE
+
+                # ── Cross-platform restore: remap domain ──────────────
+                _remap_domain_on_restore(target_service, metadata)
+
                 target_service.save()
-                
+
                 enqueue_smart_deploy_task(
                     deployment_id=str(deployment.id),
                     provider_id=str(provider.id),
@@ -1635,7 +1641,21 @@ def backup_addon(addon_id: str) -> str | None:
         logger.warning("DB dump for %s failed: %s", container_name, exc)
 
 
-def upload_backup_to_s3(local_path: str, s3_bucket: str, s3_key: str,
+def _remap_domain_on_restore(service, metadata):
+    """If restoring to a different platform, remap the service's public_domain."""
+    try:
+        current_domain = os.environ.get('DOMAIN', '').strip()
+        old_domain = (metadata or {}).get('platform_domain', '')
+        if not current_domain or not old_domain or current_domain == old_domain:
+            return
+
+        svc_domain = (service.public_domain or '').strip()
+        if old_domain in svc_domain:
+            new_domain = svc_domain.replace(old_domain, current_domain)
+            service.public_domain = new_domain
+            logger.info("Domain remapped on restore: %s → %s", svc_domain, new_domain)
+    except Exception:
+        pass
 
 
 def _upload_to_cloud_if_configured(service, filepath):
