@@ -18,7 +18,7 @@ INSTALL_DIR="${INSTALL_DIR:-/opt/smsly-hosting}"
 COMPOSE_FILE="${COMPOSE_FILE:-$INSTALL_DIR/docker-compose.prod.yml}"
 SNAPSHOT_FILE="$INSTALL_DIR/.update-safe-snapshot"
 BACKUP_DIR="$INSTALL_DIR/.update-backups"
-LOG_FILE="/var/log/smsly-update.log"
+LOG_FILE="/var/log/smsly-clean.log"
 MIN_DISK_MB=5120
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; BLUE='\033[0;34m'; NC='\033[0m'
@@ -117,7 +117,7 @@ safe_update_rollback() {
 
     # Clear stale lock from the failed original install.sh
     rm -f /tmp/smsly-install.lock 2>/dev/null || true
-    bash "$INSTALL_DIR/install.sh" --update >> "$LOG_FILE" 2>&1 || _warn "Rollback install had issues"
+    bash "$INSTALL_DIR/install.sh" --update >/dev/null 2>&1 || _warn "Rollback install had issues"
 
     # Restore DB if backed up
     if [ -n "${BACKUP_FILE:-}" ] && [ -f "$BACKUP_FILE" ]; then
