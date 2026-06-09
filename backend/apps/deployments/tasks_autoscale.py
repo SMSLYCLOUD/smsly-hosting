@@ -53,29 +53,55 @@ def analyze_and_scale_service(service_id: str):
     if rec['action'] == 'none':
         return
 
-    # 2. Find best node
-    candidates = ManagedServer.objects.filter(
-        status=ManagedServer.Status.ONLINE,
-        allow_user_workloads=True,
-    ).exclude(is_primary=True)
-
-    if not candidates.exists():
-        logger.warning("No candidate nodes for scaling %s", service.name)
-        return
-
-    scorer = NodeScorer()
-    scores = scorer.score(candidates)
-
-    # 3. Execute
     spawner = SpawningService()
     try:
         if rec['action'] == 'scale_up':
-            count = min(rec['scale_up_by'], len(scores))
             spawned = 0
+            count = rec['scale_up_by']
+
+            # ── Priority 1: Spawn locally if host has resources ──────────
+            local_ok = True
+            try:
+                spawner._check_local_capacity(service)
+            except RuntimeError:
+                local_ok = False
+
+            while spawned < count and local_ok:
+                replica = ServiceReplica.objects.create(
+                    service=service, node=None,
+                    spawn_reason=rec['reason'],
+                    status='SPAWNING',
+                )
+                try:
+                    spawner.spawn_local(service, replica)
+                    spawned += 1
+                except Exception as exc:
+                    logger.warning("Local spawn failed for %s: %s", service.name, exc)
+                    replica.status = 'DESTROYED'
+                    replica.save(update_fields=['status'])
+                    local_ok = False
+
+            if spawned >= count:
+                logger.info("Auto-scaled %s: %d local replica(s)", service.name, spawned)
+                return
+
+            # ── Priority 2: Remote nodes when local is choked ────────────
+            remaining = count - spawned
+            candidates = ManagedServer.objects.filter(
+                status=ManagedServer.Status.ONLINE,
+                allow_user_workloads=True,
+            ).exclude(is_primary=True)
+
+            if not candidates.exists():
+                logger.warning("No remote nodes for scaling %s", service.name)
+                return
+
+            scorer = NodeScorer()
+            scores = scorer.score(candidates)
             for node, score, resources in scores:
                 if spawned >= count:
                     break
-                if score < 20:  # node too loaded
+                if score < 20:
                     continue
                 replica = ServiceReplica.objects.create(
                     service=service, node=node,
@@ -85,13 +111,11 @@ def analyze_and_scale_service(service_id: str):
                 try:
                     spawner.spawn(service, node, replica)
                     spawned += 1
-                    logger.info(
-                        "Auto-scaled %s: spawned replica on %s (score=%.1f)",
-                        service.name, node.name, score,
-                    )
+                    logger.info("Auto-scaled %s: spawned on %s", service.name, node.name)
                 except Exception as exc:
-                    logger.error("Failed to spawn replica for %s on %s: %s", service.name, node.name, exc)
+                    logger.warning("Remote spawn failed for %s on %s: %s", service.name, node.name, exc)
                     replica.status = 'DESTROYED'
+                    replica.save(update_fields=['status'])
                     replica.save(update_fields=['status'])
 
         elif rec['action'] == 'scale_down':

@@ -139,6 +139,76 @@ class SpawningService:
                 pass
         self._ssh_clients.clear()
 
+    def spawn_local(self, service, replica):
+        """Create a replica on the local Docker daemon — no SSH needed."""
+        import docker as docker_lib
+        from apps.deployments.models import PlatformConfig
+
+        config = PlatformConfig.load()
+        client = docker_lib.from_env()
+        name = self._safe_name(f"{service.name}-replica-{replica.id.hex[:8]}")
+        image = service.docker_image or ''
+        if not image:
+            raise ValueError(f"Service {service.name} has no docker_image set")
+
+        # Check local capacity
+        self._check_local_capacity(service)
+
+        port = str(service.internal_port or 8000)
+        domain = service.public_domain or f"{name}.localhost"
+        net = "smsly-net"
+        router = name.replace('.', '-').replace('_', '-')
+
+        labels = {
+            "traefik.enable": "true",
+            f"traefik.docker.network": net,
+            f"traefik.http.routers.{router}.rule": f"Host(`{domain}`)",
+            f"traefik.http.routers.{router}.entrypoints": "web",
+            f"traefik.http.services.{router}.loadbalancer.server.port": port,
+            "managed_by": "smsly-hosting",
+            "smsly.blue_green.canonical_name": service.name,
+            "smsly.replica": "true",
+        }
+        if config.use_ssl:
+            labels[f"traefik.http.routers.{router}.entrypoints"] = "websecure,web"
+            labels[f"traefik.http.routers.{router}.tls"] = "true"
+
+        env_vars = {ev.key: ev.value for ev in service.env_vars.all()}
+        container = client.containers.run(
+            image=image,
+            name=name,
+            detach=True,
+            restart_policy={"Name": "unless-stopped"},
+            network=net,
+            labels=labels,
+            environment=env_vars,
+        )
+        replica.container_id = container.id[:64]
+        replica.container_name = name
+        replica.status = 'RUNNING'
+        replica.save(update_fields=['container_id', 'container_name', 'status'])
+        logger.info("Spawned replica %s locally", name)
+        return replica
+
+    def _check_local_capacity(self, service):
+        """Raise if local host lacks free RAM for the replica."""
+        min_ram_mb = getattr(service, 'memory_mb', None) or 128
+        try:
+            with open('/proc/meminfo') as f:
+                mem = {}
+                for line in f:
+                    if ':' in line:
+                        k, v = line.split(':', 1)
+                        mem[k.strip()] = int(v.strip().split()[0])
+                available = (mem.get('MemAvailable', 0) + mem.get('Cached', 0)) // 1024
+                total = mem.get('MemTotal', 0) // 1024
+                if available < min_ram_mb:
+                    raise RuntimeError(f"Local host: {available} MB free, need {min_ram_mb}")
+                if total > 0 and (available / total * 100) < 10:
+                    raise RuntimeError(f"Local host: only {available/total*100:.0f}% RAM free")
+        except FileNotFoundError:
+            pass  # not Linux — skip check
+
     def _check_node_capacity(self, ssh, node, service):
         """Verify node has enough free RAM to run another replica."""
         min_ram_mb = getattr(service, 'memory_mb', None) or 128
