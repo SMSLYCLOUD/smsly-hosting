@@ -204,7 +204,7 @@ class SpawningService:
                 total = mem.get('MemTotal', 0) // 1024
                 if available < min_ram_mb:
                     raise RuntimeError(f"Local host: {available} MB free, need {min_ram_mb}")
-                if total > 0 and (available / total * 100) < 10:
+                if total > 0 and (available / total * 100) < 20:
                     raise RuntimeError(f"Local host: only {available/total*100:.0f}% RAM free")
         except FileNotFoundError:
             pass  # not Linux — skip check
@@ -224,7 +224,7 @@ class SpawningService:
                 if available_mb < min_ram_mb:
                     logger.warning("Node %s: %d MB free (need %d)", node.name, available_mb, min_ram_mb)
                     return False
-                if free_pct < 10:
+                if free_pct < 20:
                     logger.warning("Node %s: only %.0f%% RAM free", node.name, free_pct)
                     return False
                 logger.info("Node %s OK: %d MB free (%.0f%%), %s needs %d MB",
