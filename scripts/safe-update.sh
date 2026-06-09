@@ -22,7 +22,7 @@ LOG_FILE="/var/log/smsly-update.log"
 MIN_DISK_MB=5120
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; BLUE='\033[0;34m'; NC='\033[0m'
-_log()  { printf "[%s] %s\n" "$(date +%H:%M:%S)" "$*" | tee -a "$LOG_FILE"; }
+_log()  { printf "[%s] %s\n" "$(date +%H:%M:%S)" "$*" >> "$LOG_FILE"; }
 _ok()   { echo -e "${GREEN}  ✓${NC} $*"; _log "OK: $*"; }
 _warn() { echo -e "${YELLOW}  ⚠${NC} $*"; _log "WARN: $*"; }
 _fail() { echo -e "${RED}  ✗${NC} $*"; _log "FAIL: $*"; }
@@ -117,12 +117,12 @@ safe_update_rollback() {
 
     # Clear stale lock from the failed original install.sh
     rm -f /tmp/smsly-install.lock 2>/dev/null || true
-    bash "$INSTALL_DIR/install.sh" --update 2>&1 | tail -30 || _warn "Rollback install had issues"
+    bash "$INSTALL_DIR/install.sh" --update >> "$LOG_FILE" 2>&1 || _warn "Rollback install had issues"
 
     # Restore DB if backed up
     if [ -n "${BACKUP_FILE:-}" ] && [ -f "$BACKUP_FILE" ]; then
         _warn "Restoring database from backup..."
-        docker exec -i smsly-hosting-db-1 psql -U smsly_admin smsly_hosting < "$BACKUP_FILE" 2>/dev/null && \
+        docker exec -i smsly-hosting-db-1 psql -U smsly_admin smsly_hosting < "$BACKUP_FILE" >/dev/null 2>&1 && \
             _ok "DB restored" || _warn "DB restore failed"
     fi
 
@@ -143,7 +143,7 @@ safe_update_rollback() {
 if [ "$SAFE_UPDATE_SOURCED" = "false" ]; then
     safe_update_preflight || exit 1
     safe_update_snapshot
-    bash "$INSTALL_DIR/install.sh" --update || { _warn "Update failed — rolling back"; safe_update_rollback; exit 1; }
+    bash "$INSTALL_DIR/install.sh" --update >> "$LOG_FILE" 2>&1 || { _warn "Update failed — rolling back"; safe_update_rollback; exit 1; }
     sleep 30
     safe_update_post_verify || { _warn "Post-verify failed — rolling back"; safe_update_rollback; exit 1; }
     echo -e "\n${GREEN}═══════════════════════════════════════════════════════════════${NC}"
