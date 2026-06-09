@@ -204,6 +204,12 @@ app.conf.beat_schedule = {
         'schedule': 180.0,
         'options': {'expires': 180.0},
     },
+    # Run scheduled backups every 15 minutes
+    'run-scheduled-backups-every-15m': {
+        'task': 'apps.deployments.tasks.run_scheduled_backups_task',
+        'schedule': 900.0,
+        'options': {'expires': 900.0},
+    },
 }
 
 

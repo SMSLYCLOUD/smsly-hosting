@@ -4161,16 +4161,23 @@ def restore_addon_task(self, backup_id: str):
         raise e
 
 @shared_task(bind=True, soft_time_limit=3600, time_limit=3900)
+@shared_task(bind=True, soft_time_limit=3600, max_retries=3, default_retry_delay=300)
 def create_service_backup_task(self, service_id, backup_type='MANUAL', backup_id=None):
-    backup_service = BackupService()
-    backup_service.backup_service(service_id, backup_id=backup_id, backup_type=backup_type)
+    from .services.backup_service import BackupService
+    try:
+        backup_service = BackupService()
+        backup_service.backup_service(service_id, backup_id=backup_id, backup_type=backup_type)
+    except Exception as exc:
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=exc)
+        raise
 
-@shared_task(bind=True, soft_time_limit=7200, time_limit=7500)
+@shared_task(bind=True, soft_time_limit=7200, time_limit=7500, max_retries=2, default_retry_delay=600)
 def create_server_backup_task(self, backup_id=None):
     backup_service = BackupService()
     backup_service.backup_server(backup_id=backup_id)
 
-@shared_task(bind=True, soft_time_limit=3600)
+@shared_task(bind=True, soft_time_limit=3600, max_retries=2, default_retry_delay=300)
 def restore_service_backup_task(self, backup_id, target_service_id=None, requesting_user_id=None):
     backup_service = BackupService()
     backup_service.restore_service(
@@ -4186,6 +4193,37 @@ def restore_server_backup_task(self, backup_id, requesting_user_id=None):
 
 @shared_task
 def cleanup_old_backups_task():
+
+@shared_task
+def run_scheduled_backups_task():
+    """Execute all due BackupSchedule entries."""
+    from .models_backup import BackupSchedule
+    from .services.backup_service import BackupService
+    from django.utils import timezone
+    import croniter
+    from datetime import datetime
+
+    now = timezone.now()
+    schedules = BackupSchedule.objects.filter(enabled=True)
+    ran = 0
+    for sched in schedules:
+        try:
+            cron = croniter.croniter(sched.cron_expression, now)
+            next_run = cron.get_next(datetime)
+            if sched.last_run and sched.last_run >= timezone.make_aware(datetime.fromtimestamp(next_run), timezone.get_current_timezone()):
+                continue
+            sched.last_run = now
+            sched.next_run = timezone.make_aware(datetime.fromtimestamp(cron.get_next(datetime)))
+            sched.save(update_fields=['last_run', 'next_run'])
+
+            if sched.is_server_wide:
+                create_server_backup_task.delay()
+            elif sched.service:
+                create_service_backup_task.delay(str(sched.service.id), backup_type='SCHEDULED')
+            ran += 1
+        except Exception as exc:
+            logger.warning("Scheduled backup failed for schedule %s: %s", sched.id, exc)
+    return ran
     """Delete backups older than retention_days per schedule."""
     from datetime import timedelta
 
