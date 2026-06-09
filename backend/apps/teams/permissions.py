@@ -4,7 +4,26 @@ from .models import TeamMember
 
 
 class IsTeamMember(permissions.BasePermission):
+    """Allows access if user is a member (any role) of the team."""
     def has_object_permission(self, request, view, obj):
-        # Assuming obj has a 'team' attribute or is a Team
         team = getattr(obj, 'team', obj)
         return TeamMember.objects.filter(team=team, user=request.user).exists()
+
+
+class IsTeamAdmin(permissions.BasePermission):
+    """Allows access only if user has ADMIN role on the team."""
+    def has_object_permission(self, request, view, obj):
+        team = getattr(obj, 'team', obj)
+        return TeamMember.objects.filter(
+            team=team, user=request.user, role=TeamMember.Role.ADMIN
+        ).exists()
+
+
+class IsTeamAdminOrMember(permissions.BasePermission):
+    """Allows access for ADMIN or MEMBER roles (blocks VIEWER from writes)."""
+    def has_object_permission(self, request, view, obj):
+        team = getattr(obj, 'team', obj)
+        return TeamMember.objects.filter(
+            team=team, user=request.user,
+            role__in=[TeamMember.Role.ADMIN, TeamMember.Role.MEMBER],
+        ).exists()
