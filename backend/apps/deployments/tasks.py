@@ -4193,9 +4193,36 @@ def restore_server_backup_task(self, backup_id, requesting_user_id=None):
 
 @shared_task
 def cleanup_old_backups_task():
+    """Delete backups older than retention_days per schedule."""
+    from .models_backup import BackupSchedule, ServiceBackup, ServerBackup
+    from datetime import timedelta
+    from django.utils import timezone
+    import os
 
-@shared_task
-def run_scheduled_backups_task():
+    schedules = BackupSchedule.objects.filter(enabled=True)
+    cleaned = 0
+    for sched in schedules:
+        try:
+            cutoff = timezone.now() - timedelta(days=sched.retention_days)
+            if sched.service:
+                old = ServiceBackup.objects.filter(
+                    service=sched.service, created_at__lt=cutoff
+                ).exclude(backup_type='TRANSFER')
+                for b in old:
+                    if b.file_path and os.path.exists(b.file_path):
+                        os.remove(b.file_path)
+                    b.delete()
+                    cleaned += 1
+            elif sched.is_server_wide:
+                old = ServerBackup.objects.filter(created_at__lt=cutoff)
+                for b in old:
+                    if b.file_path and os.path.exists(b.file_path):
+                        os.remove(b.file_path)
+                    b.delete()
+                    cleaned += 1
+        except Exception as exc:
+            logger.warning("Backup cleanup failed for schedule %s: %s", sched.id, exc)
+    return cleaned
     """Execute all due BackupSchedule entries."""
     from .models_backup import BackupSchedule
     from .services.backup_service import BackupService
