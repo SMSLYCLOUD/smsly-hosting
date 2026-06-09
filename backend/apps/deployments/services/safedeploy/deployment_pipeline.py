@@ -54,7 +54,18 @@ class ProductionDeploymentPipeline:
         return qs.first()
 
     def _run_backup_phase(self, deployment: Deployment) -> None:
-        logger.info(f"Backup phase not yet implemented for deployment {deployment.id}")
+        """Create a pre-migration service backup for rollback safety."""
+        from apps.deployments.services.backup_service import BackupService
+        svc = deployment.service
+        if not svc:
+            logger.warning("Backup phase skipped — no service attached to deployment %s", deployment.id)
+            return
+        try:
+            backup_svc = BackupService()
+            backup_svc.backup_service(svc.id, backup_type='PRE_TRANSFER')
+            logger.info("Pre-deploy backup created for service %s (deployment %s)", svc.name, deployment.id)
+        except Exception as exc:
+            logger.warning("Backup phase failed for deployment %s: %s", deployment.id, exc)
 
     def _run_migration_phase(self, deployment: Deployment) -> None:
         deployment.status = Deployment.Status.MIGRATION_RUNNING
