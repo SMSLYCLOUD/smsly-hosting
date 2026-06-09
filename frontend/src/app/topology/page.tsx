@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { Topology3D } from '@/components/topology/Topology3D';
 import { CanvasSchematic } from '@/components/topology/CanvasSchematic';
@@ -14,13 +15,30 @@ import { toast } from 'sonner';
 import { useGraphData } from '@/hooks/useGraphData';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
-export default function TopologyPage() {
+export default function TopologyPage({
+    searchParams,
+}: {
+    searchParams?: { service?: string };
+}) {
   const [view, setView] = useState<'3d' | '2d' | 'solar' | 'city' | 'ecosystem'>('3d');
   const [isPruning, setIsPruning] = useState(false);
   const [selectedProject, setSelectedProject] = useState<string>('all');
   const [selectedService, setSelectedService] = useState<string>('all');
 
   const { data, loading, error, refresh } = useGraphData();
+
+  // Resolve ?service=UUID to service name for filtering
+  useEffect(() => {
+    const raw = searchParams?.service;
+    if (!raw) return;
+    const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+    fetch(`/api/v1/services/${encodeURIComponent(raw)}/`, {
+      headers: token ? { 'Authorization': `Token ${token}` } : {},
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(svc => { if (svc?.name) setSelectedService(svc.name); })
+      .catch(() => {});
+  }, [searchParams?.service]);
 
   const uniqueProjects = useMemo(() => {
     return Array.from(new Set(data?.nodes.map(n => n.data?.project_name).filter(Boolean))) as string[];
