@@ -36,6 +36,7 @@ from .views_project import ProjectViewSet
 from .views_updates import PlatformUpdateViewSet
 from .views_node_exchange import node_token_exchange, node_token_exchange_via_gateway
 from .views_autoscale import ScalingViewSet
+from .views_cloud_storage import CloudStorageViewSet
 
 # Create main router
 router = DefaultRouter()
@@ -61,6 +62,7 @@ router.register(r'clusters', ClusterViewSet, basename='cluster')
 router.register(r'replication', ReplicationViewSet, basename='replication')
 router.register(r'platform-updates', PlatformUpdateViewSet, basename='platform-update')
 router.register(r'scaling', ScalingViewSet, basename='scaling')
+router.register(r'cloud-storage', CloudStorageViewSet, basename='cloud-storage')
 
 # Nested Router
 # /api/v1/services/{service_pk}/metrics/
