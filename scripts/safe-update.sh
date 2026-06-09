@@ -90,7 +90,7 @@ safe_update_post_verify() {
     done
 
     curl -sf http://localhost:3100/ready >/dev/null 2>&1 && _ok "Loki: ready" || { _warn "Loki: not ready"; failed=$((failed + 1)); }
-    curl -sf http://127.0.0.1:8081/ping >/dev/null 2>&1 && _ok "Traefik: responding" || { _warn "Traefik: not responding"; failed=$((failed + 1)); }
+    curl -sf http://127.0.0.1:8082/ping >/dev/null 2>&1 && _ok "Traefik: responding" || { _warn "Traefik: not responding"; failed=$((failed + 1)); }
     curl -sf http://127.0.0.1:9090/api/v1/targets >/dev/null 2>&1 && _ok "Prometheus: responding" || { _warn "Prometheus: not responding"; failed=$((failed + 1)); }
 
     [ "$failed" -eq 0 ] && _ok "All health checks passed" || _warn "$failed health check(s) failed"
@@ -115,6 +115,8 @@ safe_update_rollback() {
         fi
     fi
 
+    # Clear stale lock from the failed original install.sh
+    rm -f /tmp/smsly-install.lock 2>/dev/null || true
     bash "$INSTALL_DIR/install.sh" --update 2>&1 | tail -30 || _warn "Rollback install had issues"
 
     # Restore DB if backed up
