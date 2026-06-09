@@ -1514,59 +1514,47 @@ def repair_double_encrypted_env_vars(service_id: str | None = None) -> dict:
 
 
 def _dump_container_database(container_name, image_tag, temp_dir):
-
-
-def _stop_service_for_restore(service, is_remote):
-
-
-def backup_addon(addon_id: str) -> str | None:
-    """Back up a single addon (Postgres/MySQL/Redis). Returns path to dump file or None."""
-    from apps.deployments.models_addons import Addon
+    """Run pg_dump/mysqldump/redis SAVE inside a DB container for consistent backups."""
     import docker as _docker
     client = _docker.from_env()
     try:
-        addon = Addon.objects.get(id=addon_id, status='ACTIVE')
-        ctr = client.containers.get(addon.container_name or addon.name)
-        atype = (addon.addon_type or '').lower()
-        temp_dir = tempfile.mkdtemp(prefix=f"addon_backup_{addon_id}_")
+        ctr = client.containers.get(container_name)
+        image_lower = (image_tag or '').lower()
+        dump_file = None
 
-        if 'postgres' in atype:
+        if 'postgres' in image_lower:
             dump_file = os.path.join(temp_dir, 'db_dump.sql')
-            result = ctr.exec_run(['pg_dumpall', '-U', 'postgres', '-c'])
+            result = ctr.exec_run(
+                ['pg_dumpall', '-U', os.environ.get('POSTGRES_USER', 'smsly_admin'), '-c'],
+                environment={'PGPASSWORD': os.environ.get('POSTGRES_PASSWORD', '')},
+            )
             if result.exit_code == 0:
                 with open(dump_file, 'wb') as f:
                     f.write(result.output)
-                return dump_file
-        elif 'mysql' in atype or 'mariadb' in atype:
+                logger.info("pg_dumpall successful for %s", container_name)
+        elif 'mysql' in image_lower or 'mariadb' in image_lower:
             dump_file = os.path.join(temp_dir, 'db_dump.sql')
-            result = ctr.exec_run(['mysqldump', '--all-databases', '-u', 'root'])
+            password = os.environ.get('MYSQL_ROOT_PASSWORD', os.environ.get('MYSQL_PASSWORD', ''))
+            result = ctr.exec_run(['mysqldump', '--all-databases', '-u', 'root', f'-p{password}'])
             if result.exit_code == 0:
                 with open(dump_file, 'wb') as f:
                     f.write(result.output)
-                return dump_file
-        elif 'redis' in atype:
+                logger.info("mysqldump successful for %s", container_name)
+        elif 'redis' in image_lower:
             dump_file = os.path.join(temp_dir, 'redis_dump.rdb')
             ctr.exec_run(['redis-cli', 'SAVE'])
-            time.sleep(1)
+            time.sleep(2)
             bits, _ = ctr.get_archive('/data/dump.rdb')
             if bits:
                 with open(dump_file, 'wb') as f:
                     for chunk in bits:
                         f.write(chunk)
-                return dump_file
-        elif 'mongo' in atype:
-            dump_file = os.path.join(temp_dir, 'mongo_dump.archive')
-            result = ctr.exec_run(['mongodump', '--archive=/tmp/mongo.archive', '--gzip'])
-            if result.exit_code == 0:
-                bits, _ = ctr.get_archive('/tmp/mongo.archive')
-                if bits:
-                    with open(dump_file, 'wb') as f:
-                        for chunk in bits:
-                            f.write(chunk)
-                    return dump_file
+                logger.info("Redis SAVE+backup successful for %s", container_name)
     except Exception as exc:
-        logger.warning("Addon backup failed for %s: %s", addon_id, exc)
-    return None
+        logger.warning("DB dump for %s failed: %s", container_name, exc)
+
+
+def _stop_service_for_restore(service, is_remote):
     """Gracefully stop a running container before restoring volumes."""
     container_name = service.name
     try:
@@ -1592,53 +1580,52 @@ def backup_addon(addon_id: str) -> str | None:
         logger.info("Stopped service %s before restore", service.name)
     except Exception as exc:
         logger.warning("Could not stop service %s before restore: %s", service.name, exc)
-    """Run pg_dump/mysqldump/redis SAVE inside a DB container for consistent backups."""
+
+
+def backup_addon(addon_id: str) -> str | None:
+    """Back up a single addon (Postgres/MySQL/Redis/Mongo). Returns path to dump file or None."""
+    from apps.deployments.models_addons import Addon
     import docker as _docker
     client = _docker.from_env()
     try:
-        ctr = client.containers.get(container_name)
-        image_lower = (image_tag or '').lower()
-        dump_file = None
+        addon = Addon.objects.get(id=addon_id, status='ACTIVE')
+        ctr = client.containers.get(addon.container_name or addon.name)
+        atype = (addon.addon_type or '').lower()
+        temp_dir = tempfile.mkdtemp(prefix=f"addon_backup_{addon_id}_")
 
-        if 'postgres' in image_lower:
+        if 'postgres' in atype:
             dump_file = os.path.join(temp_dir, 'db_dump.sql')
-            env_vars = {
-                'PGPASSWORD': os.environ.get('POSTGRES_PASSWORD', ''),
-            }
-            result = ctr.exec_run(
-                ['pg_dumpall', '-U', os.environ.get('POSTGRES_USER', 'smsly_admin'), '-c'],
-                environment=env_vars,
-            )
+            result = ctr.exec_run(['pg_dumpall', '-U', 'postgres', '-c'])
             if result.exit_code == 0:
-                with open(dump_file, 'wb') as f:
-                    f.write(result.output)
-                logger.info("pg_dumpall successful for %s", container_name)
-            else:
-                logger.warning("pg_dumpall failed: %s", result.output[-200:])
-
-        elif 'mysql' in image_lower or 'mariadb' in image_lower:
+                with open(dump_file, 'wb') as f: f.write(result.output)
+                return dump_file
+        elif 'mysql' in atype or 'mariadb' in atype:
             dump_file = os.path.join(temp_dir, 'db_dump.sql')
-            password = os.environ.get('MYSQL_ROOT_PASSWORD', os.environ.get('MYSQL_PASSWORD', ''))
-            result = ctr.exec_run(
-                ['mysqldump', '--all-databases', '-u', 'root', f'-p{password}'],
-            )
+            result = ctr.exec_run(['mysqldump', '--all-databases', '-u', 'root'])
             if result.exit_code == 0:
-                with open(dump_file, 'wb') as f:
-                    f.write(result.output)
-                logger.info("mysqldump successful for %s", container_name)
-
-        elif 'redis' in image_lower:
+                with open(dump_file, 'wb') as f: f.write(result.output)
+                return dump_file
+        elif 'redis' in atype:
             dump_file = os.path.join(temp_dir, 'redis_dump.rdb')
             ctr.exec_run(['redis-cli', 'SAVE'])
-            time.sleep(2)
+            time.sleep(1)
             bits, _ = ctr.get_archive('/data/dump.rdb')
             if bits:
                 with open(dump_file, 'wb') as f:
-                    for chunk in bits:
-                        f.write(chunk)
-                logger.info("Redis SAVE+backup successful for %s", container_name)
+                    for chunk in bits: f.write(chunk)
+                return dump_file
+        elif 'mongo' in atype:
+            dump_file = os.path.join(temp_dir, 'mongo_dump.archive')
+            result = ctr.exec_run(['mongodump', '--archive=/tmp/mongo.archive', '--gzip'])
+            if result.exit_code == 0:
+                bits, _ = ctr.get_archive('/tmp/mongo.archive')
+                if bits:
+                    with open(dump_file, 'wb') as f:
+                        for chunk in bits: f.write(chunk)
+                    return dump_file
     except Exception as exc:
-        logger.warning("DB dump for %s failed: %s", container_name, exc)
+        logger.warning("Addon backup failed for %s: %s", addon_id, exc)
+    return None
 
 
 def _remap_domain_on_restore(service, metadata):
@@ -1675,6 +1662,9 @@ def _upload_to_cloud_if_configured(service, filepath):
         )
     except Exception as exc:
         logger.warning("Cloud upload skipped for %s: %s", service.name, exc)
+
+
+def upload_backup_to_s3(local_path: str, s3_bucket: str, s3_key: str,
                         endpoint: str = '', region: str = 'us-east-1',
                         access_key: str = '', secret_key: str = '') -> bool:
     """Upload a backup file to S3 (or R2/MinIO via custom endpoint)."""
