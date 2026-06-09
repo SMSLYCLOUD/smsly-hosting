@@ -13,6 +13,7 @@ class ServerTransferSerializer(serializers.ModelSerializer):
             'source_server_id',
             'source_backup',
             'target_server_ip',
+            'target_public_domain',
             'transfer_type',
             'service',
             'progress_percent',
@@ -64,6 +65,8 @@ class ServerTransferCreateSerializer(serializers.Serializer):
     )
     transfer_type = serializers.ChoiceField(choices=['SERVICE', 'FULL'])
     service_id = serializers.UUIDField(required=False)
+    target_public_domain = serializers.CharField(required=False, default='', allow_blank=True,
+        help_text='New platform domain for cross-platform migration')
 
     def validate_target_ssh_key(self, value):
         if value and value.strip():

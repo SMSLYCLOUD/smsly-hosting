@@ -1130,6 +1130,10 @@ if os.path.exists(services_dir):
             config.server_ip = target_ip
             config.save()
 
+            # ── Full migration: reconnect all managed nodes to new master ──
+            if self.transfer.target_public_domain:
+                self._migrate_managed_nodes_wireguard(config)
+
         # Caddyfile regeneration removed from here — at this point service.server
         # is still the source (primary), so _remote_upstream_url_for_service()
         # returns empty, causing routing to local Traefik where the container
@@ -1398,26 +1402,29 @@ if os.path.exists(services_dir):
         svc = self.transfer.service
         old_domain = (svc.public_domain or '').strip()
 
-        # Get the target platform's base domain from its config
-        new_base = None
-        try:
-            # Try querying the target server's PlatformConfig via SSH
-            if self.ssh:
-                out, _, _ = self.ssh.exec_command(
-                    "grep -m1 '^DOMAIN=' /opt/smsly-hosting/.env 2>/dev/null | cut -d= -f2",
-                    raise_on_error=False,
-                )
-                new_base = out.strip()
-        except Exception:
-            pass
+        # 1. Explicit target domain from transfer form
+        new_base = (self.transfer.target_public_domain or '').strip()
 
+        # 2. Auto-detect from target server's .env
+        if not new_base:
+            try:
+                if self.ssh:
+                    out, _, _ = self.ssh.exec_command(
+                        "grep -m1 '^DOMAIN=' /opt/smsly-hosting/.env 2>/dev/null | cut -d= -f2",
+                        raise_on_error=False,
+                    )
+                    new_base = out.strip()
+            except Exception:
+                pass
+
+        # 3. Fallback to target server host
         if not new_base and target_server:
-            new_base = getattr(target_server, 'domain_override', None)
+            new_base = target_server.host or ''
 
-        if not new_base or new_base == 'auto':
-            return fields  # can't determine target domain — keep existing
+        if not new_base or '.' not in new_base:
+            return fields
 
-        # Extract the subdomain part from old domain
+        # Extract subdomain from old domain, or use service name
         old_base = svc.default_public_base_domain()
         subdomain = old_domain.replace(f'.{old_base}', '') if old_domain.endswith(f'.{old_base}') else ''
         if not subdomain or subdomain == old_domain:
@@ -1430,6 +1437,27 @@ if os.path.exists(services_dir):
             self._log(f"Domain remapped: {old_domain} → {new_domain}")
 
         return fields
+
+    def _migrate_managed_nodes_wireguard(self, config):
+        """Reconnect all managed servers to the new master's WireGuard mesh."""
+        from ..models_core import ManagedServer
+        from .wireguard_service import WireGuardService
+
+        self._update(88, 'Reconnecting managed nodes to new master...')
+        nodes = ManagedServer.objects.filter(
+            is_primary=False, status=ManagedServer.Status.ONLINE,
+        ).exclude(host=self.transfer.target_server_ip)
+
+        reconnected = 0
+        for node in nodes:
+            try:
+                WireGuardService.ensure_server_in_default_mesh(node, deploy_async=False)
+                reconnected += 1
+            except Exception as exc:
+                logger.warning("Failed to reconnect node %s: %s", node.name, exc)
+
+        self._log(f"Reconnected {reconnected}/{nodes.count()} managed nodes to new master")
+        return reconnected
 
     def rollback(self):
         if not self.transfer.can_rollback:
