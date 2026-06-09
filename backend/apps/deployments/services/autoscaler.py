@@ -58,7 +58,12 @@ def _evaluate_scaling(service, ServiceMetric):
             return  # Global 1-minute cooldown for any scaling to prevent rapid flapping
 
     target_cpu = service.autoscale_cpu_target
-    current_replicas = service.min_replicas
+    # Count actual running replicas (home instance + spawned replicas)
+    from apps.deployments.models_replica import ServiceReplica
+    running_replicas = ServiceReplica.objects.filter(
+        service=service, status='RUNNING'
+    ).count()
+    current_replicas = 1 + running_replicas  # home instance + spawned
 
     # Get avg CPU over last 2 minutes
     recent_metrics = ServiceMetric.objects.filter(

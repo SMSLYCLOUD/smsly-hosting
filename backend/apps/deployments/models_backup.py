@@ -1,6 +1,7 @@
 import uuid
 from django.db import models
 from django.conf import settings
+from encrypted_model_fields.fields import EncryptedCharField
 from .models_core import Service
 
 class ServiceBackup(models.Model):
@@ -55,5 +56,5 @@ class BackupSchedule(models.Model):
         max_length=500, blank=True, default='',
         help_text='Custom endpoint for R2/MinIO. Leave blank for AWS S3.',
     )
-    s3_access_key = models.CharField(max_length=255, blank=True, default='')
-    s3_secret_key = models.CharField(max_length=255, blank=True, default='')
+    s3_access_key = EncryptedCharField(max_length=255, blank=True, default='')
+    s3_secret_key = EncryptedCharField(max_length=255, blank=True, default='')
