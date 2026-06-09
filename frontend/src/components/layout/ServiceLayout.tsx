@@ -1,7 +1,7 @@
 import {
     ArrowLeft, GitCommit, Activity, Terminal, Shield, Settings,
     Clock, Globe, Database, List, Timer, HardDrive, Puzzle, Network, Route,
-    HeartPulse, Cpu, BarChart3, Box, FolderOpen, ShieldCheck, Sparkles, FileSearch
+    HeartPulse, Cpu, BarChart3, Box, FolderOpen, ShieldCheck, Sparkles, FileSearch, Layers
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -38,6 +38,7 @@ export function ServiceLayout({ service, activeTab, setActiveTab, children }: Se
         { id: 'container-logs', label: 'Container Logs', icon: FileSearch, href: `/logs?service=${service.id}` },
         { id: 'cluster-metrics', label: 'Cluster Metrics', icon: BarChart3, href: `/grafana?dashboard=smsly-services&service=${service.id}` },
         { id: 'topology', label: 'Topology', icon: Network, href: '/topology' },
+        { id: 'scaling', label: 'Scaling', icon: Layers },
         { id: 'cron', label: 'Cron Jobs', icon: Timer },
         { id: 'backups', label: 'Backups', icon: HardDrive },
         { id: 'safedeploy', label: 'SafeDeploy', icon: ShieldCheck },

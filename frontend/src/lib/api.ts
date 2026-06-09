@@ -1747,6 +1747,34 @@ export const autoscalerApi = {
   },
 };
 
+// ─── Scaling API ────────────────────────────────────────────────────────────
+
+export interface Replica {
+  id: string;
+  service: string;
+  status: 'RUNNING' | 'SPAWNING' | 'DESTROYED';
+  node_name: string;
+  created_at: string;
+}
+
+export const scalingApi = {
+  getReplicas: async (serviceId: string): Promise<Replica[]> => {
+    const response = await api.get('/scaling/replicas/', { params: { service: serviceId } });
+    const data = response.data;
+    if (Array.isArray(data)) return data;
+    if (data && Array.isArray(data.results)) return data.results;
+    return [];
+  },
+  spawnReplica: async (serviceId: string): Promise<any> => {
+    const response = await api.post(`/scaling/${serviceId}/spawn/`);
+    return response.data;
+  },
+  destroyReplica: async (replicaId: string): Promise<any> => {
+    const response = await api.delete('/scaling/destroy_replica/', { params: { id: replicaId } });
+    return response.data;
+  },
+};
+
 // ─── Licensing API ──────────────────────────────────────────────────────────
 
 export interface LicenseStatus {

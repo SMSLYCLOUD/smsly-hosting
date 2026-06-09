@@ -1,8 +1,8 @@
 "use client"
 import React, { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Activity, Server, Database, Globe, TrendingUp, Zap, AlertCircle, ShieldAlert, X, DollarSign, Bell } from "lucide-react";
-import { coreApi, DashboardOverview } from "@/lib/api";
+import { Activity, Server, Database, Globe, TrendingUp, Zap, AlertCircle, ShieldAlert, X, DollarSign, Bell, ShieldCheck } from "lucide-react";
+import { coreApi, DashboardOverview, systemApi } from "@/lib/api";
 import { SkeletonDashboard } from "@/components/ui/skeleton";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
@@ -36,6 +36,7 @@ export default function DashboardPage() {
   const { user } = useAuth();
   const { toast } = useToast();
   const [showPasswordWarning, setShowPasswordWarning] = useState(false);
+  const [safeUpdateAvailable, setSafeUpdateAvailable] = useState(false);
   const hasShownLoadError = useRef(false);
   
   // WebSocket for real-time service updates
@@ -53,6 +54,14 @@ export default function DashboardPage() {
       setShowPasswordWarning(false);
     }
   }, [data]);
+
+  useEffect(() => {
+    systemApi.getConfig().then((config: any) => {
+      if (config?.safe_update_available) {
+        setSafeUpdateAvailable(true);
+      }
+    }).catch(() => {});
+  }, []);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -193,23 +202,29 @@ export default function DashboardPage() {
           <motion.div variants={fadeInUp} className="flex items-center justify-between mt-2 sm:mt-0">
             <div>
               <h2 className="text-3xl font-bold tracking-tight">Dashboard</h2>
-              <div className="flex items-center gap-2">
-                <p className="text-muted-foreground">Welcome back, {user?.username}!</p>
-                <div className="flex items-center gap-1">
-                  <div className={`w-2 h-2 rounded-full ${
-                    wsConnectionStatus === 'open' ? 'bg-green-500' : 
-                    wsConnectionStatus === 'connecting' ? 'bg-yellow-500' : 'bg-gray-400'
-                  }`} />
-                  <span className="text-xs text-muted-foreground">
-                    {wsConnectionStatus === 'open' ? 'Live' : 'Offline'}
-                  </span>
-                  {lastUpdated && (
-                    <span className="text-xs text-muted-foreground ml-2">
-                      Updated {lastUpdated.toLocaleTimeString()}
+                <div className="flex items-center gap-2">
+                  <p className="text-muted-foreground">Welcome back, {user?.username}!</p>
+                  <div className="flex items-center gap-1">
+                    <div className={`w-2 h-2 rounded-full ${
+                      wsConnectionStatus === 'open' ? 'bg-green-500' : 
+                      wsConnectionStatus === 'connecting' ? 'bg-yellow-500' : 'bg-gray-400'
+                    }`} />
+                    <span className="text-xs text-muted-foreground">
+                      {wsConnectionStatus === 'open' ? 'Live' : 'Offline'}
                     </span>
+                    {lastUpdated && (
+                      <span className="text-xs text-muted-foreground ml-2">
+                        Updated {lastUpdated.toLocaleTimeString()}
+                      </span>
+                    )}
+                  </div>
+                  {safeUpdateAvailable && (
+                    <Badge variant="outline" className="ml-2 border-emerald-500/30 text-emerald-600 flex items-center gap-1 text-[10px]">
+                      <ShieldCheck className="w-3 h-3" />
+                      Safe Update Ready
+                    </Badge>
                   )}
                 </div>
-              </div>
             </div>
             <Link href="/new">
               <motion.button
