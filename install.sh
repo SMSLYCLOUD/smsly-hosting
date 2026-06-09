@@ -4030,6 +4030,14 @@ fi
     # Using --no-deps prevents cascade restart of unrelated services
     if ! is_checkpoint_done "update_containers_rebuilt"; then
 
+    # ─── Safe Update Protocol ─────────────────────────────────────────────
+    if [ -f "$INSTALL_DIR/scripts/safe-update.sh" ]; then
+        source "$INSTALL_DIR/scripts/safe-update.sh"
+        safe_update_preflight || { echo -e "${RED}  ✗ Pre-flight checks failed — aborting update${NC}"; exit 1; }
+        safe_update_snapshot
+        trap 'safe_update_rollback' ERR
+    fi
+
     # ─── Fix script permissions (Git on Windows strips execute bits) ──────────
     echo -e "${BLUE}  → Fixing script permissions...${NC}"
     find "$INSTALL_DIR" -name "*.sh" -exec chmod +x {} \;
@@ -4443,6 +4451,21 @@ PYEOF
         echo -e "${GREEN}  ✓ Observability stack updated${NC}"
     fi
     set_checkpoint "update_containers_rebuilt"
+fi
+
+# ─── Safe Update: Post-Deploy Verification ─────────────────────────────
+if command -v safe_update_post_verify >/dev/null 2>&1; then
+    echo -e "${BLUE}  → Running post-deploy health checks...${NC}"
+    sleep 30  # wait for containers to warm up
+    if safe_update_post_verify; then
+        echo -e "${GREEN}  ✓ All health checks passed — update successful${NC}"
+        trap - ERR  # clear rollback trap on success
+        rm -f "$SNAPSHOT_FILE" 2>/dev/null || true
+    else
+        echo -e "${RED}  ✗ Post-deploy health checks failed — initiating rollback${NC}"
+        safe_update_rollback
+        exit 1
+    fi
 fi
 
     # ─── Ensure Local Docker cloud provider exists ──────────────────────────
