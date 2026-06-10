@@ -132,8 +132,10 @@ def collect_metrics_task():
         try:
             from apps.billing.services.metering import UsageMeter
             meter = UsageMeter()
-            cpu_pct = stats.get('cpu_percent', 0)
-            mem_mb = stats.get('memory_usage_mb', 0)
+            cpu_limit = float(stats.get('cpu_limit') or 1.0)
+            cpu_usage = float(stats.get('cpu_usage') or 0.0)
+            cpu_pct = (cpu_usage / cpu_limit * 100.0) if cpu_limit > 0 else 0.0
+            mem_mb = float(stats.get('memory_usage') or 0.0)
             if cpu_pct > 0:
                 meter.record_usage(service.owner, 'cpu_hours', cpu_pct / 100, timestamp=now)
             if mem_mb > 0:
@@ -169,8 +171,10 @@ def cleanup_build_cache_task():
 def _check_metric_thresholds(service, stats, now):
     """Fire resource alerts when metrics breach thresholds."""
     try:
-        cpu = stats.get('cpu_percent', 0)
-        mem_mb = stats.get('memory_usage_mb', 0)
+        cpu_limit = float(stats.get('cpu_limit') or 1.0)
+        cpu_usage = float(stats.get('cpu_usage') or 0.0)
+        cpu = (cpu_usage / cpu_limit * 100.0) if cpu_limit > 0 else 0.0
+        mem_mb = float(stats.get('memory_usage') or 0.0)
         disk_pct = stats.get('disk_percent', 0)
 
         alerts = []

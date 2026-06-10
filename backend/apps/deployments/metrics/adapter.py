@@ -44,27 +44,35 @@ class MetricsAdapter:
                 'rate(container_cpu_usage_seconds_total'
                 f'{{container_label_service_id=~"{pattern}"}}[5m]) * 100'
             ),
+            (
+                'docker_container_cpu_usage_seconds_total'
+                f'{{service_name=~"{pattern}"}} * 100'
+            ),
         ]
         return self._query_first_non_empty(queries, duration)
 
     def get_memory_history(self, service_ref,
                            duration: str = '1h') -> List[Dict[str, Any]]:
-        pattern = self._service_pattern(service_ref)
-        queries = [
-            (
-                'container_memory_usage_bytes'
-                f'{{container_label_smsly_blue_green_canonical_name=~"{pattern}"}} / 1024 / 1024'
-            ),
-            (
-                'container_memory_usage_bytes'
-                f'{{container_label_com_docker_compose_service=~"{pattern}"}} / 1024 / 1024'
-            ),
-            (
-                'container_memory_usage_bytes'
-                f'{{container_label_service_id=~"{pattern}"}} / 1024 / 1024'
-            ),
-        ]
-        return self._query_first_non_empty(queries, duration)
+         pattern = self._service_pattern(service_ref)
+         queries = [
+             (
+                 'container_memory_usage_bytes'
+                 f'{{container_label_smsly_blue_green_canonical_name=~"{pattern}"}} / 1024 / 1024'
+             ),
+             (
+                 'container_memory_usage_bytes'
+                 f'{{container_label_com_docker_compose_service=~"{pattern}"}} / 1024 / 1024'
+             ),
+             (
+                 'container_memory_usage_bytes'
+                 f'{{container_label_service_id=~"{pattern}"}} / 1024 / 1024'
+             ),
+             (
+                 'docker_container_memory_usage_bytes'
+                 f'{{service_name=~"{pattern}"}} / 1024 / 1024'
+             ),
+         ]
+         return self._query_first_non_empty(queries, duration)
 
     def get_network_history(self, service_ref,
                             duration: str = '1h') -> List[Dict[str, Any]]:
@@ -81,6 +89,10 @@ class MetricsAdapter:
             (
                 'rate(container_network_receive_bytes_total'
                 f'{{container_label_service_id=~"{pattern}"}}[5m])'
+            ),
+            (
+                'rate(docker_container_network_receive_bytes_total'
+                f'{{service_name=~"{pattern}"}}[5m])'
             ),
         ]
         return self._query_first_non_empty(queries, duration)

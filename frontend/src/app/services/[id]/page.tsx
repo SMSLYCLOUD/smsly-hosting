@@ -28,6 +28,9 @@ import { CloudStorageTab } from '@/components/settings/CloudStorageTab';
 import { SafeDeployPanel } from '@/components/deployments/SafeDeployPanel';
 import { toast } from '@/components/ui/use-toast';
 import { ResourceAlerts } from '@/components/dashboard/ResourceAlerts';
+import { LogsView } from '@/components/logs/LogsView';
+import { GrafanaEmbed } from '@/components/observability/GrafanaEmbed';
+import { TopologyView } from '@/components/topology/TopologyView';
 
 const XtermConsole = dynamic(() => import('@/components/terminal/XtermConsole'), { ssr: false });
 type ServiceEnvMap = Record<string, { id: number; value: string }>;
@@ -641,6 +644,28 @@ export default function ServiceDetailPage() {
             {activeTab === 'deployments' && <DeploymentsTab serviceId={service.id} />}
 
             {activeTab === 'metrics' && <MetricsTab serviceId={service.id} />}
+
+            {activeTab === 'container-logs' && (
+                <div className="animate-in fade-in slide-in-from-bottom-4">
+                    <LogsView searchParams={{ service: service.id }} embed={true} />
+                </div>
+            )}
+
+            {activeTab === 'monitoring' && (
+                <div className="rounded-lg border border-border bg-card shadow-sm overflow-hidden animate-in fade-in slide-in-from-bottom-4">
+                    <GrafanaEmbed
+                        dashboard="smsly-services"
+                        service={service.id}
+                        time="now-1h"
+                    />
+                </div>
+            )}
+
+            {activeTab === 'topology' && (
+                <div className="animate-in fade-in slide-in-from-bottom-4">
+                    <TopologyView serviceId={service.id} embed={true} />
+                </div>
+            )}
 
             {activeTab === 'resources' && <ResourcesTab serviceId={service.id} service={service} />}
 
