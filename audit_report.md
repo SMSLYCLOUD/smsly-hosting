@@ -52,6 +52,10 @@ Fix: Use dynamic container resolution or configuration variable
 Current code: if 'smsly-hosting-backend-1' in line_str:
 Fix: Use dynamic container resolution or configuration variable
 
+[HIGH] ./extreme_trace.py:50 — Hardcoded container name used
+Current code: if 'smsly-hosting-backend-1' in line_str:
+Fix: Use dynamic container resolution or configuration variable
+
 [HIGH] ./backend/install.sh:781 — Hardcoded container name used
 Current code: local allowed_hosts=("localhost" "127.0.0.1" "backend" "smsly-hosting-backend-1")
 Fix: Use dynamic container resolution or configuration variable
@@ -84,6 +88,10 @@ Fix: Use dynamic container resolution or configuration variable
 Current code: CRITICAL_CONTAINERS=(smsly-hosting-backend-1 smsly-hosting-db-1 smsly-hosting-pgcat-1)
 Fix: Use dynamic container resolution or configuration variable
 
+[MEDIUM] ./backend/services/addon_provisioner.py:1369 — Unhandled None response from Loki/Prometheus proxy
+Current code: resp = requests.get(url, timeout=2)
+Fix: Add explicit check for None or connection errors from metrics backend
+
 [HIGH] ./backend/config/settings.py:146 — Hardcoded container name used
 Current code: _BASE_HOSTS = ['localhost', '127.0.0.1', 'backend', 'smsly-hosting-backend-1']
 Fix: Use dynamic container resolution or configuration variable
@@ -115,6 +123,22 @@ Fix: Add bind=True, max_retries=3 to @shared_task
 [LOW] ./backend/apps/notifications/tasks.py:499 — Missing bind=True/max_retries on potentially critical retry task
 Current code: @shared_task(name='notifications.notify_backup_completed', queue='fast')
 Fix: Add bind=True, max_retries=3 to @shared_task
+
+[MEDIUM] ./backend/apps/core/views_observability.py:81 — Unhandled None response from Loki/Prometheus proxy
+Current code: resp = requests.get(
+Fix: Add explicit check for None or connection errors from metrics backend
+
+[MEDIUM] ./backend/apps/core/views_observability.py:182 — Unhandled None response from Loki/Prometheus proxy
+Current code: resp = requests.get(
+Fix: Add explicit check for None or connection errors from metrics backend
+
+[MEDIUM] ./backend/apps/core/views_observability.py:222 — Unhandled None response from Loki/Prometheus proxy
+Current code: resp = requests.get(
+Fix: Add explicit check for None or connection errors from metrics backend
+
+[MEDIUM] ./backend/apps/core/views_observability.py:248 — Unhandled None response from Loki/Prometheus proxy
+Current code: resp = requests.get(
+Fix: Add explicit check for None or connection errors from metrics backend
 
 [MEDIUM] ./backend/apps/core/views_observability.py:1 — Missing health checks on observability service
 Current code: N/A
@@ -180,6 +204,10 @@ Fix: Add @shared_task decorator
 Current code: def resume_deploy_task(self, deployment_id: str, provider_id: str):
 Fix: Add @shared_task decorator
 
+[MEDIUM] ./backend/apps/deployments/tasks.py:2294 — Unhandled None response from Loki/Prometheus proxy
+Current code: response = requests.get(
+Fix: Add explicit check for None or connection errors from metrics backend
+
 [LOW] ./backend/apps/deployments/tasks.py:4153 — Missing bind=True/max_retries on potentially critical retry task
 Current code: @shared_task(bind=True)
 Fix: Add bind=True, max_retries=3 to @shared_task
@@ -196,6 +224,10 @@ Fix: Add bind=True, max_retries=3 to @shared_task
 Current code: @shared_task
 Fix: Add bind=True, max_retries=3 to @shared_task
 
+[MEDIUM] ./backend/apps/deployments/services/scaling_ai.py:177 — Unhandled None response from Loki/Prometheus proxy
+Current code: resp = requests.get(
+Fix: Add explicit check for None or connection errors from metrics backend
+
 [CRITICAL] ./backend/apps/deployments/services/backup_service.py:130 — Insecure use of subprocess for tar creation without input validation
 Current code: subprocess.run(f'tar -czf {backup_path} {target_dir}', shell=True)
 Fix: Use Python's built-in tarfile library or pass arguments as a list without shell=True to prevent command injection
@@ -211,6 +243,14 @@ Fix: Use dynamic container resolution or configuration variable
 [CRITICAL] ./backend/apps/deployments/services/transfer_service.py:45 — Cross-platform migration failure due to missing domain remapping
 Current code: def execute_transfer(self):
 Fix: Add a domain remapping step to update Caddy/Traefik routing rules on the target server after migration
+
+[MEDIUM] ./backend/apps/deployments/services/provisioner.py:550 — Unhandled None response from Loki/Prometheus proxy
+Current code: response = requests.get(script_url, timeout=30)
+Fix: Add explicit check for None or connection errors from metrics backend
+
+[MEDIUM] ./backend/apps/deployments/metrics/adapter.py:287 — Unhandled None response from Loki/Prometheus proxy
+Current code: resp = requests.get(
+Fix: Add explicit check for None or connection errors from metrics backend
 
 [HIGH] ./backend/apps/deployments/tests/test_multi_server_local_harness.py:122 — Hardcoded container name used
 Current code: ssh.exec_command.return_value = "smsly-hosting-backend-1"
