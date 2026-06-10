@@ -269,7 +269,7 @@ if not _skip_platform_sync:
     except Exception as e:
         # Ignore missing tables during initial migrations
         if 'relation \"deployments_platformconfig\" does not exist' not in str(e):
-            print(f\"[settings] Could not sync PlatformConfig domain to memory on boot: {e}\")
+            print(f"[settings] Could not sync PlatformConfig domain to memory on boot: {e}")
 
 
 # ---------------------------------------------------------------------------
