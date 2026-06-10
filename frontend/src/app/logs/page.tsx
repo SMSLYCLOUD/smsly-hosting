@@ -48,10 +48,12 @@ export default function LogsPage({
         const isUuid = uuidRegex.test(raw);
         const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
 
-        const applyFilter = (svcName: string, composeName?: string) => {
-            const resolved = composeName || svcName;
+        const applyFilter = (svcName: string, deployMode?: string) => {
             setServiceFilter(svcName);
-            const filteredQuery = `{compose_service="${resolved}"}`;
+            const normalizedName = svcName.toLowerCase().replace(/ /g, '-');
+            const filteredQuery = deployMode === 'COMPOSE'
+                ? `{compose_project="${normalizedName}"}`
+                : `{compose_service="${svcName}"}`;
             setQuery(filteredQuery);
             setDraftQuery(filteredQuery);
         };
@@ -62,7 +64,7 @@ export default function LogsPage({
             })
                 .then((r) => (r.ok ? r.json() : null))
                 .then((svc) => {
-                    if (svc?.name) applyFilter(svc.name, svc.compose_main_service);
+                    if (svc?.name) applyFilter(svc.name, svc.deploy_mode);
                 })
                 .catch(() => {});
         } else {
