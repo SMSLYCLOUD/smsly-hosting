@@ -19,7 +19,12 @@ export function ServiceLayout({ service, activeTab, setActiveTab, children }: Se
     const router = useRouter();
     const isAiRouter = (service.docker_image || '').includes('ghcr.io/berriai/litellm') || service.name.startsWith('ai-router');
 
-    const tabs = [
+    const tabs: Array<{
+        id: string;
+        label: string;
+        icon: any;
+        href?: string;
+    }> = [
         { id: 'overview', label: 'Overview', icon: Activity },
         { id: 'deployments', label: 'Deployments', icon: Clock },
         { id: 'logs', label: 'Logs', icon: List },
@@ -35,9 +40,9 @@ export function ServiceLayout({ service, activeTab, setActiveTab, children }: Se
         { id: 'metrics', label: 'Metrics', icon: BarChart3 },
         { id: 'resources', label: 'Resources', icon: Cpu },
         { id: 'health', label: 'Health', icon: HeartPulse },
-        { id: 'container-logs', label: 'Container Logs', icon: FileSearch, href: `/logs?service=${service.id}` },
-        { id: 'monitoring', label: 'Monitoring', icon: BarChart3, href: `/grafana?dashboard=smsly-services&service=${service.id}` },
-        { id: 'topology', label: 'Topology', icon: Network, href: `/topology?service=${service.id}` },
+        { id: 'container-logs', label: 'Container Logs', icon: FileSearch },
+        { id: 'monitoring', label: 'Monitoring', icon: BarChart3 },
+        { id: 'topology', label: 'Topology', icon: Network },
         { id: 'scaling', label: 'Scaling', icon: Layers },
         { id: 'cloud-storage', label: 'Cloud Storage', icon: Cloud },
         { id: 'cron', label: 'Cron Jobs', icon: Timer },
@@ -101,7 +106,7 @@ export function ServiceLayout({ service, activeTab, setActiveTab, children }: Se
                                 <button
                                     key={tab.id}
                                     onClick={() => {
-                                        if ('href' in tab && tab.href) {
+                                        if (tab.href) {
                                             router.push(tab.href);
                                         } else {
                                             setActiveTab(tab.id);

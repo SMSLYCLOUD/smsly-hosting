@@ -194,7 +194,7 @@ export default function DeploymentWatchPage() {
                                                         await api.post(`/deployments/${id}/rollback/`, { confirm: true });
                                                         setSpaceOpsState({ mode: 'success', intensity: 'low' });
                                                     } catch (err: any) {
-                                                        setSpaceOpsState({ mode: 'error', intensity: 'high' });
+                                                        setSpaceOpsState({ mode: 'failed', intensity: 'high' });
                                                         console.error("Rollback failed", err);
                                                     }
                                                 }

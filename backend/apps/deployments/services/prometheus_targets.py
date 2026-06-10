@@ -337,6 +337,8 @@ scrape_configs:
         target_label: 'compose_service'
       - source_labels: ['__meta_docker_container_label_smsly_blue_green_canonical_name']
         target_label: 'compose_service'
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
+        target_label: 'compose_project'
       - source_labels: ['__meta_docker_container_name']
         regex: '/(.*)'
         target_label: 'container_name'
