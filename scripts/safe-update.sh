@@ -43,12 +43,13 @@ safe_update_preflight() {
     # Clean up orphaned containers from failed previous builds
     # Remove ALL stopped/created/exited containers from this project to prevent name conflicts
     docker compose -f "$COMPOSE_FILE" down --remove-orphans 2>/dev/null || true
+    # Force-remove ANY stale SMSLY containers to prevent name conflicts during compose up
+    docker compose -f "$COMPOSE_FILE" down --remove-orphans 2>/dev/null || true
+    [ -f "$INSTALL_DIR/infrastructure/docker/docker-compose.observability.yml" ] && \
+        docker compose -f "$INSTALL_DIR/infrastructure/docker/docker-compose.observability.yml" down --remove-orphans 2>/dev/null || true
     local orphaned
     orphaned=$(docker ps -a -q --filter "status=created" --filter "status=exited" --filter "status=dead" 2>/dev/null || true)
-    if [ -n "$orphaned" ]; then
-        docker rm -f $orphaned 2>/dev/null || true
-        _ok "Cleaned up orphaned containers"
-    fi
+    [ -n "$orphaned" ] && docker rm -f $orphaned 2>/dev/null && _ok "Cleaned up orphaned containers" || true
 
     for cf in "$COMPOSE_FILE" "$INSTALL_DIR/infrastructure/docker/docker-compose.observability.yml"; do
         [ -f "$cf" ] || { _fail "Missing: $cf"; return 1; }
