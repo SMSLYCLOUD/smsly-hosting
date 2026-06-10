@@ -2532,14 +2532,13 @@ wipe_existing_install() {
     fi
 
     # Clean up Caddy watcher service (prevents stale config on reinstall)
-    true-watcher 2>/dev/null || true
-    true-watcher 2>/dev/null || true
+    systemctl stop caddy-watcher 2>/dev/null || true
+    systemctl disable caddy-watcher 2>/dev/null || true
     rm -f /etc/systemd/system/caddy-watcher.service
 
     # Reset Caddyfile to default (prevents stale routing)
     if [ -f "$INSTALL_DIR"/caddy-config/Caddyfile ]; then
         echo ':80 { respond "Caddy is running" 200 }' > "$INSTALL_DIR"/caddy-config/Caddyfile
-        true 2>/dev/null || true
     fi
 
     # Remove Cloudflare token override
@@ -2812,6 +2811,16 @@ stop_node_excluded_services() {
     docker compose -f "$COMPOSE_FILE" rm -f frontend caddy >/dev/null 2>&1 || true
 }
 
+cleanup_stale_containers() {
+    local compose_f="${COMPOSE_FILE:-docker-compose.prod.yml}"
+    local stale=""
+    docker compose -f "$compose_f" down --remove-orphans 2>/dev/null || true
+    stale=$(docker ps -a -q --filter "name=smsly-hosting" 2>/dev/null || true)
+    [ -n "$stale" ] && docker rm -f $stale 2>/dev/null || true
+    stale=$(docker ps -a -q --filter "name=smsly-" 2>/dev/null || true)
+    [ -n "$stale" ] && docker rm -f $stale 2>/dev/null || true
+}
+
 docker_login() {
     local registry="${CONTAINER_REGISTRY_URL:-127.0.0.1:5000}"
     local user="${REGISTRY_USER:-smsly-registry}"
@@ -2841,9 +2850,9 @@ compose_stack_up() {
         stop_node_excluded_services
         services="$(compose_stack_service_args)"
         [ -n "$services" ] || return 1
-        docker compose -f "$COMPOSE_FILE" up -d "$@" $services
+        docker compose -f "$COMPOSE_FILE" up -d --force-recreate "$@" $services
     else
-        docker compose -f "$COMPOSE_FILE" up -d "$@"
+        docker compose -f "$COMPOSE_FILE" up -d --force-recreate "$@"
     fi
 }
 
@@ -3181,8 +3190,8 @@ restart_edge_stack() {
     if [ "$MODE_AGENT_LITE" != "true" ]; then
         non_traefik_services="socket-proxy route-fallback"
     fi
-    docker compose -f "$COMPOSE_FILE" up -d --no-deps $non_traefik_services >/dev/null 2>&1 || \
-        docker compose -f "$COMPOSE_FILE" up -d $non_traefik_services >/dev/null 2>&1 || true
+    docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps $non_traefik_services >/dev/null 2>&1 || \
+        docker compose -f "$COMPOSE_FILE" up -d --force-recreate $non_traefik_services >/dev/null 2>&1 || true
 
     # Force-recreate ONLY Traefik (not socket-proxy) to trigger full container
     # re-discovery. Traefik v3.x removed pollInterval; a fresh start against a
@@ -3288,8 +3297,8 @@ refresh_runtime_services() {
     fi
 
     if [ "${#app_services[@]}" -gt 0 ]; then
-        docker compose -f "$COMPOSE_FILE" up -d --no-deps "${app_services[@]}" >/dev/null 2>&1 || \
-            docker compose -f "$COMPOSE_FILE" up -d "${app_services[@]}" >/dev/null 2>&1 || true
+        docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "${app_services[@]}" >/dev/null 2>&1 || \
+            docker compose -f "$COMPOSE_FILE" up -d --force-recreate "${app_services[@]}" >/dev/null 2>&1 || true
     fi
 
     ensure_container_on_network "smsly-net" "smsly-hosting-pgcat-1"
@@ -3323,8 +3332,8 @@ refresh_runtime_services() {
     done
 
     if [ "${#failed_services[@]}" -eq 0 ] && [ "${#edge_services[@]}" -gt 0 ]; then
-        docker compose -f "$COMPOSE_FILE" up -d --no-deps "${edge_services[@]}" >/dev/null 2>&1 || \
-            docker compose -f "$COMPOSE_FILE" up -d "${edge_services[@]}" >/dev/null 2>&1 || true
+        docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "${edge_services[@]}" >/dev/null 2>&1 || \
+            docker compose -f "$COMPOSE_FILE" up -d --force-recreate "${edge_services[@]}" >/dev/null 2>&1 || true
 
         ensure_container_on_network "smsly-net" "smsly-hosting-route-fallback-1"
         ensure_container_on_network "smsly-net" "smsly-hosting-traefik-1"
@@ -3447,7 +3456,7 @@ sync_agent_lite_rabbitmq_password() {
     fi
 
     echo -e "${RED}  ERROR Lite Agent RabbitMQ password sync failed${NC}"
-    exit 1
+    return 1
 }
 
 recover_runtime_stack() {
@@ -3866,7 +3875,9 @@ if [ -n "$UPDATE_MODE" ]; then
     fi
 
     cd "$INSTALL_DIR"
-    if [ "${SMSLY_REEXEC:-}" != "1" ]; then
+    if [ "${SMSLY_SKIP_GIT_SYNC:-false}" = "true" ]; then
+        set_checkpoint "update_git_synced"
+    elif [ "${SMSLY_REEXEC:-}" != "1" ]; then
         # Every new update attempt must hit GitHub. Checkpoints are only for
         # resume/re-exec within the same attempt, not for skipping future pulls.
         clear_checkpoint "update_git_synced"
@@ -4033,8 +4044,8 @@ fi
     # ─── Safe Update Protocol ─────────────────────────────────────────────
     if [ -f "$INSTALL_DIR/scripts/safe-update.sh" ]; then
         source "$INSTALL_DIR/scripts/safe-update.sh"
-        safe_update_preflight || { echo -e "${RED}  ✗ Pre-flight checks failed — aborting update${NC}"; exit 1; }
         safe_update_snapshot
+        safe_update_preflight || { echo -e "${RED}  ✗ Pre-flight checks failed — aborting update${NC}"; exit 1; }
         trap 'safe_update_rollback' ERR
     fi
 
@@ -4111,12 +4122,14 @@ PYEOF
 
       case "$UPDATE_MODE" in
          frontend)
-             if [ "$MODE_NODE" = "true" ]; then
-                 echo -e "${YELLOW}  → Node mode: no frontend to update. Skipping.${NC}"
-             else
-                 echo -e "${BLUE}  → Rebuilding frontend container (cached)...${NC}"
-                 docker compose -f "$COMPOSE_FILE" build frontend
-                 docker compose -f "$COMPOSE_FILE" up -d --no-deps frontend
+              if [ "$MODE_NODE" = "true" ]; then
+                  echo -e "${YELLOW}  → Node mode: no frontend to update. Skipping.${NC}"
+              else
+                  echo -e "${BLUE}  → Rebuilding frontend container (cached)...${NC}"
+                  docker compose -f "$COMPOSE_FILE" stop frontend >/dev/null 2>&1 || true
+                  docker compose -f "$COMPOSE_FILE" rm -f frontend >/dev/null 2>&1 || true
+                  docker compose -f "$COMPOSE_FILE" build frontend
+                  docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps frontend
 
                  # Custom Domain SSL Setup for Frontend Update
                  if should_manage_caddy; then  # Only for master mode
@@ -4178,7 +4191,7 @@ PYEOF
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate backend
             else
-                docker compose -f "$COMPOSE_FILE" up -d --no-deps backend
+                docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps backend
             fi
 
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput
@@ -4197,7 +4210,7 @@ PYEOF
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate $celery_svcs
             else
-                 docker compose -f "$COMPOSE_FILE" up -d --no-deps $celery_svcs
+                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps $celery_svcs
              fi
              
              # Custom Domain SSL Setup for Backend Update
@@ -4221,7 +4234,7 @@ PYEOF
                  fi
              fi
              ;;
-         half)
+          half)
             echo -e "${BLUE}  → [HALF UPDATE] Rebuilding changed services from cache (no image pulls)${NC}"
 
             # 1. Rebuild frontend from cached layers (no --pull, no new base images)
@@ -4231,7 +4244,9 @@ PYEOF
                     echo -e "${YELLOW}  ⚠ Frontend build failed (cached layers missing). Skipping frontend.${NC}"
                     echo -e "${YELLOW}    Run --update when Docker Hub is reachable for a full rebuild.${NC}"
                 }
-                docker compose -f "$COMPOSE_FILE" up -d --no-deps frontend 2>/dev/null || true
+                docker compose -f "$COMPOSE_FILE" stop frontend >/dev/null 2>&1 || true
+                docker compose -f "$COMPOSE_FILE" rm -f frontend >/dev/null 2>&1 || true
+                docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps frontend 2>/dev/null || true
             fi
 
             # 2. Stop backend, celery & pgcat so their DB connections don't block
@@ -4255,7 +4270,7 @@ PYEOF
                 sync_agent_lite_rabbitmq_password
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate backend
             else
-                docker compose -f "$COMPOSE_FILE" up -d --no-deps backend
+                docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps backend
             fi
 
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput 2>/dev/null || true
@@ -4339,9 +4354,9 @@ PYEOF
             elif [ "$MODE_NODE" = "true" ]; then
                 stop_node_excluded_services
                 docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db pgcat redis rabbitmq socket-proxy registry route-fallback traefik
-                docker compose -f "$COMPOSE_FILE" up -d --no-deps --remove-orphans $CORE_SERVICES
+                docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps --remove-orphans $CORE_SERVICES
             else
-                docker compose -f "$COMPOSE_FILE" up -d --no-deps --remove-orphans $CORE_SERVICES
+                docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps --remove-orphans $CORE_SERVICES
             fi
 
             if [ "$MODE_AGENT_LITE" != "true" ]; then
@@ -4385,7 +4400,7 @@ PYEOF
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate backend
             else
-                docker compose -f "$COMPOSE_FILE" up -d --no-deps backend
+                docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps backend
             fi
             run_backend_migrations --root || {
                 echo -e "${YELLOW}  ⚠ Migration failed — retrying in 15s...${NC}"
@@ -4398,7 +4413,7 @@ PYEOF
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate backend
             else
-                docker compose -f "$COMPOSE_FILE" up -d --no-deps backend
+                docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps backend
             fi
 
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput
@@ -5670,9 +5685,9 @@ echo -e "${GREEN}  ✓ All required deployment files present${NC}"
 
 # ─── BLINDSPOT FIX: Ensure correct compose file is used ─────────────────────
 # Check if any containers are running with the wrong compose file (dev instead of prod)
-if docker compose ps --format "table {{.Name}}" 2>/dev/null | grep -q "smsly-hosting"; then
-    echo -e "${YELLOW}  ⚠ Found containers running from docker-compose.yml (dev). Stopping...${NC}"
-    docker compose down 2>/dev/null || true
+if docker compose -f "$COMPOSE_FILE" ps --format "table {{.Name}}" 2>/dev/null | grep -q "smsly-hosting"; then
+    echo -e "${YELLOW}  ⚠ Found containers running from a different compose project. Stopping...${NC}"
+    docker compose -f "$COMPOSE_FILE" down 2>/dev/null || true
 fi
 
 # ─── IDEMPOTENCY: Skip secret generation if .env already exists ─────────────
@@ -6056,6 +6071,7 @@ if [ "$RUST_TWIN_MODE" != "true" ]; then
     env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
 fi
     echo -e "${BLUE}  → Starting App Stack (Build + Deploy)...${NC}"
+    cleanup_stale_containers
     ( while true; do sleep 30; echo -e "${BLUE}      ↳ Progress: Deployment in progress... $(date +%H:%M:%S)${NC}"; done ) &
     HEARTBEAT_PID=$!
     set +e
@@ -6077,12 +6093,13 @@ fi
     fi
     if [ "$MODE_AGENT_LITE" = "true" ]; then
         sync_agent_lite_rabbitmq_password
-        docker compose -f "$COMPOSE_FILE" up -d --force-recreate backend celery-worker
     else
         echo -e "${BLUE}  → Deploying Observability Stack...${NC}"
         if [ -f "infrastructure/docker/docker-compose.observability.yml" ]; then
-            docker compose -f infrastructure/docker/docker-compose.observability.yml pull >/dev/null 2>&1 || true
-            docker compose -f infrastructure/docker/docker-compose.observability.yml up -d >/dev/null 2>&1 || true
+            docker compose -f infrastructure/docker/docker-compose.observability.yml pull 2>/dev/null || \
+                echo -e "${YELLOW}  ⚠ Observability stack pull failed${NC}"
+            docker compose -f infrastructure/docker/docker-compose.observability.yml up -d 2>/dev/null || \
+                echo -e "${YELLOW}  ⚠ Observability stack failed to start${NC}"
         fi
     fi
     # Deploy docker-labels exporter to all remote nodes and regenerate target files
@@ -6359,7 +6376,7 @@ EOF
         echo -e "${YELLOW}Dockerfile path: ./infrastructure/caddy/Dockerfile${NC}"
         exit 1
     fi
-    docker compose -f "$COMPOSE_FILE" up -d caddy
+    docker compose -f "$COMPOSE_FILE" up -d --force-recreate caddy
 
     # ACME staging validation — verify Let's Encrypt can reach this server before going live
     if [ "${DOMAIN:-}" ] && [ "$USE_SSL" = "true" ] && ! echo "$DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then

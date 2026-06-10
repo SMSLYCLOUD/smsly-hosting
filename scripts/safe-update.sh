@@ -42,12 +42,9 @@ safe_update_preflight() {
 
     # Clean up orphaned containers from failed previous builds
     # Remove ALL stopped/created/exited containers from this project to prevent name conflicts
-    docker compose -f "$COMPOSE_FILE" down --remove-orphans 2>/dev/null || true
-    # ── PERMANENT: Force-remove ALL project containers before deploy ────
-    # Prevents "container name already in use" conflicts from any source.
-    docker compose -f "$COMPOSE_FILE" down --remove-orphans 2>/dev/null || true
-    [ -f "$INSTALL_DIR/infrastructure/docker/docker-compose.observability.yml" ] && \
-        docker compose -f "$INSTALL_DIR/infrastructure/docker/docker-compose.observability.yml" down --remove-orphans 2>/dev/null || true
+    if ! docker compose -f "$COMPOSE_FILE" down --remove-orphans 2>/dev/null; then
+        _warn "docker compose down failed (project may not exist yet) — falling back to direct container removal"
+    fi
     # Belt-and-suspenders: rm -f any SMSLY container that compose down missed
     containers=$(docker ps -a -q --filter "name=smsly-hosting" 2>/dev/null || true)
     [ -n "$containers" ] && docker rm -f $containers 2>/dev/null || true
@@ -140,7 +137,7 @@ safe_update_rollback() {
 
     # Clear stale lock from the failed original install.sh
     rm -f /tmp/smsly-install.lock 2>/dev/null || true
-    bash "$INSTALL_DIR/install.sh" --update >/dev/null 2>&1 || _warn "Rollback install had issues"
+    SMSLY_SKIP_GIT_SYNC=true bash "$INSTALL_DIR/install.sh" --update >/dev/null 2>&1 || _warn "Rollback install had issues"
 
     # Restore DB if backed up
     if [ -n "${BACKUP_FILE:-}" ] && [ -f "$BACKUP_FILE" ]; then
@@ -164,8 +161,8 @@ safe_update_rollback() {
 # Standalone mode (bash scripts/safe-update.sh)
 # ══════════════════════════════════════════════════════════════════════════════
 if [ "$SAFE_UPDATE_SOURCED" = "false" ]; then
-    safe_update_preflight || exit 1
     safe_update_snapshot
+    safe_update_preflight || exit 1
     bash "$INSTALL_DIR/install.sh" --update >> "$CLEAN_LOG" 2>&1 || { _warn "Update failed — rolling back"; safe_update_rollback; exit 1; }
     sleep 30
     safe_update_post_verify || { _warn "Post-verify failed — rolling back"; safe_update_rollback; exit 1; }
