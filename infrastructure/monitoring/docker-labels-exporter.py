@@ -79,6 +79,7 @@ def _fetch_stats(cid, base_labels):
     precpu = stats.get("precpu_stats", {})
     mem = stats.get("memory_stats", {})
     nets = stats.get("networks", {})
+    blkio = stats.get("blkio_stats", {}).get("io_service_bytes_recursive", []) or []
 
     cpu_delta = cpu.get("cpu_usage", {}).get("total_usage", 0) - \
                 precpu.get("cpu_usage", {}).get("total_usage", 0)
@@ -93,11 +94,16 @@ def _fetch_stats(cid, base_labels):
     net_rx = sum(v.get("rx_bytes", 0) for v in nets.values())
     net_tx = sum(v.get("tx_bytes", 0) for v in nets.values())
 
+    disk_read = sum(e.get("value", 0) for e in blkio if e.get("op") == "read")
+    disk_write = sum(e.get("value", 0) for e in blkio if e.get("op") == "write")
+
     return [
         f'docker_container_cpu_usage_seconds_total{{{base_labels}}} {cpu_usage:.6f}',
         f'docker_container_memory_usage_bytes{{{base_labels}}} {mem_usage}',
         f'docker_container_network_receive_bytes_total{{{base_labels}}} {net_rx}',
         f'docker_container_network_transmit_bytes_total{{{base_labels}}} {net_tx}',
+        f'docker_container_fs_reads_bytes_total{{{base_labels}}} {disk_read}',
+        f'docker_container_fs_writes_bytes_total{{{base_labels}}} {disk_write}',
     ]
 
 
@@ -157,6 +163,10 @@ def _collect_metrics():
         "# TYPE docker_container_network_receive_bytes_total counter",
         "# HELP docker_container_network_transmit_bytes_total Network bytes transmitted",
         "# TYPE docker_container_network_transmit_bytes_total counter",
+        "# HELP docker_container_fs_reads_bytes_total Cumulative filesystem bytes read",
+        "# TYPE docker_container_fs_reads_bytes_total counter",
+        "# HELP docker_container_fs_writes_bytes_total Cumulative filesystem bytes written",
+        "# TYPE docker_container_fs_writes_bytes_total counter",
     ]
 
     # ── filter + label metrics ─────────────────────────────────────────
