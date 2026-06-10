@@ -1,7 +1,7 @@
 import {
     ArrowLeft, GitCommit, Activity, Terminal, Shield, Settings,
     Clock, Globe, Database, List, Timer, HardDrive, Puzzle, Network, Route,
-    HeartPulse, Cpu, BarChart3, Box, FolderOpen, ShieldCheck, Sparkles, FileSearch, Layers
+    HeartPulse, Cpu, BarChart3, Box, FolderOpen, ShieldCheck, Sparkles, FileSearch, Layers, Cloud
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
