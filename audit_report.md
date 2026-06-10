@@ -52,10 +52,6 @@ Fix: Use dynamic container resolution or configuration variable
 Current code: if 'smsly-hosting-backend-1' in line_str:
 Fix: Use dynamic container resolution or configuration variable
 
-[HIGH] ./extreme_trace.py:50 — Hardcoded container name used
-Current code: if 'smsly-hosting-backend-1' in line_str:
-Fix: Use dynamic container resolution or configuration variable
-
 [HIGH] ./backend/install.sh:781 — Hardcoded container name used
 Current code: local allowed_hosts=("localhost" "127.0.0.1" "backend" "smsly-hosting-backend-1")
 Fix: Use dynamic container resolution or configuration variable
