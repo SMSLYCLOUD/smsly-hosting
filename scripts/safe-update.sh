@@ -45,12 +45,29 @@ safe_update_preflight() {
     if ! docker compose -f "$COMPOSE_FILE" down --remove-orphans 2>/dev/null; then
         _warn "docker compose down failed (project may not exist yet) — falling back to direct container removal"
     fi
-    # Belt-and-suspenders: rm -f any SMSLY container that compose down missed
-    containers=$(docker ps -a -q --filter "name=smsly-hosting" 2>/dev/null || true)
-    [ -n "$containers" ] && docker rm -f $containers 2>/dev/null || true
-    containers=$(docker ps -a -q --filter "name=smsly-" 2>/dev/null || true)
-    [ -n "$containers" ] && docker rm -f $containers 2>/dev/null || true
-    _ok "Cleaned up all previous containers"
+    
+    # Rename conflicting containers instead of deleting them
+    rename_conflicting_containers() {
+        local pattern="$1"
+        local c_id=""
+        local c_name=""
+        local backup_name=""
+        for c_id in $(docker ps -a -q --filter "name=${pattern}" 2>/dev/null || true); do
+            c_name=$(docker inspect "$c_id" --format='{{.Name}}' 2>/dev/null | sed 's/^\///')
+            if [ -n "$c_name" ]; then
+                if [[ "$c_name" == *"-backup-containers"* ]]; then
+                    continue
+                fi
+                backup_name="${c_name}-backup-containers-$(date +%s)"
+                _warn "Container conflict: Renaming existing container '$c_name' to '$backup_name'"
+                docker rename "$c_name" "$backup_name" 2>/dev/null || true
+            fi
+        done
+    }
+    
+    rename_conflicting_containers "smsly-hosting"
+    rename_conflicting_containers "smsly-"
+    _ok "Renamed all conflicting containers to backup-containers"
 
     for cf in "$COMPOSE_FILE" "$INSTALL_DIR/infrastructure/docker/docker-compose.observability.yml"; do
         [ -f "$cf" ] || { _fail "Missing: $cf"; return 1; }

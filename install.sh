@@ -2811,14 +2811,29 @@ stop_node_excluded_services() {
     docker compose -f "$COMPOSE_FILE" rm -f frontend caddy >/dev/null 2>&1 || true
 }
 
+rename_conflicting_containers() {
+    local pattern="$1"
+    local c_id=""
+    local c_name=""
+    local backup_name=""
+    for c_id in $(docker ps -a -q --filter "name=${pattern}" 2>/dev/null || true); do
+        c_name=$(docker inspect "$c_id" --format='{{.Name}}' 2>/dev/null | sed 's/^\///')
+        if [ -n "$c_name" ]; then
+            if [[ "$c_name" == *"-backup-containers"* ]]; then
+                continue
+            fi
+            backup_name="${c_name}-backup-containers-$(date +%s)"
+            echo -e "  \033[0;33m⚠\033[0m Container conflict: Renaming existing container '$c_name' to '$backup_name'"
+            docker rename "$c_name" "$backup_name" 2>/dev/null || true
+        fi
+    done
+}
+
 cleanup_stale_containers() {
     local compose_f="${COMPOSE_FILE:-docker-compose.prod.yml}"
-    local stale=""
     docker compose -f "$compose_f" down --remove-orphans 2>/dev/null || true
-    stale=$(docker ps -a -q --filter "name=smsly-hosting" 2>/dev/null || true)
-    [ -n "$stale" ] && docker rm -f $stale 2>/dev/null || true
-    stale=$(docker ps -a -q --filter "name=smsly-" 2>/dev/null || true)
-    [ -n "$stale" ] && docker rm -f $stale 2>/dev/null || true
+    rename_conflicting_containers "smsly-hosting"
+    rename_conflicting_containers "smsly-"
 }
 
 docker_login() {
