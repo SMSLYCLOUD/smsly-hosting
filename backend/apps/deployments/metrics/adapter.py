@@ -98,7 +98,7 @@ class MetricsAdapter:
         return self._query_first_non_empty(queries, duration)
 
     def get_disk_history(self, service_ref,
-                         duration: str = '1h') -> List[Dict[str, Any]]:
+                          duration: str = '1h') -> List[Dict[str, Any]]:
         pattern = self._service_pattern(service_ref)
         queries = [
             (
@@ -118,6 +118,12 @@ class MetricsAdapter:
                 f'{{container_label_service_id=~"{pattern}"}}[5m])'
                 ' + rate(container_fs_writes_bytes_total'
                 f'{{container_label_service_id=~"{pattern}"}}[5m])) / 1024'
+            ),
+            (
+                '(rate(docker_container_fs_reads_bytes_total'
+                f'{{service_name=~"{pattern}"}}[5m])'
+                ' + rate(docker_container_fs_writes_bytes_total'
+                f'{{service_name=~"{pattern}"}}[5m])) / 1024'
             ),
         ]
         return self._query_first_non_empty(queries, duration)
@@ -339,10 +345,17 @@ class MetricsAdapter:
 
     def _service_pattern(self, service_ref) -> str:
         identifiers = self._service_identifiers(service_ref)
-        escaped = [re.escape(item) for item in identifiers if item]
+        escaped = [self._escape_regex(item) for item in identifiers if item]
         if not escaped:
-            return re.escape(str(service_ref))
+            return self._escape_regex(str(service_ref))
         return "|".join(escaped)
+
+    @staticmethod
+    def _escape_regex(text: str) -> str:
+        # Escape only characters that have special meaning in regular expressions
+        # and double-escape backslashes for PromQL double-quoted string literals.
+        special_chars = r'.+*?^$()[]{}|\\'
+        return ''.join(f'\\\\{c}' if c in special_chars else c for c in text)
 
     @staticmethod
     def _service_identifiers(service_ref) -> List[str]:
