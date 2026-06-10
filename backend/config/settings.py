@@ -267,7 +267,9 @@ if not _skip_platform_sync:
                             SITE_URL = f"{_db_proto}://{db_domain}"
             conn.close()
     except Exception as e:
-        print(f"[settings] Could not sync PlatformConfig domain to memory on boot: {e}")
+        # Ignore missing tables during initial migrations
+        if 'relation \"deployments_platformconfig\" does not exist' not in str(e):
+            print(f\"[settings] Could not sync PlatformConfig domain to memory on boot: {e}\")
 
 
 # ---------------------------------------------------------------------------
