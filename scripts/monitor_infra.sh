@@ -20,6 +20,12 @@ log() {
     printf '[%s] %s\n' "$LOG_TAG" "$*"
 }
 
+# ─── Guard: Exit if installer/updater is active ───────────────────────────
+if [ -f "/tmp/smsly-install.lock" ]; then
+    log "Installer/Updater lock detected (/tmp/smsly-install.lock). Exiting to prevent race conditions."
+    exit 0
+fi
+
 # ─── Systemd services to keep alive ────────────────────────────────────
 SYSTEMD_SERVICES=(
     "smsly-autoscaler.service"
