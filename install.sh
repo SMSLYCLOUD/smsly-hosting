@@ -4493,6 +4493,9 @@ if command -v safe_update_post_verify >/dev/null 2>&1; then
     if safe_update_post_verify; then
         echo -e "${GREEN}  ✓ All health checks passed — update successful${NC}"
         trap - ERR  # clear rollback trap on success
+        if command -v safe_update_cleanup >/dev/null 2>&1; then
+            safe_update_cleanup
+        fi
         rm -f "$SNAPSHOT_FILE" 2>/dev/null || true
     else
         echo -e "${RED}  ✗ Post-deploy health checks failed — initiating rollback${NC}"
