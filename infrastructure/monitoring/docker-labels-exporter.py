@@ -39,7 +39,7 @@ def _query_docker(path):
     sock.settimeout(15)
     try:
         sock.connect(DOCKER_SOCK)
-        sock.sendall(f"GET {path} HTTP/1.0\r\nHost: localhost\r\n\r\n".encode())
+        sock.sendall(f"GET {path} HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n".encode())
         data = b""
         while True:
             chunk = sock.recv(4096)
