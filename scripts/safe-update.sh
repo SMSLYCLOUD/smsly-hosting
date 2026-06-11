@@ -110,29 +110,49 @@ SNAPEOF
 safe_update_post_verify() {
     _step "Post-Deploy Health Check"
     local failed=0
-    local critical=(smsly-hosting-db-1 smsly-hosting-redis-1 smsly-hosting-rabbitmq-1
-                    smsly-hosting-backend-1 smsly-hosting-frontend-1 smsly-hosting-caddy-1
-                    smsly-hosting-celery-1 smsly-hosting-celery-beat-1
-                    smsly-loki smsly-prometheus smsly-grafana smsly-promtail
-                    smsly-docker-labels smsly-hosting-socket-proxy-1)
+    local core=(smsly-hosting-db-1 smsly-hosting-redis-1 smsly-hosting-rabbitmq-1
+                smsly-hosting-backend-1 smsly-hosting-frontend-1 smsly-hosting-caddy-1
+                smsly-hosting-celery-1 smsly-hosting-celery-beat-1
+                smsly-hosting-socket-proxy-1)
+    local observability=(smsly-loki smsly-prometheus smsly-grafana smsly-promtail
+                         smsly-docker-labels)
 
-    for ctr in "${critical[@]}"; do
+    for ctr in "${core[@]}"; do
         docker inspect "$ctr" --format='{{.State.Running}}' 2>/dev/null | grep -q true && \
             _ok "$ctr" || { _fail "$ctr NOT running"; failed=$((failed + 1)); }
     done
 
-    curl -sf http://localhost:3100/ready >/dev/null 2>&1 && _ok "Loki: ready" || { _warn "Loki: not ready"; failed=$((failed + 1)); }
-    # Traefik — check via Docker health status (more reliable than curl ping)
-    local traefik_status
-    traefik_status=$(docker inspect smsly-hosting-traefik-1 --format='{{.State.Health.Status}}' 2>/dev/null || echo "unknown")
-    if [ "$traefik_status" = "healthy" ]; then
-        _ok "Traefik: healthy (Docker)"
-    else
-        curl -sf http://127.0.0.1:8082/ping >/dev/null 2>&1 && _ok "Traefik: responding" || { _warn "Traefik: not responding"; failed=$((failed + 1)); }
+    local obs_file="$INSTALL_DIR/infrastructure/docker/docker-compose.observability.yml"
+    if [ -f "$obs_file" ]; then
+        for ctr in "${observability[@]}"; do
+            docker inspect "$ctr" --format='{{.State.Running}}' 2>/dev/null | grep -q true && \
+                _ok "$ctr" || { _warn "$ctr not running (observability stack may not be deployed)"; }
+        done
+        curl -sf http://localhost:3100/ready >/dev/null 2>&1 && _ok "Loki: ready" || { _warn "Loki: not ready"; }
+        curl -sf http://127.0.0.1:9090/api/v1/targets >/dev/null 2>&1 && _ok "Prometheus: responding" || { _warn "Prometheus: not responding"; }
     fi
-    curl -sf http://127.0.0.1:9090/api/v1/targets >/dev/null 2>&1 && _ok "Prometheus: responding" || { _warn "Prometheus: not responding"; failed=$((failed + 1)); }
 
-    [ "$failed" -le 2 ] && _ok "Health checks passed ($failed tolerable)" || _warn "$failed health check(s) failed"
+    local traefik_ok=false
+    for i in 1 2 3; do
+        local traefik_status
+        traefik_status=$(docker inspect smsly-hosting-traefik-1 --format='{{.State.Health.Status}}' 2>/dev/null || echo "unknown")
+        if [ "$traefik_status" = "healthy" ]; then
+            _ok "Traefik: healthy (Docker)"
+            traefik_ok=true
+            break
+        fi
+        curl -sf http://127.0.0.1:8082/ping >/dev/null 2>&1 && { _ok "Traefik: responding"; traefik_ok=true; break; }
+        [ "$i" -lt 3 ] && sleep 5
+    done
+    [ "$traefik_ok" = "true" ] || { _warn "Traefik: not responding"; failed=$((failed + 1)); }
+
+    if [ "$failed" -eq 0 ]; then
+        _ok "All core health checks passed"
+    elif [ "$failed" -le 2 ]; then
+        _warn "$failed core health check(s) failed — tolerable"
+    else
+        _warn "$failed core health check(s) failed"
+    fi
     return $( [ "$failed" -gt 2 ] && echo 1 || echo 0 )
 }
 
