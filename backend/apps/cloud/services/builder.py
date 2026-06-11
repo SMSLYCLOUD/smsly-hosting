@@ -144,31 +144,18 @@ class NixpacksBuilder:
 
             logger.info(f"Pushing image to {full_tag}...")
 
-            # ── Authenticate with the registry ──────────────────────────
-            # The Docker SDK's auth_config parameter on push() is unreliable
-            # and often causes "no basic auth credentials" errors.  Instead,
-            # call client.login() which properly registers credentials with
-            # the daemon for this registry.
             has_creds = bool(
                 settings.REGISTRY_USER and settings.REGISTRY_PASSWORD
             )
+            auth_config = None
             if has_creds:
-                try:
-                    client.login(
-                        username=settings.REGISTRY_USER,
-                        password=settings.REGISTRY_PASSWORD,
-                        registry=registry_url,
-                    )
-                    logger.info("Docker SDK login to %s succeeded", registry_url)
-                except Exception as login_exc:
-                    logger.warning(
-                        "Docker SDK login to %s failed (%s); "
-                        "will attempt push anyway (CLI login may still work)",
-                        registry_url, login_exc,
-                    )
+                auth_config = {
+                    "username": settings.REGISTRY_USER,
+                    "password": settings.REGISTRY_PASSWORD
+                }
 
             # ── Push via SDK ────────────────────────────────────────────
-            push_result = client.images.push(full_tag)
+            push_result = client.images.push(full_tag, auth_config=auth_config)
             # push() returns a generator (stream=True, default) that yields
             # status lines, or a single string (stream=False).  Consume
             # all output looking for JSON errors.
