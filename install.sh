@@ -2822,7 +2822,7 @@ prune_stopped_conflicting() {
             docker rm "$c_id" >/dev/null 2>&1 && removed=$((removed + 1))
         fi
     done
-    [ "$removed" -gt 0 ] && echo -e "  \033[0;32m✓\033[0m Removed $removed stopped container(s)"
+    [ "$removed" -gt 0 ] && echo -e "  \033[0;32m✓\033[0m Removed $removed stopped container(s)" || true
 }
 
 cleanup_stale_containers() {
