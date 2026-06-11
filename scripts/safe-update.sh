@@ -40,19 +40,21 @@ safe_update_preflight() {
     docker info >/dev/null 2>&1 || { _fail "Docker not responding"; return 1; }
     _ok "Docker: responsive"
 
-    # Clean up orphaned containers from failed previous builds
-    # Remove ALL stopped/created/exited containers from this project to prevent name conflicts
-    if ! docker compose -f "$COMPOSE_FILE" down --remove-orphans 2>/dev/null; then
-        _warn "docker compose down failed (project may not exist yet) — falling back to direct container removal"
+    # Clean up stopped service containers to prevent name conflicts (without stopping running production containers)
+    if ! docker compose -f "$COMPOSE_FILE" rm -f 2>/dev/null; then
+        _warn "docker compose rm failed (project may not exist yet)"
     fi
     
-    # Rename conflicting containers instead of deleting them
+    # Rename conflicting containers instead of deleting them (skipping active running ones)
     rename_conflicting_containers() {
         local pattern="$1"
         local c_id=""
         local c_name=""
         local backup_name=""
         for c_id in $(docker ps -a -q --filter "name=${pattern}" 2>/dev/null || true); do
+            if docker inspect "$c_id" --format='{{.State.Running}}' 2>/dev/null | grep -q true; then
+                continue
+            fi
             c_name=$(docker inspect "$c_id" --format='{{.Name}}' 2>/dev/null | sed 's/^\///')
             if [ -n "$c_name" ]; then
                 if [[ "$c_name" == *"-backup-containers"* ]]; then
@@ -67,7 +69,7 @@ safe_update_preflight() {
     
     rename_conflicting_containers "smsly-hosting"
     rename_conflicting_containers "smsly-"
-    _ok "Renamed all conflicting containers to backup-containers"
+    _ok "Renamed all conflicting stopped containers to backup-containers"
 
     for cf in "$COMPOSE_FILE" "$INSTALL_DIR/infrastructure/docker/docker-compose.observability.yml"; do
         [ -f "$cf" ] || { _fail "Missing: $cf"; return 1; }
