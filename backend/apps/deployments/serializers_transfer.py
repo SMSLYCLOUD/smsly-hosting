@@ -87,6 +87,8 @@ class ServerTransferCreateSerializer(serializers.Serializer):
         service_id = attrs.get('service_id')
         target_server_ip = attrs.get('target_server_ip')
         target_server_id = attrs.get('target_server_id')
+        source_server_ip = attrs.get('source_server_ip')
+        source_server_id = attrs.get('source_server_id')
 
         if transfer_type == 'SERVICE' and not service_id:
             raise serializers.ValidationError(
@@ -104,17 +106,17 @@ class ServerTransferCreateSerializer(serializers.Serializer):
                     {'target_server_ip': "target_server_ip or target_server_id is required (local node IP not set)."}
                 )
 
-        # Require at least one SSH auth method
+        # Require at least one SSH auth method for target
         has_key = bool(attrs.get('target_ssh_key', '').strip())
         has_password = bool(attrs.get('target_ssh_password', '').strip())
         target_server = None
-        
+
         if target_server_id:
             from .models_servers import ManagedServer
             target_server = ManagedServer.objects.filter(id=target_server_id).first()
             if not target_server:
                 raise serializers.ValidationError({'target_server_id': "Target server not found."})
-            
+
             if target_server.status != ManagedServer.Status.ONLINE:
                 raise serializers.ValidationError(
                     {'target_server_id': f"Target server '{target_server.name}' is currently {target_server.status}. Transfers are only allowed to ONLINE nodes."}
@@ -124,5 +126,19 @@ class ServerTransferCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 "No SSH credentials available for target server. Provide target_ssh_key, target_ssh_password, or select a target server with saved SSH credentials."
             )
+
+        # Validate source SSH when source is a known remote server
+        if source_server_id:
+            from .models_servers import ManagedServer
+            source_server = ManagedServer.objects.filter(id=source_server_id).first()
+            if source_server:
+                source_has_key = bool(attrs.get('source_ssh_key', '').strip())
+                source_has_password = bool(attrs.get('source_ssh_password', '').strip())
+                stored_key = (source_server.ssh_key or '').strip()
+                stored_password = (source_server.ssh_password or '').strip()
+                if not source_has_key and not source_has_password and not stored_key and not stored_password:
+                    raise serializers.ValidationError(
+                        {'source_ssh_key': "Source SSH credentials required for node-to-node transfer. Provide source_ssh_key/source_ssh_password or update the source server's stored credentials."}
+                    )
 
         return attrs

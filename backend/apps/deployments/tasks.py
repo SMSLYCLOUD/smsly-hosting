@@ -4256,7 +4256,6 @@ def run_scheduled_backups_task():
     return ran
 
 
-@shared_task
 @shared_task(bind=True, soft_time_limit=3600, time_limit=4200)
 def execute_server_transfer_task(self, transfer_id):
     from .models_transfer import ServerTransfer as TransferModel

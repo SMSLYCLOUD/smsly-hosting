@@ -113,10 +113,13 @@ def collect_metrics_task():
         )
         container_id = getattr(latest, 'container_id', None) if latest else None
 
-        # Try real stats, fall back to simulated
+        # Only store real Docker stats — never synthetic data.
+        # The live Docker fallback in the metrics API handles the case
+        # where Docker is available but Prometheus is not. Synthetic data
+        # would mislead dashboards and alerting.
         stats = _collect_container_stats(container_id)
         if stats is None:
-            stats = _simulate_stats(service)
+            continue
 
         ServiceMetric.objects.create(
             service=service,

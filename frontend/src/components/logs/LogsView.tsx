@@ -113,6 +113,40 @@ export function LogsView({
         setQuery(draftQuery);
     };
 
+    const applyServiceFilter = useCallback((svcName: string) => {
+        if (!svcName || !svcName.trim()) {
+            setDraftQuery(DEFAULT_QUERY);
+            setQuery(DEFAULT_QUERY);
+            setServiceFilter(undefined);
+            return;
+        }
+        const normalized = svcName.trim().toLowerCase().replace(/ /g, '-');
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        if (uuidRegex.test(svcName.trim())) {
+            const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+            fetch(`/api/v1/services/${encodeURIComponent(svcName.trim())}/`, {
+                headers: token ? { 'Authorization': `Token ${token}` } : {},
+            })
+                .then((r) => (r.ok ? r.json() : null))
+                .then((svc) => {
+                    if (svc?.name) {
+                        const svcNormalized = svc.name.toLowerCase().replace(/ /g, '-');
+                        const q = svc.deploy_mode === 'COMPOSE'
+                            ? `{compose_project="${svcNormalized}"}`
+                            : `{compose_service="${svc.name}"}`;
+                        setDraftQuery(q);
+                        setQuery(q);
+                        setServiceFilter(svc.name);
+                    }
+                })
+                .catch(() => {});
+            return;
+        }
+        const filteredQuery = `{compose_service="${normalized}"}`;
+        setDraftQuery(filteredQuery);
+        setQuery(filteredQuery);
+    }, []);
+
     useEffect(() => {
         if (error) {
             toast({ title: 'Loki unavailable', description: error, variant: 'destructive' });
@@ -156,6 +190,8 @@ export function LogsView({
                             <input
                                 value={serviceFilter || ''}
                                 onChange={(e) => setServiceFilter(e.target.value || undefined)}
+                                onBlur={(e) => { if (e.target.value) applyServiceFilter(e.target.value); }}
+                                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); applyServiceFilter(e.currentTarget.value); } }}
                                 placeholder="(all)"
                                 className="px-2 py-1 rounded-md border border-border bg-background text-foreground"
                             />
