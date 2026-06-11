@@ -18,6 +18,8 @@ import { DashboardShell } from "@/components/layout/DashboardShell";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { OAuthTab } from "@/components/settings/OAuthTab";
 import { GitHubIntegrationCard } from "@/components/settings/GitHubIntegrationCard";
+import { GitLabIntegrationCard } from "@/components/settings/GitLabIntegrationCard";
+import { BitbucketIntegrationCard } from "@/components/settings/BitbucketIntegrationCard";
 import { CloudStorageTab } from "@/components/settings/CloudStorageTab";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
@@ -1290,9 +1292,11 @@ export default function SettingsPage() {
 
         {/* OAuth Configuration Tab */}
         <TabsContent value="oauth">
-          <div className="space-y-6">
-            <GitHubIntegrationCard />
-            <OAuthTab />
+            <div className="space-y-6">
+              <GitHubIntegrationCard />
+              <GitLabIntegrationCard />
+              <BitbucketIntegrationCard />
+              <OAuthTab />
           </div>
         </TabsContent>
 

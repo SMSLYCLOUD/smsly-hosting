@@ -13,23 +13,29 @@ import api from "@/lib/api";
 interface OAuthStatus {
   github: boolean;
   google: boolean;
+  gitlab: boolean;
+  bitbucket: boolean;
 }
 
 interface OAuthCreds {
   github: { configured: boolean; client_id?: string };
   google: { configured: boolean; client_id?: string };
+  gitlab: { configured: boolean; client_id?: string };
+  bitbucket: { configured: boolean; client_id?: string };
 }
 
 export function OAuthTab() {
   const { toast } = useToast();
-  const [status, setStatus] = useState<OAuthStatus>({ github: false, google: false });
+  const [status, setStatus] = useState<OAuthStatus>({ github: false, google: false, gitlab: false, bitbucket: false });
   const [creds, setCreds] = useState<OAuthCreds>({
     github: { configured: false },
     google: { configured: false },
+    gitlab: { configured: false },
+    bitbucket: { configured: false },
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [showSecrets, setShowSecrets] = useState({ github: false, google: false });
+  const [showSecrets, setShowSecrets] = useState({ github: false, google: false, gitlab: false, bitbucket: false });
   const [isAdmin, setIsAdmin] = useState(true);
 
   // Form state
@@ -37,6 +43,10 @@ export function OAuthTab() {
   const [githubSecret, setGithubSecret] = useState("");
   const [googleClientId, setGoogleClientId] = useState("");
   const [googleSecret, setGoogleSecret] = useState("");
+  const [gitlabClientId, setGitlabClientId] = useState("");
+  const [gitlabSecret, setGitlabSecret] = useState("");
+  const [bitbucketClientId, setBitbucketClientId] = useState("");
+  const [bitbucketSecret, setBitbucketSecret] = useState("");
 
   useEffect(() => {
     fetchStatus();
@@ -61,52 +71,55 @@ export function OAuthTab() {
       setIsAdmin(true);
       if (res.data.github?.client_id) setGithubClientId(res.data.github.client_id);
       if (res.data.google?.client_id) setGoogleClientId(res.data.google.client_id);
+      if (res.data.gitlab?.client_id) setGitlabClientId(res.data.gitlab.client_id);
+      if (res.data.bitbucket?.client_id) setBitbucketClientId(res.data.bitbucket.client_id);
     } catch (err) {
-      // Non-admin users will get 403 — that's fine
       console.error("Failed to fetch OAuth credentials (admin-only)", err);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleSave = async (provider: "github" | "google") => {
+  const handleSave = async (provider: "github" | "google" | "gitlab" | "bitbucket") => {
     if (!isAdmin) {
-      toast({
-        title: "Forbidden",
-        description: "Admin access required.",
-        variant: "destructive",
-      });
+      toast({ title: "Forbidden", description: "Admin access required.", variant: "destructive" });
       return;
     }
 
     setSaving(true);
     try {
       const payload: Record<string, unknown> = {};
-      if (provider === "github") {
-        payload.github = { client_id: githubClientId.trim(), client_secret: githubSecret.trim() };
-      } else {
-        payload.google = { client_id: googleClientId.trim(), client_secret: googleSecret.trim() };
+      switch (provider) {
+        case "github":
+          payload.github = { client_id: githubClientId.trim(), client_secret: githubSecret.trim() };
+          break;
+        case "google":
+          payload.google = { client_id: googleClientId.trim(), client_secret: googleSecret.trim() };
+          break;
+        case "gitlab":
+          payload.gitlab = { client_id: gitlabClientId.trim(), client_secret: gitlabSecret.trim() };
+          break;
+        case "bitbucket":
+          payload.bitbucket = { client_id: bitbucketClientId.trim(), client_secret: bitbucketSecret.trim() };
+          break;
       }
 
       await api.post("/oauth/credentials/", payload);
-      toast({
-        title: `${provider === "github" ? "GitHub" : "Google"} OAuth saved`,
-        description: "Credentials updated. Users can now sign in with this provider.",
-      });
+      const names: Record<string, string> = { github: "GitHub", google: "Google", gitlab: "GitLab", bitbucket: "Bitbucket" };
+      toast({ title: `${names[provider]} OAuth saved`, description: "Credentials updated." });
       fetchStatus();
       fetchCreds();
-      // Clear secret fields after save
       if (provider === "github") setGithubSecret("");
-      else setGoogleSecret("");
+      else if (provider === "google") setGoogleSecret("");
+      else if (provider === "gitlab") setGitlabSecret("");
+      else setBitbucketSecret("");
     } catch (err) {
       const statusCode = (err as any)?.response?.status;
       const apiDetail = (err as any)?.response?.data?.detail || (err as any)?.response?.data?.error;
-
       let description = "Failed to save OAuth credentials.";
       if (statusCode === 401) description = "Unauthorized. Please log in again.";
       else if (statusCode === 403) description = apiDetail || "Forbidden. Admin access required.";
       else if (apiDetail) description = apiDetail;
-
       toast({ title: "Error", description, variant: "destructive" });
     } finally {
       setSaving(false);
@@ -130,7 +143,7 @@ export function OAuthTab() {
         </CardHeader>
         <CardContent>
           <p className="text-sm text-muted-foreground">
-            Log in with an admin account to manage GitHub/Google OAuth credentials.
+            Log in with an admin account to manage GitHub, Google, GitLab, and Bitbucket OAuth credentials.
           </p>
         </CardContent>
       </Card>
@@ -260,6 +273,94 @@ export function OAuthTab() {
             <Button onClick={() => handleSave("google")} disabled={saving || !googleClientId}>
               {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}
               Save Google
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* GitLab OAuth */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <svg className="h-6 w-6 text-orange-500" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M22.65 14.39L12 22.13 1.35 14.39a.84.84 0 01-.3-.94l1.22-3.78 2.44-7.51A.42.42 0 014.93 2a.43.43 0 01.24.16L12 9.32l6.83-7.13a.43.43 0 01.24-.16.42.42 0 01.22.19l2.44 7.51 1.22 3.78a.84.84 0 01-.3.88z"/>
+              </svg>
+              <div>
+                <CardTitle className="text-lg">GitLab OAuth</CardTitle>
+                <CardDescription>Allow users to sign in with their GitLab account.</CardDescription>
+              </div>
+            </div>
+            <Badge variant={status.gitlab ? "default" : "secondary"} className={status.gitlab ? "bg-green-500/10 text-green-500 border-green-500/30" : ""}>
+              {status.gitlab ? "Configured" : "Not Configured"}
+            </Badge>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="gl-client-id">Application ID</Label>
+            <Input id="gl-client-id" placeholder="GitLab Application ID" value={gitlabClientId} onChange={(e) => setGitlabClientId(e.target.value)} />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="gl-secret">Secret</Label>
+            <div className="relative">
+              <Input id="gl-secret" type={showSecrets.gitlab ? "text" : "password"} placeholder={status.gitlab ? "••••••••••••• (already set)" : "Enter secret"} value={gitlabSecret} onChange={(e) => setGitlabSecret(e.target.value)} />
+              <button type="button" onClick={() => setShowSecrets((s) => ({ ...s, gitlab: !s.gitlab }))} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                {showSecrets.gitlab ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+          </div>
+          <div className="flex items-center justify-between">
+            <p className="text-xs text-muted-foreground">
+              Redirect URI: <code className="text-[11px] bg-muted px-1 py-0.5 rounded select-all">{typeof window !== "undefined" ? window.location.origin : ""}/accounts/gitlab/login/callback/</code>
+            </p>
+            <Button onClick={() => handleSave("gitlab")} disabled={saving || !gitlabClientId}>
+              {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}
+              Save GitLab
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Bitbucket OAuth */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <svg className="h-6 w-6 text-blue-500" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M.778 1.213a.768.768 0 00-.768.892l3.263 19.79c.084.5.515.868 1.022.873H20.95a.772.772 0 00.77-.646l3.27-20.03a.768.768 0 00-.768-.891zM14.52 15.53H9.522L8.17 8.466h7.561z"/>
+              </svg>
+              <div>
+                <CardTitle className="text-lg">Bitbucket OAuth</CardTitle>
+                <CardDescription>Allow users to sign in with their Bitbucket account.</CardDescription>
+              </div>
+            </div>
+            <Badge variant={status.bitbucket ? "default" : "secondary"} className={status.bitbucket ? "bg-green-500/10 text-green-500 border-green-500/30" : ""}>
+              {status.bitbucket ? "Configured" : "Not Configured"}
+            </Badge>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="bb-client-id">Key</Label>
+            <Input id="bb-client-id" placeholder="Bitbucket OAuth Key" value={bitbucketClientId} onChange={(e) => setBitbucketClientId(e.target.value)} />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="bb-secret">Secret</Label>
+            <div className="relative">
+              <Input id="bb-secret" type={showSecrets.bitbucket ? "text" : "password"} placeholder={status.bitbucket ? "••••••••••••• (already set)" : "Enter secret"} value={bitbucketSecret} onChange={(e) => setBitbucketSecret(e.target.value)} />
+              <button type="button" onClick={() => setShowSecrets((s) => ({ ...s, bitbucket: !s.bitbucket }))} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                {showSecrets.bitbucket ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+          </div>
+          <div className="flex items-center justify-between">
+            <p className="text-xs text-muted-foreground">
+              Redirect URI: <code className="text-[11px] bg-muted px-1 py-0.5 rounded select-all">{typeof window !== "undefined" ? window.location.origin : ""}/accounts/bitbucket/login/callback/</code>
+            </p>
+            <Button onClick={() => handleSave("bitbucket")} disabled={saving || !bitbucketClientId}>
+              {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}
+              Save Bitbucket
             </Button>
           </div>
         </CardContent>

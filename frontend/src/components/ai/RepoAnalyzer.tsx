@@ -93,7 +93,7 @@ export function RepoAnalyzer({ onAnalysisComplete, initialUrl = '' }: RepoAnalyz
     const debouncedAnalyze = useDebounce(analyzeRepo, 800);
 
     useEffect(() => {
-        if (repoUrl && repoUrl.includes('github.com')) {
+        if (repoUrl && (repoUrl.includes('github.com') || repoUrl.includes('gitlab.com') || repoUrl.includes('bitbucket.org'))) {
             debouncedAnalyze(repoUrl);
         }
     }, [repoUrl, debouncedAnalyze]);

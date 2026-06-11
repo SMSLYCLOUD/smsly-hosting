@@ -765,6 +765,36 @@ export const githubApi = {
   }
 };
 
+export const gitlabApi = {
+  repos: async (params?: any): Promise<any> => {
+    const response = await api.get('/integrations/gitlab/repos/', { params });
+    return response.data;
+  },
+  branches: async (repo: string): Promise<any> => {
+    const response = await api.get('/integrations/gitlab/branches/', { params: { repo } });
+    return response.data;
+  },
+  commits: async (repo: string, branch: string): Promise<any> => {
+    const response = await api.get('/integrations/gitlab/commits/', { params: { repo, branch } });
+    return response.data;
+  }
+};
+
+export const bitbucketApi = {
+  repos: async (params?: any): Promise<any> => {
+    const response = await api.get('/integrations/bitbucket/repos/', { params });
+    return response.data;
+  },
+  branches: async (repo: string): Promise<any> => {
+    const response = await api.get('/integrations/bitbucket/branches/', { params: { repo } });
+    return response.data;
+  },
+  commits: async (repo: string, branch: string): Promise<any> => {
+    const response = await api.get('/integrations/bitbucket/commits/', { params: { repo, branch } });
+    return response.data;
+  }
+};
+
 export const systemApi = {
   health: async (): Promise<{ status: string }> => {
     const response = await api.get('/system/health/');

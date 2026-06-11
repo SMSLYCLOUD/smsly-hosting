@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Github, Chrome, Mail, ArrowLeft, Loader2 } from "lucide-react";
+import { Github, Chrome, Mail, ArrowLeft, Loader2, GitBranch, Code2 } from "lucide-react";
 import { setAuthTokenCookie } from "@/lib/auth-cookies";
 
 export default function LoginPage() {
@@ -121,6 +121,18 @@ export default function LoginPage() {
                 <a href={`${BACKEND_URL}/accounts/google/login/`}>
                   <Chrome className="mr-2 h-4 w-4" />
                   Sign in with Google
+                </a>
+              </Button>
+              <Button variant="outline" className="w-full h-11 relative" asChild>
+                <a href={`${BACKEND_URL}/accounts/gitlab/login/`}>
+                  <GitBranch className="mr-2 h-4 w-4 text-orange-500" />
+                  Sign in with GitLab
+                </a>
+              </Button>
+              <Button variant="outline" className="w-full h-11 relative" asChild>
+                <a href={`${BACKEND_URL}/accounts/bitbucket_oauth2/login/`}>
+                  <Code2 className="mr-2 h-4 w-4 text-blue-500" />
+                  Sign in with Bitbucket
                 </a>
               </Button>
 

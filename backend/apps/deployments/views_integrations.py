@@ -206,6 +206,31 @@ def _is_ip_or_localhost(url_str: str) -> bool:
         return False
 
 
+def _get_site_url(request) -> str:
+    """Resolve the site URL from PlatformConfig, settings, or request."""
+    site_url = ""
+    try:
+        from apps.deployments.models_core import PlatformConfig
+        platform_cfg = PlatformConfig.objects.first()
+        if platform_cfg and platform_cfg.domain:
+            db_domain = platform_cfg.domain.strip().lower().rstrip('.')
+            if db_domain and db_domain not in ('localhost', '127.0.0.1', '::1'):
+                db_is_ip = bool(re.fullmatch(r'\d{1,3}(?:\.\d{1,3}){3}', db_domain))
+                use_ssl = platform_cfg.use_ssl
+                scheme = 'https' if (use_ssl and not db_is_ip and not settings.DEBUG) else 'http'
+                site_url = f"{scheme}://{db_domain}"
+    except Exception as e:
+        logger.warning("Failed to load PlatformConfig for site_url: %s", e)
+    if not site_url:
+        site_url = getattr(settings, 'SITE_URL', '').rstrip('/')
+        if not settings.DEBUG and site_url and not _is_ip_or_localhost(site_url):
+            site_url = site_url.replace('http://', 'https://')
+    if not site_url:
+        scheme = "https" if request.is_secure() or request.headers.get('X-Forwarded-Proto') == 'https' else "http"
+        site_url = f"{scheme}://{request.get_host()}"
+    return site_url
+
+
 @extend_schema(responses=OpenApiTypes.OBJECT)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -420,3 +445,337 @@ def github_oauth_callback(request):
         },
         status=status.HTTP_200_OK,
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GitLab Integration
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _get_gitlab_app():
+    try:
+        from allauth.socialaccount.models import SocialApp
+        return SocialApp.objects.filter(provider="gitlab").first()
+    except Exception:
+        return None
+
+
+def _get_gitlab_oauth_callback_url(request) -> str:
+    site_url = _get_site_url(request)
+    return f"{site_url}/auth/gitlab/callback"
+
+
+@extend_schema(responses=OpenApiTypes.OBJECT)
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def gitlab_connection(request):
+    try:
+        from allauth.socialaccount.models import SocialAccount, SocialToken
+    except Exception:
+        return Response({
+            "connected": False,
+            "has_token": False,
+            "account": None,
+            "warning": "GitLab integration not available on this server.",
+        })
+
+    account = SocialAccount.objects.filter(user=request.user, provider="gitlab").order_by("-id").first()
+    extra = account.extra_data if account and isinstance(account.extra_data, dict) else {}
+
+    return Response({
+        "connected": bool(account),
+        "has_token": bool(SocialToken.objects.filter(account=account).exists() if account else False),
+        "account": {
+            "uid": account.uid,
+            "login": extra.get("username"),
+            "avatar_url": extra.get("avatar_url"),
+        } if account else None,
+    })
+
+
+GITLAB_DEFAULT_URL = "https://gitlab.com"
+
+
+@extend_schema(responses=OpenApiTypes.OBJECT)
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def gitlab_oauth_url(request):
+    app = _get_gitlab_app()
+    if not app:
+        return Response(
+            {"error": "GitLab OAuth not configured. Add a SocialApp in admin."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    callback_url = _get_gitlab_oauth_callback_url(request)
+    state = secrets.token_urlsafe(32)
+    from django.core.cache import cache
+    cache.set(f"gitlab_oauth_state:{state}", str(request.user.id), timeout=600)
+
+    gitlab_url = getattr(settings, "GITLAB_URL", GITLAB_DEFAULT_URL)
+    params = {
+        "client_id": app.client_id.strip(),
+        "redirect_uri": callback_url,
+        "response_type": "code",
+        "state": state,
+        "scope": "read_user read_api read_repository",
+    }
+
+    return Response({
+        "url": f"{gitlab_url}/oauth/authorize?{urlencode(params)}",
+        "callback_url": callback_url,
+    })
+
+
+class GitLabCallbackSerializer(serializers.Serializer):
+    code = serializers.CharField(required=True)
+
+
+@extend_schema(request=GitLabCallbackSerializer, responses=OpenApiTypes.OBJECT)
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def gitlab_oauth_callback(request):
+    code = request.data.get("code")
+    if not code:
+        return Response({"error": "Missing 'code' parameter."}, status=status.HTTP_400_BAD_REQUEST)
+
+    app = _get_gitlab_app()
+    if not app:
+        return Response({"error": "GitLab OAuth not configured."}, status=status.HTTP_400_BAD_REQUEST)
+
+    callback_url = _get_gitlab_oauth_callback_url(request)
+    gitlab_url = getattr(settings, "GITLAB_URL", GITLAB_DEFAULT_URL)
+
+    try:
+        token_resp = http_requests.post(
+            f"{gitlab_url}/oauth/token",
+            data={
+                "client_id": app.client_id,
+                "client_secret": app.secret,
+                "code": code,
+                "grant_type": "authorization_code",
+                "redirect_uri": callback_url,
+            },
+            timeout=15,
+        )
+        token_resp.raise_for_status()
+        token_data = token_resp.json()
+    except Exception as exc:
+        logger.error("GitLab token exchange failed: %s", exc)
+        return Response({"error": "Failed to exchange code with GitLab."}, status=status.HTTP_502_BAD_GATEWAY)
+
+    access_token = token_data.get("access_token")
+    if not access_token:
+        return Response({"error": "GitLab rejected the code."}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        profile_resp = http_requests.get(
+            f"{gitlab_url}/api/v4/user",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=10,
+        )
+        profile_resp.raise_for_status()
+        profile = profile_resp.json()
+    except Exception as exc:
+        logger.error("GitLab profile fetch failed: %s", exc)
+        return Response({"error": "Failed to fetch GitLab profile."}, status=status.HTTP_502_BAD_GATEWAY)
+
+    gitlab_uid = str(profile.get("id", ""))
+    if not gitlab_uid:
+        return Response({"error": "GitLab profile missing user ID."}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        from allauth.socialaccount.models import SocialAccount, SocialToken
+        account, created = SocialAccount.objects.update_or_create(
+            provider="gitlab",
+            uid=gitlab_uid,
+            defaults={"user": request.user, "extra_data": profile},
+        )
+        if not created and account.user_id != request.user.id:
+            account.user = request.user
+            account.extra_data = profile
+            account.save()
+
+        token_defaults = {"token": access_token, "token_secret": token_data.get("refresh_token", ""), "app": app}
+        expires_in = token_data.get("expires_in")
+        if expires_in:
+            from django.utils import timezone
+            from datetime import timedelta
+            token_defaults["expires_at"] = timezone.now() + timedelta(seconds=int(expires_in))
+        else:
+            from django.utils import timezone
+            from datetime import timedelta
+            token_defaults["expires_at"] = timezone.now() + timedelta(days=365)
+
+        SocialToken.objects.update_or_create(account=account, defaults=token_defaults)
+    except Exception as exc:
+        logger.error("Failed to save GitLab account: %s", exc)
+        return Response({"error": "Failed to save GitLab connection."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    return Response({
+        "connected": True,
+        "account": {
+            "uid": gitlab_uid,
+            "login": profile.get("username"),
+            "avatar_url": profile.get("avatar_url"),
+        },
+    })
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Bitbucket Integration
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _get_bitbucket_app():
+    try:
+        from allauth.socialaccount.models import SocialApp
+        return SocialApp.objects.filter(provider="bitbucket_oauth2").first()
+    except Exception:
+        return None
+
+
+def _get_bitbucket_oauth_callback_url(request) -> str:
+    site_url = _get_site_url(request)
+    return f"{site_url}/auth/bitbucket/callback"
+
+
+@extend_schema(responses=OpenApiTypes.OBJECT)
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def bitbucket_connection(request):
+    try:
+        from allauth.socialaccount.models import SocialAccount, SocialToken
+    except Exception:
+        return Response({
+            "connected": False,
+            "has_token": False,
+            "account": None,
+            "warning": "Bitbucket integration not available on this server.",
+        })
+
+    account = SocialAccount.objects.filter(user=request.user, provider="bitbucket_oauth2").order_by("-id").first()
+    extra = account.extra_data if account and isinstance(account.extra_data, dict) else {}
+
+    return Response({
+        "connected": bool(account),
+        "has_token": bool(SocialToken.objects.filter(account=account).exists() if account else False),
+        "account": {
+            "uid": account.uid,
+            "login": extra.get("username") or extra.get("display_name"),
+            "avatar_url": extra.get("links", {}).get("avatar", {}).get("href"),
+        } if account else None,
+    })
+
+
+@extend_schema(responses=OpenApiTypes.OBJECT)
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def bitbucket_oauth_url(request):
+    app = _get_bitbucket_app()
+    if not app:
+        return Response(
+            {"error": "Bitbucket OAuth not configured. Add a SocialApp in admin."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    callback_url = _get_bitbucket_oauth_callback_url(request)
+    state = secrets.token_urlsafe(32)
+    from django.core.cache import cache
+    cache.set(f"bitbucket_oauth_state:{state}", str(request.user.id), timeout=600)
+
+    params = {
+        "client_id": app.client_id.strip(),
+        "redirect_uri": callback_url,
+        "response_type": "code",
+        "state": state,
+    }
+    authorize_url = f"https://bitbucket.org/site/oauth2/authorize?{urlencode(params)}"
+
+    return Response({
+        "url": authorize_url,
+        "callback_url": callback_url,
+    })
+
+
+class BitbucketCallbackSerializer(serializers.Serializer):
+    code = serializers.CharField(required=True)
+
+
+@extend_schema(request=BitbucketCallbackSerializer, responses=OpenApiTypes.OBJECT)
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def bitbucket_oauth_callback(request):
+    code = request.data.get("code")
+    if not code:
+        return Response({"error": "Missing 'code' parameter."}, status=status.HTTP_400_BAD_REQUEST)
+
+    app = _get_bitbucket_app()
+    if not app:
+        return Response({"error": "Bitbucket OAuth not configured."}, status=status.HTTP_400_BAD_REQUEST)
+
+    callback_url = _get_bitbucket_oauth_callback_url(request)
+
+    try:
+        token_resp = http_requests.post(
+            "https://bitbucket.org/site/oauth2/access_token",
+            data={
+                "client_id": app.client_id,
+                "client_secret": app.secret,
+                "code": code,
+                "grant_type": "authorization_code",
+                "redirect_uri": callback_url,
+            },
+            headers={"Accept": "application/json"},
+            timeout=15,
+        )
+        token_resp.raise_for_status()
+        token_data = token_resp.json()
+    except Exception as exc:
+        logger.error("Bitbucket token exchange failed: %s", exc)
+        return Response({"error": "Failed to exchange code with Bitbucket."}, status=status.HTTP_502_BAD_GATEWAY)
+
+    access_token = token_data.get("access_token")
+    if not access_token:
+        return Response({"error": "Bitbucket rejected the code."}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        profile_resp = http_requests.get(
+            "https://api.bitbucket.org/2.0/user",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=10,
+        )
+        profile_resp.raise_for_status()
+        profile = profile_resp.json()
+    except Exception as exc:
+        logger.error("Bitbucket profile fetch failed: %s", exc)
+        return Response({"error": "Failed to fetch Bitbucket profile."}, status=status.HTTP_502_BAD_GATEWAY)
+
+    bb_uid = str(profile.get("account_id") or profile.get("uuid", ""))
+    if not bb_uid:
+        return Response({"error": "Bitbucket profile missing user ID."}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        from allauth.socialaccount.models import SocialAccount, SocialToken
+        account, created = SocialAccount.objects.update_or_create(
+            provider="bitbucket_oauth2",
+            uid=bb_uid,
+            defaults={"user": request.user, "extra_data": profile},
+        )
+        if not created and account.user_id != request.user.id:
+            account.user = request.user
+            account.extra_data = profile
+            account.save()
+
+        token_defaults = {"token": access_token, "token_secret": token_data.get("refresh_token", ""), "app": app}
+        SocialToken.objects.update_or_create(account=account, defaults=token_defaults)
+    except Exception as exc:
+        logger.error("Failed to save Bitbucket account: %s", exc)
+        return Response({"error": "Failed to save Bitbucket connection."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    return Response({
+        "connected": True,
+        "account": {
+            "uid": bb_uid,
+            "login": profile.get("username") or profile.get("display_name"),
+            "avatar_url": profile.get("links", {}).get("avatar", {}).get("href"),
+        },
+    })
