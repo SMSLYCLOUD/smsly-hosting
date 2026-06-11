@@ -172,9 +172,7 @@ class ServerTransferService:
             self._init_ssh()
             # Open source SSH if source is a remote node
             if self.transfer.source_server_ip and self.transfer.source_server_ip != self.transfer.target_server_ip:
-                local_ips = {'127.0.0.1', 'localhost', ''}
-                if self.transfer.source_server_ip not in local_ips and not self.transfer.source_server_ip.startswith('10.100.0.'):
-                    self._init_source_ssh()
+                self._init_source_ssh()
 
             self.transfer.status = 'PREPARING'
             self.transfer.save(update_fields=['status'])
@@ -248,6 +246,17 @@ class ServerTransferService:
     def _init_source_ssh(self):
         """Open an SSH connection to the source server for direct node-to-node transfers."""
         if not self.transfer.source_server_ip:
+            return  # Source is local
+
+        # Skip SSH initialization if the source IP matches a local IP
+        local_ips = {'127.0.0.1', 'localhost', ''}
+        try:
+            cfg = PlatformConfig.load()
+            if cfg and cfg.server_ip:
+                local_ips.add(cfg.server_ip.strip())
+        except Exception:
+            pass
+        if self.transfer.source_server_ip in local_ips or self.transfer.source_server_ip.startswith('10.100.0.'):
             return  # Source is local
 
         key = (self.transfer.source_ssh_key or '').strip()
