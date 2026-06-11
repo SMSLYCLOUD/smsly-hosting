@@ -212,6 +212,7 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
+      MASTER_MESH_IP: ${MASTER_MESH_IP:-}
       CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-127.0.0.1:5000}
       DOCKER_HOST: tcp://socket-proxy:2375
       DOCKER_NETWORK: smsly-net
@@ -257,6 +258,7 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
+      MASTER_MESH_IP: ${MASTER_MESH_IP:-}
       BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
       REDBEAT_REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
     depends_on:
@@ -328,6 +330,7 @@ services:
     restart: always
     env_file: .env
     environment:
+      MASTER_MESH_IP: ${MASTER_MESH_IP:-}
       CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-127.0.0.1:5000}
       DOCKER_HOST: tcp://socket-proxy:2375
       DOCKER_NETWORK: smsly-net
@@ -373,6 +376,7 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
+      MASTER_MESH_IP: ${MASTER_MESH_IP:-}
       CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-127.0.0.1:5000}
       DOCKER_HOST: tcp://socket-proxy:2375
       DOCKER_NETWORK: smsly-net
