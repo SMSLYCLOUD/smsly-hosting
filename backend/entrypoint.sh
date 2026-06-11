@@ -151,5 +151,10 @@ if is_web_container "$@"; then
         echo "[deploy-docker-labels] WARNING: failed to write target files" >&2
 fi
 
+# Clean up stale celery beat pidfile if we're starting beat
+if [ "${1:-}" = "celery" ] && [ "${4:-}" = "beat" ] || echo "$*" | grep -q "celery.*beat"; then
+    rm -f /app/celerybeat.pid
+fi
+
 echo "Starting: $*"
 exec "$@"
