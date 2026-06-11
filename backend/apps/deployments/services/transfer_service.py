@@ -82,6 +82,7 @@ class ServerTransferService:
     def __init__(self, transfer):
         self.transfer = transfer
         self.ssh = None
+        self.source_ssh = None
         self._uploaded_remote_backup_path = None
 
     def _log(self, message):
