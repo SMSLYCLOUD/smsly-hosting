@@ -1,12 +1,13 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Server, Plus, Trash2, RefreshCw, RefreshCcw, CheckCircle2, XCircle, Loader2,
     Globe, Shield, Wifi, WifiOff, ChevronRight, Monitor, ArrowUpRight,
-    Terminal, Key, Lock, Zap, Link2
+    Terminal, Key, Lock, Zap, Link2, Cloud
 } from 'lucide-react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { toast } from '@/components/ui/use-toast';
@@ -277,6 +278,12 @@ export default function ServersPage() {
                             >
                                 <Plus size={14} /> Add Server
                             </button>
+                            <Link
+                                href="/cloud/resources"
+                                className="px-4 py-2 rounded-lg border border-border text-sm flex items-center gap-2 hover:bg-muted/50 transition-colors"
+                            >
+                                <Cloud size={14} /> Cloud Resources
+                            </Link>
                         </div>
                     </div>
 

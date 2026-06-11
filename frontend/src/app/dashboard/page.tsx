@@ -1,7 +1,7 @@
 "use client"
 import React, { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Activity, Server, Database, Globe, TrendingUp, Zap, AlertCircle, ShieldAlert, X, DollarSign, Bell, ShieldCheck } from "lucide-react";
+import { Activity, Server, Database, Globe, TrendingUp, Zap, AlertCircle, ShieldAlert, X, DollarSign, Bell, ShieldCheck, BookTemplate, Cloud, List, BarChart3 } from "lucide-react";
 import { coreApi, DashboardOverview, systemApi } from "@/lib/api";
 import { SkeletonDashboard } from "@/components/ui/skeleton";
 import { motion, AnimatePresence } from "framer-motion";
@@ -304,7 +304,45 @@ export default function DashboardPage() {
              <EcosystemSuggestion context="dashboard" dismissible={true} />
            </motion.div>
 
-          {/* Activity Feed + Resource Usage */}
+           {/* Quick Links */}
+           <motion.div variants={fadeInUp}>
+             <div className="grid gap-4 grid-cols-2 sm:grid-cols-4">
+               <Link href="/blueprints">
+                 <Card className="hover:bg-muted/50 transition cursor-pointer h-full">
+                   <CardContent className="flex flex-col items-center justify-center py-4 gap-2">
+                     <BookTemplate className="h-6 w-6 text-emerald-500" />
+                     <span className="text-xs font-medium">Blueprints</span>
+                   </CardContent>
+                 </Card>
+               </Link>
+               <Link href="/cloud/resources">
+                 <Card className="hover:bg-muted/50 transition cursor-pointer h-full">
+                   <CardContent className="flex flex-col items-center justify-center py-4 gap-2">
+                     <Cloud className="h-6 w-6 text-cyan-500" />
+                     <span className="text-xs font-medium">Cloud Resources</span>
+                   </CardContent>
+                 </Card>
+               </Link>
+               <Link href="/logs">
+                 <Card className="hover:bg-muted/50 transition cursor-pointer h-full">
+                   <CardContent className="flex flex-col items-center justify-center py-4 gap-2">
+                     <List className="h-6 w-6 text-blue-500" />
+                     <span className="text-xs font-medium">Logs</span>
+                   </CardContent>
+                 </Card>
+               </Link>
+               <Link href="/monitoring">
+                 <Card className="hover:bg-muted/50 transition cursor-pointer h-full">
+                   <CardContent className="flex flex-col items-center justify-center py-4 gap-2">
+                     <BarChart3 className="h-6 w-6 text-purple-500" />
+                     <span className="text-xs font-medium">Monitoring</span>
+                   </CardContent>
+                 </Card>
+               </Link>
+             </div>
+           </motion.div>
+
+           {/* Activity Feed + Resource Usage */}
           <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-7">
             {/* Recent Activity */}
             <motion.div variants={fadeInUp} className="col-span-4">

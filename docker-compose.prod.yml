@@ -173,7 +173,7 @@ services:
     - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets
     - backups_data:/app/backups
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/health/live || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:8000/health/live || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 10
@@ -257,6 +257,7 @@ services:
     env_file: .env
     environment:
       BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
+      REDBEAT_REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
     depends_on:
       pgcat:
         condition: service_healthy

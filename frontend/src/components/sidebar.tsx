@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, PlusCircle, Settings, Box, Brain,
   Server, Rocket, Globe, ChevronDown, Wifi, WifiOff,
-  ExternalLink, Radio, Scaling, ArrowLeftRight, ShieldCheck, Activity
+  ExternalLink, Radio, Scaling, ArrowLeftRight, ShieldCheck
 } from "lucide-react";
 import { serversApi, type ManagedServer } from "@/lib/api";
 import TeamSwitcher from "@/components/team-switcher";
@@ -77,29 +77,15 @@ export function Sidebar() {
   const mainRoutes = [
     { label: "Client Area", icon: LayoutDashboard, href: "/client" },
     { label: "Dashboard",   icon: LayoutDashboard, href: "/dashboard" },
-    { label: "Projects",    icon: Box,             href: "/projects" },
     { label: "Services",    icon: Box,             href: "/services" },
     { label: "Deployments", icon: Rocket,          href: "/deployments" },
-    { label: "Domains",     icon: Globe,           href: "/domains" },
     { label: "Transfers",   icon: ArrowLeftRight,  href: "/transfers" },
-    { label: "Functions",   icon: Rocket,          href: "/functions" },
-    { label: "Databases",   icon: Box,             href: "/databases" },
-    { label: "Addons",      icon: Box,             href: "/addons" },
   ];
 
   const infraRoutes = [
     { label: "Servers",      icon: Server,  href: "/servers" },
     { label: "Autoscaler",   icon: Scaling, href: "/autoscaler" },
     { label: "Tunnels",      icon: Radio,   href: "/tunnels" },
-    { label: "Replication",  icon: Box,     href: "/replication" },
-    { label: "Mesh",         icon: Wifi,    href: "/network" },
-    { label: "Backups",      icon: Box,     href: "/backups" },
-    { label: "Restore",      icon: Box,     href: "/restore" },
-    { label: "Rollbacks",    icon: Box,     href: "/rollbacks" },
-    { label: "Logs",         icon: Box,     href: "/logs" },
-    { label: "Monitoring",   icon: Box,     href: "/monitoring" },
-    { label: "Grafana",      icon: Activity,href: "/grafana/" },
-    { label: "System Status",icon: Box,     href: "/status" },
     { label: "Ecosystem",    icon: Globe,   href: "/ecosystem" },
     { label: "Intelligence", icon: Brain,   href: "/intelligence" },
   ];
@@ -107,10 +93,6 @@ export function Sidebar() {
   const utilRoutes = [
     { label: "New Project", icon: PlusCircle, href: "/new" },
     { label: "Settings",    icon: Settings,   href: "/settings" },
-    { label: "Billing",     icon: Settings,   href: "/billing" },
-    { label: "API Keys",    icon: Settings,   href: "/api-keys" },
-    { label: "Audit Logs",  icon: Settings,   href: "/audit-logs" },
-    { label: "Env Vars",    icon: Settings,   href: "/env-vars" },
   ];
 
   if (user?.is_staff) {
