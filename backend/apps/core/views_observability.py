@@ -149,7 +149,7 @@ def loki_query(request):
 
     # Resolve UUID in compose_service filter (safety net for unresolved UUIDs)
     uuid_match = re.search(
-        r'compose_service(=|~)"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"',
+        r'compose_service(=~|!=|!~|=)"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"',
         query,
     )
     if uuid_match:
