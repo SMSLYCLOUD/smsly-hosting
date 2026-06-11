@@ -9,14 +9,15 @@ export const metadata = {
     description: "Platform dashboards and embed views for the SMSLY Hosting observability stack.",
 };
 
-export default function GrafanaPage({
+export default async function GrafanaPage({
     searchParams,
 }: {
-    searchParams?: { dashboard?: string; service?: string; time?: string };
+    searchParams: Promise<{ dashboard?: string; service?: string; time?: string }>;
 }) {
-    const dashboard = searchParams?.dashboard || "smsly-platform";
-    const service = searchParams?.service;
-    const time = searchParams?.time || "now-1h";
+    const resolvedSearchParams = await searchParams;
+    const dashboard = resolvedSearchParams?.dashboard || "smsly-platform";
+    const service = resolvedSearchParams?.service;
+    const time = resolvedSearchParams?.time || "now-1h";
 
     return (
         <DashboardShell>

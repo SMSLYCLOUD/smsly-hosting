@@ -106,7 +106,10 @@ class ServerTransferCreateSerializer(serializers.Serializer):
                     {'target_server_ip': "target_server_ip or target_server_id is required (local node IP not set)."}
                 )
 
-        # Require at least one SSH auth method for target
+        # Determine if target is the local node (no SSH needed)
+        target_is_local = not target_server_id and not target_server_ip
+
+        # Require at least one SSH auth method for target (skip when target is local)
         has_key = bool(attrs.get('target_ssh_key', '').strip())
         has_password = bool(attrs.get('target_ssh_password', '').strip())
         target_server = None
@@ -122,7 +125,7 @@ class ServerTransferCreateSerializer(serializers.Serializer):
                     {'target_server_id': f"Target server '{target_server.name}' is currently {target_server.status}. Transfers are only allowed to ONLINE nodes."}
                 )
 
-        if not has_key and not has_password and not target_server:
+        if not target_is_local and not has_key and not has_password and not target_server:
             raise serializers.ValidationError(
                 "No SSH credentials available for target server. Provide target_ssh_key, target_ssh_password, or select a target server with saved SSH credentials."
             )

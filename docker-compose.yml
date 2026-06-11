@@ -263,7 +263,7 @@ services:
       backend:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3000/ || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:3000/ || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 5
@@ -310,7 +310,7 @@ services:
     networks:
       - smsly-net
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:3100/ready || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:3100/ready || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -332,7 +332,7 @@ services:
     networks:
       - smsly-net
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:9080/ready || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:9080/ready || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -361,7 +361,7 @@ services:
     networks:
       - smsly-net
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
+      test: ["CMD-SHELL", "curl -f http://localhost:9090/-/healthy || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -389,7 +389,7 @@ services:
     networks:
       - smsly-net
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/healthz || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/healthz || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -413,7 +413,7 @@ services:
     networks:
       - smsly-net
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:9100/metrics || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:9100/metrics || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -434,7 +434,7 @@ services:
     networks:
       - smsly-net
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:9234/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:9234/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -464,7 +464,7 @@ services:
       - loki
       - prometheus
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/api/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/api/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

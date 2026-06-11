@@ -35,7 +35,7 @@ export function ChartContainer({ children, className, minHeight = 200 }: ChartCo
   return (
     <div ref={ref} className={className} style={{ minHeight }}>
       {ready ? (
-        <ResponsiveContainer width="100%" height="100%">
+        <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 1, height: 1 }}>
           {children}
         </ResponsiveContainer>
       ) : null}
