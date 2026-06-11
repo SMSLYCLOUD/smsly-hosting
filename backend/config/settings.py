@@ -107,6 +107,17 @@ else:
 CONTAINER_REGISTRY_URL = config(
     'CONTAINER_REGISTRY_URL',
     default='127.0.0.1:5000')
+
+# If the registry URL is a local loopback, it will fail when communicating across
+# the VPN (mesh) or even when the backend container tries to reach the registry.
+# Auto-correct to use the mesh IP if available, so that workers can pull the image
+# and the docker SDK can authenticate properly.
+if CONTAINER_REGISTRY_URL and ("127.0.0.1" in CONTAINER_REGISTRY_URL or "localhost" in CONTAINER_REGISTRY_URL):
+    import os
+    _mesh_ip = os.environ.get("MASTER_MESH_IP")
+    if _mesh_ip:
+        CONTAINER_REGISTRY_URL = CONTAINER_REGISTRY_URL.replace("127.0.0.1", _mesh_ip).replace("localhost", _mesh_ip)
+
 REGISTRY_USER = config('REGISTRY_USER', default='')
 REGISTRY_PASSWORD = config('REGISTRY_PASSWORD', default='')
 # Webhook secret: MUST be set explicitly in production. Fallback is random per startup.

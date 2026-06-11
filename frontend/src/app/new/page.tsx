@@ -78,13 +78,14 @@ export default function NewServicePage() {
   const [showEnvPrompt, setShowEnvPrompt] = React.useState(false)
   const [userRequiredVars, setUserRequiredVars] = React.useState<Record<string, string>>({})
 
-  // GitHub repos state
-  const [ghRepos, setGhRepos] = React.useState<any[]>([])
-  const [ghLoading, setGhLoading] = React.useState(false)
-  const [ghSearch, setGhSearch] = React.useState("")
-  const [ghConnected, setGhConnected] = React.useState(false)
-  const [ghCategories, setGhCategories] = React.useState<Record<string, any[]>>({})
-  const [ghClusters, setGhClusters] = React.useState<any[]>([])
+  // Git Provider state
+  const [gitProvider, setGitProvider] = React.useState<"github" | "gitlab" | "bitbucket">("github")
+  const [gitRepos, setGitRepos] = React.useState<any[]>([])
+  const [gitLoading, setGitLoading] = React.useState(false)
+  const [gitSearch, setGitSearch] = React.useState("")
+  const [gitConnected, setGitConnected] = React.useState(false)
+  const [gitCategories, setGitCategories] = React.useState<Record<string, any[]>>({})
+  const [gitClusters, setGitClusters] = React.useState<any[]>([])
   const [selectedCategory, setSelectedCategory] = React.useState<string>("All")
 
   // Templates from API
@@ -102,28 +103,36 @@ export default function NewServicePage() {
   const [selectedProject, setSelectedProject] = React.useState<string>("")
 
   React.useEffect(() => {
-    templatesApi.list().then(setTemplates).catch(() => {})
-    setGhLoading(true)
-    api.get('/integrations/github/repos/')
+    setGitLoading(true)
+    api.get(`/integrations/${gitProvider}/repos/`)
       .then(res => {
-        setGhRepos(res.data?.repos || [])
-        setGhCategories(res.data?.categories || {})
-        setGhClusters(res.data?.clusters || [])
-        setGhConnected(true)
+        setGitRepos(res.data?.repos || [])
+        setGitCategories(res.data?.categories || {})
+        setGitClusters(res.data?.clusters || [])
+        setGitConnected(true)
       })
-      .catch(() => setGhConnected(false))
-      .finally(() => setGhLoading(false))
+      .catch(() => {
+        setGitConnected(false)
+        setGitRepos([])
+        setGitCategories({})
+        setGitClusters([])
+      })
+      .finally(() => setGitLoading(false))
+  }, [gitProvider])
+
+  React.useEffect(() => {
+    templatesApi.list().then(setTemplates).catch(() => {})
     // Load projects for the project selector
     projectsApi.list().then(setProjectsList).catch(() => {})
   }, [])
 
-  const filteredRepos = ghRepos.filter(r => {
-    const matchesSearch = !ghSearch || r.full_name?.toLowerCase().includes(ghSearch.toLowerCase())
+  const filteredRepos = gitRepos.filter(r => {
+    const matchesSearch = !gitSearch || r.full_name?.toLowerCase().includes(gitSearch.toLowerCase()) || r.name?.toLowerCase().includes(gitSearch.toLowerCase())
     const matchesCategory = selectedCategory === "All" || r.category === selectedCategory
     return matchesSearch && matchesCategory
   })
 
-  const categoryList = ["All", ...Object.keys(ghCategories).sort()]
+  const categoryList = ["All", ...Object.keys(gitCategories).sort()]
 
   // ── AI Analysis ────────────────────────────────────────────────────────
   const runAnalysis = async (url: string) => {
@@ -432,17 +441,30 @@ export default function NewServicePage() {
 
                 {sourceType === "git" && (
                   <div className="space-y-4">
-                    {ghConnected && (
+                    <div className="flex items-center gap-4 border-b pb-4">
+                      <Label className="text-muted-foreground whitespace-nowrap">Git Provider</Label>
+                      <Select value={gitProvider} onValueChange={(val: any) => setGitProvider(val)}>
+                        <SelectTrigger className="w-[180px]">
+                          <SelectValue placeholder="Select Provider" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="github">GitHub</SelectItem>
+                          <SelectItem value="gitlab">GitLab</SelectItem>
+                          <SelectItem value="bitbucket">Bitbucket</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    {gitConnected && (
                       <div className="space-y-2">
-                        <Label>Your GitHub Repositories</Label>
+                        <Label>Your {gitProvider === 'github' ? 'GitHub' : gitProvider === 'gitlab' ? 'GitLab' : 'Bitbucket'} Repositories</Label>
                         <div className="flex gap-4">
                           <div className="relative flex-1">
                             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                             <Input
                               placeholder="Search repositories..."
                               className="pl-10"
-                              value={ghSearch}
-                              onChange={(e) => setGhSearch(e.target.value)}
+                              value={gitSearch}
+                              onChange={(e) => setGitSearch(e.target.value)}
                             />
                           </div>
                           <Select value={selectedCategory} onValueChange={setSelectedCategory}>
@@ -458,17 +480,17 @@ export default function NewServicePage() {
                           </Select>
                         </div>
 
-                        {ghClusters.length > 0 && !ghSearch && selectedCategory === "All" && (
+                        {gitClusters.length > 0 && !gitSearch && selectedCategory === "All" && (
                           <div className="space-y-2">
                             <p className="text-[10px] uppercase tracking-wider font-bold text-muted-foreground">Detected Clusters</p>
                             <div className="flex flex-wrap gap-2">
-                              {ghClusters.slice(0, 5).map(cluster => (
+                              {gitClusters.slice(0, 5).map(cluster => (
                                 <Button
                                   key={cluster.name}
                                   variant="outline"
                                   size="sm"
                                   className="h-7 text-xs border-dashed border-primary/40 hover:bg-primary/5"
-                                  onClick={() => setGhSearch(cluster.name.toLowerCase() + "-")}
+                                  onClick={() => setGitSearch(cluster.name.toLowerCase() + "-")}
                                 >
                                   <LayoutGrid className="h-3 w-3 mr-1" />
                                   {cluster.name} ({cluster.count})
@@ -477,7 +499,7 @@ export default function NewServicePage() {
                             </div>
                           </div>
                         )}
-                        {ghLoading ? (
+                        {gitLoading ? (
                           <div className="flex items-center justify-center py-6">
                             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                           </div>
@@ -499,7 +521,7 @@ export default function NewServicePage() {
                                 <div className="flex-1 min-w-0">
                                   <div className="flex items-center gap-2">
                                     <p className="font-medium truncate">{repo.name}</p>
-                                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-primary/10 text-primary font-medium">{repo.category}</span>
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-primary/10 text-primary font-medium">{repo.category || 'App'}</span>
                                   </div>
                                   <p className="text-xs text-muted-foreground truncate">{repo.description || 'No description'}</p>
                                 </div>
@@ -523,18 +545,23 @@ export default function NewServicePage() {
                     <div className="space-y-2">
                       <Label>Repository URL</Label>
                       <Input
-                        placeholder="https://github.com/username/repo"
+                        placeholder={`https://${gitProvider}.com/username/repo`}
                         value={repoUrl}
                         onChange={(e) => setRepoUrl(e.target.value)}
                       />
-                      {!ghConnected && (
+                      {!gitConnected && !gitLoading && (
                         <p className="text-xs text-muted-foreground">
-                          Connect your GitHub account in{" "}
+                          Connect your {gitProvider === 'github' ? 'GitHub' : gitProvider === 'gitlab' ? 'GitLab' : 'Bitbucket'} account in{" "}
                           <a className="underline hover:text-foreground" href="/settings">Settings</a>{" "}
                           to browse your repositories.
                         </p>
                       )}
-                      {ghConnected && (
+                      {gitLoading && !gitConnected && (
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+                          <Loader2 className="h-3 w-3 animate-spin" /> Fetching {gitProvider} repositories...
+                        </div>
+                      )}
+                      {gitConnected && (
                         <p className="text-xs text-muted-foreground text-emerald-500/80">
                           ✓ Push and Pull Request Webhooks will be configured automatically.
                         </p>

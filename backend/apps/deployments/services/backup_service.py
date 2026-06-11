@@ -1637,6 +1637,14 @@ def _remap_domain_on_restore(service, metadata):
         if not current_domain or not old_domain or current_domain == old_domain:
             return
 
+        # Do not remap if the target domain is an IP address
+        import ipaddress
+        try:
+            ipaddress.ip_address(current_domain)
+            return
+        except ValueError:
+            pass
+
         svc_domain = (service.public_domain or '').strip()
         if old_domain in svc_domain:
             new_domain = svc_domain.replace(old_domain, current_domain)
