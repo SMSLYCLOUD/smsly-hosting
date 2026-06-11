@@ -31,7 +31,7 @@ def write_docker_labels_targets():
     # Local node target
     local_targets = [
         {
-            "targets": [f"docker-labels:{DOCKER_LABELS_PORT}"],
+            "targets": [f"smsly-docker-labels:{DOCKER_LABELS_PORT}"],
             "labels": {"node": "local", "job": "docker-labels"},
         }
     ]
@@ -337,6 +337,7 @@ scrape_configs:
         target_label: 'compose_service'
       - source_labels: ['__meta_docker_container_label_smsly_blue_green_canonical_name']
         target_label: 'compose_service'
+        regex: '(.+)'
       - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
         target_label: 'compose_project'
       - source_labels: ['__meta_docker_container_name']

@@ -24,11 +24,12 @@ scrape_configs:
       # Extract compose service name (from Docker Compose auto-injected label)
       - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
         target_label: 'compose_service'
-      # Fallback: for non-compose (SINGLE mode) containers, use canonical_name
-      # This label is not present on compose containers, so only SINGLE-mode
-      # containers get compose_service from here.
+      # Fallback: for non-compose (SINGLE mode) containers, use canonical_name.
+      # The regex ensures only non-empty values are applied, preventing
+      # empty-label overwrite of compose_service on compose containers.
       - source_labels: ['__meta_docker_container_label_smsly_blue_green_canonical_name']
         target_label: 'compose_service'
+        regex: '(.+)'
       # Extract compose project name
       - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
         target_label: 'compose_project'
