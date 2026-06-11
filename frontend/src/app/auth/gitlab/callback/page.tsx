@@ -1,0 +1,82 @@
+"use client";
+
+import { useEffect, useState, Suspense } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
+import { Loader2, CheckCircle2, XCircle } from "lucide-react";
+import api from "@/lib/api";
+
+function GitLabCallbackContent() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const [status, setStatus] = useState<"loading" | "success" | "error">("loading");
+  const [message, setMessage] = useState("Connecting your GitLab account...");
+
+  useEffect(() => {
+    const code = searchParams.get("code");
+    const error = searchParams.get("error");
+
+    if (error) {
+      setStatus("error");
+      setMessage(searchParams.get("error_description") || "GitLab authorization was denied.");
+      return;
+    }
+
+    if (!code) {
+      setStatus("error");
+      setMessage("No authorization code received from GitLab.");
+      return;
+    }
+
+    const exchangeCode = async () => {
+      try {
+        const res = await api.post("/integrations/gitlab/oauth-callback/", { code });
+        setStatus("success");
+        setMessage(`GitLab connected as ${res.data?.account?.login || "your account"}!`);
+        setTimeout(() => router.push("/settings"), 2000);
+      } catch (e: any) {
+        setStatus("error");
+        setMessage(String(e?.response?.data?.error || "Failed to connect GitLab account."));
+      }
+    };
+
+    exchangeCode();
+  }, []);
+
+  return (
+    <div className="flex min-h-[60vh] items-center justify-center">
+      <div className="w-full max-w-md rounded-xl border bg-card p-8 text-center shadow-sm">
+        {status === "loading" && (
+          <>
+            <Loader2 className="mx-auto h-10 w-10 animate-spin text-muted-foreground" />
+            <p className="mt-4 text-muted-foreground">{message}</p>
+          </>
+        )}
+        {status === "success" && (
+          <>
+            <CheckCircle2 className="mx-auto h-10 w-10 text-green-500" />
+            <p className="mt-4 font-medium text-foreground">{message}</p>
+            <p className="mt-1 text-sm text-muted-foreground">Redirecting to settings...</p>
+          </>
+        )}
+        {status === "error" && (
+          <>
+            <XCircle className="mx-auto h-10 w-10 text-destructive" />
+            <p className="mt-4 font-medium text-foreground">GitLab Connection Failed</p>
+            <p className="mt-1 text-sm text-muted-foreground">{message}</p>
+            <button onClick={() => router.push("/settings")} className="mt-4 text-sm text-primary underline hover:no-underline">
+              Return to Settings
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export default function GitLabCallbackPage() {
+  return (
+    <Suspense fallback={<div className="flex h-screen items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-muted-foreground" /></div>}>
+      <GitLabCallbackContent />
+    </Suspense>
+  );
+}

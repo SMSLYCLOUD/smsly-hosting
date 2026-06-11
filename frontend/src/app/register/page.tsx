@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { Github, Chrome, Loader2 } from "lucide-react";
+import { Github, Chrome, Loader2, GitBranch, Code2 } from "lucide-react";
 
 import { setAuthTokenCookie } from "@/lib/auth-cookies";
 import { Button } from "@/components/ui/button";
@@ -135,6 +135,18 @@ export default function RegisterPage() {
               <a href={`${BACKEND_URL}/accounts/google/login/`}>
                 <Chrome className="mr-2 h-4 w-4" />
                 Sign up with Google
+              </a>
+            </Button>
+            <Button variant="outline" className="w-full h-11 relative" asChild>
+              <a href={`${BACKEND_URL}/accounts/gitlab/login/`}>
+                <GitBranch className="mr-2 h-4 w-4 text-orange-500" />
+                Sign up with GitLab
+              </a>
+            </Button>
+            <Button variant="outline" className="w-full h-11 relative" asChild>
+              <a href={`${BACKEND_URL}/accounts/bitbucket_oauth2/login/`}>
+                <Code2 className="mr-2 h-4 w-4 text-blue-500" />
+                Sign up with Bitbucket
               </a>
             </Button>
 

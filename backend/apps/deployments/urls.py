@@ -25,8 +25,12 @@ from .views_health_webhook import ServiceHealthWebhookView
 from .views_oauth import oauth_providers_status, oauth_credentials
 from .views_integrations import (
     github_connection, github_connect, github_oauth_url, github_oauth_callback,
+    gitlab_connection, gitlab_oauth_url, gitlab_oauth_callback,
+    bitbucket_connection, bitbucket_oauth_url, bitbucket_oauth_callback,
 )
 from .views_github import github_repos, github_branches, github_commits
+from .views_gitlab import gitlab_repos, gitlab_branches, gitlab_commits
+from .views_bitbucket import bitbucket_repos, bitbucket_branches, bitbucket_commits
 from .views_tokens import list_tokens, create_token, revoke_token
 from .views_servers import ManagedServerViewSet
 from .views_mesh import MeshNetworkViewSet
@@ -131,6 +135,22 @@ urlpatterns = [
     # API-based OAuth (bypasses session cookies for SPA compatibility)
     path('integrations/github/oauth-url/', github_oauth_url, name='github-oauth-url'),
     path('integrations/github/oauth-callback/', github_oauth_callback, name='github-oauth-callback'),
+    # GitLab integration
+    path('integrations/gitlab/', gitlab_connection, name='gitlab-connection'),
+    path('integrations/gitlab/oauth-url/', gitlab_oauth_url, name='gitlab-oauth-url'),
+    path('integrations/gitlab/oauth-callback/', gitlab_oauth_callback, name='gitlab-oauth-callback'),
+    # Bitbucket integration
+    path('integrations/bitbucket/', bitbucket_connection, name='bitbucket-connection'),
+    path('integrations/bitbucket/oauth-url/', bitbucket_oauth_url, name='bitbucket-oauth-url'),
+    path('integrations/bitbucket/oauth-callback/', bitbucket_oauth_callback, name='bitbucket-oauth-callback'),
+    # GitLab repos
+    path('integrations/gitlab/repos/', gitlab_repos, name='gitlab-repos'),
+    path('integrations/gitlab/branches/', gitlab_branches, name='gitlab-branches'),
+    path('integrations/gitlab/commits/', gitlab_commits, name='gitlab-commits'),
+    # Bitbucket repos
+    path('integrations/bitbucket/repos/', bitbucket_repos, name='bitbucket-repos'),
+    path('integrations/bitbucket/branches/', bitbucket_branches, name='bitbucket-branches'),
+    path('integrations/bitbucket/commits/', bitbucket_commits, name='bitbucket-commits'),
     # API Token management (for CLI)
     path('tokens/', list_tokens, name='token-list'),
     path('tokens/create/', create_token, name='token-create'),
