@@ -2811,32 +2811,25 @@ stop_node_excluded_services() {
     docker compose -f "$COMPOSE_FILE" rm -f frontend caddy >/dev/null 2>&1 || true
 }
 
-rename_conflicting_containers() {
+prune_stopped_conflicting() {
     local pattern="$1"
     local c_id=""
     local c_name=""
-    local backup_name=""
-    for c_id in $(docker ps -a -q --filter "name=${pattern}" 2>/dev/null || true); do
-        if docker inspect "$c_id" --format='{{.State.Running}}' 2>/dev/null | grep -q true; then
-            continue
-        fi
+    local removed=0
+    for c_id in $(docker ps -a -q --filter "name=${pattern}" --filter "status=exited" --filter "status=created" 2>/dev/null || true); do
         c_name=$(docker inspect "$c_id" --format='{{.Name}}' 2>/dev/null | sed 's/^\///')
         if [ -n "$c_name" ]; then
-            if [[ "$c_name" == *"-backup-containers"* ]]; then
-                continue
-            fi
-            backup_name="${c_name}-backup-containers-$(date +%s)"
-            echo -e "  \033[0;33m⚠\033[0m Container conflict: Renaming existing container '$c_name' to '$backup_name'"
-            docker rename "$c_name" "$backup_name" 2>/dev/null || true
+            docker rm "$c_id" >/dev/null 2>&1 && removed=$((removed + 1))
         fi
     done
+    [ "$removed" -gt 0 ] && echo -e "  \033[0;32m✓\033[0m Removed $removed stopped container(s)"
 }
 
 cleanup_stale_containers() {
     local compose_f="${COMPOSE_FILE:-docker-compose.prod.yml}"
     docker compose -f "$compose_f" down --remove-orphans 2>/dev/null || true
-    rename_conflicting_containers "smsly-hosting"
-    rename_conflicting_containers "smsly-"
+    prune_stopped_conflicting "smsly-hosting"
+    prune_stopped_conflicting "smsly-"
 }
 
 docker_login() {

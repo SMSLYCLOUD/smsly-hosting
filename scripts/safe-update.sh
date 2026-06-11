@@ -45,31 +45,27 @@ safe_update_preflight() {
         _warn "docker compose rm failed (project may not exist yet)"
     fi
     
-    # Rename conflicting containers instead of deleting them (skipping active running ones)
-    rename_conflicting_containers() {
+    # Remove stopped conflicting containers to prevent compose recreating them
+    prune_stopped_conflicting() {
         local pattern="$1"
         local c_id=""
         local c_name=""
-        local backup_name=""
-        for c_id in $(docker ps -a -q --filter "name=${pattern}" 2>/dev/null || true); do
-            if docker inspect "$c_id" --format='{{.State.Running}}' 2>/dev/null | grep -q true; then
-                continue
-            fi
+        local removed=0
+        for c_id in $(docker ps -a -q --filter "name=${pattern}" --filter "status=exited" --filter "status=created" 2>/dev/null || true); do
             c_name=$(docker inspect "$c_id" --format='{{.Name}}' 2>/dev/null | sed 's/^\///')
             if [ -n "$c_name" ]; then
                 if [[ "$c_name" == *"-backup-containers"* ]]; then
-                    continue
+                    docker rm "$c_id" >/dev/null 2>&1 && removed=$((removed + 1))
+                else
+                    docker rm "$c_id" >/dev/null 2>&1 && removed=$((removed + 1))
                 fi
-                backup_name="${c_name}-backup-containers-$(date +%s)"
-                _warn "Container conflict: Renaming existing container '$c_name' to '$backup_name'"
-                docker rename "$c_name" "$backup_name" 2>/dev/null || true
             fi
         done
+        [ "$removed" -gt 0 ] && _ok "Removed $removed stopped container(s) matching '$pattern'"
     }
     
-    rename_conflicting_containers "smsly-hosting"
-    rename_conflicting_containers "smsly-"
-    _ok "Renamed all conflicting stopped containers to backup-containers"
+    prune_stopped_conflicting "smsly-hosting"
+    prune_stopped_conflicting "smsly-"
 
     for cf in "$COMPOSE_FILE" "$INSTALL_DIR/infrastructure/docker/docker-compose.observability.yml"; do
         [ -f "$cf" ] || { _fail "Missing: $cf"; return 1; }
@@ -204,10 +200,14 @@ safe_update_cleanup() {
         docker stop "$c_id" >/dev/null 2>&1 || true
         docker rm "$c_id" >/dev/null 2>&1 && count=$((count + 1))
     done
+    # Also cleanup any leftover stopped smsly- containers that compose may try to revive
+    for c_id in $(docker ps -a -q --filter "name=smsly-" --filter "status=exited" 2>/dev/null || true); do
+        docker rm "$c_id" >/dev/null 2>&1 && count=$((count + 1))
+    done
     if [ "$count" -gt 0 ]; then
-        _ok "Removed $count backup container(s)"
+        _ok "Removed $count stale container(s)"
     else
-        _ok "No backup containers to clean"
+        _ok "No stale containers to clean"
     fi
     return 0
 }
