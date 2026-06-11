@@ -154,6 +154,8 @@ export default function SettingsPage() {
   const [savingDomain, setSavingDomain] = useState(false);
   const [showCfToken, setShowCfToken] = useState(false);
   const [cfTokenTouched, setCfTokenTouched] = useState(false);
+  const [recheckLoading, setRecheckLoading] = useState(false);
+  const [recheckLastRun, setRecheckLastRun] = useState<string | null>(null);
 
   const fetchProviders = useCallback(async () => {
     try {
@@ -557,6 +559,20 @@ export default function SettingsPage() {
               variant: "destructive" 
           });
       }
+  };
+
+  const handleRouteRecheck = async () => {
+    setRecheckLoading(true);
+    try {
+      const result = await systemApi.routeRecheck();
+      setRecheckLastRun(new Date().toISOString());
+      toast({ title: "Route recheck triggered", description: result.message });
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.response?.data?.message || "Failed to trigger route recheck.";
+      toast({ title: "Error", description: msg, variant: "destructive" });
+    } finally {
+      setRecheckLoading(false);
+    }
   };
 
   const handleSaveDomainConfig = async () => {
@@ -1487,6 +1503,36 @@ export default function SettingsPage() {
                       ))}
                     </TableBody>
                   </Table>
+                </CardContent>
+              </Card>
+
+              {/* Route Recheck */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2"><SettingsIcon className="h-5 w-5 text-green-500" /> Route Recheck</CardTitle>
+                  <CardDescription>Re-check network routes across the mesh to ensure optimal routing and connectivity.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex flex-col gap-4">
+                    <p className="text-sm text-muted-foreground">
+                      Trigger a fresh scan of all mesh network routes. This can help resolve connectivity
+                      issues and ensure traffic is flowing through the best available paths.
+                    </p>
+                    <div className="flex items-center gap-3">
+                      <Button onClick={handleRouteRecheck} disabled={recheckLoading}>
+                        {recheckLoading ? (
+                          <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Rechecking...</>
+                        ) : (
+                          'Recheck Routes'
+                        )}
+                      </Button>
+                      {recheckLastRun && (
+                        <span className="text-xs text-muted-foreground">
+                          Last recheck: {new Date(recheckLastRun).toLocaleString()}
+                        </span>
+                      )}
+                    </div>
+                  </div>
                 </CardContent>
               </Card>
 

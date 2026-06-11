@@ -1,63 +1,114 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { Loader2, DollarSign, RefreshCw, Save } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { Loader2, DollarSign, RefreshCw, Plus } from "lucide-react";
 
-import { billingApi, PricingPlan } from "@/lib/api";
+import { resourcePriceApi, ResourcePrice } from "@/lib/api";
 import { DashboardShell } from "@/components/layout/DashboardShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/components/ui/use-toast";
 import { Switch } from "@/components/ui/switch";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { ResourcePriceCard } from "@/components/billing/ResourcePriceCard";
+import { Badge } from "@/components/ui/badge";
+
+const RESOURCE_TYPES = [
+  "compute", "storage", "bandwidth", "database", "cache", "dns",
+  "load_balancer", "cdn", "email", "monitoring", "backup",
+  "ai_gpu", "function", "container", "vpc",
+];
+
+const UNIT_OPTIONS = ["hour", "month", "gb", "mb", "tb", "request", "unit", "gb_month", "mb_month"];
+
+function emptyPrice(): Partial<ResourcePrice> {
+  return {
+    resource_type: "compute",
+    name: "",
+    description: "",
+    price_per_unit: 0,
+    unit: "hour",
+    currency: "USD",
+    is_active: true,
+    tier: "",
+  };
+}
 
 export default function AdminPricingPage() {
-  const [plans, setPlans] = useState<PricingPlan[]>([]);
+  const [prices, setPrices] = useState<ResourcePrice[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [savingPlanId, setSavingPlanId] = useState<number | null>(null);
+  const [filter, setFilter] = useState<string>("all");
+  const [createOpen, setCreateOpen] = useState(false);
+  const [formData, setFormData] = useState<Partial<ResourcePrice>>(emptyPrice());
+  const [creating, setCreating] = useState(false);
   const [accessDenied, setAccessDenied] = useState(false);
   const { toast } = useToast();
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setRefreshing(true);
-      const data = await billingApi.adminGetPlans();
-      setPlans(data);
+      const data = await resourcePriceApi.list();
+      setPrices(Array.isArray(data) ? data : data?.results || []);
     } catch (err: any) {
-      if (err.response?.status === 403) {
+      if (err?.response?.status === 403) {
         setAccessDenied(true);
       } else {
-        toast({ title: "Failed to load pricing plans", variant: "destructive" });
+        toast({ title: "Failed to load resource prices", variant: "destructive" });
       }
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  };
+  }, [toast]);
 
   useEffect(() => {
     fetchData();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [fetchData]);
 
-  const handleUpdatePlan = async (id: number) => {
-    const planToUpdate = plans.find((p) => p.id === id);
-    if (!planToUpdate) return;
+  const filtered = filter === "all" ? prices : prices.filter((p) => p.resource_type === filter);
 
+  const handleUpdate = async (id: number, data: Partial<ResourcePrice>) => {
     try {
-      setSavingPlanId(id);
-      await billingApi.adminUpdatePlan(id, planToUpdate);
-      toast({ title: `Plan "${planToUpdate.name}" updated successfully` });
-      fetchData(); // Refresh to get the latest from server
-    } catch (err) {
-      toast({ title: "Failed to update plan", variant: "destructive" });
-    } finally {
-      setSavingPlanId(null);
+      await resourcePriceApi.update(String(id), data);
+      setPrices((prev) => prev.map((p) => (p.id === id ? { ...p, ...data } : p)));
+      toast({ title: "Resource price updated" });
+    } catch {
+      toast({ title: "Failed to update resource price", variant: "destructive" });
+      throw new Error("Update failed");
     }
   };
 
-  const handleChange = (id: number, field: keyof PricingPlan, value: string | number | boolean) => {
-    setPlans(plans.map((p) => (p.id === id ? { ...p, [field]: value } : p)));
+  const handleDelete = async (id: number) => {
+    try {
+      await resourcePriceApi.delete(String(id));
+      setPrices((prev) => prev.filter((p) => p.id !== id));
+      toast({ title: "Resource price deleted" });
+    } catch {
+      toast({ title: "Failed to delete resource price", variant: "destructive" });
+    }
+  };
+
+  const handleCreate = async () => {
+    if (!formData.name?.trim()) {
+      toast({ title: "Name is required", variant: "destructive" });
+      return;
+    }
+    try {
+      setCreating(true);
+      const created = await resourcePriceApi.create(formData);
+      setPrices((prev) => [...prev, created]);
+      setCreateOpen(false);
+      setFormData(emptyPrice());
+      toast({ title: "Resource price created" });
+    } catch {
+      toast({ title: "Failed to create resource price", variant: "destructive" });
+    } finally {
+      setCreating(false);
+    }
   };
 
   if (loading) {
@@ -79,7 +130,7 @@ export default function AdminPricingPage() {
           </div>
           <h2 className="text-2xl font-bold mb-2">Admin Access Required</h2>
           <p className="text-muted-foreground max-w-md">
-            You do not have permission to view or manage pricing plans. This area is restricted to staff administrators.
+            You do not have permission to manage resource prices. This area is restricted to staff administrators.
           </p>
         </div>
       </DashboardShell>
@@ -93,142 +144,172 @@ export default function AdminPricingPage() {
           <div>
             <h1 className="text-3xl font-bold text-foreground flex items-center gap-3">
               <DollarSign className="w-8 h-8 text-primary" />
-              Price Settings
+              Resource Prices
             </h1>
-            <p className="text-muted-foreground mt-1">Manage platform pricing plans and feature limits.</p>
+            <p className="text-muted-foreground mt-1">Manage per-unit pricing for platform resources.</p>
           </div>
-
           <div className="flex items-center gap-3">
+            <Button onClick={() => setCreateOpen(true)}>
+              <Plus className="h-4 w-4 mr-2" />
+              Add Price
+            </Button>
             <Button variant="outline" size="icon" onClick={fetchData} disabled={refreshing}>
               <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
             </Button>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-          {plans.map((plan) => (
-            <div key={plan.id} className="bg-card border border-border rounded-xl shadow-sm p-6 space-y-6">
-              <div className="flex items-center justify-between pb-4 border-b border-border">
-                <div>
-                  <h2 className="text-xl font-semibold text-foreground">{plan.name}</h2>
-                  <p className="text-sm text-muted-foreground">{plan.slug}</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Label htmlFor={`active-${plan.id}`} className="text-sm text-muted-foreground">Active</Label>
-                  <Switch
-                    id={`active-${plan.id}`}
-                    checked={plan.is_active}
-                    onCheckedChange={(checked) => handleChange(plan.id, "is_active", checked)}
-                  />
-                </div>
-              </div>
+        <div className="flex flex-wrap items-center gap-2 mb-6">
+          <Badge
+            variant={filter === "all" ? "default" : "outline"}
+            className="cursor-pointer"
+            onClick={() => setFilter("all")}
+          >
+            All
+          </Badge>
+          {RESOURCE_TYPES.map((type) => (
+            <Badge
+              key={type}
+              variant={filter === type ? "default" : "outline"}
+              className="cursor-pointer capitalize"
+              onClick={() => setFilter(type)}
+            >
+              {type.replace(/_/g, " ")}
+            </Badge>
+          ))}
+        </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor={`price-${plan.id}`}>Monthly Price (USD)</Label>
-                  <div className="relative">
-                    <DollarSign className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                    <Input
-                      id={`price-${plan.id}`}
-                      type="number"
-                      className="pl-9"
-                      value={plan.price_monthly_usd}
-                      onChange={(e) => handleChange(plan.id, "price_monthly_usd", parseFloat(e.target.value) || 0)}
-                    />
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor={`price-year-${plan.id}`}>Yearly Price (USD)</Label>
-                  <div className="relative">
-                    <DollarSign className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                    <Input
-                      id={`price-year-${plan.id}`}
-                      type="number"
-                      className="pl-9"
-                      value={plan.price_yearly_usd}
-                      onChange={(e) => handleChange(plan.id, "price_yearly_usd", parseFloat(e.target.value) || 0)}
-                    />
-                  </div>
-                </div>
-              </div>
+        {filtered.length === 0 ? (
+          <div className="py-12 text-center text-muted-foreground bg-card border border-border rounded-xl">
+            {prices.length === 0
+              ? "No resource prices configured yet. Click \"Add Price\" to create one."
+              : "No prices match the selected filter."}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+            {filtered.map((price) => (
+              <ResourcePriceCard
+                key={price.id}
+                price={price}
+                onUpdate={handleUpdate}
+                onDelete={handleDelete}
+              />
+            ))}
+          </div>
+        )}
+      </div>
 
-              <div className="space-y-4">
-                <h3 className="text-sm font-medium text-foreground">Resource Limits</h3>
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                  <div className="space-y-1">
-                    <Label className="text-xs text-muted-foreground">Max Services</Label>
-                    <Input
-                      type="number"
-                      value={plan.max_services}
-                      onChange={(e) => handleChange(plan.id, "max_services", parseInt(e.target.value, 10) || 0)}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs text-muted-foreground">Max CPU Cores</Label>
-                    <Input
-                      type="number"
-                      step="0.1"
-                      value={plan.max_cpu_cores}
-                      onChange={(e) => handleChange(plan.id, "max_cpu_cores", parseFloat(e.target.value) || 0)}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs text-muted-foreground">Max RAM (MB)</Label>
-                    <Input
-                      type="number"
-                      value={plan.max_memory_mb}
-                      onChange={(e) => handleChange(plan.id, "max_memory_mb", parseInt(e.target.value, 10) || 0)}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs text-muted-foreground">Max Storage (GB)</Label>
-                    <Input
-                      type="number"
-                      value={plan.max_storage_gb}
-                      onChange={(e) => handleChange(plan.id, "max_storage_gb", parseInt(e.target.value, 10) || 0)}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs text-muted-foreground">Max Addons</Label>
-                    <Input
-                      type="number"
-                      value={plan.max_addons}
-                      onChange={(e) => handleChange(plan.id, "max_addons", parseInt(e.target.value, 10) || 0)}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs text-muted-foreground">Max Team Members</Label>
-                    <Input
-                      type="number"
-                      value={plan.max_team_members}
-                      onChange={(e) => handleChange(plan.id, "max_team_members", parseInt(e.target.value, 10) || 0)}
-                    />
-                  </div>
-                </div>
-              </div>
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Add Resource Price</DialogTitle>
+            <DialogDescription>Create a new pricing entry for a platform resource.</DialogDescription>
+          </DialogHeader>
 
-              <div className="pt-4 flex justify-end">
-                <Button
-                  onClick={() => handleUpdatePlan(plan.id)}
-                  disabled={savingPlanId === plan.id}
+          <div className="grid gap-4 py-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Resource Type</Label>
+                <Select
+                  value={formData.resource_type}
+                  onValueChange={(v) => setFormData({ ...formData, resource_type: v })}
                 >
-                  {savingPlanId === plan.id ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <Save className="mr-2 h-4 w-4" />
-                  )}
-                  Save Changes
-                </Button>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {RESOURCE_TYPES.map((t) => (
+                      <SelectItem key={t} value={t} className="capitalize">{t.replace(/_/g, " ")}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Tier</Label>
+                <Input
+                  value={formData.tier}
+                  onChange={(e) => setFormData({ ...formData, tier: e.target.value })}
+                  placeholder="e.g. standard, premium"
+                />
               </div>
             </div>
-          ))}
-          {plans.length === 0 && (
-             <div className="col-span-full py-12 text-center text-muted-foreground bg-card border border-border rounded-xl">
-               No pricing plans found.
-             </div>
-          )}
-        </div>
-      </div>
+
+            <div className="space-y-2">
+              <Label>Name</Label>
+              <Input
+                value={formData.name}
+                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                placeholder="e.g. Standard Compute CPU"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label>Description</Label>
+              <Textarea
+                value={formData.description}
+                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                placeholder="Optional description of this pricing entry"
+                rows={2}
+              />
+            </div>
+
+            <div className="grid grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <Label>Price per Unit</Label>
+                <Input
+                  type="number"
+                  step="0.0001"
+                  value={formData.price_per_unit}
+                  onChange={(e) => setFormData({ ...formData, price_per_unit: parseFloat(e.target.value) || 0 })}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Unit</Label>
+                <Select
+                  value={formData.unit}
+                  onValueChange={(v) => setFormData({ ...formData, unit: v })}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {UNIT_OPTIONS.map((u) => (
+                      <SelectItem key={u} value={u}>{u}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Currency</Label>
+                <Input
+                  value={formData.currency}
+                  onChange={(e) => setFormData({ ...formData, currency: e.target.value })}
+                  placeholder="USD"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Switch
+                id="create-active"
+                checked={formData.is_active ?? true}
+                onCheckedChange={(checked) => setFormData({ ...formData, is_active: checked })}
+              />
+              <Label htmlFor="create-active">Active</Label>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setCreateOpen(false); setFormData(emptyPrice()); }}>
+              Cancel
+            </Button>
+            <Button onClick={handleCreate} disabled={creating}>
+              {creating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Create
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </DashboardShell>
   );
 }

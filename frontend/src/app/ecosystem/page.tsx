@@ -5,11 +5,13 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     Scan, Rocket, CheckCircle2, XCircle, AlertCircle, Loader2, Plus,
     Server, Database, Globe, GitBranch, Zap, ArrowRight, RefreshCw, Sparkles,
-    Code, CheckCircle, AlertTriangle
+    Code, CheckCircle, AlertTriangle, Variable
 } from 'lucide-react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import Link from 'next/link';
 import { TopologyCanvas } from './components/TopologyCanvas';
+import { BulkEnvDialog } from './components/BulkEnvDialog';
+import { CachedScanCard } from './components/CachedScanCard';
 
 // Types
 interface ServicePlan {
@@ -135,6 +137,17 @@ export default function EcosystemPage() {
 
     const [aiProviders, setAiProviders] = useState<any[]>([]);
     const [selectedProvider, setSelectedProvider] = useState<string>(() => loadState('aiProvider', 'auto'));
+
+    // Bulk env dialog
+    const [bulkEnvOpen, setBulkEnvOpen] = useState(false);
+
+    // Derive app list from plan for bulk env dialog
+    const ecosystemApps = plan?.services.map(s => ({
+        id: s.repo || s.name || `svc-${Math.random().toString(36).slice(2, 8)}`,
+        name: s.name || s.repo,
+        repo: s.repo,
+        stack: s.stack,
+    })) || [];
 
     // Deep scan states
     const [isDeepScanning, setIsDeepScanning] = useState(false);
@@ -505,14 +518,27 @@ export default function EcosystemPage() {
                             </p>
                         </div>
                         {step !== 'idle' && step !== 'scanning' && (
-                            <button
-                                onClick={() => { clearState(); setStep('idle'); setPlan(null); setPlanId(''); setError(null); }}
-                                className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1"
-                            >
-                                <RefreshCw size={14} /> Start Over
-                            </button>
+                            <div className="flex items-center gap-2">
+                                {plan && (
+                                    <button
+                                        onClick={() => setBulkEnvOpen(true)}
+                                        className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1"
+                                    >
+                                        <Variable size={14} /> Bulk Env Update
+                                    </button>
+                                )}
+                                <button
+                                    onClick={() => { clearState(); setStep('idle'); setPlan(null); setPlanId(''); setError(null); }}
+                                    className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1"
+                                >
+                                    <RefreshCw size={14} /> Start Over
+                                </button>
+                            </div>
                         )}
                     </div>
+
+                    {/* Cached Scan Card */}
+                    <CachedScanCard />
 
                     {/* Error Banner */}
                     <AnimatePresence>
@@ -1218,6 +1244,13 @@ export default function EcosystemPage() {
                     )}
                 </motion.div>
             </div>
+
+            {/* Bulk Env Update Dialog */}
+            <BulkEnvDialog
+                open={bulkEnvOpen}
+                onOpenChange={setBulkEnvOpen}
+                apps={ecosystemApps}
+            />
         </DashboardShell>
     );
 }

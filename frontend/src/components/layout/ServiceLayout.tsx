@@ -1,7 +1,8 @@
 import {
     ArrowLeft, GitCommit, Activity, Terminal, Shield, Settings,
     Clock, Globe, Database, List, Timer, HardDrive, Puzzle, Network, Route,
-    HeartPulse, Cpu, BarChart3, Box, FolderOpen, ShieldCheck, Sparkles, FileSearch, Layers, Cloud
+    HeartPulse, Cpu, BarChart3, Box, FolderOpen, ShieldCheck, Sparkles, FileSearch, Layers, Cloud,
+    CheckCircle2
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -47,6 +48,7 @@ export function ServiceLayout({ service, activeTab, setActiveTab, children }: Se
         { id: 'cloud-storage', label: 'Cloud Storage', icon: Cloud },
         { id: 'cron', label: 'Cron Jobs', icon: Timer },
         { id: 'backups', label: 'Backups', icon: HardDrive },
+        { id: 'approvals', label: 'Approvals', icon: CheckCircle2 },
         { id: 'safedeploy', label: 'SafeDeploy', icon: ShieldCheck },
         { id: 'settings', label: 'Settings', icon: Settings },
         { id: 'advanced', label: 'Advanced', icon: Shield },

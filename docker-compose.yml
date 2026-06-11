@@ -31,6 +31,12 @@ services:
     tmpfs:
       - /run
       - /tmp
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:2375/version || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
 
   # Fast worker (Heartbeats, Metrics) - Low latency, high frequency
   celery-fast:
@@ -201,7 +207,7 @@ services:
         condition: service_healthy
     healthcheck:
       test:
-        ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+        ["CMD-SHELL", "wget -q -O- http://localhost:8000/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 6
@@ -231,6 +237,7 @@ services:
       - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-smsly_hosting}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - REDBEAT_REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
     depends_on:
       backend:
         condition: service_healthy
@@ -263,7 +270,7 @@ services:
       backend:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://127.0.0.1:3000/ || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:3000/ || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 5
@@ -310,7 +317,7 @@ services:
     networks:
       - smsly-net
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:3100/ready || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:3100/ready || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -332,7 +339,7 @@ services:
     networks:
       - smsly-net
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:9080/ready || exit 1"]
+      test: ["CMD", "/usr/bin/promtail", "--version"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -361,7 +368,7 @@ services:
     networks:
       - smsly-net
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:9090/-/healthy || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:9090/-/healthy || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -389,7 +396,7 @@ services:
     networks:
       - smsly-net
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8080/healthz || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:8080/healthz || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -413,7 +420,7 @@ services:
     networks:
       - smsly-net
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:9100/metrics || exit 1"]
+      test: ["CMD", "/bin/node_exporter", "--version"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -434,10 +441,11 @@ services:
     networks:
       - smsly-net
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:9234/health || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:9234/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 30s
 
   # Grafana - Dashboards and visualization
   grafana:
@@ -464,7 +472,7 @@ services:
       - loki
       - prometheus
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:3000/api/health || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:3000/api/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

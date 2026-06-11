@@ -735,6 +735,43 @@ export const platformApi = {
   },
 };
 
+export interface Blueprint {
+  id: string;
+  name: string;
+  slug: string;
+  description: string;
+  category: string;
+  icon: string;
+  color: string;
+  repository_url?: string;
+  documentation_url?: string;
+  tags?: string[];
+  is_featured: boolean;
+  is_official: boolean;
+  min_resources?: { cpu_cores: number; memory_mb: number; storage_gb: number };
+  config_schema?: Record<string, any>;
+  created_at: string;
+  updated_at: string;
+}
+
+export const blueprintsApi = {
+  list: async (): Promise<Blueprint[]> => {
+    const response = await api.get('/blueprints/');
+    const data = response.data;
+    if (Array.isArray(data)) return data;
+    if (data && Array.isArray(data.results)) return data.results;
+    return [];
+  },
+  get: async (id: string): Promise<Blueprint> => {
+    const response = await api.get(`/blueprints/${id}/`);
+    return response.data;
+  },
+  deploy: async (id: string): Promise<any> => {
+    const response = await api.post(`/blueprints/${id}/one_click_deploy/`);
+    return response.data;
+  },
+};
+
 export const templatesApi = {
   list: async (): Promise<any[]> => {
     const response = await api.get('/templates/');
@@ -801,6 +838,9 @@ export const systemApi = {
     return response.data;
   },
   
+  routeRecheck: (): Promise<{ status: string; message: string }> =>
+    api.post('/system/route-recheck/').then(r => r.data),
+
   resources: async (): Promise<{ cpu_cores: number; ram_mb: number; swap_mb: number }> => {
     const response = await api.get('/system/resources/');
     return response.data;
@@ -1075,6 +1115,37 @@ export const teamsApi = {
     const response = await api.post(`/teams/${teamId}/remove_member/`, { user_id: userId });
     return response.data;
   },
+};
+
+// ─── Deployment Approvals API ───────────────────────────────────────────────
+
+export interface DeploymentApproval {
+  id: string;
+  requester: string;
+  requested_at: string;
+  status: 'pending' | 'approved' | 'rejected';
+  environment?: string;
+  reason?: string;
+  approved_at?: string;
+  rejected_at?: string;
+  approved_by?: string;
+  rejected_by?: string;
+}
+
+export const deploymentApprovalApi = {
+  list: (serviceId: string): Promise<DeploymentApproval[]> =>
+    api.get(`/services/${serviceId}/approvals/`).then(r => {
+      const data = r.data;
+      if (Array.isArray(data)) return data;
+      if (data && Array.isArray(data.results)) return data.results;
+      return [];
+    }),
+  create: (serviceId: string, data: any): Promise<DeploymentApproval> =>
+    api.post(`/services/${serviceId}/approvals/`, data).then(r => r.data),
+  approve: (serviceId: string, approvalId: string): Promise<DeploymentApproval> =>
+    api.post(`/services/${serviceId}/approvals/${approvalId}/approve/`).then(r => r.data),
+  reject: (serviceId: string, approvalId: string, reason?: string): Promise<DeploymentApproval> =>
+    api.post(`/services/${serviceId}/approvals/${approvalId}/reject/`, { reason }).then(r => r.data),
 };
 
 // ─── Servers API ────────────────────────────────────────────────────────────
@@ -1435,6 +1506,20 @@ export interface UsageSummary {
   active_addons: number;
 }
 
+export interface ResourcePrice {
+  id: number;
+  resource_type: string;
+  name: string;
+  description: string;
+  price_per_unit: number;
+  unit: string;
+  currency: string;
+  is_active: boolean;
+  tier: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export const billingApi = {
   getPlans: async (): Promise<PricingPlan[]> => {
     const res = await api.get('/billing/plans/');
@@ -1504,7 +1589,16 @@ export const billingApi = {
   adminGetCosts: async (): Promise<any> => {
     const res = await api.get('/billing/admin/analytics/costs/');
     return res.data;
-  }
+  },
+
+};
+
+export const resourcePriceApi = {
+  list: (params?: any) => api.get('/billing/admin/resource-prices/', { params }).then(r => r.data),
+  create: (data: any) => api.post('/billing/admin/resource-prices/', data).then(r => r.data),
+  detail: (id: string) => api.get(`/billing/admin/resource-prices/${id}/`).then(r => r.data),
+  update: (id: string, data: any) => api.put(`/billing/admin/resource-prices/${id}/`, data).then(r => r.data),
+  delete: (id: string) => api.delete(`/billing/admin/resource-prices/${id}/`).then(r => r.data),
 };
 
 // ─── Core API ───────────────────────────────────────────────────────────────
@@ -1668,6 +1762,14 @@ export const addonsApi = {
       const res = await api.post(`/addons/${addonId}/toggle_bucket_public/`, { is_public: isPublic });
       return res.data;
     },
+};
+
+export const addonMaintenanceApi = {
+  tables: (addonId: string) => api.get(`/addons/${addonId}/maintenance/tables/`).then(r => r.data),
+  query: (addonId: string, query: string) => api.post(`/addons/${addonId}/maintenance/query/`, { query }).then(r => r.data),
+  stats: (addonId: string) => api.get(`/addons/${addonId}/maintenance/stats/`).then(r => r.data),
+  vacuum: (addonId: string) => api.post(`/addons/${addonId}/maintenance/vacuum/`).then(r => r.data),
+  rotateCredentials: (addonId: string) => api.post(`/addons/${addonId}/maintenance/rotate-credentials/`).then(r => r.data),
 };
 
 export default api;
@@ -1848,3 +1950,85 @@ export const licensingApi = {
     return data;
   },
 };
+
+// ─── Cloud Resources API ───────────────────────────────────────────────────
+
+export interface CloudProvider {
+  id: string;
+  name: string;
+  provider_type: string;
+  region?: string;
+  project_id?: string;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface CloudResource {
+  id: string;
+  name: string;
+  provider: string;
+  region: string;
+  type: string;
+  status: string;
+  config: Record<string, any>;
+  created_at: string;
+  updated_at: string;
+}
+
+export const cloudResourceApi = {
+  list: () => api.get('/cloud/resources/').then(r => {
+    const data = r.data;
+    if (Array.isArray(data)) return data;
+    if (data && Array.isArray(data.results)) return data.results;
+    return [];
+  }),
+  create: (data: any) => api.post('/cloud/resources/', data).then(r => r.data),
+  detail: (id: string) => api.get(`/cloud/resources/${id}/`).then(r => r.data),
+  update: (id: string, data: any) => api.put(`/cloud/resources/${id}/`, data).then(r => r.data),
+  delete: (id: string) => api.delete(`/cloud/resources/${id}/`).then(r => r.data),
+};
+
+export interface Domain {
+  id: string;
+  name: string;
+  service?: string;
+  service_name?: string;
+  dns_managed: boolean;
+  ssl_enabled: boolean;
+  status: string;
+  target?: string;
+  record_type?: string;
+  created_at: string;
+}
+
+export const domainsApi = {
+  list: () => api.get('/domains/').then(r => {
+    const data = r.data;
+    if (Array.isArray(data)) return data;
+    if (data && Array.isArray(data.results)) return data.results;
+    return [];
+  }),
+  create: (data: any) => api.post('/domains/', data).then(r => r.data),
+  detail: (id: string) => api.get(`/domains/${id}/`).then(r => r.data),
+  update: (id: string, data: any) => api.put(`/domains/${id}/`, data).then(r => r.data),
+  delete: (id: string) => api.delete(`/domains/${id}/`).then(r => r.data),
+};
+
+export const cloudProviderApi = {
+  list: async (): Promise<CloudProvider[]> => {
+    const response = await api.get('/cloud/providers/');
+    const data = response.data;
+    if (Array.isArray(data)) return data;
+    if (data && Array.isArray(data.results)) return data.results;
+    return [];
+  },
+};
+
+// ─── Ecosystem API ────────────────────────────────────────────────────────────
+
+export const ecosystemApi = {
+  bulkUpdateEnvironment: (data: { app_ids: string[]; env_vars: Record<string, string> }) =>
+    api.post('/ecosystem/bulk-update-environment/', data).then(r => r.data),
+  cachedScan: () => api.get('/ecosystem/cached-scan/').then(r => r.data),
+};
+

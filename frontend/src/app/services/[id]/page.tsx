@@ -26,6 +26,7 @@ import { AiRouterTab } from '@/components/settings/AiRouterTab';
 import BackupsTab from '@/components/settings/BackupsTab';
 import { CloudStorageTab } from '@/components/settings/CloudStorageTab';
 import { SafeDeployPanel } from '@/components/deployments/SafeDeployPanel';
+import { DeploymentApprovalsPanel } from '@/components/deployments/DeploymentApprovalsPanel';
 import { toast } from '@/components/ui/use-toast';
 import { ResourceAlerts } from '@/components/dashboard/ResourceAlerts';
 import { LogsView } from '@/components/logs/LogsView';
@@ -834,6 +835,8 @@ export default function ServiceDetailPage() {
             {activeTab === 'backups' && <BackupsTab serviceId={service.id} />}
 
             {activeTab === 'cloud-storage' && <CloudStorageTab serviceId={service.id} />}
+
+            {activeTab === 'approvals' && <DeploymentApprovalsPanel serviceId={service.id} />}
 
             {activeTab === 'safedeploy' && <SafeDeployPanel serviceId={service.id} />}
 
