@@ -197,6 +197,22 @@ safe_update_rollback() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
+safe_update_cleanup() {
+    _step "Cleaning Up Backup Containers"
+    local count=0
+    for c_id in $(docker ps -a -q --filter "name=-backup-containers-" 2>/dev/null || true); do
+        docker stop "$c_id" >/dev/null 2>&1 || true
+        docker rm "$c_id" >/dev/null 2>&1 && count=$((count + 1))
+    done
+    if [ "$count" -gt 0 ]; then
+        _ok "Removed $count backup container(s)"
+    else
+        _ok "No backup containers to clean"
+    fi
+    return 0
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Standalone mode (bash scripts/safe-update.sh)
 # ══════════════════════════════════════════════════════════════════════════════
 if [ "$SAFE_UPDATE_SOURCED" = "false" ]; then
@@ -205,6 +221,7 @@ if [ "$SAFE_UPDATE_SOURCED" = "false" ]; then
     bash "$INSTALL_DIR/install.sh" --update >> "$CLEAN_LOG" 2>&1 || { _warn "Update failed — rolling back"; safe_update_rollback; exit 1; }
     sleep 30
     safe_update_post_verify || { _warn "Post-verify failed — rolling back"; safe_update_rollback; exit 1; }
+    safe_update_cleanup
     echo -e "\n${GREEN}═══════════════════════════════════════════════════════════════${NC}"
     echo -e "${GREEN}  ✓ UPDATE SUCCESSFUL — All systems healthy${NC}"
     echo -e "${GREEN}═══════════════════════════════════════════════════════════════${NC}"
