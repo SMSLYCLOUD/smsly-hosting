@@ -78,6 +78,50 @@ def _redact_transfer_text(text: str) -> str:
     return safe
 
 
+class _LocalSSHClient:
+    """Mimics SSHClient interface using local subprocess for when target is local."""
+
+    def __init__(self, log_fn):
+        self._log = log_fn
+
+    def connect(self):
+        pass  # Nothing to connect
+
+    def close(self):
+        pass
+
+    def check_docker(self):
+        import subprocess as sp
+        try:
+            sp.run(['docker', 'info'], capture_output=True, timeout=10, check=True)
+            return True
+        except Exception:
+            return False
+
+    def install_docker(self):
+        self._log("[local] Docker already installed — skipping installation")
+
+    def upload_file(self, local_path, remote_path):
+        import shutil
+        self._log(f"[local] Copying {local_path} → {remote_path}")
+        shutil.copy2(local_path, remote_path)
+
+    def exec_command(self, command, timeout=60, raise_on_error=True):
+        import subprocess as sp
+        self._log(f"[local] {command[:200]}")
+        try:
+            proc = sp.run(command, shell=True, capture_output=True, text=True, timeout=timeout)
+            if proc.returncode != 0 and raise_on_error:
+                raise RuntimeError(
+                    f"Local command failed (exit {proc.returncode}): {proc.stderr.strip()[:500]}"
+                )
+            return proc.stdout, proc.stderr, proc.returncode
+        except sp.TimeoutExpired:
+            if raise_on_error:
+                raise RuntimeError(f"Local command timed out after {timeout}s")
+            return '', f'timeout after {timeout}s', -1
+
+
 class ServerTransferService:
     def __init__(self, transfer):
         self.transfer = transfer
@@ -98,6 +142,39 @@ class ServerTransferService:
         self.transfer.logs = combined
         self.transfer.save(update_fields=['logs'])
         logger.info("Transfer %s: %s", self.transfer.id, _redact_transfer_text(message))
+
+    def _target_is_local(self):
+        """Return True when the transfer target is the local machine (no SSH needed)."""
+        ip = (self.transfer.target_server_ip or '').strip()
+        if not ip:
+            return True
+        local_ips = {'127.0.0.1', 'localhost', ''}
+        try:
+            cfg = PlatformConfig.load()
+            if cfg and cfg.server_ip:
+                local_ips.add(cfg.server_ip.strip())
+        except Exception:
+            pass
+        return ip in local_ips or ip.startswith('10.100.0.')
+
+    def _local_exec(self, command, timeout=60, raise_on_error=True):
+        """Execute a command locally when the target is the local machine."""
+        import subprocess as sp
+        self._log(f"[local] {command[:200]}")
+        try:
+            proc = sp.run(
+                command, shell=True, capture_output=True, text=True,
+                timeout=timeout,
+            )
+            if proc.returncode != 0 and raise_on_error:
+                raise RuntimeError(
+                    f"Local command failed (exit {proc.returncode}): {proc.stderr.strip()[:500]}"
+                )
+            return proc.stdout, proc.stderr, proc.returncode
+        except sp.TimeoutExpired:
+            if raise_on_error:
+                raise RuntimeError(f"Local command timed out after {timeout}s")
+            return '', f'timeout after {timeout}s', -1
 
     def _target_server_record(self):
         from ..models_core import ManagedServer
@@ -206,6 +283,12 @@ class ServerTransferService:
                 self.source_ssh.close()
 
     def _init_ssh(self):
+        # Use local execution when target is the local node
+        if self._target_is_local():
+            self._log("Target is local node — using local execution (no SSH needed).")
+            self.ssh = _LocalSSHClient(self._log)
+            return
+
         key = (self.transfer.target_ssh_key or '').strip()
         password = (self.transfer.target_ssh_password or '').strip()
 
@@ -246,10 +329,19 @@ class ServerTransferService:
 
     def _init_source_ssh(self):
         """Open an SSH connection to the source server for direct node-to-node transfers."""
-        if not self.transfer.source_server_ip:
+        if not self.transfer.source_server_ip and not self.transfer.source_server_id:
             return  # Source is local
 
-        # Skip SSH initialization if the source IP matches a local IP
+        # Resolve the real source IP from source_server_id if needed
+        source_ip = self.transfer.source_server_ip
+        if self.transfer.source_server_id:
+            from ..models_core import ManagedServer
+            source_server = ManagedServer.objects.filter(id=self.transfer.source_server_id).first()
+            if source_server:
+                if not source_ip or source_ip in {'127.0.0.1', 'localhost', ''}:
+                    source_ip = source_server.host or source_server.private_ip or source_server.wg_address or ''
+
+        # Skip SSH initialization if the resolved source IP is local
         local_ips = {'127.0.0.1', 'localhost', ''}
         try:
             cfg = PlatformConfig.load()
@@ -257,7 +349,7 @@ class ServerTransferService:
                 local_ips.add(cfg.server_ip.strip())
         except Exception:
             pass
-        if self.transfer.source_server_ip in local_ips or self.transfer.source_server_ip.startswith('10.100.0.'):
+        if not source_ip or source_ip in local_ips or source_ip.startswith('10.100.0.'):
             return  # Source is local
 
         key = (self.transfer.source_ssh_key or '').strip()
@@ -268,7 +360,7 @@ class ServerTransferService:
         if not has_key and not has_password:
             # Try ManagedServer credentials
             from ..models_core import ManagedServer
-            q = Q(host=self.transfer.source_server_ip)
+            q = Q(host=source_ip)
             if self.transfer.source_server_id:
                 q |= Q(id=self.transfer.source_server_id)
             server = ManagedServer.objects.filter(q).first()
@@ -285,7 +377,7 @@ class ServerTransferService:
         if not has_key and not has_password:
             raise ValueError("Source SSH credentials required for node-to-node transfer.")
 
-        ssh_kwargs = {'ip': self.transfer.source_server_ip}
+        ssh_kwargs = {'ip': source_ip}
         if has_password:
             ssh_kwargs['password'] = password
         elif has_key:
@@ -301,26 +393,29 @@ class ServerTransferService:
         """Step 1: create source backup and provision target."""
         self._update(5, 'Pre-flight: checking target server...')
 
-        # Pre-flight: verify Docker is available on target
-        if not self.ssh.check_docker():
-            self._update(8, 'Installing Docker on target server...')
-            self.ssh.install_docker()
-            time.sleep(5)
+        if self._target_is_local():
+            self._log("Target is local node — skipping remote Docker/backend checks.")
+        else:
+            # Pre-flight: verify Docker is available on target
             if not self.ssh.check_docker():
-                raise RuntimeError("Failed to install Docker on target server.")
+                self._update(8, 'Installing Docker on target server...')
+                self.ssh.install_docker()
+                time.sleep(5)
+                if not self.ssh.check_docker():
+                    raise RuntimeError("Failed to install Docker on target server.")
 
-        # Pre-flight: for SERVICE transfers, verify CloudNeuron backend is running
-        if self.transfer.transfer_type == 'SERVICE':
-            backend_container = self._find_remote_backend_container(required=False)
-            if not backend_container:
-                self._ensure_target_platform_started()
+            # Pre-flight: for SERVICE transfers, verify backend is running on target
+            if self.transfer.transfer_type == 'SERVICE':
                 backend_container = self._find_remote_backend_container(required=False)
-            if not backend_container:
-                raise RuntimeError(
-                    "Grid backend container not found on target server. "
-                    "Please install Grid on the target before transferring services."
-                )
-            self._wait_for_remote_backend_ready(backend_container)
+                if not backend_container:
+                    self._ensure_target_platform_started()
+                    backend_container = self._find_remote_backend_container(required=False)
+                if not backend_container:
+                    raise RuntimeError(
+                        "Grid backend container not found on target server. "
+                        "Please install Grid on the target before transferring services."
+                    )
+                self._wait_for_remote_backend_ready(backend_container)
 
         self._update(10, 'Creating backup on source server...')
 
@@ -360,30 +455,33 @@ class ServerTransferService:
         remote_path = f"/tmp/{_safe_backup_basename(local_path)}"
         self._uploaded_remote_backup_path = remote_path
 
-        try:
-            self.ssh.upload_file(local_path, remote_path)
-        finally:
-            if temp_decrypted and os.path.exists(temp_decrypted):
-                os.remove(temp_decrypted)
+        if self._target_is_local():
+            self._log(f"Target is local — backup already available at {local_path}")
+            self._uploaded_remote_backup_path = local_path
+        else:
+            try:
+                self.ssh.upload_file(local_path, remote_path)
+            finally:
+                if temp_decrypted and os.path.exists(temp_decrypted):
+                    os.remove(temp_decrypted)
 
-        if self.transfer.transfer_type == 'FULL':
-            install_script = os.path.join(settings.BASE_DIR, '../install.sh')
-            if os.path.exists(install_script):
-                # Enforce checksum env for supply-chain safety
-                checksum = os.environ.get("SMSLY_INSTALL_SCRIPT_SHA256", "").strip()
-                if not checksum:
-                    raise ValueError("SMSLY_INSTALL_SCRIPT_SHA256 is required for full-server transfer.")
-                self.ssh.upload_file(install_script, "/tmp/install.sh")
-                self.ssh.exec_command("chmod +x /tmp/install.sh")
-                self.ssh.exec_command(
-                    "actual=$(sha256sum /tmp/install.sh | awk '{print $1}'); "
-                    f"[ \"$actual\" = {shlex.quote(checksum)} ] || "
-                    "{ echo 'install.sh checksum mismatch' >&2; exit 44; }"
-                )
+            if self.transfer.transfer_type == 'FULL':
+                install_script = os.path.join(settings.BASE_DIR, '../install.sh')
+                if os.path.exists(install_script):
+                    checksum = os.environ.get("SMSLY_INSTALL_SCRIPT_SHA256", "").strip()
+                    if not checksum:
+                        raise ValueError("SMSLY_INSTALL_SCRIPT_SHA256 is required for full-server transfer.")
+                    self.ssh.upload_file(install_script, "/tmp/install.sh")
+                    self.ssh.exec_command("chmod +x /tmp/install.sh")
+                    self.ssh.exec_command(
+                        "actual=$(sha256sum /tmp/install.sh | awk '{print $1}'); "
+                        f"[ \"$actual\" = {shlex.quote(checksum)} ] || "
+                        "{ echo 'install.sh checksum mismatch' >&2; exit 44; }"
+                    )
 
-            local_env_path = os.path.join(settings.BASE_DIR, '../.env')
-            if os.path.exists(local_env_path):
-                self.ssh.upload_file(local_env_path, "/tmp/.env.restore")
+                local_env_path = os.path.join(settings.BASE_DIR, '../.env')
+                if os.path.exists(local_env_path):
+                    self.ssh.upload_file(local_env_path, "/tmp/.env.restore")
 
     def _restore(self):
         """Step 3: restore on target."""

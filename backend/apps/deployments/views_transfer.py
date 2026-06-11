@@ -245,13 +245,22 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
+        source_server_id = str(payload.get('source_server_id') or '')
         source_server_ip = payload.get('source_server_ip')
-        if not source_server_ip:
-            source_server_ip = PlatformConfig.load().server_ip
-
         source_ssh_key = (payload.get('source_ssh_key') or '').strip()
         source_ssh_password = (payload.get('source_ssh_password') or '').strip()
-        source_server_id = str(payload.get('source_server_id') or '')
+
+        if source_server_id:
+            source_server = ManagedServer.objects.filter(id=source_server_id, owner=request.user).first()
+            if source_server:
+                if not source_server_ip:
+                    source_server_ip = source_server.host or source_server.private_ip or source_server.wg_address
+                if not source_ssh_key and not source_ssh_password:
+                    source_ssh_key = (source_server.ssh_key or '').strip()
+                    source_ssh_password = (source_server.ssh_password or '').strip()
+
+        if not source_server_ip:
+            source_server_ip = PlatformConfig.load().server_ip
 
         if not source_server_ip:
             logger.warning("Transfer failed: Source server IP (local node IP) not set in PlatformConfig.")
@@ -336,7 +345,20 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
             target_ssh_key = str(target_server.ssh_key or '').strip()
             target_ssh_password = str(target_server.ssh_password or '').strip()
 
-        if not target_ssh_key and not target_ssh_password:
+        # Determine if target is local — no SSH needed when deploying to the local node
+        local_ips = {'127.0.0.1', 'localhost', ''}
+        try:
+            local_cfg_ip = PlatformConfig.load().server_ip
+            if local_cfg_ip:
+                local_ips.add(local_cfg_ip.strip())
+        except Exception:
+            pass
+        target_is_local = (
+            not payload.get('target_server_id')
+            and target_server_ip in local_ips
+        )
+
+        if not target_is_local and not target_ssh_key and not target_ssh_password:
             logger.warning(f"Transfer failed: No SSH credentials found for target {target_server_ip}")
             return Response(
                 {
