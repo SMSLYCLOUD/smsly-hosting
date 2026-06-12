@@ -82,8 +82,8 @@ class BackupService:
             expected_size = 0
         else:
             path = backup.file_path
-            expected_hash = (backup.metadata or {}).get('checksum_sha256', '')
-            expected_size = backup.size_bytes
+            expected_hash = (getattr(backup, 'metadata', None) or {}).get('checksum_sha256', '')
+            expected_size = getattr(backup, 'size_bytes', 0) or 0
         if not path or not os.path.exists(path):
             raise FileNotFoundError("Backup archive file not found.")
         if expected_size and os.path.getsize(path) != expected_size:
@@ -352,11 +352,14 @@ class BackupService:
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
 
-    def restore_service(self, backup_id, target_service_id=None, requesting_user_id=None):
+    def restore_service(self, backup_id, target_service_id=None, requesting_user_id=None, raise_on_snapshot_failure=False):
         """
         Restore a service from backup.
         If target_service_id is provided, restore into that service (overwrite).
         Otherwise, restore into the original service.
+        If raise_on_snapshot_failure is True, the function raises when the
+        pre-restore safety snapshot cannot be created. By default the failure
+        is logged but the restore continues, for backward compatibility.
         """
         backup_qs = ServiceBackup.objects.select_related('service', 'service__owner')
         if requesting_user_id is not None:
@@ -402,6 +405,11 @@ class BackupService:
                 self.backup_service(target_service.id, backup_type='PRE_TRANSFER')
             except Exception as e:
                 logger.warning(f"Failed to create pre-restore snapshot: {e}")
+                if raise_on_snapshot_failure:
+                    raise RuntimeError(
+                        f"Pre-restore snapshot failed: {e}. Refusing to restore "
+                        "because the active state would be lost on a corrupt restore."
+                    ) from e
 
             archive_path, cleanup_archive = self._prepare_archive_for_restore(backup)
             temp_dir = os.path.join(os.path.dirname(archive_path), f"restore_{uuid.uuid4().hex}")
@@ -414,7 +422,11 @@ class BackupService:
             self.backup_service(target_service.id, backup_type='PRE_TRANSFER')
         except Exception as e:
             logger.warning(f"Failed to create pre-restore snapshot: {e}")
-            # We don't fail the restore if snapshot fails, but we log it
+            if raise_on_snapshot_failure:
+                raise RuntimeError(
+                    f"Pre-restore snapshot failed: {e}. Refusing to restore "
+                    "because the active state would be lost on a corrupt restore."
+                ) from e
 
         archive_path, cleanup_archive = self._prepare_archive_for_restore(backup)
         temp_dir = os.path.join(os.path.dirname(archive_path), f"restore_{uuid.uuid4().hex}")
@@ -1128,6 +1140,16 @@ class BackupService:
             # OR we only restore data tables.
             # For the requirements, "Implement server restore path" likely implies restoring services.
 
+            # The bundled db_dump.sql is intentionally NOT restored. Surfacing a
+            # loud warning here so operators don't believe a full restore
+            # happened when it didn't.
+            if os.path.exists(os.path.join(temp_dir, "db_dump.sql")):
+                logger.warning(
+                    "restore_server: the bundled db_dump.sql was NOT restored. "
+                    "Operators must restore the database manually via psql. "
+                    "See docs/DISASTER_RECOVERY.md for the procedure."
+                )
+
             # Check if this is a full server backup (services/ dir) or a single service backup
             services_dir = os.path.join(temp_dir, "services")
             metadata_path = os.path.join(temp_dir, "metadata.json")
@@ -1722,3 +1744,138 @@ def upload_backup_to_s3(local_path: str, s3_bucket: str, s3_key: str,
     except Exception as exc:
         logger.error("S3 upload failed: %s", exc)
     return False
+
+
+def delete_cloud_backup_object(s3_bucket: str, s3_key: str,
+                               endpoint: str = '', region: str = 'us-east-1',
+                               access_key: str = '', secret_key: str = '') -> bool:
+    """Delete a previously-uploaded backup object from S3 (or R2/MinIO)."""
+    try:
+        import boto3
+        kwargs = {'aws_access_key_id': access_key, 'aws_secret_access_key': secret_key,
+                  'region_name': region}
+        if endpoint:
+            kwargs['endpoint_url'] = endpoint
+        s3 = boto3.client('s3', **kwargs)
+        s3.delete_object(Bucket=s3_bucket, Key=s3_key)
+        logger.info("Deleted s3://%s/%s", s3_bucket, s3_key)
+        return True
+    except ImportError:
+        logger.warning("boto3 not available — S3 delete skipped")
+    except Exception as exc:
+        logger.error("S3 delete failed for %s/%s: %s", s3_bucket, s3_key, exc)
+    return False
+
+
+def purge_user_backups(user_id) -> dict:
+    """
+    GDPR right-to-erasure helper.
+
+    Must be invoked BEFORE ``Service`` rows for the user are deleted, while
+    the CASCADE FK on ``ServiceBackup.service`` still resolves. Removes every
+    backup artifact owned by the given user:
+      * ``ServiceBackup.file_path`` tarballs on disk.
+      * ``ServerBackup`` rows that included any of this user's services, and
+        the tarball files referenced by them.
+      * The matching S3/R2/MinIO object for any schedule with a configured
+        cloud destination, derived from ``services_included``.
+
+    Returns a dict of counters that callers can use for audit logging.
+    """
+    from apps.deployments.models_backup import ServiceBackup, ServerBackup, BackupSchedule
+
+    counters = {
+        'service_backups_deleted': 0,
+        'service_backup_files_deleted': 0,
+        'server_backups_deleted': 0,
+        'server_backup_files_deleted': 0,
+        'cloud_objects_deleted': 0,
+        'errors': 0,
+    }
+
+    user_service_ids = list(
+        Service.objects.filter(owner_id=user_id).values_list('id', flat=True)
+    )
+
+    service_backups = list(
+        ServiceBackup.objects.select_related('service').filter(
+            service__owner_id=user_id,
+        )
+    )
+
+    schedules = {
+        sched.service_id: sched
+        for sched in BackupSchedule.objects.filter(
+            service__owner_id=user_id,
+            storage_backend='s3',
+        )
+    }
+
+    for backup in service_backups:
+        if backup.file_path and os.path.exists(backup.file_path):
+            try:
+                os.remove(backup.file_path)
+                counters['service_backup_files_deleted'] += 1
+                logger.info(
+                    "GDPR: deleted backup file %s for service %s",
+                    backup.file_path, backup.service_id,
+                )
+            except OSError as exc:
+                counters['errors'] += 1
+                logger.warning(
+                    "GDPR: failed to delete backup file %s: %s",
+                    backup.file_path, exc,
+                )
+
+        sched = schedules.get(backup.service_id)
+        if (sched and sched.s3_bucket and sched.s3_access_key
+                and backup.file_path):
+            service_name = getattr(backup.service, 'name', 'service')
+            s3_key = (
+                f"smsly-backups/{service_name}/"
+                f"{os.path.basename(backup.file_path)}"
+            )
+            if delete_cloud_backup_object(
+                sched.s3_bucket, s3_key,
+                endpoint=sched.s3_endpoint, region=sched.s3_region,
+                access_key=sched.s3_access_key, secret_key=sched.s3_secret_key,
+            ):
+                counters['cloud_objects_deleted'] += 1
+
+    delete_result = ServiceBackup.objects.filter(
+        service__owner_id=user_id,
+    ).delete()
+    counters['service_backups_deleted'] = delete_result[0]
+
+    # ServerBackups aren't tied to a single user; they reference a list of
+    # service IDs in `services_included`. We scan candidates whose list
+    # overlaps with the user's service IDs and purge the matching ones.
+    user_service_id_strs = {str(sid) for sid in user_service_ids}
+    candidate_server_backups = list(ServerBackup.objects.all())
+    server_backups = [
+        sb for sb in candidate_server_backups
+        if user_service_id_strs.intersection(
+            str(item) for item in (sb.services_included or [])
+        )
+    ]
+    for backup in server_backups:
+        if backup.file_path and os.path.exists(backup.file_path):
+            try:
+                os.remove(backup.file_path)
+                counters['server_backup_files_deleted'] += 1
+                logger.info(
+                    "GDPR: deleted server backup file %s", backup.file_path,
+                )
+            except OSError as exc:
+                counters['errors'] += 1
+                logger.warning(
+                    "GDPR: failed to delete server backup file %s: %s",
+                    backup.file_path, exc,
+                )
+    if server_backups:
+        ServerBackup.objects.filter(
+            id__in=[sb.id for sb in server_backups]
+        ).delete()
+    counters['server_backups_deleted'] = len(server_backups)
+
+    return counters

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
+// This page targets /api/v1/domains/, served by apps.domains.urls.GlobalDomainViewSet.
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Globe, Plus, RefreshCw, Search, Filter, Loader2,
