@@ -368,13 +368,17 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                                                         <RotateCcw className="w-4 h-4" />
                                                     )}
                                                 </Button>
-                                                <Button variant="ghost" size="sm" onClick={() => {
-                                                    const token = localStorage.getItem('auth_token') || localStorage.getItem('token');
-                                                    if (!token) {
-                                                        toast({ title: "Download failed", description: "Authentication token is missing.", variant: "destructive" });
-                                                        return;
+                                                <Button variant="ghost" size="sm" onClick={async () => {
+                                                    try {
+                                                        const res = await api.get(`/backups/${backup.id}/download-url/`);
+                                                        if (res.data?.url) {
+                                                            window.location.href = res.data.url;
+                                                        } else {
+                                                            toast({ title: "Download failed", description: "Could not generate signed download link.", variant: "destructive" });
+                                                        }
+                                                    } catch (err) {
+                                                        toast({ title: "Download failed", description: "Could not generate signed download link.", variant: "destructive" });
                                                     }
-                                                    window.location.href = `/api/v1/backups/${backup.id}/download/?token=${encodeURIComponent(token)}`;
                                                 }} title="Download">
                                                     <Download className="w-4 h-4" />
                                                 </Button>

@@ -76,7 +76,9 @@ class BackupRestoreTest(TestCase):
                 file_path=backup_file.name,
                 size_bytes=len(payload),
             )
-            url = reverse('server-backup-download', args=[backup.id]) + f"?token={token.key}"
+            from django.core import signing
+            signed = signing.TimestampSigner().sign_object({'pk': str(backup.id), 'ts': 0})
+            url = reverse('server-backup-download', args=[backup.id]) + f"?signed={signed}"
             response = self.client.get(url, HTTP_RANGE="bytes=10-19")
 
             self.assertEqual(response.status_code, 206)
