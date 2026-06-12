@@ -37,6 +37,7 @@ TIMEOUT = 12
 CPU_HIGH = float(os.environ.get("SCALE_CPU_HIGH", "70"))          # % — trigger early, before saturation
 CPU_CRITICAL = float(os.environ.get("SCALE_CPU_CRITICAL", "90"))  # % — aggressive action
 CPU_LOW = float(os.environ.get("SCALE_CPU_LOW", "25"))            # % — below this, consider scale down
+SCALE_DOWN_CPU = CPU_LOW                                            # alias for the scale-down decision
 MEM_GROWTH_MB_MIN = float(os.environ.get("SCALE_MEM_TREND_MB", "25"))  # MB/min — catch slow leaks
 MAX_REPLICAS = int(os.environ.get("SCALE_MAX_REPLICAS", "5"))
 COOLDOWN_MINUTES = int(os.environ.get("SCALE_COOLDOWN_MIN", "3"))       # shorter cooldown for faster response

@@ -378,6 +378,35 @@ if IS_AGENT_MODE:
 AUTOSCALER_API_URL = os.environ.get('AUTOSCALER_API_URL', 'http://localhost:9876')
 CADDY_CONFIG_DIR = os.environ.get("CADDY_CONFIG_DIR", "/caddy-config")
 
+# Caddy on_demand_tls 'ask' shared secret. Caddy's on_demand_tls ask directive
+# does not natively support custom request headers, so operators must place a
+# reverse proxy (or our internal Caddy config) in front of the backend that
+# injects ``X-Caddy-Secret``. If unset, a random UUID is generated at startup
+# and a warning is logged — production deployments MUST set this explicitly.
+CADDY_ASK_SECRET = str(config('CADDY_ASK_SECRET', default='')).strip()
+if not CADDY_ASK_SECRET and not IS_TESTING:
+    import uuid as _uuid_mod
+    CADDY_ASK_SECRET = _uuid_mod.uuid4().hex
+    import logging as _logging_mod
+    _logging_mod.getLogger(__name__).warning(
+        "CADDY_ASK_SECRET is not set — generated a random ephemeral value. "
+        "Set CADDY_ASK_SECRET in the environment so the Caddy 'ask' endpoint "
+        "shares a stable secret with the backend. Generated secret will NOT "
+        "survive a process restart."
+    )
+
+# Per-apex daily cap for new TLS certificate issuance (hostnames per apex per
+# UTC day). Used by the check_domain endpoint to cap blast radius if DNS
+# verification is bypassed.
+CADDY_DAILY_CERT_CAP = int(config('CADDY_DAILY_CERT_CAP', default=20))
+
+# Backup encryption. BACKUP_REQUIRE_ENCRYPTION is auto-enabled in production
+# (DEBUG=False) so backups are never silently written in cleartext.
+BACKUP_REQUIRE_ENCRYPTION = _env_bool(
+    'BACKUP_REQUIRE_ENCRYPTION',
+    default='False' if DEBUG else 'True',
+)
+
 MIDDLEWARE = [
     'django_prometheus.middleware.PrometheusBeforeMiddleware',
     'apps.deployments.middleware.DynamicAllowedHostsMiddleware', # Ensures multi-worker host sync
@@ -619,6 +648,7 @@ REST_FRAMEWORK = {
         'server_proxy': '30/min',
         'server_check_all': '2/min',
         'server_provision': '3/hour',
+        'caddy_ask': '60/min',
     },
 }
 API_RATE_LIMIT = config('API_RATE_LIMIT', default=1000, cast=int)
@@ -726,8 +756,6 @@ CELERY_QUEUES = {
 CELERY_TASK_ROUTES = {
     'apps.deployments.tasks.smart_deploy_task': {'queue': 'deploy'},
     'apps.deployments.tasks.resume_deploy_task': {'queue': 'deploy'},
-    'apps.deployments.tasks.auto_promote_task': {'queue': 'deploy'},
-    'apps.deployments.tasks.promote_deployment_task': {'queue': 'deploy'},
     'apps.deployments.tasks.provision_addon_task': {'queue': 'deploy'},
     'apps.deployments.tasks.deprovision_addon_task': {'queue': 'deploy'},
     'apps.deployments.tasks.backup_addon_task': {'queue': 'deploy'},

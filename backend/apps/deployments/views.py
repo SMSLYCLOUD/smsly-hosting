@@ -3,6 +3,7 @@
 """Views module."""
 import os
 import posixpath
+import hmac
 from rest_framework import viewsets, permissions, status, parsers, serializers, authentication
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.generics import GenericAPIView
@@ -47,6 +48,7 @@ from .tasks import (
     restore_service_backup_task,
     enqueue_smart_deploy_task,
 )
+from .rate_limiting import BurstRateThrottle, DeploymentRateThrottle
 from .domain_utils import normalize_domain
 from .services.server_guard import ServerGuard
 from apps.cloud.models import CloudProvider
@@ -279,6 +281,35 @@ def _open_backup_download_response(request, file_path: str, filename: str, clean
 
 class EmptySerializer(serializers.Serializer):
     """Schema placeholder for APIViews without request/response bodies."""
+
+
+class CaddySecretOrAdminPermission(permissions.BasePermission):
+    """
+    Permission gate for the Caddy ``on_demand_tls`` 'ask' endpoint.
+
+    Allows access if EITHER:
+
+    * the request carries ``X-Caddy-Secret`` matching ``settings.CADDY_ASK_SECRET``
+      (machine-to-machine Caddy), OR
+    * the request is from an authenticated admin user (human operator inspecting
+      the endpoint).
+
+    All other requests are denied with HTTP 401.
+    """
+
+    message = "Caddy ask endpoint requires a valid X-Caddy-Secret header or admin authentication."
+
+    def has_permission(self, request, view):
+        provided = request.headers.get("X-Caddy-Secret", "")
+        expected = str(getattr(settings, "CADDY_ASK_SECRET", "") or "")
+        if expected and provided and hmac.compare_digest(provided, expected):
+            return True
+        user = getattr(request, "user", None)
+        if user is not None and getattr(user, "is_authenticated", False) and (
+            getattr(user, "is_superuser", False) or getattr(user, "is_staff", False)
+        ):
+            return True
+        return False
 
 
 _IN_PROGRESS_DEPLOYMENT_STATUSES = [
@@ -563,6 +594,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
     queryset = Service.objects.all().order_by('-updated_at')
     serializer_class = ServiceSerializer
     permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [BurstRateThrottle, DeploymentRateThrottle]
 
     def get_queryset(self):
         """ZH-001 FIX: Return services owned by user. APITokens (remote proxies) skip owner check."""
@@ -2122,16 +2154,19 @@ class ServiceViewSet(viewsets.ModelViewSet):
         })
 
     def get_permissions(self):
-        """Allow unauthenticated check-domain for on-demand TLS validation."""
+        """Hardened auth for the Caddy ask endpoint: shared secret OR admin user."""
         if self.action == 'check_domain':
-            from rest_framework.permissions import AllowAny
-            return [AllowAny()]
+            return [CaddySecretOrAdminPermission()]
         return super().get_permissions()
 
     def get_throttles(self):
-        """Disable rate limiting for internal check-domain endpoint."""
+        """Throttle the Caddy ask endpoint to limit Let's Encrypt blast radius."""
         if self.action == 'check_domain':
-            return []
+            from rest_framework.throttling import ScopedRateThrottle
+            throttle = ScopedRateThrottle()
+            throttle.scope = 'caddy_ask'
+            self.throttle_scope = 'caddy_ask'
+            return [throttle]
         return super().get_throttles()
 
     @action(detail=False, methods=['get'], url_path='check-domain')
@@ -2140,8 +2175,49 @@ class ServiceViewSet(viewsets.ModelViewSet):
         Endpoint for Caddy's on_demand_tls 'ask' directive.
         GET /api/v1/services/check-domain/?domain=myapp.com
         Returns 200 OK if the domain is authorized, 404 otherwise.
+
+        Authentication: requires ``X-Caddy-Secret`` header matching
+        ``settings.CADDY_ASK_SECRET`` (machine-to-machine Caddy) OR an
+        authenticated admin user. Rate-limited per IP via the ``caddy_ask``
+        scope to prevent trivial DoS of Let's Encrypt.
         """
-        raw_domain = request.query_params.get('domain', '').strip().lower()
+        # ── Per-apex daily cert issuance cap ────────────────────────
+        # Limit blast radius if DNS verification is bypassed: a single
+        # apex may not consume more than CADDY_DAILY_CERT_CAP (default 20)
+        # hostnames per UTC day.
+        raw_domain_for_cap = request.query_params.get('domain', '').strip().lower()
+        apex = (
+            raw_domain_for_cap.split('.', 1)[-1]
+            if '.' in raw_domain_for_cap
+            else raw_domain_for_cap
+        )
+        if apex:
+            cap_key = f"certs_issued:{apex}:{timezone.now().strftime('%Y%m%d')}"
+            cap_value = cache.get(cap_key, 0)
+            cap_limit = int(getattr(settings, 'CADDY_DAILY_CERT_CAP', 20))
+            if cap_value >= cap_limit:
+                logger.warning(
+                    "check_domain: daily cert cap reached for apex %s (%d)",
+                    apex, cap_value,
+                )
+                return Response(
+                    {
+                        'error': (
+                            f"Daily cert issuance cap reached for {apex}. "
+                            "Try again tomorrow."
+                        )
+                    },
+                    status=status.HTTP_429_TOO_MANY_REQUESTS,
+                )
+            if cache.get(cap_key) is not None:
+                try:
+                    cache.incr(cap_key, 1)
+                except ValueError:
+                    cache.set(cap_key, cap_value + 1, timeout=86400)
+            else:
+                cache.set(cap_key, 1, timeout=86400)
+
+        raw_domain = raw_domain_for_cap
         if not raw_domain:
             return Response(status=status.HTTP_404_NOT_FOUND)
         import ipaddress
@@ -3306,6 +3382,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
     parser_classes = [
         parsers.JSONParser,
         parsers.MultiPartParser]  # Enable File Uploads
+    throttle_classes = [BurstRateThrottle, DeploymentRateThrottle]
 
     def get_serializer_class(self):
         """
@@ -3839,39 +3916,6 @@ class DeploymentViewSet(viewsets.ModelViewSet):
 
         return Response({
             'message': 'Deployment approved — build starting',
-            'deployment': DeploymentSerializer(deployment).data,
-        })
-
-    @action(detail=True, methods=['post'])
-    def promote(self, request, pk=None):
-        """
-        Manually promote a STAGED deployment to ACTIVE (immediate swap).
-        POST /api/v1/deployments/{id}/promote/
-
-        Skips the bake timer and performs immediate blue-green cutover.
-        Used for development/testing when you want instant promotion.
-        """
-        deployment = self.get_object()
-
-        if deployment.status != Deployment.Status.STAGED:
-            return Response(
-                {'error': f'Cannot promote: deployment is {deployment.status}, '
-                          'not STAGED.'},
-                status=status.HTTP_409_CONFLICT)
-
-        provider = _resolve_provider_for_service(deployment.service)
-        if not provider:
-            return Response(
-                {'error': 'No active cloud provider configured'},
-                status=status.HTTP_400_BAD_REQUEST)
-
-        from apps.deployments.tasks import promote_deployment_task
-        promote_deployment_task.delay(
-            deployment_id=str(deployment.id), provider_id=str(provider.id)
-        )
-
-        return Response({
-            'message': 'Promotion triggered — routing will swap momentarily',
             'deployment': DeploymentSerializer(deployment).data,
         })
 

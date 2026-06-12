@@ -27,6 +27,12 @@ from apps.deployments.models_storage import Volume
 
 logger = logging.getLogger(__name__)
 
+
+class BackupEncryptionRequired(Exception):
+    """Raised when BACKUP_REQUIRE_ENCRYPTION is set but BACKUP_ENCRYPTION_KEY is missing."""
+    pass
+
+
 _CHUNKED_BACKUP_MAGIC = b"SMSLY-BACKUP-AESGCM-V1\n"
 _CHUNKED_BACKUP_NONCE_PREFIX_BYTES = 8
 _DEFAULT_CRYPTO_CHUNK_SIZE = 4 * 1024 * 1024
@@ -1223,9 +1229,19 @@ class BackupService:
         Optionally encrypt backup archive at rest when BACKUP_ENCRYPTION_KEY is set.
         Uses chunked AES-GCM with the existing Fernet key material. Returns path
         to encrypted file and never loads the archive into memory.
+
+        When ``settings.BACKUP_REQUIRE_ENCRYPTION`` is true (auto-enabled when
+        ``DEBUG=False``), missing ``BACKUP_ENCRYPTION_KEY`` raises
+        :class:`BackupEncryptionRequired` instead of silently writing the
+        backup in cleartext.
         """
         key = os.environ.get("BACKUP_ENCRYPTION_KEY", "").strip()
         if not key:
+            if self._backup_encryption_required():
+                raise BackupEncryptionRequired(
+                    "BACKUP_REQUIRE_ENCRYPTION is set but BACKUP_ENCRYPTION_KEY "
+                    "is missing. Refusing to write an unencrypted backup."
+                )
             return path
 
         enc_path = path + ".enc"
@@ -1265,6 +1281,20 @@ class BackupService:
                 pass
             logger.error(f"Encryption failed for {path}: {e}")
             return path
+
+    @staticmethod
+    def _backup_encryption_required() -> bool:
+        """
+        Resolve the BACKUP_REQUIRE_ENCRYPTION flag. Prefers an explicit
+        environment variable, then falls back to ``settings.BACKUP_REQUIRE_ENCRYPTION``
+        (which itself defaults to ``True`` when ``DEBUG=False``).
+        """
+        explicit = os.environ.get("BACKUP_REQUIRE_ENCRYPTION", "").strip().lower()
+        if explicit in ("1", "true", "yes", "on"):
+            return True
+        if explicit in ("0", "false", "no", "off"):
+            return False
+        return bool(getattr(settings, "BACKUP_REQUIRE_ENCRYPTION", False))
 
     @staticmethod
     def decrypt_backup(path: str, key: str) -> str:
