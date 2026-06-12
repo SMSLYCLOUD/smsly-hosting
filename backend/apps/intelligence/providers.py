@@ -2407,6 +2407,8 @@ def _resolve_providers(provider_ids: List[str]) -> List[AIProvider]:
 # 2-Agent Code Review
 # ---------------------------------------------------------------------------
 
+_ask_code_review_depth = [0]
+
 def ask_code_review(
     prompt: str,
     system_prompt: Optional[str] = None,
@@ -2432,71 +2434,81 @@ def ask_code_review(
     if not provider_ids or len(provider_ids) < 2:
         return ask_with_fallback(prompt, system_prompt)
 
-    available = _resolve_providers(provider_ids[:2])
-    if len(available) < 2:
-        return ask_with_fallback(prompt, system_prompt, provider_ids[0] if provider_ids else None)
-
-    agent_a, agent_b = available[0], available[1]
-    effective_system = system_prompt or CODE_REVIEW_SYSTEM_PROMPT
-
-    # Phase 1: Both agents analyze (parallel)
-    phase1_prompt = (
-        f"You are performing a thorough code review.\n"
-        f"Analyze the following and provide your assessment:\n\n{prompt}"
-    )
-
-    pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+    _ask_code_review_depth[0] += 1
     try:
-        future_a = pool.submit(agent_a.ask, phase1_prompt, effective_system)
-        future_b = pool.submit(agent_b.ask, phase1_prompt, effective_system)
+        if _ask_code_review_depth[0] > 3:
+            logger.warning("ask_code_review recursion limit reached")
+            return "", "code-review(recursion_limit)"
 
-        review_a = future_a.result(timeout=60)
-        review_b = future_b.result(timeout=60)
-    except Exception as exc:
-        pool.shutdown(wait=False, cancel_futures=True)
-        logger.warning("Code review phase 1 failed: %s", exc)
-        return ask_with_fallback(prompt, system_prompt)
+        available = _resolve_providers(provider_ids[:2])
+        if len(available) < 2:
+            if not any(pid for pid in (provider_ids or [])):
+                return "", "code-review(no_providers)"
+            return ask_with_fallback(prompt, system_prompt, provider_ids[0] if provider_ids else None)
 
-    # Phase 2: Cross-review (parallel)
-    cross_prompt_a = (
-        f"You previously reviewed code and provided:\n---\n{review_a}\n---\n\n"
-        f"Another agent reviewed the same code and provided:\n---\n{review_b}\n---\n\n"
-        f"Now provide your FINAL assessment. Consider both perspectives.\n"
-        f"Identify any issues the other agent caught that you missed.\n"
-        f"Resolve any disagreements with reasoning.\n\n"
-        f"Original code/task:\n{prompt}"
-    )
+        agent_a, agent_b = available[0], available[1]
+        effective_system = system_prompt or CODE_REVIEW_SYSTEM_PROMPT
 
-    cross_prompt_b = (
-        f"You previously reviewed code and provided:\n---\n{review_b}\n---\n\n"
-        f"Another agent reviewed the same code and provided:\n---\n{review_a}\n---\n\n"
-        f"Now provide your FINAL assessment. Consider both perspectives.\n"
-        f"Identify any issues the other agent caught that you missed.\n"
-        f"Resolve any disagreements with reasoning.\n\n"
-        f"Original code/task:\n{prompt}"
-    )
+        # Phase 1: Both agents analyze (parallel)
+        phase1_prompt = (
+            f"You are performing a thorough code review.\n"
+            f"Analyze the following and provide your assessment:\n\n{prompt}"
+        )
 
-    try:
-        future_cross_a = pool.submit(agent_a.ask, cross_prompt_a, effective_system)
-        future_cross_b = pool.submit(agent_b.ask, cross_prompt_b, effective_system)
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+        try:
+            future_a = pool.submit(agent_a.ask, phase1_prompt, effective_system)
+            future_b = pool.submit(agent_b.ask, phase1_prompt, effective_system)
 
-        final_a = future_cross_a.result(timeout=60)
-        final_b = future_cross_b.result(timeout=60)
-    except Exception as exc:
-        pool.shutdown(wait=False, cancel_futures=True)
-        logger.warning("Code review phase 2 failed: %s", exc)
-        combined = f"## Agent A Review:\n{review_a}\n\n## Agent B Review:\n{review_b}"
+            review_a = future_a.result(timeout=60)
+            review_b = future_b.result(timeout=60)
+        except Exception as exc:
+            pool.shutdown(wait=False, cancel_futures=True)
+            logger.warning("Code review phase 1 failed: %s", exc)
+            return ask_with_fallback(prompt, system_prompt)
+
+        # Phase 2: Cross-review (parallel)
+        cross_prompt_a = (
+            f"You previously reviewed code and provided:\n---\n{review_a}\n---\n\n"
+            f"Another agent reviewed the same code and provided:\n---\n{review_b}\n---\n\n"
+            f"Now provide your FINAL assessment. Consider both perspectives.\n"
+            f"Identify any issues the other agent caught that you missed.\n"
+            f"Resolve any disagreements with reasoning.\n\n"
+            f"Original code/task:\n{prompt}"
+        )
+
+        cross_prompt_b = (
+            f"You previously reviewed code and provided:\n---\n{review_b}\n---\n\n"
+            f"Another agent reviewed the same code and provided:\n---\n{review_a}\n---\n\n"
+            f"Now provide your FINAL assessment. Consider both perspectives.\n"
+            f"Identify any issues the other agent caught that you missed.\n"
+            f"Resolve any disagreements with reasoning.\n\n"
+            f"Original code/task:\n{prompt}"
+        )
+
+        try:
+            future_cross_a = pool.submit(agent_a.ask, cross_prompt_a, effective_system)
+            future_cross_b = pool.submit(agent_b.ask, cross_prompt_b, effective_system)
+
+            final_a = future_cross_a.result(timeout=60)
+            final_b = future_cross_b.result(timeout=60)
+        except Exception as exc:
+            pool.shutdown(wait=False, cancel_futures=True)
+            logger.warning("Code review phase 2 failed: %s", exc)
+            combined = f"## Agent A Review:\n{review_a}\n\n## Agent B Review:\n{review_b}"
+            return combined, f"code-review({agent_a.id},{agent_b.id})"
+        finally:
+            pool.shutdown(wait=False)
+
+        combined = (
+            f"## Code Review: {agent_a.id} + {agent_b.id}\n\n"
+            f"### Agent A ({agent_a.id}) Final Assessment:\n{final_a}\n\n"
+            f"### Agent B ({agent_b.id}) Final Assessment:\n{final_b}\n"
+        )
+
         return combined, f"code-review({agent_a.id},{agent_b.id})"
     finally:
-        pool.shutdown(wait=False)
-
-    combined = (
-        f"## Code Review: {agent_a.id} + {agent_b.id}\n\n"
-        f"### Agent A ({agent_a.id}) Final Assessment:\n{final_a}\n\n"
-        f"### Agent B ({agent_b.id}) Final Assessment:\n{final_b}\n"
-    )
-
-    return combined, f"code-review({agent_a.id},{agent_b.id})"
+        _ask_code_review_depth[0] -= 1
 
 
 # ---------------------------------------------------------------------------
@@ -2536,19 +2548,41 @@ def ask_with_fallback(
 
     # Route to code review mode
     if mode == "code_review" and len(configured) >= 2:
-        result = ask_code_review(
-            prompt, system_prompt,
-            [p.id for p in configured[:2]],
-        )
-        return _wrap(*result)
+        try:
+            result = ask_code_review(
+                prompt, system_prompt,
+                [p.id for p in configured[:2]],
+            )
+            if result and result[0]:
+                return _wrap(*result)
+        except Exception as exc:
+            logger.warning("ask_code_review failed, falling back to direct: %s", exc)
+        for provider in configured:
+            try:
+                return _wrap(*_ask_single(provider, prompt, system_prompt))
+            except Exception as exc:  # noqa: BLE001
+                _record_provider_failure(getattr(provider, "id", ""))
+                logger.warning("Direct provider rescue with %s failed: %s", provider.name(), exc)
+        raise RuntimeError("All configured AI providers failed to respond.")
 
     # Route to code review in auto mode when exactly 2 providers (cheaper than full senate)
     if mode == "auto" and len(configured) == 2:
-        result = ask_code_review(
-            prompt, system_prompt,
-            [p.id for p in configured[:2]],
-        )
-        return _wrap(*result)
+        try:
+            result = ask_code_review(
+                prompt, system_prompt,
+                [p.id for p in configured[:2]],
+            )
+            if result and result[0]:
+                return _wrap(*result)
+        except Exception as exc:
+            logger.warning("ask_code_review failed, falling back to direct: %s", exc)
+        for provider in configured:
+            try:
+                return _wrap(*_ask_single(provider, prompt, system_prompt))
+            except Exception as exc:  # noqa: BLE001
+                _record_provider_failure(getattr(provider, "id", ""))
+                logger.warning("Direct provider rescue with %s failed: %s", provider.name(), exc)
+        raise RuntimeError("All configured AI providers failed to respond.")
 
     # Priority 1: User-specified provider
     if provider_id and provider_id != "auto":
