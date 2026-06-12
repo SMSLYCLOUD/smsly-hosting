@@ -1922,6 +1922,14 @@ export const scalingApi = {
     const response = await api.delete('/scaling/destroy_replica/', { params: { id: replicaId } });
     return response.data;
   },
+  updateAlertConfig: async (serviceId: string, config: Record<string, unknown>): Promise<any> => {
+    const response = await api.put(`/scaling/${serviceId}/alert_config/`, config);
+    return response.data;
+  },
+  getAlertConfig: async (serviceId: string): Promise<Record<string, unknown>> => {
+    const response = await api.get(`/scaling/${serviceId}/alert_config/`);
+    return response.data;
+  },
 };
 
 // ─── Licensing API ──────────────────────────────────────────────────────────

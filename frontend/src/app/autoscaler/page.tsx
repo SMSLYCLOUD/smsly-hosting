@@ -14,7 +14,7 @@ import {
 } from 'recharts';
 import { ChartContainer } from '@/components/ui/chart-container';
 import { DashboardShell } from '@/components/layout/DashboardShell';
-import { autoscalerApi, type AutoscalerStatus, type AutoscalerHistory, type AutoscalerService } from '@/lib/api';
+import { autoscalerApi, scalingApi, servicesApi, type AutoscalerStatus, type AutoscalerHistory, type AutoscalerService } from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
@@ -86,6 +86,7 @@ export default function AutoscalerPage() {
     webhook_url: '',
   });
   const [alertsOpen, setAlertsOpen] = useState(false);
+  const [savingAlertConfig, setSavingAlertConfig] = useState(false);
 
   const fetchData = useCallback(async () => {
     try {
@@ -779,14 +780,33 @@ export default function AutoscalerPage() {
                        )}
                      </div>
 
-                     <div className="flex justify-end gap-3 pt-4 border-t border-border/50">
-                       <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={() => {
-                         toast({ title: 'Alert Config Saved', description: 'Resource alert thresholds updated.' });
-                         setAlertsOpen(false);
-                       }}>
-                         <Save size={14} className="mr-2" /> Save Alert Config
-                       </Button>
-                     </div>
+                      <div className="flex justify-end gap-3 pt-4 border-t border-border/50">
+                        <Button
+                          className="bg-emerald-600 hover:bg-emerald-700"
+                          disabled={savingAlertConfig}
+                          onClick={async () => {
+                            setSavingAlertConfig(true);
+                            try {
+                              const services = await servicesApi.list();
+                              if (!services.length) {
+                                toast({ title: 'No services to save against', description: 'Deploy a service first to persist alert thresholds.' });
+                                return;
+                              }
+                              await Promise.all(services.map((svc) =>
+                                scalingApi.updateAlertConfig(svc.id, alertConfig),
+                              ));
+                              toast({ title: 'Alert Config Saved', description: `Resource alert thresholds updated for ${services.length} service(s).` });
+                              setAlertsOpen(false);
+                            } catch (err: any) {
+                              toast({ title: 'Save failed', description: err?.message ?? 'Could not persist alert config.', variant: 'destructive' });
+                            } finally {
+                              setSavingAlertConfig(false);
+                            }
+                          }}
+                        >
+                          <Save size={14} className="mr-2" /> {savingAlertConfig ? 'Saving…' : 'Save Alert Config'}
+                        </Button>
+                      </div>
                    </CardContent>
                  </Card>
                </motion.div>

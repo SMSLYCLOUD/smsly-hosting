@@ -1,4 +1,5 @@
 """Auto-scaling API: analyze services and manage replicas."""
+from django.shortcuts import get_object_or_404
 from rest_framework import viewsets, permissions, status, serializers
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -23,6 +24,19 @@ class ServiceReplicaSerializer(serializers.ModelSerializer):
                            'metrics_snapshot', 'created_at', 'destroyed_at']
 
 
+class AlertConfigSerializer(serializers.Serializer):
+    """Autoscaler alert thresholds + notification preferences per service."""
+    cpu_warning = serializers.IntegerField(min_value=0, max_value=100, required=False)
+    cpu_critical = serializers.IntegerField(min_value=0, max_value=100, required=False)
+    memory_warning = serializers.IntegerField(min_value=0, max_value=100, required=False)
+    memory_critical = serializers.IntegerField(min_value=0, max_value=100, required=False)
+    disk_warning = serializers.IntegerField(min_value=0, max_value=100, required=False)
+    disk_critical = serializers.IntegerField(min_value=0, max_value=100, required=False)
+    notify_email = serializers.BooleanField(required=False)
+    notify_webhook = serializers.BooleanField(required=False)
+    webhook_url = serializers.URLField(required=False, allow_blank=True)
+
+
 class ScalingViewSet(viewsets.GenericViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -33,6 +47,20 @@ class ScalingViewSet(viewsets.GenericViewSet):
         analyzer = ScalingAnalyzer(service)
         result = analyzer.analyze()
         return Response(result)
+
+    @action(detail=True, methods=['get', 'put'])
+    def alert_config(self, request, pk=None):
+        """Get or update per-service autoscaler alert thresholds."""
+        service = get_object_or_404(Service, id=pk, owner=request.user)
+        if request.method == 'GET':
+            return Response(service.alert_config or {})
+        serializer = AlertConfigSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        merged = dict(service.alert_config or {})
+        merged.update(serializer.validated_data)
+        service.alert_config = merged
+        service.save(update_fields=['alert_config', 'updated_at'])
+        return Response(merged)
 
     @action(detail=True, methods=['post'])
     def spawn(self, request, pk=None):

@@ -7,6 +7,7 @@ import uuid
 from datetime import date
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import DatabaseError
 from django.db.models import Sum
 from django.http import StreamingHttpResponse, JsonResponse
@@ -272,6 +273,14 @@ def ai_providers_update(request):
                     updated.append(f"{field}: cleared")
             else:
                 updated.append(f"{field}: {value}")
+
+    try:
+        settings.full_clean()
+    except DjangoValidationError as exc:
+        return Response(
+            {"error": "validation_failed", "fields": exc.message_dict},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     settings.save()
     _sync_db_to_env()

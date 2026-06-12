@@ -40,14 +40,14 @@ frontend-dev-*.log
 frontend-dev-*.err.log
 
 # Custom domain debugging and fix scripts
-fix_custom_domain_ssl.py
-quick_fix_ssl.py
 scratch/
 dummy.tar.gz
 
 # Temporary analysis files
 *.tmp
 *.temp
+*.bak
+*.orig
 analysis/
 reports/
 
