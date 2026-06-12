@@ -10,10 +10,29 @@ The system auto-discovers all providers with valid API keys:
 """
 
 import uuid
+from urllib.parse import urlparse
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 from encrypted_model_fields.fields import EncryptedCharField
+
+
+def _validate_https_allowlist(url: str, field_label: str, allowed_hosts: list[str]) -> None:
+    if not url:
+        return
+    parsed = urlparse(url)
+    if parsed.scheme.lower() != 'https':
+        raise ValidationError(
+            {field_label: f'{field_label} must use https:// scheme; got {parsed.scheme!r}.'}
+        )
+    host = (parsed.hostname or '').lower()
+    if not host:
+        raise ValidationError({field_label: f'{field_label} must include a hostname.'})
+    if host not in {h.lower() for h in allowed_hosts}:
+        raise ValidationError(
+            {field_label: f'{field_label} host {host!r} is not in the allowlist.'}
+        )
 
 
 class AIProviderSettings(models.Model):
@@ -149,6 +168,13 @@ class AIProviderSettings(models.Model):
     def get_solo(cls) -> "AIProviderSettings":
         obj, _ = cls.objects.get_or_create(pk=1)
         return obj
+
+    def clean(self):
+        super().clean()
+        allowed_hosts = list(getattr(settings, 'JULES_ALLOWED_HOSTS', ['api.jules.google.com']))
+        if not allowed_hosts:
+            allowed_hosts = ['api.jules.google.com']
+        _validate_https_allowlist(self.jules_base_url, 'jules_base_url', allowed_hosts)
 
 
 class LLMUsage(models.Model):
