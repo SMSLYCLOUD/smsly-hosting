@@ -4,9 +4,11 @@ import logging
 import os
 import time
 import uuid
+from datetime import date
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 from django.db import DatabaseError
+from django.db.models import Sum
 from django.http import StreamingHttpResponse, JsonResponse
 from rest_framework.decorators import api_view, permission_classes, authentication_classes, throttle_classes
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
@@ -21,9 +23,11 @@ from .providers import (
     _sync_db_to_env,
     _sanitize_api_key,
     PROVIDERS,
+    SENATE_COMMITTEE_COST_MULTIPLIER,
 )
 from .analyzer import LogAnalyzer
 from .cost import CostAdvisor
+from .models import LLMUsage, UserAICap
 from apps.deployments.models_audit import AuditLog
 from apps.core.auth import APIKeyAuthentication, CsrfExemptSessionAuthentication
 from apps.deployments.rate_limiting import AIChatRateThrottle, AIAnalysisRateThrottle
@@ -47,6 +51,82 @@ def _parse_int(value, default):
         return int(float(value))
     except (ValueError, TypeError):
         return default
+
+
+def _check_user_cap(user):
+    """Check the user's daily token / cost cap. Returns (ok, reason)."""
+    from .providers import _is_circuit_open  # noqa: F401  (kept for downstream use)
+    cap, _ = UserAICap.objects.get_or_create(user=user)
+    today = date.today()
+    used = LLMUsage.objects.filter(user=user, created_at__date=today).aggregate(
+        total=Sum('total_tokens'), cost=Sum('estimated_cost_usd')
+    )
+    total_used = used.get('total') or 0
+    cost_used = used.get('cost') or 0
+    if total_used and total_used >= cap.daily_token_cap:
+        return False, "Daily token cap exceeded"
+    if cost_used and cost_used >= cap.daily_cost_cap_usd:
+        return False, "Daily cost cap exceeded"
+    return True, None
+
+
+def _check_user_cap_for_committee(user, member_count: int):
+    """Pre-flight cap check scaled by Senate Committee multiplier."""
+    cap, _ = UserAICap.objects.get_or_create(user=user)
+    today = date.today()
+    used = LLMUsage.objects.filter(user=user, created_at__date=today).aggregate(
+        total=Sum('total_tokens'), cost=Sum('estimated_cost_usd')
+    )
+    total_used = used.get('total') or 0
+    cost_used = used.get('cost') or 0
+    scaled_token_cap = cap.daily_token_cap // max(SENATE_COMMITTEE_COST_MULTIPLIER, 1)
+    scaled_cost_cap = float(cap.daily_cost_cap_usd) / max(SENATE_COMMITTEE_COST_MULTIPLIER, 1)
+    if total_used >= scaled_token_cap:
+        return False, "Daily token cap exceeded (senate multiplier)"
+    if cost_used >= scaled_cost_cap:
+        return False, "Daily cost cap exceeded (senate multiplier)"
+    return True, None
+
+
+def _record_usage(user, provider_name: str, model: str, usage: dict) -> dict:
+    """Persist LLM usage to DB. Returns sanitized usage dict."""
+    try:
+        prompt_tokens = int(usage.get('prompt_tokens') or 0)
+        completion_tokens = int(usage.get('completion_tokens') or 0)
+        total_tokens = int(
+            usage.get('total_tokens')
+            or (prompt_tokens + completion_tokens)
+        )
+    except (TypeError, ValueError):
+        prompt_tokens = completion_tokens = total_tokens = 0
+
+    cost_per_1k = 0.0
+    try:
+        if total_tokens:
+            cost_per_1k = float(os.environ.get("LLM_USD_PER_1K_TOKENS", "0.002") or 0.0)
+    except (TypeError, ValueError):
+        cost_per_1k = 0.0
+    estimated_cost = round((total_tokens / 1000.0) * cost_per_1k, 6)
+
+    if user is not None and not getattr(user, "is_anonymous", False):
+        try:
+            LLMUsage.objects.create(
+                user=user,
+                provider=(provider_name or "unknown")[:64],
+                model=(model or "")[:128],
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+                estimated_cost_usd=estimated_cost,
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning("Failed to record LLMUsage: %s", exc)
+
+    return {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+    }
 
 
 @extend_schema(responses=OpenApiTypes.OBJECT)
@@ -217,8 +297,20 @@ def ai_test_prompt(request):
     system_prompt = request.data.get("system_prompt", None)
 
     try:
-        response, provider_name = _cached_ask(prompt, system_prompt=system_prompt, cache_bypass=True)
         configured = get_configured_providers()
+        cap_check = (
+            _check_user_cap_for_committee(request.user, len(configured))
+            if len(configured) >= 2
+            else _check_user_cap(request.user)
+        )
+        cap_ok, cap_reason = cap_check
+        if not cap_ok:
+            return Response(
+                {"error": cap_reason, "code": "ai_cap_exceeded"},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+        response, provider_name = _cached_ask(prompt, system_prompt=system_prompt, cache_bypass=True)
         mode = "senate_committee" if len(configured) >= 2 else ("solo" if len(configured) == 1 else "unconfigured")
 
         return Response({
@@ -254,7 +346,7 @@ def ai_chat_completions(request):
     # Extract prompt (last user message) and system prompt
     prompt = None
     system_prompt = None
-    
+
     for msg in reversed(messages):
         if msg.get("role") == "user" and prompt is None:
             prompt = msg.get("content")
@@ -264,13 +356,33 @@ def ai_chat_completions(request):
     if not prompt:
         return Response({"error": "No user message found"}, status=400)
 
+    _sync_db_to_env()
+    configured = get_configured_providers()
+    cap_check = (
+        _check_user_cap_for_committee(request.user, len(configured))
+        if len(configured) >= 2
+        else _check_user_cap(request.user)
+    )
+    cap_ok, cap_reason = cap_check
+    if not cap_ok:
+        return Response(
+            {"error": cap_reason, "code": "ai_cap_exceeded"},
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
     try:
-        response_text, provider_name = _cached_ask(prompt, system_prompt=system_prompt, cache_bypass=True)
-        
+        response_text, provider_name, usage_info = _cached_ask(
+            prompt, system_prompt=system_prompt, cache_bypass=True,
+            return_usage=True,
+        )
+        recorded = _record_usage(
+            request.user, provider_name, provider_name, usage_info or {},
+        )
+
         # Format response in OpenAI style
         completion_id = f"chatcmpl-{uuid.uuid4()}"
         created_time = int(time.time())
-        
+
         return Response({
             "id": completion_id,
             "object": "chat.completion",
@@ -286,11 +398,7 @@ def ai_chat_completions(request):
                     "finish_reason": "stop"
                 }
             ],
-            "usage": {
-                "prompt_tokens": -1,
-                "completion_tokens": -1,
-                "total_tokens": -1
-            }
+            "usage": recorded,
         })
     except Exception as e:
         logger.exception("AI Chat completion failed: %s", e)

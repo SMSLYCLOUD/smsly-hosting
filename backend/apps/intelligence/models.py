@@ -9,6 +9,9 @@ The system auto-discovers all providers with valid API keys:
 - 0 keys set → mock fallback
 """
 
+import uuid
+
+from django.conf import settings
 from django.db import models
 from encrypted_model_fields.fields import EncryptedCharField
 
@@ -54,7 +57,7 @@ class AIProviderSettings(models.Model):
         help_text="OpenAI-compatible base URL for Jules provider",
     )
     jules_auto_deploy_pr = models.BooleanField(
-        default=True,
+        default=False,
         help_text="Automatically redeploy services from the branch of Jules auto-fix PRs",
     )
 
@@ -146,3 +149,36 @@ class AIProviderSettings(models.Model):
     def get_solo(cls) -> "AIProviderSettings":
         obj, _ = cls.objects.get_or_create(pk=1)
         return obj
+
+
+class LLMUsage(models.Model):
+    """Per-call LLM usage record for token / cost accounting."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='llm_usages',
+    )
+    provider = models.CharField(max_length=64)
+    model = models.CharField(max_length=128, blank=True)
+    prompt_tokens = models.IntegerField(default=0)
+    completion_tokens = models.IntegerField(default=0)
+    total_tokens = models.IntegerField(default=0)
+    estimated_cost_usd = models.DecimalField(max_digits=10, decimal_places=6, default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=['user', '-created_at'])]
+
+
+class UserAICap(models.Model):
+    """Per-user daily spend / token caps for LLM calls."""
+
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='ai_cap',
+    )
+    daily_token_cap = models.IntegerField(default=100000)
+    daily_cost_cap_usd = models.DecimalField(max_digits=8, decimal_places=2, default=10.00)
