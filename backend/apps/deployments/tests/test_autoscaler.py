@@ -4,6 +4,7 @@ from datetime import timedelta
 from unittest.mock import patch
 from apps.deployments.models import Service, Project
 from apps.deployments.models_metrics import ServiceMetric
+from apps.deployments.models_replica import ServiceReplica
 from apps.deployments.services.autoscaler import _evaluate_scaling
 from django.contrib.auth import get_user_model
 
@@ -23,7 +24,8 @@ class AutoscalerTest(TestCase):
         )
 
     def test_scale_up_respects_max_replicas(self):
-        self.service.min_replicas = 3
+        self.service.max_replicas = 2
+        self.service.min_replicas = 1
         self.service.save()
         Service.objects.filter(id=self.service.id).update(last_scale_at=timezone.now() - timedelta(minutes=10))
         self.service.refresh_from_db()
@@ -33,7 +35,7 @@ class AutoscalerTest(TestCase):
         _evaluate_scaling(self.service, ServiceMetric)
 
         self.service.refresh_from_db()
-        self.assertEqual(self.service.min_replicas, 3) # Should not exceed max_replicas
+        self.assertEqual(self.service.min_replicas, 2)  # capped at max_replicas
 
     def test_scale_up_increases_replicas(self):
         self.service.min_replicas = 1
@@ -66,14 +68,14 @@ class AutoscalerTest(TestCase):
         self.service.save()
         Service.objects.filter(id=self.service.id).update(last_scale_at=timezone.now() - timedelta(minutes=10))
         self.service.refresh_from_db()
+        ServiceReplica.objects.create(service=self.service, status='RUNNING')
         now = timezone.now()
-        # Scale down triggers if avg CPU over 5m is < 50% of target (80 * 0.5 = 40)
         ServiceMetric.objects.create(service=self.service, cpu_usage=10, cpu_limit=100, memory_usage=100, memory_limit=200, timestamp=now - timedelta(minutes=1))
 
         _evaluate_scaling(self.service, ServiceMetric)
 
         self.service.refresh_from_db()
-        self.assertEqual(self.service.min_replicas, 1)
+        self.assertEqual(self.service.min_replicas, 1)  # 2 - 1 = 1
 
 
     def test_cooldown_prevents_rapid_scaling(self):
