@@ -24,8 +24,9 @@ urlpatterns = [
     path('api/v1/cloud/', include('apps.cloud.urls')),
     path('api/v1/teams/', include('apps.teams.urls')),
     path('api/v1/autoscaler/', include('apps.autoscaler.urls')),
-    path('api/v1/', include('apps.notifications.urls')),
-    path('api/v1/', include('apps.core.urls')),
+    path('api/v1/notifications/', include('apps.notifications.urls')),
+    path('api/v1/core/', include('apps.core.urls')),
+    path('api/v1/domains/', include('apps.domains.urls')),
 
     # Auth
     path('api/v1/auth/', include('dj_rest_auth.urls')),

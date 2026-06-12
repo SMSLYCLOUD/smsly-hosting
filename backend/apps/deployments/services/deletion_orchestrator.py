@@ -97,6 +97,15 @@ class DeletionOrchestrator:
     def cleanup_orphaned_resources(self, dry_run=True):
         pass
 
+    def purge_user_backup_artifacts(self, user_id) -> dict:
+        """
+        GDPR right-to-erasure helper. Delegates to the backup service so the
+        deletion orchestrator owns the single import path; this wrapper exists
+        for callers that already hold an orchestrator instance.
+        """
+        from apps.deployments.services.backup_service import purge_user_backups
+        return purge_user_backups(user_id)
+
     # -- Internal Discovery Methods --
 
     def _find_service_containers(self, service: Service) -> Set[Any]:
