@@ -19,13 +19,15 @@ from urllib.parse import urlparse
 import requests
 from django.utils import timezone
 from rest_framework import serializers, status, viewsets
-from rest_framework.decorators import action
+from rest_framework.decorators import action, throttle_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import UserRateThrottle
 
 from .models_servers import ManagedServer
 from .models_core import Service, Deployment
 from .serializers import ServiceSerializer, DeploymentSerializer
+from apps.deployments.services.transfer_service import _redact_transfer_text
 
 logger = logging.getLogger(__name__)
 
@@ -405,9 +407,11 @@ def _build_remote_headers(server, method="GET", path="/api/v1/services/", body=b
     def _apply_hmac_auth():
         if not gateway_secret:
             return False
+        import uuid as _uuid
         timestamp = str(int(time.time()))
+        nonce = _uuid.uuid4().hex
         body_hash = hashlib.sha256(body if isinstance(body, bytes) else b"").hexdigest()
-        payload = f"{method}|{path}|{timestamp}|{body_hash}"
+        payload = f"{method}|{path}|{timestamp}|{body_hash}|{nonce}"
         signature = hmac_mod.new(
             gateway_secret.encode(),
             payload.encode(),
@@ -415,6 +419,7 @@ def _build_remote_headers(server, method="GET", path="/api/v1/services/", body=b
         ).hexdigest()
         headers["X-Gateway-Signature-V2"] = signature
         headers["X-Request-Timestamp"] = timestamp
+        headers["X-Gateway-Nonce"] = nonce
         return True
 
     # Explicit mode for fallback paths.
@@ -576,6 +581,57 @@ def _lite_agent_proxy_response(server, request, method: str, path: str) -> Respo
     return None
 
 
+SAFE_DOCKER_SUBCOMMANDS = frozenset({
+    "ps", "logs", "stats", "inspect", "images", "info", "version",
+    "df", "top", "port", "events", "system",
+})
+SAFE_DOCKER_COMPOSE_SUBCOMMANDS = frozenset({
+    "ps", "logs", "config", "ls", "top",
+})
+SAFE_SYSTEM_PREFIXES = (
+    "df ", "free ", "ping -c ", "systemctl status ",
+    "cat /opt/smsly-hosting/.env | grep -v SECRET | grep -v PASSWORD | grep -v KEY",
+)
+
+_REJECTED_DOCKER_SUBCOMMANDS = frozenset({
+    "exec", "run", "rm", "kill", "rmi", "stop", "restart",
+    "pause", "unpause", "rename", "update", "wait", "attach",
+    "commit", "cp", "create", "diff", "export", "import",
+    "load", "save", "tag", "unmount", "build", "pull", "push",
+    "login", "logout", "search", "volume", "network", "plugin",
+    "secret", "config", "context", "node", "service", "stack",
+    "swarm", "system", "trust", "container", "compose", "daemon",
+})
+
+
+def _is_command_allowed(command: str) -> bool:
+    """Strict allow-list for run_command. Returns True if the command is permitted."""
+    cmd = (command or "").strip()
+    if not cmd:
+        return False
+    if any(cmd.startswith(p) for p in SAFE_SYSTEM_PREFIXES):
+        return True
+    if cmd.startswith("docker ") or cmd == "docker":
+        parts = cmd.split()
+        if len(parts) < 2:
+            return False
+        sub = parts[1]
+        if sub in _REJECTED_DOCKER_SUBCOMMANDS:
+            return False
+        return sub in SAFE_DOCKER_SUBCOMMANDS
+    if cmd.startswith("cd /opt/smsly-hosting && docker "):
+        parts = cmd.replace("cd /opt/smsly-hosting && docker ", "").split()
+        if len(parts) < 1:
+            return False
+        sub = parts[0]
+        if sub in _REJECTED_DOCKER_SUBCOMMANDS:
+            return False
+        if sub == "compose" and len(parts) >= 2 and parts[1] in SAFE_DOCKER_COMPOSE_SUBCOMMANDS:
+            return True
+        return sub in SAFE_DOCKER_SUBCOMMANDS
+    return False
+
+
 # --- Serializers -------------------------------------------------------------
 class ManagedServerSerializer(serializers.ModelSerializer):
     has_ssh_credentials = serializers.SerializerMethodField()
@@ -637,10 +693,25 @@ class ManagedServerCreateSerializer(serializers.ModelSerializer):
         return ManagedServerSerializer(instance).data
 
     def validate_host(self, value):
-        """Strip protocol and port from host — should be bare IP or domain."""
+        """Strip protocol and port, then enforce safe-IP policy for non-primary servers."""
         import re
-        value = re.sub(r'^https?://', '', value).strip().rstrip('/')
+        value = re.sub(r'^https?://', '', (value or "")).strip().rstrip('/')
         value = re.sub(r':\d+$', '', value)
+        if not value:
+            raise serializers.ValidationError("Host is required.")
+        is_primary = self.initial_data.get("is_primary", False)
+        if not is_primary:
+            try:
+                import ipaddress as _ip
+                ip = _ip.ip_address(value)
+                if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+                    raise serializers.ValidationError(
+                        f"Host {value} is in a forbidden range for non-primary servers."
+                    )
+            except ValueError:
+                pass  # Hostname — allowed for non-primary
+        if value.lower() == "localhost" and not is_primary:
+            raise serializers.ValidationError("'localhost' is not allowed as a non-primary host.")
         return value
 
     def validate_api_url(self, value):
@@ -704,11 +775,41 @@ class ManagedServerProvisionSerializer(serializers.ModelSerializer):
 
 # ─── ViewSet ─────────────────────────────────────────────────────────────────
 
+class ServerCommandThrottle(UserRateThrottle):
+    scope = 'server_run_command'
+
+
+class ServerHealThrottle(UserRateThrottle):
+    scope = 'server_heal'
+
+
+class ServerProxyThrottle(UserRateThrottle):
+    scope = 'server_proxy'
+
+
+class ServerCheckAllThrottle(UserRateThrottle):
+    scope = 'server_check_all'
+
+
+class ServerProvisionThrottle(UserRateThrottle):
+    scope = 'server_provision'
+
+
 class ManagedServerViewSet(viewsets.ModelViewSet):
     """CRUD for managed remote servers, plus health check, proxy, and provisioning."""
 
     queryset = ManagedServer.objects.all()
     permission_classes = [IsAuthenticated]
+
+    def get_throttles(self):
+        """Per-action throttles: prefer the bound action's ``throttle_classes``
+        when present, otherwise fall back to the view's class-level setting.
+        """
+        action_attr = getattr(self, self.action, None) if self.action else None
+        action_throttles = getattr(action_attr, "throttle_classes", None)
+        if action_throttles:
+            return [throttle() for throttle in action_throttles]
+        return super().get_throttles()
 
     def get_queryset(self):
         qs = self.queryset.filter(owner=self.request.user)
@@ -756,6 +857,7 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
     # ── Provision New Server ─────────────────────────────────────────────
 
     @action(detail=False, methods=["post"], url_path="provision")
+    @throttle_classes([ServerProvisionThrottle])
     def provision_new(self, request):
         """
         Create a server record and kick off auto-provisioning via SSH.
@@ -796,6 +898,7 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
         })
 
     @action(detail=True, methods=["post"], url_path="retry-provision")
+    @throttle_classes([ServerProvisionThrottle])
     def retry_provision(self, request, pk=None):
         """Retry the provisioning process for an existing server."""
         server = self.get_object()
@@ -815,6 +918,7 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
         )
 
     @action(detail=True, methods=["post"], url_path="update-server")
+    @throttle_classes([ServerProvisionThrottle])
     def update_server(self, request, pk=None):
         """
         Trigger a remote update on a managed server.
@@ -831,9 +935,8 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
         }
         if server.provision_status in blocked_statuses:
             logger.warning(
-                "Auto-clearing stalled provision_status=%s for server %s",
-                server.provision_status,
-                server.id,
+                "update_server: auto-clearing in-flight provision_status=%s for server %s (user=%s)",
+                server.provision_status, server.id, request.user.id,
             )
             server.provision_status = ManagedServer.ProvisionStatus.DONE
             server.save(update_fields=["provision_status", "updated_at"])
@@ -868,19 +971,22 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
         return Response(ManagedServerSerializer(server).data)
 
     @action(detail=False, methods=["post"])
+    @throttle_classes([ServerCheckAllThrottle])
     def check_all(self, request):
-        """Health check all servers at once."""
-        servers = self.get_queryset()
-        results = []
+        """Health check all servers — dispatched to Celery for parallelism."""
+        from .tasks import refresh_managed_server_health
+        servers = list(self.get_queryset())
         for server in servers:
-            server = _refresh_managed_server_health(server)
-            results.append(ManagedServerSerializer(server).data)
-
-        return Response({"servers": results})
+            refresh_managed_server_health.delay(str(server.id))
+        return Response(
+            {"status": "scheduled", "count": len(servers)},
+            status=status.HTTP_202_ACCEPTED,
+        )
 
     # ── Proxy ────────────────────────────────────────────────────────────
 
     @action(detail=True, methods=["post"])
+    @throttle_classes([ServerProxyThrottle])
     def proxy(self, request, pk=None):
         """
         Forward an API request to a remote server.
@@ -890,10 +996,20 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
         import json as json_mod
         from urllib.parse import urlparse
 
+        MAX_PROXY_BODY_SIZE = 1_048_576  # 1MB
+
         server = self.get_object()
         method = request.data.get("method", "GET").upper()
         raw_path = str(request.data.get("path", "") or "")
         body = request.data.get("body")
+
+        if body is not None:
+            serialized = json_mod.dumps(body, sort_keys=True)
+            if len(serialized.encode('utf-8')) > MAX_PROXY_BODY_SIZE:
+                return Response(
+                    {"error": f"Proxy body too large; max {MAX_PROXY_BODY_SIZE} bytes."},
+                    status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                )
 
         # Preserve query params while normalizing just the path segment.
         path_part, _, query_part = raw_path.partition("?")
@@ -1104,6 +1220,7 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
     # ── Self-Healing ─────────────────────────────────────────────────────
 
     @action(detail=True, methods=["post"])
+    @throttle_classes([ServerHealThrottle])
     def heal(self, request, pk=None):
         """
         Trigger self-healing on a remote server.
@@ -1170,6 +1287,7 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
         return self._run_diagnostics(server)
 
     @action(detail=True, methods=["post"])
+    @throttle_classes([ServerCommandThrottle])
     def run_command(self, request, pk=None):
         """
         Run a diagnostic/recovery command on a remote server via SSH.
@@ -1193,14 +1311,9 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        allowed_prefixes = (
-            "docker ", "cd /opt/smsly-hosting && docker ",
-            "df ", "free ", "ping ", "systemctl status docker",
-            "cat /opt/smsly-hosting/.env | grep -v SECRET | grep -v PASSWORD | grep -v KEY",
-        )
-        if not any(command.startswith(p) for p in allowed_prefixes):
+        if not _is_command_allowed(command):
             return Response(
-                {"error": "Command not allowed. Only Docker, diagnostic, and safe recovery commands are permitted."},
+                {"error": "Command not allowed. Only safe docker subcommands (ps, logs, stats, inspect, images, info, version, df, top, port, events) and system diagnostic commands are permitted."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -1210,11 +1323,20 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
             out, err, code = orchestrator._exec(command, timeout=60)
             orchestrator._close_ssh()
 
+            try:
+                redacted_out = _redact_transfer_text(out or "")
+            except Exception:
+                redacted_out = "[REDACTION FAILED]"
+            try:
+                redacted_err = _redact_transfer_text(err or "")
+            except Exception:
+                redacted_err = "[REDACTION FAILED]"
+
             return Response({
                 "command": command,
                 "exit_code": code,
-                "stdout": out[:10000],
-                "stderr": err[:5000],
+                "stdout": redacted_out[:10000],
+                "stderr": redacted_err[:5000],
             })
         except Exception as exc:
             return Response(

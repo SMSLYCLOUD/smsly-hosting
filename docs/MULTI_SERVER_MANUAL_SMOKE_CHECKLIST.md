@@ -1,5 +1,7 @@
 # Multi-Server Manual Smoke Checklist
 
+**Last reviewed: 2026-06-12**
+
 ## External VPS Connection
 
 | Check | Status |
