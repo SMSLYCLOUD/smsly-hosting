@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { BookOpen, Download, Rocket, Terminal, Code2, Puzzle, ChevronRight, ArrowRight, Server } from 'lucide-react';
+import { BookOpen, Download, Rocket, Terminal, Code2, Puzzle, ChevronRight, ArrowRight, Server, ArrowLeftRight, Network } from 'lucide-react';
 
 const docSections = [
   {
@@ -46,6 +46,24 @@ const docSections = [
     color: 'text-orange-600 dark:text-orange-400',
     bg: 'bg-orange-50 dark:bg-orange-950/40',
     border: 'border-orange-200 dark:border-orange-800',
+  },
+  {
+    href: '/docs/transfers',
+    title: 'Server Transfers',
+    desc: 'Move services between nodes in your Grid fleet. Drag-and-drop in the UI, or drive the pipeline from the API.',
+    icon: ArrowLeftRight,
+    color: 'text-violet-600 dark:text-violet-400',
+    bg: 'bg-violet-50 dark:bg-violet-950/40',
+    border: 'border-violet-200 dark:border-violet-800',
+  },
+  {
+    href: '/docs/multi-server',
+    title: 'Multi-Server & Remote Deployment',
+    desc: 'Span a primary, full-stack followers, and lightweight agents. One dashboard, one WireGuard mesh, one source of truth.',
+    icon: Network,
+    color: 'text-indigo-600 dark:text-indigo-400',
+    bg: 'bg-indigo-50 dark:bg-indigo-950/40',
+    border: 'border-indigo-200 dark:border-indigo-800',
   },
   {
     href: '/docs/addons',

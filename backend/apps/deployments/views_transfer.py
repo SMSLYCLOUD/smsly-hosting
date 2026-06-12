@@ -10,8 +10,9 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db.models import Q
 from rest_framework import viewsets, permissions, status
-from rest_framework.decorators import action
+from rest_framework.decorators import action, throttle_classes
 from rest_framework.response import Response
+from rest_framework.throttling import UserRateThrottle
 from .models_transfer import ServerTransfer
 from .serializers import ServerTransferSerializer, ServerTransferCreateSerializer
 from .models import Service, PlatformConfig
@@ -28,6 +29,11 @@ ACTIVE_TRANSFER_STATUSES = [
     'DNS_CUTOVER',
     'VERIFYING',
 ]
+
+
+class TransferCreateThrottle(UserRateThrottle):
+    scope = 'transfers'
+    rate = '5/minute'
 
 
 def is_safe_ip(ip_str, allow_private=False):
@@ -68,7 +74,8 @@ def _gateway_secret_candidates(source_ip):
 def _verify_transfer_sync_hmac(request, source_ip, body):
     signature = request.headers.get('X-Gateway-Signature-V2', '')
     timestamp = request.headers.get('X-Request-Timestamp', '')
-    if not signature or not timestamp:
+    nonce = request.headers.get('X-Gateway-Nonce', '')
+    if not signature or not timestamp or not nonce:
         return False
 
     try:
@@ -80,7 +87,7 @@ def _verify_transfer_sync_hmac(request, source_ip, body):
         return False
 
     body_hash = hashlib.sha256(body).hexdigest()
-    payload = f"{request.method}|{request.get_full_path()}|{timestamp}|{body_hash}"
+    payload = f"{request.method}|{request.get_full_path()}|{timestamp}|{body_hash}|{nonce}"
 
     for secret in _gateway_secret_candidates(source_ip):
         expected = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
@@ -213,6 +220,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
 
         return Response({'id': str(transfer.id), 'status': transfer.status})
 
+    @throttle_classes([TransferCreateThrottle])
     def create(self, request, *args, **kwargs):
         logger.info(
             "Transfer request received: transfer_type=%s service_id=%s target_server_id=%s target_ip_provided=%s auth_provided=%s",
@@ -269,6 +277,30 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
                     'error': (
                         'Source server IP is required. Set system domain config server_ip '
                         'or pass source_server_ip explicitly.'
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # SSRF Protection for source IP
+        try:
+            local_cfg_ip = PlatformConfig.load().server_ip
+        except Exception:
+            local_cfg_ip = ''
+        local_cfg_ip = (local_cfg_ip or '').strip()
+        source_is_local = source_server_ip in {'127.0.0.1', 'localhost'} or (
+            local_cfg_ip and source_server_ip == local_cfg_ip
+        )
+        if not source_is_local and not is_safe_ip(source_server_ip, allow_private=False):
+            logger.warning(
+                "Transfer failed: Source IP %s blocked by SSRF protection (user=%s).",
+                source_server_ip, request.user,
+            )
+            return Response(
+                {
+                    'error': (
+                        'Source server IP is in a forbidden range (SSRF protection). '
+                        'Only public IPs or the local node IP are allowed.'
                     )
                 },
                 status=status.HTTP_400_BAD_REQUEST,
@@ -337,6 +369,11 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
             return Response(
                 {'error': 'Target server IP is in a forbidden range (SSRF protection).'},
                 status=status.HTTP_400_BAD_REQUEST,
+            )
+        if target_server:
+            logger.info(
+                "Transfer SSRF: target_ip=%s source_ip=%s user_id=%s used allow_private override",
+                target_server_ip, source_server_ip, request.user.id,
             )
 
         target_ssh_key = str(payload.get('target_ssh_key') or '').strip()
@@ -439,3 +476,21 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
 
         rollback_transfer_task.delay(transfer_id=str(transfer.id))
         return Response({'status': 'rollback_started'})
+
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        transfer = self.get_object()
+        if transfer.status in {'COMPLETED', 'FAILED', 'ROLLED_BACK'}:
+            return Response(
+                {'error': f'Cannot cancel transfer in terminal state {transfer.status}.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if transfer.status == 'CANCELLED':
+            return Response(
+                {'error': 'Transfer already cancelled.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        transfer.status = 'CANCELLED'
+        transfer.error_message = 'Cancelled by user.'
+        transfer.save(update_fields=['status', 'error_message'])
+        return Response({'status': 'CANCELLED'})

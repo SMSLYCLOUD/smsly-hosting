@@ -1,6 +1,7 @@
 # pylint: disable=too-many-lines
 """Tasks module."""
 import logging
+import random
 import re
 import shlex
 import shutil
@@ -1468,6 +1469,10 @@ def _stop_local_service_container(service_name: str):
         logger.warning(f"Docker client unavailable on Master: {e}")
 
 
+def _remote_deploy_failed(deployment, orchestrator, fallback_msg, stage):
+    _handle_failure(None, deployment, _remote_failure_message(orchestrator, fallback_msg), stage)
+
+
 def _handle_remote_deployment(deployment, server, skip_review=False, image_name=None):
     """Delegate deployment to a remote server and poll for status.
 
@@ -1517,10 +1522,10 @@ def _handle_remote_deployment(deployment, server, skip_review=False, image_name=
 
     remote_svc_id = orchestrator.sync_service(service)
     if not remote_svc_id:
-        _handle_failure(
-            None,
+        _remote_deploy_failed(
             deployment,
-            _remote_failure_message(orchestrator, "Failed to sync service to remote server"),
+            orchestrator,
+            "Failed to sync service to remote server",
             "Remote Sync Failure",
         )
         return
@@ -1532,10 +1537,10 @@ def _handle_remote_deployment(deployment, server, skip_review=False, image_name=
         deployment, remote_svc_id, skip_review=skip_review, image_name=image_name,
     )
     if not remote_dep_id:
-        _handle_failure(
-            None,
+        _remote_deploy_failed(
             deployment,
-            _remote_failure_message(orchestrator, "Failed to trigger deployment on remote server"),
+            orchestrator,
+            "Failed to trigger deployment on remote server",
             "Remote Deploy Failure",
         )
         return
@@ -1583,10 +1588,10 @@ def _resume_remote_deployment(deployment, server):
         "memory_mb": service.memory_mb,
     }
     if not orchestrator.approve_deployment(remote_dep_id, payload=payload):
-        _handle_failure(
-            None,
+        _remote_deploy_failed(
             deployment,
-            _remote_failure_message(orchestrator, "Failed to approve remote deployment"),
+            orchestrator,
+            "Failed to approve remote deployment",
             "Remote Approval Failure",
         )
         return
@@ -1647,7 +1652,7 @@ def _poll_remote_deployment(
     append_log(deployment, f"[Remote] Initializing poller for remote deployment: {remote_dep_id}\n")
 
     for i in range(max_retries):
-        time.sleep(10)
+        time.sleep(10 + random.uniform(0, 2))
         
         if i % 6 == 0:  # Log every 60 seconds
              logger.debug("Polling remote deployment %s (attempt %d/%d)", remote_dep_id, i+1, max_retries)
@@ -4273,7 +4278,7 @@ def execute_server_transfer_task(self, transfer_id):
         cache.delete(lock_key)
         return {"status": "missing"}
 
-    if transfer.status in {"COMPLETED", "FAILED", "ROLLED_BACK"}:
+    if transfer.status in {"COMPLETED", "FAILED", "ROLLED_BACK", "CANCELLED"}:
         cache.delete(lock_key)
         return {"status": "skipped", "reason": f"terminal:{transfer.status}"}
 
@@ -4281,6 +4286,17 @@ def execute_server_transfer_task(self, transfer_id):
         engine = ServerTransferService(transfer)
         engine.execute()
         transfer.refresh_from_db(fields=["status"])
+        if transfer.status == "COMPLETED":
+            transfer.target_ssh_key = ""
+            transfer.target_ssh_password = ""
+            transfer.source_ssh_key = ""
+            transfer.source_ssh_password = ""
+            transfer.save(update_fields=[
+                "target_ssh_key",
+                "target_ssh_password",
+                "source_ssh_key",
+                "source_ssh_password",
+            ])
         return {"status": transfer.status}
     except Exception as exc:
         logger.exception("Transfer Task: unhandled failure for %s: %s", transfer_id, exc)
@@ -4288,11 +4304,15 @@ def execute_server_transfer_task(self, transfer_id):
         transfer.error_message = _redact_transfer_text(str(exc))[:4000]
         transfer.target_ssh_key = ""
         transfer.target_ssh_password = ""
+        transfer.source_ssh_key = ""
+        transfer.source_ssh_password = ""
         transfer.save(update_fields=[
             "status",
             "error_message",
             "target_ssh_key",
             "target_ssh_password",
+            "source_ssh_key",
+            "source_ssh_password",
         ])
         return {"status": "FAILED", "error": str(exc)}
     finally:
@@ -4311,6 +4331,9 @@ def rollback_transfer_task(self, transfer_id):
 
     try:
         transfer = TransferModel.objects.get(id=transfer_id)
+        if transfer.status in {"COMPLETED", "FAILED", "ROLLED_BACK", "CANCELLED"}:
+            cache.delete(lock_key)
+            return {"status": "skipped", "reason": f"terminal:{transfer.status}"}
         engine = ServerTransferService(transfer)
         engine.rollback()
         return {"status": "ROLLED_BACK"}
@@ -5370,3 +5393,17 @@ def node_watchdog_task(self):
         results["checked"], results["healed"], results["failed"], results["offline"],
     )
     return results
+
+
+@shared_task(bind=True, max_retries=2)
+def refresh_managed_server_health(self, server_id: str):
+    """Refresh the health/status of a single managed server."""
+    from .models_servers import ManagedServer
+    from .views_servers import _refresh_managed_server_health
+    try:
+        server = ManagedServer.objects.get(id=server_id)
+        _refresh_managed_server_health(server)
+    except ManagedServer.DoesNotExist:
+        logger.warning("refresh_managed_server_health: server %s not found", server_id)
+    except Exception as exc:
+        logger.exception("refresh_managed_server_health failed for %s: %s", server_id, exc)
