@@ -38,7 +38,7 @@ class ServiceHealthWebhookView(APIView):
             # Advance the deployment if it's waiting
             active_deployments = Deployment.objects.filter(
                 service=service,
-                status__in=[Deployment.Status.HEALTH_CHECK, Deployment.Status.STAGED]
+                status=Deployment.Status.HEALTH_CHECK,
             )
             for deployment in active_deployments:
                 deployment.status = Deployment.Status.ACTIVE

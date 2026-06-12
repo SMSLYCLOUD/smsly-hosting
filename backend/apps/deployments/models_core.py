@@ -623,9 +623,6 @@ class Deployment(TimeStampedModel):
         MIGRATION_FAILED = 'MIGRATION_FAILED', _('Migration Failed')
         DEPLOYING = 'DEPLOYING', _('Deploying')
         HEALTH_CHECK = 'HEALTH_CHECK', _('Health Check')
-        TRAFFIC_SHIFTING = 'TRAFFIC_SHIFTING', _('Traffic Shifting')
-        MONITORING = 'MONITORING', _('Monitoring')
-        STAGED = 'STAGED', _('Staged')
         ACTIVE = 'ACTIVE', _('Active')
         FAILED = 'FAILED', _('Failed')
         CANCELLED = 'CANCELLED', _('Cancelled')
@@ -677,16 +674,13 @@ class Deployment(TimeStampedModel):
         help_text="Deployment ID on a delegated remote server.",
     )
 
-    # Blue-green bake: stores the new (green) container ID while STAGED
+    # Blue-green: stores the new (green) container ID during a deployment
     green_container_id = models.CharField(
         max_length=255, blank=True, null=True,
-        help_text="Temp container ID during STAGED bake period")
+        help_text="Temp container ID for the new version during blue-green swap")
 
     started_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)
-    staged_at = models.DateTimeField(
-        null=True, blank=True,
-        help_text="When container entered STAGED status (bake clock start)")
 
     # Rollback tracking
     is_rollback = models.BooleanField(

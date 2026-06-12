@@ -94,7 +94,6 @@ def sync_service_status_on_deployment_change(sender, instance, created, **kwargs
             Deployment.Status.DEPLOYING,
             Deployment.Status.REVIEW,
             Deployment.Status.HEALTH_CHECK,
-            Deployment.Status.TRAFFIC_SHIFTING,
         ]:
             new_status = Service.Status.ACTIVE  # Service is active during deployment
         else:

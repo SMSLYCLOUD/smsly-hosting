@@ -1703,9 +1703,6 @@ def _poll_remote_deployment(
             Deployment.Status.MIGRATION_RUNNING,
             Deployment.Status.DEPLOYING,
             Deployment.Status.HEALTH_CHECK,
-            Deployment.Status.TRAFFIC_SHIFTING,
-            Deployment.Status.MONITORING,
-            Deployment.Status.STAGED,
         ) and deployment.status != status:
             deployment.status = status
             deployment.save(update_fields=['status', 'updated_at'])
@@ -1824,9 +1821,6 @@ def _poll_remote_deployment(
         Deployment.Status.BUILDING,
         Deployment.Status.HEALTH_CHECK,
         Deployment.Status.DEPLOYING,
-        Deployment.Status.STAGED,
-        Deployment.Status.MONITORING,
-        Deployment.Status.TRAFFIC_SHIFTING,
         Deployment.Status.MIGRATION_RUNNING,
         Deployment.Status.MIGRATION_PLANNING,
         Deployment.Status.BACKUP_RUNNING,
@@ -2717,84 +2711,6 @@ def _do_promote(deployment, provider):
         _wait_for_local_route_ready(
             deployment, service, timeout_seconds=route_timeout,
         )
-
-
-@shared_task(bind=True, max_retries=0, soft_time_limit=300, time_limit=360)
-def auto_promote_task(self, deployment_id: str, provider_id: str):
-    """
-    Auto-promote a STAGED deployment after bake period.
-
-    Scheduled with countdown=1800 (30 minutes) when deployment enters STAGED.
-    Only promotes if still in STAGED status (user may have already promoted
-    manually or the deployment may have been cancelled/failed).
-    """
-    try:
-        deployment = Deployment.objects.get(id=deployment_id)
-    except Deployment.DoesNotExist:
-        return
-
-    # Only promote if still STAGED (not already promoted or failed)
-    if deployment.status != 'STAGED':
-        logger.info(
-            "Auto-promote skipped for %s: status is %s (not STAGED)",
-            deployment_id, deployment.status,
-        )
-        return
-
-    try:
-        provider = CloudProvider.objects.get(id=provider_id)
-    except CloudProvider.DoesNotExist:
-        logger.error("Auto-promote: provider %s not found", provider_id)
-        return
-
-    try:
-        append_log(deployment, "\n⏰ Bake period complete. Auto-promoting...\n")
-        _do_promote(deployment, provider)
-    except Exception as e:
-        logger.error("Auto-promote failed for %s: %s", deployment_id, e)
-        append_log(deployment, f"\n❌ Auto-promote failed: {e}\n")
-        deployment.status = 'FAILED'
-        deployment.finished_at = timezone.now()
-        deployment.build_logs += f"\n--- Auto-Promote Failure ---\n{str(e)}\n"
-        deployment.save()
-        broadcast_status(deployment)
-
-
-@shared_task(bind=True, max_retries=0, soft_time_limit=300, time_limit=360)
-def promote_deployment_task(self, deployment_id: str, provider_id: str):
-    """
-    Manually promote a STAGED deployment (triggered by 'Promote Now' button).
-    Immediate cutover — no bake wait.
-    """
-    try:
-        deployment = Deployment.objects.get(id=deployment_id)
-    except Deployment.DoesNotExist:
-        return
-
-    if deployment.status != 'STAGED':
-        logger.warning(
-            "Manual promote skipped for %s: status is %s",
-            deployment_id, deployment.status,
-        )
-        return
-
-    try:
-        provider = CloudProvider.objects.get(id=provider_id)
-    except CloudProvider.DoesNotExist:
-        logger.error("Manual promote: provider %s not found", provider_id)
-        return
-
-    try:
-        append_log(deployment, "\n🚀 Manual promotion triggered (Promote Now)...\n")
-        _do_promote(deployment, provider)
-    except Exception as e:
-        logger.error("Manual promote failed for %s: %s", deployment_id, e)
-        append_log(deployment, f"\n❌ Manual promote failed: {e}\n")
-        deployment.status = 'FAILED'
-        deployment.finished_at = timezone.now()
-        deployment.build_logs += f"\n--- Manual Promote Failure ---\n{str(e)}\n"
-        deployment.save()
-        broadcast_status(deployment)
 
 
 @shared_task(bind=True, max_retries=0, soft_time_limit=120, time_limit=150)
