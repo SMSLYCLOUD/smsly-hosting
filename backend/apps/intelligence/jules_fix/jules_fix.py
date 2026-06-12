@@ -45,6 +45,10 @@ from apps.scripts.github import GitHubClient
 logger = logging.getLogger(__name__)
 
 
+MAX_FILES_PER_JULES_PR = 5
+MAX_BYTES_PER_JULES_PR = 50_000
+
+
 @dataclass
 class FixResult:
     """Result of a Jules auto-fix attempt."""
@@ -226,12 +230,25 @@ def _apply_fix_to_repo(
         # Create a new branch
         _run_git(["checkout", "-b", branch_name])
 
+        if len(files_to_change) > MAX_FILES_PER_JULES_PR:
+            raise RuntimeError(
+                f"Jules fix exceeds MAX_FILES_PER_JULES_PR "
+                f"({len(files_to_change)} > {MAX_FILES_PER_JULES_PR})"
+            )
+
         # Write the suggested files
+        total_bytes = 0
         for filepath, content in files_to_change.items():
             full_path = os.path.join(repo_path, filepath)
             os.makedirs(os.path.dirname(full_path), exist_ok=True)
             with open(full_path, "w", encoding="utf-8") as f:
                 f.write(content)
+            total_bytes += len(content.encode("utf-8"))
+            if total_bytes > MAX_BYTES_PER_JULES_PR:
+                raise RuntimeError(
+                    f"Jules fix exceeds MAX_BYTES_PER_JULES_PR "
+                    f"({total_bytes} > {MAX_BYTES_PER_JULES_PR})"
+                )
 
         _run_git(["add", "."])
         _run_git([
@@ -355,6 +372,9 @@ def jules_fix_deployment_failure(
             if per_service_override and per_service_override.value and per_service_override.value.lower() == 'false':
                 auto_deploy_enabled = False
             if auto_deploy_enabled:
+                if not getattr(settings, 'JULES_AUTO_DEPLOY_PR', False):  # Default False; only True if admin opts in
+                    logger.info("Jules fix pushed as PR; auto-deploy disabled by policy.")
+                    return _json_safe(result, {})
                 logger.info("Auto-deploying PR branch %s for deployment %s", branch_name, deployment_id)
                 try:
                     # Create a new deployment record for the PR branch

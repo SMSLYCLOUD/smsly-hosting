@@ -2241,6 +2241,8 @@ CODE_REVIEW_SYSTEM_PROMPT = (
     "Be specific with line references. Provide actionable feedback."
 )
 
+SENATE_COMMITTEE_COST_MULTIPLIER = 3
+
 
 def _parallel_ask(providers: List[AIProvider], prompt: str,
                   system_prompt: Optional[str] = None) -> List[Tuple[str, str]]:
@@ -2506,6 +2508,7 @@ def ask_with_fallback(
     system_prompt: Optional[str] = None,
     provider_id: str = None,
     mode: str = "auto",
+    return_usage: bool = False,
 ) -> Tuple[str, str]:
     """
     Smart multi-provider ask:
@@ -2517,24 +2520,35 @@ def ask_with_fallback(
     - If 1 provider -> single provider mode
     - If 0 providers -> error
 
-    Returns (response_text, provider_name).
+    Returns (response_text, provider_name[, usage_dict]) tuple.
+    If ``return_usage`` is True, returns a 3-tuple with a ``usage`` dict that
+    follows the OpenAI shape (``prompt_tokens``, ``completion_tokens``,
+    ``total_tokens``). When the underlying provider does not report token
+    counts the dict is empty.
     """
     _sync_db_to_env()
     configured = [p for p in get_configured_providers() if not _is_circuit_open(getattr(p, "id", ""))]
 
+    def _wrap(resp: str, name: str):
+        if return_usage:
+            return resp, name, {}
+        return resp, name
+
     # Route to code review mode
     if mode == "code_review" and len(configured) >= 2:
-        return ask_code_review(
+        result = ask_code_review(
             prompt, system_prompt,
             [p.id for p in configured[:2]],
         )
+        return _wrap(*result)
 
     # Route to code review in auto mode when exactly 2 providers (cheaper than full senate)
     if mode == "auto" and len(configured) == 2:
-        return ask_code_review(
+        result = ask_code_review(
             prompt, system_prompt,
             [p.id for p in configured[:2]],
         )
+        return _wrap(*result)
 
     # Priority 1: User-specified provider
     if provider_id and provider_id != "auto":
@@ -2549,7 +2563,7 @@ def ask_with_fallback(
 
         if target:
             try:
-                return _ask_single(target, prompt, system_prompt)
+                return _wrap(*_ask_single(target, prompt, system_prompt))
             except Exception as e:
                 _record_provider_failure(provider_id)
                 logger.warning("Target provider %s failed, falling back: %s", provider_id, e)
@@ -2557,7 +2571,7 @@ def ask_with_fallback(
     senate_enabled = os.environ.get("SENATE_ENABLED", "True").lower() == "true"
     if len(configured) >= 2 and senate_enabled:
         try:
-            return ask_collaborative(prompt, system_prompt)
+            return _wrap(*ask_collaborative(prompt, system_prompt))
         except Exception as exc:
             logger.warning("ask_collaborative failed: %s", exc)
 
@@ -2565,7 +2579,7 @@ def ask_with_fallback(
         # sequential pass before giving up.
         for provider in configured:
             try:
-                return _ask_single(provider, prompt, system_prompt)
+                return _wrap(*_ask_single(provider, prompt, system_prompt))
             except Exception as exc:  # noqa: BLE001
                 _record_provider_failure(getattr(provider, "id", ""))
                 logger.warning("Committee rescue with %s failed: %s", provider.name(), exc)
@@ -2574,7 +2588,7 @@ def ask_with_fallback(
     if len(configured) == 1:
         provider = configured[0]
         try:
-            return _ask_single(provider, prompt, system_prompt)
+            return _wrap(*_ask_single(provider, prompt, system_prompt))
         except Exception as e: # pylint: disable=broad-exception-caught
             _record_provider_failure(getattr(provider, "id", ""))
             raise RuntimeError(f"AI provider {provider.name()} failed: {e}")
@@ -2589,6 +2603,7 @@ def _cached_ask(
     ttl: int = 600,  # 10 minutes
     cache_bypass: bool = False,
     mode: str = "auto",
+    return_usage: bool = False,
 ) -> tuple:
     """Wrapper around ask_with_fallback that caches responses in Redis.
 
@@ -2599,12 +2614,15 @@ def _cached_ask(
         ttl: Cache TTL in seconds (default 600 = 10 minutes)
         cache_bypass: If True, skip cache (for chat/conversation endpoints)
         mode: "auto", "code_review", or "senate"
+        return_usage: If True, return (response, provider, usage) instead of (response, provider)
 
     Returns:
-        (response_text, provider_name) tuple
+        (response_text, provider_name[, usage_dict]) tuple
     """
     if cache_bypass:
-        return ask_with_fallback(prompt, system_prompt, provider_id, mode=mode)
+        return ask_with_fallback(
+            prompt, system_prompt, provider_id, mode=mode, return_usage=return_usage,
+        )
 
     # Build cache key from prompt content
     cache_input = f"{system_prompt or ''}:{prompt}"
@@ -2614,12 +2632,19 @@ def _cached_ask(
     # Check cache
     cached = cache.get(cache_key)
     if cached is not None:
+        if return_usage and len(cached) == 2:
+            return cached[0], cached[1], {}
         return cached
 
     # Cache miss — call provider
-    result = ask_with_fallback(prompt, system_prompt, provider_id, mode=mode)
+    result = ask_with_fallback(
+        prompt, system_prompt, provider_id, mode=mode, return_usage=return_usage,
+    )
 
-    # Cache the result
-    cache.set(cache_key, result, timeout=ttl)
+    # Cache the result (cache the 2-tuple to preserve existing on-disk shape)
+    if return_usage and len(result) == 3:
+        cache.set(cache_key, (result[0], result[1]), timeout=ttl)
+    else:
+        cache.set(cache_key, result, timeout=ttl)
 
     return result
