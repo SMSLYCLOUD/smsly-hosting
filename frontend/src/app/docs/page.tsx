@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { BookOpen, Download, Rocket, Terminal, Code2, Puzzle, ChevronRight, ArrowRight, Server, ArrowLeftRight, Network } from 'lucide-react';
+import { BookOpen, Download, Rocket, Terminal, Code2, Puzzle, ChevronRight, ArrowRight, Server, ArrowLeftRight, Network, Brain, Activity, Code, Zap } from 'lucide-react';
 
 const docSections = [
   {
@@ -64,6 +64,51 @@ const docSections = [
     color: 'text-indigo-600 dark:text-indigo-400',
     bg: 'bg-indigo-50 dark:bg-indigo-950/40',
     border: 'border-indigo-200 dark:border-indigo-800',
+  },
+  {
+    href: '/docs/deployments',
+    title: 'Deployments',
+    desc: 'Source to running container. Git, Docker, upload, template, or inline function. Every step observable, audit-logged, rollback-safe.',
+    icon: Rocket,
+    color: 'text-violet-600 dark:text-violet-400',
+    bg: 'bg-violet-50 dark:bg-violet-950/40',
+    border: 'border-violet-200 dark:border-violet-800',
+  },
+  {
+    href: '/docs/ai',
+    title: 'AI & Intelligence',
+    desc: '17 model providers, multi-agent Senate Committee, Jules auto-fix. Opt-in: nothing enabled until an admin saves a key.',
+    icon: Brain,
+    color: 'text-purple-600 dark:text-purple-400',
+    bg: 'bg-purple-50 dark:bg-purple-950/40',
+    border: 'border-purple-200 dark:border-purple-800',
+  },
+  {
+    href: '/docs/intelligence',
+    title: 'Intelligence (Runtime)',
+    desc: 'The always-on watchdog. Periodic anomaly scans, self-healing remediation, daily reports. No LLM required.',
+    icon: Activity,
+    color: 'text-cyan-600 dark:text-cyan-400',
+    bg: 'bg-cyan-50 dark:bg-cyan-950/40',
+    border: 'border-cyan-200 dark:border-cyan-800',
+  },
+  {
+    href: '/docs/functions',
+    title: 'Functions',
+    desc: 'Inline source code in Node 18 or Python 3.9. A thin HTTP shim on a hardened container with an SSRF guard on every outbound call.',
+    icon: Code,
+    color: 'text-orange-600 dark:text-orange-400',
+    bg: 'bg-orange-50 dark:bg-orange-950/40',
+    border: 'border-orange-200 dark:border-orange-800',
+  },
+  {
+    href: '/docs/autoscaling',
+    title: 'Autoscaling',
+    desc: 'Three engines, one shared state. CPU hysteresis, Prometheus + Loki + AI, and a K8s-style admin surface for manual control.',
+    icon: Zap,
+    color: 'text-emerald-600 dark:text-emerald-400',
+    bg: 'bg-emerald-50 dark:bg-emerald-950/40',
+    border: 'border-emerald-200 dark:border-emerald-800',
   },
   {
     href: '/docs/addons',
