@@ -152,11 +152,21 @@ export default function TransfersPage() {
                 payload.service_id = itemId;
             } else if (itemType === 'addon') {
                 const addon = addons.find((a: any) => a.id === itemId);
-                payload.service_id = addon?.service;
+                if (!addon?.service) {
+                    toast.error('Addon has no parent service — cannot transfer.');
+                    return;
+                }
+                payload.service_id = addon.service;
             }
 
             // If cross-platform migration, prompt for target domain
             if (targetDomain) payload.target_public_domain = targetDomain;
+
+            if (itemType === 'addon') {
+                toast.message('Note: the parent service will be moved; the addon is tied to it.', {
+                    description: 'The addon will follow its parent service automatically.',
+                });
+            }
 
             await api.post(endpoint, payload);
             toast.success(`Transfer initiated to ${getServerName(targetServerId)}`);
@@ -179,6 +189,35 @@ export default function TransfersPage() {
         if (id === 'local') return 'Local Server (This Node)';
         const srv = servers.find(s => s.id === id);
         return srv ? srv.name : 'Unknown Server';
+    };
+
+    const getServiceName = (transfer: any) => {
+        if (transfer.transfer_type === 'FULL') return 'Full Server';
+        const svc = services.find(s => s.id === transfer.service);
+        return svc ? svc.name : 'Unknown Service';
+    };
+
+    const IN_PROGRESS_STATUSES = ['PREPARING', 'UPLOADING', 'RESTORING', 'DNS_CUTOVER', 'VERIFYING'];
+
+    const handleRollback = async (transferId: string) => {
+        try {
+            await api.post(`/transfers/${transferId}/rollback/`);
+            toast.success('Rollback initiated');
+            fetchTransfers();
+        } catch (error: any) {
+            toast.error(parseApiError(error, 'Rollback request failed'));
+        }
+    };
+
+    const handleCancel = async (transferId: string) => {
+        if (!window.confirm('Cancel this in-progress transfer? This action cannot be undone.')) return;
+        try {
+            await api.post(`/transfers/${transferId}/cancel/`);
+            toast.success('Transfer cancellation requested');
+            fetchTransfers();
+        } catch (error: any) {
+            toast.error(parseApiError(error, 'Cancel request failed'));
+        }
     };
 
     const renderItemIcon = (type: string, itemType: string) => {
@@ -294,8 +333,8 @@ export default function TransfersPage() {
                                         {transfers.slice(0, 6).map((transfer: any) => (
                                             <div key={transfer.id} className="rounded-xl border border-zinc-800 bg-black/30 p-3">
                                                 <div className="flex items-center justify-between gap-2">
-                                                    <span className="text-[10px] font-bold text-zinc-400 uppercase">{transfer.transfer_type}</span>
-                                                    <span className={`text-[10px] font-bold uppercase ${
+                                                    <span className="text-[11px] font-bold text-white truncate">{getServiceName(transfer)}</span>
+                                                    <span className={`text-[10px] font-bold uppercase shrink-0 ${
                                                         transfer.status === 'COMPLETED'
                                                             ? 'text-emerald-400'
                                                             : transfer.status === 'FAILED'
@@ -304,6 +343,9 @@ export default function TransfersPage() {
                                                     }`}>
                                                         {transfer.status}
                                                     </span>
+                                                </div>
+                                                <div className="mt-1 text-[9px] font-medium text-zinc-500 uppercase tracking-wider">
+                                                    {transfer.transfer_type === 'SERVICE' ? 'Service Transfer' : 'Full Server Transfer'}
                                                 </div>
                                                 <div className="mt-2 h-1.5 rounded-full bg-zinc-800 overflow-hidden">
                                                     <div
@@ -314,6 +356,35 @@ export default function TransfersPage() {
                                                 <p className="mt-2 text-[11px] text-zinc-400 leading-relaxed">
                                                     {transfer.current_step || transfer.error_message || `${transfer.source_server_ip} -> ${transfer.target_server_ip}`}
                                                 </p>
+                                                {(transfer.can_rollback || IN_PROGRESS_STATUSES.includes(transfer.status)) && (
+                                                    <div className="mt-2 flex items-center gap-2 flex-wrap">
+                                                        {transfer.can_rollback && transfer.status === 'COMPLETED' && (
+                                                            <Button
+                                                                variant="outline"
+                                                                size="sm"
+                                                                className="h-6 px-2 text-[10px] font-bold uppercase tracking-wider rounded-md border-zinc-700 bg-zinc-900/60 text-zinc-200 hover:bg-zinc-800 hover:text-white"
+                                                                onClick={() => handleRollback(transfer.id)}
+                                                            >
+                                                                Rollback
+                                                            </Button>
+                                                        )}
+                                                        {IN_PROGRESS_STATUSES.includes(transfer.status) && (
+                                                            <Button
+                                                                variant="outline"
+                                                                size="sm"
+                                                                className="h-6 px-2 text-[10px] font-bold uppercase tracking-wider rounded-md border-zinc-700 bg-zinc-900/60 text-zinc-200 hover:bg-zinc-800 hover:text-white"
+                                                                onClick={() => handleCancel(transfer.id)}
+                                                            >
+                                                                Cancel
+                                                            </Button>
+                                                        )}
+                                                        {transfer.can_rollback && transfer.rollback_deadline && (
+                                                            <span className="text-[9px] text-zinc-500 font-medium">
+                                                                Rollback available until {new Date(transfer.rollback_deadline).toLocaleString()}
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                )}
                                             </div>
                                         ))}
                                     </div>
@@ -329,9 +400,24 @@ export default function TransfersPage() {
                                     {transfers.slice(0, 8).map((transfer: any) => (
                                         <div key={`log-${transfer.id}`} className="p-3 rounded-lg bg-black/30 border border-zinc-800/50">
                                             <div className="flex justify-between items-center mb-1">
-                                                <span className="text-[10px] font-bold text-zinc-600 uppercase">{transfer.status}</span>
-                                                <span className="text-[9px] text-zinc-700">
+                                                <span className="text-[11px] font-bold text-white truncate">{getServiceName(transfer)}</span>
+                                                <span className="text-[9px] text-zinc-700 shrink-0 ml-2">
                                                     {transfer.created_at ? new Date(transfer.created_at).toLocaleTimeString() : ''}
+                                                </span>
+                                            </div>
+                                            <div className="flex items-center gap-2 mb-1">
+                                                <span className={`text-[9px] font-bold uppercase ${
+                                                    transfer.status === 'COMPLETED'
+                                                        ? 'text-emerald-400'
+                                                        : transfer.status === 'FAILED'
+                                                          ? 'text-red-400'
+                                                          : 'text-amber-400'
+                                                }`}>
+                                                    {transfer.status}
+                                                </span>
+                                                <span className="text-[9px] text-zinc-600">•</span>
+                                                <span className="text-[9px] text-zinc-600 font-medium uppercase tracking-wider">
+                                                    {transfer.transfer_type === 'SERVICE' ? 'Service' : 'Full Server'}
                                                 </span>
                                             </div>
                                             <p className="text-[11px] text-zinc-400 leading-relaxed">

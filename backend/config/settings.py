@@ -611,6 +611,14 @@ REST_FRAMEWORK = {
         'user': '5000/hour',
         'deployments': '10/hour',
         'deployment_burst': '3/minute',
+        'transfers': '5/min',
+        'server_run_command': '2/min',
+        'server_run_command_burst': '2/min',
+        'server_commands': '2/min',
+        'server_heal': '5/min',
+        'server_proxy': '30/min',
+        'server_check_all': '2/min',
+        'server_provision': '3/hour',
     },
 }
 API_RATE_LIMIT = config('API_RATE_LIMIT', default=1000, cast=int)

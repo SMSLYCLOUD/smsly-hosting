@@ -1,3 +1,4 @@
+import logging
 import uuid
 from django.conf import settings
 from django.db import models
@@ -5,6 +6,9 @@ from django.utils import timezone
 from encrypted_model_fields.fields import EncryptedCharField, EncryptedTextField
 from .models_core import Service
 from .models_backup import ServiceBackup, ServerBackup
+
+logger = logging.getLogger(__name__)
+
 
 class ServerTransfer(models.Model):
     """Tracks migration of services from source to target server."""
@@ -25,6 +29,7 @@ class ServerTransfer(models.Model):
         ('COMPLETED', 'Completed'),
         ('FAILED', 'Failed'),
         ('ROLLED_BACK', 'Rolled Back'),
+        ('CANCELLED', 'Cancelled'),
     ], default='PREPARING', max_length=20)
 
     # Source
@@ -70,3 +75,20 @@ class ServerTransfer(models.Model):
         max_length=500, blank=True, default='',
         help_text='Target platform domain for cross-platform migration (e.g., app.interserver.com)',
     )
+
+    def save(self, *args, **kwargs):
+        from apps.deployments.services.transfer_service import _redact_transfer_text
+        for field in ('logs', 'error_message'):
+            value = getattr(self, field, None)
+            if not value:
+                continue
+            try:
+                redacted = _redact_transfer_text(str(value))
+            except Exception as exc:
+                logger.warning(
+                    "ServerTransfer.save: redaction failed for %s on %s: %s",
+                    field, getattr(self, 'id', None), exc,
+                )
+                continue
+            setattr(self, field, redacted)
+        super().save(*args, **kwargs)
