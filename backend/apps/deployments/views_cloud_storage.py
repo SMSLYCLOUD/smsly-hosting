@@ -1,5 +1,6 @@
 """Cloud storage destinations API — create, list, update, delete, test connection."""
 from django.db import models
+from django.core.exceptions import PermissionDenied
 from rest_framework import viewsets, permissions, status, serializers
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -30,7 +31,13 @@ class CloudStorageViewSet(viewsets.ModelViewSet):
     serializer_class = CloudStorageSerializer
 
     def get_queryset(self):
-        qs = CloudStorageDestination.objects.all()
+        user = self.request.user
+        # SECURITY: scope to destinations whose service is owned by the caller,
+        # or are platform-wide (service IS NULL). Without this, any authenticated
+        # user could list/modify/delete every other user's destinations.
+        qs = CloudStorageDestination.objects.filter(
+            models.Q(service__owner=user) | models.Q(service__isnull=True)
+        ).distinct()
         service_id = self.request.GET.get('service')
         platform_only = self.request.GET.get('platform') == 'true'
 
@@ -42,6 +49,27 @@ class CloudStorageViewSet(viewsets.ModelViewSet):
         elif platform_only:
             qs = qs.filter(service__isnull=True)
         return qs.filter(is_active=True)
+
+    def perform_create(self, serializer):
+        service = serializer.validated_data.get('service')
+        if service and service.owner_id != self.request.user.id:
+            raise PermissionDenied("You do not own that service.")
+        serializer.save()
+
+    def perform_update(self, serializer):
+        # Re-check service ownership on update to prevent reassigning a
+        # destination to a service the caller does not own. get_object()
+        # already uses the ownership-scoped queryset, so we only need to
+        # validate the new service FK value here.
+        service = serializer.validated_data.get('service')
+        if service and service.owner_id != self.request.user.id:
+            raise PermissionDenied("You do not own that service.")
+        serializer.save()
+
+    # perform_destroy intentionally omitted: DRF's default get_object() uses
+    # self.filter_queryset(self.get_queryset()), so the ownership-scoped
+    # queryset already excludes other users' rows, raising 404 for cross-tenant
+    # delete attempts.
 
     @action(detail=True, methods=['post'])
     def test(self, request, pk=None):
