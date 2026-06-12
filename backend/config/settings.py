@@ -211,6 +211,12 @@ if DOMAIN and DOMAIN != 'localhost':
         ALLOWED_HOSTS.append(_grid_wildcard)
 APPEND_SLASH = False
 
+JULES_ALLOWED_HOSTS = config(
+    'JULES_ALLOWED_HOSTS',
+    default='api.jules.google.com',
+    cast=Csv(),
+)
+
 # SECURITY: Fail-fast in production — no dev-creds default
 _fallback_sqlite_path = (BASE_DIR / 'fallback.db').resolve().as_posix()
 _DATABASE_DEFAULT = (

@@ -321,6 +321,11 @@ class Service(TimeStampedModel):
         default=80, help_text="Target CPU utilization percentage (HPA)")
     vpa_enabled = models.BooleanField(
         default=False, help_text="Enable Vertical Pod Autoscaling (VPA)")
+    alert_config = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Per-service autoscaler alert thresholds and notification targets.",
+    )
 
     # Multi-Region
     regions = models.ManyToManyField(
@@ -799,7 +804,7 @@ class PlatformConfig(models.Model):
         default=False,
         help_text="Enable HTTPS via Let's Encrypt")
     cloudflare_api_token = EncryptedCharField(
-        max_length=255, blank=True, default='',
+        max_length=512, blank=True, default='',
         help_text="Cloudflare API Token for DNS challenge (Edit zone DNS)")
     wildcard_subdomains = models.BooleanField(
         default=True,
@@ -822,6 +827,39 @@ class PlatformConfig(models.Model):
     def save(self, *args, **kwargs):
         self.pk = 1  # Enforce singleton
         super().save(*args, **kwargs)
+
+    CLOUDFLARE_TOKEN_MIN_LENGTH = 40
+    CLOUDFLARE_TOKEN_PATTERN = re.compile(r'^[A-Za-z0-9_\-]+$')
+
+    def validate_cloudflare_token(self) -> list:
+        """
+        Validate the Cloudflare API token format.
+
+        Returns a list of human-readable error strings. Empty list means
+        the token is acceptable (either empty, which is allowed, or it
+        meets the length/charset requirements).
+        """
+        errors = []
+        token = (self.cloudflare_api_token or "").strip()
+        if not token:
+            return errors
+        if len(token) < self.CLOUDFLARE_TOKEN_MIN_LENGTH:
+            errors.append(
+                "Cloudflare API token is too short "
+                f"(got {len(token)} chars, minimum {self.CLOUDFLARE_TOKEN_MIN_LENGTH})."
+            )
+        if not self.CLOUDFLARE_TOKEN_PATTERN.fullmatch(token):
+            errors.append(
+                "Cloudflare API token contains invalid characters; "
+                "only alphanumeric, underscore and dash are allowed."
+            )
+        return errors
+
+    def clean(self):
+        super().clean()
+        token_errors = self.validate_cloudflare_token()
+        if token_errors:
+            raise ValidationError({"cloudflare_api_token": token_errors})
 
     @classmethod
     def load(cls):

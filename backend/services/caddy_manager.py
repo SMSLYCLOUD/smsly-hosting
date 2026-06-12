@@ -7,11 +7,13 @@ to a shared volume for the host-side watcher to pick up.
 
 import datetime
 import ipaddress
+import json
 import logging
 import os
 import re
 import secrets
 import subprocess
+import time
 
 from apps.deployments.domain_utils import normalize_domain
 
@@ -26,6 +28,11 @@ CADDY_TOKEN_CLEAR_FILE = os.path.join(CADDY_CONFIG_DIR, ".cloudflare_token_clear
 # Cache the last known-good token so accidental empty writes (e.g. background
 # tasks that don't load the token) do not wipe DNS-challenge capability.
 CADDY_TOKEN_CACHE = os.path.join(CADDY_CONFIG_DIR, ".cloudflare_token_cache")
+# Cache entries expire after this many seconds (default: 30 days).
+# After expiry the cache is treated as missing and the operator must
+# re-supply a token. This prevents the cache from effectively becoming
+# permanent when combined with preserve_existing_token=True.
+CADDY_TOKEN_CACHE_TTL_SECONDS = 30 * 24 * 60 * 60
 SERVICE_PROXY_UPSTREAM = os.environ.get("SMSLY_SERVICE_PROXY_UPSTREAM", "traefik:80")
 CONTROL_PLANE_UPSTREAMS = {
     "backend:8000",
@@ -1049,18 +1056,77 @@ def generate_caddyfile(config) -> str:
     return header + "\n\n".join(sections) + "\n"
 
 
+def _read_cached_token_payload() -> dict:
+    """
+    Read the raw token cache payload from disk.
+
+    Returns an empty dict if the file is missing, unreadable, or in
+    the legacy (unstructured) format that did not include a TTL.
+    """
+    try:
+        if not os.path.exists(CADDY_TOKEN_CACHE):
+            return {}
+        with open(CADDY_TOKEN_CACHE, "r", encoding="utf-8") as handle:
+            raw = (handle.read() or "").strip()
+    except OSError:
+        return {}
+    if not raw or not raw.startswith("{"):
+        return {}
+    try:
+        return json.loads(raw)
+    except (ValueError, TypeError):
+        return {}
+
+
 def _load_cached_token() -> str:
-    """Return a token from env or cache (best-effort, empty on failure)."""
+    """
+    Return a token from env or cache (best-effort, empty on failure).
+
+    Cached entries are ignored (and the cache file is auto-invalidated)
+    once they are older than CADDY_TOKEN_CACHE_TTL_SECONDS. Legacy cache
+    files written before TTL support are treated as expired so we never
+    silently resurrect a token that has been sitting on disk indefinitely.
+    """
     token = (os.environ.get("CLOUDFLARE_API_TOKEN") or "").strip()
     if token:
         return token
+    payload = _read_cached_token_payload()
+    if not payload:
+        return ""
+    cached_token = (payload.get("token") or "").strip()
+    expires_at = payload.get("expires_at")
+    if not cached_token or not isinstance(expires_at, (int, float)):
+        return ""
+    now = time.time()
+    if now >= expires_at:
+        logger.warning(
+            "Cloudflare token cache is stale (expired at %s, %s days old); ignoring.",
+            datetime.datetime.fromtimestamp(expires_at, datetime.timezone.utc).isoformat(),
+            int((now - expires_at) / 86400),
+        )
+        try:
+            os.remove(CADDY_TOKEN_CACHE)
+        except OSError:
+            pass
+        return ""
+    return cached_token
+
+
+def clear_cached_token() -> bool:
+    """
+    Remove the Cloudflare token cache file from disk.
+
+    Returns True if the file existed and was removed, False otherwise.
+    Intended for explicit operator invalidation (admin CLI / endpoint).
+    """
     try:
         if os.path.exists(CADDY_TOKEN_CACHE):
-            with open(CADDY_TOKEN_CACHE, "r", encoding="utf-8") as handle:
-                return (handle.read() or "").strip()
-    except OSError:
-        return ""
-    return ""
+            os.remove(CADDY_TOKEN_CACHE)
+            logger.info("Cloudflare token cache cleared by operator request")
+            return True
+    except OSError as exc:
+        logger.warning("Failed to clear Cloudflare token cache: %s", exc)
+    return False
 
 
 def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_token: bool = True) -> dict:
@@ -1116,8 +1182,14 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
                 handle.write(cloudflare_token)
             # Persist a cache so future apply runs without an explicit token
             # do not unintentionally clear wildcard TLS.
+            # The cache stores a TTL so an old token is not silently
+            # resurrected across rotations.
+            cache_payload = json.dumps({
+                "token": cloudflare_token,
+                "expires_at": time.time() + CADDY_TOKEN_CACHE_TTL_SECONDS,
+            })
             with os.fdopen(os.open(CADDY_TOKEN_CACHE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as handle:
-                handle.write(cloudflare_token)
+                handle.write(cache_payload)
             if os.path.exists(CADDY_TOKEN_CLEAR_FILE):
                 os.remove(CADDY_TOKEN_CLEAR_FILE)
         else:
