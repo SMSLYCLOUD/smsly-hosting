@@ -169,6 +169,13 @@ class CleanupFileResponse(FileResponse):
                 os.remove(self._file_path)
             except OSError:
                 pass
+        if self._file_path:
+            parent = os.path.dirname(os.path.abspath(self._file_path))
+            if parent and os.path.basename(parent).startswith('smsly-decrypted-'):
+                try:
+                    os.rmdir(parent)
+                except OSError:
+                    pass
 
 
 _BACKUP_DOWNLOAD_BLOCK_SIZE = 1024 * 1024
@@ -189,7 +196,7 @@ def _backup_download_headers(response, file_size: int, filename: str):
 def _verify_signed_download(signed_value: str, expected_pk: str, max_age: int = 300) -> bool:
     """Verify a signed download token. Returns True if valid and not expired."""
     try:
-        payload = signing.Signer().unsign_object(signed_value, max_age=max_age)
+        payload = signing.TimestampSigner().unsign_object(signed_value, max_age=max_age)
         return str(payload.get('pk')) == str(expected_pk)
     except (signing.BadSignature, signing.SignatureExpired):
         return False
@@ -199,7 +206,7 @@ def _generate_signed_download_url(request, obj_pk: str, url_name: str, path_para
     """Generate a signed download URL valid for 5 minutes."""
     import time
     payload = {'pk': str(obj_pk), 'ts': int(time.time())}
-    signed = signing.Signer().sign_object(payload)
+    signed = signing.TimestampSigner().sign_object(payload)
     from urllib.parse import urlencode
     params = {'signed': signed}
     if path_params:
@@ -247,6 +254,13 @@ def _file_iterator(file_path: str, start: int = 0, end: int | None = None, clean
                 os.remove(cleanup_path)
             except OSError:
                 pass
+        if cleanup_path:
+            parent = os.path.dirname(os.path.abspath(cleanup_path))
+            if parent and os.path.basename(parent).startswith('smsly-decrypted-'):
+                try:
+                    os.rmdir(parent)
+                except OSError:
+                    pass
 
 
 def _open_backup_download_response(request, file_path: str, filename: str, cleanup_path: str | None = None):
@@ -5033,24 +5047,15 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'], permission_classes=[permissions.AllowAny], authentication_classes=[])
     def download(self, request, pk=None):
-        # Try signed token first (short-lived, avoids exposing auth token in URLs)
         signed_value = request.query_params.get('signed')
+        token_value = request.query_params.get('token')
+        if token_value:
+            return Response({'error': 'Raw token auth is disabled; use a signed download link.'}, status=status.HTTP_401_UNAUTHORIZED)
         if signed_value:
             if not _verify_signed_download(signed_value, str(pk)):
                 return Response({'error': 'Invalid or expired download link'}, status=status.HTTP_401_UNAUTHORIZED)
-        else:
-            # Fallback: allow raw auth token via query param (legacy)
-            token_key = request.query_params.get('token')
-            if token_key:
-                logger.warning("Download using raw token param - consider migrating to signed URLs")
-                from rest_framework.authtoken.models import Token
-                try:
-                    token = Token.objects.select_related('user').get(key=token_key)
-                    request.user = token.user
-                except Token.DoesNotExist:
-                    return Response({'error': 'Invalid token'}, status=status.HTTP_401_UNAUTHORIZED)
-            elif not request.user.is_authenticated:
-                return Response({'error': 'Authentication credentials were not provided.'}, status=status.HTTP_401_UNAUTHORIZED)
+        elif not request.user.is_authenticated:
+            return Response({'error': 'Authentication credentials were not provided.'}, status=status.HTTP_401_UNAUTHORIZED)
 
         backup = self.get_object()
         file_path = backup.file_path
@@ -5081,6 +5086,11 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
             file_path,
             os.path.basename(file_path),
         )
+
+    @action(detail=True, methods=['get'], url_path='download-url')
+    def download_url(self, request, pk=None):
+        backup = self.get_object()
+        return Response({'url': _generate_signed_download_url(request, str(backup.id), 'backup-download', path_params={'pk': str(backup.id)})})
 
 
 class ServerBackupViewSet(viewsets.ModelViewSet):
@@ -5118,26 +5128,15 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'], permission_classes=[permissions.AllowAny], authentication_classes=[])
     def download(self, request, pk=None):
-        # Try signed token first (short-lived, avoids exposing auth token in URLs)
         signed_value = request.query_params.get('signed')
+        token_value = request.query_params.get('token')
+        if token_value:
+            return Response({'error': 'Raw token auth is disabled; use a signed download link.'}, status=status.HTTP_401_UNAUTHORIZED)
         if signed_value:
             if not _verify_signed_download(signed_value, str(pk)):
                 return Response({'error': 'Invalid or expired download link'}, status=status.HTTP_401_UNAUTHORIZED)
-        else:
-            # Fallback: allow raw auth token via query param (legacy)
-            token_key = request.query_params.get('token')
-            if token_key:
-                logger.warning("Server backup download using raw token param - consider migrating to signed URLs")
-                from rest_framework.authtoken.models import Token
-                try:
-                    token = Token.objects.select_related('user').get(key=token_key)
-                    request.user = token.user
-                    if not request.user.is_superuser and not request.user.is_staff:
-                        return Response({'error': 'Admin privileges required.'}, status=status.HTTP_403_FORBIDDEN)
-                except Token.DoesNotExist:
-                    return Response({'error': 'Invalid token'}, status=status.HTTP_401_UNAUTHORIZED)
-            elif not request.user.is_authenticated:
-                return Response({'error': 'Authentication credentials were not provided.'}, status=status.HTTP_401_UNAUTHORIZED)
+        elif not request.user.is_authenticated:
+            return Response({'error': 'Authentication credentials were not provided.'}, status=status.HTTP_401_UNAUTHORIZED)
 
         backup = self.get_object()
         file_path = backup.file_path
@@ -5169,6 +5168,11 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
             file_path,
             os.path.basename(file_path),
         )
+
+    @action(detail=True, methods=['get'], url_path='download-url')
+    def download_url(self, request, pk=None):
+        backup = self.get_object()
+        return Response({'url': _generate_signed_download_url(request, str(backup.id), 'server-backup-download', path_params={'pk': str(backup.id)})})
 
     @action(detail=False, methods=['post'], url_path='upload-restore',
             parser_classes=[parsers.MultiPartParser])

@@ -1,8 +1,54 @@
 import uuid
+from urllib.parse import urlparse
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.conf import settings
 from encrypted_model_fields.fields import EncryptedCharField
 from .models_core import Service
+
+
+def _is_internal_http_host(host: str) -> bool:
+    if not host:
+        return False
+    if host.startswith('localhost') or host.startswith('127.'):
+        return True
+    private_prefixes = (
+        '10.', '192.168.',
+        '172.16.', '172.17.', '172.18.', '172.19.', '172.20.',
+        '172.21.', '172.22.', '172.23.', '172.24.', '172.25.',
+        '172.26.', '172.27.', '172.28.', '172.29.', '172.30.', '172.31.',
+    )
+    if any(host.startswith(p) for p in private_prefixes):
+        return True
+    if host.startswith('smsly-') or host in ('minio', 'registry'):
+        return True
+    if host.endswith('.internal'):
+        return True
+    return False
+
+
+def validate_endpoint_url(url: str) -> None:
+    """Validate an S3/R2/MinIO endpoint URL.
+
+    Empty URLs are allowed (means use provider default).
+    Only http and https schemes are accepted.
+    Plain http is only allowed for internal hosts to prevent forcing
+    unencrypted transit to attacker-controlled hosts.
+    """
+    if not url:
+        return
+    parsed = urlparse(url)
+    if parsed.scheme not in ('http', 'https'):
+        raise ValidationError(
+            f'Endpoint must use http or https; got {parsed.scheme!r}',
+        )
+    if parsed.scheme == 'http':
+        host = (parsed.hostname or '').lower()
+        if not _is_internal_http_host(host):
+            raise ValidationError(
+                'http:// endpoint only allowed for localhost/internal hosts',
+            )
+
 
 class ServiceBackup(models.Model):
     """Full snapshot of a service: container state + volumes + env vars + addons."""
@@ -58,3 +104,7 @@ class BackupSchedule(models.Model):
     )
     s3_access_key = EncryptedCharField(max_length=255, blank=True, default='')
     s3_secret_key = EncryptedCharField(max_length=255, blank=True, default='')
+
+    def clean(self):
+        super().clean()
+        validate_endpoint_url(self.s3_endpoint)

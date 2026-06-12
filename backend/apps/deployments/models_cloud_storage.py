@@ -1,8 +1,11 @@
 """Cloud storage destinations for backup offloading — R2, S3, MinIO, B2."""
 import uuid
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 from encrypted_model_fields.fields import EncryptedCharField
+
+from .models_backup import validate_endpoint_url
 
 
 class CloudStorageDestination(models.Model):
@@ -91,6 +94,10 @@ class CloudStorageDestination(models.Model):
             'storage_backend', 's3_bucket', 's3_region',
             's3_endpoint', 's3_access_key', 's3_secret_key',
         ])
+
+    def clean(self):
+        super().clean()
+        validate_endpoint_url(self.endpoint)
 
     def upload_test_file(self) -> bool:
         """Upload a test file to verify connectivity."""

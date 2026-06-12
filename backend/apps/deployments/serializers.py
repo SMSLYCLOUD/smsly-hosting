@@ -347,6 +347,15 @@ class BackupScheduleSerializer(serializers.ModelSerializer):
         model = BackupSchedule
         fields = '__all__'
 
+    def validate_s3_endpoint(self, value):
+        from .models_backup import validate_endpoint_url
+        from django.core.exceptions import ValidationError as DjangoValidationError
+        try:
+            validate_endpoint_url(value)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.messages)
+        return value
+
 # --- SafeDeploy Serializers ---
 
 class PreviewCreateSerializer(serializers.Serializer):

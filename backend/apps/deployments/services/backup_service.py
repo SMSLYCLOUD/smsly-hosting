@@ -1321,8 +1321,10 @@ class BackupService:
     @staticmethod
     def decrypt_backup(path: str, key: str) -> str:
         """
-        Decrypt an encrypted backup to a temp file and return its path.
-        Caller is responsible for deleting the temp file.
+        Decrypt an encrypted backup to a temp file in a private directory
+        and return its path. Caller is responsible for deleting the temp file
+        (use :func:`BackupService.cleanup_decrypted_path` to also remove the
+        parent private directory).
         Supports the current chunked AES-GCM format and legacy Fernet archives
         without loading the encrypted or decrypted backup into process memory.
         """
@@ -1333,12 +1335,72 @@ class BackupService:
         return BackupService._decrypt_legacy_fernet_backup(path, key)
 
     @staticmethod
+    def _make_private_decrypted_path(suffix: str = ".tar.gz") -> tuple:
+        """Create a private directory under /tmp for a decrypted backup.
+
+        The directory is created with mode 0o700 and the file with mode 0o600
+        to avoid leaking plaintext backups through permissive umasks.
+        Returns ``(tmp_path, private_dir)``.
+        """
+        import uuid as _uuid
+        private_dir = os.path.join(
+            tempfile.gettempdir(),
+            f"smsly-decrypted-{_uuid.uuid4().hex}",
+        )
+        os.makedirs(private_dir, mode=0o700, exist_ok=False)
+        try:
+            os.chmod(private_dir, 0o700)
+        except OSError:
+            pass
+        fd, tmp_path = tempfile.mkstemp(
+            prefix="backup_dec_", suffix=suffix, dir=private_dir,
+        )
+        os.close(fd)
+        try:
+            os.chmod(tmp_path, 0o600)
+        except OSError:
+            pass
+        return tmp_path, private_dir
+
+    @staticmethod
+    def cleanup_decrypted_path(path: str) -> None:
+        """Remove a decrypted backup file and its private parent directory.
+
+        Safe to call on paths that do not exist. Only removes the parent
+        directory if it matches the expected ``/tmp/smsly-decrypted-*`` pattern.
+        """
+        if not path:
+            return
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            pass
+        parent = os.path.dirname(os.path.abspath(path))
+        if not parent:
+            return
+        if not os.path.basename(parent).startswith('smsly-decrypted-'):
+            return
+        try:
+            for entry in os.listdir(parent):
+                if entry.startswith('backup_dec_'):
+                    try:
+                        os.remove(os.path.join(parent, entry))
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+        try:
+            os.rmdir(parent)
+        except OSError:
+            pass
+
+    @staticmethod
     def _decrypt_chunked_backup(path: str, key: str) -> str:
         raw_key = BackupService._decode_backup_key(key)
         aesgcm = AESGCM(raw_key)
 
-        fd, tmp_path = tempfile.mkstemp(prefix="backup_dec_", suffix=".tar.gz")
-        os.close(fd)
+        tmp_path, private_dir = BackupService._make_private_decrypted_path()
         try:
             with open(path, "rb") as source, open(tmp_path, "wb") as target:
                 magic = BackupService._read_exact(source, len(_CHUNKED_BACKUP_MAGIC))
@@ -1359,10 +1421,7 @@ class BackupService:
                     chunk_index += 1
             return tmp_path
         except Exception:
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
+            BackupService.cleanup_decrypted_path(tmp_path)
             raise
 
     @staticmethod
@@ -1405,8 +1464,7 @@ class BackupService:
         encryption_key = raw_key[16:]
 
         token_path = BackupService._decode_fernet_token_to_file(path)
-        fd, tmp_path = tempfile.mkstemp(prefix="backup_dec_", suffix=".tar.gz")
-        os.close(fd)
+        tmp_path, private_dir = BackupService._make_private_decrypted_path()
         try:
             token_size = os.path.getsize(token_path)
             min_size = _FERNET_HEADER_SIZE + _FERNET_HMAC_SIZE + 16
@@ -1459,12 +1517,10 @@ class BackupService:
 
             return tmp_path
         except InvalidToken as e:
+            BackupService.cleanup_decrypted_path(tmp_path)
             raise ValueError("Failed to decrypt backup archive: invalid token") from e
         except Exception:
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
+            BackupService.cleanup_decrypted_path(tmp_path)
             raise
         finally:
             try:
