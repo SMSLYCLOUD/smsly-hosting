@@ -13,6 +13,7 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import threading
 import yaml
 from pathlib import Path
 from urllib.parse import urlparse as parse_url
@@ -113,6 +114,11 @@ class PipelineManager:
     """
     Orchestrates the CI/CD pipeline for a deployment.
     """
+
+    # Class-level lock so concurrent PipelineManager instances do not race
+    # to rebuild the global buildx "default" builder (which would otherwise
+    # yank the builder out from under sibling builds).
+    _buildx_driver_lock = threading.Lock()
 
     def __init__(self, deployment: Deployment):
         self.deployment = deployment
@@ -1934,7 +1940,15 @@ class PipelineManager:
         # Ensure the default builder uses the docker driver, not
         # docker-container.  The docker driver loads the image directly
         # without needing --load, which avoids buildkit-container issues.
-        self._ensure_docker_driver()
+        if not self._ensure_docker_driver():
+            message = (
+                "Refusing to build: failed to recreate the buildx default "
+                "builder with the docker driver. See server logs for the "
+                "underlying docker buildx error."
+            )
+            logger.error("buildx_driver_recreation_aborted_build")
+            append_log(self.deployment, message + "\n")
+            raise BuildError(message)
 
         # Authenticate with the private registry before building so the
         # Docker daemon can pull base images (FROM lines in Dockerfile)
@@ -1973,25 +1987,123 @@ class PipelineManager:
         self._run_subprocess(cmd, context_dir)
 
     def _ensure_docker_driver(self):
-        """Ensure the default buildx builder uses the docker driver."""
-        try:
-            import subprocess
-            r = subprocess.run(
-                ["docker", "buildx", "inspect"],
-                capture_output=True, text=True, timeout=15
+        """
+        Ensure the default buildx builder uses the docker driver.
+
+        Returns True when the default builder is confirmed to be the
+        docker driver (either it was already, or it was successfully
+        recreated). Returns False when recreation was attempted but
+        failed; the caller MUST refuse to proceed with the build in
+        that case to avoid cascading buildx state changes across
+        concurrent builds.
+
+        Concurrency: protected by a class-level threading.Lock so two
+        PipelineManager instances cannot race to rm/create the default
+        builder simultaneously.
+        """
+        import subprocess
+        lock = PipelineManager._buildx_driver_lock
+        with lock:
+            try:
+                inspect = subprocess.run(
+                    ["docker", "buildx", "inspect"],
+                    capture_output=True, text=True, timeout=15
+                )
+            except FileNotFoundError:
+                logger.warning(
+                    "buildx_driver_inspect_skipped reason=docker_cli_not_found"
+                )
+                return True
+            except subprocess.TimeoutExpired:
+                logger.warning(
+                    "buildx_driver_inspect_skipped reason=timeout"
+                )
+                return True
+            except Exception as exc:
+                logger.warning(
+                    "buildx_driver_inspect_failed error=%s", exc,
+                )
+                return True
+
+            if inspect.returncode != 0:
+                logger.warning(
+                    "buildx_driver_inspect_failed returncode=%s stderr=%s",
+                    inspect.returncode,
+                    (inspect.stderr or "").strip()[:200],
+                )
+                return True
+
+            output = (inspect.stdout or "") + (inspect.stderr or "")
+            if "Driver: docker" in output:
+                return True
+
+            logger.warning(
+                "buildx_driver_recreation_started current_driver_non_docker"
             )
-            if "Driver: docker" not in r.stdout and "Driver: docker" not in r.stderr:
-                # Builder is using docker-container — recreate with docker driver
-                subprocess.run(
+            try:
+                rm = subprocess.run(
                     ["docker", "buildx", "rm", "default"],
-                    capture_output=True, timeout=15
+                    capture_output=True, text=True, timeout=15
                 )
-                subprocess.run(
-                    ["docker", "buildx", "create", "--name=default", "--driver=docker", "--use"],
-                    capture_output=True, timeout=15
+            except FileNotFoundError as exc:
+                logger.error(
+                    "buildx_driver_recreation_failed step=rm reason=docker_cli_not_found error=%s",
+                    exc,
                 )
-        except Exception:
-            pass
+                return False
+            except subprocess.TimeoutExpired:
+                logger.error(
+                    "buildx_driver_recreation_failed step=rm reason=timeout"
+                )
+                return False
+            except Exception as exc:
+                logger.error(
+                    "buildx_driver_recreation_failed step=rm error=%s", exc,
+                )
+                return False
+            if rm.returncode != 0:
+                logger.error(
+                    "buildx_driver_recreation_failed step=rm returncode=%s stderr=%s",
+                    rm.returncode,
+                    (rm.stderr or "").strip()[:200],
+                )
+                return False
+            logger.info("buildx_driver_recreation_progress step=rm completed")
+
+            try:
+                create = subprocess.run(
+                    ["docker", "buildx", "create", "--name=default",
+                     "--driver=docker", "--use"],
+                    capture_output=True, text=True, timeout=15
+                )
+            except FileNotFoundError as exc:
+                logger.error(
+                    "buildx_driver_recreation_failed step=create reason=docker_cli_not_found error=%s",
+                    exc,
+                )
+                return False
+            except subprocess.TimeoutExpired:
+                logger.error(
+                    "buildx_driver_recreation_failed step=create reason=timeout"
+                )
+                return False
+            except Exception as exc:
+                logger.error(
+                    "buildx_driver_recreation_failed step=create error=%s", exc,
+                )
+                return False
+            if create.returncode != 0:
+                logger.error(
+                    "buildx_driver_recreation_failed step=create returncode=%s stderr=%s",
+                    create.returncode,
+                    (create.stderr or "").strip()[:200],
+                )
+                return False
+
+            logger.info(
+                "buildx_driver_recreation_succeeded driver=docker"
+            )
+            return True
 
     def _patch_dockerfile_for_runtime(self, dockerfile_path: str):
         """
