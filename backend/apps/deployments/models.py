@@ -22,7 +22,7 @@ from .models_core import (
 )
 
 # 2. Sub-models (Imported after core models)
-from .models_audit import AuditLog
+from .models_audit import AuditLog, WebhookDelivery
 from .models_cron import CronJob
 from .models_storage import Volume
 from .models_updates import PlatformUpdate

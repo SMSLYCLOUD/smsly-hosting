@@ -567,8 +567,7 @@ class PipelineManager:
 
         # Keys we should NEVER inject from .env files (security)
         SKIP_PATTERNS = re.compile(
-            r'^(SECRET_KEY|JWT_SECRET|DATABASE_URL|REDIS_URL|'
-            r'AWS_SECRET|PRIVATE_KEY|.*PASSWORD.*|.*_DSN)$',
+            r'(SECRET|PRIVATE|TOKEN|PASSWORD|API[_-]?KEY|DSN|CREDENTIAL)',
             re.IGNORECASE,
         )
 
@@ -606,7 +605,7 @@ class PipelineManager:
 
                             if not key or not value:
                                 continue
-                            if SKIP_PATTERNS.match(key):
+                            if SKIP_PATTERNS.search(key):
                                 continue
 
                             # Sanitize for PostgreSQL

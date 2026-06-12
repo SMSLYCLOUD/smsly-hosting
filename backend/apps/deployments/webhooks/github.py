@@ -6,9 +6,41 @@ import re
 import uuid
 from django.conf import settings
 from apps.deployments.models import Service, Deployment
+from apps.deployments.models_audit import WebhookDelivery
 from apps.deployments.tasks import smart_deploy_task
 
 logger = logging.getLogger(__name__)
+
+
+def _check_duplicate_delivery(delivery_id, event_type):
+    """
+    Idempotency guard for GitHub deliveries.
+
+    Returns ``(delivery, should_process)``. When the delivery is new, a
+    fresh row is created and the caller should process the event. If the
+    delivery has already been processed successfully, the caller should
+    skip it. If it previously failed, the row is reset to ``processed`` so
+    the caller may retry.
+    """
+    if not delivery_id:
+        return None, True
+    delivery, created = WebhookDelivery.objects.get_or_create(
+        delivery_id=delivery_id,
+        defaults={
+            'provider': 'github',
+            'event_type': event_type or '',
+            'status': 'processed',
+        },
+    )
+    if created:
+        return delivery, True
+    if delivery.status == 'failed':
+        delivery.status = 'processed'
+        delivery.event_type = event_type or delivery.event_type
+        delivery.save(update_fields=['status', 'event_type'])
+        return delivery, True
+    logger.info("Duplicate webhook delivery %s; ignoring", delivery_id)
+    return delivery, False
 
 
 class GitHubWebhookHandler:
@@ -31,14 +63,14 @@ class GitHubWebhookHandler:
 
         return hmac.compare_digest(signature, expected)
 
-    def handle_event(self, event_type: str, payload: dict):
+    def handle_event(self, event_type: str, payload: dict, delivery_id: str = ''):
         if event_type == 'push':
-            return self._handle_push(payload)
+            return self._handle_push(payload, delivery_id)
         if event_type == 'pull_request':
-            return self._handle_pull_request(payload)
+            return self._handle_pull_request(payload, delivery_id)
         return False
 
-    def _handle_push(self, payload: dict):
+    def _handle_push(self, payload: dict, delivery_id: str = ''):
         repo_url = payload.get('repository', {}).get(
             'html_url')  # e.g. https://github.com/user/repo
         ref = payload.get('ref')  # refs/heads/main
@@ -85,7 +117,7 @@ class GitHubWebhookHandler:
 
         return triggered_count > 0
 
-    def _handle_pull_request(self, payload: dict):
+    def _handle_pull_request(self, payload: dict, delivery_id: str = ''):
         """
         Handle Pull Request events for Preview Environments.
         """

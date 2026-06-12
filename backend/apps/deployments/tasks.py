@@ -216,6 +216,8 @@ def recover_stalled_queued_deployments(limit: int = 100) -> dict:
     Automated deployments keep their auto-approval semantics even when the
     original Celery publish was lost during an update.
     """
+    from celery.result import AsyncResult
+
     results = {"seen": 0, "queued": 0, "skipped": 0, "failed": 0}
     deployments = (
         Deployment.objects.filter(status=Deployment.Status.QUEUED)
@@ -224,6 +226,18 @@ def recover_stalled_queued_deployments(limit: int = 100) -> dict:
     )
     for deployment in deployments:
         results["seen"] += 1
+        try:
+            task_state = AsyncResult(str(deployment.id)).state
+        except Exception:
+            task_state = None
+        if task_state in ("STARTED", "RECEIVED", "RETRY"):
+            logger.info(
+                "Skipping re-queue for %s: task is in state %s",
+                deployment.id,
+                task_state,
+            )
+            results["skipped"] += 1
+            continue
         provider = _resolve_provider_for_service(
             deployment.service,
             prefer_local=bool(getattr(deployment, "target_is_local", False)),
@@ -2533,7 +2547,7 @@ def _deploy_container(deployment, provider, image_name):
             env_vars=env_vars,
             cpu=int(service.cpu_cores * 1024),
             memory=service.memory_mb,
-            replicas=service.min_replicas,
+            replicas=getattr(deployment, 'queued_min_replicas', None) or service.min_replicas,
             volumes=volumes,
             healthcheck=healthcheck,
             restart_policy=service.restart_policy,
@@ -4084,6 +4098,17 @@ def restore_addon_task(self, backup_id: str):
 @shared_task(bind=True, soft_time_limit=3600, time_limit=3900, max_retries=3, default_retry_delay=300)
 def create_service_backup_task(self, service_id, backup_type='MANUAL', backup_id=None):
     from .services.backup_service import BackupService
+    from apps.deployments.utils import log_event
+    log_event(
+        action='BACKUP_CREATE',
+        target=f'Service: {service_id}',
+        actor='system',
+        metadata={
+            'service_id': str(service_id),
+            'backup_id': str(backup_id) if backup_id else None,
+            'backup_type': backup_type,
+        },
+    )
     try:
         backup_service = BackupService()
         backup_service.backup_service(service_id, backup_id=backup_id, backup_type=backup_type)
@@ -4094,22 +4119,102 @@ def create_service_backup_task(self, service_id, backup_type='MANUAL', backup_id
 
 @shared_task(bind=True, soft_time_limit=7200, time_limit=7500, max_retries=2, default_retry_delay=600)
 def create_server_backup_task(self, backup_id=None):
+    from apps.deployments.utils import log_event
+    log_event(
+        action='BACKUP_CREATE',
+        target='Server',
+        actor='system',
+        metadata={
+            'backup_id': str(backup_id) if backup_id else None,
+            'scope': 'server',
+        },
+    )
     backup_service = BackupService()
     backup_service.backup_server(backup_id=backup_id)
 
 @shared_task(bind=True, soft_time_limit=3600, max_retries=2, default_retry_delay=300)
-def restore_service_backup_task(self, backup_id, target_service_id=None, requesting_user_id=None):
+def restore_service_backup_task(self, backup_id, target_service_id=None, requesting_user_id=None, raise_on_snapshot_failure=False):
+    from apps.deployments.utils import log_event
+    log_event(
+        action='BACKUP_RESTORE',
+        target=f'Backup: {backup_id}',
+        actor='system',
+        metadata={
+            'backup_id': str(backup_id),
+            'target_service_id': str(target_service_id) if target_service_id else None,
+            'requesting_user_id': str(requesting_user_id) if requesting_user_id else None,
+            'scope': 'service',
+        },
+    )
     backup_service = BackupService()
     backup_service.restore_service(
         backup_id,
         target_service_id=target_service_id,
         requesting_user_id=requesting_user_id,
+        raise_on_snapshot_failure=raise_on_snapshot_failure,
     )
 
 @shared_task(bind=True, soft_time_limit=7200, time_limit=7500)
 def restore_server_backup_task(self, backup_id, requesting_user_id=None):
+    from apps.deployments.utils import log_event
+    log_event(
+        action='BACKUP_RESTORE',
+        target=f'Backup: {backup_id}',
+        actor='system',
+        metadata={
+            'backup_id': str(backup_id),
+            'requesting_user_id': str(requesting_user_id) if requesting_user_id else None,
+            'scope': 'server',
+        },
+    )
     backup_service = BackupService()
     backup_service.restore_server(backup_id=backup_id, requesting_user_id=requesting_user_id)
+
+
+@shared_task(bind=True, soft_time_limit=7200, time_limit=7500, max_retries=2, default_retry_delay=120)
+def purge_user_backups_task(self, user_id, actor: str = 'system', force: bool = False):
+    """
+    GDPR right-to-erasure background task.
+
+    Should be enqueued BEFORE the user account is deleted so that the
+    ``ServiceBackup.service`` FK still resolves. The task:
+      1. Removes ``ServiceBackup.file_path`` tarballs for every service
+         owned by the user.
+      2. Removes any matching cloud-storage object (S3 / R2 / MinIO).
+      3. Deletes the ``ServiceBackup`` and ``ServerBackup`` rows.
+      4. Emits an ``AuditLog`` entry recording the count of artifacts purged.
+    """
+    from apps.deployments.services.backup_service import purge_user_backups
+    from apps.deployments.models_audit import AuditLog
+
+    try:
+        counters = purge_user_backups(user_id)
+    except Exception as exc:
+        logger.error("purge_user_backups_task failed for user %s: %s", user_id, exc)
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=exc)
+        if not force:
+            raise
+
+    try:
+        AuditLog.objects.create(
+            actor=actor or 'system',
+            action='USER_BACKUPS_PURGED',
+            target=f'User: {user_id}',
+            metadata={
+                'user_id': str(user_id),
+                'service_backups_deleted': counters.get('service_backups_deleted', 0),
+                'service_backup_files_deleted': counters.get('service_backup_files_deleted', 0),
+                'server_backups_deleted': counters.get('server_backups_deleted', 0),
+                'server_backup_files_deleted': counters.get('server_backup_files_deleted', 0),
+                'cloud_objects_deleted': counters.get('cloud_objects_deleted', 0),
+                'errors': counters.get('errors', 0),
+            },
+        )
+    except Exception as exc:
+        logger.warning("Failed to record USER_BACKUPS_PURGED audit log: %s", exc)
+
+    return counters
 
 @shared_task
 def cleanup_old_backups_task():
@@ -4604,8 +4709,23 @@ def delete_service_task(self, service_id: str, force: bool = False):
             success = True
 
     if success:
-        # Capture project reference before deleting the service
+        # Capture project reference and owner before deleting the service.
         service_project = getattr(service, 'project', None)
+        service_owner_id = service.owner_id
+
+        # GDPR right-to-erasure: delete all backup tarballs and DB rows
+        # owned by this service's user BEFORE the CASCADE fires. The
+        # backup file paths are not recoverable once the ServiceBackup row
+        # is gone.
+        try:
+            from .services.backup_service import purge_user_backups
+            purge_user_backups(service_owner_id)
+        except Exception as cleanup_exc:
+            logger.warning(
+                "Backup purge during service deletion failed for %s: %s",
+                service.id, cleanup_exc,
+            )
+
         service.delete()
 
         # After deleting an LLM consumer, check if shared Ollama CPP

@@ -118,6 +118,45 @@ if CONTAINER_REGISTRY_URL and ("127.0.0.1" in CONTAINER_REGISTRY_URL or "localho
     if _mesh_ip:
         CONTAINER_REGISTRY_URL = CONTAINER_REGISTRY_URL.replace("127.0.0.1", _mesh_ip).replace("localhost", _mesh_ip)
 
+
+def _validate_registry_url():
+    """SSRF guard for the container registry URL.
+
+    Operators can accidentally (or an attacker can deliberately) point
+    CONTAINER_REGISTRY_URL at an external host, causing every tenant's
+    built image to be pushed off-platform. We refuse to boot with any URL
+    that is not on http(s) and not clearly internal.
+    """
+    from urllib.parse import urlparse
+    import ipaddress
+
+    url = os.environ.get('CONTAINER_REGISTRY_URL', '').strip()
+    if not url:
+        return
+    parsed = urlparse(url)
+    if parsed.scheme not in ('http', 'https'):
+        raise ImproperlyConfigured(
+            f'CONTAINER_REGISTRY_URL must use http or https; got {parsed.scheme}'
+        )
+    hostname = parsed.hostname or ''
+    try:
+        ip = ipaddress.ip_address(hostname)
+        if ip.is_private and hostname.startswith(('10.', '172.', '192.168.', '127.')):
+            return
+        if ip.is_private:
+            raise ImproperlyConfigured(
+                f'CONTAINER_REGISTRY_URL private IP {ip} is not allowed'
+            )
+    except ValueError:
+        pass
+    if not hostname.startswith(('localhost', '127.0.0.1', 'registry', 'smsly')):
+        raise ImproperlyConfigured(
+            f'CONTAINER_REGISTRY_URL over {parsed.scheme} is only allowed for localhost/internal; got {url}'
+        )
+
+
+_validate_registry_url()
+
 REGISTRY_USER = config('REGISTRY_USER', default='')
 REGISTRY_PASSWORD = config('REGISTRY_PASSWORD', default='')
 # Webhook secret: MUST be set explicitly in production. Fallback is random per startup.

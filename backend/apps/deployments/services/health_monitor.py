@@ -495,7 +495,7 @@ def _record_restart_attempt(service_key: str):
     count = int(state.get("count", 0) or 0) + 1
     cache.set(
         _restart_key(service_key),
-        {"count": count, "last_restart": time.time()},
+        {**state, "count": count, "last_restart": time.time()},
         timeout=STATE_TTL_SECONDS,
     )
 
@@ -541,6 +541,37 @@ def _trigger_restart(service, service_key: str) -> bool:
             logger.warning("Skipping auto-restart for %s: no prior deployment found.", service.name)
             return False
 
+        state = cache.get(_restart_key(service_key)) or {}
+        last_fallback_id = state.get("last_fallback_deployment_id")
+        if last_fallback_id:
+            last_fallback = Deployment.objects.filter(id=last_fallback_id).first()
+            if last_fallback and last_fallback.status == Deployment.Status.FAILED:
+                logger.warning(
+                    "Auto-restart skipped for %s: previous fallback deployment %s failed.",
+                    service.name, last_fallback_id,
+                )
+                if service.health_status != "needs_manual_intervention":
+                    service.health_status = "needs_manual_intervention"
+                    service.save(update_fields=["health_status", "updated_at"])
+                return False
+
+        successful = (
+            Deployment.objects
+            .filter(service=service, status=Deployment.Status.ACTIVE)
+            .order_by("-finished_at")
+            .first()
+        )
+        fallback = successful.commit_hash if successful else None
+        if not fallback:
+            logger.warning(
+                "Auto-restart skipped for service %s: no successful deployment to fall back to.",
+                service.id,
+            )
+            if service.health_status != "needs_manual_intervention":
+                service.health_status = "needs_manual_intervention"
+                service.save(update_fields=["health_status", "updated_at"])
+            return False
+
         provider = service.provider or CloudProvider.objects.filter(is_active=True).first()
         if not provider:
             logger.warning("Skipping auto-restart for %s: no active cloud provider.", service.name)
@@ -548,9 +579,14 @@ def _trigger_restart(service, service_key: str) -> bool:
 
         new_deployment = Deployment.objects.create(
             service=service,
-            commit_hash=latest.commit_hash or "HEAD",
+            commit_hash=fallback,
             status=Deployment.Status.QUEUED,
-            commit_message="Auto-restart after health check failure",
+            commit_message="Auto-restart after health check failure (fallback to last successful commit)",
+        )
+        cache.set(
+            _restart_key(service_key),
+            {**(state or {}), "last_fallback_deployment_id": str(new_deployment.id)},
+            timeout=STATE_TTL_SECONDS,
         )
         service.health_status = "starting"
         service.save(update_fields=["health_status", "updated_at"])
