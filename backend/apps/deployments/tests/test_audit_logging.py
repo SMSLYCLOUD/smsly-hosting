@@ -17,7 +17,7 @@ class AuditLoggingTest(TestCase):
         )
         self.deployment = Deployment.objects.create(
             service=self.service,
-            status='STAGED',
+            status='QUEUED',
             commit_hash='abc1234',
         )
 

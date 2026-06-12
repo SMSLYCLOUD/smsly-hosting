@@ -1234,8 +1234,6 @@ def ecosystem_release_wave_task(
         Deployment.Status.MIGRATION_RUNNING,
         Deployment.Status.DEPLOYING,
         Deployment.Status.HEALTH_CHECK,
-        Deployment.Status.TRAFFIC_SHIFTING,
-        Deployment.Status.MONITORING,
         "STARTING",
     }
 
@@ -1301,7 +1299,7 @@ def ecosystem_release_wave_task(
             "recheck_count": recheck_count + 1,
         }
 
-    # At this point, everything is either terminal (ACTIVE/STAGED or FAILED/CANCELLED)
+    # At this point, everything is either terminal (ACTIVE or FAILED/CANCELLED)
     cancelled = 0
     if failed_ids and dependencies and deployment_by_repo_key:
         cancelled = _cancel_dependent_deployments(

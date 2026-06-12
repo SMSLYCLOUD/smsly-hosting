@@ -74,8 +74,6 @@ app.conf.task_create_missing_queues = True
 app.conf.task_routes = {
     'apps.deployments.tasks.smart_deploy_task': {'queue': 'deploy'},
     'apps.deployments.tasks.resume_deploy_task': {'queue': 'deploy'},
-    'apps.deployments.tasks.auto_promote_task': {'queue': 'deploy'},
-    'apps.deployments.tasks.promote_deployment_task': {'queue': 'deploy'},
     'apps.deployments.tasks.provision_addon_task': {'queue': 'deploy'},
     'apps.deployments.tasks.deprovision_addon_task': {'queue': 'deploy'},
     'apps.deployments.tasks.backup_addon_task': {'queue': 'deploy'},
