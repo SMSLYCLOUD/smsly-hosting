@@ -1083,7 +1083,7 @@ class RemoteOrchestrator:
         payload = self._service_sync_payload(service)
 
         try:
-            resp = self._request("POST", path, payload=payload, timeout=15)
+            resp = self._request("POST", path, payload=payload, timeout=30)
             if resp and resp.status_code in (201, 200):
                 data = self._parse_json_response(resp, "creating remote service")
                 if not isinstance(data, dict) or not data.get("id"):
@@ -1299,7 +1299,7 @@ class RemoteOrchestrator:
             payload["image_name"] = image_name
         
         try:
-            resp = self._request("POST", path, payload=payload, timeout=15)
+            resp = self._request("POST", path, payload=payload, timeout=60)
             if resp and resp.status_code in (201, 200, 202):
                 data = self._parse_json_response(resp, "triggering remote deploy")
                 if isinstance(data, dict):
