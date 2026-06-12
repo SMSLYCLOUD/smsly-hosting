@@ -218,12 +218,17 @@ class InstantCustomDomainApiTests(APITestCase):
     """Domain add/remove should sync routing instantly with no redeploy."""
 
     def setUp(self):
+        from django.conf import settings as dj_settings
+
         license_obj = PlatformLicense.load()
         license_obj.tier = PlatformTier.PRO
         license_obj.is_valid = True
         license_obj.max_services = 100
         license_obj.max_team_members = 100
         license_obj.save(update_fields=['tier', 'is_valid', 'max_services', 'max_team_members'])
+
+        self._secret_backup = dj_settings.CADDY_ASK_SECRET
+        dj_settings.CADDY_ASK_SECRET = "instant-routing-test-secret"
 
         self.user = User.objects.create_user(
             username='domain-owner',
@@ -248,6 +253,12 @@ class InstantCustomDomainApiTests(APITestCase):
             status=Deployment.Status.ACTIVE,
         )
         self.client.force_authenticate(user=self.user)
+
+    def tearDown(self):
+        from django.conf import settings as dj_settings
+        dj_settings.CADDY_ASK_SECRET = self._secret_backup
+        from django.core.cache import cache
+        cache.clear()
 
     @patch('apps.deployments.views.smart_deploy_task.delay')
     @patch('apps.deployments.views.ServiceViewSet._sync_caddy', return_value={'ok': True, 'message': 'ok'})
@@ -416,6 +427,7 @@ class InstantCustomDomainApiTests(APITestCase):
         response = self.client.get(
             '/api/v1/services/check-domain/',
             {'domain': 'pending.example.com'},
+            HTTP_X_CADDY_SECRET='instant-routing-test-secret',
         )
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
@@ -433,6 +445,7 @@ class InstantCustomDomainApiTests(APITestCase):
         response = self.client.get(
             '/api/v1/services/check-domain/',
             {'domain': 'verified.example.com'},
+            HTTP_X_CADDY_SECRET='instant-routing-test-secret',
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
