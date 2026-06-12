@@ -501,21 +501,49 @@ class CodeIntelligenceView(GenericAPIView):
 
     def post(self, request):
         ai_provider = request.data.get('ai_provider', 'auto')
-        repos_data = request.data.get('repos_data', [])
+        repos_data = request.data.get('repos_data') or []
         deploy_plan = request.data.get('deploy_plan', {})
-        
-        if not repos_data or not deploy_plan:
+
+        if not isinstance(repos_data, list) or not deploy_plan:
             return Response({"detail": "repos_data and deploy_plan are required."}, status=400)
-            
+
+        from rest_framework.exceptions import PermissionDenied
+        from apps.deployments.models import Service
+
+        for repo in repos_data:
+            if not isinstance(repo, dict):
+                continue
+            owner_id = repo.get('owner_id')
+            if owner_id and owner_id != request.user.id:
+                raise PermissionDenied(
+                    f"Repo {repo.get('id') or repo.get('repo', '<unknown>')} is not owned by you."
+                )
+            if owner_id is None:
+                repo_id = repo.get('id') or repo.get('repo_id')
+                repo_url = repo.get('repo') or repo.get('html_url') or repo.get('url')
+                owned = False
+                if repo_id:
+                    owned = Service.objects.filter(
+                        id=repo_id, owner=request.user
+                    ).exists()
+                elif repo_url:
+                    owned = Service.objects.filter(
+                        owner=request.user, repository_url=repo_url
+                    ).exists()
+                if not owned:
+                    raise PermissionDenied(
+                        f"Repo {repo_id or repo_url or '<unknown>'} is not owned by you."
+                    )
+
         from apps.deployments.tasks_code_intelligence import deep_scan_and_verify_task
-        
+
         task = deep_scan_and_verify_task.delay(
             user_id=request.user.id,
             repos_data=repos_data,
             deploy_plan=deploy_plan,
             ai_provider=ai_provider
         )
-        
+
         return Response({"task_id": task.id})
 
 class DeepScanTaskStatusView(GenericAPIView):

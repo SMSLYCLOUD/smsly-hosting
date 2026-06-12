@@ -50,8 +50,9 @@ def _evaluate_scaling(service, ServiceMetric):
 
     now = timezone.now()
 
-    # Cooldown enforcement
-    last_scaled = service.updated_at
+    # Cooldown enforcement (uses the dedicated last_scale_at field so that
+    # unrelated writes to `updated_at` do not reset the cooldown).
+    last_scaled = service.last_scale_at
     if last_scaled:
         time_since_scale = now - last_scaled
         if time_since_scale < timedelta(minutes=1):
@@ -84,7 +85,8 @@ def _evaluate_scaling(service, ServiceMetric):
             service.name, current_replicas, new_replicas, avg_cpu, target_cpu,
         )
         service.min_replicas = new_replicas
-        service.save(update_fields=['min_replicas', 'updated_at'])
+        service.last_scale_at = now
+        service.save(update_fields=['min_replicas', 'last_scale_at'])
         return
 
     # Scale DOWN: CPU < 50% of target for 5+ minutes
@@ -107,4 +109,5 @@ def _evaluate_scaling(service, ServiceMetric):
                 avg_cpu_5m, scale_down_threshold,
             )
             service.min_replicas = new_replicas
-            service.save(update_fields=['min_replicas', 'updated_at'])
+            service.last_scale_at = now
+            service.save(update_fields=['min_replicas', 'last_scale_at'])

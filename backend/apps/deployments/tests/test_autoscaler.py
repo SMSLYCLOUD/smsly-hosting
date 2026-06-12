@@ -25,7 +25,7 @@ class AutoscalerTest(TestCase):
     def test_scale_up_respects_max_replicas(self):
         self.service.min_replicas = 3
         self.service.save()
-        Service.objects.filter(id=self.service.id).update(updated_at=timezone.now() - timedelta(minutes=10))
+        Service.objects.filter(id=self.service.id).update(last_scale_at=timezone.now() - timedelta(minutes=10))
         self.service.refresh_from_db()
         now = timezone.now()
         ServiceMetric.objects.create(service=self.service, cpu_usage=90, cpu_limit=100, memory_usage=100, memory_limit=200, timestamp=now - timedelta(minutes=1))
@@ -38,7 +38,7 @@ class AutoscalerTest(TestCase):
     def test_scale_up_increases_replicas(self):
         self.service.min_replicas = 1
         self.service.save()
-        Service.objects.filter(id=self.service.id).update(updated_at=timezone.now() - timedelta(minutes=10))
+        Service.objects.filter(id=self.service.id).update(last_scale_at=timezone.now() - timedelta(minutes=10))
         self.service.refresh_from_db()
         now = timezone.now()
         ServiceMetric.objects.create(service=self.service, cpu_usage=90, cpu_limit=100, memory_usage=100, memory_limit=200, timestamp=now - timedelta(minutes=1))
@@ -51,7 +51,7 @@ class AutoscalerTest(TestCase):
     def test_scale_down_respects_absolute_minimum(self):
         self.service.min_replicas = 1
         self.service.save()
-        Service.objects.filter(id=self.service.id).update(updated_at=timezone.now() - timedelta(minutes=10))
+        Service.objects.filter(id=self.service.id).update(last_scale_at=timezone.now() - timedelta(minutes=10))
         self.service.refresh_from_db()
         now = timezone.now()
         ServiceMetric.objects.create(service=self.service, cpu_usage=10, cpu_limit=100, memory_usage=100, memory_limit=200, timestamp=now - timedelta(minutes=1))
@@ -64,7 +64,7 @@ class AutoscalerTest(TestCase):
     def test_scale_down_decreases_replicas(self):
         self.service.min_replicas = 2
         self.service.save()
-        Service.objects.filter(id=self.service.id).update(updated_at=timezone.now() - timedelta(minutes=10))
+        Service.objects.filter(id=self.service.id).update(last_scale_at=timezone.now() - timedelta(minutes=10))
         self.service.refresh_from_db()
         now = timezone.now()
         # Scale down triggers if avg CPU over 5m is < 50% of target (80 * 0.5 = 40)
@@ -78,8 +78,8 @@ class AutoscalerTest(TestCase):
 
     def test_cooldown_prevents_rapid_scaling(self):
         self.service.min_replicas = 1
-        # Set updated_at to 30 seconds ago
-        self.service.updated_at = timezone.now() - timedelta(seconds=30)
+        # Set last_scale_at to 30 seconds ago
+        self.service.last_scale_at = timezone.now() - timedelta(seconds=30)
         self.service.save()
 
         now = timezone.now()
@@ -92,8 +92,8 @@ class AutoscalerTest(TestCase):
 
     def test_scale_down_cooldown(self):
         self.service.min_replicas = 2
-        # Set updated_at to 3 minutes ago
-        self.service.updated_at = timezone.now() - timedelta(minutes=3)
+        # Set last_scale_at to 3 minutes ago
+        self.service.last_scale_at = timezone.now() - timedelta(minutes=3)
         self.service.save()
 
         now = timezone.now()

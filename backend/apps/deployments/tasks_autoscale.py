@@ -15,25 +15,42 @@ from apps.deployments.services.scaling_ai import ScalingAnalyzer
 logger = logging.getLogger(__name__)
 
 
+AUTOSCALE_BATCH_SIZE = 20
+
+
 @shared_task(
     name='apps.deployments.tasks_autoscale.analyze_all_services_task',
     bind=True,
     ignore_result=True,
 )
 def analyze_all_services_task(self):
-    """Periodic task: analyze active services and auto-scale as needed."""
-    active = ServiceReplica.objects.filter(status='RUNNING').values_list('service_id', flat=True)
-    services = Service.objects.filter(status='RUNNING').distinct()
-    services = services.filter(
-        models.Q(id__in=active) | models.Q(compose_file='', deploy_mode='SINGLE')
-    )
+    """Periodic task: analyze active services and auto-scale as needed.
+
+    Uses an `id__gt` cursor so the batch of 20 never silently drops
+    services when more than 20 are candidates.
+    """
     analyzed = 0
-    for svc in services[:20]:  # batch limit per tick
-        try:
-            analyze_and_scale_service(str(svc.id))
-            analyzed += 1
-        except Exception as exc:
-            logger.warning("Auto-scale failed for %s: %s", svc.name, exc)
+    last_id = None
+    while True:
+        base = ServiceReplica.objects.filter(status='RUNNING').values_list(
+            'service_id', flat=True
+        )
+        qs = Service.objects.filter(status='RUNNING').distinct()
+        qs = qs.filter(
+            models.Q(id__in=base) | models.Q(compose_file='', deploy_mode='SINGLE')
+        )
+        if last_id is not None:
+            qs = qs.filter(id__gt=last_id)
+        batch = list(qs.order_by('id')[:AUTOSCALE_BATCH_SIZE])
+        if not batch:
+            break
+        for svc in batch:
+            try:
+                analyze_and_scale_service(str(svc.id))
+                analyzed += 1
+            except Exception as exc:
+                logger.warning("Auto-scale failed for %s: %s", svc.name, exc)
+        last_id = batch[-1].id
     return {'analyzed': analyzed}
 
 

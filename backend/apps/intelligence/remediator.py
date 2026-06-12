@@ -3,6 +3,7 @@ from typing import Dict, Optional
 import logging
 import subprocess
 from datetime import timedelta
+from django.core.cache import cache
 from django.db import transaction
 from django.utils import timezone
 from apps.deployments.models import Service, Deployment
@@ -20,6 +21,7 @@ class RemediationEngine:
 
     MAX_MEMORY_LIMIT = 2048  # 2GB Hard Limit
     AUTO_DEPLOY_COOLDOWN_MINUTES = 10
+    DOCKER_PRUNE_COOLDOWN_SECONDS = 24 * 60 * 60
     IN_PROGRESS_STATUSES = (
         Deployment.Status.QUEUED,
         Deployment.Status.REVIEW,
@@ -96,10 +98,15 @@ class RemediationEngine:
         """Return the recommended fix for a given issue type."""
         return self.RECOMMENDATIONS.get(issue_type)
 
-    def apply_fix(self, issue_type: str, service_id: str) -> bool:
+    def apply_fix(self, issue_type: str, service_id: str, explicit_admin: bool = False) -> bool:
         # pylint: disable=inconsistent-return-statements
         """
         Executes the fix for the given issue.
+
+        ``explicit_admin`` must be True for high-risk side-effects
+        (e.g. ``docker system prune``). The proactive scan must NOT
+        pass this flag, ensuring destructive cleanup only happens
+        when an admin deliberately triggers it.
         """
         try:
             with transaction.atomic():
@@ -143,20 +150,45 @@ class RemediationEngine:
                     return self._handle_rollback(service)
 
                 if action == 'CLEANUP':
-                    try:
-                        subprocess.run(
-                            ['docker', 'system', 'prune', '-f'],
-                            capture_output=True, timeout=30, check=True
+                    if not explicit_admin:
+                        logger.warning(
+                            "Refusing to run docker system prune for %s: "
+                            "not triggered by an explicit admin action",
+                            service.name,
                         )
+                        return False
+                    server_id = str(getattr(service, "server_id", None) or "default")
+                    prune_key = f"docker_prune:{server_id}"
+                    if cache.get(prune_key):
+                        logger.warning(
+                            "docker system prune skipped for %s: rate limited "
+                            "(last run within 24h)",
+                            service.name,
+                        )
+                        return False
+                    try:
+                        result = subprocess.run(
+                            ['docker', 'system', 'prune', '-f'],
+                            capture_output=True, timeout=30, check=True,
+                            text=True,
+                        )
+                        logger.info(
+                            "docker system prune output for %s: stdout=%s stderr=%s",
+                            service.name, result.stdout, result.stderr,
+                        )
+                        cache.set(prune_key, timezone.now().isoformat(), self.DOCKER_PRUNE_COOLDOWN_SECONDS)
                         AuditLog.objects.create(
                             actor="AI_REMEDIATOR",
                             action="CLEANUP",
                             target="SYSTEM",
-                            metadata={"reason": "DISK_FULL"}
+                            metadata={"reason": "DISK_FULL", "server_id": server_id}
                         )
                         return True
                     except Exception as e:
-                        logger.error("Cleanup failed: %s", e)
+                        logger.error(
+                            "docker system prune failed for %s: %s",
+                            service.name, e,
+                        )
                         return False
 
                 if action == 'REBUILD':
