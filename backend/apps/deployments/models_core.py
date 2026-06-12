@@ -396,12 +396,13 @@ class Service(TimeStampedModel):
         max_length=64, blank=True,
         help_text="Token for the service to push health status to the platform")
     health_status = models.CharField(
-        max_length=20, default='unknown',
+        max_length=32, default='unknown',
         choices=[
             ('healthy', 'Healthy'),
             ('unhealthy', 'Unhealthy'),
             ('unknown', 'Unknown'),
             ('starting', 'Starting'),
+            ('needs_manual_intervention', 'Needs Manual Intervention'),
         ],
         help_text="Current health status of the service")
 
@@ -462,6 +463,14 @@ class Service(TimeStampedModel):
         blank=True,
         null=True,
         help_text="The verified container ID or process ID of the running service."
+    )
+
+    # Dedicated last-scale timestamp for the autoscaler.
+    # Decoupled from `updated_at` so unrelated writes (e.g. health_status
+    # updates) do NOT reset the autoscaler cooldown.
+    last_scale_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text="Last time the autoscaler scaled this service (used for cooldown).",
     )
     def __str__(self):
         return f"{self.name} ({self.slug})"
@@ -709,6 +718,12 @@ class Deployment(TimeStampedModel):
     ecosystem_retry_count = models.IntegerField(
         default=0, db_default=0,
         help_text="Number of times ecosystem deploy has retried this deployment")
+
+    queued_min_replicas = models.IntegerField(
+        null=True, blank=True,
+        help_text="Snapshot of service.min_replicas captured at queue time so the deploy "
+                  "executor uses the original replica count even if the autoscaler mutates "
+                  "it during the build.")
 
     class Meta:
         ordering = ['-created_at']

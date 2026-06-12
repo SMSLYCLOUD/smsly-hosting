@@ -1221,6 +1221,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
             source_node=None if is_docker_delegated else source_node,
             target_server=target_server,
             target_is_local=target_is_local,
+            queued_min_replicas=service.min_replicas,
         )
 
         try:
@@ -1710,6 +1711,19 @@ class ServiceViewSet(viewsets.ModelViewSet):
             smart_deploy_task.delay(
                 deployment_id=str(rollback_deployment.id), provider_id=str(provider.id))
 
+        AuditLog(
+            actor=request.user.get_username(),
+            action='DEPLOYMENT_ROLLBACK_INSTANT',
+            target=f'Service: {service.name}',
+            metadata={
+                'service_id': str(service.id),
+                'deployment_id': str(rollback_deployment.id),
+                'rolled_back_to_id': str(last_good.id),
+                'rolled_back_to_commit': last_good.commit_hash,
+                'reason': reason,
+            },
+        ).save()
+
         return Response({
             'deployment': DeploymentSerializer(rollback_deployment).data,
             'rolled_back_to': DeploymentSerializer(last_good).data,
@@ -2077,6 +2091,41 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # ── Per-apex daily cert issuance cap ────────────────────────
+        # Mirrors the cap on check_domain so a single apex cannot exhaust
+        # Let's Encrypt's rate-limit through repeated verifications.
+        raw_domain_for_cap = domain.strip().lower()
+        apex = (
+            raw_domain_for_cap.split('.', 1)[-1]
+            if '.' in raw_domain_for_cap
+            else raw_domain_for_cap
+        )
+        if apex:
+            cap_key = f"certs_issued:{apex}:{timezone.now().strftime('%Y%m%d')}"
+            cap_value = cache.get(cap_key, 0)
+            cap_limit = int(getattr(settings, 'CADDY_DAILY_CERT_CAP', 20))
+            if cap_value >= cap_limit:
+                logger.warning(
+                    "verify_domain: daily cert cap reached for apex %s (%d)",
+                    apex, cap_value,
+                )
+                return Response(
+                    {
+                        'error': (
+                            f"Daily cert issuance cap reached for {apex}. "
+                            "Try again tomorrow."
+                        )
+                    },
+                    status=status.HTTP_429_TOO_MANY_REQUESTS,
+                )
+            if cache.get(cap_key) is not None:
+                try:
+                    cache.incr(cap_key, 1)
+                except ValueError:
+                    cache.set(cap_key, cap_value + 1, timeout=86400)
+            else:
+                cache.set(cap_key, 1, timeout=86400)
+
         # Compare against the service's own public domain which already
         # resolves to the correct server IP. No hardcoded CNAME needed.
         cname_target = service.public_domain or ''
@@ -2136,6 +2185,18 @@ class ServiceViewSet(viewsets.ModelViewSet):
         elif not is_valid and service.domain_verified:
             service.domain_verified = False
             service.save(update_fields=['domain_verified'])
+
+        from .utils import log_event
+        log_event(
+            actor=getattr(request.user, 'username', None) or 'system',
+            action='DOMAIN_VERIFY',
+            target=f'Service: {service.name}',
+            metadata={
+                'service_id': str(service.id),
+                'domain': domain,
+                'result': 'success' if is_valid else 'fail',
+            },
+        )
 
         return Response({
             'domain': domain,
@@ -2392,14 +2453,27 @@ class ServiceViewSet(viewsets.ModelViewSet):
         try:
             from services.caddy_manager import generate_caddyfile, apply_caddyfile
             from .models import PlatformConfig
+            from .utils import log_event
             config = PlatformConfig.load()
             content = generate_caddyfile(config)
             cf_token = (getattr(config, "cloudflare_api_token", "") or "").strip()
             result = apply_caddyfile(content, cloudflare_token=cf_token)
             if result['ok']:
                 logger.info("Caddy synced after domain change")
+                log_event(
+                    action='CADDY_RELOAD',
+                    actor='system',
+                    target='caddy',
+                    metadata={'ok': True, 'message': str(result.get('message', ''))[:200]},
+                )
             else:
                 logger.error("Caddy sync failed: %s", result['message'])
+                log_event(
+                    action='CADDY_RELOAD',
+                    actor='system',
+                    target='caddy',
+                    metadata={'ok': False, 'message': str(result.get('message', ''))[:200]},
+                )
             return {
                 "ok": bool(result.get("ok")),
                 "message": str(result.get("message", "")).strip(),
@@ -2537,6 +2611,19 @@ class ServiceViewSet(viewsets.ModelViewSet):
         caddy_result = self._sync_caddy()
         caddy_ok = bool(caddy_result.get("ok"))
         caddy_message = caddy_result.get("message") or "Routing sync failed."
+
+        from .utils import log_event
+        log_event(
+            actor=getattr(request.user, 'username', None) or 'system',
+            action='DOMAIN_ADD',
+            target=f'Service: {service.name}',
+            metadata={
+                'service_id': str(service.id),
+                'domain': domain,
+                'caddy_synced': caddy_ok,
+            },
+        )
+
         if not caddy_ok:
             logger.warning(
                 "add_domain: domain saved but routing sync failed for %s (%s): %s",
@@ -2627,6 +2714,19 @@ class ServiceViewSet(viewsets.ModelViewSet):
         caddy_result = self._sync_caddy()
         caddy_ok = bool(caddy_result.get("ok"))
         caddy_message = caddy_result.get("message") or "Routing sync failed."
+
+        from .utils import log_event
+        log_event(
+            actor=getattr(request.user, 'username', None) or 'system',
+            action='DOMAIN_DELETE',
+            target=f'Service: {service.name}',
+            metadata={
+                'service_id': str(service.id),
+                'domain': domain,
+                'caddy_synced': caddy_ok,
+            },
+        )
+
         if not caddy_ok:
             logger.warning(
                 "delete_domain: domain removed but routing sync failed for %s (%s): %s",
@@ -3482,6 +3582,19 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         payload = DeploymentSerializer(new_deployment).data
         payload["rollback_state"] = "rollback_pending"
         payload["rollback_target"] = str(target_deployment.id)
+
+        AuditLog(
+            actor=request.user.get_username(),
+            action='DEPLOYMENT_ROLLBACK',
+            target=f'Deployment: {new_deployment.id}',
+            metadata={
+                'service_id': str(service.id),
+                'deployment_id': str(new_deployment.id),
+                'target_deployment_id': str(target_deployment.id),
+                'commit_hash': target_deployment.commit_hash,
+            },
+        ).save()
+
         return Response(payload, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['post'])
@@ -3809,6 +3922,17 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             status=Deployment.Status.CANCELLED,
             finished_at=timezone.now(),
         )
+
+        if count:
+            AuditLog(
+                actor=request.user.get_username(),
+                action='DEPLOYMENT_BULK_CANCEL',
+                target='Deployment: multiple',
+                metadata={
+                    'count': count,
+                    'deployment_ids': [str(d) for d in deployment_ids],
+                },
+            ).save()
 
         return Response({
             'cancelled': count,
@@ -4873,10 +4997,37 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
         if not guard["ok"]:
             return Response(guard, status=status.HTTP_400_BAD_REQUEST)
 
+        # ── Pre-flight safety snapshot check (Fix 4) ─────────────
+        # Run a synchronous PRE_TRANSFER snapshot. If it fails, return 422
+        # with the snapshot error so the API consumer sees the failure
+        # instead of silently losing data on a corrupt restore.
+        try:
+            from .services.backup_service import BackupService
+            BackupService().backup_service(
+                target_service.id, backup_type='PRE_TRANSFER',
+            )
+        except Exception as snap_exc:
+            logger.warning(
+                "Pre-restore snapshot failed for service %s: %s",
+                target_service.id, snap_exc,
+            )
+            return Response(
+                {
+                    'error': (
+                        'Pre-restore safety snapshot failed. Refusing to '
+                        'restore to avoid data loss on a corrupt restore.'
+                    ),
+                    'snapshot_error': str(snap_exc),
+                    'backup_id': str(backup.id),
+                },
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+
         restore_service_backup_task.delay(
             backup_id=str(backup.id),
             target_service_id=str(target_service_id) if target_service_id else None,
             requesting_user_id=request.user.id,
+            raise_on_snapshot_failure=True,
         )
         return Response({'status': 'restore_started'})
 
@@ -4957,7 +5108,13 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Only COMPLETED backups can be restored.'}, status=status.HTTP_400_BAD_REQUEST)
         from apps.deployments.tasks import restore_server_backup_task
         restore_server_backup_task.delay(backup_id=str(backup.id))
-        return Response({'status': 'Restore started. Services will be recreated from backup.'})
+        return Response({
+            'status': 'restored',
+            'warning': (
+                'Database dump was not restored. Manual psql restore required. '
+                'See docs/DISASTER_RECOVERY.md for the procedure.'
+            ),
+        })
 
     @action(detail=True, methods=['get'], permission_classes=[permissions.AllowAny], authentication_classes=[])
     def download(self, request, pk=None):

@@ -90,3 +90,42 @@ class AuditLog(models.Model):
 
     def __str__(self):
         return f"[{self.hash[:8]}] {self.action} by {self.actor}"
+
+
+class WebhookDelivery(models.Model):
+    """
+    Idempotency record for incoming webhook deliveries.
+
+    Provider (e.g. GitHub) sends an ``X-GitHub-Delivery`` UUID with every
+    webhook. We persist it on first sight so duplicate deliveries of the
+    same event do not trigger duplicate builds / deployments.
+    """
+    STATUS_CHOICES = [
+        ('processed', 'Processed'),
+        ('failed', 'Failed'),
+        ('ignored', 'Ignored'),
+    ]
+
+    delivery_id = models.CharField(
+        max_length=128, primary_key=True,
+        help_text="Provider-supplied unique delivery identifier (e.g. X-GitHub-Delivery)."
+    )
+    provider = models.CharField(
+        max_length=32, default='github',
+        help_text="Webhook provider that produced this delivery."
+    )
+    event_type = models.CharField(
+        max_length=64, blank=True, default='',
+        help_text="Event type from the provider (push, pull_request, etc.)."
+    )
+    received_at = models.DateTimeField(default=timezone.now)
+    status = models.CharField(
+        max_length=16, choices=STATUS_CHOICES, default='processed')
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['provider', 'received_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.provider}:{self.delivery_id} ({self.status})"
