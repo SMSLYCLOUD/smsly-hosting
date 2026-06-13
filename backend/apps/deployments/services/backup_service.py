@@ -1063,13 +1063,35 @@ class BackupService:
                     logger.error(f"Failed to backup service {service.name} during server backup: {e}")
 
             # 3. Platform Config
-            # We can dump the .env file if it exists, or just serialize the PlatformConfig model
-            # Dumping models is safer.
+            # SECURITY (Batch G): never include the Cloudflare API
+            # token (or any future EncryptedCharField secret) in the
+            # plaintext ``platform_config.json`` that ends up in the
+            # tarball. The token is decrypted in memory by
+            # ``EncryptedCharField.from_db_value`` and would otherwise
+            # be stored in the clear inside the archive (and cleartext
+            # on disk if the tar is not itself encrypted).
             from django.core import serializers
             from apps.deployments.models import PlatformConfig
 
             with open(os.path.join(temp_dir, "platform_config.json"), 'w') as f:
-                data = serializers.serialize("json", PlatformConfig.objects.all())
+                # ``fields=[...]`` excludes EncryptedCharField secrets
+                # from the serialized JSON. Only non-sensitive
+                # configuration is included; to restore a Cloudflare
+                # token, the operator must re-enter it on the target.
+                data = serializers.serialize(
+                    "json",
+                    PlatformConfig.objects.all(),
+                    fields=[
+                        "id",
+                        "domain",
+                        "use_ssl",
+                        "wildcard_subdomains",
+                        "server_ip",
+                        "caddy_status",
+                        "max_concurrent_builds",
+                        "updated_at",
+                    ],
+                )
                 f.write(data)
 
             # 4. Final Tarball

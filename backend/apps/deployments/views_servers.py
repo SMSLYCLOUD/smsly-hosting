@@ -737,14 +737,14 @@ class ManagedServerCreateSerializer(serializers.ModelSerializer):
     def validate_api_url(self, value):
         """Ensure api_url has a protocol prefix. Default to HTTP for IPs.
 
-        SECURITY (Batch G): reject api_url that points at a link-local
-        or loopback address (e.g. ``http://169.254.169.254/`` AWS
-        metadata, ``http://localhost:8000``, ``http://127.0.0.1``)
-        — those are SSRF targets that the operator (not the user)
-        should be able to reach. A user that can register a server
-        with api_url pointing at the platform's own controller would
-        otherwise be able to relay requests to the controller's
-        admin endpoints via the ``/proxy/`` action.
+        SECURITY (Batch G): reject api_url that points at any
+        non-public address (RFC1918, link-local, loopback,
+        multicast, reserved, unspecified). These are SSRF targets
+        that the operator (not the user) should be able to reach.
+        A user that can register a server with api_url pointing at
+        the platform's own controller would otherwise be able to
+        relay requests to the controller's admin endpoints via
+        the ``/proxy/`` action.
         """
         import ipaddress
         from urllib.parse import urlparse
@@ -765,12 +765,18 @@ class ManagedServerCreateSerializer(serializers.ModelSerializer):
                 )
             try:
                 ip = ipaddress.ip_address(hostname)
-                if (ip.is_loopback or ip.is_link_local
-                        or ip.is_multicast or ip.is_reserved
-                        or ip.is_unspecified):
+                # SECURITY: reject ALL non-global unicast addresses.
+                # A valid user-registered node has a public IP
+                # (the operator's VPS), so anything in private
+                # ranges is an SSRF target.
+                if not ip.is_global or (
+                    ip.is_loopback or ip.is_link_local
+                    or ip.is_multicast or ip.is_reserved
+                    or ip.is_unspecified or ip.is_private
+                ):
                     raise serializers.ValidationError(
-                        f"api_url IP {ip} is a loopback / link-local / "
-                        f"reserved address."
+                        f"api_url IP {ip} is not a public address "
+                        f"(loopback / private / link-local / reserved)."
                     )
             except ValueError:
                 pass  # hostname — allowed

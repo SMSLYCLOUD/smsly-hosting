@@ -89,8 +89,27 @@ def _check_user_cap_for_committee(user, member_count: int):
     return True, None
 
 
-def _record_usage(user, provider_name: str, model: str, usage: dict) -> dict:
-    """Persist LLM usage to DB. Returns sanitized usage dict."""
+def _record_usage(user, provider_name: str, model: str, usage: dict,
+                  prompt_text: str = "", response_text: str = "") -> dict:
+    """Persist LLM usage to DB. Returns sanitized usage dict.
+
+    SECURITY (Batch G): when the underlying provider does not
+    return token counts in the response (the historical default
+    for several of the SMSLY providers), the spend cap was
+    effectively bypassed — every LLMUsage row recorded 0 tokens.
+    We now fall back to a character-based heuristic (≈ 4 chars
+    per token for English) so the cap is enforced even when the
+    provider doesn't report usage. Callers should pass the
+    actual prompt and response text so the estimate is correct.
+    """
+    def _estimate_tokens(text: str) -> int:
+        if not text:
+            return 0
+        # ≈ 4 chars per token is the standard rough heuristic. The
+        # absolute count is less important than the *relative*
+        # count across requests, which is what the cap compares.
+        return max(1, len(text) // 4)
+
     try:
         prompt_tokens = int(usage.get('prompt_tokens') or 0)
         completion_tokens = int(usage.get('completion_tokens') or 0)
@@ -100,6 +119,12 @@ def _record_usage(user, provider_name: str, model: str, usage: dict) -> dict:
         )
     except (TypeError, ValueError):
         prompt_tokens = completion_tokens = total_tokens = 0
+
+    # Fall back to the heuristic when the provider gave us nothing.
+    if total_tokens == 0 and (prompt_text or response_text):
+        prompt_tokens = _estimate_tokens(prompt_text)
+        completion_tokens = _estimate_tokens(response_text)
+        total_tokens = prompt_tokens + completion_tokens
 
     cost_per_1k = 0.0
     try:
@@ -321,6 +346,13 @@ def ai_test_prompt(request):
 
         response, provider_name = _cached_ask(prompt, system_prompt=system_prompt, cache_bypass=True)
         mode = "senate_committee" if len(configured) >= 2 else ("solo" if len(configured) == 1 else "unconfigured")
+        # SECURITY (Batch G): pass prompt + response so the spend
+        # cap can estimate tokens when the provider doesn't report
+        # usage. Without this, every LLMUsage row recorded 0 tokens.
+        _record_usage(
+            request.user, provider_name, provider_name, {},
+            prompt_text=prompt, response_text=response,
+        )
 
         return Response({
             "response": response,
@@ -384,8 +416,12 @@ def ai_chat_completions(request):
             prompt, system_prompt=system_prompt, cache_bypass=True,
             return_usage=True,
         )
+        # SECURITY (Batch G): pass prompt + response so the spend
+        # cap can estimate tokens when the provider doesn't report
+        # usage. Without this, every LLMUsage row recorded 0 tokens.
         recorded = _record_usage(
             request.user, provider_name, provider_name, usage_info or {},
+            prompt_text=prompt, response_text=response_text,
         )
 
         # Format response in OpenAI style
@@ -416,14 +452,36 @@ def ai_chat_completions(request):
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
+@throttle_classes([AIChatRateThrottle])
 def ai_chat_stream(request):
-    """SSE streaming endpoint for AI chat."""
+    """SSE streaming endpoint for AI chat.
+
+    SECURITY (Batch G): the endpoint now has a cap check (so a
+    single user cannot pump unlimited Senate calls) and a throttle
+    (so a tight loop cannot drive a worker-pool DoS). The body
+    is also recorded as usage so the daily token / cost cap is
+    honored for streaming requests too.
+    """
     prompt = request.data.get("prompt") or request.data.get("message", "")
     system_prompt = request.data.get("system_prompt")
     provider_id = request.data.get("provider")
 
     if not prompt:
         return JsonResponse({"error": "Prompt is required"}, status=400)
+
+    # Cap pre-flight: do not start a streaming response if the
+    # user has already exceeded the cap. Otherwise the connection
+    # would be opened, then aborted mid-stream, which is more
+    # confusing than a clean 429.
+    configured = get_configured_providers()
+    cap_check = (
+        _check_user_cap_for_committee(request.user, len(configured))
+        if len(configured) >= 2
+        else _check_user_cap(request.user)
+    )
+    cap_ok, cap_reason = cap_check
+    if not cap_ok:
+        return JsonResponse({"error": cap_reason, "code": "ai_cap_exceeded"}, status=429)
 
     def event_stream():
         try:
@@ -439,15 +497,31 @@ def ai_chat_stream(request):
                         provider = instance
 
             if not provider:
-                configured = get_configured_providers()
                 provider = configured[0] if configured else None
 
+            accumulated = []
             if provider and hasattr(provider, 'ask_stream'):
                 for chunk in provider.ask_stream(prompt, system_prompt):
+                    accumulated.append(chunk)
                     yield f"data: {json.dumps({'content': chunk})}\n\n"
             else:
                 response, _ = ask_with_fallback(prompt, system_prompt, provider_id)
+                accumulated.append(response)
                 yield f"data: {json.dumps({'content': response})}\n\n"
+
+            # Record usage after the stream completes so the
+            # recorded prompt + response text are accurate.
+            try:
+                _record_usage(
+                    request.user,
+                    getattr(provider, "id", None) or "auto",
+                    getattr(provider, "id", None) or "auto",
+                    {},
+                    prompt_text=prompt,
+                    response_text="".join(accumulated),
+                )
+            except Exception:
+                logger.exception("Failed to record streaming usage")
 
             yield "data: [DONE]\n\n"
         except Exception as exc:
