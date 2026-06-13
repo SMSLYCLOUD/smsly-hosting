@@ -1,11 +1,61 @@
 """Tasks Ai module."""
 import logging
+import re
 
 from celery import shared_task
 from .models import Deployment
 from services.ai_engine import DevOpsAgent
 
 logger = logging.getLogger(__name__)
+
+
+_INJECTION_PATTERNS = [
+    re.compile(r"ignore\s+(?:all\s+)?(?:previous|prior|above)\s+(?:instructions?|prompts?)", re.I),
+    re.compile(r"disregard\s+(?:all\s+)?(?:previous|prior|above)", re.I),
+    re.compile(r"forget\s+(?:everything|all|previous)", re.I),
+    re.compile(r"you\s+are\s+now\s+(?:a|an|the)\s+\w+", re.I),
+    re.compile(r"act\s+as\s+(?:a|an|the)\s+\w+", re.I),
+    re.compile(r"from\s+now\s+on\s+you", re.I),
+    re.compile(r"respond\s+with\s+only", re.I),
+    re.compile(r"output\s*:\s*['\"]?\{", re.I),
+    re.compile(r"<\|im_start\|>", re.I),
+    re.compile(r"<\|im_end\|>", re.I),
+    re.compile(r"<\|system\|>", re.I),
+    re.compile(r"\[INST\]", re.I),
+    re.compile(r"\[\/INST\]", re.I),
+    re.compile(r"<<SYS>>", re.I),
+    re.compile(r"<</SYS>>", re.I),
+    re.compile(r"<system>", re.I),
+    re.compile(r"</system>", re.I),
+]
+
+_HIDDEN_UNICODE_CHARS = re.compile(
+    "["
+    "\u200b\u200c\u200d\u2060"  # zero-width
+    "\u202a\u202b\u202c\u202d\u202e"  # bidi overrides
+    "\ufeff"  # BOM
+    "]"
+)
+
+
+def _sanitize_for_llm(logs: str) -> str:
+    """Neutralize common prompt-injection patterns in untrusted log text.
+
+    The build/runtime logs come from arbitrary source code and may
+    contain strings crafted to hijack the LLM. This function replaces
+    known-injection patterns with a benign redaction token so the LLM
+    sees the line existed without acting on the instructions.
+
+    The output is intentionally conservative: real error messages may
+    contain words like "ignore" or "act as" (e.g. "ignore the previous
+    version") — replacing the *pattern* is safer than rejecting the
+    line. The replacement token is the same in every case so the model
+    can recognise it as a marker.
+    """
+    out = _HIDDEN_UNICODE_CHARS.sub("", logs)
+    for pat in _INJECTION_PATTERNS:
+        out = pat.sub("[redacted-injection]", out)
+    return out
 
 
 @shared_task
@@ -24,9 +74,11 @@ def analyze_failure_task(deployment_id):
         # Call Jules AI
         agent = DevOpsAgent()
 
-        # SECURITY: Sanitize logs to prevent prompt injection and limit token count
-        # 4000 tokens ~= 16000 chars roughly. Let's cap at 15000 to be safe.
-        safe_logs = deployment.build_logs[-15000:]
+        # SECURITY: Sanitize logs to prevent prompt injection, then cap
+        # to the last 15000 chars to bound token usage. Both layers
+        # are needed: sanitization neutralizes injected instructions,
+        # truncation bounds cost.
+        safe_logs = _sanitize_for_llm(deployment.build_logs)[-15000:]
 
         diagnosis = agent.diagnose_logs(safe_logs)
 

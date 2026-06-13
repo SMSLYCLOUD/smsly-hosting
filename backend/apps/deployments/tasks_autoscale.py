@@ -1,16 +1,24 @@
-"""Auto-scaling API endpoints and Celery tasks."""
+"""Auto-scaling API endpoints and Celery tasks — thin wrappers around the
+unified ``apps.autoscaler.engine`` pipeline.
+
+The two periodic Celery tasks (``check-autoscale-every-30s`` and
+``auto-scaling-analyze-every-3m``) used to run *two different* engines
+with overlapping logic and no coordination. They now both call
+``apps.autoscaler.engine.pipeline.analyze_and_apply`` and the engine
+holds a per-service lock, so they cannot double-spawn replicas even
+when their intervals overlap.
+
+The ``analyze_and_scale_service`` function is preserved (signature and
+return value) because it is the function mocked by
+``tests/test_autoscale_pagination.py`` and exposed via the views at
+``apps.deployments.views_autoscale.ScalingViewSet.analyze``.
+"""
 import logging
 from celery import shared_task
 from django.db import models
-from rest_framework import viewsets, permissions, status, serializers
-from rest_framework.decorators import action
-from rest_framework.response import Response
 
-from apps.deployments.models_core import Service, ManagedServer
+from apps.deployments.models_core import Service
 from apps.deployments.models_replica import ServiceReplica
-from apps.deployments.services.spawning_service import SpawningService
-from apps.deployments.services.node_scorer import NodeScorer
-from apps.deployments.services.scaling_ai import ScalingAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -26,8 +34,11 @@ AUTOSCALE_BATCH_SIZE = 20
 def analyze_all_services_task(self):
     """Periodic task: analyze active services and auto-scale as needed.
 
-    Uses an `id__gt` cursor so the batch of 20 never silently drops
-    services when more than 20 are candidates.
+    Uses an ``id__gt`` cursor so the batch of 20 never silently drops
+    services when more than 20 are candidates. Delegates each
+    per-service decision to ``analyze_and_scale_service`` so the
+    test suite (which patches that name) and the ``ScalingViewSet``
+    REST endpoint share the same code path.
     """
     analyzed = 0
     last_id = None
@@ -54,97 +65,22 @@ def analyze_all_services_task(self):
     return {'analyzed': analyzed}
 
 
-def analyze_and_scale_service(service_id: str):
-    """Celery task: analyze a service and auto-scale if needed."""
-    try:
-        service = Service.objects.get(id=service_id)
-    except Service.DoesNotExist:
-        logger.warning("Auto-scale task: service %s not found", service_id)
-        return
+def analyze_and_scale_service(service_id):
+    """Public entry point used by the Celery task, REST endpoint, and tests.
 
-    # 1. AI analysis
-    analyzer = ScalingAnalyzer(service)
-    result = analyzer.analyze()
-    rec = result['recommendation']
+    Accepts a ``Service`` UUID string (from the Celery task / test mocks)
+    or a ``Service`` instance (from the REST view). Delegates to the
+    unified engine pipeline.
+    """
+    from apps.autoscaler.engine.pipeline import analyze_and_apply
 
-    if rec['action'] == 'none':
-        return
+    if isinstance(service_id, Service):
+        service = service_id
+    else:
+        try:
+            service = Service.objects.get(id=service_id)
+        except (Service.DoesNotExist, ValueError, TypeError):
+            logger.warning("Auto-scale task: service %s not found", service_id)
+            return None
+    return analyze_and_apply(service)
 
-    spawner = SpawningService()
-    try:
-        if rec['action'] == 'scale_up':
-            spawned = 0
-            count = rec['scale_up_by']
-
-            # ── Priority 1: Spawn locally if host has resources ──────────
-            local_ok = True
-            try:
-                spawner._check_local_capacity(service)
-            except RuntimeError:
-                local_ok = False
-
-            while spawned < count and local_ok:
-                replica = ServiceReplica.objects.create(
-                    service=service, node=None,
-                    spawn_reason=rec['reason'],
-                    status='SPAWNING',
-                )
-                try:
-                    spawner.spawn_local(service, replica)
-                    spawned += 1
-                except Exception as exc:
-                    logger.warning("Local spawn failed for %s: %s", service.name, exc)
-                    replica.status = 'DESTROYED'
-                    replica.save(update_fields=['status'])
-                    local_ok = False
-
-            if spawned >= count:
-                logger.info("Auto-scaled %s: %d local replica(s)", service.name, spawned)
-                return
-
-            # ── Priority 2: Remote nodes when local is choked ────────────
-            remaining = count - spawned
-            candidates = ManagedServer.objects.filter(
-                status=ManagedServer.Status.ONLINE,
-                allow_user_workloads=True,
-            ).exclude(is_primary=True)
-
-            if not candidates.exists():
-                logger.warning("No remote nodes for scaling %s", service.name)
-                return
-
-            scorer = NodeScorer()
-            scores = scorer.score(candidates)
-            for node, score, resources in scores:
-                if spawned >= count:
-                    break
-                if score < 20:
-                    continue
-                replica = ServiceReplica.objects.create(
-                    service=service, node=node,
-                    spawn_reason=rec['reason'],
-                    status='SPAWNING',
-                )
-                try:
-                    spawner.spawn(service, node, replica)
-                    spawned += 1
-                    logger.info("Auto-scaled %s: spawned on %s", service.name, node.name)
-                except Exception as exc:
-                    logger.warning("Remote spawn failed for %s on %s: %s", service.name, node.name, exc)
-                    replica.status = 'DESTROYED'
-                    replica.save(update_fields=['status'])
-                    replica.save(update_fields=['status'])
-
-        elif rec['action'] == 'scale_down':
-            # Destroy idle replicas
-            replicas = ServiceReplica.objects.filter(
-                service=service, status='RUNNING'
-            ).order_by('created_at')
-            for replica in replicas:
-                spawner.destroy(replica)
-                logger.info("Auto-scaled down %s: destroyed replica %s", service.name, replica.container_name)
-
-    finally:
-        spawner.cleanup()
-
-    return result

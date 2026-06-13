@@ -16,6 +16,24 @@ The classic engine is the **default** and is what the platform runs out of the b
 
 All three share the same `Service` fields (`min_replicas`, `max_replicas`, `autoscale_cpu_target`, `last_scale_at`) and the same `MAX_REPLICAS` global guard. They coordinate via a single row-level lock (see [Race Conditions](#race-conditions)).
 
+## Unified Engine (`apps.autoscaler.engine`)
+
+The two per-`Service` engines (Classic + AI-Enhanced) have been refactored onto a single pipeline so the three code paths cannot diverge and the periodic Celery tasks cannot double-spawn replicas for the same service.
+
+| Module | Role |
+| --- | --- |
+| `apps/autoscaler/engine/metrics.py` | `MetricsCollector` with fallback chain `db → prometheus → docker`. The two periodic tasks prefer `db` (fast, no network); the on-demand REST `analyze` endpoint prefers `prometheus` (fresher). |
+| `apps/autoscaler/engine/decision.py` | Pure `DecisionEngine` — converts a `MetricsSnapshot` + cooldown + replica state into a `Recommendation` (`scale_up` / `scale_down` / `none`). No I/O. |
+| `apps/autoscaler/engine/reconciler.py` | `Reconciler` applies a `Recommendation` via `SpawningService` (local first, then `NodeScorer` for remote). Holds a **per-service `threading.Lock`** to serialize concurrent invocations. |
+| `apps/autoscaler/engine/pipeline.py` | `analyze_and_apply(service)` and `analyze_only(service)` are the public entry points. All three Celery tasks and the legacy REST endpoint go through these. |
+| `apps/autoscaler/engine/container_metrics.py` | Container-level primitives (K8s metrics API, `docker stats`, unit parsing) shared with the platform-level autoscaler in `apps/autoscaler/views.py`. |
+
+The K8s / Docker admin surface in `apps/autoscaler/views.py` is **not** on this pipeline: it scales *platform* containers (celery, gunicorn, customer apps via Swarm/K8s deployments) using a `demand_score` on raw container metrics, not `Service.autoscale_cpu_target`. The two engines are intentionally separate.
+
+### Race Condition Prevention
+
+The three periodic tasks (`check-autoscale-every-30s`, `auto-scaling-analyze-every-3m`, `autoscaler-collect-stats-every-60s`) used to be able to spawn replicas for the same service in parallel. The `Reconciler` now holds an in-process `threading.Lock` keyed by `service.id` so the second invocation sees the updated `last_scale_at` and the cooldown logic short-circuits. The lock is per-service — work for service A never blocks work for service B. This is verified by `test_autoscaler_engine.py::ReconcilerRaceConditionTests`.
+
 ## Classic Engine (`services/autoscaler.py`)
 
 The classic engine is a CPU-based, two-threshold controller with asymmetric cooldowns. It runs on Celery beat once per minute.

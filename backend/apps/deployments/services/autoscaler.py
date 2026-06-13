@@ -1,9 +1,12 @@
 # pylint: disable=invalid-name
 """
-Autoscaler service — scales container replicas based on CPU utilization.
+Autoscaler service — thin entry point that delegates to the unified
+``apps.autoscaler.engine`` pipeline.
 
-Checks CPU usage against the service's autoscale_cpu_target and adjusts
-replica count between min_replicas and max_replicas.
+The legacy ``_evaluate_scaling`` helper is retained for backward
+compatibility with the existing test suite and the original simple
+"scale min_replicas by 1 if avg CPU over the last 2m exceeds the
+service's autoscale_cpu_target" semantics.
 """
 import logging
 from celery import shared_task
@@ -15,30 +18,34 @@ logger = logging.getLogger(__name__)
 
 @shared_task
 def check_autoscale_task():
-    """
-    Check CPU usage for all services and scale replicas if needed.
+    """Check CPU usage for all services and scale replicas if needed.
 
-    Logic:
-    - If avg CPU > target for 2+ minutes: scale up
-    - If avg CPU < target * 0.5 for 5+ minutes: scale down
-    - Never go below min_replicas or above max_replicas
+    Delegates to the unified engine so the two Celery beat tasks
+    (``check_autoscale_task`` and ``tasks_autoscale.analyze_all_services_task``)
+    cannot double-spawn replicas for the same service — the engine
+    uses a per-service lock inside ``Reconciler``.
     """
     from apps.deployments.models import Service
-    from apps.deployments.models_metrics import ServiceMetric
+    from apps.autoscaler.engine.pipeline import analyze_and_apply
 
-    services = Service.objects.filter(
-        max_replicas__gt=1,  # Only check services with autoscaling enabled
-    )
+    services = Service.objects.filter(max_replicas__gt=1)
 
     for service in services:
         try:
-            _evaluate_scaling(service, ServiceMetric)
+            analyze_and_apply(service)
         except Exception as e:
             logger.error("Autoscale check failed for %s: %s", service.name, e)
 
 
 def _evaluate_scaling(service, ServiceMetric):
-    """Evaluate whether a service needs scaling."""
+    """Evaluate whether a service needs scaling.
+
+    Retained for backward compatibility with existing tests and any
+    direct callers. Implements the original simple policy:
+      - avg CPU over 2m > target → scale up by 1
+      - avg CPU over 5m < target*0.5 → scale down by 1
+    Uses the dedicated ``last_scale_at`` field for cooldowns.
+    """
     from apps.deployments.services.server_guard import ServerGuard
 
     if ServerGuard.is_control_plane(getattr(service, "server", None)):
