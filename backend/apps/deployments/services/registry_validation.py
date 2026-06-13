@@ -1,0 +1,147 @@
+"""
+Centralised registry-URL validation for inter-node image transfers.
+
+The platform runs an internal Docker registry (default
+``registry:5000``) and may be configured to push to a small
+allowlist of public registries (Docker Hub, GHCR, Quay, GCR,
+MCR, ECR Public). Any code path that constructs a ``docker pull``
+or ``docker push`` command, or that runs ``docker load -i`` on a
+manifest-bearing archive, should run the candidate image through
+``validate_image_registry`` first.
+
+The serializer-layer validator in
+``apps/deployments/serializers.py`` (``_validate_docker_image``)
+also consults the same allowlist, but it only runs at the API
+boundary. Internal callers (provisioner fallback, self-healing
+re-builder, cross-node image transfer) construct image refs
+directly and bypass the serializer, so this helper exists to
+centralize the policy.
+
+A user can never cause the platform to pull an image from a
+registry host that is not on this list — that includes personal
+``attacker.example.com`` repositories, link-local hosts, and
+private IP ranges that aren't our own.
+"""
+import re
+from typing import Optional, Tuple
+
+# Same allowlist as serializers._ALLOWED_IMAGE_REGISTRIES; kept
+# here in one place so the policy cannot drift between the
+# API boundary and the internal callers.
+ALLOWED_IMAGE_REGISTRY_HOSTS = (
+    # host:port[:/] prefix — these are the registries the platform
+    # actually supports.
+    "127.0.0.1:5000",
+    "localhost:5000",
+    "registry:5000",
+    "smsly-hosting-registry:5000",
+    "ghcr.io",
+    "docker.io",  # Docker Hub — also matches library/<name> style
+    "registry-1.docker.io",
+    "quay.io",
+    "gcr.io",
+    "mcr.microsoft.com",
+    "public.ecr.aws",
+)
+
+
+# Shell metacharacters that would let an image ref break out of
+# the docker CLI argv position and run arbitrary code. The docker
+# client rejects these in image names, but the docker CLI itself
+# uses exec.Command which goes through /bin/sh on the remote.
+_FORBIDDEN_CHARS = ("\n", "\r", "\t", ";", "&", "|", "`", "$", " ", "<", ">")
+
+
+def _registry_prefix_for(image: str) -> str:
+    """Return the registry prefix of a Docker image reference.
+
+    For ``registry:5000/foo/bar:tag`` -> ``registry:5000``.
+    For ``nginx:1.27-alpine`` -> ``docker.io`` (Docker Hub library).
+    """
+    first_slash = image.find("/")
+    if first_slash == -1 or (
+        not ("." in image[:first_slash]
+             or ":" in image[:first_slash]
+             or image[:first_slash] == "localhost")
+    ):
+        # No registry prefix → Docker Hub library reference
+        return "docker.io"
+    return image[:first_slash]
+
+
+def validate_image_registry(image: str) -> str:
+    """Restrict ``image`` to a Docker-safe reference whose registry
+    host is on the platform allowlist.
+
+    Returns the cleaned image string. Raises ``ValueError`` if the
+    image is malformed, contains shell metacharacters, or points at
+    a registry host that is not on the allowlist. Callers should
+    treat the raised exception as a hard fail (do not pull the
+    image).
+    """
+    if image is None:
+        raise ValueError("image must not be None.")
+    if not isinstance(image, str) or not image.strip():
+        raise ValueError("image must be a non-empty string.")
+    image = image.strip()
+    if any(c in image for c in _FORBIDDEN_CHARS):
+        raise ValueError(
+            "image must not contain whitespace or shell metacharacters."
+        )
+    prefix = _registry_prefix_for(image)
+    if not any(
+        prefix == allowed or prefix.startswith(allowed + "/")
+        for allowed in ALLOWED_IMAGE_REGISTRY_HOSTS
+    ):
+        raise ValueError(
+            f"image registry {prefix!r} is not on the platform allowlist. "
+            f"Allowed: {', '.join(ALLOWED_IMAGE_REGISTRY_HOSTS)}."
+        )
+    return image
+
+
+def safe_registry_host_for_internal_fallback() -> str:
+    """Return the registry host (host:port) the platform should
+    use as the internal fallback when constructing an image ref
+    for a service that doesn't have an explicit ``docker_image``.
+
+    - If ``CONTAINER_REGISTRY_URL`` is the loopback default, the
+      answer is the master's WireGuard mesh IP (so a remote node
+      can pull across the mesh) with the registry port.
+    - Otherwise the answer is the configured registry's netloc
+      (validated at startup to be on the allowlist).
+
+    Used by ``self_healing_orchestrator`` and any other code path
+    that needs to construct an internal-registry image ref.
+    """
+    from django.conf import settings
+    from urllib.parse import urlparse
+
+    registry_url = getattr(settings, "CONTAINER_REGISTRY_URL", "") or ""
+    if registry_url.startswith(("127.0.0.1", "localhost")):
+        from apps.deployments.services.provisioner import (
+            _get_master_mesh_ip,
+        )
+        master_ip = _get_master_mesh_ip() or "127.0.0.1"
+        return f"{master_ip}:5000"
+    parsed = urlparse(registry_url)
+    return (parsed.netloc or parsed.path).rstrip("/")
+
+
+def safe_image_for_service(service_name: str, tag: str = "latest") -> str:
+    """Build an internal-registry image reference for a service.
+
+    Combines ``safe_registry_host_for_internal_fallback`` with the
+    caller-supplied service name and tag. The result is
+    ``<host>:<port>/smsly/<service_name>:<tag>`` and is guaranteed
+    to point at a registry on the platform allowlist.
+
+    The ``service_name`` is a string the user controls; the caller
+    is responsible for having already validated it (e.g. via
+    ``ServiceSerializer.validate_name`` which restricts to DNS-label
+    characters). This helper just constructs the full ref.
+    """
+    host = safe_registry_host_for_internal_fallback()
+    safe_tag = re.sub(r"[^A-Za-z0-9_.-]", "", tag or "latest")[:128] or "latest"
+    safe_name = re.sub(r"[^a-z0-9_.-]", "", (service_name or "").lower())[:63] or "app"
+    return f"{host}/smsly/{safe_name}:{safe_tag}"
