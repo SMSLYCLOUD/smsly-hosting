@@ -113,6 +113,25 @@ class ManagedServer(models.Model):
         max_length=20, choices=ProvisionStatus.choices, default=ProvisionStatus.NONE)
     provision_logs = models.TextField(blank=True, default="")
 
+    # SECURITY: TLS verification controls. ``verify_tls`` defaults to True
+    # — the platform refuses to skip certificate verification unless
+    # the operator has explicitly opted in (and the env flag
+    # `ALLOW_INSECURE_INTER_NODE_TLS` is set, see settings.py).
+    # `tls_cert_sha256` is the optional pin: when set, the connection
+    # is only accepted if the remote cert's SHA-256 matches.
+    verify_tls = models.BooleanField(
+        default=True,
+        help_text="If false, the platform skips TLS verification when "
+                  "calling this server's API. Requires the "
+                  "ALLOW_INSECURE_INTER_NODE_TLS env flag.",
+    )
+    tls_cert_sha256 = models.CharField(
+        max_length=64, blank=True, default="",
+        help_text="Optional SHA-256 fingerprint of the server's TLS cert "
+                  "(hex, no colons). When set, connections are pinned to "
+                  "this cert regardless of the system trust store.",
+    )
+
     @classmethod
     def get_primary(cls):
         """Return the primary/control-plane server."""

@@ -1127,8 +1127,13 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                     sort_keys=True,
                 ).encode()
                 timestamp = str(int(time.time()))
+                nonce = secrets.token_urlsafe(16)
                 body_hash = hashlib.sha256(body).hexdigest()
-                payload = f"POST|{path}|{timestamp}|{body_hash}"
+                # SECURITY: bind the nonce into the signed payload so
+                # a captured request cannot be replayed with a fresh
+                # nonce. Matches the format expected by
+                # views_node_exchange.node_token_exchange_via_gateway.
+                payload = f"POST|{path}|{timestamp}|{nonce}|{body_hash}"
                 signature = hmac_mod.new(
                     remote_gateway_secret.encode(),
                     payload.encode(),
@@ -1143,6 +1148,7 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                             "Content-Type": "application/json",
                             "X-Gateway-Signature-V2": signature,
                             "X-Request-Timestamp": timestamp,
+                            "X-Request-Nonce": nonce,
                         },
                         timeout=20,
                         verify=candidate_url.startswith("https://"),

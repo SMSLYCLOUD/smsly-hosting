@@ -140,8 +140,11 @@ class RemoteSyncHMACAuthenticationTests(TestCase):
     def test_remote_sync_hmac_can_list_services_without_api_token(self):
         path = "/api/v1/services/?search=hmac-api"
         timestamp = str(int(time.time()))
+        nonce = "remote-sync-test-nonce"
         body_hash = hashlib.sha256(b"").hexdigest()
-        payload = f"GET|{path}|{timestamp}|{body_hash}"
+        # SECURITY (Batch G): nonce is mandatory and bound into the
+        # signed payload.
+        payload = f"GET|{path}|{timestamp}|{nonce}|{body_hash}"
         signature = hmac.new(
             b"remote-sync-secret",
             payload.encode(),
@@ -155,6 +158,7 @@ class RemoteSyncHMACAuthenticationTests(TestCase):
             HTTP_X_SMSLY_REMOTE_SYNC="1",
             HTTP_X_GATEWAY_SIGNATURE_V2=signature,
             HTTP_X_REQUEST_TIMESTAMP=timestamp,
+            HTTP_X_REQUEST_NONCE=nonce,
         )
 
         self.assertEqual(response.status_code, 200)

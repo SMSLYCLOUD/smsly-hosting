@@ -74,7 +74,7 @@ def _gateway_secret_candidates(source_ip):
 def _verify_transfer_sync_hmac(request, source_ip, body):
     signature = request.headers.get('X-Gateway-Signature-V2', '')
     timestamp = request.headers.get('X-Request-Timestamp', '')
-    nonce = request.headers.get('X-Gateway-Nonce', '')
+    nonce = request.headers.get('X-Request-Nonce', '')
     if not signature or not timestamp or not nonce:
         return False
 
@@ -86,8 +86,18 @@ def _verify_transfer_sync_hmac(request, source_ip, body):
     if abs(int(time.time()) - request_ts) > 300:
         return False
 
+    # SECURITY (Batch G): nonce replay protection. Each nonce is
+    # one-use within the 5-minute window. Without this, a captured
+    # request can be replayed to create duplicate ServerTransfer
+    # rows. The nonce is also bound into the signed payload.
+    from django.core.cache import cache
+    nonce_key = f"transfer_nonce:{nonce}"
+    if cache.get(nonce_key):
+        return False
+    cache.set(nonce_key, "1", timeout=600)
+
     body_hash = hashlib.sha256(body).hexdigest()
-    payload = f"{request.method}|{request.get_full_path()}|{timestamp}|{body_hash}|{nonce}"
+    payload = f"{request.method}|{request.get_full_path()}|{timestamp}|{nonce}|{body_hash}"
 
     for secret in _gateway_secret_candidates(source_ip):
         expected = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()

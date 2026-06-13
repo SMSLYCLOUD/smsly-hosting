@@ -156,13 +156,20 @@ class SecurityMiddleware:
     def _verify_signature(self, request):
         """
         Verify HMAC V2 Signature.
-        Format: METHOD|PATH|TIMESTAMP|BODY_HASH
-        Header: X-Gateway-Signature-V2
+        Format: METHOD|PATH|TIMESTAMP|NONCE|BODY_HASH
+        Headers: X-Gateway-Signature-V2, X-Request-Timestamp, X-Request-Nonce
+
+        SECURITY (Batch G): the nonce is mandatory and bound into the
+        signed payload. Matches the format expected by the DRF
+        ``ZeroTrustHMACAuthentication`` and the inter-service senders
+        in ``services/remote_orchestrator.py`` /
+        ``services/provisioner.py`` / ``services/transfer_service.py``.
         """
         signature = request.headers.get('X-Gateway-Signature-V2')
         timestamp = request.headers.get('X-Request-Timestamp')
+        nonce = request.headers.get('X-Request-Nonce')
 
-        if not signature or not timestamp:
+        if not signature or not timestamp or not nonce:
             logger.warning(f"Missing signature headers for {request.path}")
             return False
 
@@ -176,22 +183,28 @@ class SecurityMiddleware:
         except ValueError:
             return False
 
-        # 2. Compute Hash
+        # 2. Nonce replay protection. Each nonce is one-use within
+        # the freshness window.
+        from django.core.cache import cache
+        nonce_key = f"middleware_hmac_nonce:{nonce}"
+        if cache.get(nonce_key):
+            logger.warning(f"HMAC nonce already used: {nonce[:16]}...")
+            return False
+        cache.set(nonce_key, "1", timeout=600)
+
+        # 3. Compute Hash
         method = request.method
-        path = request.path # Use path without query string for deterministic signing
+        path = request.path  # Use path without query string for deterministic signing
         body = request.body
         body_hash = hashlib.sha256(body).hexdigest()
 
-        payload = f"{method}|{path}|{timestamp}|{body_hash}"
-        
-        # In a real gateway scenario, we might have specific shared secrets.
-        # Here we use the Django SECRET_KEY as the shared secret for simplicity 
-        # or a specific GATEWAY_SECRET if defined.
+        payload = f"{method}|{path}|{timestamp}|{nonce}|{body_hash}"
+
         gw_secret = getattr(settings, 'GATEWAY_SECRET', self.secret_key)
-        
+
         expected_signature = hmac.new(
-            gw_secret.encode(), 
-            payload.encode(), 
+            gw_secret.encode(),
+            payload.encode(),
             hashlib.sha256
         ).hexdigest()
 

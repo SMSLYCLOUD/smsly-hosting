@@ -1,6 +1,7 @@
 import logging
 import os
 import json
+import secrets
 import time
 import tempfile
 import requests
@@ -205,10 +206,16 @@ class ServerTransferService:
 
         if secret:
             timestamp = str(int(time.time()))
+            nonce = secrets.token_urlsafe(16)
             body_hash = hashlib.sha256(body).hexdigest()
-            payload = f"POST|{path}|{timestamp}|{body_hash}"
+            # SECURITY (Batch G): bind the nonce into the signed
+            # payload so a captured request cannot be replayed with
+            # a fresh nonce. Matches the format expected by
+            # views_transfer._verify_transfer_sync_hmac.
+            payload = f"POST|{path}|{timestamp}|{nonce}|{body_hash}"
             signature = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
             headers['X-Request-Timestamp'] = timestamp
+            headers['X-Request-Nonce'] = nonce
             headers['X-Gateway-Signature-V2'] = signature
 
         return headers

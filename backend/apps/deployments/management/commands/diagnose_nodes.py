@@ -13,6 +13,7 @@ Usage:
 
 import hashlib
 import hmac
+import secrets
 import time
 
 import requests
@@ -201,13 +202,16 @@ class Command(BaseCommand):
             # Try HMAC auth
             gw_secret = str(server.gateway_secret).strip()
             ts = str(int(time.time()))
+            nonce = secrets.token_urlsafe(16)
             body_hash = hashlib.sha256(b"").hexdigest()
-            # Standardized payload: excludes query string
-            payload_str = f"GET|{api_path}|{ts}|{body_hash}"
+            # SECURITY (Batch G): nonce is mandatory and bound into
+            # the signed payload. Matches ZeroTrustHMACAuthentication.
+            payload_str = f"GET|{api_path}|{ts}|{nonce}|{body_hash}"
             sig = hmac.new(gw_secret.encode(), payload_str.encode(), hashlib.sha256).hexdigest()
             headers["X-SMSLY-Remote-Sync"] = "1"
             headers["X-Gateway-Signature-V2"] = sig
             headers["X-Request-Timestamp"] = ts
+            headers["X-Request-Nonce"] = nonce
 
             try:
                 resp = requests.get(url, headers=headers, timeout=10)

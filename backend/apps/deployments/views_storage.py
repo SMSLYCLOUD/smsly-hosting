@@ -1,8 +1,10 @@
 import logging
 import os
 import posixpath
+import re
 import uuid
 import mimetypes
+
 from django.http import StreamingHttpResponse
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import viewsets, permissions, serializers, status
@@ -16,12 +18,130 @@ from .utils import resolve_running_container, validate_and_sanitize_path
 logger = logging.getLogger(__name__)
 
 
+# SECURITY: paths that, if mounted into a tenant container, grant
+# host access (docker socket, /etc, /proc, /sys) or are simply
+# system directories that should never appear as a volume mount.
+# Allow-list of acceptable mount-path roots for tenant volumes.
+_VOLUME_ALLOWED_ROOTS = (
+    "/data", "/var/lib/smsly", "/srv", "/opt/app", "/workspace",
+    "/home/smsly", "/mnt", "/storage",
+)
+_VOLUME_FORBIDDEN_PATHS = (
+    "/var/run/docker.sock",
+    "/etc",
+    "/etc/",
+    "/proc",
+    "/proc/",
+    "/sys",
+    "/sys/",
+    "/dev",
+    "/dev/",
+    "/",
+    "/root",
+    "/root/",
+    "/boot",
+    "/boot/",
+    "/var/run",
+    "/var/run/",
+    "/var/log",
+    "/var/log/",
+)
+_VOLUME_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,62}$")
+_VOLUME_MOUNT_PATH_RE = re.compile(r"^/[A-Za-z0-9][A-Za-z0-9_./-]*$")
+
+
+def _validate_volume_mount_path(value: str) -> str:
+    """Reject any path that is not a normal POSIX path under an allow-listed
+    root, and reject system paths (/etc, /proc, /var/run/docker.sock, …)
+    that would grant the container host privileges.
+
+    Returns the cleaned path; raises ``serializers.ValidationError`` on
+    rejection so DRF surfaces a 400 to the caller.
+    """
+    if not isinstance(value, str) or not value:
+        raise serializers.ValidationError(
+            {"mount_path": "mount_path is required and must be a string."}
+        )
+    # Must start with /
+    if not value.startswith("/"):
+        raise serializers.ValidationError(
+            {"mount_path": "mount_path must be an absolute path (start with /)."}
+        )
+    # Normalise: collapse double slashes, drop trailing slash
+    normalised = posixpath.normpath(value)
+    # Reject forbidden paths (exact match or as a directory prefix)
+    for forbidden in _VOLUME_FORBIDDEN_PATHS:
+        if forbidden == "/":
+            # Only reject the literal root, not every path that starts
+            # with "/" (which is every absolute path).
+            if normalised == "/":
+                raise serializers.ValidationError(
+                    {"mount_path": "mount_path '/' is on the platform blocklist."}
+                )
+            continue
+        normalised_stripped = forbidden.rstrip("/")
+        if normalised == normalised_stripped:
+            raise serializers.ValidationError(
+                {"mount_path": f"mount_path {normalised!r} is on the platform blocklist."}
+            )
+        if forbidden.endswith("/") and normalised.startswith(forbidden):
+            raise serializers.ValidationError(
+                {"mount_path": f"mount_path {normalised!r} is on the platform blocklist."}
+            )
+    # Reject if it contains .. (defence-in-depth even though normpath collapses it)
+    if ".." in normalised.split("/"):
+        raise serializers.ValidationError(
+            {"mount_path": "mount_path must not contain '..'."}
+        )
+    # Must be under an allow-listed root
+    if not any(normalised == root or normalised.startswith(root + "/")
+               for root in _VOLUME_ALLOWED_ROOTS):
+        raise serializers.ValidationError(
+            {"mount_path":
+                f"mount_path must start with one of "
+                f"{', '.join(_VOLUME_ALLOWED_ROOTS)}."}
+        )
+    if not _VOLUME_MOUNT_PATH_RE.match(normalised):
+        raise serializers.ValidationError(
+            {"mount_path": "mount_path contains invalid characters."}
+        )
+    return normalised
+
+
+def _validate_volume_name(value: str) -> str:
+    """Volume.name becomes a real ``docker volume create <name>`` and
+    is reused as a host bind key — restrict to a docker-safe slug."""
+    if not isinstance(value, str) or not value:
+        raise serializers.ValidationError(
+            {"name": "name is required and must be a string."}
+        )
+    if not _VOLUME_NAME_RE.match(value):
+        raise serializers.ValidationError(
+            {"name": "name must be lowercase alphanumeric with '.', '_', or '-', "
+                     "starting with a letter or digit (max 63 chars)."}
+        )
+    # Block names that could collide with platform internals
+    forbidden_prefixes = ("smsly-", "smsly_", "platform-", "pgcat-", "caddy-",
+                          "redis-", "postgres-", "rabbitmq-", "traefik-",
+                          "smsly-system-", "docker-")
+    if any(value.startswith(p) for p in forbidden_prefixes):
+        raise serializers.ValidationError(
+            {"name": f"name {value!r} is on the platform blocklist."}
+        )
+    return value
+
+
 class VolumeSerializer(serializers.ModelSerializer):
     class Meta:
         model = Volume
         fields = '__all__'
         read_only_fields = ('service',)
 
+    def validate_mount_path(self, value):
+        return _validate_volume_mount_path(value)
+
+    def validate_name(self, value):
+        return _validate_volume_name(value)
 
 class VolumeViewSet(viewsets.ModelViewSet):
     serializer_class = VolumeSerializer

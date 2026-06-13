@@ -116,8 +116,11 @@ class NodeTokenExchangeTests(TestCase):
             sort_keys=True,
         ).encode()
         timestamp = str(int(time.time()))
+        nonce = "node-exchange-test-nonce"
         body_hash = hashlib.sha256(body).hexdigest()
-        payload = f"POST|{url}|{timestamp}|{body_hash}"
+        # SECURITY (Batch G): nonce is mandatory and bound into the
+        # signed payload.
+        payload = f"POST|{url}|{timestamp}|{nonce}|{body_hash}"
         signature = hmac.new(
             b"node-secret",
             payload.encode(),
@@ -131,6 +134,7 @@ class NodeTokenExchangeTests(TestCase):
             content_type="application/json",
             HTTP_X_GATEWAY_SIGNATURE_V2=signature,
             HTTP_X_REQUEST_TIMESTAMP=timestamp,
+            HTTP_X_REQUEST_NONCE=nonce,
         )
 
         self.assertEqual(response.status_code, 200)
