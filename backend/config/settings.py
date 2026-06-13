@@ -751,8 +751,22 @@ REST_FRAMEWORK = {
         'rest_framework.throttling.UserRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'anon': '200/hour',
-        'user': '5000/hour',
+        # SECURITY (Batch H): the default 'user' throttle was
+        # '5000/hour' (~1.4 req/sec sustained). The dashboard
+        # fires 4-20 GETs per page render, plus an auto-refresh
+        # every few seconds, and the platform's per-user
+        # throttle tripped the dashboard out of the gate.
+        # Bumped to 1000000/hour (~278 req/sec) which is
+        # effectively unlimited for normal UI use. Per-action
+        # guards (deployments, server_*, transfers, etc.) still
+        # protect against abusive write operations.
+        # The 'anon' throttle is bumped from 200/hour to
+        # 10000/hour so unauthenticated probes (health checks
+        # from monitoring) aren't capped. The middleware
+        # (RateLimitMiddleware) provides a separate per-IP
+        # edge guard.
+        'anon': '10000/hour',
+        'user': '1000000/hour',
         'deployments': '10/hour',
         'deployment_burst': '3/minute',
         'transfers': '5/min',
@@ -769,7 +783,15 @@ REST_FRAMEWORK = {
         'service_health_webhook': '60/minute',
     },
 }
-API_RATE_LIMIT = config('API_RATE_LIMIT', default=1000, cast=int)
+# SECURITY (Batch H): API_RATE_LIMIT was 1000 (per-IP per-minute)
+# which capped the dashboard's per-IP GET burst at 16/sec. The
+# middleware only applies to anonymous traffic, but if the user
+# has any unauthenticated path that fires many requests (e.g.
+# the Caddy ask endpoint behind a proxy, or a misconfigured
+# session that lost the auth token), they hit 429. Bumped to
+# 10000 per minute per IP — still OOM-safe and well below
+# legitimate DDoS thresholds.
+API_RATE_LIMIT = config('API_RATE_LIMIT', default=10000, cast=int)
 API_RATE_LIMIT_FAIL_CLOSED = config(
     'API_RATE_LIMIT_FAIL_CLOSED',
     default=False,

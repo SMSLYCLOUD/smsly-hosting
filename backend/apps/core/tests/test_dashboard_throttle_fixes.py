@@ -316,3 +316,80 @@ class PreferencesAliasTests(TestCase):
         # The PATCH endpoint is the detail URL: /preferences/<id>/
         match_detail = resolve('/api/v1/preferences/1/')
         self.assertIn('patch', match_detail.func.actions)
+
+
+class DefaultThrottleRateTests(TestCase):
+    """The default 'user' and 'anon' throttles must be
+    relaxed enough that the dashboard's per-page burst of
+    4-20 GETs + auto-refresh does not trip them.
+
+    The previous values (5000/hour, 200/hour) 429'd the
+    dashboard out of the gate.
+    """
+
+    def test_user_throttle_is_generous(self):
+        from rest_framework.settings import api_settings
+        rates = api_settings.DEFAULT_THROTTLE_RATES
+        self.assertIn('user', rates)
+        # Parse the rate string: '<num>/<period>'
+        num, period = rates['user'].split('/')
+        num = int(num)
+        # 'hour' period: 10000/hour is a reasonable floor
+        # that still protects against abuse.
+        if period == 'hour':
+            self.assertGreaterEqual(
+                num, 10000,
+                f"Default 'user' throttle {rates['user']} is too tight "
+                f"for the dashboard's per-page burst of 4-20 GETs.",
+            )
+        elif period == 'min':
+            self.assertGreaterEqual(
+                num, 1000,
+                f"Default 'user' throttle {rates['user']} is too tight.",
+            )
+        elif period == 'day':
+            self.assertGreaterEqual(
+                num, 100000,
+                f"Default 'user' throttle {rates['user']} is too tight.",
+            )
+
+    def test_anon_throttle_is_generous(self):
+        from rest_framework.settings import api_settings
+        rates = api_settings.DEFAULT_THROTTLE_RATES
+        self.assertIn('anon', rates)
+        num, period = rates['anon'].split('/')
+        num = int(num)
+        if period == 'hour':
+            self.assertGreaterEqual(
+                num, 1000,
+                f"Default 'anon' throttle {rates['anon']} is too tight "
+                f"for monitoring probes and unauthenticated reads.",
+            )
+
+    def test_api_rate_limit_middleware_is_generous(self):
+        from django.conf import settings
+        self.assertGreaterEqual(
+            settings.API_RATE_LIMIT, 5000,
+            f"API_RATE_LIMIT={settings.API_RATE_LIMIT} is too tight; "
+            f"bumped in Batch H to 10000 to avoid 429-ing the dashboard.",
+        )
+
+
+class AliasesBeforeBroadIncludeTests(TestCase):
+    """The frontend-compat aliases (e.g. /api/v1/dashboard/overview/)
+    MUST be registered before the broad
+    ``path('api/v1/', include('apps.deployments.urls'))`` so the
+    deployments urls do not consume and 404 those paths first.
+    """
+
+    def test_dashboard_alias_actually_routes(self):
+        from django.urls import resolve
+        match = resolve('/api/v1/dashboard/overview/')
+        # The canonical view, NOT a 404 from the deployments include.
+        self.assertTrue(
+            match.func.view_class.__name__ == 'DashboardOverviewView',
+            f'/api/v1/dashboard/overview/ resolved to '
+            f'{match.func.view_class.__name__}; expected DashboardOverviewView. '
+            f'If it resolved to a catch-all in deployments.urls, the alias '
+            f'is registered after the broad include and never reached.',
+        )
