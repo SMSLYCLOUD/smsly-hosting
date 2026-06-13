@@ -28,6 +28,67 @@ logger = logging.getLogger(__name__)
 TRANSFER_LOG_LIMIT = 300_000
 TRANSFER_ERROR_LIMIT = 4_000
 
+# SECURITY (Batch G): the .env keys that MUST NOT be shipped to the
+# target during a FULL server transfer. These are platform-level
+# secrets whose loss compromises the source platform. The
+# operator must re-enter them on the target after the transfer.
+_TRANSFER_SCRUB_KEYS = frozenset({
+    "BACKUP_ENCRYPTION_KEY",
+    "FIELD_ENCRYPTION_KEY",
+    "GATEWAY_SECRET",
+    "CLOUDFLARE_API_TOKEN",
+    "SENTRY_DSN",
+    "WEBHOOK_SECRET",
+    "OAUTH_CLIENT_SECRET",
+    "INTERNAL_API_TOKEN",
+    "JWT_SIGNING_KEY",
+    "GITLAB_SECRET_TOKEN",
+    "GITHUB_WEBHOOK_SECRET",
+    "BITBUCKET_WEBHOOK_SECRET",
+    "STRIPE_SECRET_KEY",
+    "STRIPE_WEBHOOK_SECRET",
+    "SMTP_PASSWORD",
+    "DATABASE_URL",  # contains password in URL form
+    "REDIS_URL",     # contains password in URL form
+})
+
+
+def _scrub_env_for_transfer(path: str) -> str:
+    """Read a .env file and return a scrubbed copy with platform
+    secrets stripped. Comments are preserved; quoted values are
+    preserved; the format of the file is unchanged so the target's
+    installer / process manager can read it.
+
+    The output is a string, not bytes, so callers should write it
+    in text mode. Lines that are empty or pure comments are kept
+    verbatim; key/value pairs whose key is in ``_TRANSFER_SCRUB_KEYS``
+    are replaced with a comment that flags the key as
+    "operator-must-set" so the install UI can prompt the user.
+    """
+    scrubbed_lines = []
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for raw_line in f:
+            line = raw_line.rstrip("\n")
+            stripped = line.lstrip()
+            # Preserve comments and empty lines verbatim
+            if not stripped or stripped.startswith("#"):
+                scrubbed_lines.append(line)
+                continue
+            # Find "=" not inside quotes (we don't try to be perfect
+            # — this is a .env file with simple KEY=VALUE pairs).
+            m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$", stripped)
+            if not m:
+                scrubbed_lines.append(line)
+                continue
+            key, _ = m.group(1), m.group(2)
+            if key in _TRANSFER_SCRUB_KEYS:
+                scrubbed_lines.append(
+                    f"# {key}=<OPERATOR-MUST-SET-AFTER-TRANSFER>  # scrubbed by Batch G"
+                )
+            else:
+                scrubbed_lines.append(line)
+    return "\n".join(scrubbed_lines) + "\n"
+
 
 def _command_text(result) -> str:
     """Normalize SSHClient output while tolerating older string-returning mocks."""
@@ -475,9 +536,9 @@ class ServerTransferService:
             if self.transfer.transfer_type == 'FULL':
                 install_script = os.path.join(settings.BASE_DIR, '../install.sh')
                 if os.path.exists(install_script):
-                    checksum = os.environ.get("SMSLY_INSTALL_SCRIPT_SHA256", "").strip()
+                    checksum = os.environ.get("SMSLY_INSTALL_SCRIPT SHA256", "").strip()
                     if not checksum:
-                        raise ValueError("SMSLY_INSTALL_SCRIPT_SHA256 is required for full-server transfer.")
+                        raise ValueError("SMSLY_INSTALL_SCRIPT SHA256 is required for full-server transfer.")
                     self.ssh.upload_file(install_script, "/tmp/install.sh")
                     self.ssh.exec_command("chmod +x /tmp/install.sh")
                     self.ssh.exec_command(
@@ -486,9 +547,37 @@ class ServerTransferService:
                         "{ echo 'install.sh checksum mismatch' >&2; exit 44; }"
                     )
 
+                # SECURITY (Batch G): never ship the full .env to the
+                # target. The source .env contains
+                # BACKUP_ENCRYPTION_KEY, FIELD_ENCRYPTION_KEY,
+                # GATEWAY_SECRET, CLOUDFLARE_API_TOKEN, SENTRY_DSN,
+                # etc. If the target IP is attacker-controlled
+                # (DNS rebind between view-validation and SSH
+                # connection), the attacker gets every long-lived
+                # platform secret.
+                #
+                # The fix: ship a SCRUBBED .env that contains only
+                # the values the target actually needs to bootstrap
+                # (DB credentials, Redis URL, etc.), with the
+                # platform secrets stripped. The operator must
+                # re-enter FIELD_ENCRYPTION_KEY and GATEWAY_SECRET
+                # on the target after the transfer (the install UI
+                # already prompts for these on a fresh install).
                 local_env_path = os.path.join(settings.BASE_DIR, '../.env')
                 if os.path.exists(local_env_path):
-                    self.ssh.upload_file(local_env_path, "/tmp/.env.restore")
+                    scrubbed_env = _scrub_env_for_transfer(local_env_path)
+                    with tempfile.NamedTemporaryFile(
+                        "w", delete=False, suffix=".env",
+                    ) as scrubbed:
+                        scrubbed.write(scrubbed_env)
+                        scrubbed_path = scrubbed.name
+                    try:
+                        self.ssh.upload_file(scrubbed_path, "/tmp/.env.restore")
+                    finally:
+                        try:
+                            os.unlink(scrubbed_path)
+                        except OSError:
+                            pass
 
     def _restore(self):
         """Step 3: restore on target."""

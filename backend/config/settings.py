@@ -712,6 +712,7 @@ REST_FRAMEWORK = {
         'caddy_ask': '60/min',
         'node_token_exchange': '5/minute',
         'attestation_challenge': '30/minute',
+        'service_health_webhook': '60/minute',
     },
 }
 API_RATE_LIMIT = config('API_RATE_LIMIT', default=1000, cast=int)

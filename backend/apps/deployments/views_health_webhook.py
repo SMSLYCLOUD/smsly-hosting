@@ -1,11 +1,23 @@
 """Health Webhook API."""
+import hmac
 import logging
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.throttling import AnonRateThrottle
+
 from apps.deployments.models_core import Service, Deployment
 
 logger = logging.getLogger(__name__)
+
+
+class ServiceHealthWebhookThrottle(AnonRateThrottle):
+    """Per-IP throttle for the health webhook. The endpoint is
+    AllowAny (the service pushing the heartbeat doesn't have a
+    user session), so the throttle is keyed by client IP.
+    """
+    scope = 'service_health_webhook'
+    rate = '60/minute'
 
 
 class ServiceHealthWebhookView(APIView):
@@ -15,6 +27,7 @@ class ServiceHealthWebhookView(APIView):
     """
     authentication_classes = []
     permission_classes = []
+    throttle_classes = [ServiceHealthWebhookThrottle]
 
     def post(self, request, service_id):
         webhook_token = request.headers.get("X-Health-Token") or request.data.get("token")
@@ -26,7 +39,20 @@ class ServiceHealthWebhookView(APIView):
         except Service.DoesNotExist:
             return Response({"error": "Service not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        if not service.health_webhook_token or service.health_webhook_token != webhook_token:
+        # SECURITY (Batch G):
+        # 1. If the service has no webhook token configured, return
+        #    404 (not 403). The previous code returned 403 here,
+        #    which let an unauthenticated caller distinguish
+        #    "service exists but no webhook configured" from
+        #    "service doesn't exist" — a small info leak.
+        # 2. Use a constant-time compare via hmac.compare_digest to
+        #    prevent timing-based token extraction. The previous
+        #    ``!=`` short-circuited on first mismatch and leaked
+        #    timing info.
+        expected_token = (service.health_webhook_token or "").strip()
+        if not expected_token:
+            return Response({"error": "Service not found"}, status=status.HTTP_404_NOT_FOUND)
+        if not hmac.compare_digest(expected_token, webhook_token):
             return Response({"error": "Invalid health token"}, status=status.HTTP_403_FORBIDDEN)
 
         health_status = request.data.get("status", "healthy")
