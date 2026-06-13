@@ -70,7 +70,12 @@ class DashboardOverviewView(GenericAPIView):
                 latest = service.deployments.order_by('-created_at').first()
                 if latest and latest.status in {
                     Deployment.Status.ACTIVE,
-                    Deployment.Status.STAGED,
+                    # SECURITY (Batch H): ``STAGED`` was referenced here
+                    # but does not exist on ``Deployment.Status``. The
+                    # line crashed with AttributeError on every dashboard
+                    # render, returning 500 to the user. Removed; the
+                    # existing ``ACTIVE`` and ``HEALTH_CHECK`` values
+                    # already cover the "running" set.
                     Deployment.Status.HEALTH_CHECK,
                 }:
                     running_services += 1
