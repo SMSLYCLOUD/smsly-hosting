@@ -50,7 +50,13 @@ if not _FIELD_ENCRYPTION_KEY_RAW:
 
 SECRET_KEY = _SECRET_KEY_RAW
 FIELD_ENCRYPTION_KEY = _FIELD_ENCRYPTION_KEY_RAW
-GATEWAY_SECRET = str(config('GATEWAY_SECRET', default=SECRET_KEY)).strip() or SECRET_KEY
+# SECURITY: GATEWAY_SECRET is the HMAC shared secret used by
+# inter-node token exchange. It must be a separate value from
+# SECRET_KEY (which is used for Django signing/cookies and
+# must NOT be sent to a peer over the network). The value is
+# captured here as a raw string; the production/DEBUG check
+# is deferred until after DEBUG is defined further down.
+_GATEWAY_SECRET_RAW = str(config('GATEWAY_SECRET', default='')).strip()
 
 # SECURITY: allow operators to opt out of TLS verification on a
 # per-ManagedServer basis. When this flag is False (the default),
@@ -77,6 +83,36 @@ except Exception as e:
 DOMAIN = (config('DOMAIN', default='localhost') or 'localhost').strip()
 DEBUG = _env_bool('DEBUG', default='False')
 SMSLY_DISABLE_SIGNATURE_CHECK = _env_bool('SMSLY_DISABLE_SIGNATURE_CHECK', default='False')
+
+
+def _resolve_gateway_secret() -> str:
+    """Return the GATEWAY_SECRET to use at boot, or raise
+    ImproperlyConfigured if production requirements are not met.
+
+    In production (not DEBUG, not IS_TESTING) the platform
+    refuses to fall back to SECRET_KEY — the gateway secret
+    must be a distinct value. In tests / DEBUG the fallback
+    to SECRET_KEY is allowed for convenience.
+    """
+    if _GATEWAY_SECRET_RAW:
+        return _GATEWAY_SECRET_RAW
+    if IS_TESTING or DEBUG:
+        return SECRET_KEY
+    raise ImproperlyConfigured(
+        "GATEWAY_SECRET is not set.\n\n"
+        "  GATEWAY_SECRET is the HMAC shared secret used for inter-node\n"
+        "  token exchange. It MUST be a separate value from SECRET_KEY\n"
+        "  so the Django signing key is never sent over the network to\n"
+        "  peer nodes.\n\n"
+        "  Run the included helper to generate all secrets:\n"
+        "    python scripts/generate_env_secrets.py --env .env\n\n"
+        "  Or generate just this key:\n"
+        "    python -c \"import secrets; print(secrets.token_hex(32))\"\n\n"
+        "  Then add GATEWAY_SECRET=<value> to your .env file."
+    )
+
+
+GATEWAY_SECRET = _resolve_gateway_secret()
 # Owner edition: all tier gates disabled — all features unlocked.
 SMSLY_DISABLE_TIER_GATES = config("SMSLY_DISABLE_TIER_GATES", default=False, cast=bool)
 # Maximum file size in bytes for container file_read (default: 10MB)
@@ -231,9 +267,12 @@ JULES_ALLOWED_HOSTS = config(
 )
 
 # SECURITY: Fail-fast in production — no dev-creds default
+# The default in DEBUG mode is a generic "smsly_admin" / "smsly_admin"
+# placeholder. In production the platform refuses to boot if
+# DATABASE_URL is unset (no fallback to a known password).
 _fallback_sqlite_path = (BASE_DIR / 'fallback.db').resolve().as_posix()
 _DATABASE_DEFAULT = (
-    'postgres://postgres:postgres@localhost:5432/smsly_hosting'
+    'postgresql://smsly_admin:smsly_admin@localhost:5432/smsly_hosting'
     if DEBUG
     else f'sqlite:///{_fallback_sqlite_path}'
 )
@@ -723,7 +762,35 @@ API_RATE_LIMIT_FAIL_CLOSED = config(
 )
 
 # Celery
-REDIS_PASSWORD = config('REDIS_PASSWORD', default='')
+# SECURITY: REDIS_PASSWORD must be set in production. An empty
+# password means the Redis instance runs without --requirepass,
+# which is fail-insecure: any container on the same network can
+# read and modify the cache, broker, and rate-limit state.
+def _resolve_redis_password() -> str:
+    """Return the REDIS_PASSWORD to use at boot, or raise
+    ImproperlyConfigured if production requirements are not met.
+
+    In production the platform refuses to boot with an empty
+    REDIS_PASSWORD (the broker would start with --requirepass
+    empty and accept any client). In tests / DEBUG the empty
+    value is allowed for in-memory cache backends.
+    """
+    raw = str(config('REDIS_PASSWORD', default='')).strip()
+    if not raw and not (IS_TESTING or DEBUG):
+        raise ImproperlyConfigured(
+            "REDIS_PASSWORD is not set.\n\n"
+            "  Redis must use a real randomly-generated password. "
+            "An empty value means the broker / cache / channel layer run "
+            "without authentication and any peer on the network can read "
+            "or modify the data.\n"
+            "  Generate one with:\n"
+            "    python -c \"import secrets; print(secrets.token_hex(16))\"\n"
+            "  Then add REDIS_PASSWORD=<value> to your .env file."
+        )
+    return raw
+
+
+REDIS_PASSWORD = _resolve_redis_password()
 REDIS_HOST = config('REDIS_HOST', default='redis')
 REDIS_PORT = config('REDIS_PORT', default='6379')
 REDIS_SCHEME = config('REDIS_SCHEME', default='redis')
@@ -736,7 +803,44 @@ else:
 # Prefer explicit REDIS_URL override when provided; otherwise build from host/port.
 # Prefer explicit CELERY_BROKER_URL override; otherwise build from user/pass.
 _RABBITMQ_USER = config('RABBITMQ_DEFAULT_USER', default='smsly_user')
-_RABBITMQ_PASS = config('RABBITMQ_PASSWORD', default='smsly_password')
+# SECURITY: refuse to boot with the well-known placeholder
+# "smsly_password" in production. Operators must set a real
+# random RABBITMQ_PASSWORD. Tests and DEBUG mode may use the
+# placeholder for convenience.
+def _resolve_rabbitmq_password() -> str:
+    """Return the RABBITMQ_PASSWORD to use at boot, or raise
+    ImproperlyConfigured if production requirements are not met.
+
+    In production the platform refuses to boot with an empty
+    RABBITMQ_PASSWORD or with the well-known placeholder
+    ``smsly_password``. In tests the empty value falls back to
+    a fixed test value; in DEBUG mode the placeholder is
+    allowed.
+    """
+    raw = str(config('RABBITMQ_PASSWORD', default='')).strip()
+    if not raw:
+        if IS_TESTING:
+            return 'test-rabbitmq-password'
+        if DEBUG:
+            return 'smsly_password'  # debug-only placeholder, never used in prod
+        raise ImproperlyConfigured(
+            "RABBITMQ_PASSWORD is not set.\n\n"
+            "  RabbitMQ must use a real randomly-generated password.\n"
+            "  Generate one with:\n"
+            "    python -c \"import secrets; print(secrets.token_hex(16))\"\n"
+            "  Then add RABBITMQ_PASSWORD=<value> to your .env file."
+        )
+    if raw == 'smsly_password' and not (IS_TESTING or DEBUG):
+        raise ImproperlyConfigured(
+            "RABBITMQ_PASSWORD is set to the well-known placeholder "
+            "'smsly_password'. This value is publicly known and is rejected "
+            "in production. Generate a real random password with:\n"
+            "  python -c \"import secrets; print(secrets.token_hex(16))\""
+        )
+    return raw
+
+
+_RABBITMQ_PASS = _resolve_rabbitmq_password()
 _RABBITMQ_HOST = config('RABBITMQ_HOST', default='rabbitmq')
 _RABBITMQ_PORT = config('RABBITMQ_PORT', default='5672')
 _RABBITMQ_VHOST = config('RABBITMQ_DEFAULT_VHOST', default='')
