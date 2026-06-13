@@ -624,7 +624,18 @@ class ServiceViewSet(viewsets.ModelViewSet):
     queryset = Service.objects.all().order_by('-updated_at')
     serializer_class = ServiceSerializer
     permission_classes = [permissions.IsAuthenticated]
-    throttle_classes = [BurstRateThrottle, DeploymentRateThrottle]
+    # SECURITY (Batch H): throttles are applied PER ACTION below.
+    # Class-level throttle_classes would cap *every* method (including
+    # GETs that the dashboard fires when listing services, polling
+    # health, fetching env_vars, etc.) at the deployment throttle
+    # (3/min). The dashboard renders 4-20 GETs per page load and
+    # 429s the user out of the gate. Safe methods (GET, HEAD, OPTIONS)
+    # now fall through to the default user-rate throttle
+    # (``'user': '5000/hour'`` in settings.py). Write actions
+    # (deploy, restart, stop, bulk-action, etc.) declare their own
+    # ``throttle_classes=[BurstRateThrottle, DeploymentRateThrottle]``
+    # on the @action decorator to keep the deployment-burst guard.
+    throttle_classes: list = []
 
     def get_queryset(self):
         """ZH-001 FIX: Return services owned by user. APITokens (remote proxies) skip owner check."""
@@ -2029,15 +2040,36 @@ class ServiceViewSet(viewsets.ModelViewSet):
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK
         )
 
-    @action(detail=True, methods=['delete', 'patch'],
+    @action(detail=True, methods=['get', 'delete', 'patch'],
             url_path='env_vars/(?P<var_id>\\d+)')
-    def delete_env_var(self, request, pk=None, var_id=None):
+    def env_var_detail(self, request, pk=None, var_id=None):
+        """GET / PATCH / DELETE on a single env var.
+
+        The frontend ``getEnvVarValue`` (api.ts:591) calls
+        ``GET /services/{id}/env_vars/{varId}/`` to reveal a
+        secret. The previous decorator only allowed
+        ``['delete', 'patch']`` which made the GET return 405
+        and the secret-reveal flow silently fail.
+        """
         service = self.get_object()
         try:
             var = EnvironmentVariable.objects.get(id=var_id, service=service)
         except EnvironmentVariable.DoesNotExist:
             return Response(status=status.HTTP_404_NOT_FOUND)
 
+        if request.method.upper() == 'GET':
+            reveal_secrets = (
+                request.user.is_superuser
+                or var.service.owner_id == request.user.id
+                or getattr(request, 'auth', None)
+                and hasattr(request.auth, 'prefix')  # APIToken
+            )
+            return Response(
+                EnvVarSerializer(
+                    var,
+                    context={'request': request, 'reveal_secrets': reveal_secrets},
+                ).data
+            )
         if request.method.upper() == 'DELETE':
             var.delete()
             return Response(status=status.HTTP_204_NO_CONTENT)
@@ -2251,14 +2283,30 @@ class ServiceViewSet(viewsets.ModelViewSet):
         return super().get_permissions()
 
     def get_throttles(self):
-        """Throttle the Caddy ask endpoint to limit Let's Encrypt blast radius."""
+        """Throttle the Caddy ask endpoint to limit Let's Encrypt blast radius,
+        and apply the deployment-burst guard only to write methods.
+
+        The previous implementation let ``throttle_classes =
+        [BurstRateThrottle, DeploymentRateThrottle]`` apply to every
+        action on the viewset, including the GETs the dashboard fires
+        on every page render. The dashboard renders 4-20 GETs per
+        page; at 3/min the user is 429'd before the page can load.
+        Now:
+          - ``check_domain`` (Caddy) uses the ``caddy_ask`` scope.
+          - GET / HEAD / OPTIONS fall through to the default user-rate
+            throttle (``'user': '5000/hour'``).
+          - POST / PUT / PATCH / DELETE get the deployment-burst
+            guard.
+        """
         if self.action == 'check_domain':
             from rest_framework.throttling import ScopedRateThrottle
             throttle = ScopedRateThrottle()
             throttle.scope = 'caddy_ask'
             self.throttle_scope = 'caddy_ask'
             return [throttle]
-        return super().get_throttles()
+        if self.request.method in permissions.SAFE_METHODS:
+            return []
+        return [BurstRateThrottle(), DeploymentRateThrottle()]
 
     @action(detail=False, methods=['get'], url_path='check-domain')
     def check_domain(self, request):
@@ -3519,8 +3567,22 @@ class DeploymentViewSet(viewsets.ModelViewSet):
     parser_classes = [
         parsers.JSONParser,
         parsers.MultiPartParser]  # Enable File Uploads
-    throttle_classes = [BurstRateThrottle, DeploymentRateThrottle]
+    # SECURITY (Batch H): same fix as ServiceViewSet. Throttles
+    # are applied only to write methods (POST / PUT / PATCH /
+    # DELETE) via get_throttles() below. Safe GETs (the
+    # Activity Feed, Intelligence page, and per-deployment
+    # polling) must not 429 the user.
+    throttle_classes: list = []
 
+    def get_throttles(self):
+        """Apply the deployment-burst guard only to write methods.
+
+        GET / HEAD / OPTIONS are safe. The deployment listing,
+        activity feed, and logs views fire many GETs per page.
+        """
+        if self.request.method in permissions.SAFE_METHODS:
+            return []
+        return [BurstRateThrottle(), DeploymentRateThrottle()]
     def get_serializer_class(self):
         """
         Use lightweight serializer for list endpoints to avoid returning
