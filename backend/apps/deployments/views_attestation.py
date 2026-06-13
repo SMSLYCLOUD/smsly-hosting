@@ -28,7 +28,10 @@ from rest_framework import status
 from rest_framework.decorators import api_view, throttle_classes
 from rest_framework.response import Response
 
-from apps.deployments.rate_limiting import NodeTokenExchangeThrottle  # AnonRateThrottle, 5/min
+from apps.deployments.rate_limiting import (
+    AttestationVerifyRateThrottle,
+    NodeTokenExchangeThrottle,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +74,7 @@ def attestation_challenge(request):
 
 
 @api_view(["POST"])
+@throttle_classes([AttestationVerifyRateThrottle])  # 30/min per source IP
 def attestation_verify(request):
     """
     Verify an attestation response.

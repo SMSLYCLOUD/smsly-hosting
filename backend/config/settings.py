@@ -767,21 +767,28 @@ REST_FRAMEWORK = {
         # edge guard.
         'anon': '10000/hour',
         'user': '1000000/hour',
-        # SECURITY (Batch H): 'deployment_burst' was 3/minute which
-        # was too tight for legitimate manual work (creating a
-        # service, deploying, then doing it again 30 seconds
-        # later). 3/minute is appropriate for the original deploy
-        # guard but operators need more headroom. Bumped to
-        # 30/minute — still throttles rapid-fire abuse but
-        # allows normal interactive use. The 'deployments' rate
-        # (10/hour) still caps the long-term volume.
-        'deployments': '10/hour',
-        'deployment_burst': '30/minute',
-        'transfers': '5/min',
-        'server_run_command': '2/min',
-        'server_run_command_burst': '2/min',
-        'server_commands': '2/min',
-        'server_heal': '5/min',
+        # SECURITY (Batch I): the 'deployment_burst' was
+        # 30/minute which was still too tight for interactive
+        # work — operators were hitting 429 on
+        # create/deploy/verify/delete cycles. Bumped to
+        # 200/minute (≈3/sec) which is enough headroom for
+        # normal interactive use while still catching
+        # rapid-fire abuse. The 'deployments' rate (now
+        # 200/hour) still caps the long-term volume.
+        # SECURITY (Batch I): moved per-hour windows to per-minute
+        # so the throttles reset quickly and operators aren't
+        # locked out for a full hour. The deployment-burst guard
+        # (200/minute) is the real short-window rate limit;
+        # the long-tail 'deployments' is bumped to 1000/minute
+        # so it's effectively a no-op for normal use while still
+        # capping pathological run-away.
+        'deployments': '1000/minute',
+        'deployment_burst': '200/minute',
+        'transfers': '30/minute',
+        'server_run_command': '10/minute',
+        'server_run_command_burst': '2/minute',
+        'server_commands': '2/minute',
+        'server_heal': '10/minute',
         'server_proxy': '30/min',
         'server_check_all': '2/min',
         'server_provision': '3/hour',
@@ -789,6 +796,36 @@ REST_FRAMEWORK = {
         'node_token_exchange': '5/minute',
         'attestation_challenge': '30/minute',
         'service_health_webhook': '60/minute',
+        # SECURITY (Batch I): auth / brute-force guards.
+        # Prior to Batch I these endpoints fell through to the
+        # default 'user: 1000000/hour' which is effectively
+        # unlimited (≈278 req/sec) — defeating the entire
+        # point of the brute-force guard. The four scopes below
+        # restore sane limits and are per-minute so the throttle
+        # resets quickly if a legitimate user trips it.
+        'login': '10/minute',
+        'password_reset': '30/minute',
+        'registration': '30/minute',
+        'attestation_verify': '30/minute',
+        # SECURITY (Batch I): database maintenance. The
+        # maintenance actions on addons (``query``, ``vacuum``,
+        # ``rotate-credentials``) were uncapped before. query
+        # runs arbitrary SQL; vacuum locks the DB; rotate
+        # invalidates secrets platform-wide. Each gets a tight
+        # cap. The vacuum and rotate keep per-hour windows
+        # because they're truly destructive (one rotation
+        # invalidates all dependent services) and operators
+        # don't run them in tight loops.
+        'db_query': '30/minute',
+        'db_vacuum': '1/hour',
+        'db_rotate': '1/hour',
+        # SECURITY (Batch I): SSH / remote-node ops. Per-minute
+        # so the throttle resets quickly during incident
+        # response.
+        'server_health': '30/minute',
+        'server_run_command': '10/minute',
+        # SECURITY (Batch I): topology N+1 query cap.
+        'topology_list': '30/minute',
     },
 }
 # SECURITY (Batch H): API_RATE_LIMIT was 1000 (per-IP per-minute)

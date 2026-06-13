@@ -23,6 +23,7 @@ from rest_framework.decorators import action, throttle_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle
+from .rate_limiting import ServerHealthCheckRateThrottle
 
 from .models_servers import ManagedServer
 from .models_core import Service, Deployment
@@ -1040,7 +1041,8 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
 
     # ── Health Check ─────────────────────────────────────────────────────
 
-    @action(detail=True, methods=["post"])
+    @action(detail=True, methods=["post"],
+            throttle_classes=[ServerHealthCheckRateThrottle])
     def health_check(self, request, pk=None):
         """Ping a remote server's API to check if it's online."""
         server = self.get_object()

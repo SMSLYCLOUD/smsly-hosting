@@ -35,6 +35,8 @@ urlpatterns = [
          include('apps.cloud.urls_ecosystem_bulk_env_alias')),
     path('api/v1/ecosystem/cached-scan/',
          include('apps.cloud.urls_ecosystem_cached_scan_alias')),
+    path('api/v1/resource-alerts/',
+         include('apps.notifications.urls_resource_alerts_alias')),
     path('api/v1/api-keys/',
          include('apps.core.urls_api_keys_alias')),
     path('api/v1/admin/users/',
@@ -55,7 +57,16 @@ urlpatterns = [
     path('api/v1/core/', include('apps.core.urls')),
     path('api/v1/domains/', include('apps.domains.urls')),
 
-    # Auth
+    # Auth — the three brute-force-sensitive endpoints
+    # (login, password reset, registration) are mounted from
+    # a throttled URL conf that subclasses dj_rest_auth's
+    # views and applies the platform's narrow auth throttles.
+    # The remaining dj_rest_auth URLs (logout, user details,
+    # password change) are mounted via the existing include
+    # below and keep their default global throttle. The
+    # throttled URLs MUST come first so they win the URL
+    # resolution race.
+    path('api/v1/auth/', include('apps.core.urls_throttled_auth')),
     path('api/v1/auth/', include('dj_rest_auth.urls')),
     path(
         'api/v1/auth/registration/',
