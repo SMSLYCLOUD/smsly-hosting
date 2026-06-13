@@ -175,6 +175,12 @@ def _validate_registry_url():
     CONTAINER_REGISTRY_URL at an external host, causing every tenant's
     built image to be pushed off-platform. We refuse to boot with any URL
     that is not on http(s) and not clearly internal.
+
+    For convenience (and to match the pre-validator behaviour where
+    install.sh emitted ``registry:5000`` and ``registry.smsly.cloud``
+    without a scheme), the URL is auto-prefixed with ``http://`` if no
+    scheme is present. The scheme is then validated and the host is
+    checked against the platform allowlist.
     """
     from urllib.parse import urlparse
     import ipaddress
@@ -182,10 +188,19 @@ def _validate_registry_url():
     url = os.environ.get('CONTAINER_REGISTRY_URL', '').strip()
     if not url:
         return
+    # Auto-default scheme so operators who follow the
+    # `.env.example` default (``registry.smsly.cloud`` or
+    # ``registry:5000``) do not have to type ``http://`` /
+    # ``https://`` explicitly. The platform allowlist check
+    # below still applies.
+    if '://' not in url:
+        url = 'http://' + url
+        os.environ['CONTAINER_REGISTRY_URL'] = url
     parsed = urlparse(url)
     if parsed.scheme not in ('http', 'https'):
         raise ImproperlyConfigured(
-            f'CONTAINER_REGISTRY_URL must use http or https; got {parsed.scheme}'
+            f'CONTAINER_REGISTRY_URL must use http or https; got scheme={parsed.scheme!r} '
+            f'from url={url!r}'
         )
     hostname = parsed.hostname or ''
     try:

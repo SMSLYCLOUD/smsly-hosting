@@ -66,3 +66,38 @@ class ValidateRegistryUrlTests(SimpleTestCase):
         os.environ['CONTAINER_REGISTRY_URL'] = 'https://attacker.example/'
         with self.assertRaises(ImproperlyConfigured):
             _validate_registry_url()
+
+    def test_bare_hostname_is_auto_prefixed_with_http(self):
+        # The .env.example ships with
+        # ``CONTAINER_REGISTRY_URL=registry.smsly.cloud`` (no
+        # scheme). The validator must auto-prefix ``http://``
+        # for convenience so operators don't have to type the
+        # scheme explicitly.
+        os.environ['CONTAINER_REGISTRY_URL'] = 'registry.smsly.cloud'
+        self.assertIsNone(_validate_registry_url())
+        self.assertEqual(
+            os.environ['CONTAINER_REGISTRY_URL'],
+            'http://registry.smsly.cloud',
+        )
+
+    def test_bare_registry_dns_is_auto_prefixed(self):
+        # ``registry:5000`` is the internal Docker DNS form
+        # used during local builds.
+        os.environ['CONTAINER_REGISTRY_URL'] = 'registry:5000'
+        self.assertIsNone(_validate_registry_url())
+        self.assertEqual(
+            os.environ['CONTAINER_REGISTRY_URL'],
+            'http://registry:5000',
+        )
+
+    def test_error_message_includes_url_and_scheme(self):
+        # The old error message was ``got {parsed.scheme}`` which
+        # produced a misleading blank message when the URL had
+        # no scheme. The new message must include both the
+        # scheme (repr) and the full URL.
+        os.environ['CONTAINER_REGISTRY_URL'] = 'ftp://registry.example/'
+        with self.assertRaises(ImproperlyConfigured) as cm:
+            _validate_registry_url()
+        msg = str(cm.exception)
+        self.assertIn("scheme='ftp'", msg)
+        self.assertIn('ftp://registry.example/', msg)
