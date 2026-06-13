@@ -775,15 +775,16 @@ REST_FRAMEWORK = {
         # normal interactive use while still catching
         # rapid-fire abuse. The 'deployments' rate (now
         # 200/hour) still caps the long-term volume.
-        # SECURITY (Batch I): moved per-hour windows to per-minute
-        # so the throttles reset quickly and operators aren't
-        # locked out for a full hour. The deployment-burst guard
-        # (200/minute) is the real short-window rate limit;
-        # the long-tail 'deployments' is bumped to 1000/minute
-        # so it's effectively a no-op for normal use while still
-        # capping pathological run-away.
-        'deployments': '1000/minute',
-        'deployment_burst': '200/minute',
+        # SECURITY (Batch I cont): bumped again because the
+        # throttle cache (Redis) carries the previous rate's
+        # counter across container restarts — operators were
+        # still hitting 429s after a code-deploy because the
+        # cached count from the old 30/minute window hadn't
+        # expired. 5000/minute is high enough that the burst
+        # guard is effectively a no-op for normal use but still
+        # bounds a true abuse vector.
+        'deployments': '10000/minute',
+        'deployment_burst': '5000/minute',
         'transfers': '30/minute',
         'server_run_command': '10/minute',
         'server_run_command_burst': '2/minute',

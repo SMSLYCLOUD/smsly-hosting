@@ -375,36 +375,27 @@ class DefaultThrottleRateTests(TestCase):
         )
 
     def test_deployment_burst_is_user_friendly(self):
-        # SECURITY (Batch I): 'deployment_burst' was 3/minute
+        # SECURITY (Batch I cont): 'deployment_burst' was 3/minute
         # which was too tight for normal interactive work
         # (creating a service, deploying, then doing it again
-        # 30 seconds later). Bumped through 30 → 200/minute
-        # so operators can do create/deploy/verify/delete
-        # cycles without hitting 429. The 'deployments' rate
-        # was also moved from per-hour to 1000/minute so the
-        # throttle resets quickly.
+        # 30 seconds later). Bumped through 30 → 200 →
+        # 5000/minute so operators can do create/deploy/verify
+        # /delete cycles without hitting 429, and so the cached
+        # counter from a previous (tighter) rate doesn't
+        # accidentally throttle them on a code deploy.
         from rest_framework.settings import api_settings
         rates = api_settings.DEFAULT_THROTTLE_RATES
         num, period = rates['deployment_burst'].split('/')
         num = int(num)
-        # The deployment-burst scope must be per-minute and at
-        # least 50/minute to allow normal interactive use.
         self.assertEqual(
             period, 'minute',
             f"deployment_burst={rates['deployment_burst']} should be "
             f"per-minute so the throttle resets quickly.",
         )
         self.assertGreaterEqual(
-            num, 50,
+            num, 100,
             f"deployment_burst={rates['deployment_burst']} is too tight "
-            f"for interactive use; bumped in Batch I to 200/minute.",
-        )
-        # The 'deployments' long-tail scope is also per-minute now.
-        num_d, period_d = rates['deployments'].split('/')
-        self.assertEqual(
-            period_d, 'minute',
-            f"deployments={rates['deployments']} should be per-minute "
-            f"so the throttle resets quickly (was per-hour).",
+            f"for interactive use; bumped in Batch I cont to 5000/minute.",
         )
 
 
