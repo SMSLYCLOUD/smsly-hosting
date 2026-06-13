@@ -767,8 +767,16 @@ REST_FRAMEWORK = {
         # edge guard.
         'anon': '10000/hour',
         'user': '1000000/hour',
+        # SECURITY (Batch H): 'deployment_burst' was 3/minute which
+        # was too tight for legitimate manual work (creating a
+        # service, deploying, then doing it again 30 seconds
+        # later). 3/minute is appropriate for the original deploy
+        # guard but operators need more headroom. Bumped to
+        # 30/minute — still throttles rapid-fire abuse but
+        # allows normal interactive use. The 'deployments' rate
+        # (10/hour) still caps the long-term volume.
         'deployments': '10/hour',
-        'deployment_burst': '3/minute',
+        'deployment_burst': '30/minute',
         'transfers': '5/min',
         'server_run_command': '2/min',
         'server_run_command_burst': '2/min',

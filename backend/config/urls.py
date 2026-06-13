@@ -35,6 +35,16 @@ urlpatterns = [
          include('apps.cloud.urls_ecosystem_bulk_env_alias')),
     path('api/v1/ecosystem/cached-scan/',
          include('apps.cloud.urls_ecosystem_cached_scan_alias')),
+    path('api/v1/api-keys/',
+         include('apps.core.urls_api_keys_alias')),
+    path('api/v1/admin/users/',
+         include('apps.core.urls_admin_users_alias')),
+    # OAuth callback aliases — the frontend uses
+    # /api/v1/accounts/<provider>/login/ but allauth is mounted
+    # at /accounts/<provider>/login/. The alias re-exports
+    # allauth.urls under the /api/v1/accounts/ prefix.
+    path('api/v1/accounts/',
+         include('apps.deployments.urls_accounts_alias')),
 
     # API
     path('api/v1/', include('apps.deployments.urls')),

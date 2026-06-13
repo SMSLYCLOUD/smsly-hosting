@@ -374,6 +374,23 @@ class DefaultThrottleRateTests(TestCase):
             f"bumped in Batch H to 10000 to avoid 429-ing the dashboard.",
         )
 
+    def test_deployment_burst_is_user_friendly(self):
+        # SECURITY (Batch H): 'deployment_burst' was 3/minute
+        # which was too tight for normal interactive work
+        # (creating a service, deploying, then doing it again
+        # 30 seconds later). Bumped to 30/minute. The
+        # 'deployments' rate (10/hour) still caps the
+        # long-term volume.
+        from rest_framework.settings import api_settings
+        rates = api_settings.DEFAULT_THROTTLE_RATES
+        num, period = rates['deployment_burst'].split('/')
+        num = int(num)
+        self.assertGreaterEqual(
+            num, 10,
+            f"deployment_burst={rates['deployment_burst']} is too tight "
+            f"for interactive use; bumped in Batch H to 30/minute.",
+        )
+
 
 class AliasesBeforeBroadIncludeTests(TestCase):
     """The frontend-compat aliases (e.g. /api/v1/dashboard/overview/)
