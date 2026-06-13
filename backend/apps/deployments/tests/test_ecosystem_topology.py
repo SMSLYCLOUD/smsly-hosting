@@ -313,10 +313,13 @@ class EcosystemTopologyAPITests(APITestCase):
     """Test the /api/v1/topology/ecosystem/ endpoint."""
 
     def setUp(self):
+        # SECURITY: ecosystem endpoint is admin-only (returns platform-
+        # wide topology); the test user must be staff to exercise it.
         self.user = User.objects.create_user(
             username='ecosystem-test',
             email='eco@test.com',
             password='password123',
+            is_staff=True,
         )
         self._http_patcher = patch('apps.deployments.services.ecosystem_graph_builder._check_http', return_value=True)
         self._http_patcher.start()

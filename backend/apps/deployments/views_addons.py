@@ -377,11 +377,20 @@ def toggle_bucket_public_api(request, pk):
     logger.info(f"[MINIO_DEBUG] toggle_bucket_public_api entered for pk={pk}, method={request.method}")
     try:
         from apps.deployments.models_addons import Addon
+        from django.db.models import Q
+        # SECURITY: scope the lookup to addons the caller can access
+        # (mirrors AddonViewSet.get_queryset). Without this, any
+        # authenticated user could flip any tenant's MinIO bucket
+        # public.
         try:
-            addon = Addon.objects.get(pk=pk)
-        except Exception as db_err:
-            logger.warning(f"[MINIO_DEBUG] Addon {pk} not found in DB: {db_err}")
-            return Response({'error': f'Addon {pk} not found in database'}, status=404)
+            addon = Addon.objects.filter(
+                Q(service__owner=request.user) |
+                Q(service__project__team__members__user=request.user) |
+                Q(service__owner__isnull=True)
+            ).distinct().get(pk=pk)
+        except Addon.DoesNotExist:
+            logger.warning(f"[MINIO_DEBUG] Addon {pk} not accessible to user {request.user.id}")
+            return Response({'error': f'Addon {pk} not found'}, status=404)
         
         logger.info(f"[MINIO_DEBUG] Found addon {addon.name} ({addon.addon_type})")
         if addon.addon_type != 'MINIO':
@@ -434,5 +443,7 @@ def toggle_bucket_public_api(request, pk):
     except Addon.DoesNotExist:
         return Response({'error': 'Addon not found'}, status=404)
     except Exception as e:
-        logger.error(f"Standalone toggle failed: {e}")
-        return Response({'error': str(e)}, status=500)
+        # SECURITY: log the full error server-side but don't echo it
+        # to the caller (info-leak / SSRF probe risk).
+        logger.error("Standalone toggle failed: %s", e, exc_info=True)
+        return Response({'error': 'Internal error toggling bucket.'}, status=500)

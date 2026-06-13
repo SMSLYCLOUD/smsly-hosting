@@ -17,11 +17,12 @@ import logging
 
 from django.contrib.auth import authenticate
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from apps.deployments.api_token_auth import APIToken
+from apps.deployments.rate_limiting import NodeTokenExchangeThrottle
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,7 @@ def _clean_node_name(value):
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
+@throttle_classes([NodeTokenExchangeThrottle])
 def node_token_exchange(request):
     """
     Exchange admin credentials for an API token.
@@ -94,6 +96,7 @@ def node_token_exchange(request):
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
+@throttle_classes([NodeTokenExchangeThrottle])
 def node_token_exchange_via_gateway(request):
     """
     Exchange a GATEWAY_SECRET (HMAC) for an API token.
@@ -113,22 +116,32 @@ def node_token_exchange_via_gateway(request):
 
     signature = request.headers.get("X-Gateway-Signature-V2", "")
     timestamp = request.headers.get("X-Request-Timestamp", "")
+    nonce = request.headers.get("X-Request-Nonce", "")
     raw_body = request.body
     node_name = _clean_node_name(request.data.get("node_name", "Remote Node"))
 
-    if not signature or not timestamp:
+    if not signature or not timestamp or not nonce:
         return Response(
-            {"error": "HMAC signature headers required."},
+            {"error": "HMAC signature, timestamp, and nonce headers are required."},
             status=status.HTTP_401_UNAUTHORIZED,
         )
 
     # Verify timestamp freshness
     try:
         req_ts = int(timestamp)
-        if abs(int(time.time()) - req_ts) > 60:
+        if abs(int(time.time()) - req_ts) > 15:
             return Response({"error": "Timestamp expired."}, status=status.HTTP_401_UNAUTHORIZED)
     except ValueError:
         return Response({"error": "Invalid timestamp."}, status=status.HTTP_400_BAD_REQUEST)
+
+    # SECURITY: nonce replay protection. Each nonce can be used once
+    # within the freshness window. Without this, a captured request
+    # can be replayed for up to 15s.
+    from django.core.cache import cache
+    nonce_key = f"node_token_nonce:{nonce}"
+    if cache.get(nonce_key):
+        return Response({"error": "Nonce already used."}, status=status.HTTP_401_UNAUTHORIZED)
+    cache.set(nonce_key, "1", timeout=30)
 
     # Verify HMAC
     gw_secret = str(getattr(settings, "GATEWAY_SECRET", "") or settings.SECRET_KEY or "").strip()
@@ -137,7 +150,9 @@ def node_token_exchange_via_gateway(request):
     method = request.method
     path = request.get_full_path()
     body_hash = hashlib.sha256(raw_body).hexdigest()
-    payload = f"{method}|{path}|{timestamp}|{body_hash}"
+    # Bind the nonce into the signed payload so a captured request
+    # cannot be replayed with a fresh nonce.
+    payload = f"{method}|{path}|{timestamp}|{nonce}|{body_hash}"
     expected = hmac.new(gw_secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
 
     if not hmac.compare_digest(expected, signature):

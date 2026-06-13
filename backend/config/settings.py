@@ -694,6 +694,8 @@ REST_FRAMEWORK = {
         'server_check_all': '2/min',
         'server_provision': '3/hour',
         'caddy_ask': '60/min',
+        'node_token_exchange': '5/minute',
+        'attestation_challenge': '30/minute',
     },
 }
 API_RATE_LIMIT = config('API_RATE_LIMIT', default=1000, cast=int)

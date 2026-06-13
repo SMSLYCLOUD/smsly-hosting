@@ -348,7 +348,16 @@ class TopologyViewSet(viewsets.GenericViewSet):
 
     @action(detail=False, methods=['get'], url_path='ecosystem')
     def ecosystem(self, request):
-        """Return the full platform infrastructure ecosystem topology graph."""
+        """Return the full platform infrastructure ecosystem topology graph.
+
+        SECURITY: Admin-only — the ecosystem graph contains every
+        service, addon, mesh peer, and replication relationship in
+        the platform. Restricting to ``IsAdminUser`` prevents regular
+        users from enumerating other tenants' infrastructure.
+        """
+        if not request.user or not request.user.is_authenticated or not request.user.is_staff:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Admin access required.")
         from .services.ecosystem_graph_builder import EcosystemGraphBuilder
         builder = EcosystemGraphBuilder()
         graph = builder.build()
