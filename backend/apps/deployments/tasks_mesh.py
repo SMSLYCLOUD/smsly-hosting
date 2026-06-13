@@ -77,14 +77,36 @@ def check_mesh_health_task():
                                     expected_endpoint = f"{server.private_ip}:{mesh.listen_port}"
                                 else:
                                     expected_endpoint = f"{server.host}:{mesh.listen_port}"
-                                    
+
                                 if peer.endpoint != expected_endpoint:
-                                    logger.info(
-                                        f"Mesh {mesh.name}: Peer {peer.wg_address} endpoint changed from "
-                                        f"'{peer.endpoint}' to '{expected_endpoint}'. Updating in database."
+                                    # SECURITY (Batch G cont): run the
+                                    # candidate through the same
+                                    # validator the rest of the mesh
+                                    # service uses, so a malformed
+                                    # server.host or a half-updated
+                                    # private_ip cannot poison the
+                                    # peer record.
+                                    from apps.deployments.services.wireguard_service import (
+                                        WireGuardService,
                                     )
-                                    peer.endpoint = expected_endpoint
-                                    peer.save(update_fields=["endpoint", "updated_at"])
+                                    try:
+                                        validated_endpoint = (
+                                            WireGuardService.validate_endpoint(
+                                                expected_endpoint
+                                            )
+                                        )
+                                    except ValueError as endpoint_exc:
+                                        logger.warning(
+                                            "Skipping mesh endpoint update for %s: %s",
+                                            peer.wg_address, endpoint_exc,
+                                        )
+                                    else:
+                                        logger.info(
+                                            f"Mesh {mesh.name}: Peer {peer.wg_address} endpoint changed from "
+                                            f"'{peer.endpoint}' to '{validated_endpoint}'. Updating in database."
+                                        )
+                                        peer.endpoint = validated_endpoint
+                                        peer.save(update_fields=["endpoint", "updated_at"])
                                 
                                 # Trigger recovery task (deploy_mesh_task) with 5 min cooldown rate-limit per peer
                                 heal_lock_key = f"mesh-heal-lock:{peer.id}"

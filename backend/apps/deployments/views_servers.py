@@ -655,9 +655,17 @@ def _is_command_allowed(command: str) -> bool:
 # --- Serializers -------------------------------------------------------------
 class ManagedServerSerializer(serializers.ModelSerializer):
     has_ssh_credentials = serializers.SerializerMethodField()
+    # SECURITY (Batch G cont): whether a TLS cert SHA-256 pin
+    # is configured. We never return the pin itself — only a
+    # boolean — so the serializer is safe to surface in the
+    # read API. The pin is set via a separate admin action.
+    tls_cert_sha256_set = serializers.SerializerMethodField()
 
     def get_has_ssh_credentials(self, obj):
         return bool(str(obj.ssh_password or '').strip() or str(obj.ssh_key or '').strip())
+
+    def get_tls_cert_sha256_set(self, obj):
+        return bool((getattr(obj, "tls_cert_sha256", "") or "").strip())
 
     class Meta:
         model = ManagedServer
@@ -668,12 +676,26 @@ class ManagedServerSerializer(serializers.ModelSerializer):
             "server_version", "services_count", "created_at",
             "provision_status", "provision_logs", "role", "wg_address",
             "has_ssh_credentials", "is_lite_agent",
+            # SECURITY (Batch G cont): expose the per-server TLS
+            # verification settings so operators can audit which
+            # nodes run with verify_tls=False. tls_cert_sha256 is
+            # write-only (the pin is never echoed back to API
+            # consumers); tls_cert_sha256_set is a boolean indicator
+            # so operators can see whether a pin is configured
+            # without leaking the pin value itself.
+            "verify_tls", "tls_cert_sha256_set",
         ]
         read_only_fields = [
             "id", "status", "last_health_check", "server_version",
             "services_count", "created_at", "provision_status",
             "role", "wg_address", "has_ssh_credentials", "is_lite_agent",
+            "tls_cert_sha256_set",
         ]
+
+    def get_tls_cert_sha256_set(self, obj):
+        """Return whether a TLS cert SHA-256 pin is configured, without
+        revealing the pin itself."""
+        return bool((getattr(obj, "tls_cert_sha256", "") or "").strip())
 
 
 class ManagedServerCreateSerializer(serializers.ModelSerializer):
