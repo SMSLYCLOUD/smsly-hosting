@@ -23,6 +23,7 @@ from enum import Enum
 from typing import Optional
 from dataclasses import dataclass, field
 
+from django.conf import settings
 from django.utils import timezone
 from django.core.cache import cache
 
@@ -678,10 +679,17 @@ class SelfHealingOrchestrator:
         # If compose failed, try pulling image from local registry and running directly
         docker_image = getattr(deployment.service, "docker_image", "") or ""
         if not docker_image:
-            # Construct image name from service name and commit hash
+            # Construct image name from the platform's configured
+            # CONTAINER_REGISTRY_URL via the centralised registry
+            # validation helper. The helper guarantees the
+            # resulting host:port is on the platform allowlist
+            # (loopback, public, or master mesh) and never
+            # includes user-controlled input in the registry host
+            # portion.
             commit = getattr(deployment, "commit_hash", "") or ""
             tag = commit[:8] if commit else "latest"
-            docker_image = f"10.100.0.1:5000/smsly/{service_name}:{tag}"
+            from .registry_validation import safe_image_for_service
+            docker_image = safe_image_for_service(service_name, tag=tag)
 
         self._log(f"Pulling image: {docker_image}")
         pull_out, pull_err, pull_code = self._exec(
