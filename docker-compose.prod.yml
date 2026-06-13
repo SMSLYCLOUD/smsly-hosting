@@ -60,7 +60,7 @@ services:
           memory: ${PGCAT_MEMORY_LIMIT:-256M}
   redis:
     image: redis:7-alpine
-    command: redis-server --requirepass ${REDIS_PASSWORD} --maxmemory ${REDIS_MAXMEMORY:-400mb} --maxmemory-policy allkeys-lru --repl-backlog-size 64mb --repl-backlog-ttl 3600
+    command: redis-server --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env} --maxmemory ${REDIS_MAXMEMORY:-400mb} --maxmemory-policy allkeys-lru --repl-backlog-size 64mb --repl-backlog-ttl 3600
     restart: unless-stopped
     volumes:
     - redis_data:/data
@@ -567,8 +567,8 @@ services:
       - "5672:5672"
     restart: unless-stopped
     environment:
-      RABBITMQ_DEFAULT_USER: smsly_user
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-smsly_user}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD must be set in .env}
       RABBITMQ_MEMORY_WATERMARK: ${RABBITMQ_MEMORY_WATERMARK:-0.6}
     volumes:
     - rabbitmq_data:/var/lib/rabbitmq
