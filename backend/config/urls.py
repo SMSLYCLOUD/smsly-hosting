@@ -34,6 +34,24 @@ urlpatterns = [
         'api/v1/auth/registration/',
         include('dj_rest_auth.registration.urls')),
     path('accounts/', include('allauth.urls')),
+
+    # ─── Frontend compatibility aliases ──────────────────────────────────────
+    # The frontend ``src/lib/api.ts`` calls some endpoints at the
+    # root of ``/api/v1/`` (e.g. ``/api/v1/dashboard/overview/``)
+    # but the actual routes are mounted under ``/api/v1/core/``
+    # or other app prefixes. These aliases let the existing
+    # frontend keep working without a rebuild. New code should
+    # call the canonical ``/api/v1/<app>/...`` paths.
+    path('api/v1/dashboard/overview/',
+         include('apps.core.urls_dashboard_alias')),
+    path('api/v1/system/health/',
+         include('apps.core.urls_system_health_alias')),
+    path('api/v1/system/resources/',
+         include('apps.core.urls_system_resources_alias')),
+    path('api/v1/preferences/',
+         include('apps.notifications.urls_preferences_alias')),
+    path('api/v1/ecosystem/bulk-update-environment/',
+         include('apps.cloud.urls_ecosystem_bulk_env_alias')),
 ]
 
 # ─── Conditional App Routes (Agent Mode Resiliency) ───────────────────────
