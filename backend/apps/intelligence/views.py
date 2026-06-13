@@ -618,9 +618,17 @@ def jules_fix_history(request, service_id: str):
     Return Jules auto-fix history for a service by scanning deployment logs.
     """
     try:
+        from django.db.models import Q
         from apps.deployments.models_core import Service, Deployment
 
-        service = Service.objects.get(id=service_id)
+        # SECURITY: scope to services the caller can access (owner or
+        # team member). Without this, any authenticated user could
+        # read another tenant's jules events (which include snippets
+        # of build logs).
+        service = Service.objects.filter(
+            Q(owner=request.user) |
+            Q(project__team__members__user=request.user)
+        ).distinct().get(id=service_id)
         deployments = Deployment.objects.filter(service=service).order_by("-updated_at")[:20]
 
         entries = []
@@ -647,4 +655,6 @@ def jules_fix_history(request, service_id: str):
     except Service.DoesNotExist:
         return Response({"error": "Service not found"}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
-        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        # SECURITY: log full traceback server-side; don't echo to caller
+        logger.exception("jules_fix_history failed: %s", e)
+        return Response({"error": "Internal error."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

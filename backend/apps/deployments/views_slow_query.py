@@ -7,7 +7,10 @@ from apps.deployments.services.slow_query import fetch_slow_queries, fetch_query
 
 
 class SlowQueryViewSet(viewsets.GenericViewSet):
-    permission_classes = [permissions.IsAuthenticated]
+    # SECURITY: pg_stat_statements is platform-wide — restrict to admins
+    # to prevent regular users from enumerating other tenants' query
+    # patterns or resetting shared observability counters.
+    permission_classes = [permissions.IsAdminUser]
 
     def list(self, request):
         """Get slow queries (default: >100ms mean execution time)."""

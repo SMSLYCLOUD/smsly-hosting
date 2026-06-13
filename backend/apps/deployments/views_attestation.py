@@ -25,8 +25,10 @@ from django.conf import settings
 from django.core.cache import cache
 
 from rest_framework import status
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, throttle_classes
 from rest_framework.response import Response
+
+from apps.deployments.rate_limiting import NodeTokenExchangeThrottle  # AnonRateThrottle, 5/min
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +39,7 @@ CHALLENGE_CACHE_PREFIX = "attest_challenge_"
 
 
 @api_view(["POST"])
+@throttle_classes([NodeTokenExchangeThrottle])  # 5/min per source IP
 def attestation_challenge(request):
     """
     Request an attestation challenge for a target WireGuard address.
@@ -107,15 +110,16 @@ def attestation_verify(request):
 
     # Look up the peer's gateway_secret
     from .models_mesh import WireGuardPeer
+    # SECURITY: don't distinguish "DB error" from "unknown peer" in
+    # the response — that would let a network-adjacent attacker probe
+    # for DB failures. Both surface as 404.
     try:
         peer = WireGuardPeer.objects.select_related("server").filter(
             wg_address=sender_wg, is_active=True,
         ).first()
     except Exception:
-        return Response(
-            {"error": "Database error resolving peer"},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        logger.exception("DB error resolving peer for attestation: sender_wg=%s", sender_wg)
+        peer = None
 
     if not peer or not peer.server:
         return Response(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import secrets
+from typing import Optional
 from urllib.parse import quote, urlencode
 
 import requests as http_requests
@@ -289,6 +290,46 @@ class GitHubCallbackSerializer(serializers.Serializer):
     code = serializers.CharField(required=True, help_text="GitHub authorization code")
 
 
+def _verify_oauth_state(request, provider: str) -> Optional[Response]:
+    """
+    Verify the ``state`` parameter on an OAuth callback.
+
+    The corresponding ``*_oauth_url`` view stores
+    ``{provider}_oauth_state:{state} → user_id`` in the cache before
+    redirecting the user to the provider. The callback must echo the
+    same ``state`` so we can prove the user who started the flow is
+    the one completing it. Without this check, an attacker can trick
+    a victim into linking the attacker's GitHub/GitLab/Bitbucket
+    account to the victim's SMSLY account.
+
+    Returns ``None`` on success, or a ``Response`` describing the
+    failure (the caller should return it directly).
+    """
+    state = request.data.get("state")
+    if not state:
+        return Response(
+            {"error": "Missing 'state' parameter."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    from django.core.cache import cache
+    cache_key = f"{provider}_oauth_state:{state}"
+    expected_user_id = cache.get(cache_key)
+    if not expected_user_id:
+        return Response(
+            {"error": "Invalid or expired state."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    # Single-use: delete the cache entry immediately so the same
+    # state cannot be replayed by an attacker.
+    cache.delete(cache_key)
+    if str(expected_user_id) != str(request.user.id):
+        return Response(
+            {"error": "State does not match the current user."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    return None
+
+
 @extend_schema(request=GitHubCallbackSerializer, responses=OpenApiTypes.OBJECT)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
@@ -300,6 +341,10 @@ def github_oauth_callback(request):
     This is the SPA-compatible replacement for allauth's browser-based
     callback. No server-side sessions or cookies needed.
     """
+    state_err = _verify_oauth_state(request, "github")
+    if state_err is not None:
+        return state_err
+
     code = request.data.get("code")
     if not code:
         return Response(
@@ -534,6 +579,10 @@ class GitLabCallbackSerializer(serializers.Serializer):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def gitlab_oauth_callback(request):
+    state_err = _verify_oauth_state(request, "gitlab")
+    if state_err is not None:
+        return state_err
+
     code = request.data.get("code")
     if not code:
         return Response({"error": "Missing 'code' parameter."}, status=status.HTTP_400_BAD_REQUEST)
@@ -704,6 +753,10 @@ class BitbucketCallbackSerializer(serializers.Serializer):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def bitbucket_oauth_callback(request):
+    state_err = _verify_oauth_state(request, "bitbucket")
+    if state_err is not None:
+        return state_err
+
     code = request.data.get("code")
     if not code:
         return Response({"error": "Missing 'code' parameter."}, status=status.HTTP_400_BAD_REQUEST)

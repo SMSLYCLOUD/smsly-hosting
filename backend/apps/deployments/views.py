@@ -2364,7 +2364,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'], url_path='dependencies', permission_classes=[permissions.IsAuthenticated])
     def dependencies(self, request, pk=None):
         try:
-            service = Service.objects.get(id=pk)
+            service = self.get_queryset().get(id=pk)
         except Service.DoesNotExist:
             return Response({"error": "Service not found"}, status=status.HTTP_404_NOT_FOUND)
 
@@ -2376,16 +2376,18 @@ class ServiceViewSet(viewsets.ModelViewSet):
         raw_deps = plan.get('depends_on', [])
         deps = []
         for token in raw_deps:
-            # Resolve token to a Service if possible
+            # Resolve token to a Service if possible — only surface
+            # services the caller can access.
             try:
-                dep_svc = Service.objects.filter(name__iexact=token).first()
+                dep_svc = self.get_queryset().filter(name__iexact=token).first()
                 if dep_svc:
                     deps.append({"id": str(dep_svc.id), "name": dep_svc.name})
             except Exception:
                 continue
 
         # Find dependents (services that list this one in their depends_on)
-        dependents_qs = Service.objects.filter(plan__contains={"depends_on": [service.name]})
+        # and only include those the caller can access.
+        dependents_qs = self.get_queryset().filter(plan__contains={"depends_on": [service.name]})
         dependents = [{"id": str(s.id), "name": s.name} for s in dependents_qs]
 
         return Response({"service": {"id": str(service.id), "name": service.name}, "depends_on": deps, "dependents": dependents})
@@ -2401,7 +2403,10 @@ class ServiceViewSet(viewsets.ModelViewSet):
         if not isinstance(ids, list) or not action:
             return Response({"error": "Invalid payload"}, status=status.HTTP_400_BAD_REQUEST)
 
-        services_qs = Service.objects.filter(id__in=ids)
+        # SECURITY: Scope the bulk action to services the caller can access
+        # via get_queryset(). Otherwise any authenticated user could trigger
+        # deploy/cancel/senate against other tenants' services.
+        services_qs = self.get_queryset().filter(id__in=ids)
         results = []
         for svc in services_qs:
             try:
@@ -2448,7 +2453,9 @@ class ServiceViewSet(viewsets.ModelViewSet):
         """
         from collections import defaultdict
         result = defaultdict(list)
-        for svc in Service.objects.all():
+        # SECURITY: scope to the caller's accessible services via get_queryset()
+        # so the sidebar cannot be used to enumerate other tenants' services.
+        for svc in self.get_queryset():
             # ``svc.repo`` is stored as a full URL in the model; we only need the
             # owner/repo slug for display.
             repo_slug = svc.repository_url.split('/')[-1] if svc.repository_url else str(svc.id)
@@ -3665,7 +3672,16 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         3. Prunes dangling Docker images.
         4. Deletes the deployment records from DB.
         5. Cancels stuck QUEUED deployments (>1h old).
+
+        SECURITY: the global ``client.images.prune(dangling=False)`` call
+        removes every unused image on the host — reaping images other
+        tenants' active services depend on. It is restricted to admins.
+        Non-admins still get their own failed containers removed and
+        dangling-image cleanup.
         """
+        from rest_framework.exceptions import PermissionDenied
+        is_admin = bool(request.user and request.user.is_authenticated and request.user.is_staff)
+
         # ── 1. DB: Select deployments to prune ──
         base_qs = Deployment.objects.filter(
             status__in=['FAILED', 'ERROR', 'CANCELLED']
@@ -3719,9 +3735,16 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             # Prune all stopped containers to be sure
             client.containers.prune()
 
-            # Prune all unused images (not just dangling) to reclaim disk space
-            image_prune_res = client.images.prune(filters={"dangling": ["false"]})
-            images_pruned = image_prune_res.get("SpaceReclaimed", 0)
+            # Prune unused images. SECURITY: the unfiltered
+            # ``dangling: false`` prune affects every tenant on the
+            # host. Restrict the global prune to admins; non-admins
+            # only get their own dangling images (the safer default).
+            if is_admin:
+                image_prune_res = client.images.prune(filters={"dangling": ["false"]})
+                images_pruned = image_prune_res.get("SpaceReclaimed", 0)
+            else:
+                image_prune_res = client.images.prune(filters={"dangling": ["true"]})
+                images_pruned = image_prune_res.get("SpaceReclaimed", 0)
 
             # ── 2b. VPS: Temp backup cleanup ──
             # Clean up stale files in /tmp/backups (older than 1h)

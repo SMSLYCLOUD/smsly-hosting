@@ -171,10 +171,45 @@ class AIProviderSettings(models.Model):
 
     def clean(self):
         super().clean()
-        allowed_hosts = list(getattr(settings, 'JULES_ALLOWED_HOSTS', ['api.jules.google.com']))
-        if not allowed_hosts:
-            allowed_hosts = ['api.jules.google.com']
-        _validate_https_allowlist(self.jules_base_url, 'jules_base_url', allowed_hosts)
+        # SECURITY: each provider's base_url must use https and point to
+        # the vendor's public host (or an allowlisted alias). This
+        # blocks admins (or anyone with IsAdminUser) from pointing
+        # provider requests at internal services, cloud metadata
+        # endpoints, or the platform's own mesh.
+        jules_hosts = list(getattr(settings, 'JULES_ALLOWED_HOSTS', ['api.jules.google.com']))
+        _validate_https_allowlist(self.jules_base_url, 'jules_base_url',
+                                  jules_hosts or ['api.jules.google.com'])
+        # Local LLM is the one exception: it is explicitly meant to run
+        # against a local endpoint (Ollama, LM Studio, etc.) over plain
+        # http. Allow any non-routable host but require a hostname so
+        # we don't accept empty / malformed values.
+        if self.localllm_base_url:
+            from urllib.parse import urlparse as _urlparse
+            p = _urlparse(self.localllm_base_url)
+            if not p.hostname:
+                raise ValidationError(
+                    {'localllm_base_url': 'localllm_base_url must include a hostname.'}
+                )
+        _validate_https_allowlist(
+            self.freemodel_base_url, 'freemodel_base_url',
+            ['api.freemodel.dev'],
+        )
+        _validate_https_allowlist(
+            self.opencode_base_url, 'opencode_base_url',
+            ['api.opencode.ai'],
+        )
+        _validate_https_allowlist(
+            self.mistral_base_url, 'mistral_base_url',
+            ['api.mistral.ai'],
+        )
+        _validate_https_allowlist(
+            self.nvidia_base_url, 'nvidia_base_url',
+            ['integrate.api.nvidia.com'],
+        )
+        _validate_https_allowlist(
+            self.cloudflare_base_url, 'cloudflare_base_url',
+            ['gateway.ai.cloudflare.com'],
+        )
 
 
 class LLMUsage(models.Model):
