@@ -21,7 +21,9 @@ def _build_signed_request(request_factory, *, body=b"", source_ip="203.0.113.50"
     timestamp = str(int(time.time()))
     body_hash = hashlib.sha256(body).hexdigest()
     nonce_value = nonce if nonce is not None else "static-test-nonce"
-    payload = f"{method}|{path}|{timestamp}|{body_hash}|{nonce_value}"
+    # SECURITY (Batch G): canonical HMAC payload format
+    # {method}|{path}|{timestamp}|{nonce}|{body_hash}.
+    payload = f"{method}|{path}|{timestamp}|{nonce_value}|{body_hash}"
     signature = hmac.new(
         TEST_SECRET.encode(), payload.encode(), hashlib.sha256
     ).hexdigest()
@@ -30,7 +32,7 @@ def _build_signed_request(request_factory, *, body=b"", source_ip="203.0.113.50"
     request.META["HTTP_X_SMSLY_REMOTE_SYNC"] = "1"
     request.META["HTTP_X_GATEWAY_SIGNATURE_V2"] = signature
     request.META["HTTP_X_REQUEST_TIMESTAMP"] = timestamp
-    request.META["HTTP_X_GATEWAY_NONCE"] = nonce_value
+    request.META["HTTP_X_REQUEST_NONCE"] = nonce_value
     request.META["REMOTE_ADDR"] = source_ip
     request._body = body
     return request, timestamp, nonce_value, body_hash
@@ -59,8 +61,8 @@ class HmacNonceTests(TestCase):
 
     def test_build_remote_headers_includes_nonce(self):
         headers = _build_remote_headers(self.server)
-        self.assertIn("X-Gateway-Nonce", headers)
-        self.assertTrue(headers["X-Gateway-Nonce"])
+        self.assertIn("X-Request-Nonce", headers)
+        self.assertTrue(headers["X-Request-Nonce"])
 
     def test_build_remote_headers_nonce_matches_signature_payload(self):
         server = ManagedServer.objects.create(
@@ -77,8 +79,8 @@ class HmacNonceTests(TestCase):
             headers = _build_remote_headers(
                 server, method="POST", path=path, body=body
             )
-            self.assertIn("X-Gateway-Nonce", headers)
-            nonce = headers["X-Gateway-Nonce"]
+            self.assertIn("X-Request-Nonce", headers)
+            nonce = headers["X-Request-Nonce"]
             signature = headers.get("X-Gateway-Signature-V2", "")
             timestamp = headers.get("X-Request-Timestamp", "")
 
@@ -86,7 +88,8 @@ class HmacNonceTests(TestCase):
             self.assertTrue(timestamp)
 
             body_hash = hashlib.sha256(body).hexdigest()
-            expected_payload = f"POST|{path}|{timestamp}|{body_hash}|{nonce}"
+            # Canonical payload format: nonce before body_hash.
+            expected_payload = f"POST|{path}|{timestamp}|{nonce}|{body_hash}"
             expected_signature = hmac.new(
                 TEST_SECRET.encode(), expected_payload.encode(), hashlib.sha256
             ).hexdigest()
@@ -101,6 +104,7 @@ class HmacNonceTests(TestCase):
         body = b'{"foo":"bar"}'
         timestamp = str(int(time.time()))
         body_hash = hashlib.sha256(body).hexdigest()
+        # No nonce in payload — receiver must reject.
         payload = f"POST|/api/v1/transfers/register-incoming/|{timestamp}|{body_hash}"
         signature = hmac.new(
             TEST_SECRET.encode(), payload.encode(), hashlib.sha256
@@ -140,13 +144,15 @@ class HmacNonceTests(TestCase):
             self.factory, body=body, source_ip="203.0.113.50"
         )
         tampered_nonce = original_nonce + "-tampered"
-        request.META["HTTP_X_GATEWAY_NONCE"] = tampered_nonce
+        # Replace the nonce header with a tampered value but keep the
+        # original signature over the original nonce.
+        request.META["HTTP_X_REQUEST_NONCE"] = tampered_nonce
 
-        tampered_payload = (
-            f"POST|/api/v1/transfers/register-incoming/|{timestamp}|{body_hash}|{original_nonce}"
+        original_payload = (
+            f"POST|/api/v1/transfers/register-incoming/|{timestamp}|{original_nonce}|{body_hash}"
         )
         original_signature = hmac.new(
-            TEST_SECRET.encode(), tampered_payload.encode(), hashlib.sha256
+            TEST_SECRET.encode(), original_payload.encode(), hashlib.sha256
         ).hexdigest()
         request.META["HTTP_X_GATEWAY_SIGNATURE_V2"] = original_signature
 

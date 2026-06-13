@@ -1,34 +1,35 @@
-"""Custom authentication classes for CloudNeuron API."""
+"""Custom authentication classes for CloudNeuron API.
 
-from rest_framework.authentication import SessionAuthentication
-
-
-class CsrfExemptSessionAuthentication(SessionAuthentication):
-    """
-    Session authentication without CSRF enforcement.
-
-    DRF's default SessionAuthentication enforces CSRF on unsafe methods (POST,
-    PUT, DELETE, PATCH). This causes 403 errors when:
-
-    1. A user has a session cookie (from OAuth login)
-    2. The frontend sends Authorization: Token xxx
-    3. The token is stale/invalid (doesn't match DB)
-    4. DRF falls through to SessionAuthentication
-    5. CSRF check fails → 403
-
-    Since our API primarily uses token auth and the session is only a fallback,
-    we skip CSRF enforcement for API requests. The API is already protected by
-    token auth and the SecurityMiddleware's HMAC verification.
-    """
-
-    def enforce_csrf(self, request):
-        """Skip CSRF check for API requests."""
-        return  # No-op — CSRF not needed for token-first API
-
-from rest_framework.authentication import BaseAuthentication
+SECURITY (Batch G): the legacy ``CsrfExemptSessionAuthentication``
+class is no longer registered in ``DEFAULT_AUTHENTICATION_CLASSES``.
+A view that needs CSRF-exempt session auth must opt in explicitly
+with ``@authentication_classes([..., CsrfExemptSessionAuthentication])``
+plus a comment justifying the exemption. Relying on a global
+fallback disabled CSRF protection on every session-authenticated
+request, which allowed a cross-site forged request to land against
+any session-cookie holder (admin, OAuth user, etc.).
+"""
+from rest_framework.authentication import BaseAuthentication, SessionAuthentication
 from rest_framework.exceptions import AuthenticationFailed
 from django.contrib.auth.hashers import check_password
 from .models import APIKey
+
+
+class CsrfExemptSessionAuthentication(SessionAuthentication):
+    """Session auth without CSRF enforcement — opt-in only.
+
+    Use only for views that genuinely need to accept a
+    session-cookie request without a CSRF token (e.g. the
+    ``ai_chat_completions`` endpoint, which receives JSON from
+    a token-authenticated frontend and may also be hit by a
+    session-cookie holder). Every other view that may receive a
+    session-cookie request must rely on the default
+    ``SessionAuthentication`` (CSRF enforced).
+    """
+
+    def enforce_csrf(self, request):
+        return  # Opt-in CSRF exemption, justified per-view
+
 
 class APIKeyAuthentication(BaseAuthentication):
     """

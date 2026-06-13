@@ -145,9 +145,10 @@ class RemoteSyncHMACAuthentication(BaseAuthentication):
 
         signature = str(request.headers.get("X-Gateway-Signature-V2", "")).strip()
         timestamp = str(request.headers.get("X-Request-Timestamp", "")).strip()
-        if not signature and not timestamp:
+        nonce = str(request.headers.get("X-Request-Nonce", "")).strip()
+        if not signature and not timestamp and not nonce:
             return None
-        if not signature or not timestamp:
+        if not signature or not timestamp or not nonce:
             raise AuthenticationFailed("Incomplete remote sync signature.")
 
         try:
@@ -164,8 +165,15 @@ class RemoteSyncHMACAuthentication(BaseAuthentication):
         if not gateway_secret:
             raise AuthenticationFailed("Remote sync gateway secret is not configured.")
 
+        # SECURITY (Batch G): nonce replay protection.
+        from django.core.cache import cache
+        nonce_key = f"remote_sync_nonce:{nonce}"
+        if cache.get(nonce_key):
+            raise AuthenticationFailed("Remote sync nonce already used.")
+        cache.set(nonce_key, "1", timeout=600)
+
         body_hash = hashlib.sha256(request.body).hexdigest()
-        payload = f"{request.method}|{request.get_full_path()}|{timestamp}|{body_hash}"
+        payload = f"{request.method}|{request.get_full_path()}|{timestamp}|{nonce}|{body_hash}"
         expected = hmac.new(
             gateway_secret.encode(),
             payload.encode(),

@@ -1,5 +1,6 @@
 """Models Storage module."""
 import uuid
+from django.core.exceptions import ValidationError
 from django.db import models
 
 
@@ -17,6 +18,25 @@ class Volume(models.Model):
     size_gb = models.IntegerField(default=1)
 
     created_at = models.DateTimeField(auto_now_add=True)
+
+    def clean(self):
+        """Defence-in-depth: a model-level validator catches direct DB
+        writes that bypass the serializer. The serializer in
+        views_storage.py runs first; this is the second line of defence
+        against Volume rows that would let a tenant mount /var/run/
+        docker.sock or other host directories into their container.
+        """
+        super().clean()
+        # Avoid circular import
+        from .views_storage import _validate_volume_name, _validate_volume_mount_path
+        try:
+            _validate_volume_name(self.name)
+        except Exception as exc:
+            raise ValidationError({"name": str(exc)})
+        try:
+            _validate_volume_mount_path(self.mount_path)
+        except Exception as exc:
+            raise ValidationError({"mount_path": str(exc)})
 
     def __str__(self):
         return f"{self.name} ({self.mount_path})"

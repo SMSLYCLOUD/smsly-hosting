@@ -1,11 +1,79 @@
 import logging
 import re
+from urllib.parse import urlparse
 from rest_framework import serializers
 from .models import Service, Deployment, EnvironmentVariable, Region
 from .models_audit import AuditLog
 from .models_backup import ServiceBackup, ServerBackup, BackupSchedule
 from .models_safedeploy import PreviewEnvironment, DatabaseClone, MigrationValidation, DeploymentApproval, DeploymentArtifact
 from .serializers_transfer import ServerTransferSerializer, ServerTransferCreateSerializer
+
+
+# SECURITY: docker_image strings flow into ``docker pull`` on the
+# controller and remote nodes. We restrict the scheme/host to the
+# platform's own registry (or a small set of well-known public
+# registries) and reject anything that would let a tenant pull
+# from a personal registry on the public internet.
+_ALLOWED_IMAGE_REGISTRIES = (
+    # host:port[:/] prefix — these are the registries the platform
+    # actually supports. Anything else is rejected.
+    "127.0.0.1:5000",
+    "localhost:5000",
+    "registry:5000",
+    "smsly-hosting-registry:5000",
+    "ghcr.io",
+    "docker.io",  # Docker Hub — also matches library/<name> style
+    "registry-1.docker.io",
+    "quay.io",
+    "gcr.io",
+    "mcr.microsoft.com",
+    "public.ecr.aws",
+)
+
+
+def _validate_docker_image(image: str) -> str:
+    """Restrict the ``docker_image`` value to a docker-safe reference
+    whose registry host is on the platform allowlist.
+
+    The result is a string like ``registry:5000/foo/bar:tag`` or, for
+    a public registry, ``nginx:1.27-alpine``. Anything that resolves
+    to a registry not in the allowlist (e.g. a personal registry at
+    ``attacker.com``) is rejected so a tenant cannot pull an image
+    from a host that the platform does not control.
+    """
+    if image is None:
+        return image
+    if not isinstance(image, str) or not image.strip():
+        raise serializers.ValidationError(
+            "docker_image must be a non-empty string."
+        )
+    image = image.strip()
+    # Reject obvious shell-injection characters
+    if any(c in image for c in ("\n", "\r", "\t", ";", "&", "|", "`", "$", " ", "<", ">")):
+        raise serializers.ValidationError(
+            "docker_image must not contain whitespace or shell metacharacters."
+        )
+    # Split into registry/repo:tag
+    # Docker reference grammar: [REGISTRY/]REPO[:TAG][@DIGEST]
+    first_slash = image.find("/")
+    if first_slash == -1 or (
+        # The "registry" portion must contain a '.' or ':' or be 'localhost'
+        # — otherwise it's a Docker Hub library reference (e.g. 'nginx')
+        not ("." in image[:first_slash] or ":" in image[:first_slash] or image[:first_slash] == "localhost")
+    ):
+        # Treat as Docker Hub library reference
+        registry_prefix = "docker.io"
+    else:
+        registry_prefix = image[:first_slash]
+    if not any(
+        registry_prefix == allowed or registry_prefix.startswith(allowed + "/")
+        for allowed in _ALLOWED_IMAGE_REGISTRIES
+    ):
+        raise serializers.ValidationError(
+            f"docker_image registry {registry_prefix!r} is not on the platform allowlist. "
+            f"Allowed: {', '.join(_ALLOWED_IMAGE_REGISTRIES)}."
+        )
+    return image
 
 
 class RegionSerializer(serializers.ModelSerializer):
@@ -73,6 +141,23 @@ class ServiceSerializer(serializers.ModelSerializer):
     estimated_cost = serializers.SerializerMethodField()
     node_metadata = serializers.SerializerMethodField()
     domain_instances = serializers.SerializerMethodField()
+
+    def validate_docker_image(self, value):
+        return _validate_docker_image(value)
+
+    def validate_name(self, value):
+        # SECURITY: Service.name flows into docker container names,
+        # traefik labels, and image tags. Reject anything outside the
+        # DNS-label / container-name charset.
+        if not value or not isinstance(value, str):
+            raise serializers.ValidationError("name is required.")
+        if not re.fullmatch(r"[a-z0-9]([-a-z0-9_.]{0,61}[a-z0-9])?", value):
+            raise serializers.ValidationError(
+                "name must be a DNS label: lowercase alphanumeric with "
+                "'-', '_', or '.', starting and ending with a letter or digit "
+                "(max 63 chars)."
+            )
+        return value
 
     class Meta:
         model = Service

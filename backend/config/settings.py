@@ -52,6 +52,19 @@ SECRET_KEY = _SECRET_KEY_RAW
 FIELD_ENCRYPTION_KEY = _FIELD_ENCRYPTION_KEY_RAW
 GATEWAY_SECRET = str(config('GATEWAY_SECRET', default=SECRET_KEY)).strip() or SECRET_KEY
 
+# SECURITY: allow operators to opt out of TLS verification on a
+# per-ManagedServer basis. When this flag is False (the default),
+# the platform refuses to skip certificate verification on
+# inter-node HTTP — preventing a network-adjacent attacker from
+# MITMing the connection and capturing the gateway_secret /
+# SSH password. Set to True only for self-signed lite agent
+# testing environments.
+ALLOW_INSECURE_INTER_NODE_TLS = config(
+    'ALLOW_INSECURE_INTER_NODE_TLS',
+    default='false',
+    cast=lambda v: str(v).lower() in ('1', 'true', 'yes', 'on'),
+)
+
 # Validate encryption key format (Fernet requirement: 32 bytes, URL-safe base64)
 try:
     from cryptography.fernet import Fernet
@@ -668,10 +681,13 @@ REST_FRAMEWORK = {
         'apps.deployments.api_token_auth.APITokenAuthentication',
         'apps.deployments.api_token_auth.RemoteSyncHMACAuthentication',
         'rest_framework.authentication.TokenAuthentication',
-        # CSRF-exempt session auth: prevents 403 when token auth fails and
-        # DRF falls through to session auth (which enforces CSRF by default).
-        # API endpoints use token auth primarily; session is only a fallback.
-        'apps.core.auth.CsrfExemptSessionAuthentication',
+        # SECURITY (Batch G): the legacy CsrfExemptSessionAuthentication
+        # fallback was removed. Session-authenticated requests are now
+        # subject to CSRF enforcement. Endpoints that genuinely need
+        # CSRF-exempt session auth (e.g. OAuth callback, webhooks) must
+        # explicitly opt in via ``authentication_classes = [...,
+        # 'apps.core.auth.CsrfExemptSessionAuthentication']`` on the
+        # specific view, with a comment explaining why.
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',

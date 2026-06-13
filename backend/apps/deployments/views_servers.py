@@ -131,16 +131,25 @@ def _detect_reachable_api_url(server) -> tuple[str | None, Any | None]:
     # Try multiple health paths: /health is the standard endpoint,
     # /health/live is the liveness-only probe used by some lite agent configs.
     health_paths = ("/health", "/health/live")
+    from .services.tls_verify import resolve_tls_verify, _check_pin_after_handshake
+    verify, fingerprint = resolve_tls_verify(server)
     for base_url in _candidate_api_urls(server):
         for health_path in health_paths:
             try:
-                # We use verify=False because many remote nodes use self-signed certs
-                # or haven't finished provisioning SSL via Caddy yet.
+                # SECURITY: TLS verification is now per-server
+                # (ManagedServer.verify_tls, default True) and can
+                # be tightened with a SHA-256 cert pin
+                # (ManagedServer.tls_cert_sha256). The legacy
+                # hard-coded ``verify=False`` was removed in
+                # Batch G to prevent a MITM on the inter-node
+                # connection from capturing the gateway_secret.
                 response = requests.get(
                     f"{base_url}{health_path}",
                     timeout=MANAGED_SERVER_HEALTH_TIMEOUT,
-                    verify=False,
+                    verify=verify,
                 )
+                if fingerprint:
+                    _check_pin_after_handshake(response, fingerprint)
             except requests.RequestException:
                 continue
 
@@ -259,6 +268,8 @@ def _try_auto_token_exchange(server, base_url: str) -> str | None:
                 payload = f"POST|{path}|{ts}|{body_hash}"
                 sig = hmac_mod.new(gateway_secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
 
+                from .services.tls_verify import resolve_tls_verify, _check_pin_after_handshake
+                verify, fingerprint = resolve_tls_verify(server)
                 resp = requests.post(
                     f"{url_base}{path}",
                     data=body,
@@ -268,8 +279,10 @@ def _try_auto_token_exchange(server, base_url: str) -> str | None:
                         "X-Request-Timestamp": ts,
                     },
                     timeout=15,
-                    verify=False,
+                    verify=verify,
                 )
+                if fingerprint:
+                    _check_pin_after_handshake(resp, fingerprint)
                 if resp.status_code == 200:
                     token = resp.json().get("token")
                     if token:
@@ -278,7 +291,7 @@ def _try_auto_token_exchange(server, base_url: str) -> str | None:
             except Exception as exc:
                 logger.debug("HMAC token exchange failed for %s via %s: %s", server.host, url_base, exc)
 
-        allow_pw_exchange = str(os.environ.get("ALLOW_REMOTE_PASSWORD_EXCHANGE", "")).lower() in {
+        allow_pw_exchange = str(os.environ.get("ALLOW REMOTE_PASSWORD_EXCHANGE", "")).lower() in {
             "1", "true", "yes", "on"
         }
 
@@ -294,8 +307,10 @@ def _try_auto_token_exchange(server, base_url: str) -> str | None:
                             "node_name": f"Node-{server.host}",
                         },
                         timeout=15,
-                        verify=False,
+                        verify=verify,
                     )
+                    if fingerprint:
+                        _check_pin_after_handshake(resp, fingerprint)
                     if resp.status_code == 200:
                         token = resp.json().get("token")
                         if token:
@@ -318,8 +333,10 @@ def _try_auto_token_exchange(server, base_url: str) -> str | None:
                         f"{url_base}/api/v1/auth/login/",
                         json={"username": username, "password": ssh_password},
                         timeout=15,
-                        verify=False,
+                        verify=verify,
                     )
+                    if fingerprint:
+                        _check_pin_after_handshake(resp, fingerprint)
                     if resp.status_code == 200:
                         token = resp.json().get("key") or resp.json().get("token")
                         if token:
@@ -407,11 +424,14 @@ def _build_remote_headers(server, method="GET", path="/api/v1/services/", body=b
     def _apply_hmac_auth():
         if not gateway_secret:
             return False
-        import uuid as _uuid
+        import secrets as _secrets
         timestamp = str(int(time.time()))
-        nonce = _uuid.uuid4().hex
+        nonce = _secrets.token_urlsafe(16)
         body_hash = hashlib.sha256(body if isinstance(body, bytes) else b"").hexdigest()
-        payload = f"{method}|{path}|{timestamp}|{body_hash}|{nonce}"
+        # SECURITY (Batch G): canonical payload format
+        # {method}|{path}|{timestamp}|{nonce}|{body_hash}.
+        # Matches ZeroTrustHMACAuthentication on the server side.
+        payload = f"{method}|{path}|{timestamp}|{nonce}|{body_hash}"
         signature = hmac_mod.new(
             gateway_secret.encode(),
             payload.encode(),
@@ -419,7 +439,7 @@ def _build_remote_headers(server, method="GET", path="/api/v1/services/", body=b
         ).hexdigest()
         headers["X-Gateway-Signature-V2"] = signature
         headers["X-Request-Timestamp"] = timestamp
-        headers["X-Gateway-Nonce"] = nonce
+        headers["X-Request-Nonce"] = nonce
         return True
 
     # Explicit mode for fallback paths.
@@ -715,16 +735,45 @@ class ManagedServerCreateSerializer(serializers.ModelSerializer):
         return value
 
     def validate_api_url(self, value):
-        """Ensure api_url has a protocol prefix. Default to HTTP for IPs."""
-        value = value.strip().rstrip('/')
+        """Ensure api_url has a protocol prefix. Default to HTTP for IPs.
+
+        SECURITY (Batch G): reject api_url that points at a link-local
+        or loopback address (e.g. ``http://169.254.169.254/`` AWS
+        metadata, ``http://localhost:8000``, ``http://127.0.0.1``)
+        — those are SSRF targets that the operator (not the user)
+        should be able to reach. A user that can register a server
+        with api_url pointing at the platform's own controller would
+        otherwise be able to relay requests to the controller's
+        admin endpoints via the ``/proxy/`` action.
+        """
+        import ipaddress
+        from urllib.parse import urlparse
+        value = (value or "").strip().rstrip('/')
         if value and not value.startswith(('http://', 'https://')):
-            # Detect bare IP and default to HTTP
             host_part = value.split(':')[0]
             try:
                 ipaddress.ip_address(host_part)
                 value = f'http://{value}'
             except ValueError:
                 value = f'https://{value}'
+        if value:
+            parsed = urlparse(value)
+            hostname = (parsed.hostname or '').lower()
+            if hostname in ('localhost',) or hostname.endswith('.localhost'):
+                raise serializers.ValidationError(
+                    f"api_url hostname {hostname!r} is a loopback / internal target."
+                )
+            try:
+                ip = ipaddress.ip_address(hostname)
+                if (ip.is_loopback or ip.is_link_local
+                        or ip.is_multicast or ip.is_reserved
+                        or ip.is_unspecified):
+                    raise serializers.ValidationError(
+                        f"api_url IP {ip} is a loopback / link-local / "
+                        f"reserved address."
+                    )
+            except ValueError:
+                pass  # hostname — allowed
         return value
 
 

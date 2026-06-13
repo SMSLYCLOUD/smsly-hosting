@@ -64,7 +64,15 @@ from apps.deployments.utils import resolve_running_container
 class ZeroTrustHMACAuthentication(authentication.BaseAuthentication):
     """
     Authenticate requests from peer nodes using HMAC V2.
-    Required headers: X-Gateway-Signature-V2, X-Request-Timestamp
+    Required headers: X-Gateway-Signature-V2, X-Request-Timestamp,
+    X-Request-Nonce.
+
+    SECURITY (Batch G): the nonce is now mandatory and bound into the
+    signed payload. Without this, a captured request can be replayed
+    for the full timestamp window. Callers must generate a
+    cryptographically-random nonce per request, send it in
+    ``X-Request-Nonce``, and include it in the signed payload as
+    ``{method}|{path}|{timestamp}|{nonce}|{body_hash}``.
     """
     def authenticate(self, request):
         import hashlib
@@ -75,7 +83,8 @@ class ZeroTrustHMACAuthentication(authentication.BaseAuthentication):
 
         signature = request.headers.get("X-Gateway-Signature-V2", "")
         timestamp = request.headers.get("X-Request-Timestamp", "")
-        if not signature or not timestamp:
+        nonce = request.headers.get("X-Request-Nonce", "")
+        if not signature or not timestamp or not nonce:
             return None
 
         # Verify timestamp freshness (1 min window)
@@ -86,19 +95,26 @@ class ZeroTrustHMACAuthentication(authentication.BaseAuthentication):
         except ValueError:
             raise authentication.AuthenticationFailed("Invalid timestamp")
 
+        # SECURITY: nonce replay protection. Each nonce is one-use
+        # within the freshness window.
+        from django.core.cache import cache
+        nonce_key = f"hmac_nonce:{nonce}"
+        if cache.get(nonce_key):
+            raise authentication.AuthenticationFailed("Nonce already used")
+        cache.set(nonce_key, "1", timeout=120)
+
         # Verify HMAC
         gw_secret = getattr(settings, "GATEWAY_SECRET", settings.SECRET_KEY)
         method = request.method
         path = request.get_full_path()
-        
-        # For remote triggers, we need to handle request body carefully
+
         try:
             body = request.body
         except Exception:
             body = b""
-            
+
         body_hash = hashlib.sha256(body).hexdigest()
-        payload = f"{method}|{path}|{timestamp}|{body_hash}"
+        payload = f"{method}|{path}|{timestamp}|{nonce}|{body_hash}"
         expected = hmac.new(gw_secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
 
         if not hmac.compare_digest(expected, signature):

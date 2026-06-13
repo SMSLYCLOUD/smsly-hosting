@@ -1,5 +1,6 @@
 import logging
 import os
+import secrets
 import time
 import uuid
 import hashlib
@@ -421,8 +422,12 @@ class RemoteOrchestrator:
             "node_name": f"Node-{self.server.host or self.server.name}"[:100],
         })
         timestamp = str(int(time.time()))
+        nonce = secrets.token_urlsafe(16)
         body_hash = hashlib.sha256(body).hexdigest()
-        payload = f"POST|{path}|{timestamp}|{body_hash}"
+        # SECURITY: bind the nonce into the signed payload so a
+        # captured request cannot be replayed with a fresh nonce.
+        # Matches views_node_exchange.node_token_exchange_via_gateway.
+        payload = f"POST|{path}|{timestamp}|{nonce}|{body_hash}"
         signature = hmac_mod.new(
             gateway_secret.encode(),
             payload.encode(),
@@ -441,6 +446,7 @@ class RemoteOrchestrator:
                     "Content-Type": "application/json",
                     "X-Gateway-Signature-V2": signature,
                     "X-Request-Timestamp": timestamp,
+                    "X-Request-Nonce": nonce,
                 },
                 timeout=self._timeout(15),
                 allow_redirects=False,
@@ -542,10 +548,12 @@ class RemoteOrchestrator:
 
         if auth_mode in (None, "hmac") and gateway_secret:
             timestamp = str(int(time.time()))
+            nonce = secrets.token_urlsafe(16)
             body_hash = hashlib.sha256(body).hexdigest()
-            # Use the full path including query params to match server-side
-            # request.get_full_path() in ZeroTrustHMACAuthentication
-            payload = f"{method}|{path}|{timestamp}|{body_hash}"
+            # SECURITY: bind the nonce into the signed payload so a
+            # captured request cannot be replayed with a fresh nonce.
+            # Matches ZeroTrustHMACAuthentication on the server side.
+            payload = f"{method}|{path}|{timestamp}|{nonce}|{body_hash}"
             signature = hmac_mod.new(
                 gateway_secret.encode(),
                 payload.encode(),
@@ -553,6 +561,7 @@ class RemoteOrchestrator:
             ).hexdigest()
             headers["X-Gateway-Signature-V2"] = signature
             headers["X-Request-Timestamp"] = timestamp
+            headers["X-Request-Nonce"] = nonce
             return headers
 
         return headers
