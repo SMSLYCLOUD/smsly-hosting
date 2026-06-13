@@ -22,13 +22,19 @@ from typing import Optional, Tuple
 from django.conf import settings
 
 
-# Env flag the operator must set to allow *any* server to opt out
-# of TLS verification. The platform refuses to skip cert checks
-# in production unless this is explicitly set. Default: False.
-ALLOW_INSECURE_INTER_NODE_TLS = (
-    os.environ.get("ALLOW_INSECURE_INTER_NODE_TLS", "false").lower()
-    in ("1", "true", "yes", "on")
-)
+# SECURITY: helper used to read the platform-wide
+# ALLOW_INSECURE_INTER_NODE_TLS env flag. We re-read it on
+# every call (rather than capturing it at import time) so a
+# runtime config change is honored without a process restart.
+def _allow_insecure_inter_node_tls() -> bool:
+    raw = os.environ.get("ALLOW_INSECURE_INTER_NODE_TLS", "false").strip().lower()
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    # Honour the Django settings.DEBUG override too — when DEBUG
+    # is on, the platform is in development mode and skipping
+    # cert checks is acceptable (e.g. self-signed master in a
+    # local docker compose stack).
+    return bool(getattr(settings, "DEBUG", False))
 
 
 def _build_ssl_context_for_pin(fingerprint_hex: str) -> ssl.SSLContext:
@@ -103,6 +109,38 @@ def resolve_tls_verify(managed_server) -> Tuple[bool, Optional[str]]:
         return True, None
     # Server wants to skip cert verification. Only honor that if the
     # operator has explicitly opted in.
-    if ALLOW_INSECURE_INTER_NODE_TLS or getattr(settings, "DEBUG", False):
+    if _allow_insecure_inter_node_tls():
         return False, None
     return True, None  # refuse the insecure request
+
+
+def resolve_tls_verify_for_url(candidate_url: str) -> Tuple[bool, Optional[str]]:
+    """Return ``(verify, fingerprint_hex)`` for a POST to a peer URL.
+
+    Used by the provisioner when it doesn't yet have a
+    ``ManagedServer`` row for the target (the master is being
+    discovered by candidate URL). Defaults to the safe behavior:
+
+      * For ``http://`` URLs: ``(False, None)`` — there is no
+        certificate to verify, so there's nothing to pin.
+      * For ``https://`` URLs: ``(True, None)`` — refuse to skip
+        cert verification unless ``ALLOW_INSECURE_INTER_NODE_TLS``
+        is set in the environment, in which case ``(False, None)``.
+      * If the operator has set a master-cert SHA-256 pin via the
+        env var ``SMSLY_MASTER_TLS_CERT_SHA256``, the second
+        element is that pin and the caller should pass it to
+        ``_check_pin_after_handshake``.
+    """
+    from urllib.parse import urlparse
+    parsed = urlparse(candidate_url or "")
+    if parsed.scheme != "https":
+        # Plain HTTP has no certificate to verify.
+        return False, None
+    fingerprint = os.environ.get(
+        "SMSLY_MASTER_TLS_CERT SHA256", ""
+    ).strip()
+    if fingerprint:
+        return True, fingerprint
+    if _allow_insecure_inter_node_tls():
+        return False, None
+    return True, None  # safe default

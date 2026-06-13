@@ -396,8 +396,6 @@ def _harden_master_firewall(server: ManagedServer) -> None:
 
     _append_log(server, "✅ Master firewall rules synchronized for this node.")
 
-    _append_log(server, "✅ Master firewall rules synchronized for this node.")
-
 
 def _prepare_remote_install_lock(ssh, server: ManagedServer) -> None:
     """Clear stale installer locks and optionally replace an active retry instance."""
@@ -1118,6 +1116,10 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
             _append_log(server, f"Warning: could not read remote gateway secret: {secret_exc}")
 
         if not api_token and remote_gateway_secret:
+            from .tls_verify import (
+                _check_pin_after_handshake,
+                resolve_tls_verify_for_url,
+            )
             token_errors = []
             for candidate_url in api_urls:
                 path = "/api/v1/auth/node-token-exchange-hmac/"
@@ -1139,6 +1141,13 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                     payload.encode(),
                     hashlib.sha256,
                 ).hexdigest()
+                # SECURITY (Batch G cont): per-server TLS verify
+                # + optional SHA-256 pin. For HTTPS URLs the safe
+                # default is verify=True; a network-adjacent MITM
+                # would otherwise capture the gateway_secret.
+                verify, fingerprint = resolve_tls_verify_for_url(
+                    candidate_url
+                )
                 try:
                     response = requests.post(
                         f"{candidate_url}{path}",
@@ -1151,8 +1160,10 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                             "X-Request-Nonce": nonce,
                         },
                         timeout=20,
-                        verify=candidate_url.startswith("https://"),
+                        verify=verify,
                     )
+                    if fingerprint:
+                        _check_pin_after_handshake(response, fingerprint)
                     if not response.ok:
                         token_errors.append(f"{candidate_url}:HTTP {response.status_code}")
                         continue
@@ -1174,16 +1185,29 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
 
         # If installer did not emit an API token, exchange admin credentials for one.
         if not api_token and admin_user and admin_password:
+            from .tls_verify import (
+                _check_pin_after_handshake,
+                resolve_tls_verify_for_url,
+            )
             token_errors = []
             for candidate_url in api_urls:
                 login_url = f"{candidate_url}/api/v1/auth/login/"
+                # SECURITY (Batch G cont): same per-server TLS verify
+                # as the HMAC exchange above. This is the path that
+                # ships the SSH/admin password over the wire —
+                # without verify=True an MITM would capture it.
+                verify, fingerprint = resolve_tls_verify_for_url(
+                    candidate_url
+                )
                 try:
                     response = requests.post(
                         login_url,
                         json={"username": admin_user, "password": admin_password},
                         timeout=20,
-                        verify=candidate_url.startswith("https://"),
+                        verify=verify,
                     )
+                    if fingerprint:
+                        _check_pin_after_handshake(response, fingerprint)
                     if not response.ok:
                         token_errors.append(f"{candidate_url}:HTTP {response.status_code}")
                         continue
