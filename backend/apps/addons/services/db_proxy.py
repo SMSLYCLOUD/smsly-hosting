@@ -3,6 +3,7 @@ import json
 import re
 import sqlparse
 from sqlparse.sql import Statement
+from django.core.cache import cache
 from apps.deployments.models_addons import Addon
 
 logger = logging.getLogger(__name__)
@@ -158,6 +159,11 @@ class DatabaseProxy:
         ``addon`` and ``user`` are required for the ownership check that
         guarantees a user can only query databases they own. They are
         keyword-only so the call site is explicit.
+
+        SECURITY (Issue 24): a per-addon Redis lock serialises
+        concurrent queries so two simultaneous calls cannot both
+        pass the throttle check and both open a session against
+        the same addon.
         """
         if self.addon.addon_type != 'POSTGRES':
             return {}
@@ -175,7 +181,21 @@ class DatabaseProxy:
             if not is_owner:
                 raise PermissionError("You do not own this addon")
 
-        return self._execute_readonly(cleaned_sql, limit)
+        lock_key = None
+        if addon is not None:
+            lock_key = f"db_proxy_lock:{addon.id}"
+            if not cache.add(lock_key, "1", timeout=30):
+                raise ValueError(
+                    "Another query is in progress for this addon. Try again."
+                )
+        try:
+            return self._execute_readonly(cleaned_sql, limit)
+        finally:
+            if lock_key is not None:
+                try:
+                    cache.delete(lock_key)
+                except Exception:
+                    pass
 
     def _execute_readonly(self, sql: str, limit: int) -> dict:
         """Open a connection, force READ ONLY at the SQL level, and run ``sql``."""

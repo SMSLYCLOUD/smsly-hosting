@@ -50,6 +50,21 @@ class TopologyViewSet(viewsets.GenericViewSet):
             'cron_jobs',
         )
 
+        service_ids = [s.id for s in user_services]
+        latest_per_service = {}
+        if service_ids:
+            deployments = (
+                Deployment.objects
+                .filter(service_id__in=service_ids)
+                .order_by('service_id', '-created_at')
+            )
+            seen = set()
+            for d in deployments:
+                if d.service_id in seen:
+                    continue
+                seen.add(d.service_id)
+                latest_per_service[d.service_id] = d
+
         nodes = []
         edges = []
         service_ids = set()
@@ -58,10 +73,7 @@ class TopologyViewSet(viewsets.GenericViewSet):
             svc_id = str(service.id)
             service_ids.add(svc_id)
 
-            # Get latest deployment status
-            latest_deploy = Deployment.objects.filter(
-                service=service
-            ).order_by('-created_at').first()
+            latest_deploy = latest_per_service.get(service.id)
 
             deploy_status = 'NONE'
             deploy_commit = None

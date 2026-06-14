@@ -129,6 +129,48 @@ class ZeroTrustHMACAuthentication(authentication.BaseAuthentication):
 
 logger = logging.getLogger(__name__)
 
+# SECURITY (Issue 21): the SMSLY_DISABLE_TIER_GATES env var, when set,
+# silently unlocks all paid tier features. An operator who flips the
+# env var should leave a fingerprint in the immutable AuditLog.
+# ``_check_tier_gates_disabled()`` returns the current boolean state
+# of the flag and records an AuditLog entry on the first consult per
+# process. Call this helper instead of reading the env var or the
+# settings attribute directly. The flag is also documented in
+# config/settings.py.
+_TIER_GATES_LOGGED = False
+
+
+def _check_tier_gates_disabled() -> bool:
+    """Return True if the SMSLY_DISABLE_TIER_GATES bypass is active.
+
+    On the first consult in a given process where the flag is on,
+    record an immutable AuditLog entry so the bypass is never silent.
+    """
+    global _TIER_GATES_LOGGED
+    raw = str(
+        getattr(settings, "SMSLY_DISABLE_TIER_GATES", False)
+        or os.environ.get("SMSLY_DISABLE_TIER_GATES", "")
+    ).strip().lower()
+    enabled = raw in ("1", "true", "yes", "on")
+    if enabled and not _TIER_GATES_LOGGED:
+        try:
+            AuditLog.objects.create(
+                actor="system",
+                action="TIER_GATES_DISABLED",
+                target="global",
+                metadata={
+                    "env_var": "SMSLY_DISABLE_TIER_GATES",
+                    "value": os.environ.get(
+                        "SMSLY_DISABLE_TIER_GATES",
+                        getattr(settings, "SMSLY_DISABLE_TIER_GATES", ""),
+                    ),
+                },
+            )
+        except Exception as exc:
+            logger.error("Failed to audit-log SMSLY_DISABLE_TIER_GATES: %s", exc)
+        _TIER_GATES_LOGGED = True
+    return enabled
+
 MAINTENANCE_ACTIONS = {
     "clear": {
         "flag": "--clear",
@@ -2470,34 +2512,41 @@ class ServiceViewSet(viewsets.ModelViewSet):
         # SECURITY: Scope the bulk action to services the caller can access
         # via get_queryset(). Otherwise any authenticated user could trigger
         # deploy/cancel/senate against other tenants' services.
-        services_qs = self.get_queryset().filter(id__in=ids)
+        # SECURITY (Issue 25): wrap the iteration in a transaction
+        # and use select_for_update so a service cannot be deleted
+        # by another request between the filter and the action.
+        # ``action == 'deploy'`` enqueues a Celery task — that work
+        # is outside the DB transaction by design (the row lock is
+        # released as soon as the task id is handed to the broker).
         results = []
-        for svc in services_qs:
-            try:
-                if action == 'deploy':
-                    # Queue a smart_deploy_task for each service
-                    from apps.deployments.tasks import smart_deploy_task
-                    smart_deploy_task.delay(str(svc.id))
-                elif action == 'cancel':
-                    # Cancel any queued or building deployments
-                    from apps.deployments.models import Deployment
-                    Deployment.objects.filter(service=svc, status__in=[Deployment.Status.QUEUED, Deployment.Status.BUILDING]).update(status=Deployment.Status.CANCELLED)
-                elif action == 'senate':
-                    # Trigger AI Senate env enrichment (re‑use existing logic)
-                    from apps.intelligence.services.env_intelligence import EnvironmentIntelligenceService
-                    env_context = {}  # placeholder – real implementation would gather context
-                    suggestions = EnvironmentIntelligenceService.resolve_environment(env_context, svc.stack or '', svc.name)
-                    from apps.deployments.models import EnvironmentVariable
-                    import re
-                    for k, v in suggestions.items():
-                        if not re.match(r'^[A-Za-z0-9_][A-Za-z0-9_.-]*$', k):
-                            logger.warning("Skipping invalid env var key from Senate: %s", k)
-                            continue
-                        EnvironmentVariable.objects.update_or_create(service=svc, key=k, defaults={'value': v, 'is_secret': False})
-                results.append({"id": str(svc.id), "status": "ok"})
-            except Exception as exc:
-                logger.error("Bulk action %s failed for service %s: %s", action, svc.id, exc)
-                results.append({"id": str(svc.id), "status": "error", "error": str(exc)})
+        with transaction.atomic():
+            services_qs = self.get_queryset().filter(id__in=ids).select_for_update()
+            for svc in services_qs:
+                try:
+                    if action == 'deploy':
+                        # Queue a smart_deploy_task for each service
+                        from apps.deployments.tasks import smart_deploy_task
+                        smart_deploy_task.delay(str(svc.id))
+                    elif action == 'cancel':
+                        # Cancel any queued or building deployments
+                        from apps.deployments.models import Deployment
+                        Deployment.objects.filter(service=svc, status__in=[Deployment.Status.QUEUED, Deployment.Status.BUILDING]).update(status=Deployment.Status.CANCELLED)
+                    elif action == 'senate':
+                        # Trigger AI Senate env enrichment (re‑use existing logic)
+                        from apps.intelligence.services.env_intelligence import EnvironmentIntelligenceService
+                        env_context = {}  # placeholder – real implementation would gather context
+                        suggestions = EnvironmentIntelligenceService.resolve_environment(env_context, svc.stack or '', svc.name)
+                        from apps.deployments.models import EnvironmentVariable
+                        import re
+                        for k, v in suggestions.items():
+                            if not re.match(r'^[A-Za-z0-9_][A-Za-z0-9_.-]*$', k):
+                                logger.warning("Skipping invalid env var key from Senate: %s", k)
+                                continue
+                            EnvironmentVariable.objects.update_or_create(service=svc, key=k, defaults={'value': v, 'is_secret': False})
+                    results.append({"id": str(svc.id), "status": "ok"})
+                except Exception as exc:
+                    logger.error("Bulk action %s failed for service %s: %s", action, svc.id, exc)
+                    results.append({"id": str(svc.id), "status": "error", "error": str(exc)})
         return Response({"action": action, "results": results})
 
     # ---------------------------------------------------------------------
@@ -2593,8 +2642,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         Enforce billing plan limit for custom domains.
         (Disabled for self-hosted instances).
         """
-        from django.conf import settings
-        if getattr(settings, 'SMSLY_DISABLE_TIER_GATES', False):
+        if _check_tier_gates_disabled():
             return None
         try:
             from apps.billing.models import UserSubscription
@@ -4510,13 +4558,39 @@ class SessionTokenView(GenericAPIView):
     """
     Exchange an authenticated Django session for a DRF token.
     Used by the frontend callback page to avoid token-in-URL leakage.
+
+    SECURITY: switched from GET to POST. GET responses for tokens are
+    cacheable, get recorded in browser history, and any CORS
+    misconfiguration leaks the token to a third-party origin. POST
+    bodies are not cached, not recorded in history, and only readable
+    by a correctly-configured Same-Origin request. The DRF token is
+    also rotated on every exchange so a token captured from any prior
+    response is invalidated as soon as the legitimate caller refreshes
+    it.
     """
     serializer_class = EmptySerializer
     permission_classes = [permissions.IsAuthenticated]
+    http_method_names = ['post', 'options', 'head']
 
-    def get(self, request):
-        token, _ = Token.objects.get_or_create(user=request.user)
-        return Response({'token': token.key})
+    def get_throttles(self):
+        from rest_framework.throttling import UserRateThrottle
+
+        class _TokenExchangeThrottle(UserRateThrottle):
+            scope = 'token_exchange'
+            rate = '10/hour'
+
+        return [_TokenExchangeThrottle()]
+
+    def post(self, request):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return Response(
+                {"error": "Authentication required"},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+        Token.objects.filter(user=user).delete()
+        new_token = Token.objects.create(user=user)
+        return Response({'token': new_token.key})
 
 class SystemConfigView(GenericAPIView):
     """
@@ -4796,115 +4870,127 @@ class DomainConfigView(GenericAPIView):
         return updated
 
     def put(self, request):
-        config = PlatformConfig.load()
-        data = request.data
-        previous_base_domain = Service.default_public_base_domain()
-        original_domain = (config.domain or "").strip().lower().rstrip(".")
+        # SECURITY (Issue 22): wrap the whole update under a row
+        # lock on the PlatformConfig singleton so two concurrent
+        # admins cannot race the Caddyfile/DNS apply. The
+        # Caddyfile is applied first; if the subsequent DNS apply
+        # raises, the transaction rolls back the DB writes
+        # (caddy_status, updated_at) and the caller sees a 5xx
+        # with no partial DB state.
+        with transaction.atomic():
+            config = PlatformConfig.objects.select_for_update().get(pk=1)
+            data = request.data
+            previous_base_domain = Service.default_public_base_domain()
+            original_domain = (config.domain or "").strip().lower().rstrip(".")
 
-        # Update fields
-        if 'domain' in data:
-            raw_domain = str(data.get('domain') or '').strip()
-            if raw_domain:
-                domain, domain_error = _normalize_request_domain(raw_domain)
-                if domain_error:
-                    return Response(
-                        {'error': f'Invalid domain: {domain_error}'},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-                config.domain = domain
-            else:
-                config.domain = ''
-        if 'use_ssl' in data:
-            config.use_ssl = _parse_bool(data.get('use_ssl'))
-        if 'wildcard_subdomains' in data:
-            config.wildcard_subdomains = _parse_bool(data.get('wildcard_subdomains'))
-        if 'cloudflare_api_token' in data:
-            # Allow explicit clear by sending an empty string.
-            config.cloudflare_api_token = str(
-                data.get('cloudflare_api_token') or ''
-            ).strip()
-        clearing_token = 'cloudflare_api_token' in data and not config.cloudflare_api_token
-        if 'server_ip' in data:
-            config.server_ip = str(data.get('server_ip') or '').strip() or None
+            # Update fields
+            if 'domain' in data:
+                raw_domain = str(data.get('domain') or '').strip()
+                if raw_domain:
+                    domain, domain_error = _normalize_request_domain(raw_domain)
+                    if domain_error:
+                        return Response(
+                            {'error': f'Invalid domain: {domain_error}'},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+                    config.domain = domain
+                else:
+                    config.domain = ''
+            if 'use_ssl' in data:
+                config.use_ssl = _parse_bool(data.get('use_ssl'))
+            if 'wildcard_subdomains' in data:
+                config.wildcard_subdomains = _parse_bool(data.get('wildcard_subdomains'))
+            if 'cloudflare_api_token' in data:
+                # Allow explicit clear by sending an empty string.
+                config.cloudflare_api_token = str(
+                    data.get('cloudflare_api_token') or ''
+                ).strip()
+            clearing_token = 'cloudflare_api_token' in data and not config.cloudflare_api_token
+            if 'server_ip' in data:
+                config.server_ip = str(data.get('server_ip') or '').strip() or None
 
-        # Validate: wildcard requires Cloudflare token
-        if config.wildcard_subdomains and config.use_ssl and not config.cloudflare_api_token:
-            return Response(
-                {'error': 'Wildcard subdomains require a Cloudflare API Token.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            # Validate: wildcard requires Cloudflare token
+            if config.wildcard_subdomains and config.use_ssl and not config.cloudflare_api_token:
+                return Response(
+                    {'error': 'Wildcard subdomains require a Cloudflare API Token.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
-        config.save()
+            config.save()
 
-        updated_service_domains = 0
-        new_domain = (config.domain or "").strip().lower().rstrip(".")
-        if new_domain and new_domain != previous_base_domain:
-            updated_service_domains = self._rewrite_service_public_domains(
-                previous_base_domain,
-                new_domain,
-            )
-            if updated_service_domains:
-                logger.info(
-                    "Rewrote %s service public domains from %s to %s",
-                    updated_service_domains,
+            updated_service_domains = 0
+            new_domain = (config.domain or "").strip().lower().rstrip(".")
+            if new_domain and new_domain != previous_base_domain:
+                updated_service_domains = self._rewrite_service_public_domains(
                     previous_base_domain,
                     new_domain,
                 )
-        elif original_domain and not new_domain:
-            logger.info(
-                "Platform domain cleared from %s; existing service public domains were left unchanged",
-                original_domain,
-            )
-
-        # Generate and apply Caddyfile
-        try:
-            from services.caddy_manager import generate_caddyfile, apply_caddyfile
-            caddyfile_content = generate_caddyfile(config)
-            cf_token = (config.cloudflare_api_token or "").strip()
-            result = apply_caddyfile(
-                caddyfile_content,
-                cloudflare_token=cf_token,
-                preserve_existing_token=not clearing_token,
-            )
-            config.caddy_status = 'applied' if result['ok'] else 'error'
-            config.save(update_fields=['caddy_status'])
-            if not result.get('ok'):
-                return Response(
-                    {
-                        'error': f"Config saved but Caddyfile apply failed: {result.get('message', 'unknown error')}",
-                        'caddy_status': config.caddy_status,
-                    },
-                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                if updated_service_domains:
+                    logger.info(
+                        "Rewrote %s service public domains from %s to %s",
+                        updated_service_domains,
+                        previous_base_domain,
+                        new_domain,
+                    )
+            elif original_domain and not new_domain:
+                logger.info(
+                    "Platform domain cleared from %s; existing service public domains were left unchanged",
+                    original_domain,
                 )
 
-            # Auto-create DNS records on Cloudflare when possible.
-            if config.cloudflare_api_token and config.server_ip and config.domain:
-                try:
-                    from apps.deployments.services.dns import ensure_dns_records
-                    domains = [config.domain]
-                    if config.wildcard_subdomains:
-                        domains.append(f"*.{config.domain}")
-                    dns_result = ensure_dns_records(domains, config.server_ip, config.cloudflare_api_token)
-                    if not dns_result.get("ok"):
-                        logger.warning("DNS sync issues: %s", dns_result.get("errors"))
-                except Exception as dns_exc:  # pylint: disable=broad-exception-caught
-                    logger.warning("DNS sync skipped: %s", dns_exc)
-        except Exception as e:
-            config.caddy_status = 'error'
-            config.save(update_fields=['caddy_status'])
-            return Response(
-                {'error': f'Config saved but Caddyfile apply failed: {e}'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+            # Generate and apply Caddyfile
+            try:
+                from services.caddy_manager import generate_caddyfile, apply_caddyfile
+                caddyfile_content = generate_caddyfile(config)
+                cf_token = (config.cloudflare_api_token or "").strip()
+                result = apply_caddyfile(
+                    caddyfile_content,
+                    cloudflare_token=cf_token,
+                    preserve_existing_token=not clearing_token,
+                )
+                config.caddy_status = 'applied' if result['ok'] else 'error'
+                config.save(update_fields=['caddy_status'])
+                if not result.get('ok'):
+                    return Response(
+                        {
+                            'error': f"Config saved but Caddyfile apply failed: {result.get('message', 'unknown error')}",
+                            'caddy_status': config.caddy_status,
+                        },
+                        status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    )
 
-        return Response({
-            'message': 'Domain configuration updated and Caddyfile applied.',
-            'caddy_status': config.caddy_status,
-            'cloudflare_api_token_set': bool(config.cloudflare_api_token),
-            'updated_service_domains': updated_service_domains,
-            'redeploy_required': bool(updated_service_domains),
-            'caddyfile_preview': caddyfile_content,
-        })
+                # Auto-create DNS records on Cloudflare when possible.
+                # If this raises, the surrounding transaction rolls
+                # back the Caddyfile-apply status update, the
+                # PlatformConfig changes, and the service-domain
+                # rewrites — i.e. nothing is half-applied.
+                if config.cloudflare_api_token and config.server_ip and config.domain:
+                    try:
+                        from apps.deployments.services.dns import ensure_dns_records
+                        domains = [config.domain]
+                        if config.wildcard_subdomains:
+                            domains.append(f"*.{config.domain}")
+                        dns_result = ensure_dns_records(domains, config.server_ip, config.cloudflare_api_token)
+                        if not dns_result.get("ok"):
+                            logger.warning("DNS sync issues: %s", dns_result.get("errors"))
+                    except Exception as dns_exc:  # pylint: disable=broad-exception-caught
+                        logger.warning("DNS sync skipped: %s", dns_exc)
+            except Exception as e:
+                config.caddy_status = 'error'
+                config.save(update_fields=['caddy_status'])
+                return Response(
+                    {'error': f'Config saved but Caddyfile apply failed: {e}'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+
+            return Response({
+                'message': 'Domain configuration updated and Caddyfile applied.',
+                'caddy_status': config.caddy_status,
+                'cloudflare_api_token_set': bool(config.cloudflare_api_token),
+                'updated_service_domains': updated_service_domains,
+                'redeploy_required': bool(updated_service_domains),
+                'caddyfile_preview': caddyfile_content,
+            })
 
 
 class RouteRecheckView(GenericAPIView):

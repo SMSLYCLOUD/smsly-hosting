@@ -128,6 +128,11 @@ def _resolve_gateway_secret() -> str:
 
 GATEWAY_SECRET = _resolve_gateway_secret()
 # Owner edition: all tier gates disabled — all features unlocked.
+# SECURITY (Issue 21): the flag is audit-logged on the first
+# consult per process via ``_check_tier_gates_disabled()`` in
+# apps.deployments.views. That helper records an immutable
+# AuditLog entry so an operator flipping the env var cannot
+# silently unlock paid features — there is always a fingerprint.
 SMSLY_DISABLE_TIER_GATES = config("SMSLY_DISABLE_TIER_GATES", default=False, cast=bool)
 # Maximum file size in bytes for container file_read (default: 10MB)
 SMSLY_MAX_FILE_READ_SIZE = max(1, int(config("SMSLY_MAX_FILE_READ_SIZE", default=10 * 1024 * 1024)))
@@ -875,6 +880,12 @@ REST_FRAMEWORK = {
         'server_run_command': '10/minute',
         # SECURITY (Batch I): topology N+1 query cap.
         'topology_list': '30/minute',
+        # SECURITY (Issue 20): the cloud-storage ``templates``
+        # endpoint is a no-DB convenience action that returns the
+        # static TEMPLATES list. A scripted caller could probe it
+        # indefinitely to enumerate destination IDs that the
+        # platform supports. Cap at 30/minute per user.
+        'cloud_templates': '30/minute',
     },
 }
 # SECURITY (Batch H): API_RATE_LIMIT was 1000 (per-IP per-minute)

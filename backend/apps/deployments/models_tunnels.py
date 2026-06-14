@@ -77,6 +77,8 @@ class ReservedSubdomain(models.Model):
         related_name='reserved_subdomains')
     subdomain = models.CharField(max_length=63, unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    released_at = models.DateTimeField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
 
     class Meta:
         ordering = ['-created_at']

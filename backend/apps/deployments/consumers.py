@@ -684,12 +684,25 @@ class TerminalConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def _verify_ownership(self):
-        """Verify user owns the deployment."""
+        """Verify user owns the deployment, or is a member of the
+        team that owns the service's project.
+
+        SECURITY: previously this checked ``service.owner`` only. A
+        team member who is removed from the team mid-session would
+        retain their WebSocket — the existing query is run on every
+        connect AND on every received message — so we must also
+        reject the connection when the user is neither the owner
+        nor a current team member. The membership check uses the
+        ``TeamMember`` through table directly so a removed user
+        immediately loses access on the next ``receive()`` call.
+        """
+        from django.db.models import Q
         from apps.deployments.models import Deployment
         try:
             return Deployment.objects.filter(
+                Q(service__owner=self.user) |
+                Q(service__project__team__members__user=self.user),
                 id=self.deployment_id,
-                service__owner=self.user
             ).exists()
         except Exception:
             return False
@@ -870,11 +883,16 @@ class BuildLogConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def _verify_ownership(self):
+        # SECURITY: also accept team members of the service's project,
+        # not just the service owner. See TerminalConsumer._verify_ownership
+        # for the full rationale.
+        from django.db.models import Q
         from apps.deployments.models import Deployment
         try:
             return Deployment.objects.filter(
+                Q(service__owner=self.user) |
+                Q(service__project__team__members__user=self.user),
                 id=self.deployment_id,
-                service__owner=self.user
             ).exists()
         except Exception:
             return False

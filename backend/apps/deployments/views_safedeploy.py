@@ -3,6 +3,7 @@ from rest_framework.decorators import action, throttle_classes
 from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle
 from django.conf import settings as django_settings
+from django.db import transaction
 from django.db.models import Q
 import logging
 from apps.deployments.models_core import Service, Deployment
@@ -27,7 +28,7 @@ class ApprovalThrottle(UserRateThrottle):
     rate = '20/minute'
 
 
-MAX_PREVIEWS_PER_SERVICE = getattr(django_settings, 'MAX_PREVIEWS_PER_SERVICE', 50)
+MAX_PREVIEWS_PER_CREATOR = getattr(django_settings, 'MAX_PREVIEWS_PER_CREATOR', 10)
 
 
 def send_approval_notification(approval, service_pk):
@@ -95,13 +96,14 @@ class PreviewEnvironmentViewSet(viewsets.ModelViewSet):
 
         existing = PreviewEnvironment.objects.filter(
             service=service,
+            created_by=request.user,
         ).exclude(status__in=[
             PreviewEnvironment.Status.DESTROYED,
             PreviewEnvironment.Status.EXPIRED,
         ]).count()
-        if existing >= MAX_PREVIEWS_PER_SERVICE:
+        if existing >= MAX_PREVIEWS_PER_CREATOR:
             return Response(
-                {"error": f"Preview quota exceeded ({existing}/{MAX_PREVIEWS_PER_SERVICE}). Destroy existing previews first."},
+                {"error": f"Per-user preview quota exceeded ({existing}/{MAX_PREVIEWS_PER_CREATOR}). Destroy existing previews first."},
                 status=status.HTTP_429_TOO_MANY_REQUESTS,
             )
 
@@ -228,22 +230,32 @@ class DeploymentApprovalViewSet(viewsets.ModelViewSet):
     def approve(self, request, pk=None, service_pk=None):
         from apps.deployments.services.safedeploy.deployment_pipeline import ProductionDeploymentPipeline
 
-        approval = self._get_approval_for_service(pk, service_pk)
-        if approval is None:
-            return Response({"error": "Approval not found"}, status=status.HTTP_404_NOT_FOUND)
+        with transaction.atomic():
+            try:
+                approval = DeploymentApproval.objects.select_for_update().get(
+                    id=pk, service_id=service_pk,
+                )
+            except DeploymentApproval.DoesNotExist:
+                return Response({"error": "Approval not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        deployment = approval.deployment
-        if deployment is None:
-            return Response({"error": "No deployment associated with this approval"}, status=status.HTTP_400_BAD_REQUEST)
+            if approval.status != DeploymentApproval.Status.PENDING:
+                return Response(
+                    {"error": f"Approval is in {approval.status} status, not PENDING."},
+                    status=status.HTTP_409_CONFLICT,
+                )
 
-        if deployment.status != Deployment.Status.AWAITING_APPROVAL:
-            return Response({"error": "Deployment is not awaiting approval"}, status=status.HTTP_400_BAD_REQUEST)
+            deployment = approval.deployment
+            if deployment is None:
+                return Response({"error": "No deployment associated with this approval"}, status=status.HTTP_400_BAD_REQUEST)
 
-        if str(deployment.service_id) != str(service_pk):
-            return Response({"error": "Deployment does not belong to this service"}, status=status.HTTP_400_BAD_REQUEST)
+            if deployment.status != Deployment.Status.AWAITING_APPROVAL:
+                return Response({"error": "Deployment is not awaiting approval"}, status=status.HTTP_400_BAD_REQUEST)
 
-        pipeline = ProductionDeploymentPipeline()
-        approval = pipeline.approve_and_process(deployment, request.user)
+            if str(deployment.service_id) != str(service_pk):
+                return Response({"error": "Deployment does not belong to this service"}, status=status.HTTP_400_BAD_REQUEST)
+
+            pipeline = ProductionDeploymentPipeline()
+            approval = pipeline.approve_and_process(deployment, request.user)
 
         try:
             AuditLog(

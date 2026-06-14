@@ -427,6 +427,28 @@ def github_oauth_callback(request):
     try:
         from allauth.socialaccount.models import SocialAccount, SocialToken
 
+        # SECURITY: refuse to silently re-assign an existing SocialAccount
+        # to a different user. Without this guard, a GitHub user can
+        # take over another tenant's SMSLY account by completing the
+        # OAuth callback while signed in as the attacker — the existing
+        # SocialAccount (uid=github_uid) gets reassigned to the
+        # attacker's SMSLY user, and any repo/integration tied to it
+        # follows.
+        existing = SocialAccount.objects.filter(
+            provider="github", uid=github_uid,
+        ).first()
+        if existing and existing.user_id != request.user.id:
+            return Response(
+                {
+                    "error": (
+                        "This OAuth account is already linked to another "
+                        "user. Please contact the original owner to "
+                        "release the link."
+                    )
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
         account, created = SocialAccount.objects.update_or_create(
             provider="github",
             uid=github_uid,
@@ -435,12 +457,6 @@ def github_oauth_callback(request):
                 "extra_data": profile,
             },
         )
-
-        # If account exists but belongs to another user, re-link it
-        if not created and account.user_id != request.user.id:
-            account.user = request.user
-            account.extra_data = profile
-            account.save()
 
         # Upsert the token — include expires_at if GitHub provides it
         from django.utils import timezone
@@ -634,15 +650,30 @@ def gitlab_oauth_callback(request):
 
     try:
         from allauth.socialaccount.models import SocialAccount, SocialToken
+        # SECURITY: refuse to silently re-assign an existing SocialAccount
+        # to a different user. See github_oauth_callback for the full
+        # rationale — without this guard, completing the OAuth flow
+        # while signed in as an attacker would take over the tenant
+        # that originally owned the GitLab uid.
+        existing = SocialAccount.objects.filter(
+            provider="gitlab", uid=gitlab_uid,
+        ).first()
+        if existing and existing.user_id != request.user.id:
+            return Response(
+                {
+                    "error": (
+                        "This OAuth account is already linked to another "
+                        "user. Please contact the original owner to "
+                        "release the link."
+                    )
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
         account, created = SocialAccount.objects.update_or_create(
             provider="gitlab",
             uid=gitlab_uid,
             defaults={"user": request.user, "extra_data": profile},
         )
-        if not created and account.user_id != request.user.id:
-            account.user = request.user
-            account.extra_data = profile
-            account.save()
 
         token_defaults = {"token": access_token, "token_secret": token_data.get("refresh_token", ""), "app": app}
         expires_in = token_data.get("expires_in")
@@ -808,15 +839,30 @@ def bitbucket_oauth_callback(request):
 
     try:
         from allauth.socialaccount.models import SocialAccount, SocialToken
+        # SECURITY: refuse to silently re-assign an existing SocialAccount
+        # to a different user. See github_oauth_callback for the full
+        # rationale — without this guard, completing the OAuth flow
+        # while signed in as an attacker would take over the tenant
+        # that originally owned the Bitbucket uid.
+        existing = SocialAccount.objects.filter(
+            provider="bitbucket_oauth2", uid=bb_uid,
+        ).first()
+        if existing and existing.user_id != request.user.id:
+            return Response(
+                {
+                    "error": (
+                        "This OAuth account is already linked to another "
+                        "user. Please contact the original owner to "
+                        "release the link."
+                    )
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
         account, created = SocialAccount.objects.update_or_create(
             provider="bitbucket_oauth2",
             uid=bb_uid,
             defaults={"user": request.user, "extra_data": profile},
         )
-        if not created and account.user_id != request.user.id:
-            account.user = request.user
-            account.extra_data = profile
-            account.save()
 
         token_defaults = {"token": access_token, "token_secret": token_data.get("refresh_token", ""), "app": app}
         SocialToken.objects.update_or_create(account=account, defaults=token_defaults)

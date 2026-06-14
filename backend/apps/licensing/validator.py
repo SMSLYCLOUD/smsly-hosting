@@ -163,7 +163,11 @@ def _apply_license_payload(license_obj, payload):
     """
     Apply the validated payload to the license object.
     """
-    license_obj.tier = payload.get('tier', PlatformTier.COMMUNITY)
+    tier_value = payload.get('tier', PlatformTier.COMMUNITY)
+    if tier_value not in PlatformTier.values:
+        logger.warning("Rejecting license payload with invalid tier %r", tier_value)
+        return False
+    license_obj.tier = tier_value
     license_obj.licensed_to = payload.get('licensed_to', '')
     license_obj.instance_id = payload.get('instance_id', '')
 

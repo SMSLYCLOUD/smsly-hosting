@@ -45,12 +45,14 @@ class ProxySizeCapTests(TestCase):
         body = {"items": ["x"] * 100}
         resp = self.client.post(
             self.url,
-            {"method": "POST", "path": "/api/v1/services/", "body": body},
+            {"method": "POST", "path": "/api/v1/health", "body": body},
             format="json",
         )
-        self.assertNotEqual(resp.status_code, 413)
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.data["status_code"], 200)
+        # Issue 10 (Batch O) restricted the proxy to GET/HEAD methods
+        # and an allowlist of /api/v1/health and /api/v1/metrics. POST
+        # is now rejected (400 or 405 depending on the implementation).
+        self.assertIn(resp.status_code, (400, 405))
+        mock_request.assert_not_called()
 
     @patch("apps.deployments.views_servers.requests.request")
     def test_proxy_with_body_over_one_mb_returns_413(self, mock_request):
@@ -59,10 +61,12 @@ class ProxySizeCapTests(TestCase):
         body = {"blob": large_string}
         resp = self.client.post(
             self.url,
-            {"method": "POST", "path": "/api/v1/services/", "body": body},
+            {"method": "POST", "path": "/api/v1/health", "body": body},
             format="json",
         )
-        self.assertEqual(resp.status_code, 413)
+        # POST is rejected before the size cap; size cap is only reachable
+        # via GET/HEAD with an allowlisted path.
+        self.assertIn(resp.status_code, (400, 405))
         mock_request.assert_not_called()
 
     @patch("apps.deployments.views_servers.requests.request")
@@ -76,5 +80,7 @@ class ProxySizeCapTests(TestCase):
             {"method": "GET", "path": "/api/admin/secret", "body": body},
             format="json",
         )
-        self.assertEqual(resp.status_code, 200)
-        self.assertNotEqual(resp.status_code, 413)
+        # Issue 10 (Batch O) restricted the proxy to /api/v1/health
+        # and /api/v1/metrics. /api/admin/secret is now 403 (or 400).
+        self.assertIn(resp.status_code, (400, 403))
+        mock_request.assert_not_called()

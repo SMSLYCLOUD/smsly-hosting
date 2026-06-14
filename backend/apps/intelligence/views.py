@@ -157,7 +157,7 @@ def _record_usage(user, provider_name: str, model: str, usage: dict,
 
 @extend_schema(responses=OpenApiTypes.OBJECT)
 @api_view(["GET"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsAdminUser])
 def ai_providers_status(request):
     """
     Return all AI providers with config status, model, and balance.
@@ -165,6 +165,11 @@ def ai_providers_status(request):
     GET /api/v1/ai/providers/
     Query params:
       - include_balance=true  (optional, slower — hits each provider's billing API)
+
+    SECURITY: admin-only. Any authenticated user previously received the
+    list of configured providers, which keys were present, and the
+    configured model names — useful reconnaissance for an attacker that
+    has already compromised a low-privilege account.
     """
     try:
         include_balance = request.query_params.get("include_balance", "").lower() == "true"
