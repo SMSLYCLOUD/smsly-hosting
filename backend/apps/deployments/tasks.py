@@ -1200,6 +1200,15 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
         else:
             provider = CloudProvider.objects.get(id=provider_id)
 
+        is_delegated = deployment.source_node is not None
+
+        if not skip_review and getattr(service, 'safedeploy_enabled', False) \
+                and not getattr(deployment, 'is_rollback', False) and not is_delegated:
+            from apps.deployments.services.safedeploy.deployment_pipeline import ProductionDeploymentPipeline
+            ProductionDeploymentPipeline().process_deployment(deployment)
+            if deployment.status == Deployment.Status.AWAITING_APPROVAL:
+                return  # parked; will resume on approve
+
         # 0. Remote Delegation
         from apps.deployments.models import PlatformConfig
         config = PlatformConfig.load()
@@ -1207,7 +1216,6 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
         # Remote delegation: if this deployment was triggered by a remote
         # master (source_node is set), the current node should build the
         # image and then deploy to the remote via the orchestrator.
-        is_delegated = deployment.source_node is not None
         if is_delegated:
             from apps.deployments.models_core import ManagedServer
 

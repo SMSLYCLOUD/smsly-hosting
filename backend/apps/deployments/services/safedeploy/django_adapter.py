@@ -1,4 +1,5 @@
 import os
+import ast
 from typing import Dict, Any, List
 from .command_executor import CommandExecutor
 from apps.deployments.models_safedeploy import MigrationValidation
@@ -26,59 +27,96 @@ class DjangoAdapter:
 
     def inspect_migration_files(self, project_path: str) -> List[Dict[str, Any]]:
         operations = []
-        if not os.path.exists(project_path): return operations
-        for root, _, files in os.walk(project_path):
-            if 'migrations' in root:
-                for file in files:
-                    if file.endswith('.py') and file != '__init__.py':
-                        filepath = os.path.join(root, file)
-                        try:
-                            with open(filepath, 'r') as f:
-                                content = f.read()
-                                if 'migrations.RemoveField' in content: operations.append({'type': 'RemoveField', 'file': file})
-                                if 'migrations.DeleteModel' in content: operations.append({'type': 'DeleteModel', 'file': file})
-                                if 'migrations.RunPython' in content: operations.append({'type': 'RunPython', 'file': file})
-                                if 'migrations.RunSQL' in content: operations.append({'type': 'RunSQL', 'file': file})
-                                if 'migrations.AlterField' in content: operations.append({'type': 'AlterField', 'file': file})
-                                if 'migrations.AddField' in content: operations.append({'type': 'AddField', 'file': file})
-                        except Exception:
-                            pass
+        if not os.path.exists(project_path):
+            return operations
+        for root, dirs, files in os.walk(project_path):
+            dirs[:] = [d for d in dirs if d == 'migrations']
+            if not dirs and os.path.basename(root) != 'migrations':
+                continue
+            for file in files:
+                if not (file.endswith('.py') and file != '__init__.py'):
+                    continue
+                filepath = os.path.join(root, file)
+                try:
+                    with open(filepath, 'r') as f:
+                        source = f.read()
+                    tree = ast.parse(source, filename=filepath)
+                    operations.extend(self._extract_operations_from_ast(tree, filepath))
+                except (SyntaxError, ValueError):
+                    pass
         return operations
 
-    def classify_migration_risk(self, operations: List[Dict[str, Any]]) -> Dict[str, Any]:
-        risk_score = 0
-        reasons = []
-        has_critical = False
-        has_high = False
-        has_medium = False
+    def _extract_operations_from_ast(self, tree: ast.AST, filepath: str) -> List[Dict[str, Any]]:
+        op_names = {
+            'DeleteModel', 'RemoveField', 'RunPython', 'RunSQL',
+            'AlterField', 'AddField', 'RenameField', 'RenameModel',
+            'CreateModel', 'AddIndex', 'RemoveIndex',
+        }
+        operations = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                op_name = node.func.attr
+                if op_name in op_names:
+                    entry = {'type': op_name, 'file': os.path.basename(filepath)}
+                    if op_name == 'RunPython':
+                        entry['no_reverse'] = self._runpython_has_no_reverse(node)
+                    operations.append(entry)
+        return operations
 
+    @staticmethod
+    def _runpython_has_no_reverse(call_node: ast.Call) -> bool:
+        for kw in call_node.keywords:
+            if kw.arg == 'reverse_code':
+                if isinstance(kw.value, ast.Constant) and kw.value.value is None:
+                    return True
+                return False
+        return True
+
+    def classify_migration_risk(self, operations: List[Dict[str, Any]]) -> Dict[str, Any]:
+        score_map = {
+            'DeleteModel': 100, 'RunSQL': 100,
+            'RemoveField': 50, 'RunPython': 50,
+            'AlterField': 25, 'RemoveIndex': 25,
+            'RenameField': 25, 'RenameModel': 25,
+            'AddField': 0, 'AddIndex': 0, 'CreateModel': 0,
+        }
+        risk_score = 0
+        has_critical = has_high = has_medium = False
+        reasons = []
         for op in operations:
             op_type = op.get('type')
-            if op_type in ['DeleteModel', 'RunSQL']:
+            score = score_map.get(op_type, 0)
+            risk_score += score
+            if op_type in ('DeleteModel', 'RunSQL'):
                 has_critical = True
-                risk_score += 100
-                reasons.append(f"Contains {op_type}.")
-            elif op_type in ['RemoveField', 'RunPython']:
+            elif op_type in ('RemoveField', 'RunPython'):
                 has_high = True
-                risk_score += 50
-                reasons.append(f"Contains {op_type}.")
-            elif op_type in ['AlterField']:
+            elif op_type in ('AlterField', 'RemoveIndex', 'RenameField', 'RenameModel'):
                 has_medium = True
-                risk_score += 20
-
-        if risk_score > 100: risk_score = 100
-
-        risk_level = MigrationValidation.RiskLevel.LOW
-        if has_critical: risk_level = MigrationValidation.RiskLevel.CRITICAL
-        elif has_high: risk_level = MigrationValidation.RiskLevel.HIGH
-        elif has_medium: risk_level = MigrationValidation.RiskLevel.MEDIUM
-
+            if score >= 25:
+                reasons.append(f"Contains {op_type}.")
+            if op_type == 'RunPython' and op.get('no_reverse'):
+                reasons.append("RunPython has no reverse — migration cannot be undone.")
+        risk_score = min(risk_score, 100)
+        if has_critical:
+            level = MigrationValidation.RiskLevel.CRITICAL
+        elif has_high:
+            level = MigrationValidation.RiskLevel.HIGH
+        elif has_medium:
+            level = MigrationValidation.RiskLevel.MEDIUM
+        else:
+            level = MigrationValidation.RiskLevel.LOW
         return {
-            'risk_level': risk_level,
+            'risk_level': level,
             'risk_score': risk_score,
             'reasons': reasons,
-            'requires_manual_approval': risk_level in [MigrationValidation.RiskLevel.HIGH, MigrationValidation.RiskLevel.CRITICAL],
-            'requires_backup': risk_level != MigrationValidation.RiskLevel.LOW,
-            'can_auto_deploy': risk_level == MigrationValidation.RiskLevel.LOW,
-            'summary': f"Migration risk is {risk_level} (Score: {risk_score})"
+            'requires_manual_approval': level in (MigrationValidation.RiskLevel.HIGH, MigrationValidation.RiskLevel.CRITICAL),
+            'requires_backup': level != MigrationValidation.RiskLevel.LOW,
+            'can_auto_deploy': level == MigrationValidation.RiskLevel.LOW,
+            'auto_deploy_policy': (
+                MigrationValidation.AutoDeployPolicy.LOW_RISK_ONLY
+                if level == MigrationValidation.RiskLevel.LOW
+                else MigrationValidation.AutoDeployPolicy.NEVER
+            ),
+            'summary': f"Migration risk is {level} (Score: {risk_score})"
         }

@@ -51,7 +51,7 @@ class RedactionTestCase(unittest.TestCase):
 from apps.deployments.services.safedeploy.postgres_snapshot_manager import PostgresSnapshotManager
 from apps.deployments.models_core import Service, EnvironmentVariable, Deployment
 from apps.deployments.models_safedeploy import PreviewEnvironment
-from apps.deployments.tasks_safedeploy import _make_clone_database_name, run_preview_health_check_job
+from apps.deployments.tasks_safedeploy import _make_clone_database_name, provision_preview_service_job
 from apps.cloud.models import CloudProvider
 
 class PostgresSnapshotManagerTestCase(unittest.TestCase):
@@ -118,7 +118,7 @@ class BranchPreviewManagerTestCase(TestCase):
         self.assertNotEqual(first.preview_url, second.preview_url)
 
 
-class PreviewHealthJobTestCase(TestCase):
+class PreviewProvisionJobTestCase(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(username="preview-job-user", password="p")
         self.provider = CloudProvider.objects.create(
@@ -152,8 +152,8 @@ class PreviewHealthJobTestCase(TestCase):
 
     @patch("apps.deployments.tasks_safedeploy._dispatch_preview_deployment")
     @patch("apps.deployments.tasks_safedeploy._sync_preview_addons")
-    def test_health_job_syncs_preview_service_and_dispatches_each_run(self, mock_sync_addons, mock_dispatch):
-        run_preview_health_check_job(str(self.preview.id))
+    def test_provision_job_syncs_preview_service_and_dispatches_each_run(self, mock_sync_addons, mock_dispatch):
+        provision_preview_service_job(str(self.preview.id))
 
         transient = Service.objects.get(parent_service=self.parent, is_preview=True)
         self.assertEqual(transient.repository_url, self.parent.repository_url)
@@ -167,7 +167,7 @@ class PreviewHealthJobTestCase(TestCase):
 
         self.preview.commit_sha = "b" * 7
         self.preview.save(update_fields=["commit_sha"])
-        run_preview_health_check_job(str(self.preview.id))
+        provision_preview_service_job(str(self.preview.id))
 
         self.assertEqual(mock_sync_addons.call_count, 2)
         self.assertEqual(mock_dispatch.call_count, 2)

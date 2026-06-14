@@ -361,6 +361,10 @@ class Service(TimeStampedModel):
 
     # SafeDeploy Config
     safe_deploy_enabled = models.BooleanField(default=False)
+    safedeploy_enabled = models.BooleanField(
+        default=False,
+        help_text="When true, production deploys go through the SafeDeploy pipeline (preview → migration validation → risk classification → manual approval).",
+    )
     preview_environments_enabled = models.BooleanField(default=True)
     auto_create_preview_on_branch_push = models.BooleanField(default=False)
     MIGRATION_AUTO_APPROVAL_CHOICES = [('NEVER', 'Never'), ('LOW_RISK_ONLY', 'Low Risk Only'), ('LOW_AND_MEDIUM', 'Low and Medium'), ('ALWAYS_REQUIRE_MANUAL', 'Always Require Manual')]
@@ -748,6 +752,10 @@ class Deployment(TimeStampedModel):
         help_text="Snapshot of service.min_replicas captured at queue time so the deploy "
                   "executor uses the original replica count even if the autoscaler mutates "
                   "it during the build.")
+
+    metadata = models.JSONField(
+        default=dict, blank=True,
+        help_text="Scratch state for in-flight pipeline phases (e.g. pre-migration state for rollback).")
 
     class Meta:
         ordering = ['-created_at']

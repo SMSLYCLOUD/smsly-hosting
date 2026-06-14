@@ -87,7 +87,9 @@ app.conf.task_routes = {
     'apps.deployments.tasks_safedeploy.create_database_clone_job': {'queue': 'deploy'},
     'apps.deployments.tasks_safedeploy.run_migration_validation_job': {'queue': 'deploy'},
     'apps.deployments.tasks_safedeploy.run_preview_tests_job': {'queue': 'deploy'},
+    'apps.deployments.tasks_safedeploy.provision_preview_service_job': {'queue': 'deploy'},
     'apps.deployments.tasks_safedeploy.run_preview_health_check_job': {'queue': 'deploy'},
+    'apps.deployments.tasks_safedeploy.expire_stale_previews_job': {'queue': 'fast'},
     'apps.deployments.tasks_safedeploy.destroy_preview_environment_job': {'queue': 'deploy'},
     'apps.deployments.tasks.update_remote_server_task': {'queue': 'deploy'},
     'apps.deployments.tasks.self_heal_remote_deployment': {'queue': 'deploy'},
@@ -207,6 +209,12 @@ app.conf.beat_schedule = {
         'task': 'apps.deployments.tasks.run_scheduled_backups_task',
         'schedule': 900.0,
         'options': {'expires': 900.0},
+    },
+    # Expire stale preview environments hourly
+    'expire-stale-previews': {
+        'task': 'apps.deployments.tasks_safedeploy.expire_stale_previews_job',
+        'schedule': 3600.0,
+        'options': {'expires': 3600.0},
     },
 }
 

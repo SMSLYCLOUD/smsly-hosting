@@ -80,9 +80,30 @@ class PostgresSnapshotManager:
             timeout=timeout
         )
 
-    def create_clone(self, source_db_name: str, clone_db_name: str) -> bool:
+    def create_clone(self, source_db_name: str, clone_db_name: str,
+                     allow_production_disruption: bool = False) -> bool:
         _validate_db_name(source_db_name)
         _validate_db_name(clone_db_name)
+
+        if allow_production_disruption:
+            logger.critical(
+                "ALLOW_PRODUCTION_DISRUPTION=True: pg_terminate_backend will be "
+                "issued against %s to clone to %s", source_db_name, clone_db_name
+            )
+            try:
+                from apps.deployments.models_audit import AuditLog
+                AuditLog.objects.create(
+                    actor='system',
+                    action='DB_CLONE_PRODUCTION_DISRUPTION',
+                    target=f"Service:{source_db_name}",
+                    metadata={
+                        'source_db': source_db_name,
+                        'clone_db': clone_db_name,
+                        'reason': 'allow_production_disruption=True',
+                    },
+                )
+            except Exception as _audit_exc:
+                logger.error("Failed to write AuditLog for production disruption: %s", _audit_exc)
 
         maintenance_url = self._get_maintenance_url()
         source_url = self._build_db_url(source_db_name)
@@ -92,27 +113,24 @@ class PostgresSnapshotManager:
             logger.error(f"CLONE_DEBUG >>> start: source=%s clone=%s admin_url=%s",
                          source_db_name, clone_db_name, self.admin_db_url[:60])
 
-            # 1.  Terminate other connections to the source database.
-            #     We connect to 'postgres' so our own session does not hold a
-            #     lock on source_db.
-            term_sql = (
-                f"SELECT pg_terminate_backend(pid) "
-                f"FROM pg_stat_activity "
-                f"WHERE datname = '{source_db_name}' AND pid <> pg_backend_pid();"
-            )
-            term_res = self._run_psql(maintenance_url, term_sql, check=False)
-            logger.error(f"CLONE_DEBUG >>> terminate rc=%s stderr=%s",
-                         term_res.returncode, term_res.stderr[:200] if term_res.stderr else '')
-            if term_res.returncode != 0:
-                logger.warning(f"pg_terminate_backend non-zero exit: %s",
-                               term_res.stderr.strip())
-            else:
-                terminated = term_res.stdout.strip()
-                if terminated:
-                    logger.info(f"Terminated %s backends on %s",
-                                terminated, source_db_name)
+            if allow_production_disruption:
+                term_sql = (
+                    f"SELECT pg_terminate_backend(pid) "
+                    f"FROM pg_stat_activity "
+                    f"WHERE datname = '{source_db_name}' AND pid <> pg_backend_pid();"
+                )
+                term_res = self._run_psql(maintenance_url, term_sql, check=False)
+                logger.error(f"CLONE_DEBUG >>> terminate rc=%s stderr=%s",
+                             term_res.returncode, term_res.stderr[:200] if term_res.stderr else '')
+                if term_res.returncode != 0:
+                    logger.warning(f"pg_terminate_backend non-zero exit: %s",
+                                   term_res.stderr.strip())
+                else:
+                    terminated = term_res.stdout.strip()
+                    if terminated:
+                        logger.info(f"Terminated %s backends on %s",
+                                    terminated, source_db_name)
 
-            # 2.  Drop any stale clone database left from a previous attempt.
             drop_sql = f'DROP DATABASE IF EXISTS "{clone_db_name}";'
             drop_res = self._run_psql(maintenance_url, drop_sql, check=False)
             logger.error(f"CLONE_DEBUG >>> drop rc=%s stderr=%s",
@@ -120,8 +138,6 @@ class PostgresSnapshotManager:
             if drop_res.returncode != 0:
                 logger.warning(f"DROP IF EXISTS stderr: %s", drop_res.stderr.strip())
 
-            # 3.  CREATE DATABASE … WITH TEMPLATE (from the maintenance
-            #     connection so no session holds a lock on source_db).
             create_sql = (
                 f'CREATE DATABASE "{clone_db_name}" WITH TEMPLATE "{source_db_name}";'
             )
@@ -142,7 +158,6 @@ class PostgresSnapshotManager:
                     stderr_msg, stdout_msg
                 )
 
-                # 4.  Fallback — try pg_dump → psql pipe.
                 logger.info("Attempting pg_dump / psql fallback …")
                 return self._clone_via_dump(
                     source_db_name, clone_db_name,

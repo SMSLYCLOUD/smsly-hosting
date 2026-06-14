@@ -89,6 +89,13 @@ class CanApproveDeployment(permissions.BasePermission):
         if not self._user_can_access_service(request.user, service):
             return False
 
+        if approval.requested_by_id == request.user.id:
+            logger.warning(
+                "CanApproveDeployment denied self-approval: user=%s approval=%s service=%s",
+                request.user.id, approval_id, service_pk,
+            )
+            return False
+
         if request.user.is_superuser:
             return True
 
