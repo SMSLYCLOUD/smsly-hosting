@@ -5082,6 +5082,77 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
         backup = serializer.save(created_by=self.request.user, status='PENDING')
         create_service_backup_task.delay(service_id=str(backup.service.id), backup_type='MANUAL', backup_id=str(backup.id))
 
+    @action(detail=False, methods=['post'], url_path='import-key')
+    def import_key(self, request):
+        """Register a foreign BACKUP_ENCRYPTION_KEY on this master for
+        cross-master restore. Accepts ``key_id`` (8-char hex from the
+        source backup's V2 header) and ``key_material`` (the source's
+        Fernet ``BACKUP_ENCRYPTION_KEY`` from ``.env``).
+
+        The action is admin-only and audit-logged. The imported key is
+        stored encrypted at rest with ``FIELD_ENCRYPTION_KEY`` and is
+        only consulted when the V2 header's ``key_id`` does not match
+        this master's active key.
+        """
+        from .services.backup_service import (
+            BackupKeyCollisionError,
+            BackupService,
+        )
+        if not request.user.is_superuser:
+            return Response(
+                {'error': 'Admin only. Use the install.sh on each master to manage keys.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        key_id = str(request.data.get('key_id') or '').strip()
+        key_material = str(request.data.get('key_material') or '').strip()
+        label = str(request.data.get('label') or '').strip()[:100]
+        if not key_id or not key_material:
+            return Response(
+                {'error': 'Both "key_id" and "key_material" are required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            result = BackupService.import_backup_key(
+                key_id=key_id,
+                key_material=key_material,
+                label=label,
+            )
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except BackupKeyCollisionError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_409_CONFLICT)
+        try:
+            AuditLog(
+                actor=request.user.get_username(),
+                action='BACKUP_KEY_IMPORTED' if result.get('source') == 'IMPORTED' else 'BACKUP_KEY_REIMPORTED',
+                target=f'key_id={result["key_id"]}',
+                metadata={
+                    'fingerprint': result['fingerprint'],
+                    'label': label,
+                    'created': result.get('created', False),
+                },
+            ).save()
+        except Exception:
+            pass
+        return Response(result, status=status.HTTP_201_CREATED if result.get('created') else status.HTTP_200_OK)
+
+    @action(detail=True, methods=['get'], url_path='header')
+    def header(self, request, pk=None):
+        """Return the V2 backup header (key_id, fingerprint) so the
+        operator can copy the key_id to a different master for the
+        ``import-key`` flow. Returns 404 if the backup is not in V2
+        format.
+        """
+        from .services.backup_service import BackupService
+        backup = self.get_object()
+        if not backup.file_path or not os.path.exists(backup.file_path):
+            return Response({'error': 'Backup file not found'}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            info = BackupService.read_v2_header(backup.file_path)
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(info)
+
     @action(detail=True, methods=['post'])
     def restore(self, request, pk=None):
         backup = self.get_object()
@@ -5164,7 +5235,7 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
         if not file_path or not os.path.exists(file_path):
             return Response({'error': 'File not found'}, status=status.HTTP_404_NOT_FOUND)
 
-        from .services.backup_service import BackupService
+        from .services.backup_service import BackupService, UnknownBackupKeyIdError
         key = os.environ.get("BACKUP_ENCRYPTION_KEY", "").strip()
 
         # If the file is encrypted, we must decrypt it for the user to download
@@ -5176,6 +5247,20 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
                     decrypted_path,
                     os.path.basename(file_path).replace(".enc", ""),
                     cleanup_path=decrypted_path,
+                )
+            except UnknownBackupKeyIdError as exc:
+                return Response(
+                    {
+                        'error': str(exc),
+                        'key_id': exc.key_id,
+                        'fingerprint': exc.fingerprint,
+                        'remediation': (
+                            'POST /api/v1/backups/service/import-key/ with '
+                            'key_id and key_material from the source master, '
+                            'then retry this download.'
+                        ),
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
             except Exception as e:
                 import logging
@@ -5202,6 +5287,66 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         backup = serializer.save(status='PENDING')
         create_server_backup_task.delay(backup_id=str(backup.id))
+
+    @action(detail=False, methods=['post'], url_path='import-key')
+    def import_key(self, request):
+        """Server-wide counterpart of :meth:`ServiceBackupViewSet.import_key`.
+        Same admin-only + audit-logged + cross-master restore flow.
+        """
+        from .services.backup_service import (
+            BackupKeyCollisionError,
+            BackupService,
+        )
+        if not request.user.is_superuser:
+            return Response(
+                {'error': 'Admin only.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        key_id = str(request.data.get('key_id') or '').strip()
+        key_material = str(request.data.get('key_material') or '').strip()
+        label = str(request.data.get('label') or '').strip()[:100]
+        if not key_id or not key_material:
+            return Response(
+                {'error': 'Both "key_id" and "key_material" are required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            result = BackupService.import_backup_key(
+                key_id=key_id,
+                key_material=key_material,
+                label=label,
+            )
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except BackupKeyCollisionError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_409_CONFLICT)
+        try:
+            AuditLog(
+                actor=request.user.get_username(),
+                action='BACKUP_KEY_IMPORTED' if result.get('source') == 'IMPORTED' else 'BACKUP_KEY_REIMPORTED',
+                target=f'key_id={result["key_id"]}',
+                metadata={
+                    'fingerprint': result['fingerprint'],
+                    'label': label,
+                    'created': result.get('created', False),
+                },
+            ).save()
+        except Exception:
+            pass
+        return Response(result, status=status.HTTP_201_CREATED if result.get('created') else status.HTTP_200_OK)
+
+    @action(detail=True, methods=['get'], url_path='header')
+    def header(self, request, pk=None):
+        """Server-wide counterpart of :meth:`ServiceBackupViewSet.header`."""
+        from .services.backup_service import BackupService
+        backup = self.get_object()
+        if not backup.file_path or not os.path.exists(backup.file_path):
+            return Response({'error': 'Backup file not found'}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            info = BackupService.read_v2_header(backup.file_path)
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(info)
 
     @action(detail=True, methods=['post'])
     def restore(self, request, pk=None):
@@ -5245,7 +5390,7 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
         if not file_path or not os.path.exists(file_path):
             return Response({'error': 'Backup file not found on disk.'}, status=status.HTTP_404_NOT_FOUND)
 
-        from .services.backup_service import BackupService
+        from .services.backup_service import BackupService, UnknownBackupKeyIdError
         key = os.environ.get("BACKUP_ENCRYPTION_KEY", "").strip()
 
         # If the file is encrypted, we must decrypt it for the user to download
@@ -5258,6 +5403,20 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
                     decrypted_path,
                     os.path.basename(file_path).replace(".enc", ""),
                     cleanup_path=decrypted_path,
+                )
+            except UnknownBackupKeyIdError as exc:
+                return Response(
+                    {
+                        'error': str(exc),
+                        'key_id': exc.key_id,
+                        'fingerprint': exc.fingerprint,
+                        'remediation': (
+                            'POST /api/v1/backups/server/import-key/ with '
+                            'key_id and key_material from the source master, '
+                            'then retry this download.'
+                        ),
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
             except Exception as e:
                 import logging
