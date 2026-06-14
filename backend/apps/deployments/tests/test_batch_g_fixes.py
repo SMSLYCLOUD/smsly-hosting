@@ -153,15 +153,19 @@ class ManagedServerAPIURLSSRFGuardTests(TestCase):
 
 class TransferEnvScrubbingTests(TestCase):
     """Audit #19: the FULL transfer path shipped the entire source
-    .env to the target, including FIELD_ENCRYPTION_KEY,
-    GATEWAY_SECRET, BACKUP_ENCRYPTION_KEY, CLOUDFLARE_API_TOKEN.
-    The scrubber must strip these and leave a comment that flags
-    the operator-must-set.
+    .env to the target, including GATEWAY_SECRET, BACKUP_ENCRYPTION_KEY,
+    CLOUDFLARE_API_TOKEN. The scrubber must strip these and leave a
+    comment that flags the operator-must-set.
+
+    Note (Batch L): FIELD_ENCRYPTION_KEY is intentionally NOT scrubbed
+    because the FULL transfer ships the source DB dump with rows
+    encrypted by this key. The target needs the same key to decrypt
+    the data; the operator is warned via transfer logs that the key
+    is being shipped. See test_transfer_field_encryption_key.py.
     """
 
     SCRUBBED_KEYS = [
         "BACKUP_ENCRYPTION_KEY",
-        "FIELD_ENCRYPTION_KEY",
         "GATEWAY_SECRET",
         "CLOUDFLARE_API_TOKEN",
         "SENTRY_DSN",
@@ -178,7 +182,7 @@ class TransferEnvScrubbingTests(TestCase):
 
     def test_scrub_strips_platform_secrets(self):
         env = (
-            "FIELD_ENCRYPTION_KEY=AABBccdd==\n"
+            "FIELD_ENCRYPTION_KEY=FIELD_KEY_LIVE_VALUE\n"
             "GATEWAY_SECRET=super-secret-1\n"
             "BACKUP_ENCRYPTION_KEY=AABBccdd==\n"
             "CLOUDFLARE_API_TOKEN=cf-token-1234\n"
@@ -203,6 +207,11 @@ class TransferEnvScrubbingTests(TestCase):
                 value, scrubbed,
                 f"Secret value {value!r} leaked into scrubbed output"
             )
+        # FIELD_ENCRYPTION_KEY value MUST appear in the output (no longer scrubbed).
+        self.assertIn(
+            "FIELD_KEY_LIVE_VALUE", scrubbed,
+            "FIELD_ENCRYPTION_KEY value must be shipped to target to decrypt DB rows",
+        )
         # The KEY NAMES should appear (as comments flagging
         # operator-must-set).
         for key in self.SCRUBBED_KEYS:
@@ -225,7 +234,8 @@ class TransferEnvScrubbingTests(TestCase):
             os.unlink(path)
         self.assertIn("# This is a comment", scrubbed)
         self.assertIn("POSTGRES_USER=app", scrubbed)
-        self.assertNotIn("AABBccdd", scrubbed)
+        # FIELD_ENCRYPTION_KEY value now passes through (see Batch L note above).
+        self.assertIn("AABBccdd", scrubbed)
 
 
 # ── AI spend cap (audit AI HIGH) ──────────────────────────────────────────

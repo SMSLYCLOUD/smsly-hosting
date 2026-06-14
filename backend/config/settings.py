@@ -133,6 +133,10 @@ SMSLY_DISABLE_TIER_GATES = config("SMSLY_DISABLE_TIER_GATES", default=False, cas
 SMSLY_MAX_FILE_READ_SIZE = max(1, int(config("SMSLY_MAX_FILE_READ_SIZE", default=10 * 1024 * 1024)))
 # Enable transfer pipeline by default; can be turned off for hardened environments
 ALLOW_STUB_TRANSFER_PIPELINE = _env_bool('ALLOW_STUB_TRANSFER_PIPELINE', default='False')
+# Default to True: refuse to start a transfer unless the target can reach
+# the source on TCP/22.  Operators can override with
+# TRANSFER_REQUIRE_BIDIRECTIONAL_SSH=false in the .env.
+TRANSFER_REQUIRE_BIDIRECTIONAL_SSH = _env_bool('TRANSFER_REQUIRE_BIDIRECTIONAL_SSH', default='True')
 
 # Security hardening
 # Force insecure settings when running tests to prevent 301 redirects

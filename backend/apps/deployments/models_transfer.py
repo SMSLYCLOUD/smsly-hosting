@@ -35,6 +35,7 @@ class ServerTransfer(models.Model):
     # Source
     source_server_ip = models.GenericIPAddressField()
     source_server_id = models.CharField(max_length=255, blank=True, default='', help_text='ManagedServer UUID when source is a known node')
+    # Encrypted at rest via EncryptedTextField; cleared on COMPLETED/FAILED.
     source_ssh_key = EncryptedTextField(blank=True, default='')
     source_ssh_password = EncryptedCharField(max_length=255, blank=True, default='')
     source_backup = models.ForeignKey(ServiceBackup, on_delete=models.SET_NULL, null=True, blank=True)
@@ -42,8 +43,15 @@ class ServerTransfer(models.Model):
 
     # Target
     target_server_ip = models.GenericIPAddressField()
+    # Encrypted at rest via EncryptedTextField; cleared on COMPLETED/FAILED.
     target_ssh_key = EncryptedTextField(blank=True, default='')
     target_ssh_password = EncryptedCharField(max_length=255, blank=True, default='')
+
+    # Free-form JSON bag used to snapshot pre-transfer state (e.g. original
+    # service env vars) so rollback can restore it.  Kept on the row so it
+    # survives process restarts and is read in the same atomic step that
+    # flips the transfer to ROLLED_BACK.
+    metadata = models.JSONField(default=dict, blank=True)
 
     # Scope
     transfer_type = models.CharField(choices=[
