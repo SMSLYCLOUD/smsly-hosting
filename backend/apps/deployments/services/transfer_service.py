@@ -18,7 +18,7 @@ from django.utils import timezone
 from django.db import transaction
 from django.db.models import Q
 
-from .backup_service import BackupService
+from .backup_service import BackupService, UnknownBackupKeyIdError
 from .ssh_client import SSHClient
 from ..models import Service, PlatformConfig, EnvironmentVariable
 from ..models_storage import Volume
@@ -32,9 +32,17 @@ TRANSFER_ERROR_LIMIT = 4_000
 # target during a FULL server transfer. These are platform-level
 # secrets whose loss compromises the source platform. The
 # operator must re-enter them on the target after the transfer.
+#
+# NOTE: FIELD_ENCRYPTION_KEY is intentionally NOT in this set. The
+# source's .env ships the same FIELD_ENCRYPTION_KEY so the target
+# can decrypt the encrypted database rows shipped in db_dump.sql.
+# Without this, every EncryptedCharField row (service env vars,
+# ManagedServer SSH credentials, ServerTransfer SSH passwords,
+# BackupEncryptionKey key material, etc.) would silently decrypt
+# to "" on the target because EncryptedCharField is configured to
+# swallow InvalidToken and return "" (see Batch J safe_to_python).
 _TRANSFER_SCRUB_KEYS = frozenset({
     "BACKUP_ENCRYPTION_KEY",
-    "FIELD_ENCRYPTION_KEY",
     "GATEWAY_SECRET",
     "CLOUDFLARE_API_TOKEN",
     "SENTRY_DSN",
@@ -335,6 +343,7 @@ class ServerTransferService:
 
             self.transfer.status = 'DNS_CUTOVER'
             self.transfer.save(update_fields=['status'])
+            self._stop_source_service()
             self._dns_cutover()
 
             self.transfer.status = 'VERIFYING'
@@ -517,7 +526,16 @@ class ServerTransferService:
             key = os.environ.get("BACKUP_ENCRYPTION_KEY", "").strip()
             if not key:
                 raise ValueError("Encrypted backup detected but BACKUP_ENCRYPTION_KEY is not set.")
-            temp_decrypted = BackupService.decrypt_backup(local_path, key)
+            try:
+                temp_decrypted = BackupService.decrypt_backup(local_path, key)
+            except UnknownBackupKeyIdError as exc:
+                raise ValueError(
+                    f"Backup encrypted with unknown key_id={exc.key_id} "
+                    f"(fingerprint={exc.fingerprint}). "
+                    "Call POST /api/v1/backups/import-key/ on the target with the "
+                    "source's key_id and BACKUP_ENCRYPTION_KEY to register the "
+                    "foreign key, then retry the transfer."
+                ) from exc
             local_path = temp_decrypted
 
         remote_path = f"/tmp/{_safe_backup_basename(local_path)}"
@@ -536,33 +554,46 @@ class ServerTransferService:
             if self.transfer.transfer_type == 'FULL':
                 install_script = os.path.join(settings.BASE_DIR, '../install.sh')
                 if os.path.exists(install_script):
-                    checksum = os.environ.get("SMSLY_INSTALL_SCRIPT SHA256", "").strip()
-                    if not checksum:
-                        raise ValueError("SMSLY_INSTALL_SCRIPT SHA256 is required for full-server transfer.")
+                    with open(install_script, 'rb') as f:
+                        expected_sha256 = hashlib.sha256(f.read()).hexdigest()
                     self.ssh.upload_file(install_script, "/tmp/install.sh")
                     self.ssh.exec_command("chmod +x /tmp/install.sh")
                     self.ssh.exec_command(
                         "actual=$(sha256sum /tmp/install.sh | awk '{print $1}'); "
-                        f"[ \"$actual\" = {shlex.quote(checksum)} ] || "
+                        f"[ \"$actual\" = {shlex.quote(expected_sha256)} ] || "
                         "{ echo 'install.sh checksum mismatch' >&2; exit 44; }"
                     )
 
                 # SECURITY (Batch G): never ship the full .env to the
                 # target. The source .env contains
-                # BACKUP_ENCRYPTION_KEY, FIELD_ENCRYPTION_KEY,
-                # GATEWAY_SECRET, CLOUDFLARE_API_TOKEN, SENTRY_DSN,
-                # etc. If the target IP is attacker-controlled
-                # (DNS rebind between view-validation and SSH
-                # connection), the attacker gets every long-lived
-                # platform secret.
+                # BACKUP_ENCRYPTION_KEY, GATEWAY_SECRET,
+                # CLOUDFLARE_API_TOKEN, SENTRY_DSN, etc. If the
+                # target IP is attacker-controlled (DNS rebind
+                # between view-validation and SSH connection), the
+                # attacker gets every long-lived platform secret.
                 #
                 # The fix: ship a SCRUBBED .env that contains only
                 # the values the target actually needs to bootstrap
-                # (DB credentials, Redis URL, etc.), with the
-                # platform secrets stripped. The operator must
-                # re-enter FIELD_ENCRYPTION_KEY and GATEWAY_SECRET
-                # on the target after the transfer (the install UI
-                # already prompts for these on a fresh install).
+                # (DB credentials, Redis URL, FIELD_ENCRYPTION_KEY,
+                # etc.), with the platform secrets stripped. The
+                # operator must re-enter GATEWAY_SECRET on the target
+                # after the transfer (the install UI already prompts
+                # for it on a fresh install).
+                #
+                # NOTE: FIELD_ENCRYPTION_KEY is intentionally NOT
+                # scrubbed. Without it on the target, the
+                # EncryptedCharField rows in db_dump.sql (service env
+                # vars, ManagedServer SSH credentials, ServerTransfer
+                # SSH passwords, etc.) would silently decrypt to ""
+                # on the target (Batch J safe_to_python masks the
+                # failure). The warning below makes the cross-trust
+                # trade-off visible to the operator.
+                self._log(
+                    "WARNING: shipping FIELD_ENCRYPTION_KEY to target — this "
+                    "enables the target to decrypt all encrypted database rows "
+                    "from the source. Operator should rotate the key after "
+                    "migration if cross-trust is a concern."
+                )
                 local_env_path = os.path.join(settings.BASE_DIR, '../.env')
                 if os.path.exists(local_env_path):
                     scrubbed_env = _scrub_env_for_transfer(local_env_path)
@@ -578,6 +609,86 @@ class ServerTransferService:
                             os.unlink(scrubbed_path)
                         except OSError:
                             pass
+
+                key_export_path = self._export_backup_key()
+                if key_export_path:
+                    try:
+                        self.ssh.upload_file(key_export_path, "/tmp/key_export.json")
+                        self._log(
+                            "Shipped BACKUP_ENCRYPTION_KEY bundle to target — "
+                            "it will be imported on the target during the "
+                            "restore step so historical backups remain readable."
+                        )
+                    finally:
+                        try:
+                            os.unlink(key_export_path)
+                        except OSError:
+                            pass
+
+    def _export_backup_key(self) -> str | None:
+        """Build a JSON bundle describing the source's BACKUP_ENCRYPTION_KEY.
+
+        The bundle is consumed by the import script that runs in the
+        target's backend container during FULL transfer restore. It
+        lets the target register the source's Fernet key by its
+        ``key_id`` so any backup created on the source remains
+        readable on the target (cross-master restore).
+
+        Returns the path to a temp file containing the JSON, or
+        ``None`` if no BACKUP_ENCRYPTION_KEY is configured (nothing
+        to migrate). Returns ``None`` for SERVICE transfers — they
+        don't need cross-master key registration.
+        """
+        if self.transfer.transfer_type != 'FULL':
+            return None
+        key_material = os.environ.get("BACKUP_ENCRYPTION_KEY", "").strip()
+        if not key_material:
+            return None
+        try:
+            fingerprint = BackupService.compute_backup_key_fingerprint(key_material)
+        except Exception as exc:
+            self._log(f"Could not compute backup key fingerprint: {exc}")
+            return None
+        try:
+            from apps.deployments.models_backup import BackupEncryptionKey
+            row = (
+                BackupEncryptionKey.objects
+                .filter(is_active=True, fingerprint=fingerprint)
+                .first()
+            )
+        except Exception as exc:
+            self._log(f"Could not look up active BackupEncryptionKey: {exc}")
+            row = None
+        if row is None:
+            self._log(
+                "No active BackupEncryptionKey row found for source's "
+                f"BACKUP_ENCRYPTION_KEY (fingerprint={fingerprint}). "
+                "The target will generate a new key on first use; historical "
+                "backups created on the source will require manual key import."
+            )
+            return None
+        source_ip = (
+            self.transfer.source_server_ip
+            or getattr(self.transfer.source_server, "host", None)
+            or "unknown"
+        )
+        bundle = {
+            'key_id': row.key_id,
+            'key_material': key_material,
+            'fingerprint': fingerprint,
+            'source_label': f'migrated-from-{source_ip}',
+        }
+        fd, path = tempfile.mkstemp(prefix='backup_key_export_', suffix='.json')
+        try:
+            with os.fdopen(fd, 'w') as f:
+                json.dump(bundle, f)
+        except Exception:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            raise
+        return path
 
     def _restore(self):
         """Step 3: restore on target."""
@@ -786,6 +897,10 @@ class ServerTransferService:
         exist on the source server. If a restored platform URL host cannot
         resolve from the target backend, point common runtime URL keys at the
         target platform services instead.
+
+        Before applying the remap, snapshot every candidate key's current
+        value into ``self.transfer.metadata['pre_transfer_env_vars']`` so
+        rollback can restore the original source-platform values.
         """
         if not self.transfer.service or not self.ssh:
             return
@@ -803,6 +918,7 @@ payload = json.loads(%r)
 svc = Service.objects.filter(name=payload["service_name"]).first()
 platform_database_url = os.environ.get("DATABASE_URL", "").strip()
 platform_redis_url = os.environ.get("REDIS_URL", "").strip()
+pre_transfer = {}
 if svc:
     url_remaps = {
         "DATABASE_URL": platform_database_url,
@@ -815,6 +931,7 @@ if svc:
     }
     # ── Domain/env remaps for cross-platform migration ─────────────────
     target_domain = os.environ.get("DOMAIN", "").strip()
+    domain_remaps = {}
     if target_domain:
         domain_remaps = {
             "PUBLIC_DOMAIN": target_domain,
@@ -822,17 +939,25 @@ if svc:
             "DJANGO_ALLOWED_HOSTS": target_domain,
             "SITE_URL": f"https://{target_domain}",
         }
-        for dk, dv in domain_remaps.items():
-            # Only update if the current value references the old platform
-            env = EnvironmentVariable.objects.filter(service=svc, key=dk).first()
-            if env and env.value and str(env.value).strip():
-                old_val = str(env.value).strip()
-                old_base = os.environ.get("DOMAIN_OLD", "").strip() or "localhost"
-                if old_base in old_val or old_val == "********":
-                    EnvironmentVariable.objects.update_or_create(
-                        service=svc, key=dk,
-                        defaults={"value": dv, "source": "SYSTEM"},
-                    )
+
+    # Snapshot pre-transfer values for every candidate key so rollback can
+    # restore them on the SOURCE side of the move.
+    for candidate_key in list(url_remaps.keys()) + list(domain_remaps.keys()):
+        env = EnvironmentVariable.objects.filter(service=svc, key=candidate_key).first()
+        if env is not None:
+            pre_transfer[candidate_key] = str(env.value or "")
+
+    for dk, dv in domain_remaps.items():
+        # Only update if the current value references the old platform
+        env = EnvironmentVariable.objects.filter(service=svc, key=dk).first()
+        if env and env.value and str(env.value).strip():
+            old_val = str(env.value).strip()
+            old_base = os.environ.get("DOMAIN_OLD", "").strip() or "localhost"
+            if old_base in old_val or old_val == "********":
+                EnvironmentVariable.objects.update_or_create(
+                    service=svc, key=dk,
+                    defaults={"value": dv, "source": "SYSTEM"},
+                )
 
     for key, replacement_url in url_remaps.items():
         if not replacement_url:
@@ -853,6 +978,12 @@ if svc:
                 key=key,
                 defaults={"value": replacement_url, "is_secret": True, "source": "SYSTEM"},
             )
+
+# Emit the snapshot on a single line inside sentinels so the parent can
+# extract it deterministically even if Django logs interleave with stdout.
+print("PRE_TRANSFER_ENV_JSON_BEGIN")
+print(json.dumps(pre_transfer))
+print("PRE_TRANSFER_ENV_JSON_END")
 """.strip() % json.dumps(payload)
 
         cmd = (
@@ -861,10 +992,128 @@ if svc:
             f"{remap_code}\n"
             "PY"
         )
+        pre_transfer: dict = {}
         try:
-            self.ssh.exec_command(cmd, timeout=60, raise_on_error=False)
+            result = self.ssh.exec_command(cmd, timeout=60, raise_on_error=False)
+            output = _command_text(result)
+            match = re.search(
+                r"PRE_TRANSFER_ENV_JSON_BEGIN\s*(\{.*?\})\s*PRE_TRANSFER_ENV_JSON_END",
+                output,
+                re.DOTALL,
+            )
+            if match:
+                try:
+                    pre_transfer = json.loads(match.group(1)) or {}
+                except json.JSONDecodeError as exc:
+                    logger.warning("Could not parse pre-transfer env snapshot: %s", exc)
         except Exception as exc:
             logger.warning("Failed to remap target platform env vars: %s", exc)
+
+        if pre_transfer:
+            metadata = dict(self.transfer.metadata or {})
+            metadata['pre_transfer_env_vars'] = pre_transfer
+            self.transfer.metadata = metadata
+            self.transfer.save(update_fields=['metadata'])
+
+    def _revert_target_platform_env(self):
+        """Restore the source platform env-var values captured at remap time.
+
+        Reads ``self.transfer.metadata['pre_transfer_env_vars']`` (populated
+        by ``_remap_target_platform_env``) and writes each key back to the
+        target's EnvironmentVariable table via a small Python script run
+        inside the target's backend container.
+
+        No-op for FULL transfers, when no snapshot is present, or when the
+        SSH / backend container is unavailable.
+        """
+        if self.transfer.transfer_type != 'SERVICE' or not self.transfer.service:
+            return
+        if not self.ssh:
+            return
+        pre_transfer = (self.transfer.metadata or {}).get('pre_transfer_env_vars') or {}
+        if not pre_transfer:
+            return
+
+        try:
+            backend_container = self._find_remote_backend_container(required=False)
+        except Exception as exc:
+            self._log(f"Could not locate backend container for env revert: {exc}")
+            return
+        if not backend_container:
+            self._log("Backend container not found on target — skipping env revert.")
+            return
+
+        service_name = _safe_service_name(self.transfer.service.name)
+        safe_backend = shlex.quote(backend_container)
+        script_path = f"/tmp/transfer_revert_env_{self.transfer.id}.py"
+        remote_safe_script = shlex.quote(script_path)
+
+        payload = {
+            'service_name': service_name,
+            'pre_transfer': pre_transfer,
+        }
+        revert_code = f"""
+import json
+import os
+import sys
+import django
+
+for candidate in (os.getcwd(), '/app', '/app/backend'):
+    if os.path.isdir(candidate) and candidate not in sys.path:
+        sys.path.insert(0, candidate)
+
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
+django.setup()
+
+from apps.deployments.models import Service, EnvironmentVariable
+
+payload = json.loads({json.dumps(json.dumps(payload))})
+svc = Service.objects.filter(name=payload['service_name']).first()
+if svc:
+    for key, value in payload['pre_transfer'].items():
+        EnvironmentVariable.objects.update_or_create(
+            service=svc,
+            key=key,
+            defaults={{
+                'value': value,
+                'is_secret': True,
+                'source': 'SYSTEM',
+            }},
+        )
+    print(f"REVERTED {{len(payload['pre_transfer'])}} env vars for {{payload['service_name']}}")
+else:
+    print('ERROR: service not found', file=sys.stderr)
+"""
+        local_script = tempfile.NamedTemporaryFile(
+            mode='w', suffix='.py', prefix=f'revert_env_{self.transfer.id}_', delete=False,
+        )
+        try:
+            local_script.write(revert_code)
+            local_script.close()
+            self.ssh.upload_file(local_script.name, script_path)
+        finally:
+            os.unlink(local_script.name)
+
+        try:
+            result = _command_text(self.ssh.exec_command(
+                f"docker exec {safe_backend} python3 {remote_safe_script}",
+                raise_on_error=False,
+            ))
+            if "REVERTED" in result:
+                self._log(
+                    f"Reverted target platform env vars: {result.strip()}"
+                )
+            else:
+                self._log(
+                    f"Target env revert did not confirm: {result.strip()[:300]}"
+                )
+        except Exception as exc:
+            logger.warning("Failed to revert target platform env vars: %s", exc)
+        finally:
+            self.ssh.exec_command(
+                f"rm -f {remote_safe_script}",
+                raise_on_error=False,
+            )
 
     def _seed_target_deployment_record(self, backend_container, metadata):
         """Create a deployment row on the target so remote dashboards are seeded."""
@@ -1302,7 +1551,177 @@ if os.path.exists(services_dir):
         self._update(90, 'Starting platform...')
         self.ssh.exec_command(f"{compose} up -d; }}")
 
+        self._import_backup_key_on_target(remote_temp_dir)
+
         self.ssh.exec_command(f"rm -rf {remote_temp_dir} {remote_backup_path} {script_path} /tmp/.env.restore")
+
+    def _import_backup_key_on_target(self, remote_temp_dir: str) -> None:
+        """Import the source's BACKUP_ENCRYPTION_KEY on the target.
+
+        No-op when the key export bundle was not shipped (either
+        BACKUP_ENCRYPTION_KEY was not set on the source, or the
+        target is not configured for a FULL transfer). When the
+        bundle is present, runs a small Python script inside the
+        target's backend container that calls
+        ``BackupService.import_backup_key`` so the source's
+        historical backups remain readable on the target.
+        """
+        if self.transfer.transfer_type != 'FULL':
+            return
+        if not self.ssh:
+            return
+        bundle_check = _command_text(self.ssh.exec_command(
+            "test -f /tmp/key_export.json && echo PRESENT || echo MISSING",
+            raise_on_error=False,
+        )).strip()
+        if "PRESENT" not in bundle_check:
+            return
+        try:
+            backend_container = self._find_remote_backend_container(required=True)
+        except Exception as exc:
+            self._log(
+                f"Could not find backend container for key import: {exc}. "
+                "Historical backups from the source will need to be "
+                "manually imported on the target."
+            )
+            return
+        try:
+            self._wait_for_remote_backend_ready(backend_container)
+        except Exception as exc:
+            self._log(
+                f"Backend container did not become ready for key import: {exc}. "
+                "Continuing without key migration."
+            )
+            return
+        safe_backend_container = shlex.quote(backend_container)
+        bundle = _command_text(self.ssh.exec_command("cat /tmp/key_export.json")).strip()
+        if not bundle:
+            self._log("Key export bundle on target is empty — skipping import.")
+            return
+        try:
+            parsed = json.loads(bundle)
+            key_id = parsed.get('key_id', '')
+            label = parsed.get('source_label', 'migrated-from-unknown')
+        except Exception as exc:
+            self._log(f"Could not parse key export bundle: {exc} — skipping import.")
+            return
+        if not key_id:
+            self._log("Key export bundle missing key_id — skipping import.")
+            return
+        key_material = parsed.get('key_material', '')
+        if not key_material:
+            self._log("Key export bundle missing key_material — skipping import.")
+            return
+        import_script = f"""
+import os
+import sys
+import json
+import django
+
+for candidate in (os.getcwd(), '/app', '/app/backend'):
+    if os.path.isdir(candidate) and candidate not in sys.path:
+        sys.path.insert(0, candidate)
+
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
+django.setup()
+
+from apps.deployments.services.backup_service import BackupService
+
+KEY_EXPORT_PATH = '/tmp/key_export.json'
+
+def run():
+    if not os.path.exists(KEY_EXPORT_PATH):
+        print('ERROR: key export not found at ' + KEY_EXPORT_PATH, file=sys.stderr)
+        sys.exit(1)
+    try:
+        with open(KEY_EXPORT_PATH) as f:
+            bundle = json.load(f)
+    except Exception as exc:
+        print(f'ERROR: failed to read key export: {{exc}}', file=sys.stderr)
+        sys.exit(1)
+    key_id = bundle.get('key_id', '')
+    key_material = bundle.get('key_material', '')
+    label = bundle.get('source_label', 'migrated-from-unknown')
+    if not key_id or not key_material:
+        print('ERROR: key export missing key_id or key_material', file=sys.stderr)
+        sys.exit(1)
+    try:
+        result = BackupService.import_backup_key(
+            key_id=key_id,
+            key_material=key_material,
+            label=label,
+        )
+        print(f"IMPORTED key_id={{result['key_id']}} fingerprint={{result['fingerprint']}} created={{result['created']}}")
+    except Exception as exc:
+        print(f'ERROR: failed to import key: {{exc}}', file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+if __name__ == '__main__':
+    run()
+"""
+        script_path = f"/tmp/import_key_{self.transfer.id}.py"
+        local_script = tempfile.NamedTemporaryFile(
+            mode='w', suffix='.py', prefix=f'import_key_{self.transfer.id}_', delete=False
+        )
+        try:
+            local_script.write(import_script)
+            local_script.close()
+            self.ssh.upload_file(local_script.name, script_path)
+        finally:
+            os.unlink(local_script.name)
+        self.ssh.exec_command(
+            f"docker cp {shlex.quote(script_path)} "
+            f"{safe_backend_container}:/tmp/import_key.py"
+        )
+        result = _command_text(self.ssh.exec_command(
+            f"docker exec {safe_backend_container} python3 /tmp/import_key.py"
+        ))
+        if "IMPORTED" not in result or "ERROR" in result:
+            self._log(
+                f"BACKUP_ENCRYPTION_KEY import on target did not confirm success: {result}"
+            )
+        else:
+            self._log(
+                f"Imported source BACKUP_ENCRYPTION_KEY on target: {result.strip()}"
+            )
+        self.ssh.exec_command(
+            f"docker exec -u 0 {safe_backend_container} sh -lc "
+            + shlex.quote("rm -f /tmp/import_key.py /tmp/key_export.json || true"),
+            raise_on_error=False,
+        )
+        self.ssh.exec_command(
+            f"rm -f {shlex.quote(script_path)}",
+            raise_on_error=False,
+        )
+
+    def _stop_source_service(self):
+        """Stop and remove the service container on the source node.
+
+        Called immediately before DNS cutover so users never see the OLD
+        service after the NEW Traefik route on the target becomes live.
+        For FULL transfers the source host is being decommissioned, so
+        this is a no-op.
+        """
+        if self.transfer.transfer_type != 'SERVICE' or not self.transfer.service:
+            return
+        service_name = shlex.quote(_safe_service_name(self.transfer.service.name))
+        if self.source_ssh:
+            self.source_ssh.exec_command(
+                f"docker stop {service_name} 2>/dev/null; "
+                f"docker rm -f {service_name} 2>/dev/null",
+                raise_on_error=False,
+            )
+            return
+        try:
+            import docker as docker_lib
+            client = docker_lib.from_env()
+            container = client.containers.get(self.transfer.service.name)
+            container.stop(timeout=10)
+            container.remove()
+        except Exception:
+            pass
 
     def _dns_cutover(self):
         self._update(85, 'DNS cutover: updating records...')
@@ -1579,24 +1998,6 @@ if os.path.exists(services_dir):
                 # causing HTTP 502 errors.
                 self._regenerate_master_caddyfile()
 
-                # Stop source service — DNS/Caddy now routes to target
-                service_name = shlex.quote(_safe_service_name(self.transfer.service.name))
-                if self.source_ssh:
-                    self.source_ssh.exec_command(
-                        f"docker stop {service_name} 2>/dev/null; docker rm -f {service_name} 2>/dev/null",
-                        raise_on_error=False,
-                    )
-                else:
-                    # Source is local
-                    try:
-                        import docker as docker_lib
-                        client = docker_lib.from_env()
-                        container = client.containers.get(self.transfer.service.name)
-                        container.stop(timeout=10)
-                        container.remove()
-                    except Exception:
-                        pass
-
         self.transfer.save()
         self._update(100, 'Transfer complete!')
 
@@ -1663,6 +2064,32 @@ if os.path.exists(services_dir):
         self._log(f"Reconnected {reconnected}/{nodes.count()} managed nodes to new master")
         return reconnected
 
+    def _stop_target_service_on_rollback(self):
+        """Stop and remove the service container on the target during rollback.
+
+        After a successful transfer the target keeps the now-orphaned
+        container running. Rollback points Caddy back to the source, but
+        leaves the target container still answering requests on the local
+        Traefik — wasted CPU and a confusing "two live copies" state. Stop
+        and remove it.
+
+        Skipped for FULL transfers (would need a confirm dialog — the
+        target is the new master and tearing it down is destructive).
+        """
+        if self.transfer.transfer_type != 'SERVICE' or not self.transfer.service:
+            return
+        if not self.ssh:
+            return
+        service_name = shlex.quote(_safe_service_name(self.transfer.service.name))
+        try:
+            self.ssh.exec_command(
+                f"docker stop {service_name} 2>/dev/null; "
+                f"docker rm -f {service_name} 2>/dev/null",
+                raise_on_error=False,
+            )
+        except Exception as exc:
+            logger.warning("Failed to stop target service during rollback: %s", exc)
+
     def rollback(self):
         if not self.transfer.can_rollback:
             raise ValueError('Rollback not allowed')
@@ -1694,6 +2121,12 @@ if os.path.exists(services_dir):
             source_server = ManagedServer.objects.filter(host=self.transfer.source_server_ip).first()
             self.transfer.service.server = source_server
             self.transfer.service.save(update_fields=['server'])
+
+            # Tear down the now-orphaned target container and revert the
+            # env-var snapshot taken during remap BEFORE Caddy is told to
+            # route traffic back to the source.
+            self._stop_target_service_on_rollback()
+            self._revert_target_platform_env()
 
             # Regenerate Caddyfile so routing points back to the source
             self._regenerate_master_caddyfile()
