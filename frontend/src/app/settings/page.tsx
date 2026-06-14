@@ -21,6 +21,7 @@ import { GitHubIntegrationCard } from "@/components/settings/GitHubIntegrationCa
 import { GitLabIntegrationCard } from "@/components/settings/GitLabIntegrationCard";
 import { BitbucketIntegrationCard } from "@/components/settings/BitbucketIntegrationCard";
 import { CloudStorageTab } from "@/components/settings/CloudStorageTab";
+import BackupKeysTab from "@/components/settings/BackupKeysTab";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -1314,6 +1315,11 @@ export default function SettingsPage() {
               <BitbucketIntegrationCard />
               <OAuthTab />
           </div>
+        </TabsContent>
+
+        {/* Cross-Master Backup Keys Tab */}
+        <TabsContent value="backups">
+          <BackupKeysTab />
         </TabsContent>
 
         {/* Infrastructure Tab */}

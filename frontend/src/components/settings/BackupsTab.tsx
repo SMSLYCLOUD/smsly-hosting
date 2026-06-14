@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Loader2, Download, RotateCcw, Trash2, Plus, Clock, Save, AlertCircle, CheckCircle } from 'lucide-react';
+import { Loader2, Download, RotateCcw, Trash2, Plus, Clock, Save, AlertCircle, CheckCircle, FileKey } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import api from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
@@ -367,6 +367,27 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                                                     ) : (
                                                         <RotateCcw className="w-4 h-4" />
                                                     )}
+                                                </Button>
+                                                <Button variant="ghost" size="sm" onClick={async () => {
+                                                    try {
+                                                        const res = await api.get(`/backups/${backup.id}/header/`);
+                                                        if (res.data?.key_id && res.data?.fingerprint) {
+                                                            const text = `key_id=${res.data.key_id}\nfingerprint=${res.data.fingerprint}`;
+                                                            await navigator.clipboard.writeText(text);
+                                                            toast({ title: 'V2 header copied', description: text });
+                                                        } else {
+                                                            toast({
+                                                                title: 'Not a V2 backup',
+                                                                description: res.data?.error || 'This backup is in an older format and has no key_id.',
+                                                                variant: 'destructive',
+                                                            });
+                                                        }
+                                                    } catch (err: any) {
+                                                        const msg = err?.response?.data?.error || 'Could not read backup header.';
+                                                        toast({ title: 'Header read failed', description: msg, variant: 'destructive' });
+                                                    }
+                                                }} title="Copy V2 header (key_id + fingerprint) for cross-master restore">
+                                                    <FileKey className="w-4 h-4" />
                                                 </Button>
                                                 <Button variant="ghost" size="sm" onClick={async () => {
                                                     try {
