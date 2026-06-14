@@ -33,11 +33,37 @@ class BackupEncryptionRequired(Exception):
     pass
 
 
+class UnknownBackupKeyIdError(Exception):
+    """Raised when a V2 backup's key_id is not registered on this master.
+
+    The caller should respond with a 400 + key_id + expected_fingerprint
+    so the operator can either re-run with the correct key or call
+    ``POST /backups/import-key/`` to register the source's key on this
+    master. After import, the restore can be retried and the key will
+    resolve automatically.
+    """
+    def __init__(self, key_id: str, fingerprint: str, message: str = ''):
+        self.key_id = key_id
+        self.fingerprint = fingerprint
+        super().__init__(message or f"Unknown backup key_id={key_id}")
+
+
+class BackupKeyCollisionError(Exception):
+    """Raised when importing a key whose key_id collides with an existing
+    row that has different key material (likely a 1-in-2^32 random collision
+    or an attempted key-swap attack)."""
+    pass
+
+
 _CHUNKED_BACKUP_MAGIC = b"SMSLY-BACKUP-AESGCM-V1\n"
+_CHUNKED_BACKUP_V2_MAGIC = b"SMSLY-BACKUP-AESGCM-V2\n"
 _CHUNKED_BACKUP_NONCE_PREFIX_BYTES = 8
+_CHUNKED_BACKUP_KEY_ID_BYTES = 4
+_CHUNKED_BACKUP_FINGERPRINT_BYTES = 4
 _DEFAULT_CRYPTO_CHUNK_SIZE = 4 * 1024 * 1024
 _FERNET_HEADER_SIZE = 1 + 8 + 16
 _FERNET_HMAC_SIZE = 32
+
 
 class BackupService:
     def __init__(self):
@@ -1268,6 +1294,192 @@ class BackupService:
             raise ValueError("Encrypted backup is truncated")
         return data
 
+    @staticmethod
+    def compute_backup_key_fingerprint(key_material: str) -> str:
+        """Return 8-char hex fingerprint for a Fernet BACKUP_ENCRYPTION_KEY.
+
+        Fingerprint is the first 4 bytes of SHA-256(raw 32-byte AES key).
+        Stored in the V2 backup header so the target can verify the
+        loaded key matches without attempting a decrypt.
+        """
+        try:
+            raw_key = BackupService._decode_backup_key(key_material)
+        except ValueError:
+            raise
+        return hashlib.sha256(raw_key).digest()[:_CHUNKED_BACKUP_FINGERPRINT_BYTES].hex()
+
+    @staticmethod
+    def resolve_or_register_active_key(key_material: str) -> dict:
+        """Look up the BackupEncryptionKey row for ``key_material`` or create one.
+
+        Returns ``{'key_id': <8 hex>, 'fingerprint': <8 hex>, 'created': bool}``.
+        Called by the encrypt path so the V2 header can be stamped with
+        a stable ``key_id``. Falls back to returning a synthetic
+        ``key_id`` derived from the fingerprint when the DB is
+        unavailable (e.g. inside a management command running with
+        ``--no-database``); the V2 header is still written and the
+        backup can still be decrypted locally via the env key.
+        """
+        fingerprint = BackupService.compute_backup_key_fingerprint(key_material)
+        try:
+            from apps.deployments.models_backup import BackupEncryptionKey
+        except Exception:
+            return {
+                'key_id': fingerprint,
+                'fingerprint': fingerprint,
+                'created': False,
+            }
+        try:
+            row = (
+                BackupEncryptionKey.objects
+                .filter(fingerprint=fingerprint, is_active=True)
+                .first()
+            )
+            if row is not None:
+                return {'key_id': row.key_id, 'fingerprint': fingerprint, 'created': False}
+            existing_any = (
+                BackupEncryptionKey.objects
+                .filter(fingerprint=fingerprint)
+                .first()
+            )
+            if existing_any is not None:
+                existing_any.is_active = True
+                existing_any.save(update_fields=['is_active'])
+                return {
+                    'key_id': existing_any.key_id,
+                    'fingerprint': fingerprint,
+                    'created': False,
+                }
+            key_id = os.urandom(_CHUNKED_BACKUP_KEY_ID_BYTES).hex()
+            BackupEncryptionKey.objects.filter(is_active=True).update(is_active=False)
+            BackupEncryptionKey.objects.create(
+                key_id=key_id,
+                fingerprint=fingerprint,
+                key_material_encrypted=key_material,
+                source='AUTO',
+                is_active=True,
+            )
+            return {'key_id': key_id, 'fingerprint': fingerprint, 'created': True}
+        except Exception as exc:
+            logger.warning(
+                "Could not register active backup key in DB (%s); "
+                "falling back to fingerprint-derived key_id",
+                exc,
+            )
+            return {
+                'key_id': fingerprint,
+                'fingerprint': fingerprint,
+                'created': False,
+            }
+
+    @staticmethod
+    def lookup_key_by_id(key_id: str) -> str | None:
+        """Return the Fernet key material for a registered key_id, or None.
+
+        Used by the decrypt path when the env key's fingerprint does
+        not match the V2 header — i.e. the backup was encrypted on a
+        different master and the operator has already imported the
+        source key.
+        """
+        try:
+            from apps.deployments.models_backup import BackupEncryptionKey
+            row = BackupEncryptionKey.objects.filter(key_id=key_id).first()
+            if row is None:
+                return None
+            return row.key_material_encrypted
+        except Exception:
+            return None
+
+    @staticmethod
+    def read_v2_header(path: str) -> dict:
+        """Read the V2 header (key_id, fingerprint) from an encrypted backup.
+
+        Returns ``{'key_id': <8 hex>, 'fingerprint': <8 hex>, 'magic': 'V2'}``
+        or raises :class:`ValueError` if the file is not V2 format.
+        """
+        with open(path, "rb") as source:
+            magic = source.read(len(_CHUNKED_BACKUP_V2_MAGIC))
+        if magic != _CHUNKED_BACKUP_V2_MAGIC:
+            raise ValueError("Backup is not V2 format (no key_id in header)")
+        with open(path, "rb") as source:
+            source.read(len(_CHUNKED_BACKUP_V2_MAGIC))
+            key_id = BackupService._read_exact(
+                source, _CHUNKED_BACKUP_KEY_ID_BYTES
+            )
+            fingerprint = BackupService._read_exact(
+                source, _CHUNKED_BACKUP_FINGERPRINT_BYTES
+            )
+        return {
+            'magic': 'V2',
+            'key_id': key_id.hex(),
+            'fingerprint': fingerprint.hex(),
+        }
+
+    @staticmethod
+    def import_backup_key(
+        key_id: str,
+        key_material: str,
+        label: str = '',
+    ) -> dict:
+        """Register a foreign key on this master for cross-master restore.
+
+        ``key_id`` is the 8-char hex from the source backup's V2 header
+        (operator copies it from the source's UI or the
+        ``POST /backups/header/`` endpoint). ``key_material`` is the
+        Fernet ``BACKUP_ENCRYPTION_KEY`` from the source's ``.env``.
+
+        Idempotent: if a row with this key_id and the same fingerprint
+        already exists, returns it. If a row with this key_id and a
+        DIFFERENT fingerprint exists, raises :class:`BackupKeyCollisionError`
+        (this would be a 1-in-2^32 random collision or an attempted
+        key-swap attack; the operator should re-import from the source).
+        """
+        try:
+            from apps.deployments.models_backup import BackupEncryptionKey
+        except Exception as exc:
+            raise RuntimeError(
+                "BackupEncryptionKey model unavailable; cannot import key."
+            ) from exc
+        if not key_id or len(key_id) != _CHUNKED_BACKUP_KEY_ID_BYTES * 2:
+            raise ValueError(
+                f"key_id must be {_CHUNKED_BACKUP_KEY_ID_BYTES * 2} hex chars"
+            )
+        try:
+            int(key_id, 16)
+        except ValueError as exc:
+            raise ValueError("key_id must be hex") from exc
+        fingerprint = BackupService.compute_backup_key_fingerprint(key_material)
+        existing = (
+            BackupEncryptionKey.objects.filter(key_id=key_id).first()
+        )
+        if existing is not None:
+            if existing.fingerprint != fingerprint:
+                raise BackupKeyCollisionError(
+                    f"key_id={key_id} already registered with a different "
+                    f"fingerprint ({existing.fingerprint} != {fingerprint}). "
+                    "Refusing to overwrite."
+                )
+            return {
+                'key_id': existing.key_id,
+                'fingerprint': existing.fingerprint,
+                'source': existing.source,
+                'created': False,
+            }
+        BackupEncryptionKey.objects.create(
+            key_id=key_id,
+            fingerprint=fingerprint,
+            key_material_encrypted=key_material,
+            source='IMPORTED',
+            is_active=False,
+            label=label or f'Imported on {timezone.now().isoformat()}',
+        )
+        return {
+            'key_id': key_id,
+            'fingerprint': fingerprint,
+            'source': 'IMPORTED',
+            'created': True,
+        }
+
     def _maybe_encrypt(self, path: str) -> str:
         """
         Optionally encrypt backup archive at rest when BACKUP_ENCRYPTION_KEY is set.
@@ -1278,6 +1490,10 @@ class BackupService:
         ``DEBUG=False``), missing ``BACKUP_ENCRYPTION_KEY`` raises
         :class:`BackupEncryptionRequired` instead of silently writing the
         backup in cleartext.
+
+        Writes a V2 header (``SMSLY-BACKUP-AESGCM-V2\n`` + 4-byte
+        ``key_id`` + 4-byte ``fingerprint`` + 8-byte nonce prefix) so
+        cross-master restores can look up the source key by ``key_id``.
         """
         key = os.environ.get("BACKUP_ENCRYPTION_KEY", "").strip()
         if not key:
@@ -1294,9 +1510,16 @@ class BackupService:
             aesgcm = AESGCM(raw_key)
             nonce_prefix = os.urandom(_CHUNKED_BACKUP_NONCE_PREFIX_BYTES)
             chunk_size = self._crypto_chunk_size()
+            key_info = self.resolve_or_register_active_key(key)
+            header_key_id = bytes.fromhex(key_info['key_id'][:_CHUNKED_BACKUP_KEY_ID_BYTES * 2])
+            header_fingerprint = bytes.fromhex(
+                key_info['fingerprint'][:_CHUNKED_BACKUP_FINGERPRINT_BYTES * 2]
+            )
 
             with open(path, "rb") as source, open(enc_path, "wb") as encrypted:
-                encrypted.write(_CHUNKED_BACKUP_MAGIC)
+                encrypted.write(_CHUNKED_BACKUP_V2_MAGIC)
+                encrypted.write(header_key_id)
+                encrypted.write(header_fingerprint)
                 encrypted.write(nonce_prefix)
                 chunk_index = 0
                 while True:
@@ -1347,14 +1570,108 @@ class BackupService:
         and return its path. Caller is responsible for deleting the temp file
         (use :func:`BackupService.cleanup_decrypted_path` to also remove the
         parent private directory).
-        Supports the current chunked AES-GCM format and legacy Fernet archives
-        without loading the encrypted or decrypted backup into process memory.
+        Supports the current V2 chunked AES-GCM format (with key_id +
+        fingerprint header), the legacy V1 chunked format, and the
+        pre-V1 Fernet archives without loading the encrypted or
+        decrypted backup into process memory.
+
+        For V2 backups where the passed ``key`` does not match the
+        header's fingerprint (i.e. the backup was encrypted on a
+        different master), this function will look up the key by
+        ``key_id`` in the ``BackupEncryptionKey`` table. If not
+        found, raises :class:`UnknownBackupKeyIdError` so the
+        operator can call ``POST /backups/import-key/`` to import
+        the source key.
         """
         with open(path, "rb") as source:
-            magic = source.read(len(_CHUNKED_BACKUP_MAGIC))
+            magic = source.read(len(_CHUNKED_BACKUP_V2_MAGIC))
+        if magic == _CHUNKED_BACKUP_V2_MAGIC:
+            return BackupService._decrypt_v2_chunked_backup(path, key)
         if magic == _CHUNKED_BACKUP_MAGIC:
             return BackupService._decrypt_chunked_backup(path, key)
         return BackupService._decrypt_legacy_fernet_backup(path, key)
+
+    @staticmethod
+    def _resolve_key_for_v2(path: str, passed_key: str) -> tuple[bytes, str]:
+        """Resolve the raw 32-byte AES key for a V2 backup.
+
+        Strategy (in order):
+        1. If the passed key's fingerprint matches the V2 header
+           fingerprint, use it (covers same-master + same-key case).
+        2. Otherwise, look up the key by key_id in
+           ``BackupEncryptionKey``. If the imported key's fingerprint
+           matches, use it (covers cross-master import case).
+        3. Otherwise, raise :class:`UnknownBackupKeyIdError` so the
+           operator can import the source key.
+
+        Returns ``(raw_key_bytes, fingerprint_hex)``.
+        """
+        with open(path, "rb") as source:
+            source.read(len(_CHUNKED_BACKUP_V2_MAGIC))
+            header_key_id = BackupService._read_exact(
+                source, _CHUNKED_BACKUP_KEY_ID_BYTES
+            )
+            header_fingerprint = BackupService._read_exact(
+                source, _CHUNKED_BACKUP_FINGERPRINT_BYTES
+            )
+        header_fingerprint_hex = header_fingerprint.hex()
+        header_key_id_hex = header_key_id.hex()
+
+        passed_fingerprint = BackupService.compute_backup_key_fingerprint(passed_key)
+        if passed_fingerprint == header_fingerprint_hex:
+            return BackupService._decode_backup_key(passed_key), header_fingerprint_hex
+
+        imported_key_material = BackupService.lookup_key_by_id(header_key_id_hex)
+        if imported_key_material is not None:
+            imported_fingerprint = BackupService.compute_backup_key_fingerprint(
+                imported_key_material
+            )
+            if imported_fingerprint == header_fingerprint_hex:
+                return (
+                    BackupService._decode_backup_key(imported_key_material),
+                    header_fingerprint_hex,
+                )
+
+        raise UnknownBackupKeyIdError(
+            key_id=header_key_id_hex,
+            fingerprint=header_fingerprint_hex,
+            message=(
+                f"Backup was encrypted with key_id={header_key_id_hex} "
+                f"(fingerprint={header_fingerprint_hex}) which is not "
+                "registered on this master. Call POST /backups/import-key/ "
+                "to import the source key, then retry."
+            ),
+        )
+
+    @staticmethod
+    def _decrypt_v2_chunked_backup(path: str, key: str) -> str:
+        raw_key, _fingerprint = BackupService._resolve_key_for_v2(path, key)
+        aesgcm = AESGCM(raw_key)
+
+        tmp_path, private_dir = BackupService._make_private_decrypted_path()
+        try:
+            with open(path, "rb") as source, open(tmp_path, "wb") as target:
+                magic = BackupService._read_exact(source, len(_CHUNKED_BACKUP_V2_MAGIC))
+                if magic != _CHUNKED_BACKUP_V2_MAGIC:
+                    raise ValueError("Unsupported encrypted backup format (V2 expected)")
+                source.read(_CHUNKED_BACKUP_KEY_ID_BYTES + _CHUNKED_BACKUP_FINGERPRINT_BYTES)
+                nonce_prefix = BackupService._read_exact(
+                    source, _CHUNKED_BACKUP_NONCE_PREFIX_BYTES
+                )
+                chunk_index = 0
+                while True:
+                    length_raw = BackupService._read_exact(source, 4)
+                    chunk_length = struct.unpack(">I", length_raw)[0]
+                    if chunk_length == 0:
+                        break
+                    ciphertext = BackupService._read_exact(source, chunk_length)
+                    nonce = nonce_prefix + struct.pack(">I", chunk_index)
+                    target.write(aesgcm.decrypt(nonce, ciphertext, None))
+                    chunk_index += 1
+            return tmp_path
+        except Exception:
+            BackupService.cleanup_decrypted_path(tmp_path)
+            raise
 
     @staticmethod
     def _make_private_decrypted_path(suffix: str = ".tar.gz") -> tuple:
