@@ -72,10 +72,15 @@ class HealthWebhookSecurityTests(TestCase):
         self.assertEqual(resp.status_code, 404)
 
     def test_valid_token_returns_200(self):
+        import uuid
         client = APIClient()
         resp = client.post(
             self.url,
-            {"token": "super-secret-webhook-token-1234", "status": "healthy"},
+            {
+                "token": "super-secret-webhook-token-1234",
+                "nonce": uuid.uuid4().hex,
+                "status": "healthy",
+            },
             format="json",
         )
         self.assertEqual(resp.status_code, 200)

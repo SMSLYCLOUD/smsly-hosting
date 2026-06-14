@@ -203,6 +203,16 @@ def heartbeat_receive(request):
 
     Authenticated via HMAC V2 using the sender's per-node gateway_secret.
     Called by peer servers over WireGuard mesh.
+
+    SECURITY: returns a constant ``{"accepted": True}`` on every HMAC-
+    authenticated request. Distinguishing 'no mesh configured' from
+    'heartbeat accepted' would let a network-adjacent attacker (one
+    that has compromised any single peer's gateway_secret, or is the
+    peer itself) enumerate whether the platform has any other peer
+    configured by toggling MeshNetwork.is_active and reading the
+    response shape. The legitimate leader does not need this feedback
+    — cluster liveness is determined by timeout, not by the body of
+    the heartbeat ack.
     """
     term = request.data.get("term")
     leader_wg_address = request.data.get("leader_wg_address")
@@ -214,21 +224,35 @@ def heartbeat_receive(request):
         )
 
     from .models_mesh import MeshNetwork
-    meshes = MeshNetwork.objects.filter(is_active=True)
-    for mesh in meshes:
+    mesh = (
+        MeshNetwork.objects
+        .filter(is_active=True, peers__server__wg_address=leader_wg_address)
+        .distinct()
+        .first()
+    )
+    if mesh is None:
+        mesh = (
+            MeshNetwork.objects
+            .filter(is_active=True, peers__wg_address=leader_wg_address)
+            .distinct()
+            .first()
+        )
+    if mesh is None:
+        logger.warning(
+            "Heartbeat received from unknown peer wg_address=%s; "
+            "no active mesh contains this peer.",
+            leader_wg_address,
+        )
+    else:
         try:
             cluster = ElectionService.get_or_create_cluster(mesh=mesh)
-            accepted = ElectionService.receive_heartbeat(
+            ElectionService.receive_heartbeat(
                 cluster, int(term), leader_wg_address,
             )
-            return Response({"accepted": accepted})
         except Exception as e:
             logger.error(f"Heartbeat receive error: {e}")
 
-    return Response(
-        {"error": "No active mesh found"},
-        status=status.HTTP_404_NOT_FOUND,
-    )
+    return Response({"accepted": True})
 
 
 @api_view(["POST"])
@@ -250,18 +274,33 @@ def vote_request(request):
         )
 
     from .models_mesh import MeshNetwork
-    meshes = MeshNetwork.objects.filter(is_active=True)
-    for mesh in meshes:
-        try:
-            cluster = ElectionService.get_or_create_cluster(mesh=mesh)
-            granted = ElectionService.handle_vote_request(
-                cluster, int(term), candidate_wg_address,
-            )
-            return Response({"vote_granted": granted})
-        except Exception as e:
-            logger.error(f"Vote request error: {e}")
-
-    return Response(
-        {"error": "No active mesh found"},
-        status=status.HTTP_404_NOT_FOUND,
+    mesh = (
+        MeshNetwork.objects
+        .filter(is_active=True, peers__server__wg_address=candidate_wg_address)
+        .distinct()
+        .first()
     )
+    if mesh is None:
+        mesh = (
+            MeshNetwork.objects
+            .filter(is_active=True, peers__wg_address=candidate_wg_address)
+            .distinct()
+            .first()
+        )
+    if mesh is None:
+        return Response(
+            {"error": "No active mesh found for this peer"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    try:
+        cluster = ElectionService.get_or_create_cluster(mesh=mesh)
+        granted = ElectionService.handle_vote_request(
+            cluster, int(term), candidate_wg_address,
+        )
+        return Response({"vote_granted": granted})
+    except Exception as e:
+        logger.error(f"Vote request error: {e}")
+        return Response(
+            {"error": "Vote processing failed"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )

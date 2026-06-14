@@ -895,6 +895,13 @@ class ServerProxyThrottle(UserRateThrottle):
     scope = 'server_proxy'
 
 
+ALLOWED_PROXY_METHODS = {'GET', 'HEAD'}
+ALLOWED_PROXY_PATHS = (
+    '/api/v1/health',
+    '/api/v1/metrics',
+)
+
+
 class ServerCheckAllThrottle(UserRateThrottle):
     scope = 'server_check_all'
 
@@ -970,7 +977,26 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
         """
         Create a server record and kick off auto-provisioning via SSH.
         The installer will run on the remote VPS and auto-fill api_url/api_token.
+
+        SECURITY: marking a server as ``is_primary=True`` displaces the
+        platform's existing primary control plane. Any non-superuser
+        with valid SSH credentials could previously register a
+        competing primary and seize traffic for their workloads.
+        Only superusers may set the flag.
         """
+        is_primary_raw = request.data.get("is_primary", False)
+        if isinstance(is_primary_raw, str):
+            is_primary_requested = is_primary_raw.strip().lower() in (
+                "true", "1", "yes", "t", "on",
+            )
+        else:
+            is_primary_requested = bool(is_primary_raw)
+        if is_primary_requested and not request.user.is_superuser:
+            return Response(
+                {"error": "Only superusers can provision a primary server."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         serializer = ManagedServerProvisionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -1109,6 +1135,11 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
 
         server = self.get_object()
         method = request.data.get("method", "GET").upper()
+        if method not in ALLOWED_PROXY_METHODS:
+            return Response(
+                {"error": f"Method {method} is not allowed."},
+                status=status.HTTP_405_METHOD_NOT_ALLOWED,
+            )
         raw_path = str(request.data.get("path", "") or "")
         body = request.data.get("body")
 
@@ -1134,18 +1165,25 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Constrain the proxy to a fixed allowlist of safe read-only platform
+        # endpoints. This blocks tenant-controlled SSRF amplification via
+        # the platform's API token. Compare the path portion only, ignoring
+        # any query string so legitimate ?detail=1 etc. still work.
+        path_only_for_match = normalized_path.rstrip("/")
+        if not any(
+            path_only_for_match == allowed.rstrip("/")
+            or path_only_for_match.startswith(allowed.rstrip("/") + "/")
+            for allowed in ALLOWED_PROXY_PATHS
+        ):
+            return Response(
+                {"error": "Path not in proxy allowlist."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         # Re-verify /api/ prefix after normalization
         if not path.startswith("/api/"):
             return Response(
                 {"error": "Only /api/ paths can be proxied."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # Validate only HTTP/HTTPS methods are allowed
-        allowed_methods = {"GET", "POST", "PUT", "PATCH", "DELETE"}
-        if method not in allowed_methods:
-            return Response(
-                {"error": f"Method {method} is not allowed."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -1158,6 +1196,29 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
         if parsed.scheme not in ("http", "https"):
             return Response(
                 {"error": "Server API URL must use HTTP or HTTPS."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # SECURITY: refuse to forward authenticated requests to a hostname
+        # that does not match the registered server.host. A tenant can
+        # otherwise register api_url=http://attacker.example.com and have
+        # the platform ship the gateway secret / API token straight to the
+        # attacker.
+        api_host = (parsed.hostname or "").strip().lower()
+        server_host = (server.host or "").strip().lower()
+        if not server_host:
+            return Response(
+                {"error": "Server host is not configured."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if api_host != server_host:
+            return Response(
+                {
+                    "error": (
+                        "api_url hostname does not match server.host; "
+                        "refusing to forward authenticated proxy request."
+                    )
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -1434,12 +1495,14 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
 
             try:
                 redacted_out = _redact_transfer_text(out or "")
-            except Exception:
-                redacted_out = "[REDACTION FAILED]"
+            except Exception as exc:
+                logger.error("Redaction failed for run_command stdout: %s", exc)
+                redacted_out = "[REDACTION FAILED — output suppressed for safety]"
             try:
                 redacted_err = _redact_transfer_text(err or "")
-            except Exception:
-                redacted_err = "[REDACTION FAILED]"
+            except Exception as exc:
+                logger.error("Redaction failed for run_command stderr: %s", exc)
+                redacted_err = "[REDACTION FAILED — output suppressed for safety]"
 
             return Response({
                 "command": command,

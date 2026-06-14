@@ -14,6 +14,20 @@ from .serializers import CloudProviderSerializer, CloudProviderCreateSerializer,
 logger = logging.getLogger(__name__)
 
 
+_CREDENTIAL_LITERAL_RE = re.compile(
+    r'(\s*)([a-z_][a-z0-9_]*_password)(\s*=\s*)"[^"]+"',
+    re.IGNORECASE,
+)
+
+
+def _strip_literal_credentials(template: str) -> str:
+    """Replace any literal password value in the template with a
+    ``var.<name>`` reference so the rendered IaC never carries a cleartext
+    credential the user could accidentally commit or apply.
+    """
+    return _CREDENTIAL_LITERAL_RE.sub(r'\1\2\3var.\2', template)
+
+
 class CloudProviderViewSet(viewsets.ModelViewSet):
     # M-3 fix: non-admin users only see active providers (no credential details)
     permission_classes = [permissions.IsAuthenticated]
@@ -545,7 +559,41 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             + resource_block
         )
 
-        return Response({'code': iac_code, 'language': 'hcl', 'provider': provider})
+        iac_code = _strip_literal_credentials(iac_code)
+        acknowledged = bool(request.data.get('requires_acknowledgement'))
+
+        try:
+            from apps.deployments.models_audit import AuditLog
+            AuditLog(
+                user=request.user if request.user.is_authenticated else None,
+                actor=request.user.get_username() if request.user.is_authenticated else 'system',
+                action='IAC_ACKNOWLEDGED' if acknowledged else 'IAC_PREVIEW_GENERATED',
+                target=f'cloud:{provider}',
+                metadata={
+                    'cloud': provider,
+                    'description_chars': len(description),
+                    'acknowledged': acknowledged,
+                },
+            ).save()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to write IAC audit log: %s", exc)
+
+        warning = (
+            'WARNING: This is a preview generated from a natural-language '
+            'description. Review and add required_providers, variables, and '
+            'state backend before applying. Literal credentials have been '
+            'replaced with var.* references; you must still declare those '
+            'variables and supply values via a non-committed tfvars file.'
+        )
+        return Response({
+            'code': iac_code,
+            'language': 'hcl',
+            'provider': provider,
+            'template': iac_code,
+            'preview_only': True,
+            'acknowledged': acknowledged,
+            'warning': warning,
+        })
 
     @action(detail=False, methods=['get'])
     def ecosystem_prompts(self, request):

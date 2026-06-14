@@ -9,8 +9,9 @@ import requests
 from decouple import config
 from django.conf import settings
 from rest_framework import permissions, status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.response import Response
+from rest_framework.throttling import UserRateThrottle
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,26 @@ PROMETHEUS_INTERNAL_URL = config('PROMETHEUS_INTERNAL_URL', default='http://prom
 
 PROXY_TIMEOUT = 15
 
+# SECURITY: cap query length and restrict to a safe character set so a user
+# cannot smuggle PromQL/LogQL tokens that reach other tenants or amplify an
+# SSRF on the in-cluster observability backends.
+MAX_PROMETHEUS_QUERY_LENGTH = 4096
+MAX_LOKI_QUERY_LENGTH = 4096
+SAFE_QUERY_CHARS_RE = re.compile(r"^[a-zA-Z0-9_=.{}, !\"'\(\)\[\]:\-]+$")
+ALLOWED_LOKI_LABELS = frozenset({
+    'service', 'job', 'level', 'status', 'method', 'route',
+})
+MAX_PROMETHEUS_TIME_RANGE = timedelta(days=30)
+
 _LOKI_RELATIVE_RE = re.compile(r'^now(?:[-+](\d+)([smhd]))?$')
+
+
+class ObservabilityRateThrottle(UserRateThrottle):
+    """30 req/min/user. Defined inline so it does not depend on
+    settings.DEFAULT_THROTTLE_RATES having a matching entry.
+    """
+    scope = 'observability'
+    rate = '30/minute'
 
 
 def _loki_time_to_ns(value: str) -> str:
@@ -55,6 +75,67 @@ def _grafana_auth_header() -> dict:
         return {}
     token = base64.b64encode(f"{GRAFANA_USER}:{GRAFANA_PASSWORD}".encode()).decode()
     return {'Authorization': f'Basic {token}'}
+
+
+def _validate_query_chars(query: str) -> str:
+    """Reject queries whose length or character set is unsafe."""
+    if not query:
+        return 'Query is required.'
+    if not SAFE_QUERY_CHARS_RE.match(query):
+        return 'Query contains characters outside the allowed PromQL/LogQL set.'
+    return ''
+
+
+def _user_owned_service_names(user) -> list[str]:
+    """Return the names of services the user owns, used for tenant scoping."""
+    from apps.deployments.models import Service
+    names = list(
+        Service.objects
+        .filter(owner=user)
+        .values_list('compose_main_service', 'name')
+    )
+    out: list[str] = []
+    for compose_name, name in names:
+        candidate = (compose_name or '').strip() or (name or '').strip()
+        if candidate:
+            out.append(candidate)
+    return out
+
+
+def _scope_query_to_tenant(query: str, service_names: list[str]) -> str:
+    """Inject a ``compose_service=~"<names>"`` filter so the query can only
+    match the user's own services.
+
+    If the query already has a ``{...}`` selector, the filter is merged
+    into the first selector. Otherwise the query is wrapped in a selector
+    that restricts results to the user's own compose_service names.
+    """
+    safe = [re.escape(n) for n in service_names if n]
+    if not safe:
+        raise ValueError("User has no services to scope the query to.")
+    tenant_filter = f'compose_service=~"{"|".join(safe)}"'
+    if '{' in query:
+        idx = query.index('{')
+        end_idx = query.index('}', idx)
+        inner = query[idx + 1:end_idx].strip()
+        new_inner = f'{inner}, {tenant_filter}' if inner else tenant_filter
+        return query[:idx + 1] + new_inner + query[end_idx:]
+    return '{' + tenant_filter + '}'
+
+
+def _parse_prometheus_time(raw: str | None) -> str | None:
+    """Restrict the ``time`` parameter to [now-30d, now]."""
+    if raw is None or raw == '':
+        return None
+    try:
+        ts = float(raw)
+    except (TypeError, ValueError):
+        return None
+    now = datetime.now(timezone.utc).timestamp()
+    lower = (datetime.now(timezone.utc) - MAX_PROMETHEUS_TIME_RANGE).timestamp()
+    if ts < lower or ts > now:
+        return None
+    return raw
 
 
 @api_view(['GET'])
@@ -141,11 +222,31 @@ def _resolve_service_var(var_service: str) -> str:
 
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
+@throttle_classes([ObservabilityRateThrottle])
 def loki_query(request):
     """Proxy a range query to Loki with the auth boundary at the Django layer."""
     query = request.GET.get('query', '').strip()
-    if not query:
-        return Response({'error': 'query parameter is required'}, status=status.HTTP_400_BAD_REQUEST)
+    if len(query) > MAX_LOKI_QUERY_LENGTH:
+        return Response(
+            {'error': f'Query exceeds {MAX_LOKI_QUERY_LENGTH} characters.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    char_error = _validate_query_chars(query)
+    if char_error:
+        return Response({'error': char_error}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        service_names = _user_owned_service_names(request.user)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Loki query service lookup failed: %s", exc)
+        return Response(
+            {'error': 'Unable to resolve user services for tenant scoping.'},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    try:
+        query = _scope_query_to_tenant(query, service_names)
+    except ValueError as exc:
+        return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
     # Resolve UUID in compose_service filter (safety net for unresolved UUIDs)
     uuid_match = re.search(
@@ -224,10 +325,21 @@ def loki_query(request):
 
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
+@throttle_classes([ObservabilityRateThrottle])
 def loki_label_values(request, label: str):
     """Proxy a label-values lookup to Loki."""
     if not label:
         return Response({'error': 'label name is required'}, status=status.HTTP_400_BAD_REQUEST)
+    if label not in ALLOWED_LOKI_LABELS:
+        return Response(
+            {
+                'error': (
+                    f"label {label!r} is not in the allowed set: "
+                    f"{sorted(ALLOWED_LOKI_LABELS)}"
+                ),
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     try:
         resp = requests.get(
@@ -249,16 +361,50 @@ def loki_label_values(request, label: str):
 
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
+@throttle_classes([ObservabilityRateThrottle])
 def prometheus_query(request):
     """Proxy an instant PromQL query to Prometheus."""
     query = request.GET.get('query', '').strip()
-    if not query:
-        return Response({'error': 'query parameter is required'}, status=status.HTTP_400_BAD_REQUEST)
+    if len(query) > MAX_PROMETHEUS_QUERY_LENGTH:
+        return Response(
+            {'error': f'Query exceeds {MAX_PROMETHEUS_QUERY_LENGTH} characters.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    char_error = _validate_query_chars(query)
+    if char_error:
+        return Response({'error': char_error}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
+        service_names = _user_owned_service_names(request.user)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Prometheus query service lookup failed: %s", exc)
+        return Response(
+            {'error': 'Unable to resolve user services for tenant scoping.'},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    try:
+        query = _scope_query_to_tenant(query, service_names)
+    except ValueError as exc:
+        return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    raw_time = request.GET.get('time')
+    if raw_time:
+        parsed_time = _parse_prometheus_time(raw_time)
+        if parsed_time is None:
+            return Response(
+                {'error': 'time must be a Unix timestamp within the last 30 days.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+    else:
+        parsed_time = None
+
+    try:
+        params = {'query': query}
+        if parsed_time is not None:
+            params['time'] = parsed_time
         resp = requests.get(
             f"{PROMETHEUS_INTERNAL_URL}/api/v1/query",
-            params={'query': query, 'time': request.GET.get('time')},
+            params=params,
             timeout=PROXY_TIMEOUT,
         )
         resp.raise_for_status()

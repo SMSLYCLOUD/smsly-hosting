@@ -4,8 +4,21 @@ from django.core.exceptions import PermissionDenied
 from rest_framework import viewsets, permissions, status, serializers
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.throttling import UserRateThrottle
 
 from apps.deployments.models_cloud_storage import CloudStorageDestination
+
+
+class CloudStorageTemplatesRateThrottle(UserRateThrottle):
+    """Per-user throttle on the ``templates`` convenience endpoint.
+
+    The endpoint returns the static TEMPLATES list — a no-DB
+    response — but a script can probe it indefinitely. The
+    ``cloud-templates`` scope caps it at 30/minute per user.
+    Rate is read from
+    ``settings.DEFAULT_THROTTLE_RATES['cloud_templates']``.
+    """
+    scope = 'cloud_templates'
 
 
 class CloudStorageSerializer(serializers.ModelSerializer):
@@ -80,6 +93,7 @@ class CloudStorageViewSet(viewsets.ModelViewSet):
         return Response({'status': 'error', 'message': 'Upload failed — check credentials and endpoint'},
                         status=status.HTTP_400_BAD_REQUEST)
 
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'],
+            throttle_classes=[CloudStorageTemplatesRateThrottle])
     def templates(self, request):
         return Response(CloudStorageDestination.TEMPLATES)

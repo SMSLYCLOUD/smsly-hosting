@@ -1,4 +1,6 @@
 """OAuth configuration views."""
+from collections import OrderedDict
+
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
@@ -6,8 +8,39 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
 from allauth.socialaccount.models import SocialApp
+from allauth.socialaccount import providers as allauth_providers
 from django.contrib.sites.models import Site
 from django.conf import settings
+from django.core.cache import cache
+from django.db.models.signals import post_save, post_delete
+from django.dispatch import receiver
+
+
+# SECURITY (Issue 23): the oauth_credentials POST handler writes
+# credentials to SocialApp and the dashboard expects the next
+# OAuth flow to pick up the new values immediately. allauth
+# memoises its provider registry in-process, so a stale
+# SocialApp would still be served until the worker restarts.
+# The post_save / post_delete receivers below bust the relevant
+# cache keys AND wipe allauth's in-process provider registry on
+# any SocialApp change, so the next call sees the fresh values.
+_OAUTH_CACHE_PREFIX = "social_app"
+
+
+@receiver(post_save, sender=SocialApp)
+@receiver(post_delete, sender=SocialApp)
+def _invalidate_social_app_cache(sender, instance, **kwargs):
+    cache.delete(f"{_OAUTH_CACHE_PREFIX}:{instance.provider}:{instance.id}")
+    # allauth memoises providers in an OrderedDict. Clearing it
+    # and resetting ``loaded`` forces the next ``get_class`` call
+    # to re-import the provider module — and the provider module
+    # re-reads SOCIALACCOUNT_PROVIDERS (and any consumer that
+    # re-queries SocialApp) picks up the new values.
+    try:
+        allauth_providers.registry.provider_map = OrderedDict()
+        allauth_providers.registry.loaded = False
+    except Exception:
+        pass
 
 
 @extend_schema(responses=OpenApiTypes.OBJECT)
