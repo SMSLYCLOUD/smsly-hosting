@@ -71,6 +71,20 @@ ALLOW_INSECURE_INTER_NODE_TLS = config(
     cast=lambda v: str(v).lower() in ('1', 'true', 'yes', 'on'),
 )
 
+# SECURITY (Batch J): Docker buildx fallback builder name. The
+# default ``docker`` driver buildx builder can corrupt on
+# Docker daemon restarts. The platform auto-creates a
+# ``docker-container`` driver fallback with this name when
+# the build fails with the buildx default-builder recreation
+# error. The fallback spawns a fresh BuildKit container per
+# build, which is resilient to daemon restarts. Operators can
+# pre-create the fallback or set BUILDX_BUILDER= to force a
+# specific builder globally.
+BUILDX_FALLBACK_BUILDER = config(
+    'BUILDX_FALLBACK_BUILDER',
+    default='smsly-fallback',
+)
+
 # Validate encryption key format (Fernet requirement: 32 bytes, URL-safe base64)
 try:
     from cryptography.fernet import Fernet

@@ -5,11 +5,106 @@ import os
 import logging
 import docker
 import json
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
+
+
+# ─── Buildx fallback (Batch J) ──────────────────────────────────────
+# The default ``docker`` driver buildx builder can corrupt after
+# Docker daemon restarts, disk pressure on /var/lib/docker/buildx,
+# or daemon upgrades. Symptoms: every Nixpacks build fails with
+# ``failed to recreate the buildx default builder with the
+# docker driver``. The ``default`` name is reserved and tied
+# to a Docker context that can't be removed while active, so the
+# operator has to switch context first.
+#
+# Self-heal: when the build fails with the buildx default
+# error, we (a) create a ``docker-container`` driver fallback
+# named ``smsly-fallback``, and (b) re-run the build with
+# ``BUILDX_BUILDER=smsly-fallback``. The fallback builder
+# spawns a fresh BuildKit container per build, which is
+# resilient to daemon restarts.
+
+_BUILDX_DEFAULT_BROKEN_MARKERS = (
+    'failed to recreate the buildx default builder',
+    'buildx default builder',
+    'no such builder: default',
+    'failed to compute cache key',
+    "couldn't find buildx default",
+)
+
+# Capture the real CalledProcessError class at import time.
+# Tests that mock ``subprocess`` (e.g. ``mock.patch.object(
+# builder, 'subprocess', ...)``) would otherwise replace the
+# class with a MagicMock, breaking the ``except`` clause
+# below with a TypeError. We re-export the real class so the
+# except can match a real exception instance.
+_CalledProcessError = subprocess.CalledProcessError
+
+
+def _is_buildx_default_broken(stderr: str) -> bool:
+    """Return True if ``stderr`` looks like the buildx
+    default-builder recreation error.
+    """
+    if not stderr:
+        return False
+    needle = stderr.lower()
+    return any(marker in needle for marker in _BUILDX_DEFAULT_BROKEN_MARKERS)
+
+
+def _ensure_buildx_fallback(fallback_name: str = 'smsly-fallback') -> Tuple[bool, str]:
+    """Create the docker-container fallback builder if it
+    doesn't already exist.
+
+    The ``docker-container`` driver spawns a BuildKit container
+    per build, which is more resilient to corruption than the
+    ``docker`` driver. The fallback name is operator-tunable
+    via ``settings.BUILDX_FALLBACK_BUILDER`` (env var).
+
+    Returns ``(created, status)`` where ``created`` is True if
+    a new builder was created (or already existed) and ``status``
+    is a short human-readable description for logs.
+    """
+    try:
+        ls = subprocess.run(
+            ['docker', 'buildx', 'ls'],
+            capture_output=True, text=True, timeout=15,
+        )
+    except (_CalledProcessError, FileNotFoundError) as exc:
+        return False, f'buildx ls failed: {exc}'
+
+    if fallback_name in (ls.stdout or ''):
+        return True, f'fallback {fallback_name!r} already exists'
+
+    create = subprocess.run(
+        [
+            'docker', 'buildx', 'create',
+            '--name', fallback_name,
+            '--driver', 'docker-container',
+            '--use',
+        ],
+        capture_output=True, text=True, timeout=60,
+    )
+    if create.returncode != 0:
+        return False, (
+            f'fallback create failed (rc={create.returncode}): '
+            f'{create.stderr.strip() or create.stdout.strip()}'
+        )
+    return True, f'created fallback {fallback_name!r}'
+
+
+def _buildx_fallback_builder_name() -> str:
+    """Return the configured fallback builder name. Reads from
+    ``settings.BUILDX_FALLBACK_BUILDER`` (env var) with a
+    sensible default of ``smsly-fallback``.
+    """
+    return (
+        getattr(settings, 'BUILDX_FALLBACK_BUILDER', None)
+        or 'smsly-fallback'
+    )
 
 
 class NixpacksBuilder:
@@ -113,7 +208,63 @@ class NixpacksBuilder:
                 "stderr": process.stderr or "",
             }
 
-        except subprocess.CalledProcessError as e:
+        except _CalledProcessError as e:
+            stderr = (e.stderr or "") + "\n" + (e.stdout or "")
+            # ─── Batch J: buildx default-builder self-heal ─────────
+            # The default ``docker`` driver buildx builder can
+            # corrupt on daemon restart. Detect that specific
+            # error, create a ``docker-container`` fallback
+            # builder, and re-run the build against it.
+            if _is_buildx_default_broken(stderr):
+                fallback_name = _buildx_fallback_builder_name()
+                logger.warning(
+                    "Detected broken buildx default builder in "
+                    "Nixpacks stderr; creating fallback %r and "
+                    "retrying the build.",
+                    fallback_name,
+                )
+                created, fb_status = _ensure_buildx_fallback(fallback_name)
+                if created:
+                    logger.info(
+                        "Buildx fallback ready (%s); retrying build "
+                        "with BUILDX_BUILDER=%s.",
+                        fb_status, fallback_name,
+                    )
+                    try:
+                        retry = subprocess.run(
+                            command,
+                            check=True,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True,
+                            env={
+                                **os.environ,
+                                "NIXPACKS_CACHE_DIR": effective_cache_dir,
+                                "BUILDX_BUILDER": fallback_name,
+                            },
+                        )
+                        return {
+                            "image_name": image_name,
+                            "stdout": retry.stdout or "",
+                            "stderr": retry.stderr or "",
+                        }
+                    except subprocess.CalledProcessError as retry_exc:
+                        logger.error(
+                            "Build retry with fallback %r also failed: %s",
+                            fallback_name, retry_exc.stderr[-2000:],
+                        )
+                        e = retry_exc
+                        stderr = (
+                            (retry_exc.stderr or "")
+                            + "\n[buildx fallback self-heal attempted: "
+                            + fb_status + "]"
+                        )
+                else:
+                    logger.error(
+                        "Could not create buildx fallback %r: %s. "
+                        "Falling back to original error.",
+                        fallback_name, fb_status,
+                    )
             # Capture full output for debugging
             error_detail = ""
             if e.stdout:

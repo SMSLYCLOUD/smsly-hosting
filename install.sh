@@ -1563,6 +1563,8 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "GITHUB_WEBHOOK_SECRET" "$(gen_hex_secret 32)" "GitHub webhook signature verification"
     env_ensure_var "$env_file" "AUTOSCALER_API_TOKEN" "$(gen_hex_secret 32)" "Autoscaler API bearer token (shared between autoscaler service and Django backend)"
     env_ensure_var "$env_file" "FRP_AUTH_TOKEN" "$(gen_hex_secret 32)" "FRP tunnel relay authentication token"
+    env_ensure_var "$env_file" "BACKUP_ENCRYPTION_KEY" "$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())' 2>/dev/null || openssl rand -base64 32)" "Fernet key used to encrypt on-disk backups (required when BACKUP_REQUIRE_ENCRYPTION=True)"
+    env_ensure_var "$env_file" "BACKUP_REQUIRE_ENCRYPTION" "true" "Refuse to write unencrypted backups"
     env_ensure_var "$env_file" "SMSLY_DISABLE_TIER_GATES" "true" "Disable owner-tier paywall gates in this edition"
     env_ensure_var "$env_file" "SMSLY_ENABLE_STARTUP_CADDY_SYNC" "false" "Keep AppConfig.ready side-effect free; installer/watchers sync edge config"
     env_ensure_var "$env_file" "PGCAT_ADMIN_PASSWORD" "$(gen_hex_secret 24)" "PgCat administration password (mandatory for 1.2+)"
@@ -4123,15 +4125,61 @@ print("\033[0;32m  ✓ SSH client patched\033[0m")
 PYEOF
     fi
 
-    # Ensure shared networks exist (prod stack uses external networks)
-    ensure_update_networks
+     # Ensure shared networks exist (prod stack uses external networks)
+     ensure_update_networks
 
-     # Cache bust only if disk is low (already runs in the disk check above when needed).
-     # Moved into case blocks below to avoid redundant double bust.
+     # Ensure all critical envs are set. The install.sh auto-
+     # generates these at first install; on UPDATE, the env
+     # file may be missing newer secrets that were added
+     # after the original install (e.g. BACKUP_ENCRYPTION_KEY
+     # was added in a later release). This block auto-fills
+     # any missing secret so the platform doesn't fail-closed
+     # in production because of an env added in a newer
+     # version. Each secret is only added if it doesn't
+     # already exist (preserves any operator-set value).
+     if [ -f "$env_file" ] && [ "$MODE_NODE" != "true" ]; then
+         echo -e "${BLUE}[UPDATE] Verifying critical envs in $env_file...${NC}"
+         local _missing_count=0
+         # Each line: <VAR_NAME>=<generator>
+         local _env_generators=(
+             "REDIS_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || true)"
+             "RABBITMQ_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || true)"
+             "GATEWAY_SECRET|$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
+             "GITHUB_WEBHOOK_SECRET|$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
+             "AUTOSCALER_API_TOKEN|$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
+             "FRP_AUTH_TOKEN|$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
+             "PGCAT_ADMIN_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(24))" 2>/dev/null || true)"
+             "BACKUP_ENCRYPTION_KEY|$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null || openssl rand -base64 32)"
+         )
+         local _entry
+         for _entry in "${_env_generators[@]}"; do
+             local _key="${_entry%%|*}"
+             local _generator="${_entry#*|}"
+             if ! grep -q "^${_key}=" "$env_file" 2>/dev/null; then
+                 if [ -n "$_generator" ]; then
+                     echo -e "${YELLOW}  → Auto-generating missing $_key${NC}"
+                     env_set_value "$env_file" "$_key" "$_generator"
+                     _missing_count=$((_missing_count + 1))
+                 fi
+             fi
+         done
+         if [ "$_missing_count" -gt 0 ]; then
+             echo -e "${GREEN}  ✓ Auto-generated $_missing_count missing secret(s)${NC}"
+             # Re-source the env so the new values take effect
+             # in the current shell session.
+             set -a
+             # shellcheck disable=SC1090
+             source "$env_file" 2>/dev/null || true
+             set +a
+         fi
+     fi
 
-     docker_login
+      # Cache bust only if disk is low (already runs in the disk check above when needed).
+      # Moved into case blocks below to avoid redundant double bust.
 
-      case "$UPDATE_MODE" in
+      docker_login
+
+       case "$UPDATE_MODE" in
          frontend)
               if [ "$MODE_NODE" = "true" ]; then
                   echo -e "${YELLOW}  → Node mode: no frontend to update. Skipping.${NC}"
@@ -5822,6 +5870,9 @@ else
     [ -n "${FRP_AUTH_TOKEN:-}" ] || FRP_AUTH_TOKEN="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
     [ -n "${PGCAT_ADMIN_PASSWORD:-}" ] || PGCAT_ADMIN_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(24))" 2>/dev/null || true)"
     [ -n "${GRAFANA_PASSWORD:-}" ] || GRAFANA_PASSWORD="$(python3 -c "import secrets,string; print(''.join(secrets.choice(string.ascii_letters+string.digits+'-_') for _ in range(40)))" 2>/dev/null || openssl rand -base64 30 | tr -d '+/=' )"
+    [ -n "${BACKUP_ENCRYPTION_KEY:-}" ] || BACKUP_ENCRYPTION_KEY="$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null || openssl rand -base64 32)"
+    [ -n "${BACKUP_REQUIRE_ENCRYPTION:-}" ] || BACKUP_REQUIRE_ENCRYPTION="true"
+    [ -n "${SMSLY_STRICT_SSH_HOST_KEY_CHECK:-}" ] || SMSLY_STRICT_SSH_HOST_KEY_CHECK="false"
 
     # Validate Fernet key format
     if ! echo "$FIELD_ENCRYPTION_KEY" | python3 -c "

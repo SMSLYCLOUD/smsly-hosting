@@ -47,6 +47,7 @@ class FailureType(Enum):
     DISK_FULL = "disk_full"
     NETWORK_UNREACHABLE = "network_unreachable"
     DOCKER_DAEMON_DOWN = "docker_daemon_down"
+    BUILDX_BROKEN = "buildx_broken"
     IMAGE_PULL_FAILED = "image_pull_failed"
     PORT_CONFLICT = "port_conflict"
     CONFIG_ERROR = "config_error"
@@ -59,6 +60,7 @@ class RecoveryAction(Enum):
     RESTART_STACK = "restart_stack"
     RESTART_DOCKER_DAEMON = "restart_docker_daemon"
     REBUILD_CONTAINER = "rebuild_container"
+    REPAIR_BUILDX = "repair_buildx"
     PRUNE_IMAGES = "prune_images"
     PRUNE_VOLUMES = "prune_volumes"
     FIX_NETWORK = "fix_network"
@@ -316,6 +318,29 @@ class SelfHealingOrchestrator:
                 self._log(f"Container {container_name} not found — will rebuild")
                 return
 
+            # Batch J: detect buildx default-builder recreation
+            # failure in the build logs. The build may have
+            # succeeded on the master but the image pull on
+            # the node failed, or the build happened on the
+            # node itself and the buildx default builder
+            # was corrupt. Either way the recovery is the
+            # same: ensure a docker-container fallback builder
+            # exists on the node.
+            buildx_broken = self._looks_like_buildx_failure(
+                result.container_logs
+            )
+            if buildx_broken:
+                result.failure_type = FailureType.BUILDX_BROKEN
+                result.error_details = (
+                    "Docker buildx default builder recreation failed; "
+                    "fallback builder will be created."
+                )
+                result.suggested_actions.append(RecoveryAction.REPAIR_BUILDX)
+                self._log(
+                    "Detected broken buildx default builder in container "
+                    "logs; queuing REPAIR_BUILDX action."
+                )
+
             if state in ("exited", "dead"):
                 result.failure_type = FailureType.CONTAINER_CRASHED
                 result.suggested_actions.append(RecoveryAction.RESTART_CONTAINER)
@@ -440,6 +465,124 @@ class SelfHealingOrchestrator:
 
         return FailureType.CONTAINER_CRASHED
 
+    # ─── Batch J: buildx self-heal helpers ────────────────────────
+
+    _BUILDX_BROKEN_MARKERS = (
+        "failed to recreate the buildx default builder",
+        "buildx default builder",
+        "no such builder: default",
+        'error: failed to solve: failed to compute cache key',
+    )
+
+    def _looks_like_buildx_failure(self, text: str) -> bool:
+        """Return True if ``text`` looks like a buildx default-
+        builder recreation failure (the most common cause of a
+        successful-on-master / failing-on-node image pull or
+        local node build).
+        """
+        if not text:
+            return False
+        needle = text.lower()
+        return any(marker in needle for marker in self._BUILDX_BROKEN_MARKERS)
+
+    def _repair_buildx(
+        self,
+        deployment=None,
+        diagnostics: Optional[DiagnosticResult] = None,
+    ) -> RecoveryResult:
+        """Self-heal a broken buildx default builder on the node.
+
+        The Docker ``default`` buildx builder can corrupt after
+        a daemon restart or disk-pressure event. The ``default``
+        name is reserved and tied to a Docker context that can't
+        be removed while active. The recovery:
+          1. Switches the active Docker context to the
+             ``smsly-fallback`` builder (creating it with the
+             ``docker-container`` driver if it doesn't exist).
+          2. Removes the now-unreferenced default context/builder
+             so a fresh one can be created on next use.
+          3. Recreates a docker-container fallback named
+             ``smsly-fallback`` and selects it.
+          4. Re-tries the original action.
+        """
+        if not self._can_heal():
+            return RecoveryResult(
+                action_taken=RecoveryAction.NONE,
+                details="No SSH credentials available",
+            )
+
+        try:
+            fallback = getattr(
+                settings, "BUILDX_FALLBACK_BUILDER", "smsly-fallback"
+            ) or "smsly-fallback"
+
+            self._log(f"Repairing buildx on node (fallback={fallback!r})")
+
+            # 1. Make sure the fallback exists, prefer the
+            #    docker-container driver.
+            create_out, _, _ = self._exec(
+                f"docker buildx create --name {fallback} "
+                f"--driver docker-container --use 2>&1 || true",
+                timeout=60,
+            )
+            self._log(f"buildx create fallback: {create_out.strip()[:200]}")
+
+            # 2. Switch to the fallback as the active context so
+            #    the default can be removed.
+            self._exec(
+                f"docker context use {fallback} 2>&1 || true",
+                timeout=15,
+            )
+
+            # 3. Try to remove the default context and builder.
+            #    Errors here are non-fatal: the fallback is now
+            #    active and the corrupt default is no longer
+            #    blocking builds.
+            rm_ctx_out, _, _ = self._exec(
+                "docker context rm default 2>&1 || true",
+                timeout=15,
+            )
+            self._log(f"buildx remove default context: {rm_ctx_out.strip()[:200]}")
+
+            rm_bld_out, _, _ = self._exec(
+                "docker buildx rm default 2>&1 || true",
+                timeout=15,
+            )
+            self._log(f"buildx remove default builder: {rm_bld_out.strip()[:200]}")
+
+            # 4. Verify the fallback is healthy.
+            ls_out, _, _ = self._exec(
+                "docker buildx ls 2>&1",
+                timeout=15,
+            )
+            self._log(f"buildx ls after repair: {ls_out.strip()[:400]}")
+
+            if fallback in (ls_out or ""):
+                return RecoveryResult(
+                    success=True,
+                    action_taken=RecoveryAction.REPAIR_BUILDX,
+                    details=(
+                        f"Buildx fallback {fallback!r} is active and "
+                        "the corrupt default was removed."
+                    ),
+                )
+
+            return RecoveryResult(
+                action_taken=RecoveryAction.REPAIR_BUILDX,
+                details=(
+                    "Buildx repair attempted but the fallback is "
+                    f"not visible in ``docker buildx ls``:\n{ls_out}"
+                ),
+                next_action=RecoveryAction.ESCALATE_TO_AI,
+            )
+        except Exception as exc:
+            self._log(f"buildx repair exception: {exc}")
+            return RecoveryResult(
+                action_taken=RecoveryAction.REPAIR_BUILDX,
+                details=f"buildx repair exception: {exc}",
+                next_action=RecoveryAction.ESCALATE_TO_AI,
+            )
+
     # ─── Recovery Actions ────────────────────────────────────────────
 
     def heal_deployment_failure(self, deployment, max_attempts: int = MAX_HEAL_ATTEMPTS) -> RecoveryResult:
@@ -527,17 +670,18 @@ class SelfHealingOrchestrator:
     ) -> RecoveryResult:
         """Execute a specific recovery action."""
         handlers = {
-            RecoveryAction.RESTART_CONTAINER: self._restart_container,
-            RecoveryAction.RESTART_STACK: self._restart_stack,
-            RecoveryAction.RESTART_DOCKER_DAEMON: self._restart_docker_daemon,
-            RecoveryAction.REBUILD_CONTAINER: self._rebuild_container,
-            RecoveryAction.PRUNE_IMAGES: self._prune_images,
-            RecoveryAction.PRUNE_VOLUMES: self._prune_volumes,
-            RecoveryAction.FIX_NETWORK: self._fix_network,
-            RecoveryAction.FIX_PERMISSIONS: self._fix_permissions,
-            RecoveryAction.INCREASE_RESOURCES: self._increase_resources,
-            RecoveryAction.ROLLBACK: self._rollback,
-            RecoveryAction.REPROVISION: self._reprovision,
+        RecoveryAction.RESTART_CONTAINER: self._restart_container,
+        RecoveryAction.RESTART_STACK: self._restart_stack,
+        RecoveryAction.RESTART_DOCKER_DAEMON: self._restart_docker_daemon,
+        RecoveryAction.REBUILD_CONTAINER: self._rebuild_container,
+        RecoveryAction.REPAIR_BUILDX: self._repair_buildx,
+        RecoveryAction.PRUNE_IMAGES: self._prune_images,
+        RecoveryAction.PRUNE_VOLUMES: self._prune_volumes,
+        RecoveryAction.FIX_NETWORK: self._fix_network,
+        RecoveryAction.FIX_PERMISSIONS: self._fix_permissions,
+        RecoveryAction.INCREASE_RESOURCES: self._increase_resources,
+        RecoveryAction.ROLLBACK: self._rollback,
+        RecoveryAction.REPROVISION: self._reprovision,
         }
 
         handler = handlers.get(action)
