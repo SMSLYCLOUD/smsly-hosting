@@ -980,6 +980,12 @@ MASTER_MQ_PASSWORD="$MASTER_MQ_PASSWORD"
 MASTER_REDIS_PASSWORD="${MASTER_REDIS_PASSWORD:-}"
 MASTER_GATEWAY_SECRET="${MASTER_GATEWAY_SECRET:-}"
 MASTER_FIELD_ENCRYPTION_KEY="${MASTER_FIELD_ENCRYPTION_KEY:-}"
+MASTER_BACKUP_ENCRYPTION_KEY="${MASTER_BACKUP_ENCRYPTION_KEY:-}"
+MASTER_BACKUP_REQUIRE_ENCRYPTION="${MASTER_BACKUP_REQUIRE_ENCRYPTION:-}"
+MASTER_GITHUB_WEBHOOK_SECRET="${MASTER_GITHUB_WEBHOOK_SECRET:-}"
+MASTER_AUTOSCALER_API_TOKEN="${MASTER_AUTOSCALER_API_TOKEN:-}"
+MASTER_FRP_AUTH_TOKEN="${MASTER_FRP_AUTH_TOKEN:-}"
+MASTER_PGCAT_ADMIN_PASSWORD="${MASTER_PGCAT_ADMIN_PASSWORD:-}"
 SMSLY_NODE_ID="$SMSLY_NODE_ID"
 SMSLY_NODE_QUEUE="$SMSLY_NODE_QUEUE"
 EOF
@@ -1013,6 +1019,39 @@ EOF
     if [ -n "${MASTER_FIELD_ENCRYPTION_KEY:-}" ]; then
         env_set_value "$env_file" "FIELD_ENCRYPTION_KEY" "$MASTER_FIELD_ENCRYPTION_KEY"
     fi
+
+    # Batch J: sync the remaining critical master secrets to the
+    # node. Without these the node can't decrypt shared backups,
+    # verify GitHub webhooks, or authenticate to the autoscaler
+    # API. Each is a one-way sync from master to node: the
+    # node inherits the value but never overwrites the master's
+    # copy. If a var is unset on the master, we skip it (an
+    # older master that pre-dates the var is treated as "not
+    # required" rather than failed).
+    local _master_secrets_to_sync=(
+        "BACKUP_ENCRYPTION_KEY:master's Fernet key for at-rest backup encryption"
+        "|BACKUP_REQUIRE_ENCRYPTION:master's backup-encryption policy (true/false)"
+        "|GITHUB_WEBHOOK_SECRET:master's GitHub webhook signature verification secret"
+        "|AUTOSCALER_API_TOKEN:master's autoscaler-service bearer token"
+        "|FRP_AUTH_TOKEN:master's FRP tunnel relay authentication token"
+        "|PGCAT_ADMIN_PASSWORD:master's PgCat administration password"
+    )
+    local _entry
+    for _entry in "${_master_secrets_to_sync[@]}"; do
+        local _key="${_entry%%|*}"
+        local _master_val="${MASTER_ENV_"${_key}":-}"
+        # If the env var wasn't set in the current shell, try
+        # to read it directly from the master's .env file.
+        # (MASTER_ENV_<KEY> isn't actually exported; the
+        # env_get_value helper below reads from the file on disk.)
+        if [ -z "$_master_val" ] && [ -f "$MASTER_ENV_FILE" ]; then
+            _master_val="$(env_get_value "$MASTER_ENV_FILE" "$_key" 2>/dev/null || true)"
+        fi
+        if [ -n "$_master_val" ]; then
+            env_set_value "$env_file" "$_key" "$_master_val"
+        fi
+    done
+
     env_set_value "$env_file" "SMSLY_DISABLE_LOCAL_SERVICES" "false"
     env_set_value "$env_file" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
     env_set_value "$env_file" "SMSLY_ENABLE_STARTUP_CADDY_SYNC" "false"
