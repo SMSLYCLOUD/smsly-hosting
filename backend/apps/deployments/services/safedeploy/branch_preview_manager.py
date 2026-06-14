@@ -2,7 +2,7 @@ import re
 from typing import Optional
 from django.utils import timezone
 from apps.deployments.models_core import Service, EnvironmentVariable
-from apps.deployments.models_safedeploy import PreviewEnvironment, DatabaseClone
+from apps.deployments.models_safedeploy import PreviewEnvironment, DatabaseClone, MigrationValidation
 
 class BranchPreviewManager:
     """
@@ -33,6 +33,7 @@ class BranchPreviewManager:
         preview.error_message = ""
         preview.save()
         preview.artifacts.all().delete()
+        MigrationValidation.objects.filter(preview_environment=preview).delete()
         return preview
 
     def destroy_preview(self, preview: PreviewEnvironment) -> bool:

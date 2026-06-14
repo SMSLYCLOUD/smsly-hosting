@@ -82,6 +82,11 @@ class MigrationValidation(TimeStampedModel):
         SKIPPED = 'SKIPPED', 'Skipped'
         NOT_CONFIGURED = 'NOT_CONFIGURED', 'Not Configured'
 
+    class AutoDeployPolicy(models.TextChoices):
+        NEVER = 'NEVER', 'Never auto-deploy (always requires approval)'
+        LOW_RISK_ONLY = 'LOW_RISK_ONLY', 'Auto-deploy for LOW risk only'
+        ALWAYS = 'ALWAYS', 'Auto-deploy when can_auto_deploy is True'
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     preview_environment = models.OneToOneField(PreviewEnvironment, on_delete=models.CASCADE, related_name='migration_validation', null=True, blank=True)
     deployment = models.OneToOneField(Deployment, on_delete=models.CASCADE, related_name='migration_validation', null=True, blank=True)
@@ -94,9 +99,8 @@ class MigrationValidation(TimeStampedModel):
     detected_operations = models.JSONField(default=list, blank=True)
     recommendations = models.JSONField(default=list, blank=True)
 
-    requires_manual_approval = models.BooleanField(default=False)
+    auto_deploy_policy = models.CharField(max_length=20, choices=AutoDeployPolicy.choices, default=AutoDeployPolicy.LOW_RISK_ONLY)
     requires_backup = models.BooleanField(default=False)
-    can_auto_deploy = models.BooleanField(default=False)
 
     error_message = models.TextField(blank=True)
 
