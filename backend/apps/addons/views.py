@@ -46,8 +46,8 @@ class AddonMaintenanceViewSet(viewsets.ReadOnlyModelViewSet):
             return Response({'error': 'SQL required'}, status=status.HTTP_400_BAD_REQUEST)
 
         proxy = DatabaseProxy(addon)
-        result = proxy.query(sql)
-        if 'error' in result:
+        result = proxy.query(sql, addon=addon, user=request.user)
+        if isinstance(result, dict) and 'error' in result:
             return Response(result, status=status.HTTP_400_BAD_REQUEST)
         return Response(result)
 

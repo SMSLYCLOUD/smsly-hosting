@@ -4,7 +4,6 @@ import base64
 import logging
 import hashlib
 import uuid
-import requests
 from django.conf import settings
 from django.utils import timezone
 from datetime import timedelta
@@ -16,7 +15,6 @@ from .models import PlatformLicense, PlatformTier
 
 logger = logging.getLogger(__name__)
 
-LICENSE_SERVER_URL = getattr(settings, 'SMSLY_LICENSE_SERVER', 'https://license.smsly.cloud')
 PUBLIC_KEY_PATH = os.path.join(os.path.dirname(__file__), 'keys', 'public.pem')
 
 def get_instance_id():
@@ -73,14 +71,15 @@ def validate_license(license_obj=None):
         _set_community_tier(license_obj)
         return
 
-    # 1. Try Online Validation
-    try:
-        if _validate_online(license_obj):
-            return
-    except Exception as e:
-        logger.warning(f"Online license validation failed: {e}")
+    # SECURITY: the online license path has been disabled. Trusting the
+    # upstream ``license.smsly.cloud`` response — even over HTTPS — was
+    # vulnerable to network-adjacent MITM (no cert pinning) and to a
+    # compromised / hijacked origin. The offline path verifies an
+    # RSA-signed payload against the platform's pinned public key, which
+    # is the only safe trust anchor for tier / limit decisions.
+    logger.critical("Online license path disabled for security; offline verification required.")
 
-    # 2. Fallback to Offline Validation
+    # 1. Try Offline Validation
     try:
         if _validate_offline(license_obj):
             return
@@ -112,39 +111,6 @@ def _set_community_tier(license_obj, error=""):
     license_obj.expires_at = None
     license_obj.save()
 
-def _validate_online(license_obj):
-    """
-    Call the license server to validate the key.
-    Expects a signed JSON response payload.
-    """
-    # If using stub server for dev
-    if getattr(settings, 'SMSLY_USE_STUB_LICENSE', False):
-        from .stub_server import validate_stub
-        payload = validate_stub(license_obj.license_key, get_instance_id())
-    else:
-        response = requests.post(
-            f"{LICENSE_SERVER_URL}/v1/validate",
-            json={
-                "license_key": license_obj.license_key,
-                "instance_id": get_instance_id()
-            },
-            timeout=10
-        )
-        response.raise_for_status()
-        payload = response.json()
-
-    # Process successful response
-    # The payload should contain the signed data and the signature,
-    # OR just the raw data if we trust TLS.
-    # Requirement says: "Returns signed JSON with tier, expiry, features"
-    # And "OFFLINE... license_data is a base64-encoded JSON payload signed..."
-
-    # We update the license_data blob for offline use
-    if 'license_data' in payload:
-        license_obj.license_data = payload['license_data']
-
-    # Also update the fields directly from the response for immediate use
-    return _apply_license_payload(license_obj, payload)
 
 def _validate_offline(license_obj):
     """

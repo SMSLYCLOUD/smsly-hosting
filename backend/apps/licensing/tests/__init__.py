@@ -1,0 +1,1 @@
+# Licensing tests package.
