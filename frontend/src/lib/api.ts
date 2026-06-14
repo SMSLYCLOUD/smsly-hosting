@@ -1687,6 +1687,21 @@ export interface Addon {
     config: Record<string, any>;
 }
 
+export const backupsApi = {
+  importKey: async (scope: 'service' | 'server', payload: { key_id: string; key_material: string; label?: string }): Promise<{ key_id: string; fingerprint: string; source: string; created: boolean }> => {
+    const res = await api.post(`/backups/${scope}/import-key/`, payload);
+    return res.data;
+  },
+  getHeader: async (scope: 'service' | 'server', backupId: string): Promise<{ magic: string; key_id: string; fingerprint: string }> => {
+    const res = await api.get(`/backups/${scope}/${backupId}/header/`);
+    return res.data;
+  },
+  list: async (scope: 'service' | 'server'): Promise<any[]> => {
+    const res = await api.get(`/backups/${scope}/`);
+    return Array.isArray(res.data) ? res.data : (res.data?.results || []);
+  },
+};
+
 export const addonsApi = {
     list: async (): Promise<Addon[]> => {
         const res = await api.get('/addons/');
