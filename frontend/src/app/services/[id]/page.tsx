@@ -76,7 +76,9 @@ export default function ServiceDetailPage() {
     const [telegramChatId, setTelegramChatId] = useState('');
     const [whatsappTo, setWhatsappTo] = useState('');
     const [servers, setServers] = useState<ManagedServer[]>([]);
-    const [targetServerId, setTargetServerId] = useState<string>(LOCAL_DEPLOY_TARGET);
+    const [targetServerId, setTargetServerId] = useState<string>(
+      service?.server_id ?? '',
+    );
     const logsEndRef = useRef<HTMLDivElement>(null);
 
     const loadWatchConfig = useCallback(async (serviceId: string) => {
@@ -254,6 +256,13 @@ export default function ServiceDetailPage() {
         const key = localStorage.getItem('smsly_ai_key');
         if (key) setAiKey(key);
     }, []);
+
+    const userPickedNodeRef = useRef(false);
+    useEffect(() => {
+        if (!service?.server_id) return;
+        if (userPickedNodeRef.current) return;
+        setTargetServerId(service.server_id);
+    }, [service?.server_id]);
 
     useEffect(() => {
         const load = async () => {
@@ -597,11 +606,19 @@ export default function ServiceDetailPage() {
                                     <div className="flex gap-2">
                                         <select
                                             value={targetServerId}
-                                            onChange={(e) => setTargetServerId(e.target.value || LOCAL_DEPLOY_TARGET)}
+                                            onChange={(e) => {
+                                                userPickedNodeRef.current = true;
+                                                setTargetServerId(e.target.value || service?.server_id || LOCAL_DEPLOY_TARGET);
+                                            }}
                                             className="flex-1 bg-card border border-border rounded-lg px-2 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
                                         >
                                             <option value={LOCAL_DEPLOY_TARGET}>Local Server</option>
-                                            {servers.filter((s) => !s.is_primary).map((s) => (
+                                            {service?.server_id && (
+                                                <option value={service.server_id}>
+                                                    Assigned node: {service.node_metadata?.name || service.server_id.slice(0, 8)}
+                                                </option>
+                                            )}
+                                            {servers.filter((s) => !s.is_primary && s.id !== service?.server_id).map((s) => (
                                                 <option key={s.id} value={s.id}>
                                                     {s.name}
                                                 </option>
