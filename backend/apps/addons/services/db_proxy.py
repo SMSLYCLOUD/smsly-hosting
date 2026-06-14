@@ -1,8 +1,113 @@
 import logging
 import json
+import re
+import sqlparse
+from sqlparse.sql import Statement
 from apps.deployments.models_addons import Addon
 
 logger = logging.getLogger(__name__)
+
+_DISALLOWED_TOP_LEVEL = {
+    'INSERT', 'UPDATE', 'DELETE', 'DROP', 'TRUNCATE', 'ALTER', 'CREATE',
+    'GRANT', 'REVOKE', 'SET', 'COPY', 'VACUUM', 'REINDEX', 'CLUSTER',
+    'LOCK', 'CALL', 'DO', 'EXECUTE', 'MERGE', 'REFRESH', 'LISTEN',
+    'UNLISTEN', 'NOTIFY', 'DISCARD', 'RESET', 'SHOW',
+}
+_ALLOWED_TOP_LEVEL = {'SELECT', 'WITH', 'EXPLAIN', 'EXPLAIN ANALYZE'}
+
+
+def _validate_readonly_sql(sql: str) -> str:
+    """Validate that ``sql`` is a single read-only statement.
+
+    Returns the cleaned SQL (with a single trailing semicolon) on success.
+    Raises ``ValueError`` for anything that is not a ``SELECT`` / ``WITH``
+    / ``EXPLAIN`` (or anything containing additional statements, DDL/DML
+    keywords, or session/transaction configuration commands).
+    """
+    if sql is None:
+        raise ValueError("SQL is required")
+    if not isinstance(sql, str):
+        raise ValueError("SQL must be a string")
+
+    cleaned = sql.strip()
+    if not cleaned:
+        raise ValueError("SQL is required")
+
+    stripped_for_check = cleaned.rstrip()
+    if stripped_for_check.endswith(';'):
+        stripped_for_check = stripped_for_check[:-1].rstrip()
+    if ';' in stripped_for_check:
+        raise ValueError("Multi-statement queries are not allowed")
+
+    if re.search(r'\bSET\s+TRANSACTION\b', cleaned, re.IGNORECASE):
+        raise ValueError("SET TRANSACTION is not allowed")
+    if re.search(r'\bSET\s+SESSION\b', cleaned, re.IGNORECASE):
+        raise ValueError("SET SESSION is not allowed")
+    if re.search(r'\bSET\s+LOCAL\s+', cleaned, re.IGNORECASE):
+        raise ValueError("SET LOCAL is not allowed")
+    if re.search(r'\bSET\s+ROLE\b', cleaned, re.IGNORECASE):
+        raise ValueError("SET ROLE is not allowed")
+    if re.search(r'\bSET\s+CONSTRAINTS\b', cleaned, re.IGNORECASE):
+        raise ValueError("SET CONSTRAINTS is not allowed")
+
+    scan_sql = re.sub(
+        r'\bFOR\s+(NO\s+KEY\s+|KEY\s+)?(UPDATE|SHARE)\b',
+        '',
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    for kw in _DISALLOWED_TOP_LEVEL:
+        if re.search(r'\b' + re.escape(kw) + r'\b', scan_sql, re.IGNORECASE):
+            raise ValueError(f"Disallowed keyword: {kw}")
+
+    statements = [s for s in sqlparse.parse(cleaned) if not _is_empty_stmt(s)]
+    if not statements:
+        raise ValueError("No SQL statement found")
+    if len(statements) > 1:
+        raise ValueError("Multi-statement queries are not allowed")
+
+    stmt = statements[0]
+    if not isinstance(stmt, Statement):
+        raise ValueError("Unsupported SQL construct")
+
+    first_keyword = _first_keyword(stmt)
+    if first_keyword is None:
+        raise ValueError("No SQL keyword detected")
+    if first_keyword not in _ALLOWED_TOP_LEVEL:
+        raise ValueError(
+            f"Only SELECT/WITH/EXPLAIN queries are allowed (got {first_keyword})"
+        )
+
+    return cleaned
+
+
+def _is_empty_stmt(stmt) -> bool:
+    if stmt.ttype in (sqlparse.tokens.Comment, sqlparse.tokens.Whitespace):
+        return True
+    non_punct = [
+        t for t in stmt.tokens
+        if t.ttype is not sqlparse.tokens.Whitespace
+        and t.ttype is not sqlparse.tokens.Comment
+        and t.ttype is not sqlparse.tokens.Punctuation
+    ]
+    return not non_punct
+
+
+def _first_keyword(stmt: Statement) -> str | None:
+    for token in stmt.tokens:
+        if token.ttype in sqlparse.tokens.Comment or token.ttype is sqlparse.tokens.Whitespace:
+            continue
+        if token.is_group and not token.tokens:
+            continue
+        value = token.value.strip().upper()
+        if not value:
+            continue
+        match = re.match(r'([A-Z_]+)', value)
+        if match:
+            return match.group(1)
+        return value.split()[0] if value.split() else None
+    return None
+
 
 class DatabaseProxy:
     """Connects to user addon databases through internal Docker network."""
@@ -47,23 +152,44 @@ class DatabaseProxy:
         finally:
             conn.close()
 
-    def query(self, sql: str, limit: int = 100) -> dict:
-        """Execute read-only SQL query."""
+    def query(self, sql: str, limit: int = 100, *, addon: Addon | None = None, user=None) -> dict:
+        """Execute read-only SQL query.
+
+        ``addon`` and ``user`` are required for the ownership check that
+        guarantees a user can only query databases they own. They are
+        keyword-only so the call site is explicit.
+        """
         if self.addon.addon_type != 'POSTGRES':
             return {}
 
+        cleaned_sql = _validate_readonly_sql(sql)
+
+        if addon is not None and user is not None:
+            addon_owner_id = getattr(getattr(addon, 'service', None), 'owner_id', None)
+            if addon_owner_id is None and hasattr(addon, 'owner_id'):
+                addon_owner_id = addon.owner_id
+            is_owner = (
+                getattr(user, 'is_superuser', False)
+                or (addon_owner_id is not None and addon_owner_id == getattr(user, 'id', None))
+            )
+            if not is_owner:
+                raise PermissionError("You do not own this addon")
+
+        return self._execute_readonly(cleaned_sql, limit)
+
+    def _execute_readonly(self, sql: str, limit: int) -> dict:
+        """Open a connection, force READ ONLY at the SQL level, and run ``sql``."""
         conn = self.get_connection()
-        conn.set_session(readonly=True) # Safety first
         try:
+            conn.set_session(readonly=True)
             with conn.cursor() as cur:
-                # Enforce timeout
-                cur.execute("SET statement_timeout = 10000")
+                cur.execute("BEGIN ISOLATION LEVEL SERIALIZABLE READ ONLY")
+                cur.execute("SET LOCAL statement_timeout = '5s'")
                 cur.execute(sql)
 
                 if cur.description:
                     columns = [desc[0] for desc in cur.description]
                     rows = cur.fetchmany(limit)
-                    # Convert non-serializable types
                     serializable_rows = []
                     for row in rows:
                         new_row = []
@@ -76,10 +202,21 @@ class DatabaseProxy:
 
                     return {'columns': columns, 'rows': serializable_rows, 'count': len(rows)}
                 return {'affected': cur.rowcount}
+        except PermissionError:
+            raise
+        except ValueError as e:
+            return {'error': str(e)}
         except Exception as e:
             return {'error': str(e)}
         finally:
-            conn.close()
+            try:
+                conn.rollback()
+            except Exception:
+                logger.warning("rollback failed on db proxy connection", exc_info=True)
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     # ── Redis ──
     def redis_info(self) -> dict:

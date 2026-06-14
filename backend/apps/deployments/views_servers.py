@@ -10,6 +10,8 @@ import hmac as hmac_mod
 import ipaddress
 import json as json_mod
 import logging
+import re
+import shlex
 import time
 import os
 import uuid
@@ -611,7 +613,7 @@ SAFE_DOCKER_COMPOSE_SUBCOMMANDS = frozenset({
 })
 SAFE_SYSTEM_PREFIXES = (
     "df ", "free ", "ping -c ", "systemctl status ",
-    "cat /opt/smsly-hosting/.env | grep -v SECRET | grep -v PASSWORD | grep -v KEY",
+    "cat /opt/smsly/*.log",
 )
 
 _REJECTED_DOCKER_SUBCOMMANDS = frozenset({
@@ -624,33 +626,61 @@ _REJECTED_DOCKER_SUBCOMMANDS = frozenset({
     "swarm", "system", "trust", "container", "compose", "daemon",
 })
 
+_FORBIDDEN_SHELL_METACHARS = re.compile(r'[;|&`$()<>\n\r\\]|\$\(')
+_SAFE_COMMANDS = (
+    'docker', 'docker-compose', 'systemctl', 'journalctl',
+    'ls', 'cat', 'head', 'tail', 'grep', 'awk', 'sed',
+    'ps', 'top', 'free', 'df', 'du', 'uptime',
+    'ping', 'traceroute', 'ss', 'netstat', 'ip', 'ifconfig',
+)
+
+
+FORBIDDEN_PATH_PATTERNS = (
+    ".env",
+    "/etc/shadow",
+    "/etc/passwd",
+    "/etc/sudoers",
+)
+
+
+_DOCKER_DENIED_SUBCOMMANDS = frozenset({
+    'compose', 'exec', 'run', 'swarm', 'system', 'trust',
+    'container', 'daemon', 'stack', 'service', 'node',
+    'secret', 'config', 'network', 'volume', 'plugin',
+    'image', 'buildx', 'context', 'manifest',
+    'checkpoint', 'attach', 'wait', 'kill',
+    'pause', 'unpause', 'rename', 'restart', 'start',
+    'stop', 'update', 'rm', 'rmi',
+})
+
 
 def _is_command_allowed(command: str) -> bool:
     """Strict allow-list for run_command. Returns True if the command is permitted."""
-    cmd = (command or "").strip()
-    if not cmd:
+    if not command or not isinstance(command, str):
         return False
-    if any(cmd.startswith(p) for p in SAFE_SYSTEM_PREFIXES):
-        return True
-    if cmd.startswith("docker ") or cmd == "docker":
-        parts = cmd.split()
-        if len(parts) < 2:
-            return False
-        sub = parts[1]
-        if sub in _REJECTED_DOCKER_SUBCOMMANDS:
-            return False
-        return sub in SAFE_DOCKER_SUBCOMMANDS
-    if cmd.startswith("cd /opt/smsly-hosting && docker "):
-        parts = cmd.replace("cd /opt/smsly-hosting && docker ", "").split()
-        if len(parts) < 1:
-            return False
-        sub = parts[0]
-        if sub in _REJECTED_DOCKER_SUBCOMMANDS:
-            return False
-        if sub == "compose" and len(parts) >= 2 and parts[1] in SAFE_DOCKER_COMPOSE_SUBCOMMANDS:
-            return True
-        return sub in SAFE_DOCKER_SUBCOMMANDS
-    return False
+    if _FORBIDDEN_SHELL_METACHARS.search(command):
+        return False
+    if '`' in command or '$(' in command:
+        return False
+        return False
+    stripped = command.strip()
+    if not stripped:
+        return False
+    try:
+        parts = shlex.split(stripped)
+    except ValueError:
+        return False
+    if not parts:
+        return False
+    if parts[0] not in _SAFE_COMMANDS:
+        return False
+    if parts[0] in ('docker', 'docker-compose') and len(parts) > 1 and parts[1] in _DOCKER_DENIED_SUBCOMMANDS:
+        return False
+    for arg in parts:
+        for bad in FORBIDDEN_PATH_PATTERNS:
+            if bad in arg:
+                return False
+    return True
 
 
 # --- Serializers -------------------------------------------------------------

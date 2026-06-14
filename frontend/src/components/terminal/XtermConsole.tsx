@@ -8,9 +8,10 @@ import '@xterm/xterm/css/xterm.css';
 
 interface XtermConsoleProps {
   wsUrl: string;
+  wsToken?: string | null;
 }
 
-export default function XtermConsole({ wsUrl }: XtermConsoleProps) {
+export default function XtermConsole({ wsUrl, wsToken }: XtermConsoleProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
   const term = useRef<Terminal | null>(null);
   const ws = useRef<WebSocket | null>(null);
@@ -59,8 +60,9 @@ export default function XtermConsole({ wsUrl }: XtermConsoleProps) {
 
     const connectWebSocket = () => {
       if (disposed) return;
+      const protocols = wsToken ? ['token', wsToken] : undefined;
       try {
-        socket = new WebSocket(wsUrl);
+        socket = new WebSocket(wsUrl, protocols);
       } catch {
         terminal.writeln(
           '\x1b[31mConsole unavailable: invalid WebSocket URL.\x1b[0m',

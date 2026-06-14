@@ -18,6 +18,25 @@ class TerminalConsumer(AsyncWebsocketConsumer):
 
     SECURITY: Requires authentication and ownership verification.
     Connects to the running Docker container via `docker exec`.
+
+    Authentication protocol
+    -----------------------
+    The DRF auth token is read from a Sec-WebSocket-Protocol subprotocol,
+    NEVER from the URL query string. Query strings are captured in
+    reverse-proxy access logs (Caddy/Nginx), browser history, and the
+    ``Referer`` header of cross-origin requests, and a long-lived DRF
+    token must never appear in a URL.
+
+    Client offers one of:
+        - ``["token", "<key>"]``  — recommended (the literal ``token`` is
+          the protocol marker, the second value is the DRF auth key)
+        - ``["token.<key>"]``     — alternate: the key is prefixed with
+          the literal ``token.``
+        - ``["<key>"]``           — legacy: the single subprotocol is
+          the token value itself
+
+    Server accepts with ``Sec-WebSocket-Protocol: token`` so the actual
+    auth key is never echoed in the WS handshake response.
     """
 
     def __init__(self, *args, **kwargs):
@@ -53,26 +72,33 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         self.deployment_id = self.scope['url_route']['kwargs']['deployment_id']
         self.user = None
 
-        # ── ACCEPT IMMEDIATELY: Prevent proxy timeouts during auth ──
-        await self.accept()
-        self._accepted = True
-
         try:
             # ======================================================================
-            # SECURITY: Authenticate WebSocket connection via token
+            # SECURITY: Authenticate via Sec-WebSocket-Protocol subprotocols.
+            # The token is NEVER read from the URL query string — query
+            # strings are recorded in proxy access logs, browser history,
+            # and Referer headers, and a long-lived DRF token must never
+            # appear in a URL.
             # ======================================================================
-            query_string = self.scope.get('query_string', b'').decode()
+            subprotocols = self.scope.get('subprotocols') or []
             token_key = None
-            for param in query_string.split('&'):
-                if param.startswith('token='):
-                    token_key = param.split('=', 1)[1]
+            for proto in subprotocols:
+                if not proto:
+                    continue
+                if proto.startswith('token.'):
+                    token_key = proto[len('token.'):]
                     break
+                if proto != 'token':
+                    token_key = proto
+                    break
+            # Legacy: a single subprotocol that IS the token value
+            if not token_key and len(subprotocols) == 1 and subprotocols[0] and subprotocols[0] != 'token':
+                token_key = subprotocols[0]
 
             if not token_key:
                 logger.warning(
-                    "WebSocket connection rejected: No token provided for "
+                    "WebSocket connection rejected: No token subprotocol for "
                     "deployment %s", self.deployment_id)
-                await self.send(text_data=json.dumps({'error': 'Missing token'}))
                 await self.close(code=4001)
                 return
 
@@ -82,7 +108,6 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 logger.warning(
                     "WebSocket connection rejected: Invalid token for "
                     "deployment %s", self.deployment_id)
-                await self.send(text_data=json.dumps({'error': 'Invalid token'}))
                 await self.close(code=4002)
                 return
 
@@ -93,9 +118,14 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 logger.warning(
                     "WebSocket connection rejected: User %s doesn't own "
                     "deployment %s", self.user.id, self.deployment_id)
-                await self.send(text_data=json.dumps({'error': 'Access denied'}))
                 await self.close(code=4003)
                 return
+
+            # Accept the WS with the negotiated 'token' subprotocol so
+            # the client can verify the handshake honored the marker.
+            # The actual auth key is never echoed in the response.
+            await self.accept(subprotocol='token')
+            self._accepted = True
 
             # ── INITIALIZE ──
             log_event(
@@ -129,7 +159,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                     await self.send(text_data=json.dumps({'error': 'Internal error'}))
                 except Exception:
                     pass
-                await self.close(code=4000)
+            await self.close(code=4000)
 
     async def _async_setup(self):
         """Background task to handle discovery and attachment without blocking handshake."""

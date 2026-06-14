@@ -3503,9 +3503,38 @@ class ServiceViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Path is required'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            path = _validate_and_sanitize_path(path)
+            resolved = posixpath.normpath(path)
+        except Exception:
+            return Response({'error': 'Invalid path'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if hasattr(service, 'volumes'):
+            try:
+                volumes = list(service.volumes.all())
+            except Exception:
+                volumes = []
+            if volumes:
+                mount_paths = [posixpath.normpath(v.mount_path).rstrip('/') or '/' for v in volumes]
+                in_mount = False
+                for mount in mount_paths:
+                    if resolved == mount or resolved.startswith(mount + '/'):
+                        try:
+                            if posixpath.commonpath([resolved, mount]) == mount:
+                                in_mount = True
+                                break
+                        except ValueError:
+                            continue
+                if not in_mount:
+                    return Response({'error': 'Path traversal blocked'}, status=status.HTTP_400_BAD_REQUEST)
+                path = resolved
+
+        try:
+            path = _validate_and_sanitize_path(path, skip_system_check=False)
         except Exception as e:
             return Response({'error': 'Path validation failed', 'details': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        base_name = posixpath.basename(path)
+        if not base_name or base_name.startswith('/') or '..' in base_name.split('/'):
+            return Response({'error': 'Invalid filename'}, status=status.HTTP_400_BAD_REQUEST)
 
         latest_deploy = service.deployments.filter(status='ACTIVE').first()
         if not latest_deploy:
@@ -3535,15 +3564,19 @@ class ServiceViewSet(viewsets.ModelViewSet):
             import io
             import time
 
+            base_name = posixpath.basename(path)
+            if not base_name or base_name.startswith('/') or '..' in base_name.split('/'):
+                return Response({'error': 'Invalid filename'}, status=status.HTTP_400_BAD_REQUEST)
+
             tar_stream = io.BytesIO()
             with tarfile.open(fileobj=tar_stream, mode='w') as tar:
-                tarinfo = tarfile.TarInfo(name=os.path.basename(path))
+                tarinfo = tarfile.TarInfo(name=base_name)
                 tarinfo.size = len(file_bytes)
                 tarinfo.mtime = int(time.time())
                 tar.addfile(tarinfo, io.BytesIO(file_bytes))
 
             tar_stream.seek(0)
-            dir_name = os.path.dirname(path)
+            dir_name = posixpath.dirname(path)
             exit_code, output = container.exec_run(["mkdir", "-p", dir_name])
             if exit_code != 0:
                 return Response({'error': 'Failed to create parent directory', 'details': output.decode()}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

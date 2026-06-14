@@ -180,7 +180,8 @@ class _LocalSSHClient:
         import subprocess as sp
         self._log(f"[local] {command[:200]}")
         try:
-            proc = sp.run(command, shell=True, capture_output=True, text=True, timeout=timeout)
+            parts = shlex.split(command) if isinstance(command, str) else command
+            proc = sp.run(parts, shell=False, capture_output=True, text=True, timeout=timeout)
             if proc.returncode != 0 and raise_on_error:
                 raise RuntimeError(
                     f"Local command failed (exit {proc.returncode}): {proc.stderr.strip()[:500]}"
@@ -232,8 +233,9 @@ class ServerTransferService:
         import subprocess as sp
         self._log(f"[local] {command[:200]}")
         try:
+            parts = shlex.split(command) if isinstance(command, str) else command
             proc = sp.run(
-                command, shell=True, capture_output=True, text=True,
+                parts, shell=False, capture_output=True, text=True,
                 timeout=timeout,
             )
             if proc.returncode != 0 and raise_on_error:

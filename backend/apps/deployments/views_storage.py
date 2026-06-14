@@ -555,9 +555,30 @@ class VolumeViewSet(viewsets.ModelViewSet):
         except ValueError as e:
             return Response({'error': 'Invalid path', 'details': str(e)}, status=status.HTTP_403_FORBIDDEN)
 
-        mount = posixpath.normpath(volume.mount_path)
-        if not (path == mount or path.startswith(mount + "/")):
-            return Response({'error': 'Invalid path'}, status=status.HTTP_403_FORBIDDEN)
+        mount = posixpath.normpath(volume.mount_path).rstrip('/') or '/'
+        resolved = posixpath.normpath(path)
+        if not (resolved == mount or resolved.startswith(mount + "/")):
+            return Response(
+                {'error': f'Path {path} escapes the volume mount {volume.mount_path}'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            common = posixpath.commonpath([resolved, mount])
+        except ValueError:
+            return Response({'error': 'Path traversal blocked'}, status=status.HTTP_400_BAD_REQUEST)
+        if common != mount:
+            return Response({'error': 'Path traversal blocked'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            sanitized = validate_and_sanitize_path(resolved, skip_system_check=False)
+        except ValueError as e:
+            return Response({'error': 'Invalid path', 'details': str(e)}, status=status.HTTP_403_FORBIDDEN)
+
+        base_name = posixpath.basename(sanitized)
+        if not base_name or base_name.startswith('/') or '..' in base_name.split('/'):
+            return Response({'error': 'Invalid filename'}, status=status.HTTP_400_BAD_REQUEST)
+
+        path = sanitized
 
         return self._volume_dispatch(
             volume,
@@ -582,16 +603,20 @@ class VolumeViewSet(viewsets.ModelViewSet):
             import io
             import time
 
+            base_name = posixpath.basename(path)
+            if not base_name or base_name.startswith('/') or '..' in base_name.split('/'):
+                return Response({'error': 'Invalid filename'}, status=status.HTTP_400_BAD_REQUEST)
+
             tar_stream = io.BytesIO()
             with tarfile.open(fileobj=tar_stream, mode='w') as tar:
                 file_data = content.encode('utf-8')
-                tarinfo = tarfile.TarInfo(name=os.path.basename(path))
+                tarinfo = tarfile.TarInfo(name=base_name)
                 tarinfo.size = len(file_data)
                 tarinfo.mtime = int(time.time())
                 tar.addfile(tarinfo, io.BytesIO(file_data))
 
             tar_stream.seek(0)
-            dir_name = os.path.dirname(path)
+            dir_name = posixpath.dirname(path)
             exit_code, output = container.exec_run(["mkdir", "-p", dir_name])
             if exit_code != 0:
                 return Response({'error': 'Failed to create parent directory', 'details': output.decode()}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

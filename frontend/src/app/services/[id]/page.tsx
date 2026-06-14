@@ -889,9 +889,9 @@ export default function ServiceDetailPage() {
                                 ? 'wss'
                                 : 'ws';
                         const host = typeof window !== 'undefined' ? window.location.host : 'localhost';
-                        const wsUrl = `${proto}://${host}/ws/terminal/${deploymentId}/?token=${encodeURIComponent(token)}`;
+                        const wsUrl = `${proto}://${host}/ws/terminal/${deploymentId}/`;
 
-                        return <XtermConsole wsUrl={wsUrl} />;
+                        return <XtermConsole wsUrl={wsUrl} wsToken={token} />;
                     })()}
                 </div>
             )}

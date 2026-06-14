@@ -299,6 +299,36 @@ JULES_ALLOWED_HOSTS = config(
     cast=Csv(),
 )
 
+# SECURITY (SSRF): allowlist of hostnames that the ``localllm_base_url``
+# admin setting may point at. The default is an empty tuple, which means
+# out-of-the-box deployments cannot point the local LLM provider at any
+# hostname (IP-literal hosts are still rejected by the network range
+# block-list in apps.intelligence.models). Operators who actually want to
+# use Ollama / LM Studio / vLLM must explicitly set
+# ``LOCALLM_ALLOWED_HOSTS=ollama.internal,my-llm.local`` (comma-separated
+# env var) in the .env file. An empty default is intentional — the
+# ``localllm`` provider is opt-in, not opt-out, and a forgotten setting
+# should not silently turn the AI provider into an SSRF exfil channel.
+LOCALLM_ALLOWED_HOSTS = config(
+    'LOCALLM_ALLOWED_HOSTS',
+    default='',
+    cast=Csv(),
+)
+
+# SECURITY: placeholder for the public key used to pin the license server
+# response when the (currently disabled) online validation path is ever
+# re-enabled. The default empty string is intentional: an empty value
+# forces the offline-signed-token path to be the only trust anchor and
+# makes it impossible to re-enable the network call without first
+# populating this setting with the same public key shipped in
+# ``apps/licensing/keys/public.pem``. Operators must set
+# ``LICENSE_SERVER_PUBKEY=...`` to a PEM-encoded RSA public key before
+# the online path can be reactivated.
+LICENSE_SERVER_PUBKEY = config(
+    'LICENSE_SERVER_PUBKEY',
+    default='',
+)
+
 # SECURITY: Fail-fast in production — no dev-creds default
 # The default in DEBUG mode is a generic "smsly_admin" / "smsly_admin"
 # placeholder. In production the platform refuses to boot if

@@ -9,6 +9,7 @@ The system auto-discovers all providers with valid API keys:
 - 0 keys set → mock fallback
 """
 
+import ipaddress
 import uuid
 from urllib.parse import urlparse
 
@@ -16,6 +17,24 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 from encrypted_model_fields.fields import EncryptedCharField
+
+
+_DISALLOWED_LOCALLM_NETWORKS = (
+    ipaddress.ip_network('127.0.0.0/8'),
+    ipaddress.ip_network('::1/128'),
+    ipaddress.ip_network('169.254.0.0/16'),
+    ipaddress.ip_network('fe80::/10'),
+    ipaddress.ip_network('10.0.0.0/8'),
+    ipaddress.ip_network('172.16.0.0/12'),
+    ipaddress.ip_network('192.168.0.0/16'),
+    ipaddress.ip_network('fc00::/7'),
+)
+_DISALLOWED_LOCALLM_HOSTS = frozenset({
+    '169.254.169.254',
+    'fd00:ec2::254',
+    'metadata.google.internal',
+    'metadata',
+})
 
 
 def _validate_https_allowlist(url: str, field_label: str, allowed_hosts: list[str]) -> None:
@@ -32,6 +51,40 @@ def _validate_https_allowlist(url: str, field_label: str, allowed_hosts: list[st
     if host not in {h.lower() for h in allowed_hosts}:
         raise ValidationError(
             {field_label: f'{field_label} host {host!r} is not in the allowlist.'}
+        )
+
+
+def _validate_localllm_base_url(url: str) -> None:
+    if not url:
+        return
+    parsed = urlparse(url)
+    host = (parsed.hostname or '').lower()
+    if not host:
+        raise ValidationError(
+            {'localllm_base_url': 'localllm_base_url must include a hostname.'}
+        )
+    if host in _DISALLOWED_LOCALLM_HOSTS:
+        raise ValidationError(
+            {'localllm_base_url': f'localllm_base_url host {host!r} is not allowed.'}
+        )
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = None
+    if ip is not None:
+        for network in _DISALLOWED_LOCALLM_NETWORKS:
+            if ip in network:
+                raise ValidationError(
+                    {'localllm_base_url': f'localllm_base_url host {host!r} is in a '
+                     f'disallowed network range ({network}).'}
+                )
+    allowed_hosts = tuple(getattr(settings, 'LOCALLM_ALLOWED_HOSTS', ()) or ())
+    allowed_hosts = {h.lower() for h in allowed_hosts}
+    if not allowed_hosts or host not in allowed_hosts:
+        raise ValidationError(
+            {'localllm_base_url': f'localllm_base_url host {host!r} is not in the '
+             f'LOCALLM_ALLOWED_HOSTS allowlist. Add it to settings.LOCALLM_ALLOWED_HOSTS '
+             f'before using this provider.'}
         )
 
 
@@ -179,17 +232,16 @@ class AIProviderSettings(models.Model):
         jules_hosts = list(getattr(settings, 'JULES_ALLOWED_HOSTS', ['api.jules.google.com']))
         _validate_https_allowlist(self.jules_base_url, 'jules_base_url',
                                   jules_hosts or ['api.jules.google.com'])
-        # Local LLM is the one exception: it is explicitly meant to run
-        # against a local endpoint (Ollama, LM Studio, etc.) over plain
-        # http. Allow any non-routable host but require a hostname so
-        # we don't accept empty / malformed values.
-        if self.localllm_base_url:
-            from urllib.parse import urlparse as _urlparse
-            p = _urlparse(self.localllm_base_url)
-            if not p.hostname:
-                raise ValidationError(
-                    {'localllm_base_url': 'localllm_base_url must include a hostname.'}
-                )
+        # SECURITY (SSRF): the local LLM endpoint runs an OpenAI-compatible
+        # call that is prefixed with the provider's API key. An admin who
+        # pointed this at ``http://169.254.169.254/...`` or ``http://localhost:8000/admin/``
+        # would exfiltrate that key to themselves. Reject any host that
+        # resolves to loopback, link-local, RFC1918 private, IPv6 ULA, or
+        # cloud-metadata ranges. Hostnames (rather than literal IPs) are
+        # additionally required to be in ``settings.LOCALLM_ALLOWED_HOSTS``,
+        # which defaults to an empty tuple so out-of-the-box deployments
+        # cannot accidentally trust an attacker-controlled DNS name.
+        _validate_localllm_base_url(self.localllm_base_url)
         _validate_https_allowlist(
             self.freemodel_base_url, 'freemodel_base_url',
             ['api.freemodel.dev'],
