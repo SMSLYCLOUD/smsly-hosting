@@ -161,6 +161,16 @@ def _should_verify_tls() -> bool:
     return raw not in ("0", "false", "no")
 
 
+def _server_verify_tls(server) -> bool:
+    """SECURITY (Issue 78): respect the per-server ``verify_tls`` flag
+    when probing the internal/private/mesh/container targets.  The
+    platform defaults to True so that we never silently skip cert
+    verification unless the operator has explicitly opted in on a
+    given server (``ManagedServer.verify_tls=False``).
+    """
+    return bool(getattr(server, "verify_tls", True))
+
+
 def _platform_ssl_enabled() -> bool:
     try:
         from apps.deployments.models import PlatformConfig
@@ -241,13 +251,19 @@ def _build_targets(service, active_deployment):
 
     # ── Mesh & Private IP Targets (AWS/VPN Optimization) ────────────────
     from apps.deployments.models_mesh import WireGuardPeer
-    
+
+    # SECURITY (Issue 78): respect the per-server ``verify_tls`` flag
+    # even on the plain-HTTP internal probes. Previously the code
+    # hard-coded ``verify=False`` for these URLs, which would have
+    # silently disabled TLS verification had the scheme ever changed.
+
     # 1. Private IP (Internal Cloud Network)
     if getattr(service.server, 'private_ip', None):
         p_ip = service.server.private_ip
+        verify_private = _server_verify_tls(service.server)
         for port in ports:
             for path in paths:
-                _add(f"http://{p_ip}:{port}{path}", verify=False)
+                _add(f"http://{p_ip}:{port}{path}", verify=verify_private)
 
     # 2. Mesh IP (WireGuard VPN Network)
     # Find this server's mesh IP
@@ -255,15 +271,19 @@ def _build_targets(service, active_deployment):
         mesh_peer = WireGuardPeer.objects.filter(server=service.server, is_active=True).first()
         if mesh_peer and mesh_peer.wg_address:
             m_ip = mesh_peer.wg_address
+            verify_mesh = _server_verify_tls(service.server)
             for port in ports:
                 for path in paths:
-                    _add(f"http://{m_ip}:{port}{path}", verify=False)
+                    _add(f"http://{m_ip}:{port}{path}", verify=verify_mesh)
 
     # ── Container-local Targets (Docker DNS) ───────────────────────────
     # Use the service name as Docker DNS hostname
     container_id = (active_deployment.container_id or "").strip()
     if container_id:
         direct_headers = {"Host": public_domain} if public_domain else {}
+        verify_container = (
+            _server_verify_tls(service.server) if service.server else True
+        )
 
         service_name = (service.name or "").strip()
         if service_name:

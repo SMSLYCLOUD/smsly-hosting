@@ -23,6 +23,7 @@ from celery import shared_task
 from rest_framework import serializers, viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.exceptions import ValidationError
 
 from apps.deployments.models import Service
 
@@ -73,6 +74,16 @@ LANGUAGE_COLORS = {
 
 MAX_FILES = 500  # Safety cap
 MAX_FILE_SIZE = 100_000  # 100KB per file
+from apps.cloud.services.code_analyzer import MAX_TOTAL_BYTES  # noqa: E402
+
+_AI_CODE_DISCLAIMER = (
+    "NOTE: The following prompt contains structural metadata extracted from "
+    "a customer's source repository (file paths, route labels, model names, "
+    "and aggregate size statistics only). No file contents or secrets are "
+    "included. Do not infer, fabricate, or repeat any code, credentials, or "
+    "private identifiers. Respond with a high-level architecture summary "
+    "only.\n\n"
+)
 
 
 # ─── File Analysis Helpers ───────────────────────────────────────────────────
@@ -217,6 +228,7 @@ def analyze_codebase(repo_path: str) -> dict:
     dir_index = {}   # dir_path -> node_id
     file_count = 0
     total_lines = 0
+    total_bytes = 0
     lang_stats = {}
 
     for root, dirs, filenames in os.walk(repo_path, topdown=True):
@@ -269,12 +281,15 @@ def analyze_codebase(repo_path: str) -> dict:
                 file_size = os.path.getsize(full_path)
                 if file_size > MAX_FILE_SIZE:
                     continue
+                if total_bytes + file_size > MAX_TOTAL_BYTES:
+                    raise ValidationError("Repository too large")
                 with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
             except (OSError, UnicodeDecodeError):
                 continue
 
             file_count += 1
+            total_bytes += file_size
             lines = content.count('\n') + 1
             total_lines += lines
 
@@ -430,7 +445,7 @@ def _generate_ai_summary(analysis: dict) -> str:
         stats = analysis['stats']
 
         # Build a concise prompt
-        prompt = (
+        prompt = _AI_CODE_DISCLAIMER + (
             f"Analyze this codebase structure and provide a brief architecture summary.\n\n"
             f"Tech Stack: {tech}\n"
             f"Stats: {stats['files']} files, {stats['lines']} lines, "

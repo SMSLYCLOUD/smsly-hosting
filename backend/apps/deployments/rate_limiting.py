@@ -192,3 +192,18 @@ class TopologyListRateThrottle(UserRateThrottle):
     ``settings.DEFAULT_THROTTLE_RATES['topology_list']``.
     """
     scope = 'topology_list'
+
+
+# Cron (Batch I cont 3 / Issue 137)
+# The cron-jobs viewset has no built-in rate limit. A user could
+# create a cron job every request, polluting the scheduler and
+# (combined with #136) exhausting the schedule space. Per-user
+# throttle from settings at instantiation.
+
+class CronJobCreateRateThrottle(UserRateThrottle):
+    """Throttle on POST /api/v1/services/<id>/cron/.
+
+    Rate from
+    ``settings.DEFAULT_THROTTLE_RATES['cron_jobs_create']``.
+    """
+    scope = 'cron_jobs_create'

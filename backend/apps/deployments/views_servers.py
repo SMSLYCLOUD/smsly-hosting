@@ -680,7 +680,66 @@ def _is_command_allowed(command: str) -> bool:
         for bad in FORBIDDEN_PATH_PATTERNS:
             if bad in arg:
                 return False
+    # SEC (Issue 75): ``docker logs <name>`` lets a user read the logs of
+    # any container running on the host, including other tenants'.
+    # Restrict it to containers the calling user actually owns. The
+    # ``Service`` row is the authoritative owner record — its ``name``
+    # matches the docker container name.  We cross-check both
+    # ``Service.name == args[2]`` (the target the user wants to tail)
+    # and ``Service.owner == request.user`` so a tenant cannot pass
+    # another tenant's container name.
+    if (
+        len(parts) >= 3
+        and parts[0] == 'docker'
+        and parts[1] == 'logs'
+    ):
+        target_name = parts[2]
+        if target_name.startswith('-'):
+            return False
+        user = _current_request_user()
+        if user is None:
+            return False
+        if not _user_owns_container_name(user, target_name):
+            return False
     return True
+
+
+_DOCKER_LOGS_OWNER_CACHE: dict[str, bool] = {}
+
+
+def _user_owns_container_name(user, name: str) -> bool:
+    """Return True when the given container ``name`` is owned by ``user``.
+
+    Cross-checks ``Service.name == name`` (the docker container name
+    the caller wants to tail) and ``Service.owner == user`` (the
+    owner claim). Cached per-name for the lifetime of the worker
+    process to avoid hitting the ORM on every ``docker logs``
+    invocation.
+    """
+    cache_key = f"{getattr(user, 'id', None)}:{name}"
+    if cache_key in _DOCKER_LOGS_OWNER_CACHE:
+        return _DOCKER_LOGS_OWNER_CACHE[cache_key]
+    try:
+        owned = Service.objects.filter(name=name, owner=user).exists()
+    except Exception:
+        owned = False
+    _DOCKER_LOGS_OWNER_CACHE[cache_key] = owned
+    return owned
+
+
+def _current_request_user():
+    """Best-effort lookup of the user attached to the current request."""
+    from threading import current_thread
+
+    thread = current_thread()
+    return getattr(thread, 'smsly_request_user', None)
+
+
+def _bind_request_user(user):
+    """Bind the current user to the worker thread for ``_is_command_allowed``."""
+    from threading import current_thread
+
+    setattr(current_thread(), 'smsly_request_user', user)
 
 
 # --- Serializers -------------------------------------------------------------
@@ -731,13 +790,17 @@ class ManagedServerSerializer(serializers.ModelSerializer):
 
 class ManagedServerCreateSerializer(serializers.ModelSerializer):
     """For 'Connect Existing' mode — user provides api_url + api_token."""
+    node_certificate = serializers.CharField(
+        write_only=True, required=False, allow_blank=True,
+    )
+
     class Meta:
         model = ManagedServer
         fields = [
             "name", "host", "private_ip", "api_url", "api_token",
             "gateway_secret", "ssh_user", "ssh_password", "ssh_key",
             "ssh_port", "is_primary", "allow_user_workloads",
-            "provider_metadata", "is_lite_agent",
+            "provider_metadata", "is_lite_agent", "node_certificate",
         ]
         extra_kwargs = {
             "api_token": {"write_only": True, "required": False},
@@ -746,6 +809,16 @@ class ManagedServerCreateSerializer(serializers.ModelSerializer):
             "ssh_password": {"write_only": True, "required": False},
             "provider_metadata": {"required": False},
         }
+
+    def validate(self, data):
+        is_lite = data.get("is_lite_agent", False)
+        if is_lite:
+            cert = (data.get("node_certificate") or "").strip()
+            if not cert:
+                raise serializers.ValidationError(
+                    {"node_certificate": "node_certificate is required when is_lite_agent=True."}
+                )
+        return data
 
     def validate_ssh_key(self, value):
         if value and value.strip():
@@ -841,6 +914,9 @@ class ManagedServerProvisionSerializer(serializers.ModelSerializer):
     ssh_auth_method = serializers.ChoiceField(
         choices=["password", "key"], write_only=True,
     )
+    node_certificate = serializers.CharField(
+        write_only=True, required=False, allow_blank=True,
+    )
 
     class Meta:
         model = ManagedServer
@@ -848,6 +924,7 @@ class ManagedServerProvisionSerializer(serializers.ModelSerializer):
             "name", "host", "ssh_port", "ssh_user",
             "ssh_password", "ssh_key", "ssh_auth_method",
             "is_primary", "allow_user_workloads", "is_lite_agent",
+            "node_certificate",
         ]
         extra_kwargs = {
             "ssh_password": {"write_only": True},
@@ -878,6 +955,13 @@ class ManagedServerProvisionSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {"ssh_key": "SSH private key is required for key auth."}
             )
+        is_lite = data.get("is_lite_agent", False)
+        if is_lite:
+            cert = (data.get("node_certificate") or "").strip()
+            if not cert:
+                raise serializers.ValidationError(
+                    {"node_certificate": "node_certificate is required when is_lite_agent=True."}
+                )
         return data
 
 

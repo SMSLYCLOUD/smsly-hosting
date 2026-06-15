@@ -163,7 +163,9 @@ class VolumeViewSet(viewsets.ModelViewSet):
                 service_id=service_uuid,
                 service__owner=self.request.user,
             )
-        return Volume.objects.none()
+        return Volume.objects.filter(
+            service__owner=self.request.user,
+        )
 
     def perform_create(self, serializer):
         service_uuid = self._validated_service_uuid()

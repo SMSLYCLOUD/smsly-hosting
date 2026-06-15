@@ -1,0 +1,99 @@
+# pylint: disable=invalid-name
+"""Regression tests for Finding #31 (DeploymentApprovalViewSet.approve race).
+
+The approve() action must:
+
+  * fetch the ``DeploymentApproval`` row inside a
+    ``transaction.atomic`` block with ``select_for_update()`` so two
+    concurrent admins cannot both win;
+  * early-return HTTP 409 if the approval is no longer in
+    ``PENDING`` status (no clobber);
+  * still use the same ``approval_id``/``service_pk`` scoping so a
+    tenant cannot approve a deployment on a service they don't own.
+"""
+
+import inspect
+from unittest.mock import patch
+
+from django.contrib.auth import get_user_model
+from django.test import TestCase
+from rest_framework.test import APIClient
+
+from apps.deployments import views_safedeploy
+from apps.deployments.models_core import Service, Deployment
+from apps.deployments.models_safedeploy import DeploymentApproval
+
+
+User = get_user_model()
+
+
+def _stub_approve_and_process(deployment, user):
+    approval = DeploymentApproval.objects.filter(deployment=deployment).first()
+    if approval is None:
+        approval = DeploymentApproval.objects.create(
+            service=deployment.service, deployment=deployment,
+        )
+    approval.status = DeploymentApproval.Status.APPROVED
+    approval.approved_by = user
+    approval.save(update_fields=["status", "approved_by", "updated_at"])
+    return approval
+
+
+class Finding31ApprovalRaceTests(TestCase):
+    """Lock the approve() race fix."""
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username="fix31-admin", password="p", is_staff=True, is_superuser=True,
+        )
+        self.owner = User.objects.create_user(username="fix31-owner", password="p")
+        self.service = Service.objects.create(name="fix31-svc", owner=self.owner)
+        self.deployment = Deployment.objects.create(
+            service=self.service,
+            commit_hash="a" * 40,
+            status=Deployment.Status.AWAITING_APPROVAL,
+        )
+        self.approval = DeploymentApproval.objects.create(
+            service=self.service,
+            deployment=self.deployment,
+            status=DeploymentApproval.Status.PENDING,
+        )
+        self.url = (
+            f"/api/v1/services/{self.service.id}/approvals/"
+            f"{self.approval.id}/approve/"
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.admin)
+
+    def test_second_approve_returns_409(self):
+        with patch(
+            "apps.deployments.services.safedeploy.deployment_pipeline."
+            "ProductionDeploymentPipeline.approve_and_process",
+            side_effect=_stub_approve_and_process,
+        ):
+            first = self.client.post(self.url, {}, format="json")
+            self.assertEqual(first.status_code, 200)
+            second = self.client.post(self.url, {}, format="json")
+            self.assertEqual(second.status_code, 409)
+            self.assertIn("not PENDING", str(second.data))
+
+    def test_approve_uses_select_for_update_and_atomic(self):
+        """Static check: the approve() action body must call
+        ``select_for_update`` and ``transaction.atomic``."""
+        source = inspect.getsource(views_safedeploy.DeploymentApprovalViewSet.approve)
+        self.assertIn("select_for_update", source)
+        self.assertIn("transaction.atomic", source)
+
+    def test_non_pending_returns_409_without_pipeline_call(self):
+        """If the approval is APPROVED before the request hits, the
+        handler must short-circuit and never invoke the pipeline."""
+        self.approval.status = DeploymentApproval.Status.APPROVED
+        self.approval.save(update_fields=["status"])
+
+        with patch(
+            "apps.deployments.services.safedeploy.deployment_pipeline."
+            "ProductionDeploymentPipeline.approve_and_process"
+        ) as mock_pipeline:
+            resp = self.client.post(self.url, {}, format="json")
+        self.assertEqual(resp.status_code, 409)
+        mock_pipeline.assert_not_called()

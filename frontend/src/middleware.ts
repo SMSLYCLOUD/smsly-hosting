@@ -1,6 +1,14 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
+const DEV_SHORT_CIRCUIT_ENABLED = false;
+
+if (process.env.NODE_ENV === "production" && DEV_SHORT_CIRCUIT_ENABLED) {
+  throw new Error(
+    "DEV_SHORT_CIRCUIT_ENABLED must not be true in production builds",
+  );
+}
+
 const PROTECTED_PREFIXES = [
   "/dashboard",
   "/new",
@@ -44,7 +52,7 @@ function hasSessionCookie(request: NextRequest): boolean {
 }
 
 export async function middleware(request: NextRequest) {
-  if (process.env.NODE_ENV === "development") {
+  if (process.env.NODE_ENV === "development" && DEV_SHORT_CIRCUIT_ENABLED) {
     return NextResponse.next();
   }
   const pathname = request.nextUrl.pathname;

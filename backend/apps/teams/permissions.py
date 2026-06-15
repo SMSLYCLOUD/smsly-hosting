@@ -17,13 +17,3 @@ class IsTeamAdmin(permissions.BasePermission):
         return TeamMember.objects.filter(
             team=team, user=request.user, role=TeamMember.Role.ADMIN
         ).exists()
-
-
-class IsTeamAdminOrMember(permissions.BasePermission):
-    """Allows access for ADMIN or MEMBER roles (blocks VIEWER from writes)."""
-    def has_object_permission(self, request, view, obj):
-        team = getattr(obj, 'team', obj)
-        return TeamMember.objects.filter(
-            team=team, user=request.user,
-            role__in=[TeamMember.Role.ADMIN, TeamMember.Role.MEMBER],
-        ).exists()

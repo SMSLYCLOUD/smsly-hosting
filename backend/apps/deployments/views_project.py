@@ -7,6 +7,7 @@ import logging
 from rest_framework import viewsets, permissions, status, serializers as drf_serializers
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from django.db import transaction
 from django.db.models import Q
 
 from .models_project import Project
@@ -14,6 +15,11 @@ from .models import Service
 from .serializers import ServiceSerializer
 
 logger = logging.getLogger(__name__)
+
+
+class RemoveServiceSerializer(drf_serializers.Serializer):
+    service_id = drf_serializers.UUIDField()
+    replacement_project_id = drf_serializers.UUIDField()
 
 
 class ProjectViewSet(viewsets.ModelViewSet):
@@ -148,38 +154,71 @@ class ProjectViewSet(viewsets.ModelViewSet):
     def remove_service(self, request, pk=None):
         """
         POST /api/v1/projects/{id}/remove-service/
-        Body: { "service_id": "uuid" }
+        Body: { "service_id": "uuid", "replacement_project_id": "uuid" }
+
+        SECURITY (Issue 50): unlinking a service from its project would
+        orphan it — license tier checks and billing assume
+        ``service.project`` is non-null. The endpoint therefore requires
+        a ``replacement_project_id`` and re-attaches the service to that
+        project in the same DB transaction. The original caller's
+        project is verified as the service's *current* project, the
+        replacement project is verified as accessible to the caller,
+        and the service is moved atomically.
         """
-        from django.db.models import Q
-        project = self.get_object()
-        service_id = request.data.get('service_id')
-        if not service_id:
+        serializer = RemoveServiceSerializer(data=request.data)
+        if not serializer.is_valid():
             return Response(
-                {'error': 'service_id is required'},
+                {'error': 'service_id and replacement_project_id are required'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        service_id = serializer.validated_data['service_id']
+        replacement_project_id = serializer.validated_data['replacement_project_id']
+
+        project = self.get_object()
+
         try:
-            service = Service.objects.get(
-                Q(owner=request.user) | Q(project__team__members__user=request.user),
-                id=service_id, project=project
-            )
+            with transaction.atomic():
+                service = Service.objects.select_for_update().get(
+                    Q(owner=request.user)
+                    | Q(project__team__members__user=request.user),
+                    id=service_id,
+                )
+                if service.project_id != project.id:
+                    return Response(
+                        {'error': 'Service is not in this project'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                replacement_qs = Project.objects.filter(id=replacement_project_id)
+                if not request.user.is_superuser:
+                    replacement_qs = replacement_qs.filter(
+                        Q(owner=request.user)
+                        | Q(team__members__user=request.user)
+                    )
+                if not replacement_qs.exists():
+                    return Response(
+                        {'error': 'Replacement project not found or access denied'},
+                        status=status.HTTP_404_NOT_FOUND,
+                    )
+
+                service.project_id = replacement_project_id
+                service.save(update_fields=['project', 'updated_at'])
         except Service.DoesNotExist:
             return Response(
-                {'error': 'Service not found in this project or access denied'},
+                {'error': 'Service not found or access denied'},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        service.project = None
-        service.save(update_fields=['project', 'updated_at'])
-
         logger.info(
-            'Removed service %s (%s) from project %s (%s)',
-            service.name, service.id, project.name, project.id,
+            'Moved service %s (%s) from project %s (%s) to replacement %s',
+            service.name, service.id, project.name, project.id, replacement_project_id,
         )
         return Response({
             'status': 'ok',
             'service_id': str(service.id),
+            'project_id': str(project.id),
+            'replacement_project_id': str(replacement_project_id),
         })
 
     @action(detail=True, methods=['post'], url_path='sync-envs')

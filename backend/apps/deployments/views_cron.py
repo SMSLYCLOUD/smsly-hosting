@@ -2,6 +2,7 @@
 from rest_framework import viewsets, permissions, serializers
 from .models_cron import CronJob
 from .models import Service
+from .rate_limiting import CronJobCreateRateThrottle
 
 
 class CronJobSerializer(serializers.ModelSerializer):
@@ -13,7 +14,8 @@ class CronJobSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
             'last_run_at',
-            'next_run_at']
+            'next_run_at',
+            'service']
 
 
 class CronJobViewSet(viewsets.ModelViewSet):
@@ -31,10 +33,15 @@ class CronJobViewSet(viewsets.ModelViewSet):
             ).distinct()
         return CronJob.objects.none()  # Should be nested
 
+    def get_throttles(self):
+        if self.action == 'create':
+            return [CronJobCreateRateThrottle()]
+        return super().get_throttles()
+
     def perform_create(self, serializer):
         service = Service.objects.get(pk=self.kwargs['service_pk'])
         has_access = (
-            service.owner == self.request.user or 
+            service.owner == self.request.user or
             (service.project and service.project.team and service.project.team.members.filter(user=self.request.user).exists())
         )
         if not has_access:

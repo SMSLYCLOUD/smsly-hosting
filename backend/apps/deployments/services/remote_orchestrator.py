@@ -1507,8 +1507,9 @@ exit 0
         )
         try:
             ssh.connect()
+            argv = shlex.split(f"sh -lc {shlex.quote(script)}")
             out, err, code = ssh.exec_command(
-                f"sh -lc {shlex.quote(script)}",
+                argv,
                 timeout=60,
                 raise_on_error=False,
             )

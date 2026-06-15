@@ -3,6 +3,7 @@ import subprocess
 import logging
 import os
 import re
+from types import SimpleNamespace
 from urllib.parse import urlparse, urlunparse
 
 logger = logging.getLogger(__name__)
@@ -68,16 +69,109 @@ class PostgresSnapshotManager:
         return urlunparse(parsed._replace(path=f'/{db_name}'))
 
     def _run_psql(self, db_url: str, sql: str, check: bool = True,
-                  timeout: int = 120) -> subprocess.CompletedProcess:
-        """Run a psql command and return the CompletedProcess result."""
+                  timeout: int = 120) -> SimpleNamespace:
+        """Run a psql command and return a SimpleNamespace describing the outcome.
+
+        The returned object always exposes ``.ok`` (bool). On success
+        it carries ``.stdout`` / ``.stderr`` / ``.returncode`` from the
+        underlying ``CompletedProcess``. On ``CalledProcessError`` or
+        ``TimeoutExpired`` it carries ``.ok=False``, ``.error`` and
+        ``.stderr`` so callers can log/display the failure without
+        having to re-wrap the exception.
+        """
         masked = _mask_url_password(db_url)
         logger.debug(f"psql %s: %s", masked, sql[:300])
-        return subprocess.run(
-            ['psql', '-d', db_url, '-v', 'ON_ERROR_STOP=1', '-c', sql],
-            check=check,
-            capture_output=True,
-            text=True,
-            timeout=timeout
+        try:
+            result = subprocess.run(
+                ['psql', '-d', db_url, '-v', 'ON_ERROR_STOP=1', '-c', sql],
+                check=check,
+                capture_output=True,
+                text=True,
+                timeout=timeout
+            )
+        except subprocess.CalledProcessError as e:
+            return SimpleNamespace(
+                ok=False,
+                error=str(e),
+                stderr=e.stderr,
+                stdout=e.stdout,
+                returncode=e.returncode,
+            )
+        except subprocess.TimeoutExpired as e:
+            stderr_str = (
+                (e.stderr or b'').decode('utf-8', errors='replace')
+                if isinstance(e.stderr, (bytes, bytearray)) else (e.stderr or '')
+            )
+            stdout_str = (
+                (e.stdout or b'').decode('utf-8', errors='replace')
+                if isinstance(e.stdout, (bytes, bytearray)) else (e.stdout or '')
+            )
+            return SimpleNamespace(
+                ok=False,
+                error=str(e),
+                stderr=stderr_str,
+                stdout=stdout_str,
+                returncode=None,
+            )
+        return SimpleNamespace(
+            ok=True,
+            returncode=result.returncode,
+            stdout=result.stdout,
+            stderr=result.stderr,
+        )
+
+    def _run_psql_vars(self, db_url: str, sql: str, variables: dict,
+                       check: bool = True, timeout: int = 120) -> SimpleNamespace:
+        """Run a psql command with -v name=value parameters to avoid SQL injection.
+
+        Same return contract as ``_run_psql`` — a ``SimpleNamespace``
+        with ``.ok`` and on failure ``.error``/``.stderr`` so callers
+        can compose multiple psql calls without each one having to
+        re-wrap ``CalledProcessError``.
+        """
+        masked = _mask_url_password(db_url)
+        logger.debug(f"psql %s: %s vars=%s", masked, sql[:300], list(variables.keys()))
+        cmd = ['psql', '-d', db_url, '-v', 'ON_ERROR_STOP=1']
+        for name, value in variables.items():
+            cmd += ['-v', f'{name}={value}']
+        cmd += ['-c', sql]
+        try:
+            result = subprocess.run(
+                cmd,
+                check=check,
+                capture_output=True,
+                text=True,
+                timeout=timeout
+            )
+        except subprocess.CalledProcessError as e:
+            return SimpleNamespace(
+                ok=False,
+                error=str(e),
+                stderr=e.stderr,
+                stdout=e.stdout,
+                returncode=e.returncode,
+            )
+        except subprocess.TimeoutExpired as e:
+            stderr_str = (
+                (e.stderr or b'').decode('utf-8', errors='replace')
+                if isinstance(e.stderr, (bytes, bytearray)) else (e.stderr or '')
+            )
+            stdout_str = (
+                (e.stdout or b'').decode('utf-8', errors='replace')
+                if isinstance(e.stdout, (bytes, bytearray)) else (e.stdout or '')
+            )
+            return SimpleNamespace(
+                ok=False,
+                error=str(e),
+                stderr=stderr_str,
+                stdout=stdout_str,
+                returncode=None,
+            )
+        return SimpleNamespace(
+            ok=True,
+            returncode=result.returncode,
+            stdout=result.stdout,
+            stderr=result.stderr,
         )
 
     def create_clone(self, source_db_name: str, clone_db_name: str,

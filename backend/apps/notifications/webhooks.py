@@ -5,6 +5,9 @@ from urllib.parse import urlparse
 
 import requests
 from django.conf import settings
+from django.core.exceptions import ValidationError
+
+from apps.core.validators import validate_ssrf
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +20,26 @@ _ALLOWED_NOTIFICATION_HOSTS = frozenset({
 })
 
 _MAX_BODY_BYTES = 64 * 1024
-_REQUEST_TIMEOUT = 5
+_DEFAULT_REQUEST_TIMEOUT = 5.0
+
+
+def _get_request_timeout() -> float:
+    """Return the configured notification webhook timeout.
+
+    Reads ``settings.NOTIFICATION_WEBHOOK_TIMEOUT`` (float seconds)
+    and falls back to ``5.0`` when unset or non-positive. A
+    configurable timeout lets operators tune the wait for slow
+    downstream targets without code changes; the default preserves
+    the original 5s behaviour.
+    """
+    value = getattr(settings, 'NOTIFICATION_WEBHOOK_TIMEOUT', _DEFAULT_REQUEST_TIMEOUT)
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        value = _DEFAULT_REQUEST_TIMEOUT
+    if value <= 0:
+        value = _DEFAULT_REQUEST_TIMEOUT
+    return value
 
 
 def _validate_notification_url(url: str) -> str:
@@ -102,6 +124,16 @@ def _post_notification(url: str, payload: dict, user=None, provider: str = '') -
         )
         return False
 
+    try:
+        validate_ssrf(url)
+    except ValidationError as exc:
+        logger.warning(
+            "Rejected notification URL host=%s reason=%s",
+            getattr(user, 'id', None),
+            exc,
+        )
+        return False
+
     body = str(payload).encode('utf-8')
     if len(body) > _MAX_BODY_BYTES:
         logger.warning(
@@ -114,7 +146,7 @@ def _post_notification(url: str, payload: dict, user=None, provider: str = '') -
         resp = requests.post(
             url,
             json=payload,
-            timeout=_REQUEST_TIMEOUT,
+            timeout=_get_request_timeout(),
             allow_redirects=False,
         )
         return 200 <= resp.status_code < 300
