@@ -25,8 +25,12 @@ from ..models_storage import Volume
 
 logger = logging.getLogger(__name__)
 
-TRANSFER_LOG_LIMIT = 300_000
+TRANSFER_LOG_LIMIT = getattr(settings, "TRANSFER_LOG_LIMIT", 100 * 1024)
 TRANSFER_ERROR_LIMIT = 4_000
+
+
+def get_transfer_log_limit():
+    return getattr(settings, "TRANSFER_LOG_LIMIT", TRANSFER_LOG_LIMIT)
 
 # SECURITY (Batch G): the .env keys that MUST NOT be shipped to the
 # target during a FULL server transfer. These are platform-level
@@ -119,32 +123,48 @@ def _safe_backup_basename(file_path: str) -> str:
     return name[:255]
 
 
+_PATTERNS = [
+    re.compile(
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
+        flags=re.DOTALL,
+    ),
+    re.compile(
+        r"(?i)((?:TOKEN|SECRET|PASSWORD|KEY|DSN|DATABASE_URL|REDIS_URL|AMQP_URL|BROKER_URL|API_KEY)[A-Z0-9_]*=)([^\s\"']+)",
+    ),
+    re.compile(
+        r"Bearer\s+[A-Za-z0-9._-]+",
+    ),
+    re.compile(
+        r"postgres(ql)?://[^\s]+:[^\s]+@",
+    ),
+    re.compile(
+        r"(?i)((?:Authorization|X-API-Key|X-Auth-Token):\s*)(\S+)",
+    ),
+    re.compile(
+        r"(?:https?://)[^:/\s]+:[^@\s]+@",
+    ),
+]
+
+
 def _redact_transfer_text(text: str) -> str:
     """Keep persisted transfer logs useful without storing secrets."""
     if not text:
         return ""
     safe = str(text).replace("\x00", "")
-    safe = re.sub(
-        r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
-        "-----BEGIN PRIVATE KEY-----***-----END PRIVATE KEY-----",
-        safe,
-        flags=re.DOTALL,
-    )
-    safe = re.sub(
-        r"(?i)((?:TOKEN|SECRET|PASSWORD|KEY|DSN|DATABASE_URL|REDIS_URL|AMQP_URL|BROKER_URL|API_KEY)[A-Z0-9_]*=)([^\s\"']+)",
-        r"\1***",
-        safe,
-    )
-    safe = re.sub(
-        r"(?i)((?:Authorization|X-API-Key|X-Auth-Token):\s*)(\S+)",
-        r"\1***",
-        safe,
-    )
-    safe = re.sub(
-        r"(?:https?://)[^:/\s]+:[^@\s]+@",
-        "***@",
-        safe,
-    )
+    for idx, pat in enumerate(_PATTERNS):
+        if idx == 0:
+            safe = pat.sub(
+                "-----BEGIN PRIVATE KEY-----***-----END PRIVATE KEY-----",
+                safe,
+            )
+        elif idx == 1:
+            safe = pat.sub(r"\1***", safe)
+        elif idx in (2, 3):
+            safe = pat.sub("***", safe)
+        elif idx == 4:
+            safe = pat.sub(r"\1***", safe)
+        else:
+            safe = pat.sub("***@", safe)
     return safe
 
 
@@ -205,10 +225,11 @@ class ServerTransferService:
         ts = timezone.now().strftime('%Y-%m-%d %H:%M:%S')
         line = _redact_transfer_text(f"[{ts}] {message}\n")
         combined = (self.transfer.logs or "") + line
-        if len(combined) > TRANSFER_LOG_LIMIT:
+        cap = get_transfer_log_limit()
+        if len(combined) > cap:
             combined = (
                 "--- Older transfer log output truncated to keep this record bounded ---\n"
-                + combined[-TRANSFER_LOG_LIMIT:]
+                + combined[-cap:]
             )
         self.transfer.logs = combined
         self.transfer.save(update_fields=['logs'])

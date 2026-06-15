@@ -37,6 +37,7 @@ class PreviewEnvironment(TimeStampedModel):
 
     class Meta:
         ordering = ['-created_at']
+        unique_together = (('service', 'branch_name', 'commit_sha'),)
 
     def __str__(self):
         return f"{self.service.name} - {self.branch_name} ({self.status})"
@@ -147,6 +148,11 @@ class DeploymentArtifact(TimeStampedModel):
     artifact_type = models.CharField(max_length=30, choices=ArtifactType.choices)
     content = models.TextField(blank=True)
     file_path = models.CharField(max_length=255, blank=True, null=True)
+    is_archived = models.BooleanField(
+        default=False,
+        help_text="Soft-delete flag: when True the row is hidden from "
+                  "default querysets but is preserved for audit.",
+    )
 
 class HealthCheckResult(TimeStampedModel):
     class Status(models.TextChoices):

@@ -368,11 +368,17 @@ class NixpacksBuilder:
         ]
 
         try:
-            result = subprocess.run(command, capture_output=True, text=True)
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
             if result.returncode != 0:
-                logger.warning(
-                    f"Trivy scan failed (binary missing?): {result.stderr}")
-                return {"error": "Scan skipped (tool missing)"}
+                raise RuntimeError(
+                    f"trivy scan failed (rc={result.returncode}): "
+                    f"{(result.stderr or '').strip()[:1000]}"
+                )
 
             report = json.loads(result.stdout)
 

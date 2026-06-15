@@ -881,6 +881,13 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         import os
         from services.ecosystem import heuristic_analysis
         from apps.deployments.services.git_manager import GitManager
+        from apps.cloud.services.code_analyzer import (
+            MAX_TOTAL_BYTES,
+            iter_repo_files,
+            walk_repo_with_cap,
+        )
+
+        MAX_FILES = 500
 
         repo_url = request.data.get('repo_url')
         if not repo_url:
@@ -922,12 +929,19 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
                     )
 
                 # Analyze
-                # Get list of files relative to project path
+                walk = walk_repo_with_cap(project_path, MAX_TOTAL_BYTES)
+                if walk.capped:
+                    return Response(
+                        {'error': 'Repo too large (>50MB total)'},
+                        status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+                    )
                 project_files = []
-                for root, _, filenames in os.walk(project_path):
-                    for f in filenames:
-                        rel_path = os.path.relpath(os.path.join(root, f), project_path)
-                        project_files.append(rel_path)
+                for _abs, rel_path, _size in iter_repo_files(
+                    project_path, MAX_TOTAL_BYTES,
+                ):
+                    if len(project_files) >= MAX_FILES:
+                        break
+                    project_files.append(rel_path)
 
                 analysis_results = heuristic_analysis(project_files, clone_dir=project_path)
 

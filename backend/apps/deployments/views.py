@@ -4,6 +4,7 @@
 import os
 import posixpath
 import hmac
+import re
 from rest_framework import viewsets, permissions, status, parsers, serializers, authentication
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.generics import GenericAPIView
@@ -4598,7 +4599,7 @@ class SystemConfigView(GenericAPIView):
     GET /api/v1/system/config/
     """
     serializer_class = EmptySerializer
-    permission_classes = [permissions.IsAdminUser]
+    permission_classes = [permissions.IsAuthenticated]
 
     def _maintenance_task_response(self, task_id: str):
         task_id = str(task_id or "").strip()
@@ -4657,11 +4658,20 @@ class SystemConfigView(GenericAPIView):
         if task_id:
             return self._maintenance_task_response(task_id)
 
-        return Response({
-            # General
+        safe_data = {
             'VERSION': '3.0.0',
-            'DEBUG': settings.DEBUG,
             'DOMAIN': getattr(settings, 'DOMAIN', 'localhost'),
+            'safe_update_available': os.path.exists('/opt/smsly-hosting/scripts/safe-update.sh'),
+            **self._get_storage_metrics(),
+        }
+
+        if not request.user.is_superuser:
+            return Response(safe_data)
+
+        return Response({
+            **safe_data,
+            # General
+            'DEBUG': settings.DEBUG,
             'TIME_ZONE': settings.TIME_ZONE,
             'SITE_ID': settings.SITE_ID,
 
@@ -4705,11 +4715,11 @@ class SystemConfigView(GenericAPIView):
             # Webhook
             'GITHUB_WEBHOOK_SECRET_SET': bool(getattr(settings, 'GITHUB_WEBHOOK_SECRET', '')),
 
-            # Safe Update
-            'safe_update_available': os.path.exists('/opt/smsly-hosting/scripts/safe-update.sh'),
-
-            # Storage
-            **self._get_storage_metrics(),
+            # Maintenance actions available to admins (labels only, no flags)
+            'maintenance_actions': [
+                {'action': key, 'label': spec['label']}
+                for key, spec in MAINTENANCE_ACTIONS.items()
+            ],
         })
 
     def _get_storage_metrics(self):
@@ -4989,8 +4999,60 @@ class DomainConfigView(GenericAPIView):
                 'cloudflare_api_token_set': bool(config.cloudflare_api_token),
                 'updated_service_domains': updated_service_domains,
                 'redeploy_required': bool(updated_service_domains),
-                'caddyfile_preview': caddyfile_content,
+                'caddyfile_preview': _redact_caddyfile_preview(caddyfile_content),
             })
+
+
+_CADDYFILE_REDACT_KEYWORDS = (
+    'Strict-Transport-Security',
+    'tls',
+    'internal',
+    'basicauth',
+    'header Strict-Transport-Security',
+)
+
+
+def _redact_caddyfile_preview(text: str) -> str:
+    """Strip any line in a Caddyfile preview that contains a secret or
+    internal-only directive. The preview is returned to admins over
+    the API, so we must not leak the actual TLS/internal/basicauth
+    configuration, nor any ``${ENV_VAR}`` placeholders that may encode
+    tokens. Each matching line is replaced wholesale with
+    ``***REDACTED***``.
+
+    A line that opens a ``basicauth`` or ``internal`` block also
+    redacts all subsequent lines until the matching closing brace.
+    """
+    if not text:
+        return text
+    redacted_lines = []
+    env_var_re = re.compile(r"\$\{[^}\s]+\}")
+    block_open_keywords = ("basicauth", "internal")
+    in_secret_block = 0
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            redacted_lines.append(line)
+            continue
+        lowered = stripped.lower()
+        if not in_secret_block and any(
+            kw.lower() in lowered for kw in _CADDYFILE_REDACT_KEYWORDS
+        ):
+            redacted_lines.append('***REDACTED***')
+            if any(open_kw in lowered for open_kw in block_open_keywords) and "{" in stripped:
+                in_secret_block = stripped.count("{") - stripped.count("}")
+            continue
+        if in_secret_block:
+            redacted_lines.append('***REDACTED***')
+            in_secret_block += stripped.count("{") - stripped.count("}")
+            if in_secret_block < 0:
+                in_secret_block = 0
+            continue
+        if env_var_re.search(stripped):
+            redacted_lines.append('***REDACTED***')
+            continue
+        redacted_lines.append(line)
+    return "\n".join(redacted_lines)
 
 
 class RouteRecheckView(GenericAPIView):

@@ -32,7 +32,7 @@ class BranchPreviewManager:
         preview.status = PreviewEnvironment.Status.BUILDING
         preview.error_message = ""
         preview.save()
-        preview.artifacts.all().delete()
+        preview.artifacts.all().update(is_archived=True)
         MigrationValidation.objects.filter(preview_environment=preview).delete()
         return preview
 

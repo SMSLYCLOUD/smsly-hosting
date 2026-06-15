@@ -1,5 +1,7 @@
 """SSL Monitor service."""
+import ipaddress
 import logging
+import socket
 from datetime import datetime, timezone as dt_timezone
 
 from celery import shared_task
@@ -10,6 +12,43 @@ from apps.notifications.models import Notification
 from apps.domains.tasks import verify_dns_and_provision_ssl_task
 
 logger = logging.getLogger(__name__)
+
+
+def _is_safe_outbound_target(host: str) -> bool:
+    """SEC (Issue 54): reject outbound targets that resolve to internal IPs.
+
+    The platform connects to arbitrary user-supplied domains to fetch
+    certificates; without this check a hostile Domain record (or a
+    platform-config typo) could be pointed at ``169.254.169.254``,
+    ``localhost``, or RFC1918 space and turn the monitor into an SSRF
+    primitive.  We resolve once and refuse any address in a private
+    or loopback range.
+    """
+    if not host:
+        return False
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except (OSError, UnicodeError, ValueError):
+        return False
+    for info in infos or []:
+        sockaddr = info[4] if len(info) > 4 else None
+        addr = sockaddr[0] if sockaddr else None
+        if not addr:
+            continue
+        try:
+            ip = ipaddress.ip_address(addr)
+        except ValueError:
+            return False
+        if (
+            ip.is_loopback
+            or ip.is_link_local
+            or ip.is_private
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
+            return False
+    return True
 
 class SSLMonitorService:
     def check_all_certificates(self):
@@ -34,6 +73,12 @@ class SSLMonitorService:
         import ssl
         import socket
         try:
+            if not _is_safe_outbound_target(domain):
+                logger.warning(
+                    "SSL check skipped for platform domain %s: resolves to internal address",
+                    domain,
+                )
+                return
             ctx = ssl.create_default_context()
             with ctx.wrap_socket(socket.socket(), server_hostname=domain) as s:
                 s.settimeout(5.0)
@@ -58,6 +103,16 @@ class SSLMonitorService:
         owner = domain_obj.service.owner
 
         try:
+            if not _is_safe_outbound_target(domain):
+                logger.warning(
+                    "SSL check skipped for %s: resolves to internal address",
+                    domain,
+                )
+                domain_obj.ssl_active = False
+                domain_obj.last_error = "Domain resolves to an internal address."
+                domain_obj.save(update_fields=['ssl_active', 'last_error', 'checked_at'])
+                return
+
             ctx = ssl.create_default_context()
             with ctx.wrap_socket(socket.socket(), server_hostname=domain) as s:
                 s.settimeout(5.0)

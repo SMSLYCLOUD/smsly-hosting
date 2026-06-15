@@ -11,7 +11,28 @@ logger = logging.getLogger(__name__)
 
 
 class ProductionDeploymentPipeline:
-    def process_deployment(self, deployment: Deployment) -> None:
+    _TERMINAL_STATUSES = (
+        Deployment.Status.ACTIVE,
+        Deployment.Status.FAILED,
+        Deployment.Status.CANCELLED,
+        Deployment.Status.ROLLED_BACK,
+    )
+
+    def process_deployment(self, deployment: Deployment) -> Deployment:
+        """Run a deployment through the full pipeline. Idempotent: if the
+        deployment is already in a terminal status (``ACTIVE``,
+        ``FAILED``, ``CANCELLED`` or ``ROLLED_BACK``), the call
+        short-circuits and returns the existing deployment row.
+        """
+        deployment.refresh_from_db()
+        if deployment.status in self._TERMINAL_STATUSES:
+            logger.info(
+                "process_deployment: deployment %s is already in terminal "
+                "status %s; short-circuiting (idempotent no-op).",
+                deployment.id, deployment.status,
+            )
+            return deployment
+
         deployment.status = Deployment.Status.MIGRATION_PLANNING
         deployment.save()
 
@@ -80,6 +101,7 @@ class ProductionDeploymentPipeline:
 
         deployment.status = Deployment.Status.ACTIVE
         deployment.save()
+        return deployment
 
     def _get_latest_validation_for_commit(self, service_id, commit_hash):
         qs = MigrationValidation.objects.filter(

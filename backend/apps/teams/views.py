@@ -1,5 +1,6 @@
 """Views module."""
 import logging
+from smtplib import SMTPException
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -69,18 +70,39 @@ class TeamViewSet(viewsets.ModelViewSet):
                 return Response({'error': 'User already in team'}, status=status.HTTP_400_BAD_REQUEST)
 
             TeamMember.objects.create(team=team, user=user, role=role)
-            
-            # Send Notification
+
             try:
                 send_mail(
                     subject=f"You've been invited to join {team.name} on SMSLY",
                     message=f"Hello {user.username},\n\nYou have been invited to join the team '{team.name}' as a {role}.\n\nLog in to accept: {getattr(settings, 'SITE_URL', 'http://localhost:3000')}",
                     from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@smsly.com'),
                     recipient_list=[email],
-                    fail_silently=True
+                    fail_silently=False,
                 )
-            except Exception:
-                pass # Non-blocking
+            except SMTPException as mail_exc:
+                logger.error(
+                    "invite_member: SMTP failure for team=%s invitee=%s: %s",
+                    team.id, email, mail_exc,
+                )
+                return Response(
+                    {
+                        "error": "smtp_failure",
+                        "mail_error": str(mail_exc),
+                    },
+                    status=status.HTTP_502_BAD_GATEWAY,
+                )
+            except (OSError, ConnectionError, TimeoutError) as mail_exc:
+                logger.error(
+                    "invite_member: mail transport failure for team=%s invitee=%s: %s",
+                    team.id, email, mail_exc,
+                )
+                return Response(
+                    {
+                        "error": "smtp_failure",
+                        "mail_error": str(mail_exc),
+                    },
+                    status=status.HTTP_502_BAD_GATEWAY,
+                )
 
             return Response({'status': 'invited'})
         else:

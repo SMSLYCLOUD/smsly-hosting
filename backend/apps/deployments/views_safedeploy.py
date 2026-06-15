@@ -32,13 +32,76 @@ MAX_PREVIEWS_PER_CREATOR = getattr(django_settings, 'MAX_PREVIEWS_PER_CREATOR', 
 
 
 def send_approval_notification(approval, service_pk):
-    # TODO: wire to apps.notifications.services.send_notification once that helper exists.
-    status_label = (approval.status or '').lower()
+    """Send an approval-state-change notification to the requester.
+
+    Tries the platform notification dispatcher first; falls back to
+    Django's ``send_mail`` if the user has an email address and the
+    email backend is configured.  All failures are logged and
+    swallowed so the caller's approve/reject flow is never blocked by
+    a misconfigured email backend.
+    """
     requester = getattr(approval, 'requested_by', None)
-    logger.info(
-        "Would notify requester=%s service=%s approval=%s status=%s",
-        getattr(requester, 'id', None), service_pk, getattr(approval, 'id', None), status_label,
+    requester_email = getattr(requester, 'email', None)
+    status_label = (approval.status or '').lower()
+    deployment_id = getattr(getattr(approval, 'deployment', None), 'id', None)
+
+    if not requester_email:
+        logger.info(
+            "send_approval_notification: requester=%s has no email; "
+            "skipping notification for approval=%s status=%s",
+            getattr(requester, 'id', None),
+            getattr(approval, 'id', None),
+            status_label,
+        )
+        return
+
+    subject = f"[CloudNeuron] Deployment {status_label.upper()}"
+    message = (
+        f"Your deployment (id={deployment_id}) was {status_label}.\n"
+        f"Service: {service_pk}\n"
+        f"Approval: {getattr(approval, 'id', None)}\n"
     )
+
+    delivered = False
+    try:
+        from apps.notifications.tasks import dispatch_notification
+        dispatch_notification.delay(
+            event_type='deployment_approval',
+            user_id=requester.id,
+            title=subject,
+            message=message,
+            metadata={
+                'service_pk': str(service_pk) if service_pk else None,
+                'deployment_id': str(deployment_id) if deployment_id else None,
+                'approval_id': str(getattr(approval, 'id', None)),
+                'approval_status': status_label,
+            },
+            channels=['email'],
+        )
+        delivered = True
+    except Exception as exc:
+        logger.warning(
+            "send_approval_notification: dispatch_notification failed (%s); "
+            "falling back to send_mail",
+            exc,
+        )
+
+    if not delivered:
+        try:
+            from django.core.mail import send_mail
+            from django.conf import settings as django_settings
+            send_mail(
+                subject=subject,
+                message=message,
+                from_email=getattr(django_settings, 'DEFAULT_FROM_EMAIL', 'noreply@smsly.cloud'),
+                recipient_list=[requester_email],
+                fail_silently=True,
+            )
+        except Exception as exc:
+            logger.warning(
+                "send_approval_notification: send_mail fallback failed for %s: %s",
+                requester_email, exc,
+            )
 
 
 class PreviewEnvironmentViewSet(viewsets.ModelViewSet):

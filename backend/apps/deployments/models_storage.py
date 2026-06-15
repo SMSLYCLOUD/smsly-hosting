@@ -1,10 +1,14 @@
 """Models Storage module."""
+import re
 import uuid
 from django.core.exceptions import ValidationError
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
 
 class Volume(models.Model):
+    _VOLUME_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     # Use string reference to avoid circular import
     service = models.ForeignKey(
@@ -15,7 +19,10 @@ class Volume(models.Model):
     name = models.CharField(max_length=255)
     mount_path = models.CharField(max_length=255,
                                   help_text="Path inside container e.g. /data")
-    size_gb = models.IntegerField(default=1)
+    size_gb = models.IntegerField(
+        default=1,
+        validators=[MinValueValidator(1), MaxValueValidator(1000)],
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -40,3 +47,11 @@ class Volume(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.mount_path})"
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(size_gb__gte=1) & models.Q(size_gb__lte=1000),
+                name="volume_size_gb_range",
+            ),
+        ]

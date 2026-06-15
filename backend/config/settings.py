@@ -886,6 +886,9 @@ REST_FRAMEWORK = {
         # indefinitely to enumerate destination IDs that the
         # platform supports. Cap at 30/minute per user.
         'cloud_templates': '30/minute',
+        # SECURITY (Issue 137): cron-jobs POST is uncapped, a user
+        # can spam cron jobs. Cap at 10/hour per user.
+        'cron_jobs_create': '10/hour',
     },
 }
 # SECURITY (Batch H): API_RATE_LIMIT was 1000 (per-IP per-minute)
