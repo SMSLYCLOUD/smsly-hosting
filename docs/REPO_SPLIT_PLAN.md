@@ -1,5 +1,17 @@
 # Repository Split Plan (No-Delete, Zero-Downtime)
 
+> **Note (2026-06):** During the dead-code cleanup, four stubs were quarantined
+> to `archive/` and are **not** part of the current target layout below:
+> - `custom-addons/` → `archive/custom-addons-2026-06/`
+> - `rust_twin/` → `archive/rust_twin-2026-06/`
+> - `console/` → `archive/console-2026-06/`
+> - `cli/smsly.py` (Click-based, superseded by `cli/smsly_cli.py`) →
+>   `archive/dead-cli-2026-06/`
+>
+> The target repos below describe the **production** split, not the
+> historical/proposed split that includes those dead paths. See
+> `archive/DEAD_CODE_QUARANTINE.md` for the full manifest.
+
 This plan separates apps into clean repos while keeping the platform stable and avoiding destructive moves.
 
 ## Guardrails

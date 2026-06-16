@@ -113,7 +113,7 @@ curl -sS http://localhost:8000/api/v1/servers/ \
     "name": "Worker EU",
     "host": "203.0.113.10",
     "private_ip": "10.0.5.10",
-    "api_url": "http://203.0.113.10:8090",
+    "api_url": "http://203.0.113.10",
     "api_token": "smsly_…",
     "ssh_user": "root",
     "ssh_password": "REDACTED",
@@ -231,7 +231,7 @@ The deploy task writes `/etc/wireguard/wg0.conf`, runs `wg-quick up wg0`, and ve
 
 The mesh is the **preferred** transport for inter-node API calls. The `api_url` resolution order in `views_servers._candidate_api_urls` is:
 
-1. WireGuard mesh IP (`http://<wg_address>` or `http://<wg_address>:8090` for full followers).
+1. WireGuard mesh IP (`http://<wg_address>` — Caddy on the remote node binds 80/443 directly; the legacy nginx-bridge URL on the deprecated follower port is no longer used).
 2. Public IP / domain (`http://<host>` or `https://<host>` if a domain is present).
 3. Loopback shortcut (`http://127.0.0.1:8000`) when the host is `localhost`.
 
@@ -336,7 +336,7 @@ curl -sS http://localhost:8000/api/v1/servers/ \
     "name": "Worker EU",
     "host": "203.0.113.10",
     "private_ip": "10.0.5.10",
-    "api_url": "http://203.0.113.10:8090",
+    "api_url": "http://203.0.113.10",
     "api_token": "smsly_a3b8c1d2e3f4…",
     "ssh_user": "root",
     "ssh_password": "REDACTED",

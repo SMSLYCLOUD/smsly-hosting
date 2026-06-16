@@ -190,22 +190,27 @@ servicesApi.approveDeployment(dId)     // Approve REVIEW → BUILDING
 | `celery-beat` | Same as backend | Periodic task scheduler |
 | `db` | postgres:16-alpine | Primary database |
 | `redis` | redis:7-alpine | Cache + Celery broker |
-| `caddy` | caddy:2.7-alpine | Reverse proxy, SSL termination, routing |
+| `caddy` | caddy:2-alpine (built from `infrastructure/caddy/Dockerfile` with xcaddy + Cloudflare DNS plugin) | Reverse proxy, SSL termination, routing |
 | `socket-proxy` | tecnativa/docker-socket-proxy | Read-only Docker socket |
 | `registry` | registry:2 | Private Docker registry for user images |
 | `traefik` | traefik:v3.6 | Dynamic routing for deployed services |
 
 ### Build Commands
 
+`docker-compose.yml` is the dev override on top of `docker-compose.prod.yml`. Compose merges them, but the two files are **mutually exclusive at the CLI level** — `docker-compose.prod.yml` is a strict superset of `docker-compose.yml` (it includes the dev override already). Stack both `-f` flags and Compose will reject the config with duplicate-service errors.
+
 ```bash
-# Full stack (both compose files required for build context)
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+# Dev (local — uses docker-compose.yml override)
+docker compose -f docker-compose.yml up -d --build
+
+# Prod (master / node / lite-agent — docker-compose.prod.yml is the single source of truth)
+docker compose -f docker-compose.prod.yml up -d --build
 
 # Backend only
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build backend
+docker compose -f docker-compose.prod.yml up -d --build backend
 
 # Frontend only
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build frontend
+docker compose -f docker-compose.prod.yml up -d --build frontend
 ```
 
 ---

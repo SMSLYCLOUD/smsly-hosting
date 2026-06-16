@@ -1,4 +1,4 @@
-# Grid Production Deployment Guide
+# SMSLY (CloudNeuron) Production Deployment Guide
 
 ## Prerequisites
 
@@ -7,7 +7,9 @@ Before deploying to production, ensure you have:
 - [ ] Domain name pointing to your server (A record)
 - [ ] Server with Ubuntu 20.04+ or similar
 - [ ] Docker & Docker Compose installed
-- [ ] Ports 80, 443, 8090 open in firewall
+- [ ] Ports **80, 443** open in firewall
+
+> **Note:** Port **8090** was the legacy nginx+Caddy bridge port. It is **no longer used** — Caddy now binds 80/443 directly and routes to `backend:8000`. The active port list is just 80 + 443.
 
 ## DNS Configuration
 
@@ -131,8 +133,8 @@ docker compose -f docker-compose.prod.yml exec backend python manage.py collects
 # Check all services are running
 docker compose -f docker-compose.prod.yml ps
 
-# Test health endpoint (should return 200 OK)
-curl http://localhost:8090/health
+# Test health endpoint (Caddy listens on host :80 and routes /health → backend:8000)
+curl http://localhost/health
 
 # Check SSL is working
 curl https://cloud.smsly.cloud/health

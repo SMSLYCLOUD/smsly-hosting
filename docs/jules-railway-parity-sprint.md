@@ -379,7 +379,7 @@ CELERY_BEAT_SCHEDULE = {
 ```bash
 python manage.py check
 python manage.py makemigrations --check  # Should say "No changes detected"
-python manage.py test apps.deployments
+pytest -q backend/apps/deployments
 ```
 
 ---
@@ -705,7 +705,7 @@ The teams app already exists at `backend/apps/teams/`. Enhance:
 cd backend
 python manage.py check --deploy
 python manage.py makemigrations --check
-python manage.py test
+pytest -q
 
 # Frontend checks
 cd frontend

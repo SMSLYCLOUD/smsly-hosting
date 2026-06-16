@@ -27,7 +27,7 @@
 | **CPU** | 2 vCPUs | 4 vCPUs |
 | **RAM** | 2 GB | 4 GB |
 | **Disk** | 20 GB | 40 GB+ SSD |
-| **Ports** | 80, 443 | 80, 443, 8090 |
+| **Ports** | 80, 443 | 80, 443 |
 | **Network** | Public IPv4 | Static IP preferred |
 
 **Software dependencies** (installed automatically): Docker, Docker Compose, Python 3, Caddy, Git.
@@ -103,7 +103,7 @@ Credentials: /opt/smsly-hosting/.credentials
 Best for testing and development. No domain needed.
 
 - **Access:** `http://YOUR_IP`
-- **Caddy:** Proxies port 80 → 8090
+- **Caddy:** Binds port 80 directly; routes to `backend:8000` (and `frontend:3000`). No nginx bridge.
 - **SSL:** None
 
 Select option `1` during installation.
@@ -241,7 +241,7 @@ docker compose -f docker-compose.prod.yml restart backend
 ### Health Check
 
 ```bash
-curl http://localhost:8090/health
+curl http://localhost/health
 # Returns: {"status": "healthy", ...}
 ```
 
@@ -317,7 +317,7 @@ Replace with:
 
 ```
 your-domain.com {
-    reverse_proxy localhost:8090
+    reverse_proxy localhost:8000
     encode gzip
 }
 ```
@@ -332,7 +332,7 @@ nano .env
 DOMAIN=your-domain.com
 USE_SSL=true
 ALLOWED_HOSTS=your-domain.com,YOUR_IP,localhost,127.0.0.1
-CSRF_TRUSTED_ORIGINS=https://your-domain.com,http://localhost:8090
+CSRF_TRUSTED_ORIGINS=https://your-domain.com,http://localhost
 CORS_ALLOWED_ORIGINS=https://your-domain.com
 ```
 
@@ -360,7 +360,7 @@ caddy reload --config /etc/caddy/Caddyfile
 1. Check containers: `docker compose -f docker-compose.prod.yml ps`
 2. Check that backend and frontend containers are healthy
 3. Check Caddy: `systemctl status caddy`
-4. Check firewall: `ufw status` — port 8090 should be allowed
+4. Check firewall: `ufw status` — ports 80 and 443 should be allowed (8090 is the legacy nginx bridge and is **not** required)
 
 ### Database Connection Error
 

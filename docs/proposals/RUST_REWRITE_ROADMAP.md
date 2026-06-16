@@ -1,5 +1,15 @@
 # Grid Rust Rewrite Roadmap
 
+> **DEPRECATED 2026-06:** The `rust_twin/` workspace referenced by this roadmap
+> was a 7-crate Cargo skeleton with scaffolding-only source and a fabricated
+> `PARITY_REPORT.md` (identical 10.00 ms latencies across every endpoint).
+> It has been moved to `archive/rust_twin-2026-06/`. The `--rust` install
+> mode in `install.sh` and the `.github/workflows/rust-ci.yml` workflow will
+> no longer function and need to be retired in a follow-up. See
+> `archive/DEAD_CODE_QUARANTINE.md`. Do not revive without a real parity
+> test suite and full integration with the Python backend, Celery workers,
+> and Next.js frontend.
+
 ## Objective
 Rewrite the entire Grid platform (Python/Django Backend, Celery Workers, Next.js Frontend) into a single, high-performance, unified Rust workspace. This roadmap is designed for AI agents to incrementally and safely migrate the system.
 

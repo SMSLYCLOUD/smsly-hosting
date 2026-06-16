@@ -23,7 +23,7 @@
 - `docs/ROUTE_NAV_AUDIT.md` (listed current route links)
 
 ## Test Commands and Results
-- **Backend Tests:** Ran `/home/jules/.pyenv/versions/3.12.13/bin/python backend/manage.py test apps.deployments.tests.test_emergency_fix apps.deployments.tests.test_primary_server_fix`. **Result:** All 9 tests passed.
+- **Backend Tests:** Ran `cd backend && pytest apps/deployments/tests/test_emergency_fix.py apps/deployments/tests/test_primary_server_fix.py`. **Result:** All 9 tests passed.
 - **Frontend Typecheck:** `cd frontend && npm run typecheck`. **Result:** Compiled with 0 errors.
 - **Frontend Lint:** `cd frontend && npm run lint`. **Result:** Ran successfully.
 - **Frontend Build:** `cd frontend && npm run build`. **Result:** Optimized production build created successfully.

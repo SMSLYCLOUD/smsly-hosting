@@ -56,7 +56,7 @@
 ```powershell
 python scripts/multi_server_local_harness.py
 pytest
-python manage.py test || true
+pytest -q || true
 
 cd frontend
 npm run typecheck

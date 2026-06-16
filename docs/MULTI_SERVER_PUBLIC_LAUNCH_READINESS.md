@@ -39,7 +39,7 @@ Run before public release:
 
 ```powershell
 pytest
-python manage.py test || true
+pytest -q || true
 
 cd frontend
 npm run typecheck

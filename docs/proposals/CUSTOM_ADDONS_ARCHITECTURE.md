@@ -1,5 +1,12 @@
 # Custom Add-ons Architecture Plan
 
+> **DEPRECATED 2026-06:** This proposal was never implemented. The `custom-addons/`
+> directory in the repo root was a misnamed 135-line Rust TCP broker skeleton,
+> not Odoo addons, and was not wired into the build, compose files, or
+> installer. It has been moved to `archive/custom-addons-2026-06/`. See
+> `archive/DEAD_CODE_QUARANTINE.md` for context. Do not revive without writing
+> tests and re-integrating with the installer.
+
 This document outlines the high-level architecture and implementation plan for a new suite of custom, built-from-scratch infrastructure add-ons. The goal is to replace legacy ecosystem components (RabbitMQ, Redis, PostgreSQL, Nginx, etc.) with modern, high-performance, and unified alternatives that solve their historical pain points and offer a vastly improved developer experience.
 
 All components are intended to be built from scratch, leveraging modern systems programming languages (such as Rust or Go) to ensure memory safety, high concurrency, and low latency.
