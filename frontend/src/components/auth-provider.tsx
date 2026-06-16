@@ -58,7 +58,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         if (path === "/login" || path === "/register") {
           // Avoid Next.js route-cache edge cases: force a navigation.
-          window.location.replace("/dashboard");
+          // The same 5-second loop guard used in the 401 branch below
+          // is required here too — without it, a stale-but-valid
+          // session returning 200 on /login then 401 on /dashboard
+          // (or vice versa) will spin forever between the two pages.
+          const loopKey = '__auth_redirect_ts';
+          const lastRedirect = Number(sessionStorage.getItem(loopKey) || 0);
+          const tooRecent = Date.now() - lastRedirect < 5000;
+          if (!tooRecent) {
+            sessionStorage.setItem(loopKey, String(Date.now()));
+            window.location.replace("/dashboard");
+          }
         }
       } catch (error) {
         // Not authenticated. Clear any legacy client-side state from
