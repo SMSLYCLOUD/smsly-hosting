@@ -1,0 +1,23 @@
+[package]
+name = "cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+sea-orm = { workspace = true }
+sea-orm-migration = { workspace = true }
+dotenvy = { workspace = true }
+
+# CLI Argument Parser
+clap = { version = "4.5", features = ["derive"] }
+# Password hashing
+argon2 = "0.5"
+chrono = { version = "0.4", features = ["serde"] }
+tracing-subscriber = { workspace = true }
+
+# Local workspace
+cn_core = { path = "../core", package = "core" }

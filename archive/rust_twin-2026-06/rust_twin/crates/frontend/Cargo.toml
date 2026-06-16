@@ -1,0 +1,19 @@
+[package]
+name = "frontend"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Web framework
+leptos = { version = "0.6", features = ["csr"] }
+leptos_router = { version = "0.6", features = ["csr"] }
+
+# Communication & Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+
+# Utilities
+console_error_panic_hook = "0.1"
+tracing = { workspace = true }
+tracing-wasm = "0.2"

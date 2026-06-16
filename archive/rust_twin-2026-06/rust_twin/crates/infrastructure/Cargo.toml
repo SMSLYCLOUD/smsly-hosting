@@ -1,0 +1,20 @@
+[package]
+name = "infrastructure"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { workspace = true, features = ["process", "rt", "macros"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+
+# Docker API Client
+bollard = "0.16"
+
+# Process stream parsing
+futures-util = "0.3"
+
+# SSH Transfer Engine
+ssh2 = "0.9"

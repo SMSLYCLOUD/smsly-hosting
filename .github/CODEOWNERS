@@ -1,0 +1,13 @@
+# Default owners for the whole repo
+* @smsly/maintainers
+
+# Critical paths require additional review
+/backend/config/settings.py @smsly/maintainers @smsly/security
+/backend/apps/deployments/services/transfer_service.py @smsly/maintainers @smsly/security
+/backend/apps/deployments/services/backup_service.py @smsly/maintainers @smsly/security
+/install.sh @smsly/maintainers @smsly/security
+/Dockerfile @smsly/maintainers @smsly/security
+/docker-compose*.yml @smsly/maintainers @smsly/security
+/charts/ @smsly/maintainers @smsly/security
+/.github/workflows/ @smsly/maintainers @smsly/security
+/certs/ @smsly/maintainers @smsly/security

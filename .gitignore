@@ -66,3 +66,66 @@ Thumbs.db
 builds/
 caddy-config/
 
+# === Repo hygiene additions ===
+# Tracked secrets — caught by .gitignore too late, also covered below
+certs/*.key
+certs/*.pem
+!certs/*.crt
+auth/htpasswd
+
+# Caddy runtime state (was previously tracked)
+caddy-config/.cloudflare_*
+caddy-config/.perm_probe
+caddy-config/.reload
+caddy-config/.update
+
+# Backup/merge leftovers
+*.bak
+*.orig
+*.rej
+
+# Dev logs
+frontend-dev-*.log
+*.dev.log
+
+# Old data dumps
+old_templates.json
+db.sqlite3
+db.sqlite3-journal
+fallback.db
+*.sqlite3-journal
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Coverage / cache
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.dmypy.json
+
+# Build artifacts
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# === Archived dead code (2026-06 cleanup) ===
+# archive/ contains stubs that the repo no longer uses. The directory tree is
+# tracked (so git history is preserved), but its build outputs and caches are
+# excluded. See archive/DEAD_CODE_QUARANTINE.md for the manifest.
+archive/**/target/
+archive/**/node_modules/
+archive/**/__pycache__/
+archive/**/*.pyc
+archive/**/*.class
+
