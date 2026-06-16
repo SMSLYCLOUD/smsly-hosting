@@ -74,8 +74,8 @@ impl AuthUtils {
         // algorithm-specific hash (e.g. Argon2 PHC string, bcrypt PHC string,
         // or `iter$salt$hash` for PBKDF2).
         let raw = stored_hash
-            .splitn(2, '$')
-            .nth(1)
+            .split_once('$')
+            .map(|x| x.1)
             .unwrap_or(stored_hash);
 
         match algo {
@@ -151,9 +151,9 @@ impl AuthUtils {
 ///
 /// Django's `BCryptSHA256PasswordHasher`:
 ///   1. Computes `SHA-256(password)`,
-///   2. Base64-encodes the 32-byte digest (standard alphabet, no padding), and
-///   3. Runs `bcrypt` over that base64 string with a 72-byte input limit
-///      (bcrypt itself truncates the input).
+///   2. Base64-encodes the 32-byte digest (standard alphabet, padded), and
+///   3. Runs `bcrypt` over that base64 string (44 ASCII chars, well under
+///      bcrypt's 72-byte input limit, so bcrypt's own truncation never bites).
 ///
 /// The portion after `bcrypt_sha256$` is a normal bcrypt PHC string
 /// (`$2b$<cost>$<22-char salt><31-char hash>`).
@@ -161,13 +161,18 @@ fn verify_bcrypt_sha256(password: &str, raw_hash: &str) -> Result<bool> {
     let mut sha = Sha256::new();
     sha.update(password.as_bytes());
     let digest = sha.finalize();
-    // Base64-encode the raw SHA-256 digest (no padding) exactly like Django.
+    // Base64-encode the raw SHA-256 digest (with `=` padding) exactly like
+    // Django's `b64encode` does.
     let bcrypt_input = general_purpose::STANDARD.encode(digest);
     Ok(bcrypt::verify(&bcrypt_input, raw_hash).unwrap_or(false))
 }
 
-/// Verify a Django PBKDF2-SHA256 hash. The `raw_hash` portion (after the
-/// algorithm prefix) has the form `iterations$base64(salt)$base64(hash)`.
+/// Verify a Django PBKDF2-SHA256 hash.
+///
+/// The `raw_hash` portion (after the algorithm prefix) has the form
+/// `iterations$salt$base64(hash)`. The salt is 12 ASCII characters from
+/// the set `string.ascii_letters + string.digits + "./"` (NOT base64), and
+/// the hash is the standard base64-encoded digest (with `=` padding).
 fn verify_pbkdf2_sha256(password: &str, raw_hash: &str) -> Result<bool> {
     let parts: Vec<&str> = raw_hash.split('$').collect();
     if parts.len() != 3 {
@@ -177,19 +182,17 @@ fn verify_pbkdf2_sha256(password: &str, raw_hash: &str) -> Result<bool> {
         ));
     }
     let iterations: u32 = parts[0].parse().context("pbkdf2 iterations")?;
-    let salt = general_purpose::STANDARD
-        .decode(parts[1])
-        .map_err(|e| anyhow!("pbkdf2 salt decode: {}", e))?;
+    let salt = parts[1].as_bytes();
     let expected = general_purpose::STANDARD
         .decode(parts[2])
         .map_err(|e| anyhow!("pbkdf2 hash decode: {}", e))?;
     let mut actual = vec![0u8; expected.len()];
-    pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, iterations, &mut actual);
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, iterations, &mut actual);
     Ok(actual.as_slice() == expected.as_slice())
 }
 
-/// Verify a legacy Django PBKDF2-SHA1 hash. Same format as SHA-256 but
-/// produces a 20-byte (160-bit) digest.
+/// Verify a legacy Django PBKDF2-SHA1 hash. Same wire format as
+/// `pbkdf2_sha256` but the digest is 20 bytes (SHA-1).
 fn verify_pbkdf2_sha1(password: &str, raw_hash: &str) -> Result<bool> {
     let parts: Vec<&str> = raw_hash.split('$').collect();
     if parts.len() != 3 {
@@ -199,14 +202,12 @@ fn verify_pbkdf2_sha1(password: &str, raw_hash: &str) -> Result<bool> {
         ));
     }
     let iterations: u32 = parts[0].parse().context("pbkdf2 iterations")?;
-    let salt = general_purpose::STANDARD
-        .decode(parts[1])
-        .map_err(|e| anyhow!("pbkdf2 salt decode: {}", e))?;
+    let salt = parts[1].as_bytes();
     let expected = general_purpose::STANDARD
         .decode(parts[2])
         .map_err(|e| anyhow!("pbkdf2 hash decode: {}", e))?;
     let mut actual = vec![0u8; expected.len()];
-    pbkdf2_hmac::<Sha1>(password.as_bytes(), &salt, iterations, &mut actual);
+    pbkdf2_hmac::<Sha1>(password.as_bytes(), salt, iterations, &mut actual);
     Ok(actual.as_slice() == expected.as_slice())
 }
 
@@ -233,11 +234,11 @@ mod tests {
             Some(HashAlgo::BcryptSha256)
         );
         assert_eq!(
-            HashAlgo::detect("pbkdf2_sha256$600000$YWFhYQ$BBBB"),
+            HashAlgo::detect("pbkdf2_sha256$600000$abcdef012345$BBBB"),
             Some(HashAlgo::Pbkdf2Sha256)
         );
         assert_eq!(
-            HashAlgo::detect("pbkdf2_sha1$1000$YWFhYQ$BBBB"),
+            HashAlgo::detect("pbkdf2_sha1$1000$saltsaltsalt$BBBB"),
             Some(HashAlgo::Pbkdf2Sha1)
         );
         assert_eq!(HashAlgo::detect("garbage"), None);
@@ -257,21 +258,19 @@ mod tests {
 
     #[test]
     fn test_verify_pbkdf2_sha256_wrong_password() {
-        // Build a PBKDF2-SHA256 hash in the exact Django format, then verify
-        // that a wrong password is rejected and the right one is accepted.
+        // Build a PBKDF2-SHA256 hash in the exact Django format:
+        //   "pbkdf2_sha256$<iterations>$<ascii salt>$<base64 hash>"
+        // Django's salt is 12 ASCII characters from the alphabet
+        // [A-Za-z0-9./] and the hash is the standard base64-encoded
+        // binary digest (with `=` padding).
         let password = "correct horse battery staple";
-        let salt = general_purpose::STANDARD.encode(b"0123456789abcdef");
+        let salt = "abcdef012345"; // 12-char ASCII "salt"
         let iterations: u32 = 1000;
         let mut buf = [0u8; 32];
-        pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt.as_bytes(), iterations, &mut buf);
+        pbkdf2_hmac::<Sha256>(password.as_bytes(), salt.as_bytes(), iterations, &mut buf);
         let expected = general_purpose::STANDARD.encode(buf);
 
-        let stored = format!(
-            "pbkdf2_sha256${}${}${}",
-            iterations,
-            salt.trim_end_matches('='), // Django stores unpadded base64
-            expected.trim_end_matches('=')
-        );
+        let stored = format!("pbkdf2_sha256${}${}${}", iterations, salt, expected);
 
         assert!(AuthUtils::verify_password(password, &stored).unwrap());
         assert!(!AuthUtils::verify_password("wrong", &stored).unwrap());
@@ -280,18 +279,13 @@ mod tests {
     #[test]
     fn test_verify_pbkdf2_sha1_wrong_password() {
         let password = "legacy user";
-        let salt = general_purpose::STANDARD.encode(b"saltysalt1234567");
+        let salt = "saltsaltsalt";
         let iterations: u32 = 1000;
         let mut buf = [0u8; 20];
-        pbkdf2_hmac::<Sha1>(password.as_bytes(), &salt.as_bytes(), iterations, &mut buf);
+        pbkdf2_hmac::<Sha1>(password.as_bytes(), salt.as_bytes(), iterations, &mut buf);
         let expected = general_purpose::STANDARD.encode(buf);
 
-        let stored = format!(
-            "pbkdf2_sha1${}${}${}",
-            iterations,
-            salt.trim_end_matches('='),
-            expected.trim_end_matches('=')
-        );
+        let stored = format!("pbkdf2_sha1${}${}${}", iterations, salt, expected);
 
         assert!(AuthUtils::verify_password(password, &stored).unwrap());
         assert!(!AuthUtils::verify_password("nope", &stored).unwrap());

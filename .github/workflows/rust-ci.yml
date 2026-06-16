@@ -1,0 +1,114 @@
+# rust_twin CI — only runs on changes to the archived rust_twin.
+# Workflow added back 2026-06-16 as part of the rust_twin revival.
+# All third-party actions are pinned to commit SHAs.
+
+name: rust_twin CI
+
+on:
+  push:
+    paths:
+      - 'archive/rust_twin-2026-06/rust_twin/**'
+  pull_request:
+    paths:
+      - 'archive/rust_twin-2026-06/rust_twin/**'
+  workflow_dispatch:  # allow manual trigger
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  fmt:
+    name: cargo fmt
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1, with toolchain 1.82.0
+        with:
+          toolchain: 1.82.0
+          components: rustfmt
+      - name: Check formatting
+        run: cd archive/rust_twin-2026-06/rust_twin && cargo fmt --all -- --check
+        continue-on-error: true  # Don't fail the build until code is fmt-clean
+
+  clippy:
+    name: cargo clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: 1.82.0
+          components: clippy
+      - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab  # v2.7.5
+      - name: Run clippy
+        run: cd archive/rust_twin-2026-06/rust_twin && cargo clippy --workspace --all-targets -- -D warnings
+        continue-on-error: true  # Don't fail until code is clippy-clean
+
+  check:
+    name: cargo check (compile)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: 1.82.0
+      - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab
+      - name: cargo check
+        run: cd archive/rust_twin-2026-06/rust_twin && cargo check --workspace
+        # This may currently fail (per B1 audit). Do NOT continue-on-error:
+        # we want to know if the code doesn't compile.
+
+  test:
+    name: cargo test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: smsly_admin
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: rust_twin_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://smsly_admin:testpass@localhost:5432/rust_twin_test
+      REDIS_URL: redis://localhost:6379/0
+    steps:
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: 1.82.0
+      - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab
+      - name: cargo test
+        run: cd archive/rust_twin-2026-06/rust_twin && cargo test --workspace --exclude frontend
+        env:
+          DATABASE_URL: postgres://smsly_admin:testpass@localhost:5432/rust_twin_test
+          REDIS_URL: redis://localhost:6379/0
+        continue-on-error: true  # Tests may fail until the code stabilises
