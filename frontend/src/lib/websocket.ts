@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import { getAuthToken } from './auth-cookies';
 
 export interface ServiceStatusUpdate {
   type: 'service_status_update';
@@ -54,13 +53,16 @@ export function useWebSocket(options: UseWebSocketOptions) {
     }
 
     setConnectionStatus('connecting');
-    const token = getAuthToken();
-    
-    // Add token to URL query parameters
-    const urlWithToken = `${url}?token=${encodeURIComponent(token || '')}`;
-    
+
+    // Auth is provided by the HttpOnly auth cookie that the browser
+    // attaches to the WebSocket upgrade request. The server's
+    // QueryStringAuthMiddleware reads the cookie directly from the
+    // Cookie header (no token in the query string) — see
+    // backend/apps/deployments/middleware.py for the matching
+    // server-side change.
+
     try {
-      wsRef.current = new WebSocket(urlWithToken);
+      wsRef.current = new WebSocket(url);
 
       wsRef.current.onopen = () => {
         setConnectionStatus('open');

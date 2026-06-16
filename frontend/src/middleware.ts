@@ -42,7 +42,16 @@ function isCallbackPage(pathname: string): boolean {
 }
 
 function hasAuthTokenCookie(request: NextRequest): boolean {
-  const authToken = request.cookies.get("auth_token")?.value;
+  // The backend issues two cookie names depending on the environment:
+  //   * ``__Host-auth_token`` in production (HTTPS-only, with the
+  //     hardened ``__Host-`` prefix)
+  //   * ``auth_token`` in development (plain HTTP allowed)
+  // The middleware runs on the frontend before the request reaches the
+  // backend, so it does not know which environment it is in. Accept
+  // either name to keep both code paths working.
+  const authToken =
+    request.cookies.get("__Host-auth_token")?.value ??
+    request.cookies.get("auth_token")?.value;
   return Boolean(authToken && authToken.trim());
 }
 

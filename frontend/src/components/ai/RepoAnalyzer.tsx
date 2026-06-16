@@ -71,11 +71,10 @@ export function RepoAnalyzer({ onAnalysisComplete, initialUrl = '' }: RepoAnalyz
         setError('');
 
         try {
-            const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
             const response = await axios.post(
                 '/api/v1/analyze-repo/',
                 { repo_url: url },
-                { headers: token ? { Authorization: `Token ${token}` } : {} }
+                { withCredentials: true }
             );
 
             setAnalysis(response.data);

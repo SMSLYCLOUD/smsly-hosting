@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/components/ui/use-toast"
 import { cn } from "@/lib/utils"
+import { api } from "@/lib/api"
 import { DashboardShell } from "@/components/layout/DashboardShell"
 import { useConfirm } from '@/components/ui/confirm-dialog'
 import { RequiresTier } from "@/components/licensing/RequiresTier"
@@ -39,16 +40,14 @@ export default function MarketplacePage() {
     // Initial Fetch
     React.useEffect(() => {
         const loadData = async () => {
-            const token = localStorage.getItem("auth_token")
-            if (!token) {
-                setIsLoading(false)
-                return
-            }
-
+            // The HttpOnly auth cookie is attached automatically by
+            // the browser; we do not need to read the token client-side.
+            // An unauthenticated request returns 401 and surfaces as a
+            // "not signed in" UI through the api instance.
             try {
                 // Fetch Addons
                 const addonsRes = await fetch("/api/v1/addons/", {
-                    headers: { "Authorization": `Token ${token}` }
+                    credentials: "include",
                 })
                 if (addonsRes.ok) {
                     const data = await addonsRes.json()
@@ -59,7 +58,7 @@ export default function MarketplacePage() {
 
                 // Fetch Services (for provisioning)
                 const servicesRes = await fetch("/api/v1/services/", {
-                    headers: { "Authorization": `Token ${token}` }
+                    credentials: "include",
                 })
                 if (servicesRes.ok) {
                     const data = await servicesRes.json()
@@ -71,6 +70,7 @@ export default function MarketplacePage() {
                         setTargetServiceId((prev) => prev || svcList[0].id)
                     }
                 }
+
             } catch (err) {
                 console.error(err)
             } finally {
@@ -90,11 +90,9 @@ export default function MarketplacePage() {
     }
 
     const handleOneClickProvision = async (item: AddonRegistryItem) => {
-        const token = localStorage.getItem("auth_token")
-        if (!token) {
-            toast({ title: "Login required", description: "Please login to provision addons.", variant: "destructive" })
-            return
-        }
+        // The HttpOnly auth cookie is attached automatically by the
+        // browser. If the user is not authenticated, the request
+        // returns 401 and the global interceptor surfaces the error.
         if (!targetServiceId) {
             toast({ title: "No service found", description: "Create a service first, then provision addons.", variant: "destructive" })
             return
@@ -104,10 +102,8 @@ export default function MarketplacePage() {
         try {
             const res = await fetch("/api/v1/addons/", {
                 method: "POST",
-                headers: { 
-                    "Content-Type": "application/json",
-                    "Authorization": `Token ${token}` 
-                },
+                credentials: "include",
+                headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     name: `${item.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${randomToken(6)}`.slice(0, 255),
                     addon_type: item.addon_type,
@@ -131,11 +127,10 @@ export default function MarketplacePage() {
         setActiveAddon(addon)
         setIsBackupsOpen(true)
         setIsLoadingBackups(true)
-        const token = localStorage.getItem("auth_token")
-        
+
         try {
             const res = await fetch(`/api/v1/addons/${addon.id}/backups/`, {
-                headers: { "Authorization": `Token ${token}` }
+                credentials: "include",
             })
             if (res.ok) {
                 const data = await res.json()
@@ -151,11 +146,10 @@ export default function MarketplacePage() {
 
     const handleCreateBackup = async () => {
         if (!activeAddon) return
-        const token = localStorage.getItem("auth_token")
         try {
              const res = await fetch(`/api/v1/addons/${activeAddon.id}/backup/`, {
                 method: "POST",
-                headers: { "Authorization": `Token ${token}` }
+                credentials: "include",
             })
             if (res.ok) {
                 toast({ title: "Backup Started", description: "Your backup is running in background." })
@@ -170,15 +164,12 @@ export default function MarketplacePage() {
     const handleRestore = async (backupId: string) => {
         if (!activeAddon) return
         if (!await confirm({ title: 'Restore backup?', message: 'This will overwrite current data. Continue?', variant: 'destructive', confirmText: 'Restore' })) return
-        
-        const token = localStorage.getItem("auth_token")
+
         try {
              const res = await fetch(`/api/v1/addons/${activeAddon.id}/restore/`, {
                 method: "POST",
-                headers: { 
-                    "Content-Type": "application/json",
-                    "Authorization": `Token ${token}`
-                },
+                credentials: "include",
+                headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ backup_id: backupId })
             })
             if (res.ok) {
@@ -191,14 +182,13 @@ export default function MarketplacePage() {
 
     const handleDownload = async (backup: any) => {
         if (!activeAddon) return
-        const token = localStorage.getItem("auth_token")
-        
+
         try {
             const res = await fetch(`/api/v1/addons/${activeAddon.id}/download_backup/?backup_id=${backup.id}`, {
-                headers: { "Authorization": `Token ${token}` }
+                credentials: "include",
             })
             if (!res.ok) throw new Error("Download failed")
-            
+
             const blob = await res.blob()
             const url = window.URL.createObjectURL(blob)
             const a = document.createElement('a')
@@ -323,10 +313,9 @@ export default function MarketplacePage() {
                                             onClick={async () => {
                                                 if (await confirm({ title: "Delete Addon", message: "Are you sure? All data will be lost." })) {
                                                     try {
-                                                        const token = localStorage.getItem("auth_token")
                                                         const res = await fetch(`/api/v1/addons/${addon.id}/`, {
                                                             method: 'DELETE',
-                                                            headers: { 'Authorization': `Token ${token}` }
+                                                            credentials: 'include',
                                                         })
                                                         if (res.ok) {
                                                             setAddons(prev => prev.filter(a => a.id !== addon.id))

@@ -57,13 +57,9 @@ function ecosystemEdgeToTopologyEdge(e: EcosystemGraph['edges'][0]): TopologyEdg
 }
 
 function fetchEcosystem(): Promise<EcosystemGraph> {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
   return fetch('/api/v1/topology/ecosystem/', {
     credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Token ${token}` } : {}),
-    },
+    headers: { 'Content-Type': 'application/json' },
   }).then(res => {
     if (!res.ok) throw new Error(`Ecosystem fetch failed: HTTP ${res.status}`);
     return res.json();

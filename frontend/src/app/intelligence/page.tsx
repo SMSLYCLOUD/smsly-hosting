@@ -132,15 +132,11 @@ export default function IntelligencePage() {
     chatAbortRef.current = controller;
 
     try {
-      const token = typeof window !== 'undefined'
-        ? (localStorage.getItem('auth_token') || (document.cookie.match(/(?:^|;\s*)auth_token=([^;]+)/)?.[1] ? decodeURIComponent(document.cookie.match(/(?:^|;\s*)auth_token=([^;]+)/)![1]) : null))
-        : null;
-
       const response = await fetch('/api/v1/ai/chat/stream/', {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { 'Authorization': `Token ${token}` } : {}),
         },
         body: JSON.stringify({ prompt }),
         signal: controller.signal,

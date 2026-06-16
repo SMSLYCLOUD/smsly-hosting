@@ -276,8 +276,10 @@ export default function NewServicePage() {
   const handleDeploy = async () => {
     setIsDeploying(true)
     try {
-      const token = localStorage.getItem("auth_token")
-      if (!token) throw new Error("Not authenticated")
+      // The HttpOnly auth cookie is attached automatically by the
+      // browser via the api instance's ``withCredentials: true``. If
+      // the user is not authenticated, the call returns 401 and the
+      // global error interceptor handles the redirect.
       const localOnlyRequest = { _skipRemoteProxy: true } as any
 
       // Auto-derive name from repo URL if still empty

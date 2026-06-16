@@ -15,8 +15,7 @@ interface ResourceAlert {
 }
 
 function getHeaders(): Record<string, string> {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
-    return token ? { 'Authorization': `Token ${token}` } : {};
+    return {};
 }
 
 function apiUrl(path: string) {
@@ -30,7 +29,10 @@ export function ResourceAlerts({ serviceId }: { serviceId: string }) {
     useEffect(() => {
         const fetchAlerts = async () => {
             try {
-                const res = await fetch(apiUrl(`/resource-alerts/?service=${serviceId}`), { headers: getHeaders() });
+                const res = await fetch(apiUrl(`/resource-alerts/?service=${serviceId}`), {
+                    credentials: 'include',
+                    headers: getHeaders(),
+                });
                 if (res.ok) {
                     const data = await res.json();
                     setAlerts(Array.isArray(data) ? data : data.results);
@@ -46,7 +48,11 @@ export function ResourceAlerts({ serviceId }: { serviceId: string }) {
 
     const handleDismiss = async (id: string) => {
         try {
-            await fetch(apiUrl(`/resource-alerts/${id}/dismiss/`), { method: 'POST', headers: getHeaders() });
+            await fetch(apiUrl(`/resource-alerts/${id}/dismiss/`), {
+                method: 'POST',
+                credentials: 'include',
+                headers: getHeaders(),
+            });
             setAlerts(prev => prev.filter(a => a.id !== id));
         } catch (e) {
             console.error(e);

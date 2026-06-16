@@ -12,7 +12,6 @@ import * as THREE from 'three';
 import api from '@/lib/api';
 import { addonsApi } from '@/lib/api';
 
-// @ts-ignore
 const ForceGraph3D = dynamic(() => import('react-force-graph-3d'), { ssr: false });
 
 /* ── Types ── */

@@ -1,4 +1,8 @@
 // @ts-nocheck
+// TODO(follow-up): this component imports from 'react-force-graph' (not installed; the installed
+// packages are 'react-force-graph-2d' and 'react-force-graph-3d') and calls servicesApi.retrieveDependencies,
+// which does not exist on servicesApi. Add the dependencies API method, fix the import, type the
+// node/ctx/globalScale callbacks, and remove this directive.
 import React, { useEffect, useState } from 'react';
 import { servicesApi } from '@/lib/api';
 import { Loader2 } from 'lucide-react';

@@ -35,18 +35,12 @@ interface ManagedServer {
     is_lite_agent?: boolean;
 }
 
-function getToken() {
-    return typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
-}
-
 async function apiFetch(path: string, method = 'GET', body?: object) {
-    const token = getToken();
     const res = await fetch(path, {
         method,
         credentials: 'include',
         headers: {
             'Content-Type': 'application/json',
-            ...(token ? { Authorization: `Token ${token}` } : {}),
         },
         body: body ? JSON.stringify(body) : undefined,
     });

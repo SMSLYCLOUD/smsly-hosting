@@ -48,7 +48,6 @@ export function LogsView({
         }
         const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
         const isUuid = uuidRegex.test(raw);
-        const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
 
         const applyFilter = (svcName: string, deployMode?: string) => {
             setServiceFilter(svcName);
@@ -62,7 +61,7 @@ export function LogsView({
 
         if (isUuid) {
             fetch(`/api/v1/services/${encodeURIComponent(raw)}/`, {
-                headers: token ? { 'Authorization': `Token ${token}` } : {},
+                credentials: "include",
             })
                 .then((r) => (r.ok ? r.json() : null))
                 .then((svc) => {
@@ -78,14 +77,13 @@ export function LogsView({
         setLoading(true);
         setError(null);
         try {
-            const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
             const params = new URLSearchParams();
             params.set('query', query);
             params.set('start', range);
             params.set('end', 'now');
             params.set('limit', String(limit));
             const res = await fetch(`/api/v1/observability/loki/query/?${params.toString()}`, {
-                headers: token ? { 'Authorization': `Token ${token}` } : {},
+                credentials: "include",
             });
             if (!res.ok) {
                 const body = await res.json().catch(() => ({}));
@@ -123,13 +121,12 @@ export function LogsView({
         const normalized = svcName.trim().toLowerCase().replace(/ /g, '-');
         const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
         if (uuidRegex.test(svcName.trim())) {
-            const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
             fetch(`/api/v1/services/${encodeURIComponent(svcName.trim())}/`, {
-                headers: token ? { 'Authorization': `Token ${token}` } : {},
+                credentials: "include",
             })
                 .then((r) => (r.ok ? r.json() : null))
                 .then((svc) => {
-                    if (svc?.name) {
+                    if (svc) {
                         const svcNormalized = svc.name.toLowerCase().replace(/ /g, '-');
                         const q = svc.deploy_mode === 'COMPOSE'
                             ? `{compose_project="${svcNormalized}"}`

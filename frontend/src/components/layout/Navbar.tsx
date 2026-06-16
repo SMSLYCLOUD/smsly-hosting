@@ -10,7 +10,8 @@ import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { ModeToggle } from '@/components/ui/mode-toggle';
 import { motion, AnimatePresence } from 'framer-motion';
-import { clearAuthCookies } from '@/lib/auth-cookies';
+import { api } from '@/lib/api';
+import { logout as performLogout } from '@/lib/auth';
 
 export function Navbar() {
   const [isMenuOpen, setIsMenuOpen] = React.useState(false);
@@ -27,39 +28,33 @@ export function Navbar() {
     };
     window.addEventListener('scroll', handleScroll);
 
-    // Check auth
-    const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
-    if (token) {
-        // Fetch user data and resolve admin capability via admin-only endpoint.
-        (async () => {
+    // Fetch user via the cookie-authenticated axios instance. A 401
+    // means the user is logged out and we keep the menu in the
+    // anonymous state. There is no client-side token to read.
+    (async () => {
+      try {
+        const userRes = await api.get('/auth/user/');
+        if (!userRes.data) return;
+        const data = userRes.data;
+
+        let isStaff = Boolean(data?.is_staff || data?.is_superuser);
+        if (!isStaff) {
           try {
-            const userRes = await fetch(`${window.location.origin}/api/v1/auth/user/`, {
-              headers: { 'Authorization': `Token ${token}` },
-            });
-            if (!userRes.ok) {
-              throw new Error('unauthorized');
-            }
-            const data = await userRes.json();
-
-            let isStaff = Boolean(data?.is_staff || data?.is_superuser);
-            if (!isStaff) {
-              const adminRes = await fetch(`${window.location.origin}/api/v1/system/config/`, {
-                headers: { 'Authorization': `Token ${token}` },
-              });
-              isStaff = adminRes.ok;
-            }
-
-            setUser({
-              email: data?.email || data?.username || 'User',
-              is_staff: isStaff,
-            });
+            await api.get('/system/config/');
+            isStaff = true;
           } catch {
-            localStorage.removeItem('auth_token');
-            clearAuthCookies();
-            setUser(null);
+            isStaff = false;
           }
-        })();
-    }
+        }
+
+        setUser({
+          email: data?.email || data?.username || 'User',
+          is_staff: isStaff,
+        });
+      } catch {
+        setUser(null);
+      }
+    })();
 
     const handleClickOutside = (event: MouseEvent) => {
         if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
@@ -75,11 +70,9 @@ export function Navbar() {
   }, []);
 
   const handleLogout = () => {
-    localStorage.removeItem('auth_token');
-    clearAuthCookies();
     setUser(null);
     setIsUserMenuOpen(false);
-    router.push('/login');
+    performLogout();
   };
 
   const publicLinks = [

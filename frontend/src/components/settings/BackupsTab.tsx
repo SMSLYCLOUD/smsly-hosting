@@ -182,24 +182,23 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
     const connectWebSocket = (deploymentId: string) => {
         if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
-        const token = typeof window !== 'undefined'
-            ? (localStorage.getItem('auth_token') || document.cookie.match(/(?:^|;\s*)auth_token=([^;]+)/)?.[1])
-            : null;
-        if (!token) return;
-
-        const decodedToken = typeof window !== 'undefined' && document.cookie.match(/(?:^|;\s*)auth_token=([^;]+)/)
-            ? decodeURIComponent(document.cookie.match(/(?:^|;\s*)auth_token=([^;]+)/)![1])
-            : token;
+        // Auth for the build-logs WebSocket is provided by the
+        // HttpOnly auth cookie that the browser attaches to the
+        // WebSocket upgrade request. The server's
+        // QueryStringAuthMiddleware reads the cookie directly from
+        // the Cookie header (no token in the query string) — see
+        // backend/apps/deployments/middleware.py for the matching
+        // server-side change.
 
         const proto = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss' : 'ws';
         const host = typeof window !== 'undefined' ? window.location.host : 'localhost';
-        const wsUrl = `${proto}://${host}/ws/build-logs/${deploymentId}/?token=${encodeURIComponent(decodedToken)}`;
+        const wsUrl = `${proto}://${host}/ws/build-logs/${deploymentId}/`;
 
         try {
             const ws = new WebSocket(wsUrl);
 
             ws.onopen = () => {
-                console.log('WebSocket connected for deployment monitoring');
+                // Connection established — server will start streaming build logs.
             };
 
             ws.onmessage = (event) => {
@@ -219,7 +218,6 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
             };
 
             ws.onclose = () => {
-                console.log('WebSocket connection closed');
                 // Don't reconnect automatically, let the polling handle it
             };
 

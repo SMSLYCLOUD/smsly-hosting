@@ -1,4 +1,7 @@
 // @ts-nocheck
+// TODO(follow-up): this component imports @mantine/core, @tabler/icons-react, and react-router-dom,
+// none of which are installed in this app. It was carried over from a previous router-based shell.
+// Refactor to use the local UI primitives (@/components/ui/*) and Next.js Link/navigation, or delete it.
 import React, { useState, useEffect } from 'react';
 import { NavLink } from 'react-router-dom';
 import { Input, Collapse, List, Badge } from '@mantine/core';
