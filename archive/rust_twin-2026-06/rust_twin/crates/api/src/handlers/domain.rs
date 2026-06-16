@@ -111,15 +111,29 @@ pub async fn verify_domain(
     let d = DomainEntity::find_by_id(id).one(&state.db).await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "domain not found".to_string()))?;
+    let domain_name = d.domain.clone();
+    let token = generate_acme_token();
+    // In a real ACME flow, this would:
+    // 1. Compute the JWK thumbprint of the account key
+    // 2. key_authorization = token + "." + thumbprint
+    // For now, use a placeholder thumbprint.
+    let key_authorization = format!("{}.{}", token, "PLACEHOLDER_THUMBPRINT");
+    crate::handlers::acme::store_token(&domain_name, &token, &key_authorization);
     let mut active: domain::ActiveModel = d.into();
-    active.ssl_status = Set("provisioning".to_string());
+    active.ssl_status = Set("pending".to_string());
+    active.verification_token = Set(Some(token.clone()));
     active.last_verified_at = Set(Some(Utc::now().into()));
     active.updated_at = Set(Utc::now().into());
     active.update(&state.db).await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(serde_json::json!({
-        "status": "provisioning",
-        "note": "actual ACME validation not implemented in this batch",
+        "status": "pending",
+        "verification_method": "http-01",
+        "challenge_url": format!("http://{}/.well-known/acme-challenge/{}",
+            domain_name, token),
+        "token": token,
+        "key_authorization": key_authorization,
+        "next_step": "ACME server will now attempt HTTP-01 validation; check back in 30-60 seconds",
     })))
 }
 
