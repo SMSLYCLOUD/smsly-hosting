@@ -58,7 +58,7 @@ import logging
 import re
 from celery.result import AsyncResult
 from apps.cloud.docker_client import get_docker_client
-from .utils import validate_and_sanitize_path as _validate_and_sanitize_path
+from .utils import validate_and_sanitize_path
 from apps.deployments.utils import resolve_running_container
 
 
@@ -2990,7 +2990,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         # Symlink resolution for Docker containers
         if path is not None:
             try:
-                path = _validate_and_sanitize_path(path, container=container)
+                path = validate_and_sanitize_path(path, container=container)
             except Exception:
                 pass
 
@@ -3004,7 +3004,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         path = request.query_params.get('path', '/')
 
         try:
-            path = _validate_and_sanitize_path(path)
+            path = validate_and_sanitize_path(path)
         except Exception as e:
             logger.warning("file_browse 400: Path validation failed for %s: %s", path, str(e))
             return Response({
@@ -3290,7 +3290,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Path required'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            path = _validate_and_sanitize_path(path)
+            path = validate_and_sanitize_path(path)
         except Exception as e:
             return Response({'error': 'Path validation failed', 'details': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -3338,7 +3338,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Path required'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            path = _validate_and_sanitize_path(path)
+            path = validate_and_sanitize_path(path)
         except Exception as e:
             return Response({'error': 'Path validation failed', 'details': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -3382,7 +3382,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Path required'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            path = _validate_and_sanitize_path(path)
+            path = validate_and_sanitize_path(path)
         except Exception as e:
             return Response({'error': 'Path validation failed', 'details': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -3427,7 +3427,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Path parameter is required'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            path = _validate_and_sanitize_path(path)
+            path = validate_and_sanitize_path(path)
         except Exception as e:
             return Response({'error': 'Path validation failed', 'details': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -3479,7 +3479,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Path and content parameters are required'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            path = _validate_and_sanitize_path(path)
+            path = validate_and_sanitize_path(path)
         except Exception as e:
             return Response({'error': 'Path validation failed', 'details': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -3577,7 +3577,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 path = resolved
 
         try:
-            path = _validate_and_sanitize_path(path, skip_system_check=False)
+            path = validate_and_sanitize_path(path, skip_system_check=False)
         except Exception as e:
             return Response({'error': 'Path validation failed', 'details': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -4743,6 +4743,11 @@ class SystemConfigView(GenericAPIView):
 
     def post(self, request):
         """Queue a maintenance task via the API."""
+        if not (request.user and request.user.is_authenticated and request.user.is_staff):
+            return Response(
+                {"error": "Admin privileges are required for maintenance actions."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         action = str(request.data.get('action') or '').strip().lower()
         action_spec = MAINTENANCE_ACTIONS.get(action)
         if not action_spec:

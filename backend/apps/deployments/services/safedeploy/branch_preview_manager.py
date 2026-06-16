@@ -4,15 +4,30 @@ from django.utils import timezone
 from apps.deployments.models_core import Service, EnvironmentVariable
 from apps.deployments.models_safedeploy import PreviewEnvironment, DatabaseClone, MigrationValidation
 
+BRANCH_NAME_RE = re.compile(r'^[a-zA-Z0-9_./-]{1,200}$')
+COMMIT_SHA_RE = re.compile(r'^[a-f0-9]{7,40}$')
+
+
 class BranchPreviewManager:
     """
     Manages the lifecycle of branch preview environments.
     """
 
+    def _validate(self, branch_name: str, commit_sha: str) -> None:
+        if not isinstance(branch_name, str) or not BRANCH_NAME_RE.match(branch_name):
+            raise ValueError(
+                "branch_name must match ^[a-zA-Z0-9_./-]{1,200}$"
+            )
+        if not isinstance(commit_sha, str) or not COMMIT_SHA_RE.match(commit_sha):
+            raise ValueError(
+                "commit_sha must match ^[a-f0-9]{7,40}$"
+            )
+
     def create_preview(self, service: Service, branch_name: str, commit_sha: str, user=None) -> PreviewEnvironment:
         """
         Creates a new PreviewEnvironment and begins its provisioning workflow.
         """
+        self._validate(branch_name, commit_sha)
         preview = PreviewEnvironment.objects.create(
             service=service,
             branch_name=branch_name,
@@ -28,6 +43,7 @@ class BranchPreviewManager:
         """
         Updates the commit sha and rebuilds an existing preview.
         """
+        self._validate(preview.branch_name, commit_sha)
         preview.commit_sha = commit_sha
         preview.status = PreviewEnvironment.Status.BUILDING
         preview.error_message = ""
