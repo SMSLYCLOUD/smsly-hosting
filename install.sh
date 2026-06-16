@@ -4139,11 +4139,15 @@ fi
      # in production because of an env added in a newer
      # version. Each secret is only added if it doesn't
      # already exist (preserves any operator-set value).
-     if [ -f "$env_file" ] && [ "$MODE_NODE" != "true" ]; then
-         echo -e "${BLUE}[UPDATE] Verifying critical envs in $env_file...${NC}"
-         local _missing_count=0
+     # NOTE: This block runs in the top-level update flow (not
+     # inside a function), so we use $INSTALL_DIR/.env directly
+     # and avoid the `local` keyword.
+     _env_file="$INSTALL_DIR/.env"
+     if [ -f "$_env_file" ] && [ "$MODE_NODE" != "true" ]; then
+         echo -e "${BLUE}[UPDATE] Verifying critical envs in $_env_file...${NC}"
+         _missing_count=0
          # Each line: <VAR_NAME>=<generator>
-         local _env_generators=(
+         _env_generators=(
              "REDIS_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || true)"
              "RABBITMQ_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || true)"
              "GATEWAY_SECRET|$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
@@ -4153,14 +4157,13 @@ fi
              "PGCAT_ADMIN_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(24))" 2>/dev/null || true)"
              "BACKUP_ENCRYPTION_KEY|$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null || openssl rand -base64 32)"
          )
-         local _entry
          for _entry in "${_env_generators[@]}"; do
-             local _key="${_entry%%|*}"
-             local _generator="${_entry#*|}"
-             if ! grep -q "^${_key}=" "$env_file" 2>/dev/null; then
+             _key="${_entry%%|*}"
+             _generator="${_entry#*|}"
+             if ! grep -q "^${_key}=" "$_env_file" 2>/dev/null; then
                  if [ -n "$_generator" ]; then
                      echo -e "${YELLOW}  → Auto-generating missing $_key${NC}"
-                     env_set_value "$env_file" "$_key" "$_generator"
+                     env_set_value "$_env_file" "$_key" "$_generator"
                      _missing_count=$((_missing_count + 1))
                  fi
              fi
@@ -4171,10 +4174,12 @@ fi
              # in the current shell session.
              set -a
              # shellcheck disable=SC1090
-             source "$env_file" 2>/dev/null || true
+             source "$_env_file" 2>/dev/null || true
              set +a
          fi
      fi
+     # Unset the helper var to avoid leaking into the rest of the script.
+     unset _env_file _env_generators _entry _key _generator _missing_count
 
       # Cache bust only if disk is low (already runs in the disk check above when needed).
       # Moved into case blocks below to avoid redundant double bust.

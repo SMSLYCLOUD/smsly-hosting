@@ -1,1 +1,14 @@
 pub mod migrator;
+
+mod m20250616_000001_create_users;
+mod m20250616_000002_create_projects;
+mod m20250616_000003_create_services;
+mod m20250616_000004_create_deployments;
+mod m20250616_000005_create_addons;
+mod m20250616_000006_create_teams;
+mod m20250616_000007_create_team_members;
+mod m20250616_000008_create_api_keys;
+mod m20250616_000009_create_crons;
+mod m20250616_000010_create_environment_variables;
+mod m20250616_000011_create_platform_licenses;
+mod m20250616_000012_create_usages;

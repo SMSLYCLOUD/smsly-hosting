@@ -7,6 +7,7 @@ use sea_orm::DatabaseConnection;
 use std::sync::Arc;
 use tracing::{error, info};
 
+pub mod celery_bridge;
 pub mod tasks;
 
 pub struct WorkerState {
@@ -15,7 +16,8 @@ pub struct WorkerState {
     pub redis: redis::Client,
 }
 
-const QUEUE_NAME: &str = "grid:tasks:default";
+const NATIVE_QUEUE: &str = "grid:tasks:default";
+const CELERY_QUEUE: &str = "celery";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -74,7 +76,7 @@ async fn start_scheduler(state: Arc<WorkerState>) -> Result<()> {
             }
         });
 
-        let _: () = conn.lpush(QUEUE_NAME, task_payload.to_string()).await.unwrap_or_else(|e| {
+        let _: () = conn.lpush(NATIVE_QUEUE, task_payload.to_string()).await.unwrap_or_else(|e| {
             error!("Scheduler failed to push task: {}", e);
         });
     }
@@ -89,13 +91,18 @@ async fn start_polling_loop(state: Arc<WorkerState>) -> Result<()> {
         .context("Failed to acquire multiplexed Redis connection")?;
 
     loop {
-        // Blockingly pop from the end of the list (BRPOP), timeout 5 seconds
-        let result: redis::RedisResult<Option<(String, String)>> =
-            conn.brpop(QUEUE_NAME, 5.0_f64).await;
+        // Blockingly pop from the end of either list (BRPOP supports multiple keys).
+        // Celery queue is checked first; native queue is the fallback.
+        let result: redis::RedisResult<Option<(String, String)>> = redis::cmd("BRPOP")
+            .arg(CELERY_QUEUE)
+            .arg(NATIVE_QUEUE)
+            .arg(5.0_f64)
+            .query_async(&mut conn)
+            .await;
 
         match result {
-            Ok(Some((_queue, payload))) => {
-                info!("Received raw task payload");
+            Ok(Some((queue, payload))) => {
+                info!("Received raw task payload from queue '{}'", queue);
 
                 // Spawn a new task to handle the payload concurrently so we don't block the loop
                 let state_clone = Arc::clone(&state);
@@ -106,7 +113,7 @@ async fn start_polling_loop(state: Arc<WorkerState>) -> Result<()> {
                 });
             }
             Ok(None) => {
-                // Timeout reached, queue is empty. Loop continues.
+                // Timeout reached, all queues empty. Loop continues.
             }
             Err(e) => {
                 error!("Redis BRPOP error: {:#}", e);
