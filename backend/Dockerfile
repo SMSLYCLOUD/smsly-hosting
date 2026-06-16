@@ -17,16 +17,21 @@ RUN apt-get update \
     dnsutils \
     net-tools \
     iptables \
-    # Security: Install Docker via official repo with GPG verification
-    && install -m 0755 -d /etc/apt/keyrings \
-    && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
-    && chmod a+r /etc/apt/keyrings/docker.asc \
-    && echo \
-    "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian \
-    $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
-    tee /etc/apt/sources.list.d/docker.list > /dev/null \
-    && apt-get update \
-    && apt-get install -y docker-ce-cli docker-buildx-plugin \
+    # SECURITY: removed from runtime - install via builder stage
+    # TODO: move docker-ce-cli + docker-buildx-plugin to a dedicated builder
+    # stage and COPY --from=builder only the static binaries needed at
+    # runtime. Installing the Docker apt repo into the runtime image enlarges
+    # the attack surface (extra signed keys, persistent apt source) for a
+    # client we only invoke against a remote socket-proxy.
+    # && install -m 0755 -d /etc/apt/keyrings \
+    # && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
+    # && chmod a+r /etc/apt/keyrings/docker.asc \
+    # && echo \
+    # "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian \
+    # $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+    # tee /etc/apt/sources.list.d/docker.list > /dev/null \
+    # && apt-get update \
+    # && apt-get install -y docker-ce-cli docker-buildx-plugin \
     # Install Nixpacks (Current safest method)
     && curl -sL https://nixpacks.com/install.sh | bash \
     && rm -rf /var/lib/apt/lists/*

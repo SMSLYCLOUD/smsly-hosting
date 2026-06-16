@@ -1,3 +1,7 @@
+# NOTE: This is a reference snippet for WebSocket-specific tuning, NOT the
+# canonical configuration. The active edge proxy is caddy-config/Caddyfile.
+# Do not deploy this file as-is. See docs/REVERSE_PROXY_DECISION.md.
+
 # Optimized Caddy configuration for WebSockets
 # Include this in your main Caddyfile
 

@@ -3,7 +3,8 @@ services:
   # Docker Socket Proxy (CRITICAL: Never expose raw Docker socket)
   # ============================================================
   socket-proxy:
-    image: tecnativa/docker-socket-proxy:latest
+    # TODO: pin to digest via dependabot/renovate (Renovate: digest-update).
+    image: tecnativa/docker-socket-proxy:0.1.2
     restart: unless-stopped
     environment:
       CONTAINERS: 1
@@ -69,10 +70,14 @@ services:
     env_file: .env
     environment:
       - DOCKER_HOST=tcp://socket-proxy:2375
+    # SECURITY: removed `./:/platform-src:ro` bind mount. The full host repo
+    # exposed every source file, secret, and build artefact to the deploy
+    # worker. install.sh is now mounted as a single file; all other paths
+    # the deploy worker used under /platform-src must be packaged into the
+    # backend image or referenced through explicit, scoped mounts.
     volumes:
       - ./backend:/app
       - ./install.sh:/app/install.sh:ro
-      - ./:/platform-src:ro
       - ./caddy-config:/caddy-config
       - backups_data:/app/backups
 
@@ -118,7 +123,9 @@ services:
     restart: unless-stopped
     command: postgres -c max_connections=200
     ports:
-      - "5432:5432" # Required for Lite Agents
+      # SECURITY: bind to loopback so postgres is only reachable on the host
+      # itself (use SSH tunnel or local lite-agent socket-proxy for access).
+      - "127.0.0.1:5432:5432" # Required for Lite Agents
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-smsly_hosting}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
@@ -155,7 +162,9 @@ services:
     image: rabbitmq:3-management-alpine
     restart: unless-stopped
     ports:
-      - "5672:5672"
+      # SECURITY: AMQP broker on loopback only; producers/consumers reach it
+      # through the smsly-net overlay, never the host interface.
+      - "127.0.0.1:5672:5672"
     environment:
       RABBITMQ_DEFAULT_USER: smsly_user
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
@@ -179,10 +188,10 @@ services:
     volumes:
       - ./backend:/app
       - ./install.sh:/app/install.sh:ro
-      - ./:/platform-src:ro
       - backups_data:/app/backups
 
       - ./caddy-config:/caddy-config
+    # SECURITY: removed `./:/platform-src:ro` — see celery-deploy comment above.
     ports:
       - "8000:8000"
     env_file:
@@ -282,10 +291,13 @@ services:
   # Docker Registry
   # ============================================================
   registry:
-    image: registry:2
+    # TODO: pin to digest via dependabot/renovate (Renovate: digest-update).
+    image: registry:2.8.3
     restart: unless-stopped
     ports:
-      - "5000:5000"
+      # SECURITY: registry only exposed on loopback; remote nodes pull through
+      # an SSH tunnel or via the public Traefik route configured in prod.
+      - "127.0.0.1:5000:5000"
     environment:
       REGISTRY_AUTH: htpasswd
       REGISTRY_AUTH_HTPASSWD_REALM: SMSLY Registry
@@ -309,7 +321,8 @@ services:
     container_name: smsly-loki
     restart: unless-stopped
     ports:
-      - "3100:3100"
+      # SECURITY: log ingestion API on loopback only.
+      - "127.0.0.1:3100:3100"
     volumes:
       - loki_data:/loki
       - ./infrastructure/monitoring/loki-config.yml:/etc/loki/local-config.yaml:ro
@@ -354,7 +367,9 @@ services:
     container_name: smsly-prometheus
     restart: unless-stopped
     ports:
-      - "9090:9090"
+      # SECURITY: prometheus UI on loopback only; expose externally only via
+      # an authenticated reverse proxy.
+      - "127.0.0.1:9090:9090"
     volumes:
       - ./infrastructure/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
@@ -380,7 +395,17 @@ services:
     image: gcr.io/cadvisor/cadvisor:v0.49.1
     container_name: smsly-cadvisor
     restart: unless-stopped
-    privileged: true
+    # SECURITY: privileged:true was dropped in favour of the minimal capability
+    # set cAdvisor actually needs (process inspection, network/cgroup access).
+    # no-new-privileges blocks any setuid binary inside the image from gaining
+    # extra rights, so this is materially less powerful than full privileged
+    # mode while still allowing cAdvisor to read container/host metrics.
+    cap_add:
+      - SYS_PTRACE
+      - NET_ADMIN
+      - SYS_ADMIN
+    security_opt:
+      - no-new-privileges:true
     command:
       - --containerd=unix:///var/run/containerd/containerd.sock
     volumes:
@@ -453,17 +478,21 @@ services:
     container_name: smsly-grafana
     restart: unless-stopped
     ports:
-      - "3001:3000"
+      # SECURITY: grafana on loopback; public access goes through Caddy/Traefik
+      # with auth at the /grafana path prefix.
+      - "127.0.0.1:3001:3000"
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-}
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_SERVER_ROOT_URL=https://${DOMAIN:-localhost}/grafana/
       - GF_SERVER_SERVE_FROM_SUB_PATH=true
-      - GF_AUTH_ANONYMOUS_ENABLED=true
-      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
-      - GF_SECURITY_ALLOW_EMBEDDING=true
-      - GF_SECURITY_COOKIE_SAMESITE=none
+      # SECURITY: anonymous access disabled; embedding off; strict same-site
+      # cookies. Re-enable embedding/anon only behind a trusted SSO proxy.
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      # - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer   # disabled with anonymous auth
+      - GF_SECURITY_ALLOW_EMBEDDING=false
+      - GF_SECURITY_COOKIE_SAMESITE=strict
     volumes:
       - grafana_data:/var/lib/grafana
     networks:

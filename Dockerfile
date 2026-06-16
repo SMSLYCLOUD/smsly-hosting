@@ -96,4 +96,10 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=30s --retries=3 \
     CMD wget -q -O /dev/null "http://127.0.0.1:${PORT}/health" || exit 1
 
+# SECURITY: drop root for the runtime process. Caddy needs to bind 80/443 in
+# monolithic mode but the cap_net_bind_service file capability lets a non-root
+# user bind low ports without requiring the whole container to run as root.
+RUN setcap cap_net_bind_service=+ep /usr/bin/caddy
+USER smsly
+
 ENTRYPOINT ["/entrypoint.platform.sh"]

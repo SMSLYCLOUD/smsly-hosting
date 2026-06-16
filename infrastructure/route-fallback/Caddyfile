@@ -1,4 +1,13 @@
 :80 {
+	# Security headers on every response, including the 503 fallback page
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "geolocation=(), camera=(), microphone=()"
+		-X-SMSLY-Control-Plane
+	}
+
 	# Healthcheck endpoint for Docker
 	handle /health {
 		respond "OK" 200
