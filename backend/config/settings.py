@@ -200,7 +200,7 @@ def _validate_registry_url():
     that is not on http(s) and not clearly internal.
 
     For convenience (and to match the pre-validator behaviour where
-    install.sh emitted ``registry:5000`` and ``registry.smsly.cloud``
+    install.sh emits ``registry:5000`` and a value from ``CONTAINER_REGISTRY_URL``
     without a scheme), the URL is auto-prefixed with ``http://`` if no
     scheme is present. The scheme is then validated and the host is
     checked against the platform allowlist.
@@ -212,8 +212,8 @@ def _validate_registry_url():
     if not url:
         return
     # Auto-default scheme so operators who follow the
-    # `.env.example` default (``registry.smsly.cloud`` or
-    # ``registry:5000``) do not have to type ``http://`` /
+    # `.env.example` default (or the value of ``CONTAINER_REGISTRY_URL``)
+    # do not have to type ``http://`` /
     # ``https://`` explicitly. The platform allowlist check
     # below still applies.
     if '://' not in url:
@@ -264,12 +264,18 @@ else:
 _DEFAULT_TUNNEL_BASE_DOMAIN = 'tunnel.localhost'
 if DOMAIN and DOMAIN != 'localhost':
     if re.fullmatch(r'\d{1,3}(?:\.\d{1,3}){3}', DOMAIN):
-        _DEFAULT_TUNNEL_BASE_DOMAIN = f'tunnel.{DOMAIN}.sslip.io'
+        _DEFAULT_TUNNEL_BASE_DOMAIN = f'tunnel.{DOMAIN}'
     else:
         _DEFAULT_TUNNEL_BASE_DOMAIN = f'tunnel.{DOMAIN}'
-TUNNEL_BASE_DOMAIN = (
-    config('TUNNEL_DOMAIN', default=_DEFAULT_TUNNEL_BASE_DOMAIN)
-    or _DEFAULT_TUNNEL_BASE_DOMAIN
+# If the env var is set, use it; otherwise default to "tunnel.<DOMAIN>"
+# Operators can set TUNNEL_BASE_DOMAIN=auto.sslip.io for self-hosted with sslip.io
+# or TUNNEL_BASE_DOMAIN=tunnel.example.com for a custom wildcard
+TUNNEL_BASE_DOMAIN = config(
+    "TUNNEL_BASE_DOMAIN",
+    default=(
+        config('TUNNEL_DOMAIN', default=_DEFAULT_TUNNEL_BASE_DOMAIN)
+        or _DEFAULT_TUNNEL_BASE_DOMAIN
+    ),
 ).strip()
 # Infrastructure Version Control
 INFRA_VERSION = '2026.05.11.10.35'
@@ -288,10 +294,16 @@ for host in _BASE_HOSTS:
 
 if DOMAIN and DOMAIN != 'localhost' and DOMAIN not in ALLOWED_HOSTS:
     ALLOWED_HOSTS.append(DOMAIN)
-# Ensure common cPanel/CloudNode hostnames are allowed for automated checks
-ALLOWED_HOSTS.extend(['.cprapid.com', '.sslip.io'])
+# In dev/test, allow the popular wildcard DNS services
+# (sslip.io gives every IP a public hostname; cprapid.com is the same).
+# In production, operators should set ALLOWED_HOSTS_EXTRAS explicitly.
+if DEBUG:
+    ALLOWED_HOSTS.extend(['.cprapid.com', '.sslip.io'])
+else:
+    extras = config("ALLOWED_HOSTS_EXTRAS", default="").split(",")
+    ALLOWED_HOSTS.extend(h.strip() for h in extras if h.strip())
 # Ensure sub-subdomains of the platform domain are matched for deployed services
-# e.g. service-name.grid.smsly.cloud needs .grid.smsly.cloud pattern
+# e.g. a service with subdomain <service-name>.<DOMAIN> needs a .<DOMAIN> pattern
 if DOMAIN and DOMAIN != 'localhost':
     _grid_wildcard = f'.{DOMAIN}'
     if _grid_wildcard not in ALLOWED_HOSTS:
@@ -1206,8 +1218,11 @@ EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='')
 EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')
 EMAIL_TIMEOUT = config('EMAIL_TIMEOUT', default=10, cast=int)
 
-# Use noreply@{DOMAIN} if DEFAULT_FROM_EMAIL is not set in env
-_DEFAULT_FROM = f"noreply@{DOMAIN}" if DOMAIN != 'localhost' else 'noreply@smsly.cloud'
+# Read DEFAULT_FROM_EMAIL from env (already in .env.example line 75-76)
+_DEFAULT_FROM = config(
+    "DEFAULT_FROM_EMAIL",
+    default=f"noreply@{DOMAIN}" if DOMAIN and DOMAIN != 'localhost' else "noreply@localhost"
+)
 DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default=_DEFAULT_FROM)
 SERVER_EMAIL = DEFAULT_FROM_EMAIL
 # (Patching moved higher up)
