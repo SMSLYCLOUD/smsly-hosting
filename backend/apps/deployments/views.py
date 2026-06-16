@@ -269,13 +269,15 @@ def _verify_signed_download(signed_value: str, expected_pk: str, max_age: int = 
 def _generate_signed_download_url(request, obj_pk: str, url_name: str, path_params: dict | None = None) -> str:
     """Generate a signed download URL valid for 5 minutes."""
     import time
+    from django.urls import reverse
     payload = {'pk': str(obj_pk), 'ts': int(time.time())}
     signed = signing.TimestampSigner().sign_object(payload)
     from urllib.parse import urlencode
     params = {'signed': signed}
     if path_params:
         params.update(path_params)
-    return request.build_absolute_uri(f"/api/v1/{url_name}/?{urlencode(params)}")
+    path = reverse(url_name, args=[obj_pk])
+    return request.build_absolute_uri(f"{path}?{urlencode(params)}")
 
 
 def _parse_single_range(range_header: str, file_size: int):

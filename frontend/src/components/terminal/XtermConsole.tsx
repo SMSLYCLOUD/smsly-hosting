@@ -193,7 +193,7 @@ export default function XtermConsole({ wsUrl, wsToken }: XtermConsoleProps) {
       }
       window.removeEventListener('resize', handleResize);
     };
-  }, [wsUrl]);
+  }, [wsUrl, wsToken]);
 
   return (
     <div

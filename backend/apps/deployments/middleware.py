@@ -66,21 +66,79 @@ def get_user_from_token(token_key: str):
 
 class QueryStringAuthMiddleware:
     """
-    Custom middleware to authenticate users based on a 'token' query parameter.
-    Standard for xterm.js WebSockets where Headers cannot be easily sent in browsers.
+    Custom middleware to authenticate users for WebSocket connections.
+
+    Accepts the credential in two transports, in this order of precedence:
+
+    1. ``?token=...`` query-string parameter — kept for backward
+       compatibility with xterm.js and CLI-style integrations that
+       cannot easily send HTTP headers from a browser.
+    2. The HttpOnly auth cookie set by the login view
+       (``__Host-auth_token`` in production, ``auth_token`` in dev).
+       The browser attaches this cookie automatically to the WS
+       upgrade request, so the frontend does not have to put the
+       long-lived DRF token in the URL — query strings are recorded
+       in proxy access logs, browser history, and the ``Referer``
+       header of cross-origin requests, and a long-lived DRF token
+       must never appear in a URL.
+
+    The DRF side has the equivalent
+    :class:`apps.core.auth.CookieAwareTokenAuthentication` for HTTP
+    endpoints; this middleware mirrors that behaviour for Channels.
     """
+
+    # Match either the production (``__Host-`` prefixed, HTTPS-only) or
+    # the development cookie name. The ``__Host-`` prefix REQUIRES
+    # ``Secure``, ``Path=/``, and no ``Domain`` attribute, so the
+    # browser refuses to set it on plain HTTP. In dev the plain
+    # ``auth_token`` name is used instead.
+    _COOKIE_NAMES = ('__Host-auth_token', 'auth_token')
+
     def __init__(self, app):
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        # 1. Parse query string
+        # 1. Query-string token (backward compat for xterm.js / CLI clients).
         query_string = scope.get('query_string', b'').decode('utf-8')
         query_params = parse_qs(query_string)
         token_key = query_params.get('token', [None])[0]
 
-        # 2. Authenticate if token exists
+        # 2. HttpOnly auth cookie (the path the React frontend actually uses).
+        if not token_key:
+            token_key = self._extract_cookie_token(scope)
+
+        # 3. Authenticate if a token was found in either transport.
         if token_key:
             close_old_connections()
             scope['user'] = await get_user_from_token(token_key)
-        
+
         return await self.app(scope, receive, send)
+
+    @classmethod
+    def _extract_cookie_token(cls, scope):
+        """Return the auth token from the WS upgrade's ``Cookie`` header.
+
+        Returns ``None`` if the header is missing, malformed, or carries
+        no recognized auth cookie. The header value is parsed permissively
+        (latin-1, which is the wire encoding for HTTP/1.1 headers) so a
+        non-ASCII cookie name does not break the WS upgrade entirely —
+        it just falls through to ``None`` and the connection is closed
+        by the consumer as unauthenticated.
+        """
+        for raw_name, raw_value in scope.get('headers', []):
+            if raw_name.lower() != b'cookie':
+                continue
+            try:
+                header = raw_value.decode('latin-1')
+            except UnicodeDecodeError:
+                return None
+            for chunk in header.split(';'):
+                name, sep, value = chunk.strip().partition('=')
+                if not sep:
+                    continue
+                if name in cls._COOKIE_NAMES:
+                    return value
+            # Cookie header was present but carried no recognized
+            # auth cookie — do not fall through to a different header.
+            return None
+        return None

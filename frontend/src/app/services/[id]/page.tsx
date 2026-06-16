@@ -74,6 +74,28 @@ export default function ServiceDetailPage() {
       service?.server_id ?? '',
     );
     const logsEndRef = useRef<HTMLDivElement>(null);
+    const [wsToken, setWsToken] = useState<string | null>(null);
+
+    useEffect(() => {
+        if (activeTab !== 'console' || wsToken) return;
+        let cancelled = false;
+        (async () => {
+            try {
+                const res = await fetch('/api/v1/auth/session-token/', {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: { Accept: 'application/json' },
+                });
+                if (!res.ok) return;
+                const data = await res.json();
+                if (!cancelled && typeof data?.token === 'string') {
+                    setWsToken(data.token);
+                }
+            } catch {
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [activeTab, wsToken]);
 
     const loadWatchConfig = useCallback(async (serviceId: string) => {
         setWatchConfigLoading(true);
@@ -866,13 +888,19 @@ export default function ServiceDetailPage() {
                         }
 
                         // The terminal WebSocket authenticates via the
-                        // HttpOnly auth cookie. The cookie is attached
-                        // to the WebSocket upgrade request by the
-                        // browser; the server's WebSocket auth
-                        // middleware (channels consumers) must read it
-                        // from the Cookie header — see
-                        // backend/apps/deployments/consumers.py for the
-                        // matching server-side change.
+                        // Sec-WebSocket-Protocol subprotocol header (NOT
+                        // the URL query string and NOT the cookie — the
+                        // backend consumer reads scope["subprotocols"]
+                        // only). The DRF token lives in an HttpOnly
+                        // cookie that JS cannot read, so we exchange
+                        // the session for a short-lived token via
+                        // POST /api/v1/auth/session-token/ above and
+                        // pass it here as wsToken. XtermConsole then
+                        // opens the socket as new WebSocket(url,
+                        // ['token', wsToken]) which matches the
+                        // server's recommended ["token", "<key>"]
+                        // format — see backend/apps/deployments/
+                        // consumers.py:32-41 and :83-96.
 
                         const proto =
                             typeof window !== 'undefined' && window.location.protocol === 'https:'
@@ -881,7 +909,15 @@ export default function ServiceDetailPage() {
                         const host = typeof window !== 'undefined' ? window.location.host : 'localhost';
                         const wsUrl = `${proto}://${host}/ws/terminal/${deploymentId}/`;
 
-                        return <XtermConsole wsUrl={wsUrl} wsToken={null} />;
+                        if (!wsToken) {
+                            return (
+                                <div className="h-full w-full flex items-center justify-center text-zinc-400 text-sm">
+                                    Preparing console session…
+                                </div>
+                            );
+                        }
+
+                        return <XtermConsole wsUrl={wsUrl} wsToken={wsToken} />;
                     })()}
                 </div>
             )}

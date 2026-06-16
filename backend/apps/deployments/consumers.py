@@ -962,28 +962,27 @@ class ServiceStatusConsumer(AsyncWebsocketConsumer):
         self.user_group_name = None
 
     async def connect(self):
-        """Authenticate and join user's service status group."""
+        """Authenticate and join user's service status group.
+
+        Authentication is delegated to
+        :class:`apps.deployments.middleware.QueryStringAuthMiddleware`,
+        which inspects both the ``?token=...`` query string and the
+        HttpOnly auth cookie (``__Host-auth_token`` / ``auth_token``)
+        sent automatically on the WebSocket upgrade. By the time
+        ``connect()`` runs, ``scope['user']`` is either the resolved
+        user or an ``AnonymousUser`` — we trust the middleware and do
+        not re-parse the query string here, which was the previous
+        source of the immediate-close / 5s-reconnect loop when the
+        frontend connected without a query-string token.
+        """
         # ── ACCEPT IMMEDIATELY: Prevent proxy timeouts during auth ──
         await self.accept()
 
         try:
-            # Authenticate
-            query_string = self.scope.get('query_string', b'').decode()
-            token_key = None
-            for param in query_string.split('&'):
-                if param.startswith('token='):
-                    token_key = param.split('=', 1)[1]
-                    break
-
-            if not token_key:
-                await self.send(text_data=json.dumps({'error': 'Missing token'}))
+            self.user = self.scope.get('user')
+            if not self.user or not getattr(self.user, 'is_authenticated', False):
+                await self.send(text_data=json.dumps({'error': 'Authentication required'}))
                 await self.close(code=4001)
-                return
-
-            self.user = await self._authenticate_token(token_key)
-            if not self.user:
-                await self.send(text_data=json.dumps({'error': 'Invalid token'}))
-                await self.close(code=4002)
                 return
 
             # Join the user's service status group

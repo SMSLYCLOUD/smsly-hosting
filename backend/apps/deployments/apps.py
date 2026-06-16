@@ -5,6 +5,38 @@ from pathlib import Path
 
 from django.apps import AppConfig
 from django.conf import settings
+from django.db.backends.signals import connection_created
+
+
+def _on_first_db_connection(sender, connection, **kwargs):
+    """Run DB-dependent startup work on the first connection of each worker.
+
+    These queries are intentionally deferred out of ``AppConfig.ready()`` so
+    they do not trigger Django's "Accessing the database during app
+    initialization" ``RuntimeWarning`` (which fires 4× per restart, once per
+    gunicorn worker). The ``connection_created`` signal fires the first time
+    a worker opens a DB connection -- i.e. during the first request -- so
+    ALLOWED_HOSTS, the Prometheus gauge, and the docker-labels target files
+    are all populated before the second request arrives, with no warning in
+    the logs. The handler disconnects itself so it runs exactly once per
+    worker process.
+    """
+    try:
+        from .patching import patch_runtime_settings
+        patch_runtime_settings()
+    except Exception:
+        pass
+
+    try:
+        from config.metrics import SERVICES_ACTIVE
+        from .models import Service
+        SERVICES_ACTIVE.set(
+            Service.objects.filter(status=Service.Status.ACTIVE).count()
+        )
+    except Exception:
+        pass
+
+    connection_created.disconnect(_on_first_db_connection)
 
 
 def _is_serving_process() -> bool:
@@ -98,20 +130,11 @@ class DeploymentsConfig(AppConfig):
         except ImportError:
             pass
 
-        # Initialize prometheus gauge for active services (resets on restart)
-        try:
-            from config.metrics import SERVICES_ACTIVE
-            from .models import Service
-            SERVICES_ACTIVE.set(Service.objects.filter(status=Service.Status.ACTIVE).count())
-        except Exception:
-            pass
-
-        # 3. Dynamic Domain Patching (Zero Trust Whitelisting)
-        try:
-            from .patching import patch_runtime_settings
-            patch_runtime_settings()
-        except Exception:
-            pass
+        # Defer DB-dependent startup work (Prometheus gauge + runtime settings
+        # patch) to the first DB connection of each worker. Running these in
+        # ready() would trigger Django's "Accessing the database during app
+        # initialization" RuntimeWarning. See _on_first_db_connection.
+        connection_created.connect(_on_first_db_connection)
 
         # Startup proxy sync is opt-in because AppConfig.ready() must not
         # perform database/proxy side effects during management commands.

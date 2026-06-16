@@ -30,7 +30,7 @@ class CronJobViewSet(viewsets.ModelViewSet):
             return CronJob.objects.filter(
                 Q(service__owner=self.request.user) | Q(service__project__team__members__user=self.request.user),
                 service_id=self.kwargs['service_pk']
-            ).distinct()
+            ).distinct().order_by("id")
         return CronJob.objects.none()  # Should be nested
 
     def get_throttles(self):
