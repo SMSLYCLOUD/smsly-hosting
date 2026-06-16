@@ -128,4 +128,8 @@ archive/**/node_modules/
 archive/**/__pycache__/
 archive/**/*.pyc
 archive/**/*.class
+archive/**/*.exe
+archive/**/*.dll
+archive/**/*.so
+archive/**/*.dylib
 
