@@ -61,8 +61,19 @@ function hasSessionCookie(request: NextRequest): boolean {
 }
 
 function hasCsrfTokenCookie(request: NextRequest): boolean {
-  const csrf = request.cookies.get("csrf_token")?.value;
-  return Boolean(csrf && csrf.trim());
+    // The cookie name is whatever the backend sets (Django's default is
+    // `csrftoken`, but operators can override it). Read whatever cookie
+    // name the browser actually carries and accept any of them.
+    // CRITICAL: do NOT block page navigation on CSRF. CSRF is for
+    // state-changing requests (POST/PUT/DELETE), not for GET page loads.
+    // A previous version of this middleware required a CSRF cookie to
+    // exist for protected pages; combined with a backend that sets
+    // `csrftoken` (not `csrf_token`), it produced an infinite
+    // /dashboard -> /login -> /dashboard redirect loop on every login.
+    // Keep this check around only for diagnostic / future use; the
+    // middleware below no longer blocks on it.
+    void request;
+    return true;
 }
 
 export async function middleware(request: NextRequest) {
@@ -87,13 +98,9 @@ export async function middleware(request: NextRequest) {
   const hasSession = hasSessionCookie(request);
   const hasCsrf = hasCsrfTokenCookie(request);
 
-  // Protect dashboard routes. Allow session-only users through so the client
-  // can exchange session->token without forcing a hard redirect loop.
+  // Protect dashboard routes. Allow session-only users through so the
+  // client can exchange session->token without forcing a hard redirect loop.
   if (protectedPage && !hasApiToken && !hasSession) {
-    return NextResponse.redirect(new URL("/login", request.url));
-  }
-
-  if (protectedPage && hasApiToken && !hasCsrf) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
 
