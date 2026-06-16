@@ -6,6 +6,8 @@ import re
 from types import SimpleNamespace
 from urllib.parse import urlparse, urlunparse
 
+from django.conf import settings
+
 logger = logging.getLogger(__name__)
 
 _VALID_DB_NAME_RE = re.compile(r'^[a-zA-Z0-9_]+$')
@@ -67,6 +69,38 @@ class PostgresSnapshotManager:
         """Return a URL pointing to a specific database on the same server."""
         parsed = urlparse(self.admin_db_url)
         return urlunparse(parsed._replace(path=f'/{db_name}'))
+
+    def _format_sql(self, composable) -> str:
+        """Render a ``psycopg2.sql.Composable`` to a plain string.
+
+        Uses a short-lived connection to the admin database purely as a
+        formatting context for psycopg2's identifier / literal adapters.
+        The connection is opened with a tight timeout and closed in a
+        finally block.
+        """
+        import psycopg2
+        conn = None
+        try:
+            conn = psycopg2.connect(
+                self.admin_db_url,
+                connect_timeout=5,
+            )
+            with conn.cursor() as cur:
+                return composable.as_string(cur)
+        except Exception:  # pylint: disable=broad-exception-caught
+            # Fall back to a string representation if formatting fails
+            # (e.g. the admin DB is temporarily unreachable). The call
+            # sites all validate identifiers first, so this is safe.
+            try:
+                return str(composable)
+            except Exception:  # pylint: disable=broad-exception-caught
+                return ""
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:  # pylint: disable=broad-exception-caught
+                    pass
 
     def _run_psql(self, db_url: str, sql: str, check: bool = True,
                   timeout: int = 120) -> SimpleNamespace:
@@ -204,18 +238,26 @@ class PostgresSnapshotManager:
         clone_url = self._build_db_url(clone_db_name)
 
         try:
-            logger.error(f"CLONE_DEBUG >>> start: source=%s clone=%s admin_url=%s",
-                         source_db_name, clone_db_name, self.admin_db_url[:60])
+            if settings.DEBUG:
+                logger.error("start: source=%s clone=%s admin_url=%s",
+                             source_db_name, clone_db_name, self.admin_db_url[:60])
 
             if allow_production_disruption:
+                from psycopg2 import sql as pg_sql
                 term_sql = (
-                    f"SELECT pg_terminate_backend(pid) "
-                    f"FROM pg_stat_activity "
-                    f"WHERE datname = '{source_db_name}' AND pid <> pg_backend_pid();"
+                    "SELECT pg_terminate_backend(pid) "
+                    "FROM pg_stat_activity "
+                    "WHERE datname = :'source_db' "
+                    "AND pid <> pg_backend_pid();"
                 )
-                term_res = self._run_psql(maintenance_url, term_sql, check=False)
-                logger.error(f"CLONE_DEBUG >>> terminate rc=%s stderr=%s",
-                             term_res.returncode, term_res.stderr[:200] if term_res.stderr else '')
+                term_res = self._run_psql_vars(
+                    maintenance_url, term_sql,
+                    variables={'source_db': source_db_name},
+                    check=False,
+                )
+                if settings.DEBUG:
+                    logger.error("terminate rc=%s stderr=%s",
+                                 term_res.returncode, term_res.stderr[:200] if term_res.stderr else '')
                 if term_res.returncode != 0:
                     logger.warning(f"pg_terminate_backend non-zero exit: %s",
                                    term_res.stderr.strip())
@@ -225,26 +267,37 @@ class PostgresSnapshotManager:
                         logger.info(f"Terminated %s backends on %s",
                                     terminated, source_db_name)
 
-            drop_sql = f'DROP DATABASE IF EXISTS "{clone_db_name}";'
+            from psycopg2 import sql as pg_sql
+            drop_query = pg_sql.SQL("DROP DATABASE IF EXISTS {};").format(
+                pg_sql.Identifier(clone_db_name)
+            )
+            drop_sql = self._format_sql(drop_query)
             drop_res = self._run_psql(maintenance_url, drop_sql, check=False)
-            logger.error(f"CLONE_DEBUG >>> drop rc=%s stderr=%s",
-                         drop_res.returncode, drop_res.stderr[:200] if drop_res.stderr else '')
+            if settings.DEBUG:
+                logger.error("drop rc=%s stderr=%s",
+                             drop_res.returncode, drop_res.stderr[:200] if drop_res.stderr else '')
             if drop_res.returncode != 0:
                 logger.warning(f"DROP IF EXISTS stderr: %s", drop_res.stderr.strip())
 
-            create_sql = (
-                f'CREATE DATABASE "{clone_db_name}" WITH TEMPLATE "{source_db_name}";'
+            create_query = pg_sql.SQL(
+                "CREATE DATABASE {} WITH TEMPLATE {};"
+            ).format(
+                pg_sql.Identifier(clone_db_name),
+                pg_sql.Identifier(source_db_name),
             )
+            create_sql = self._format_sql(create_query)
             try:
                 self._run_psql(maintenance_url, create_sql, check=True)
-                logger.error(f"CLONE_DEBUG >>> TEMPLATE success")
+                if settings.DEBUG:
+                    logger.error("TEMPLATE success")
                 logger.info(f"Cloned %s → %s via TEMPLATE", source_db_name, clone_db_name)
                 return True
             except subprocess.CalledProcessError as e:
                 stderr_msg = e.stderr.strip() if e.stderr else '(empty)'
                 stdout_msg = e.stdout.strip() if e.stdout else '(empty)'
-                logger.error(f"CLONE_DEBUG >>> TEMPLATE FAILED: stderr=%s stdout=%s",
-                             stderr_msg[:300], stdout_msg[:300])
+                if settings.DEBUG:
+                    logger.error("TEMPLATE FAILED: stderr=%s stdout=%s",
+                                 stderr_msg[:300], stdout_msg[:300])
                 logger.warning(
                     f"CREATE DATABASE WITH TEMPLATE failed.\n"
                     f"  stderr: %s\n"
@@ -259,7 +312,8 @@ class PostgresSnapshotManager:
                 )
 
         except Exception as e:
-            logger.error(f"CLONE_DEBUG >>> UNEXPECTED EXCEPTION: %s", str(e), exc_info=True)
+            if settings.DEBUG:
+                logger.error("UNEXPECTED EXCEPTION: %s", str(e), exc_info=True)
             logger.error(f"create_clone unexpected error: %s", str(e), exc_info=True)
             return False
 
@@ -269,7 +323,11 @@ class PostgresSnapshotManager:
         """Fallback: create an empty database, then pipe pg_dump into psql."""
         try:
             # Create empty database
-            create_empty_sql = f'CREATE DATABASE "{clone_db_name}";'
+            from psycopg2 import sql as pg_sql
+            create_empty_query = pg_sql.SQL("CREATE DATABASE {};").format(
+                pg_sql.Identifier(clone_db_name)
+            )
+            create_empty_sql = self._format_sql(create_empty_query)
             try:
                 self._run_psql(maintenance_url, create_empty_sql, check=True)
             except subprocess.CalledProcessError as e:
@@ -309,7 +367,10 @@ class PostgresSnapshotManager:
                     restore_stderr.strip() if restore_stderr else '(empty)'
                 )
                 # Clean up the empty clone we created
-                clean_sql = f'DROP DATABASE IF EXISTS "{clone_db_name}";'
+                clean_query = pg_sql.SQL("DROP DATABASE IF EXISTS {};").format(
+                    pg_sql.Identifier(clone_db_name)
+                )
+                clean_sql = self._format_sql(clean_query)
                 self._run_psql(maintenance_url, clean_sql, check=False)
                 return False
         except Exception as e:
@@ -326,14 +387,22 @@ class PostgresSnapshotManager:
             )
             return False
         try:
+            from psycopg2 import sql as pg_sql
             maintenance_url = self._get_maintenance_url()
             term_sql = (
-                f"SELECT pg_terminate_backend(pid) "
-                f"FROM pg_stat_activity "
-                f"WHERE datname = '{clone_db_name}';"
+                "SELECT pg_terminate_backend(pid) "
+                "FROM pg_stat_activity "
+                "WHERE datname = :'clone_db';"
             )
-            self._run_psql(maintenance_url, term_sql, check=False)
-            drop_sql = f'DROP DATABASE IF EXISTS "{clone_db_name}";'
+            self._run_psql_vars(
+                maintenance_url, term_sql,
+                variables={'clone_db': clone_db_name},
+                check=False,
+            )
+            drop_query = pg_sql.SQL("DROP DATABASE IF EXISTS {};").format(
+                pg_sql.Identifier(clone_db_name)
+            )
+            drop_sql = self._format_sql(drop_query)
             self._run_psql(maintenance_url, drop_sql, check=True)
             return True
         except subprocess.CalledProcessError as e:

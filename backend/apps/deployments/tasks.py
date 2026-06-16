@@ -1,3 +1,8 @@
+# ============================================================================
+# REFACTOR IN PROGRESS — see docs/REFACTOR_PLAN_VIEWS_TASKS.md
+# This file is being split into per-domain siblings. New code should be
+# added to the appropriate sibling file (e.g. views_servers.py, tasks_health.py).
+# ============================================================================
 # pylint: disable=too-many-lines
 """Tasks module."""
 import logging
@@ -46,6 +51,7 @@ from apps.deployments.models_transfer import ServerTransfer
 from apps.deployments.services.backup_service import BackupService
 from apps.deployments.services.pipeline import PipelineManager, PipelineError
 from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+from apps.deployments.services.tls_verify import should_verify
 from apps.deployments.services.transfer_service import ServerTransferService
 from apps.deployments.utils import (
     append_log,
@@ -2255,19 +2261,48 @@ def _wait_for_local_route_ready(
 
     _add_probe(f"https://{host}", verify=True, kind="edge")
     _add_probe(f"http://{host}", verify=True, kind="edge")
-    _add_probe("http://caddy:80", headers={"Host": host}, verify=False, kind="edge")
+    _add_probe(
+        "http://caddy:80",
+        headers={"Host": host},
+        verify=should_verify("http://caddy:80"),
+        kind="edge",
+    )
     configured = os.environ.get("TRAEFIK_INTERNAL_URL", "").strip()
     if configured:
-        _add_probe(configured, headers={"Host": host}, verify=False)
-    _add_probe("http://traefik:80", headers={"Host": host}, verify=False)
-    
+        _add_probe(
+            configured,
+            headers={"Host": host},
+            verify=should_verify(configured),
+        )
+    _add_probe(
+        "http://traefik:80",
+        headers={"Host": host},
+        verify=should_verify("http://traefik:80"),
+    )
+
     is_lite = getattr(service.server, "is_lite_agent", False) if service.server else False
     if is_lite:
-        _add_probe("http://127.0.0.1:80", headers={"Host": host}, verify=False)
-        _add_probe("http://localhost:80", headers={"Host": host}, verify=False)
+        _add_probe(
+            "http://127.0.0.1:80",
+            headers={"Host": host},
+            verify=should_verify("http://127.0.0.1:80"),
+        )
+        _add_probe(
+            "http://localhost:80",
+            headers={"Host": host},
+            verify=should_verify("http://localhost:80"),
+        )
     else:
-        _add_probe("http://127.0.0.1:8081", headers={"Host": host}, verify=False)
-        _add_probe("http://localhost:8081", headers={"Host": host}, verify=False)
+        _add_probe(
+            "http://127.0.0.1:8081",
+            headers={"Host": host},
+            verify=should_verify("http://127.0.0.1:8081"),
+        )
+        _add_probe(
+            "http://localhost:8081",
+            headers={"Host": host},
+            verify=should_verify("http://localhost:8081"),
+        )
 
     # Preserve order and remove duplicates.
     probes = []
@@ -3495,7 +3530,7 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
             templates = json.load(f)
         template = next((t for t in templates if t.get('id') == template_id), None)
     except Exception as exc: # pylint: disable=broad-exception-caught
-        print(f"DEBUG: Exception reading template JSON: {exc}")
+        logger.exception("Exception reading template JSON: %s", exc)
         template = None
 
     def _verify_image_available(image: str):

@@ -122,8 +122,8 @@ class DevOpsAgent:
                     try:
                         prompt = f"Metric '{metric_name}' showed values {metrics}. Anomalies found at {anomalies}. Explain potential cause in one sentence."
                         explanation = self.llm.invoke(prompt).content
-                    except:
-                        pass
+                    except Exception as exc:  # pylint: disable=broad-exception-caught
+                        logger.exception("LLM anomaly explanation failed: %s", exc)
 
                 return {
                     "status": "anomaly_detected",

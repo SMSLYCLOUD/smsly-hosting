@@ -14,6 +14,7 @@ from typing import Optional
 from urllib.parse import urlencode, urlparse
 from django.conf import settings
 from .ssh_client import SSHClient
+from .tls_verify import should_verify
 from apps.deployments.models import (
     Service,
     Deployment,
@@ -751,14 +752,11 @@ class RemoteOrchestrator:
                 for attempt in range(attempts):
                     try:
                         # SEC-ZT-005 + MESH-OPTIMIZATION: TLS verification logic.
-                        # For internal mesh/IP targets, skip SSL verification since mesh VPN
-                        # already encrypts traffic. This prevents self-signed cert errors.
-                        verify_ssl = _REMOTE_VERIFY
-                        if verify_ssl and not url.startswith("https://"):
-                            verify_ssl = False  # No SSL to verify on plain HTTP
-                        # MESH-OPTIMIZATION: Force verify=False for internal mesh targets
-                        if _is_internal_target(url):
-                            verify_ssl = False
+                        # Centralised in ``apps.deployments.services.tls_verify``:
+                        # plain HTTP, loopback, Docker-internal, and private
+                        # IPs (when ALLOW_INSECURE_INTER_NODE_TLS is set) get
+                        # ``verify=False``; HTTPS public URLs get ``verify=True``.
+                        verify_ssl = should_verify(url)
                         response = requests.request(
                             method_upper,
                             url,

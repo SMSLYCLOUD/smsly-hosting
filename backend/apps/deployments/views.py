@@ -1,3 +1,8 @@
+# ============================================================================
+# REFACTOR IN PROGRESS — see docs/REFACTOR_PLAN_VIEWS_TASKS.md
+# This file is being split into per-domain siblings. New code should be
+# added to the appropriate sibling file (e.g. views_servers.py, tasks_health.py).
+# ============================================================================
 # pylint: disable=invalid-name
 # pylint: disable=too-many-lines
 """Views module."""

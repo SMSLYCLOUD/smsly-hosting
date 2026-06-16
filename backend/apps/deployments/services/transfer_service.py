@@ -1493,9 +1493,36 @@ if __name__ == '__main__':
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,62}", db_name):
             raise RuntimeError("Unsafe POSTGRES_DB value in target .env.")
 
+        from psycopg2 import sql as pg_sql
+        from django.db import connection as _django_db_connection
+
+        # Build the SQL with psycopg2.sql.Identifier so the database
+        # identifier is quoted by the driver rather than via shell
+        # string concatenation. We need a real cursor just to format
+        # the Composable; the SQL is then shipped verbatim to the
+        # remote ``psql`` via SSH.
+        drop_query = pg_sql.SQL(
+            "DROP DATABASE IF EXISTS {}; CREATE DATABASE {};"
+        ).format(
+            pg_sql.Identifier(db_name),
+            pg_sql.Identifier(db_name),
+        )
+        try:
+            with _django_db_connection.cursor() as _cur:
+                drop_sql_str = drop_query.as_string(_cur)
+        except Exception:  # pylint: disable=broad-exception-caught
+            # Fall back to manual double-quoting if no live connection
+            # is available. ``db_name`` is already validated against a
+            # safe regex so this is purely defence-in-depth.
+            escaped = db_name.replace('"', '""')
+            drop_sql_str = (
+                f'DROP DATABASE IF EXISTS "{escaped}"; '
+                f'CREATE DATABASE "{escaped}";'
+            )
+
         drop_cmd = (
             f"{compose} exec -T db psql -U {shlex.quote(db_user)} postgres "
-            f"-c 'DROP DATABASE IF EXISTS \"{db_name}\"; CREATE DATABASE \"{db_name}\";'"
+            f"-c {shlex.quote(drop_sql_str)}"
             "; }"
         )
         self.ssh.exec_command(drop_cmd)
@@ -1546,8 +1573,8 @@ if os.path.exists(services_dir):
                 print(f"Restoring volume {{vname}}...")
                 try:
                     run(["docker", "volume", "create", vname])
-                except:
-                    pass
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    logger.exception("docker volume create failed for %s: %s", vname, exc)
 
                 run([
                     "docker", "run", "--rm", "-i",

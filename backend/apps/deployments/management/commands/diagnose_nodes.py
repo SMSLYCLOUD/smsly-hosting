@@ -21,6 +21,7 @@ from django.core.management.base import BaseCommand
 
 from apps.deployments.models_servers import ManagedServer
 from apps.deployments.api_token_auth import APIToken
+from apps.deployments.services.tls_verify import should_verify, audit_verify
 from rest_framework.authtoken.models import Token as DRFToken
 
 
@@ -130,7 +131,11 @@ class Command(BaseCommand):
         
         for candidate in candidates:
             try:
-                resp = requests.get(f"{candidate.rstrip('/')}/health", timeout=5, verify=False)
+                _probe_url = f"{candidate.rstrip('/')}/health"
+                _verify = should_verify(_probe_url)
+                if not _verify:
+                    audit_verify(_probe_url, _verify)
+                resp = requests.get(_probe_url, timeout=5, verify=_verify)
                 if resp.status_code < 500:
                     base = candidate.rstrip("/")
                     response = resp

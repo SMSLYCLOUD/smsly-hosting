@@ -3,6 +3,8 @@ from rest_framework import serializers, viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from django.conf import settings
+from django.http import FileResponse
 from apps.cloud.docker_client import get_docker_client
 import re
 from django.db.models import Q
@@ -11,6 +13,27 @@ from .models import Service, EnvironmentVariable
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+class _ClosingFileResponse(FileResponse):
+    """FileResponse that explicitly closes its underlying file when closed.
+
+    Django's FileResponse does register the file in ``_closable_objects``,
+    but if an exception interrupts the normal close path the file can leak.
+    Closing ``self._file`` defensively in ``close()`` guarantees the OS
+    file descriptor is released as soon as the response finishes.
+    """
+
+    def close(self):
+        try:
+            return super().close()
+        finally:
+            f = getattr(self, '_file', None)
+            if f is not None and hasattr(f, 'close') and not getattr(f, 'closed', True):
+                try:
+                    f.close()
+                except Exception:  # pylint: disable=broad-exception-caught
+                    pass
 
 
 class AddonSerializer(serializers.ModelSerializer):
@@ -269,19 +292,22 @@ class AddonViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Backup not found'}, status=status.HTTP_404_NOT_FOUND)
             
         import os
-        from django.http import FileResponse
         if not os.path.exists(backup.file_path):
             return Response({'error': 'File not found on disk'}, status=status.HTTP_404_NOT_FOUND)
 
         # Security: ensure the file path is within the expected backups directory
-        from django.conf import settings as django_settings
-        backups_root = os.path.realpath(os.path.join(django_settings.BASE_DIR, 'backups'))
+        backups_root = os.path.realpath(os.path.join(settings.BASE_DIR, 'backups'))
         real_path = os.path.realpath(backup.file_path)
         if not real_path.startswith(backups_root):
             logger.warning("Blocked backup download path traversal: %s", backup.file_path)
             return Response({'error': 'Invalid backup path'}, status=status.HTTP_403_FORBIDDEN)
 
-        response = FileResponse(open(backup.file_path, 'rb'), as_attachment=True, filename=os.path.basename(backup.file_path))
+        backup_file = open(backup.file_path, 'rb')
+        response = _ClosingFileResponse(
+            backup_file,
+            as_attachment=True,
+            filename=os.path.basename(backup.file_path),
+        )
         return response
 
     @action(detail=True, methods=['post'])
@@ -374,7 +400,8 @@ from rest_framework.permissions import IsAuthenticated
 @permission_classes([IsAuthenticated])
 def toggle_bucket_public_api(request, pk):
     """Standalone API function with maximal diagnostic logging."""
-    logger.info(f"[MINIO_DEBUG] toggle_bucket_public_api entered for pk={pk}, method={request.method}")
+    if settings.DEBUG:
+        logger.info("toggle_bucket_public_api entered for pk=%s, method=%s", pk, request.method)
     try:
         from apps.deployments.models_addons import Addon
         from django.db.models import Q
@@ -389,10 +416,12 @@ def toggle_bucket_public_api(request, pk):
                 Q(service__owner__isnull=True)
             ).distinct().get(pk=pk)
         except Addon.DoesNotExist:
-            logger.warning(f"[MINIO_DEBUG] Addon {pk} not accessible to user {request.user.id}")
+            if settings.DEBUG:
+                logger.warning("Addon %s not accessible to user %s", pk, request.user.id)
             return Response({'error': f'Addon {pk} not found'}, status=404)
         
-        logger.info(f"[MINIO_DEBUG] Found addon {addon.name} ({addon.addon_type})")
+        if settings.DEBUG:
+            logger.info("Found addon %s (%s)", addon.name, addon.addon_type)
         if addon.addon_type != 'MINIO':
             return Response({'error': f'Addon type {addon.addon_type} does not support bucket toggling'}, status=400)
         
@@ -410,13 +439,15 @@ def toggle_bucket_public_api(request, pk):
         
         # ── UUID DISCOVERY: Search for the Addon ID in the container names ──
         all_containers = client.containers.list()
-        logger.info(f"[MINIO_DEBUG] Scanning {len(all_containers)} containers for ID: {addon_uuid}")
+        if settings.DEBUG:
+            logger.info("Scanning %s containers for ID: %s", len(all_containers), addon_uuid)
         
         for c in all_containers:
             # Match by UUID (case-insensitive substring)
             if addon_uuid.lower() in c.name.lower():
                 container = c
-                logger.info(f"[MINIO_DEBUG] Found match by UUID in name: {c.name}")
+            if settings.DEBUG:
+                logger.info("Found match by UUID in name: %s", c.name)
                 break
 
         if not container:
@@ -425,11 +456,13 @@ def toggle_bucket_public_api(request, pk):
             for c in all_containers:
                 if container_name.lower() in c.name.lower():
                     container = c
-                    logger.info(f"[MINIO_DEBUG] Found match by legacy name fallback: {c.name}")
+                if settings.DEBUG:
+                    logger.info("Found match by legacy name fallback: %s", c.name)
                     break
 
         if not container:
-            logger.error(f"[MINIO_DEBUG] FAILED: Could not find container for Addon {addon_uuid} after full scan")
+            if settings.DEBUG:
+                logger.error("FAILED: Could not find container for Addon %s after full scan", addon_uuid)
             return Response({'error': 'MinIO container not found for this addon'}, status=404)
 
         cmd = ['mc', 'anonymous', 'set', policy, f'myminio/{bucket_name}']
