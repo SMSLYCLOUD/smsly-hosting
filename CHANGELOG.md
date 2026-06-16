@@ -19,6 +19,9 @@ All notable changes to this project will be documented in this file.
 - Pin all GitHub Actions to commit SHAs; add `permissions:` block; add `pip-audit`, `bandit`, `gitleaks`, `npm audit` to CI
 - Add `SECURITY.md`, `CODEOWNERS`, `dependabot.yml`, `.pre-commit-config.yaml`
 - Add `pytest-cov` + custom markers; remove `--exit-zero` from pylint; add `tsc --noEmit` to CI
+- Add `frontend-e2e` job (Playwright) to `test.yml` — runs after `frontend-build`, installs Chromium with deps, uploads the report artifact on every run
+- Add `pre-commit` job to `ci.yml` — runs gitleaks, ruff, and bandit hooks across all files (complements the standalone `gitleaks` SARIF job)
+- Add `safety` job to `ci.yml` — complementary Python CVE scanner to `pip-audit`; `continue-on-error` so first-run noise doesn't block CI
 
 ### Architecture
 - Document the three reverse-proxy configs (Caddy / Traefik / nginx legacy) in `docs/REVERSE_PROXY_DECISION.md`
