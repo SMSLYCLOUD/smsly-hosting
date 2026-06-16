@@ -15,9 +15,13 @@ spec:
       labels:
         app: {{ include "smsly-hosting.name" . }}-prometheus
     spec:
+      securityContext:
+        {{- include "smsly.podSecurityContext" . | nindent 8 }}
       containers:
         - name: prometheus
           image: "{{ .Values.observability.prometheus.image }}"
+          securityContext:
+            {{- include "smsly.containerSecurityContext" . | nindent 12 }}
           ports:
             - containerPort: 9090
           volumeMounts:

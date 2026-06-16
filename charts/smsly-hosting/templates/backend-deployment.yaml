@@ -1,3 +1,4 @@
+{{- include "smsly.validateValues" . }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -30,9 +31,15 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      serviceAccountName: {{ include "smsly-hosting.fullname" . }}-backend
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "smsly.podSecurityContext" . | nindent 8 }}
       initContainers:
         - name: wait-for-db
           image: "{{ .Values.postgresql.image.repository }}:{{ .Values.postgresql.image.tag }}"
+          securityContext:
+            {{- include "smsly.containerSecurityContext" . | nindent 12 }}
           command:
             - sh
             - -c
@@ -49,6 +56,8 @@ spec:
                   key: dbPassword
         - name: wait-for-redis
           image: redis:7-alpine
+          securityContext:
+            {{- include "smsly.containerSecurityContext" . | nindent 12 }}
           command:
             - sh
             - -c
@@ -61,6 +70,8 @@ spec:
         - name: backend
           image: "{{ .Values.global.imageRegistry }}{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
           imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+          securityContext:
+            {{- include "smsly.containerSecurityContext" . | nindent 12 }}
           command:
             - gunicorn
             - config.wsgi:application

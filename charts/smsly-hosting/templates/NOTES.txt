@@ -1,0 +1,16 @@
+SMSLY Hosting deployed.
+
+{{- if .Values.networkPolicy.enabled }}
+✓ NetworkPolicy enabled
+{{- end }}
+{{- if .Values.pdb.backend.enabled }}
+✓ PodDisruptionBudgets enabled
+{{- end }}
+
+⚠️  SECURITY CHECKLIST before going to production:
+  1. secrets.secretKey, secrets.dbPassword, secrets.redisPassword are set to strong random values
+  2. backend.image.tag, frontend.image.tag are pinned to specific versions (not 'latest')
+  3. ingress.className is configured for your cluster
+  4. cert-manager is installed and a ClusterIssuer is configured
+  5. Backup encryption keys are stored outside the cluster (Vault/SOPS)
+  6. RBAC: this chart runs as non-root (UID 1000); verify any hostPath mounts allow that
