@@ -6,9 +6,16 @@ on:
   pull_request:
     branches: [ "main" ]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   backend-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
     env:
       SECRET_KEY: "ci-secret-key-must-be-long-enough-for-checks"
       DEBUG: "False"
@@ -23,9 +30,9 @@ jobs:
         ports:
           - 6379:6379
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c # v4
       with:
         python-version: "3.12"
     - name: Install Dependencies
@@ -50,10 +57,13 @@ jobs:
 
   frontend-build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
     - name: Set up Node
-      uses: actions/setup-node@v3
+      uses: actions/setup-node@3235b876344d2a9aa001b8d1453c930bba69e610 # v3
       with:
         node-version: "20"
     - name: Install Dependencies
@@ -70,15 +80,12 @@ jobs:
 
   infra-validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
     - name: Create dummy env
-      run: |
-        echo "REDIS_PASSWORD=dummy" >> .env
-        echo "POSTGRES_PASSWORD=dummy" >> .env
-        echo "FIELD_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" >> .env
-        echo "SECRET_KEY=dummy" >> .env
-    - name: Validate Compose Config
       run: |
         touch .env
         echo "REDIS_PASSWORD=dummy" >> .env
@@ -86,5 +93,50 @@ jobs:
         echo "FIELD_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" >> .env
         echo "SECRET_KEY=dummy" >> .env
         echo "FRP_AUTH_TOKEN=dummy" >> .env
+    - name: Validate Compose Config
+      run: |
         docker compose -f docker-compose.yml config > /dev/null
         docker compose -f docker-compose.prod.yml config > /dev/null
+
+  sca:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+    - name: Set up Python
+      uses: actions/setup-python@0a5c61591373683505ea898e09a3ea4f39ef2b9c # v5.0.0
+      with:
+        python-version: "3.11"
+    - name: Set up Node
+      uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+      with:
+        node-version: "20"
+    - name: Install pip-audit and bandit
+      run: |
+        python -m pip install --upgrade pip
+        pip install pip-audit bandit
+    - name: Run pip-audit
+      run: pip-audit --strict --requirement backend/requirements.txt
+    - name: Run bandit
+      run: bandit -r backend/ -ll -i
+    - name: Run npm audit
+      working-directory: ./frontend
+      run: npm audit --omit=dev --audit-level=high
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+    - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+      with:
+        fetch-depth: 0
+    - name: Run gitleaks
+      uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITLEAKS_UPLOAD_SARIF: "true"
