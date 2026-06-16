@@ -6,9 +6,16 @@ on:
   pull_request:
     branches: [ "main" ]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   backend-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
     services:
       postgres:
         image: postgres:16-alpine
@@ -34,10 +41,10 @@ jobs:
         python-version: [3.12]
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
 
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v3
+      uses: actions/setup-python@3542bca2639a428e1796aaa6a2ffef0c0f575566 # v3
       with:
         python-version: ${{ matrix.python-version }}
 
@@ -45,9 +52,9 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r backend/requirements.txt
-        pip install pytest pytest-django
+        pip install pytest pytest-django coverage pytest-cov
 
-    - name: Run Tests
+    - name: Run backend tests with coverage
       env:
         SECRET_KEY: test_secret_key
         DEBUG: True
@@ -58,15 +65,40 @@ jobs:
         DJANGO_SETTINGS_MODULE: config.settings
       run: |
         cd backend
-        pytest
+        coverage run -m pytest --cov=apps --cov=config --cov-report=xml --cov-report=term-missing -m "not slow and not e2e"
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v4
+      with:
+        file: backend/coverage.xml
+        fail_ci_if_error: false
+        continue-on-error: true  # Don't fail CI on first run
+
+  typecheck:
+    name: TypeScript typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: cd frontend && npm ci
+      - run: cd frontend && npx tsc --noEmit
 
   frontend-build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           node-version: "20"
           cache: "npm"
@@ -84,6 +116,9 @@ jobs:
 
   dockerfile-smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
     services:
       postgres:
         image: postgres:16-alpine
@@ -109,7 +144,7 @@ jobs:
           --health-retries 10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
 
       - name: Build Monolithic Dockerfile
         run: |
