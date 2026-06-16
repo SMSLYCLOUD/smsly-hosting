@@ -2,6 +2,22 @@
 {
 	on_demand_tls {
 		ask http://backend:8000/api/v1/services/check-domain/
+		allow {
+			# Operators: add your explicit allowed domains here.
+			# Wildcard domains require a DNS challenge (see Caddyfile docs).
+			# Without an allowlist, anyone who can reach Caddy on :443 can
+			# request a certificate for any domain pointing at this server.
+		}
+	}
+
+	# Global security headers (applied to every site block)
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "geolocation=(), camera=(), microphone=()"
+		# Remove fingerprinting header
+		-X-SMSLY-Control-Plane
 	}
 }
 
@@ -93,75 +109,14 @@
 		reverse_proxy backend:8000
 	}
 
-	@redirectable {
-		not header_regexp host ^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$
-		not host localhost
-		not host 127.0.0.1
-		not host *.local
-		header_regexp host .+
-	}
-	redir @redirectable https://{host}{uri} 308
-
-	handle {
-		# Large backup downloads
-		@backup_download {
-			path /api/v1/server/backups/*/download
-			path /api/v1/server/backups/*/download/
-			path /api/v1/backups/*/download
-			path /api/v1/backups/*/download/
-		}
-		reverse_proxy @backup_download backend:8000 {
-			transport http {
-				read_timeout 3600s
-				write_timeout 3600s
-			}
-			flush_interval -1
-		}
-
-		@api path /api/*
-		reverse_proxy @api backend:8000
-
-		@ws path /ws/*
-		reverse_proxy @ws backend:8000 {
-			transport http {
-				read_timeout 3600s
-				write_timeout 3600s
-			}
-		}
-
-		@admin path /admin/*
-		reverse_proxy @admin backend:8000
-
-		@health path /health
-		reverse_proxy @health backend:8000
-
-		@oauth_github path /accounts/github/*
-		@oauth_google path /accounts/google/*
-		reverse_proxy @oauth_github backend:8000
-		reverse_proxy @oauth_google backend:8000
-
-		@static path /static/*
-		handle @static {
-			root * /app/staticfiles
-			file_server {
-				pass_thru
-			}
-			header Cache-Control "public, immutable"
-		}
-
-		@media path /media/*
-		handle @media {
-			root * /app/media
-			file_server {
-				pass_thru
-			}
-			header Cache-Control "public"
-		}
-
-		respond /caddy-health 200 "ok"
-
-		reverse_proxy frontend:3000
-
-		encode gzip
+	# Explicit allowlist for hosts that may receive cleartext on :80.
+	# Any host NOT on this list is forced to HTTPS with 308.
+	redir {
+		if not {host} is localhost
+		if not {host} is 127.0.0.1
+		if not {host} ends_with .local
+		if not {host} matches ^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$
+		to https://{host}{uri}
+		status 308
 	}
 }

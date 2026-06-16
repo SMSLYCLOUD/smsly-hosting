@@ -83,10 +83,13 @@ services:
         limits:
           memory: ${REDIS_MEMORY_LIMIT:-512M}
   registry:
-    image: registry:2
+    # TODO: pin to digest via dependabot/renovate (Renovate: digest-update).
+    image: registry:2.8.3
     restart: unless-stopped
     ports:
-    - 5000:5000
+    # SECURITY: registry on loopback only; build hosts reach it via SSH tunnel
+    # or the internal smsly-net overlay through the Traefik proxy.
+    - 127.0.0.1:5000:5000
     environment:
       REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /var/lib/registry
       REGISTRY_STORAGE_DELETE_ENABLED: "true"
@@ -110,7 +113,8 @@ services:
         limits:
           memory: ${REGISTRY_MEMORY_LIMIT:-1G}
   docker-mirror:
-    image: registry:2
+    # TODO: pin to digest via dependabot/renovate (Renovate: digest-update).
+    image: registry:2.8.3
     restart: unless-stopped
     ports:
       - 5001:5000
@@ -142,8 +146,9 @@ services:
     command: gunicorn config.asgi:application --bind 0.0.0.0:8000 --workers ${GUNICORN_WORKERS:-4} --worker-class
       uvicorn.workers.UvicornWorker --timeout ${GUNICORN_TIMEOUT:-600}
     restart: unless-stopped
-    cap_add:
-      - NET_ADMIN
+    # SECURITY: NET_ADMIN was used for iptables in dev; in prod the host should
+    # manage firewall rules, not the app container. Re-enable only if a
+    # specific feature requires it and document why.
     env_file: .env
     environment:
       UVICORN_WS_PING_INTERVAL: 20
@@ -167,8 +172,20 @@ services:
     - media_volume:/app/media
     - caddy_config:/caddy-config
     - ./install.sh:/app/install.sh:ro
-    - ./.env:/app/.env:rw
-    - ./:/platform-src:ro
+    # SECURITY: mount .env read-only. The backend's platform-config sync
+    # (`apps.deployments.signals.sync_infrastructure_on_config_change`) writes
+    # to /app/.env, but the existing PermissionError handler already logs a
+    # warning and continues; the new value persists in DB and is re-applied
+    # at process restart. For full read-write sync, switch to a writable
+    # volume (e.g. `caddy_env:/app/.env`) instead of a host-file bind.
+    - ./.env:/app/.env:ro
+    # SECURITY: removed `./:/platform-src:ro` bind mount. Mounting the full
+    # repo into the backend container leaks the entire host source tree to
+    # every backend process and the deploy worker. The two files actually
+    # used from that tree (install.sh, infrastructure/.../docker-labels-
+    # exporter.py) are now accessed via the explicit single-file install.sh
+    # mount above, and via /app/infrastructure/... when the backend image
+    # bundles it (the prometheus_targets loader has a fallback chain).
     - /opt/smsly-cache:/opt/smsly-cache
     - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds
     - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets
@@ -233,7 +250,6 @@ services:
     - media_volume:/app/media
     - caddy_config:/caddy-config
     - ./install.sh:/app/install.sh:ro
-    - ./:/platform-src:ro
     - /opt/smsly-cache:/opt/smsly-cache
     - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds
     - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets
@@ -351,7 +367,6 @@ services:
     - media_volume:/app/media
     - caddy_config:/caddy-config
     - ./install.sh:/app/install.sh:ro
-    - ./:/platform-src:ro
     - /opt/smsly-cache:/opt/smsly-cache
     - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds
     - backups_data:/app/backups
@@ -397,7 +412,6 @@ services:
     - media_volume:/app/media
     - caddy_config:/caddy-config
     - ./install.sh:/app/install.sh:ro
-    - ./:/platform-src:ro
     - /opt/smsly-cache:/opt/smsly-cache
     - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds
     - backups_data:/app/backups
@@ -415,7 +429,8 @@ services:
     - smsly-net
     - socket-proxy
   socket-proxy:
-    image: tecnativa/docker-socket-proxy:latest
+    # TODO: pin to digest via dependabot/renovate (Renovate: digest-update).
+    image: tecnativa/docker-socket-proxy:0.1.2
     restart: unless-stopped
     environment:
       CONTAINERS: 1
@@ -491,7 +506,10 @@ services:
     - --entrypoints.websecure.http.tls=true
     - --entrypoints.websecure.forwardedHeaders.trustedIPs=127.0.0.1/32,172.16.0.0/12,10.0.0.0/8
     - --entrypoints.metrics.address=:8082
-    - --api.insecure=true
+    # SECURITY: removed --api.insecure=true; the dashboard now requires auth
+    # via a Traefik middleware (configure traefik.http.routers.api.middlewares
+    # with a basicauth/forwardauth handler on a websecure entrypoint). The
+    # :8082 port mapping below remains for Prometheus metrics, not the API.
     - --metrics.prometheus=true
     - --metrics.prometheus.entrypoint=metrics
     - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-admin@${DOMAIN:-localhost}}
@@ -528,7 +546,8 @@ services:
           cpus: '${TRAEFIK_CPU_LIMIT:-0.50}'
           memory: ${TRAEFIK_MEMORY_LIMIT:-512M}
   frps:
-    image: snowdreamtech/frps:latest
+    # TODO: pin to digest via dependabot/renovate (Renovate: digest-update).
+    image: snowdreamtech/frps:0.61.0
     restart: unless-stopped
     env_file: .env
     environment:
@@ -537,7 +556,11 @@ services:
     volumes:
     - ./infrastructure/frps/frps.toml:/etc/frp/frps.toml:ro
     ports:
-    - 7000:7000
+    # SECURITY: bind the frps control port to loopback. NOTE: real tunnels
+    # need a public ingress — terminate them on the host firewall / reverse
+    # proxy and forward to this loopback port, or rebind to the public IP
+    # explicitly (do NOT use 0.0.0.0).
+    - 127.0.0.1:7000:7000
     - 127.0.0.1:7080:7080
     - 127.0.0.1:7500:7500
     command:
@@ -564,7 +587,9 @@ services:
   rabbitmq:
     image: rabbitmq:3-management-alpine
     ports:
-      - "5672:5672"
+      # SECURITY: AMQP broker on loopback; producers/consumers talk to it
+      # through the smsly-net overlay only.
+      - "127.0.0.1:5672:5672"
     restart: unless-stopped
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-smsly_user}

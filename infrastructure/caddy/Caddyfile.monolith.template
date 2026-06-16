@@ -1,3 +1,9 @@
+# NOTE: This is a per-app template for the legacy monolith Caddy instance.
+# It is NOT the canonical SMSLY edge configuration. The active edge proxy for
+# the main docker-compose stack is caddy-config/Caddyfile.
+# Keep this template in sync with the canonical file when routing changes.
+# See docs/REVERSE_PROXY_DECISION.md.
+
 :${PORT} {
 	# API
 	@api path /api/*
