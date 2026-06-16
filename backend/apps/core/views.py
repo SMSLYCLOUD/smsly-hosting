@@ -85,7 +85,15 @@ class DashboardOverviewView(GenericAPIView):
                     Deployment.Status.REVIEW,
                     Deployment.Status.QUEUED,
                     Deployment.Status.MIGRATION_RUNNING,
-                    Deployment.Status.TRAFFIC_SHIFTING,
+                    # SECURITY (Batch H follow-up): ``TRAFFIC_SHIFTING`` was
+                    # referenced here but does not exist on
+                    # ``Deployment.Status`` (it was removed from the model
+                    # along with ``STAGED`` and ``MONITORING`` in an
+                    # unrecorded refactor; only migrations 0050/0068 still
+                    # list it as a column choice). The line crashed with
+                    # AttributeError on every dashboard render, returning
+                    # 500 and triggering a page-reload loop. Removed; the
+                    # remaining in-progress states already cover running.
                 }:
                     running_services += 1
                 elif latest and latest.status == Deployment.Status.FAILED:
