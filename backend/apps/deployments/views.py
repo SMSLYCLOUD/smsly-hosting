@@ -4531,72 +4531,11 @@ class PlatformResourcesView(GenericAPIView):
 
 
 
-class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
-    serializer_class = AuditLogSerializer
-    permission_classes = [permissions.IsAuthenticated]
-
-    def list(self, request, *args, **kwargs):
-        return super().list(request, *args, **kwargs)
-
-    def retrieve(self, request, *args, **kwargs):
-        return super().retrieve(request, *args, **kwargs)
-
-    def get_queryset(self):
-        """ZH-001 FIX: Filter audit logs to only show entries for the requesting user."""
-        if self.request.user.is_superuser:
-            qs = AuditLog.objects.all()
-        else:
-            username = self.request.user.get_username()
-            qs = AuditLog.objects.filter(actor=username)
-
-        # Search filter
-        search = self.request.query_params.get('search', '').strip()
-        if search:
-            qs = qs.filter(
-                Q(action__icontains=search) |
-                Q(actor__icontains=search) |
-                Q(target__icontains=search)
-            )
-        return qs
+from .views_audit import AuditLogViewSet  # noqa: F401  (re-export for backwards compat — see views_audit.py)
 
 
-class SessionTokenView(GenericAPIView):
-    """
-    Exchange an authenticated Django session for a DRF token.
-    Used by the frontend callback page to avoid token-in-URL leakage.
+from .views_auth import SessionTokenView  # noqa: F401  (re-export for backwards compat — see views_auth.py)
 
-    SECURITY: switched from GET to POST. GET responses for tokens are
-    cacheable, get recorded in browser history, and any CORS
-    misconfiguration leaks the token to a third-party origin. POST
-    bodies are not cached, not recorded in history, and only readable
-    by a correctly-configured Same-Origin request. The DRF token is
-    also rotated on every exchange so a token captured from any prior
-    response is invalidated as soon as the legitimate caller refreshes
-    it.
-    """
-    serializer_class = EmptySerializer
-    permission_classes = [permissions.IsAuthenticated]
-    http_method_names = ['post', 'options', 'head']
-
-    def get_throttles(self):
-        from rest_framework.throttling import UserRateThrottle
-
-        class _TokenExchangeThrottle(UserRateThrottle):
-            scope = 'token_exchange'
-            rate = '10/hour'
-
-        return [_TokenExchangeThrottle()]
-
-    def post(self, request):
-        user = request.user
-        if not user or not user.is_authenticated:
-            return Response(
-                {"error": "Authentication required"},
-                status=status.HTTP_401_UNAUTHORIZED,
-            )
-        Token.objects.filter(user=user).delete()
-        new_token = Token.objects.create(user=user)
-        return Response({'token': new_token.key})
 
 class SystemConfigView(GenericAPIView):
     """
@@ -5175,61 +5114,8 @@ class RouteRecheckView(GenericAPIView):
         )
 
 
-class RouteStatusView(GenericAPIView):
-    """
-    Authenticated DNS/SSL status check for the platform domain.
-    """
+from .views_route_status import RouteStatusView  # noqa: F401  (re-export for backwards compat — see views_route_status.py)
 
-    authentication_classes = [authentication.SessionAuthentication, authentication.TokenAuthentication]
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get(self, request):  # pylint: disable=unused-argument
-        import socket
-        import ssl
-        from datetime import datetime
-
-        cfg = PlatformConfig.load()
-        domains = [d for d in [cfg.domain] if d]
-        entries = []
-
-        def _resolve(host):
-            try:
-                return socket.gethostbyname(host)
-            except Exception:
-                return None
-
-        def _cert_expiry(host):
-            try:
-                ctx = ssl.create_default_context()
-                with ctx.wrap_socket(socket.socket(), server_hostname=host) as s:
-                    s.settimeout(4.0)
-                    s.connect((host, 443))
-                    cert = s.getpeercert()
-                not_after = datetime.strptime(cert["notAfter"], "%b %d %H:%M:%S %Y %Z")
-                return not_after.isoformat()
-            except Exception:
-                return None
-
-        for host in domains:
-            resolved = _resolve(host)
-            entries.append(
-                {
-                    "host": host,
-                    "resolved_ip": resolved,
-                    "matches_server_ip": bool(resolved and cfg.server_ip and resolved == cfg.server_ip),
-                    "cert_not_after": _cert_expiry(host) if cfg.use_ssl else None,
-                }
-            )
-
-        return Response(
-            {
-                "domain": cfg.domain,
-                "use_ssl": cfg.use_ssl,
-                "wildcard_subdomains": cfg.wildcard_subdomains,
-                "server_ip": cfg.server_ip,
-                "entries": entries,
-            }
-        )
 
 class ServiceBackupViewSet(viewsets.ModelViewSet):
     queryset = ServiceBackup.objects.all().order_by('-created_at')
