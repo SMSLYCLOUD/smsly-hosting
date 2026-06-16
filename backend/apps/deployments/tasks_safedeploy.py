@@ -398,9 +398,8 @@ def run_migration_validation_job(preview_id: str):
         validation.risk_score = risk_report['risk_score']
         validation.summary = risk_report['summary']
         validation.reasons = risk_report['reasons']
-        validation.requires_manual_approval = risk_report['requires_manual_approval']
+        validation.auto_deploy_policy = risk_report['auto_deploy_policy']
         validation.requires_backup = risk_report['requires_backup']
-        validation.can_auto_deploy = risk_report['can_auto_deploy']
 
         # Migrate
         rc, out, err = adapter.run_migrate(cloned_path, env)
