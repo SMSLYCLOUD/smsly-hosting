@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# SECURITY: --rust mode (RUST_TWIN_MODE) was removed in 2026-06 because the
+# rust_twin/ stubs are now in archive/. The Rust rewrite is abandoned.
+
 # =============================================================================
 # Grid by SMSLY - Universal Installer v3.2.4 (Production Hardened)
 # VERSION: 2026-05-07-0219
@@ -16,9 +19,6 @@
 #   Backend only:     sudo bash install.sh --update-backend
 #   Runtime refresh:  sudo bash install.sh --refresh
 #   Wipe install:     sudo bash install.sh --wipe
-#
-#   Rust Twin:        sudo bash install.sh --rust
-#                     sudo bash install.sh --update --rust
 #
 # Features:
 #   - Idempotent: safe to re-run without data loss
@@ -52,7 +52,6 @@ _DETECTED_INSTALL_MODE=""
 _CLI_INSTALL_MODE=""
 _CLI_MODE_CONFLICT=false
 RESUME_MODE=false
-RUST_TWIN_MODE="${RUST_TWIN_MODE:-false}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
 NO_SCREEN="${NO_SCREEN:-false}"
 
@@ -119,7 +118,6 @@ for arg in "$@"; do
     --mode=master|--master) set_cli_install_mode_from_value "master" ;;
     --mode=*)         set_cli_install_mode_from_value "${arg#--mode=}" ;;
     --mode)           _EXPECT_MODE_VALUE=true ;;
-    --rust)            RUST_TWIN_MODE="true" ;;
     --resume)          RESUME_MODE=true ;;
     --no-screen|--skip-screen)
                        NO_SCREEN=true ;;
@@ -610,9 +608,7 @@ STATE_FILE="/opt/smsly-hosting/.smsly_install_state"
 STATE_MODE_FILE="${STATE_FILE}.mode"
 
 install_flavor() {
-    if [ "${RUST_TWIN_MODE:-false}" = "true" ]; then
-        echo "rust"
-    elif [ "${MODE_AGENT_LITE:-false}" = "true" ]; then
+    if [ "${MODE_AGENT_LITE:-false}" = "true" ]; then
         echo "agent-lite"
     else
         echo "master"
@@ -856,7 +852,7 @@ is_master_mode() {
 }
 
 should_manage_caddy() {
-    is_master_mode && [ "${RUST_TWIN_MODE:-false}" != "true" ]
+    is_master_mode
 }
 
 mode_env_value() {
@@ -2216,10 +2212,10 @@ WIPE_MODE="false"
 RECOVER_MODE="false"
 REFRESH_MODE="false"
 DEBUG_MODE="false"
-RUST_TWIN_MODE="${RUST_TWIN_MODE:-false}"
 FORCE_REDEPLOY="false"
+RECREATE_TRAEFIK="false"
 
-# Simple loop to parse multiple arguments like `--update --rust`
+# Simple loop to parse multiple arguments
 for arg in "$@"; do
     case "$arg" in
         --update)          UPDATE_MODE="full" ;;
@@ -2231,19 +2227,18 @@ for arg in "$@"; do
         --refresh)         REFRESH_MODE="true" ;;
         --debug)           DEBUG_MODE="true" ;;
         --verify)          VERIFY_MODE="true" ;;
-        --rust)            RUST_TWIN_MODE="true" ;;
         --mode=agent-lite|--agent-lite|--mode=node|--node|--mode=master|--master) : ;;
         --clear)           CLEAR_MODE="true" ;;
         --fix-domain)      FIX_DOMAIN_MODE="true" ;;
         --fix-permissions) FIX_PERMISSIONS_MODE="true" ;;
         --force-redeploy)  FORCE_REDEPLOY="true" ;;
+        --recreate-traefik) RECREATE_TRAEFIK="true" ;;
         --help|-h)
-            echo "Usage: sudo bash install.sh [--rust] [--mode=agent-lite|--mode=node] [--update|--update-half|--update-frontend|--update-backend|--refresh|--recover|--debug|--wipe|--clear|--fix-domain|--fix-permissions]"
+            echo "Usage: sudo bash install.sh [--mode=agent-lite|--mode=node] [--update|--update-half|--update-frontend|--update-backend|--refresh|--recover|--debug|--wipe|--clear|--fix-domain|--fix-permissions]"
             echo ""
             echo "  (no args)          Fresh install (Legacy Python | Full-Stack Master)"
             echo "  --mode=agent-lite  Install as a Lite Agent (shared-DB node)"
             echo "  --mode=node        Install as a Full-Stack Node (own DB, no frontend)"
-            echo "  --rust             Deploy the Next-Gen Rust Twin instead of Python"
             echo "  --update           Pull latest code and rebuild all services (full rebuild)"
             echo "  --update-half      Pull latest code, restart backend only — no Docker image rebuild"
             echo "  --clear            Wipes stale addons and frees up docker resources"
@@ -2259,10 +2254,8 @@ if [ "$MODE_AGENT_LITE" = "true" ]; then
     COMPOSE_FILE="infrastructure/docker/docker-compose.agent-lite.yml"
 fi
 
-if [ "$RUST_TWIN_MODE" = "true" ]; then
-    COMPOSE_FILE="rust_twin/docker-compose.yml"
-fi
-
+# SECURITY: --rust / RUST_TWIN_MODE branch removed 2026-06. The rust_twin/
+# stubs moved to archive/rust_twin-2026-06/ and the Rust rewrite is abandoned.
 
 MODE_LABEL="fresh-install"
 if [ "$MODE_AGENT_LITE" = "true" ]; then
@@ -4857,18 +4850,6 @@ fi
 
 # ─── Interactive Setup (Step 0) ──────────────────────────────────────────────
 if [ "$NON_INTERACTIVE" != "true" ] && [ -e /dev/tty ]; then
-    # Architecture Selection
-    if [ "${RUST_TWIN_MODE:-false}" = "false" ]; then
-        echo -e "${BLUE}Select Backend Architecture:${NC}"
-        echo -e "  1) ${GREEN}Legacy Python${NC} (Stable monolith)"
-        echo -e "  2) ${GREEN}Next-Gen Rust${NC} (High-performance microservices, Beta)"
-        read -p "Enter choice [1]: " _ARCH_CHOICE < /dev/tty
-        if [ "${_ARCH_CHOICE:-1}" = "2" ]; then
-            RUST_TWIN_MODE="true"
-            COMPOSE_FILE="rust_twin/docker-compose.yml"
-        fi
-    fi
-
     # Agent Lite Selection
     if [ "$MODE_AGENT_LITE" = "true" ] && [ -z "${MASTER_IP:-}" ]; then
         echo -e "\n${BLUE}═══════════════════════════════════════════════════════════"
@@ -5765,10 +5746,8 @@ if [ "$MODE_AGENT_LITE" = "true" ]; then
 elif [ "$MODE_NODE" = "true" ]; then
     echo -e "${BLUE}  → Node mode: deploying prod stack without frontend/Caddy; Traefik binds public HTTP.${NC}"
 fi
-if [ "$RUST_TWIN_MODE" != "true" ]; then
-    echo -e "${BLUE}  → Disabling backend entrypoint bootstrap for installer-controlled migrations...${NC}"
-    env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
-fi
+echo -e "${BLUE}  → Disabling backend entrypoint bootstrap for installer-controlled migrations...${NC}"
+env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
     echo -e "${BLUE}  → Starting App Stack (Build + Deploy)...${NC}"
     ( while true; do sleep 30; echo -e "${BLUE}      ↳ Progress: Deployment in progress... $(date +%H:%M:%S)${NC}"; done ) &
     HEARTBEAT_PID=$!
@@ -5882,7 +5861,6 @@ echo -e "${BLUE}  → Restarting backend with synced credentials...${NC}"
 docker compose -f "$COMPOSE_FILE" restart backend >/dev/null 2>&1
 sleep 5
 
-if [ "$RUST_TWIN_MODE" != "true" ]; then
     echo -e "${BLUE}  → Running Migrations...${NC}"
 
     # Stop all services that talk to the DB.  Any open connection — even
@@ -5931,20 +5909,13 @@ if [ "$RUST_TWIN_MODE" != "true" ]; then
         echo -e "${YELLOW}  ↳ Tip: Re-run with --resume: sudo bash install.sh --resume${NC}"
         exit 1
     fi
-else
-    echo -e "${BLUE}  → Rust Twin: Skipping Django manage.py migrations (handled via SeaORM/CLI in future steps)...${NC}"
-fi
 
-if [ "$RUST_TWIN_MODE" != "true" ]; then
     echo -e "${BLUE}  → Collecting Static Files...${NC}"
     # Fix volume ownership — Docker creates named volumes as root
     docker compose -f "$COMPOSE_FILE" exec -T --user root backend chown -R 1000:1000 /app/staticfiles /app/media /app/backups 2>/dev/null || true
     docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic --noinput
 
     sync_platform_domain_state "$INSTALL_DIR/.env"
-else
-    echo -e "${BLUE}  → Rust Twin: Skipping static file collection (handled by Trunk WASM bundler)...${NC}"
-fi
     set_checkpoint "database_initialized"
 fi
 fi
@@ -5959,12 +5930,7 @@ if [ "$MODE_AGENT_LITE" = "true" ]; then
     echo -e "${BLUE}  → Lite Agent mode: skipping master admin and Local Docker provider setup.${NC}"
     set_checkpoint "admin_created"
 else
-if [ "$RUST_TWIN_MODE" = "true" ]; then
-    echo -e "${BLUE}  → Rust Twin: Skipping Python admin user creation (Use 'docker compose exec cli createsuperuser')...${NC}"
-    ADMIN_EXISTS=1
-else
-    ADMIN_EXISTS=$(echo "from django.contrib.auth import get_user_model; User = get_user_model(); print('1' if User.objects.filter(username='admin').exists() else '0')" | docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null | tail -1)
-fi
+ADMIN_EXISTS=$(echo "from django.contrib.auth import get_user_model; User = get_user_model(); print('1' if User.objects.filter(username='admin').exists() else '0')" | docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null | tail -1)
 
 if [ "${ADMIN_EXISTS:-0}" = "1" ]; then
     echo -e "${GREEN}  ✓ Admin user check bypassed or already exists — skipping${NC}"
@@ -6025,14 +5991,12 @@ print('CREATED' if created else 'EXISTS')
         echo -e "${GREEN}  ✓ Local Docker cloud provider ready${NC}"
     fi
 fi
-if [ "$RUST_TWIN_MODE" != "true" ]; then
-    echo -e "${BLUE}  → Keeping backend entrypoint bootstrap disabled; installer controls migrations...${NC}"
-    env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
-    if should_manage_caddy; then
-        env_set_value "$INSTALL_DIR/.env" "SMSLY_ENABLE_STARTUP_CADDY_SYNC" "true"
-    else
-        env_set_value "$INSTALL_DIR/.env" "SMSLY_ENABLE_STARTUP_CADDY_SYNC" "false"
-    fi
+echo -e "${BLUE}  → Keeping backend entrypoint bootstrap disabled; installer controls migrations...${NC}"
+env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
+if should_manage_caddy; then
+    env_set_value "$INSTALL_DIR/.env" "SMSLY_ENABLE_STARTUP_CADDY_SYNC" "true"
+else
+    env_set_value "$INSTALL_DIR/.env" "SMSLY_ENABLE_STARTUP_CADDY_SYNC" "false"
 fi
     set_checkpoint "admin_created"
 fi
