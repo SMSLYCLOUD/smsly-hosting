@@ -10,17 +10,18 @@ backend:
   image:
     repository: smsly/backend
     pullPolicy: IfNotPresent
-    tag: "latest"
+    # Pin a specific tag in production. The chart validator refuses "latest" or empty.
+    tag: "2.1.0"
   replicaCount: 2
   service:
     type: ClusterIP
     port: 8000
   env:
     debug: "False"
-    secretKey: "change-me-in-prod"
+    secretKey: ""
     dbName: "smsly_hosting"
     dbUser: "smsly_admin"
-    dbPassword: "change-me"
+    dbPassword: ""
     redisPassword: ""
     fieldEncryptionKey: ""
     githubWebhookSecret: ""
@@ -28,6 +29,8 @@ backend:
     csrfTrustedOrigins: ""
     corsAllowedOrigins: ""
     internalApiUrl: "http://smsly-hosting-backend:8000"
+  serviceAccount:
+    create: true
   resources:
     limits:
       cpu: 1000m
@@ -58,12 +61,15 @@ frontend:
   image:
     repository: smsly/frontend
     pullPolicy: IfNotPresent
-    tag: "latest"
+    # Pin a specific tag in production. The chart validator refuses "latest" or empty.
+    tag: "2.1.0"
   replicaCount: 2
   service:
     type: ClusterIP
     port: 3000
   nextPublicApiUrl: ""
+  serviceAccount:
+    create: true
   resources:
     limits:
       cpu: 500m
@@ -89,8 +95,11 @@ celery:
   image:
     repository: smsly/backend
     pullPolicy: IfNotPresent
-    tag: "latest"
+    # Pin a specific tag in production. Mirrors backend.image.tag.
+    tag: "2.1.0"
   replicaCount: 2
+  serviceAccount:
+    create: true
   workers:
     default:
       concurrency: 8
@@ -243,3 +252,22 @@ secrets:
   existingSecret: ""
   extraEnvVars: []
   extraEnvVarsSecret: ""
+  # Required when not using secrets.existingSecret. The chart validator
+  # refuses "change-me", "change-me-in-prod", "latest" or empty values.
+  secretKey: ""
+  dbPassword: ""
+  redisPassword: ""
+
+networkPolicy:
+  enabled: true
+
+pdb:
+  backend:
+    enabled: true
+    minAvailable: 1
+  celery:
+    enabled: true
+    minAvailable: 1
+  frontend:
+    enabled: true
+    minAvailable: 1

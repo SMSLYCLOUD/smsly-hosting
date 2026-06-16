@@ -28,3 +28,11 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 app.kubernetes.io/name: {{ include "smsly-hosting.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
+
+{{- define "smsly.fullname" -}}
+{{- include "smsly-hosting.fullname" . -}}
+{{- end }}
+
+{{- define "smsly.labels" -}}
+{{- include "smsly-hosting.labels" . -}}
+{{- end }}

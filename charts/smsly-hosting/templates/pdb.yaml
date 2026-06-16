@@ -1,0 +1,16 @@
+{{- range $name, $cfg := .Values.pdb }}
+{{- if $cfg.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "smsly.fullname" $ }}-{{ $name }}
+  labels:
+    {{- include "smsly.labels" $ | nindent 4 }}
+spec:
+  minAvailable: {{ $cfg.minAvailable | default 1 }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $name }}
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+{{- end }}
+{{- end }}

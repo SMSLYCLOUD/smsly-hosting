@@ -1,4 +1,5 @@
 {{- if .Values.celery.enabled }}
+{{- include "smsly.validateValues" . }}
 {{- range $name, $worker := .Values.celery.workers }}
 ---
 apiVersion: apps/v1
@@ -26,10 +27,16 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      serviceAccountName: {{ include "smsly-hosting.fullname" $ }}-celery
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "smsly.podSecurityContext" $ | nindent 8 }}
       containers:
         - name: celery-{{ $name }}
           image: "{{ $.Values.global.imageRegistry }}{{ $.Values.celery.image.repository }}:{{ $.Values.celery.image.tag }}"
           imagePullPolicy: {{ $.Values.celery.image.pullPolicy }}
+          securityContext:
+            {{- include "smsly.containerSecurityContext" $ | nindent 12 }}
           command:
             - celery
             - -A
@@ -89,10 +96,16 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      serviceAccountName: {{ include "smsly-hosting.fullname" . }}-celery
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "smsly.podSecurityContext" . | nindent 8 }}
       containers:
         - name: celery-beat
           image: "{{ .Values.global.imageRegistry }}{{ .Values.celery.image.repository }}:{{ .Values.celery.image.tag }}"
           imagePullPolicy: {{ .Values.celery.image.pullPolicy }}
+          securityContext:
+            {{- include "smsly.containerSecurityContext" . | nindent 12 }}
           command:
             - celery
             - -A
