@@ -1,5 +1,5 @@
 use axum::{extract::{Path, State}, http::StatusCode, response::IntoResponse, routing::{delete, get, post}, Json, Router};
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{ColumnTrait, DatabaseConnection, QueryFilter, Set};
 use serde::Deserialize;
 use std::sync::Arc;
 

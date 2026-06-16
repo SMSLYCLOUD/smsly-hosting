@@ -30,3 +30,4 @@ mod m20250617_000027_create_social_accounts;
 mod m20250617_000028_create_social_apps;
 mod m20250617_000029_create_social_tokens;
 mod m20250617_000030_create_addon_templates;
+mod m20250617_000031_add_deployment_requester_id;

@@ -41,6 +41,7 @@ impl MigratorTrait for Migrator {
             Box::new(super::m20250617_000028_create_social_apps::CreateSocialApps),
             Box::new(super::m20250617_000029_create_social_tokens::CreateSocialTokens),
             Box::new(super::m20250617_000030_create_addon_templates::CreateAddonTemplates),
+            Box::new(super::m20250617_000031_add_deployment_requester_id::AddDeploymentRequesterId),
         ]
     }
 }

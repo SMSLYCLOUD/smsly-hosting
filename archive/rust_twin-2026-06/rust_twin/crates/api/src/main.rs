@@ -11,36 +11,23 @@ use api::{routes, AppState};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // 1. Initialize telemetry
     telemetry::init()?;
 
-    // 2. Load config
     info!("Loading configuration...");
     let config = Config::load().context("Failed to load environment configuration")?;
 
-    // 3. Connect to database
     info!("Connecting to database at {}", &config.database_url);
     let db = db::establish_connection(&config.database_url).await?;
 
-    // 4. Connect to Redis (used for queueing deployments)
     let redis_url = config.get_redis_url();
     let redis_client = redis::Client::open(redis_url).context("Failed to connect to Redis")?;
 
-    // 5. Set up App State
-    let state = Arc::new(AppState {
-        db,
-        config: config.clone(),
-        redis: redis_client,
-    });
+    let state = Arc::new(AppState::new(db, config.clone(), redis_client));
 
-    // 5. Build Axum Router
     let app = Router::new()
         .route("/health", get(health_check))
-        // Mount v1 API routes
-        .merge(routes::create_router())
-        .with_state(state);
+        .merge(routes::create_router(state));
 
-    // 6. Bind and Serve
     let addr = format!("{}:{}", config.host, config.port);
     info!("Starting Axum server on {}", addr);
     let listener = TcpListener::bind(&addr).await?;
