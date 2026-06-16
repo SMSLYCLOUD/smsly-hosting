@@ -34,9 +34,8 @@ export function GrafanaEmbed({ dashboard, service, time }: GrafanaEmbedProps) {
             setResolvedService(service);
             return;
         }
-        const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
         fetch(`/api/v1/services/${encodeURIComponent(service)}/`, {
-            headers: token ? { 'Authorization': `Token ${token}` } : {},
+            credentials: "include",
         })
             .then((r) => (r.ok ? r.json() : null))
             .then((svc) => {
@@ -58,12 +57,8 @@ export function GrafanaEmbed({ dashboard, service, time }: GrafanaEmbedProps) {
         setLoading(true);
         setError(null);
 
-        const token = typeof window !== 'undefined'
-            ? localStorage.getItem('auth_token')
-            : null;
-
         fetch(`/api/v1/observability/grafana/embed/${encodeURIComponent(dashboard)}/?${params}`, {
-            headers: token ? { 'Authorization': `Token ${token}` } : {},
+            credentials: "include",
         })
             .then(async (res) => {
                 if (!res.ok) {

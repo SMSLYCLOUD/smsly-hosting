@@ -3,34 +3,17 @@
 import { useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
-import { setAuthTokenCookie, clearAuthCookies } from "@/lib/auth-cookies";
+import { clearAuthCookies } from "@/lib/auth-cookies";
 
 // Prevent static prerendering — this page needs runtime URL params
 export const dynamic = "force-dynamic";
 
-function getExistingToken(): string | null {
-  if (typeof window === "undefined") {
-    return null;
-  }
-  const fromStorage = localStorage.getItem("auth_token");
-  if (fromStorage) {
-    return fromStorage;
-  }
-  const match = document.cookie.match(/(?:^|;\s*)auth_token=([^;]+)/);
-  return match ? decodeURIComponent(match[1]) : null;
-}
-
-async function fetchSessionToken(
-  fallbackToken: string | null
-): Promise<{ token: string | null; unauthorized: boolean }> {
+async function fetchSessionToken(): Promise<{ token: string | null; unauthorized: boolean }> {
   try {
     const response = await fetch("/api/v1/auth/session-token/", {
-      method: "GET",
+      method: "POST",
       credentials: "include",
-      headers: {
-        Accept: "application/json",
-        ...(fallbackToken ? { Authorization: `Token ${fallbackToken}` } : {}),
-      },
+      headers: { Accept: "application/json" },
     });
     if (!response.ok) {
       return { token: null, unauthorized: response.status === 401 || response.status === 403 };
@@ -51,34 +34,30 @@ function CallbackContent() {
     let active = true;
 
     const completeAuth = async () => {
-      const existingToken = getExistingToken();
-
-      // Backward-compatible fallback only: older backends may still pass token in query.
+      // Backward-compatible fallback only: older backends may still
+      // pass token in query. Newer backends set the HttpOnly cookie
+      // on /api/v1/accounts/<provider>/login/callback/ via Set-Cookie
+      // and the browser attaches it automatically; we do not need to
+      // read or store the token client-side.
       const sessionResult = queryToken
         ? { token: null, unauthorized: false }
-        : await fetchSessionToken(existingToken);
-      let token = queryToken || sessionResult.token;
-
-      // During reconnect, keep an existing token if the session exchange failed
-      // for a transient reason (network/proxy race), but never when explicitly unauthorized.
-      if (!token && existingToken && !sessionResult.unauthorized) {
-        token = existingToken;
-      }
+        : await fetchSessionToken();
+      const token = queryToken || sessionResult.token;
 
       if (!active) {
         return;
       }
 
       if (token) {
-        localStorage.setItem("auth_token", token);
-        setAuthTokenCookie(token);
-
-        // Full reload avoids Next.js route-cache edge cases around auth redirects.
+        // Older backends may return a token in the body. We use it
+        // only as a sign that the auth flow completed; the actual
+        // credential is whatever cookie the backend's Set-Cookie
+        // header attached. No localStorage write, no client-side
+        // cookie write — the backend owns the cookie lifecycle.
         window.location.replace("/dashboard");
         return;
       }
 
-      localStorage.removeItem("auth_token");
       clearAuthCookies();
       window.location.replace("/login");
     };

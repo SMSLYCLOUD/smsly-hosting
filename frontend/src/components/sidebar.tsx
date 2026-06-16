@@ -9,7 +9,7 @@ import {
   Server, Rocket, Globe, ChevronDown, Wifi, WifiOff,
   ExternalLink, Radio, Scaling, ArrowLeftRight, ShieldCheck
 } from "lucide-react";
-import { serversApi, type ManagedServer } from "@/lib/api";
+import { api, serversApi, type ManagedServer } from "@/lib/api";
 import TeamSwitcher from "@/components/team-switcher";
 
 export function Sidebar() {
@@ -29,15 +29,11 @@ export function Sidebar() {
     serversApi.list().then(setServers).catch(() => {});
     if (typeof window !== "undefined") {
       setActiveServer(localStorage.getItem("smsly_active_server"));
-      const token = localStorage.getItem('auth_token');
-      if (token) {
-        fetch(`${window.location.origin}/api/v1/auth/user/`, {
-          headers: { 'Authorization': `Token ${token}` },
-        })
-        .then(res => res.json())
-        .then(data => setUser({ is_staff: Boolean(data?.is_staff || data?.is_superuser) }))
+      // Fetch user via the cookie-authenticated axios instance. The
+      // HttpOnly auth cookie is attached automatically.
+      api.get('/auth/user/')
+        .then(res => setUser({ is_staff: Boolean(res.data?.is_staff || res.data?.is_superuser) }))
         .catch(() => setUser(null));
-      }
     }
   }, []);
 

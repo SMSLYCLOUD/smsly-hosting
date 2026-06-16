@@ -24,19 +24,10 @@ import { EcosystemNode, EcosystemEdge, EcosystemGraph } from '@/types/topology';
 import { TrafficFlowAnimation } from './TrafficFlowAnimation';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 
-function getToken(): string | null {
-  if (typeof window === 'undefined') return null;
-  return localStorage.getItem('auth_token');
-}
-
 async function fetchEcosystem(): Promise<EcosystemGraph> {
-  const token = getToken();
   const res = await fetch('/api/v1/topology/ecosystem/', {
     credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Token ${token}` } : {}),
-    },
+    headers: { 'Content-Type': 'application/json' },
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();

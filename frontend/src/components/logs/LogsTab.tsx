@@ -74,18 +74,16 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
         if (!deployment?.id) return;
         if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
-        const token = typeof window !== 'undefined'
-            ? (localStorage.getItem('auth_token') || document.cookie.match(/(?:^|;\s*)auth_token=([^;]+)/)?.[1])
-            : null;
-        if (!token) return;
-
-        const decodedToken = typeof window !== 'undefined' && document.cookie.match(/(?:^|;\s*)auth_token=([^;]+)/)
-            ? decodeURIComponent(document.cookie.match(/(?:^|;\s*)auth_token=([^;]+)/)![1])
-            : token;
-
+        // Auth for the build-logs WebSocket is provided by the
+        // HttpOnly auth cookie that the browser attaches to the
+        // WebSocket upgrade request. The server's
+        // QueryStringAuthMiddleware reads the cookie directly from
+        // the Cookie header (no token in the query string) — see
+        // backend/apps/deployments/middleware.py for the matching
+        // server-side change.
         const proto = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss' : 'ws';
         const host = typeof window !== 'undefined' ? window.location.host : 'localhost';
-        const wsUrl = `${proto}://${host}/ws/build-logs/${deployment.id}/?token=${encodeURIComponent(decodedToken)}`;
+        const wsUrl = `${proto}://${host}/ws/build-logs/${deployment.id}/`;
 
         try {
             const ws = new WebSocket(wsUrl);
@@ -168,9 +166,8 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
 
         const fetchBuildLogs = async () => {
             try {
-                const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
                 const res = await fetch(`/api/v1/deployments/${deployment.id}/`, {
-                    headers: token ? { 'Authorization': `Token ${token}` } : {},
+                    credentials: "include",
                 });
                 if (res.ok) {
                     const data = await res.json();
@@ -205,9 +202,8 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
         const fetchRuntimeLogs = async () => {
             setRuntimeLoading(true);
             try {
-                const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
                 const res = await fetch(`/api/v1/deployments/${deployment.id}/runtime-logs/?tail=200`, {
-                    headers: token ? { 'Authorization': `Token ${token}` } : {},
+                    credentials: "include",
                 });
                 if (res.ok) {
                     const data = await res.json();

@@ -27,8 +27,7 @@ interface PlatformUpdate {
 }
 
 function getHeaders(): Record<string, string> {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
-    return token ? { 'Authorization': `Token ${token}`, 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json' };
+    return { 'Content-Type': 'application/json' };
 }
 
 function apiUrl(path: string) {
@@ -47,7 +46,10 @@ export default function UpdatesPage() {
 
     const fetchUpdates = async () => {
         try {
-            const res = await fetch(apiUrl('/platform-updates/'), { headers: getHeaders() });
+            const res = await fetch(apiUrl('/platform-updates/'), {
+                credentials: 'include',
+                headers: getHeaders(),
+            });
             if (res.ok) {
                 setIsBackendReachable(true);
                 const data = await res.json();
@@ -94,6 +96,7 @@ export default function UpdatesPage() {
         try {
             const res = await fetch(apiUrl('/platform-updates/trigger/'), {
                 method: 'POST',
+                credentials: 'include',
                 headers: getHeaders(),
             });
             if (res.ok) {
@@ -121,6 +124,7 @@ export default function UpdatesPage() {
         try {
             const res = await fetch(apiUrl(`/platform-updates/${id}/rollback/`), {
                 method: 'POST',
+                credentials: 'include',
                 headers: getHeaders(),
             });
             if (res.ok) {

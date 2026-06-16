@@ -86,12 +86,9 @@ export default function AppStorePage() {
             return;
         }
 
-        const token = typeof window !== "undefined" ? localStorage.getItem("auth_token") : null;
-        if (!token) {
-            toast({ title: "Login required", description: "Please login to deploy templates.", variant: "destructive" });
-            router.push("/login");
-            return;
-        }
+        // The HttpOnly auth cookie is attached automatically by the
+        // browser via ``credentials: 'include'`` on the api instance.
+        // We still short-circuit on a 401 to redirect to /login.
 
         setDeployingId(String(tpl.id));
         try {

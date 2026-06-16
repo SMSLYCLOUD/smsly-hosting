@@ -70,10 +70,6 @@ const STACK_COLORS: Record<string, string> = {
     unknown: 'text-zinc-400 bg-zinc-500/10 border-zinc-500/20',
 };
 
-function getToken() {
-    return typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
-}
-
 type Step = 'idle' | 'selection' | 'scanning' | 'review' | 'deploying' | 'done';
 
 function saveState(key: string, value: any) {
@@ -94,13 +90,11 @@ function clearState() {
 }
 
 async function apiPost(path: string, body?: object) {
-    const token = getToken();
     const res = await fetch(path, {
         method: 'POST',
         credentials: 'include',
         headers: {
             'Content-Type': 'application/json',
-            ...(token ? { Authorization: `Token ${token}` } : {}),
         },
         body: body ? JSON.stringify(body) : undefined,
     });
@@ -109,12 +103,8 @@ async function apiPost(path: string, body?: object) {
 }
 
 async function apiGet(path: string) {
-    const token = getToken();
     const res = await fetch(path, {
         credentials: 'include',
-        headers: {
-            ...(token ? { Authorization: `Token ${token}` } : {}),
-        },
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res.json();
@@ -176,14 +166,14 @@ export default function EcosystemPage() {
     // Check for active plan on mount
     useEffect(() => {
         const checkActivePlan = async () => {
-            const token = getToken();
-            if (!token) return;
-            // Only check if we're in idle state with no plan
+            // The HttpOnly auth cookie is attached automatically by the
+            // browser via ``credentials: 'include'``. No client-side
+            // token check is needed.
             if (step !== 'idle' || plan) return;
 
             try {
                 const res = await fetch('/api/v1/cloud/ecosystem/active-plan/', {
-                    headers: { 'Authorization': `Token ${token}` },
+                    credentials: 'include',
                 });
                 const data = await res.json();
                 if (!data.has_active_plan) return;

@@ -34,11 +34,10 @@ export function TopologyView({
   // Resolve ?service=UUID to service name for filtering
   useEffect(() => {
     if (!targetService) return;
-    const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (uuidRegex.test(targetService)) {
       fetch(`/api/v1/services/${encodeURIComponent(targetService)}/`, {
-        headers: token ? { 'Authorization': `Token ${token}` } : {},
+        credentials: "include",
       })
         .then(r => r.ok ? r.json() : null)
         .then(svc => { if (svc?.name) setSelectedService(svc.name); })

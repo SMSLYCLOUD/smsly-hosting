@@ -1,20 +1,11 @@
 'use client';
 
-import { useEffect } from 'react';
-
+// NOTE: This component used to monkey-patch the global `console.warn` to suppress a
+// deprecation warning from `THREE.Clock` (used transitively by `react-force-graph-3d`).
+// Mutating globals is a footgun in SSR/RSC and conflicts with the React strict mode
+// double-invoke. Instead, the warning is now filtered at the import site (or simply
+// tolerated in dev). This component is kept as a no-op for now to avoid touching
+// every import site, but it is safe to remove once the upstream package upgrades.
 export function ThreeCompat() {
-  useEffect(() => {
-    const warn = console.warn;
-    console.warn = (...args: any[]) => {
-      if (typeof args[0] === 'string' && args[0].includes('THREE.Clock: This module has been deprecated')) {
-        return;
-      }
-      warn.apply(console, args);
-    };
-    return () => {
-      console.warn = warn;
-    };
-  }, []);
-
   return null;
 }

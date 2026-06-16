@@ -58,7 +58,6 @@ export function FloatingAI() {
     setIsLoading(true);
 
     try {
-      const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
       const endpoints = ['/api/v1/cloud/intelligence/ask/', '/api/v1/cloud/intelligence/chat/'];
       let data: any = null;
 
@@ -68,7 +67,6 @@ export function FloatingAI() {
           credentials: 'include',
           headers: {
             'Content-Type': 'application/json',
-            ...(token ? { Authorization: `Token ${token}` } : {}),
           },
           body: JSON.stringify({ message: trimmed }),
         });

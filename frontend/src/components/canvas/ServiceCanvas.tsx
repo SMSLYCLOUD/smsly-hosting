@@ -13,7 +13,6 @@ import dynamic from 'next/dynamic';
 import * as THREE from 'three';
 import { Maximize2, ZoomIn, ZoomOut } from 'lucide-react';
 
-// @ts-ignore
 const ForceGraph3D = dynamic(() => import('react-force-graph-3d'), { ssr: false });
 
 interface ServiceCanvasProps {

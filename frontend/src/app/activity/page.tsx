@@ -20,8 +20,7 @@ interface AuditLog {
 }
 
 function getHeaders(): Record<string, string> {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
-    return token ? { 'Authorization': `Token ${token}`, 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json' };
+    return { 'Content-Type': 'application/json' };
 }
 
 function apiUrl(path: string) {
@@ -37,7 +36,10 @@ export default function ActivityPage() {
 
     const fetchLogs = useCallback(async () => {
         try {
-            const res = await fetch(apiUrl('/audit-logs/?ordering=-created_at&limit=50'), { headers: getHeaders() });
+            const res = await fetch(apiUrl('/audit-logs/?ordering=-created_at&limit=50'), {
+                credentials: 'include',
+                headers: getHeaders(),
+            });
             if (res.ok) {
                 const data = await res.json();
                 setLogs(Array.isArray(data) ? data : data.results);

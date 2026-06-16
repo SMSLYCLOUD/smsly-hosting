@@ -37,12 +37,6 @@ const XtermConsole = dynamic(() => import('@/components/terminal/XtermConsole'),
 type ServiceEnvMap = Record<string, { id: number; value: string }>;
 const LOCAL_DEPLOY_TARGET = 'local';
 
-const getAuthTokenFromCookie = (): string | null => {
-    if (typeof document === 'undefined') return null;
-    const match = document.cookie.match(/(?:^|;\s*)auth_token=([^;]+)/);
-    return match ? decodeURIComponent(match[1]) : null;
-};
-
 const parseBool = (value: string | undefined, fallback: boolean) => {
     if (typeof value !== 'string') return fallback;
     const normalized = value.trim().toLowerCase();
@@ -871,18 +865,14 @@ export default function ServiceDetailPage() {
                             );
                         }
 
-                        const token =
-                            typeof window !== 'undefined'
-                                ? (localStorage.getItem('auth_token') || getAuthTokenFromCookie())
-                                : null;
-
-                        if (!token) {
-                            return (
-                                <div className="h-full w-full flex items-center justify-center text-zinc-400 text-sm">
-                                    Login required to open the console.
-                                </div>
-                            );
-                        }
+                        // The terminal WebSocket authenticates via the
+                        // HttpOnly auth cookie. The cookie is attached
+                        // to the WebSocket upgrade request by the
+                        // browser; the server's WebSocket auth
+                        // middleware (channels consumers) must read it
+                        // from the Cookie header — see
+                        // backend/apps/deployments/consumers.py for the
+                        // matching server-side change.
 
                         const proto =
                             typeof window !== 'undefined' && window.location.protocol === 'https:'
@@ -891,7 +881,7 @@ export default function ServiceDetailPage() {
                         const host = typeof window !== 'undefined' ? window.location.host : 'localhost';
                         const wsUrl = `${proto}://${host}/ws/terminal/${deploymentId}/`;
 
-                        return <XtermConsole wsUrl={wsUrl} wsToken={token} />;
+                        return <XtermConsole wsUrl={wsUrl} wsToken={null} />;
                     })()}
                 </div>
             )}
