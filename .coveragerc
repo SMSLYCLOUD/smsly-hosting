@@ -1,0 +1,28 @@
+[run]
+source = backend/apps,backend/config
+omit =
+    */migrations/*
+    */tests/*
+    */test_*.py
+    */__pycache__/*
+    */scratch/*
+    */tmp/*
+    */verification/*
+
+[report]
+exclude_lines =
+    pragma: no cover
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    def __repr__
+    \.\.\.
+    pass
+show_missing = True
+skip_empty = True
+precision = 2
+
+[html]
+directory = htmlcov
+
+[xml]
+output = coverage.xml
