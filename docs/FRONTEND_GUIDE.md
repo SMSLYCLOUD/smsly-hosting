@@ -9,7 +9,7 @@
 | Layer | Technology |
 |-------|------------|
 | Framework | Next.js 15 (App Router, TypeScript) |
-| Styling | Tailwind CSS v4 |
+| Styling | Tailwind CSS v3 (`^3.3.0` per `frontend/package.json`) |
 | UI Components | shadcn/ui + custom |
 | HTTP Client | Axios (via `src/lib/api.ts`) |
 | Auth | Cookie + localStorage dual-token |
@@ -203,7 +203,7 @@ const { data, loading, error } = useLiveData('/services/', 5000);
 
 ## Styling Conventions
 
-1. **Tailwind v4** — use `@import "tailwindcss"` not `@tailwind`
+1. **Tailwind v3** — use `@tailwind base; @tailwind components; @tailwind utilities;` in `globals.css` (PostCSS pipeline via `tailwindcss` v3). Do **not** use the v4-only `@import "tailwindcss"` syntax until the project upgrades.
 2. **Dark mode** — use `dark:` variants, theme-provider handles toggling
 3. **shadcn/ui** — import from `@/components/ui/`
 4. **`cn()` helper** — merge classNames: `cn("base", conditional && "active")`

@@ -331,7 +331,7 @@ class GridUser(HttpUser):
 **Run load test:**
 
 ```bash
-locust -f tests/load/locustfile.py --host=http://localhost:8090 --users 100 --spawn-rate 10
+locust -f tests/load/locustfile.py --host=http://localhost --users 100 --spawn-rate 10
 ```
 
 ---
@@ -580,7 +580,7 @@ locust -f tests/load/locustfile.py --headless --users 100 --spawn-rate 10 --run-
 
 # Health checks
 echo "💚 Verifying health endpoints..."
-curl -f http://localhost:8090/health || exit 1
+curl -f http://localhost/health || exit 1
 
 # Documentation
 echo "📚 Verifying documentation..."

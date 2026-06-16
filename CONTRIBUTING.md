@@ -1,6 +1,8 @@
-# Contributing to Grid
+# Contributing to SMSLY (CloudNeuron)
 
 We are building the **Universal PaaS** for the world. Whether you are in San Francisco, Lagos, Berlin, or Tokyo, we want your code.
+
+> **Brands:** The project is currently branded as **SMSLY**; the public-facing product name is **CloudNeuron**. **"Grid"** is a legacy code name. All three names still appear in older docs, scripts, and code; please prefer the current names in new material.
 
 ## 🌟 Bounty Program
 We incentivize critical features. Check our [Issues](https://github.com/SMSLYCLOUD/smsly-hosting/issues) for "Bounty" labels.
@@ -12,7 +14,7 @@ We incentivize critical features. Check our [Issues](https://github.com/SMSLYCLO
 
 ### Prerequisites
 - Docker & Docker Compose
-- Python 3.12+
+- Python 3.11+ (matches `Dockerfile` and `.devcontainer/devcontainer.json`)
 - Node.js 20+
 
 ### Steps
@@ -41,8 +43,8 @@ We incentivize critical features. Check our [Issues](https://github.com/SMSLYCLO
 
 ## 🧪 Testing
 We enforce strict quality standards.
-- **Backend Tests**: `pytest` (Must pass CI).
-- **Linting**: `pylint` (Must score > 9.0).
+- **Backend Tests**: `cd backend && pytest` (must pass CI; `pytest.ini` defines custom markers — `slow`, `integration`, `security`, `e2e`, `smoke`).
+- **Linting**: `pylint` runs in CI as a blocking check; the config enables ~20 carefully chosen rules. A **9.0+** score is encouraged but not enforced (the legacy hard threshold was retired when the `.pylintrc` was tightened to disable noisy checks).
 
 ## 🌍 Global Mission
 Our goal is to democratize cloud infrastructure. Avoid region-specific hardcoding unless explicitly handling latency optimization. Ensure UI supports i18n where possible.

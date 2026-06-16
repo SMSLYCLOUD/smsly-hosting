@@ -1,11 +1,13 @@
-# Grid Operations Runbook
+# SMSLY (CloudNeuron) Operations Runbook
+
+> "Grid" is a legacy code name for SMSLY; both still appear in older scripts and docs.
 
 ## Quick Reference
 
 ### Service Access
-- **Dashboard**: `http://<YOUR_IP>:8090/`
-- **Admin**: `http://<YOUR_IP>:8090/admin/`
-- **API**: `http://<YOUR_IP>:8090/api/v1/`
+- **Dashboard**: `http://<YOUR_IP>/` (Caddy binds 80/443 directly; port 8090 is the **legacy** nginx bridge and is no longer used)
+- **Admin**: `http://<YOUR_IP>/admin/`
+- **API**: `http://<YOUR_IP>/api/v1/`
 
 ### Installation Details
 - **Root Directory**: `/opt/smsly-hosting`
@@ -125,7 +127,7 @@ docker logs smsly-hosting-backend-1 --tail 50 2>&1 | grep -i "rate limit"
 
 **Fix**: If legitimate users are being throttled, bump rates in `backend/config/settings.py` → `DEFAULT_THROTTLE_RATES`.
 
-### Dashboard Not Accessible on Port 8090
+### Dashboard Not Accessible on Host Port 80/443
 
 1.  **Check Containers**:
     ```bash
@@ -134,11 +136,12 @@ docker logs smsly-hosting-backend-1 --tail 50 2>&1 | grep -i "rate limit"
     Ensure `backend`, `frontend`, and `caddy` containers are all Up.
 
 2.  **Check Firewall**:
-    Ensure port 8090 is allowed on your VPS firewall (Security Group).
+    Ensure ports 80 and 443 are allowed on your VPS firewall (Security Group). Port 8090 is legacy and should **not** be open.
     ```bash
     ufw status
-    # If active, allow 8090
-    ufw allow 8090/tcp
+    # If active, allow 80 + 443
+    ufw allow 80/tcp
+    ufw allow 443/tcp
     ```
 
 3.  **Check Logs**:
@@ -174,7 +177,7 @@ docker compose -f docker-compose.prod.yml exec backend python manage.py shell -c
 
 - **Disk Space**: Monitor `df -h` to ensure Docker volumes have space.
 - **Memory**: Monitor `docker stats` for high usage by `backend` or `celery`.
-- **Health Check**: `curl http://localhost:8090/health` (should return 200 OK with `"status": "healthy"`).
+- **Health Check**: `curl http://localhost/health` (should return 200 OK with `"status": "healthy"`). Caddy listens on host :80 and proxies `/health` to `backend:8000`.
 
 ### Production Monitoring
 
@@ -322,7 +325,7 @@ docker compose -f docker-compose.prod.yml exec backend python manage.py migrate 
 
 ### Pre-Deployment Checklist
 
-- [ ] All tests passing (`docker compose -f docker-compose.prod.yml exec backend python manage.py test`)
+- [ ] All tests passing (`cd backend && pytest`)
 - [ ] Database migrations reviewed
 - [ ] Environment variables validated
 - [ ] SSL certificate valid and not expiring soon

@@ -120,7 +120,7 @@ The PaaS repository successfully underwent a comprehensive production-readiness 
 - `test_command_executor.py`: Tests shlex parsing.
 
 **6. Test Commands Run**
-- `cd backend && python manage.py test apps.deployments.tests.<module>`
+- `cd backend && pytest apps/deployments/tests/test_<module>.py`
 - Result: **All tests pass successfully.**
 
 **7. Remaining Risks**

@@ -137,7 +137,7 @@ For non-interactive automation, use: `FORCE_WIPE=1 sudo bash install.sh --wipe`
 | **Frontend** | Next.js 15 (TypeScript), Tailwind CSS v4 |
 | **Database** | PostgreSQL 16 |
 | **Orchestration** | Docker Compose |
-| **SSL/Proxy** | Caddy (automatic Let's Encrypt, containerized, routes directly to backend/frontend) |
+| **SSL/Proxy** | Caddy (Compose master, automatic Let's Encrypt, routes directly to backend/frontend); Traefik (Compose node / lite-agent / Kubernetes, label-driven); nginx (bare-metal, **legacy**) |
 | **Builder** | Nixpacks (auto-detect buildpacks) |
 
 ---
@@ -191,6 +191,23 @@ Lite Agents are lightweight worker nodes that connect to the master's database, 
 
 ---
 
+## 🌐 Reverse Proxy
+
+SMSLY runs three different edge proxies, one per deployment surface. The active configuration for each is the single source of truth for that surface; do not mix them.
+
+| Deployment surface | Edge proxy | Source of truth | TLS |
+|--------------------|------------|-----------------|-----|
+| Docker Compose — master | **Caddy** | `caddy-config/Caddyfile` | Automatic Let's Encrypt via `on_demand_tls` |
+| Docker Compose — node / lite-agent | **Traefik** | `docker-compose.prod.yml` Traefik labels + `traefik` service | Automatic Let's Encrypt via the `letsencrypt` resolver |
+| Kubernetes (Helm) | **Traefik** | `charts/smsly-hosting/templates/ingress.yaml` (default `ingress.className: traefik`) | cert-manager (annotation `cert-manager.io/cluster-issuer`) |
+| Bare-metal (legacy) | **nginx** | `nginx.conf` at repo root (**marked LEGACY** — see banner) | None (operator terminates TLS in front) |
+
+Compose master mode also runs a small **route-fallback Caddy** (`infrastructure/route-fallback/Caddyfile`) that returns a "Service waking up" 503 page for any path the platform's Traefik rules and platform's backend/frontend services have not yet picked up. It is a safety net, not a primary route.
+
+For the full per-route conflict matrix, failure modes, and migration plan, see **[`docs/REVERSE_PROXY_DECISION.md`](docs/REVERSE_PROXY_DECISION.md)**.
+
+---
+
 ## 📂 Project Structure
 
 ```
@@ -239,7 +256,7 @@ smsly-hosting/
 | 2026-05 | **IP-mode SSL guard (SEC-002)**: `USE_SSL=true` env var forcibly downgraded when `DOMAIN` is a raw IP | `install.sh:1243-1253,3846-3855` |
 | 2026-05 | **DNS fallback via DoH**: DNS check uses Google DNS-over-HTTPS when `host` (dnsutils) unavailable | `install.sh:3490-3517` |
 | 2026-05 | **ACME staging validation**: Caddy HTTPS-ready check before going live | `install.sh:4321-4360` |
-| 2026-05 | **Nginx removed from routing chain**: Caddy now proxies directly to backend:8000 and frontend:3000 instead of via nginx | `caddy-config/Caddyfile`, `caddy_manager.py`, `docker-compose.prod.yml` |
+| 2026-05 | **Reverse proxy topology clarified**: Caddy is the primary edge proxy for the Compose master (`caddy-config/Caddyfile`); Traefik is the primary edge proxy for the Compose node / lite-agent and for Kubernetes (`docker-compose.prod.yml` Traefik labels + `charts/smsly-hosting/templates/ingress.yaml`); `nginx.conf` is now marked LEGACY and used only for the bare-metal install path. See [`docs/REVERSE_PROXY_DECISION.md`](docs/REVERSE_PROXY_DECISION.md) |
 | 2026-05 | **Caddy redirect excludes localhost**: `:80` HTTPS redirect skips IPs, localhost, `.local` hostnames | `caddy_manager.py:516-531` |
 | 2026-05 | **Token file hardening**: Cloudflare token files created with `0o600`, config dir restricted to `0o700` | `caddy_manager.py:596-616` |
 | 2026-05 | **Unified secret generator**: `scripts/generate_env_secrets.py` is the single source of truth for all secret generation | `scripts/generate_env_secrets.py` |
@@ -250,6 +267,24 @@ smsly-hosting/
 | 2026-05 | **Inter-server TLS enforcement (SEC-ZT-005)**: `SMSLY_ENFORCE_INTERSERVER_TLS` setting; `SMSLY_REMOTE_VERIFY` for cert validation | `remote_orchestrator.py` |
 | 2026-05 | **Celery task encryption (SEC-ZT-006)**: `encrypt_arg()`/`decrypt_arg()` for sensitive task arguments using Fernet | `task_encryption.py`, `tasks_replication.py` |
 | 2026-05 | **Safe node operations**: `run_node_operation` management command replaces inline Python injection via `docker exec` | `management/commands/run_node_operation.py` |
+| 2026-06 | **Deep-sweep remediation (W1–W4 in flight)** — see [`SECURITY.md`](SECURITY.md), [`docs/REVERSE_PROXY_DECISION.md`](docs/REVERSE_PROXY_DECISION.md), [`docs/CLI_UNIFICATION_DECISION.md`](docs/CLI_UNIFICATION_DECISION.md), [`archive/DEAD_CODE_QUARANTINE.md`](archive/DEAD_CODE_QUARANTINE.md) | repo-wide |
+| 2026-06 | **SSH MITM backdoor killed**: `install.sh` no longer patches `paramiko.AutoAddPolicy` onto production Python; `SMSLY_STRICT_SSH_HOST_KEY_CHECK` defaults to `true` | `install.sh`, `ssh_client.py`, `provisioner.py` |
+| 2026-06 | **Committed secrets untracked + rotated**: `certs/registry.key`, `auth/htpasswd`, caddy-config runtime files moved out of git | `.gitignore`, `certs/`, `auth/`, `caddy-config/` |
+| 2026-06 | **`.secrets.tmp` plaintext replaced** with in-memory process substitution | `install.sh`, `scripts/generate_env_secrets.py` |
+| 2026-06 | **Auth moved to HttpOnly cookies**; dev-fallback auth provider removed | `frontend/src/components/auth-provider.tsx`, `backend/apps/teams/auth.py` |
+| 2026-06 | **Container hardening**: `USER smsly` in monolithic `Dockerfile`; `cap_add: NET_ADMIN` dropped from backend; `privileged: true` dropped from cAdvisor | `Dockerfile`, `docker-compose.prod.yml` |
+| 2026-06 | **Traefik `--api.insecure=true` removed**; Grafana anonymous disabled; all `:latest` image tags pinned | `docker-compose.prod.yml`, `infrastructure/monitoring/*` |
+| 2026-06 | **Internal service ports bound to `127.0.0.1`** | `docker-compose.prod.yml` |
+| 2026-06 | **Helm chart hardening**: `securityContext` defaults, `NetworkPolicy` (default-deny + intra-namespace), `PodDisruptionBudget`, per-component `ServiceAccount` with `automountServiceAccountToken: false`, `change-me`/`latest` sentinels in `_validators.tpl` | `charts/smsly-hosting/templates/_securitycontext.tpl`, `networkpolicy.yaml`, `pdb.yaml`, `serviceaccount.yaml`, `_validators.tpl` |
+| 2026-06 | **`tls_verify.py` centralised policy**; 18+ scattered `verify=False` calls replaced | `backend/services/tls_verify.py`, `backend/apps/**/services/*.py` |
+| 2026-06 | **Caddy HSTS, Permissions-Policy, `on_demand_tls` allowlist** | `caddy-config/Caddyfile` |
+| 2026-06 | **GitHub Actions pinned to commit SHAs** with `permissions:` block; `pip-audit`, `bandit`, `gitleaks`, `npm audit` added to CI | `.github/workflows/*` |
+| 2026-06 | **`SECURITY.md`**, **`CODEOWNERS`**, **`dependabot.yml`**, **`.pre-commit-config.yaml`** added | repo root, `.github/`, `.pre-commit-config.yaml` |
+| 2026-06 | **`pytest-cov` + custom markers** (slow / integration / security / e2e / smoke); `--exit-zero` removed from pylint; `tsc --noEmit` added to CI | `pytest.ini`, `.pylintrc`, `.github/workflows/*` |
+| 2026-06 | **Reverse-proxy topology**: Caddy = Compose master, Traefik = Compose node / lite-agent + Kubernetes; `nginx.conf` marked LEGACY | `docs/REVERSE_PROXY_DECISION.md` |
+| 2026-06 | **CLI unification**: Node CLI wins (Click CLI moved to `archive/`) | `docs/CLI_UNIFICATION_DECISION.md` |
+| 2026-06 | **Dead-code quarantine**: `custom-addons/`, `rust_twin/`, `console/`, Click CLI moved to `archive/` | `archive/DEAD_CODE_QUARANTINE.md` |
+| 2026-06 | **Refactor plan for god files** (`views.py` 5,827 lines, `tasks.py` 5,400 lines) | `docs/REFACTOR_PLAN_VIEWS_TASKS.md` |
 
 ---
 
