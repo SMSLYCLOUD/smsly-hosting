@@ -1,4 +1,11 @@
 pub mod project;
+pub mod service;
 pub mod auth;
 pub mod billing;
 pub mod teams;
+pub mod deployment;
+pub mod domain;
+pub mod tunnel;
+pub mod transfer;
+pub mod webhook;
+pub mod sso;

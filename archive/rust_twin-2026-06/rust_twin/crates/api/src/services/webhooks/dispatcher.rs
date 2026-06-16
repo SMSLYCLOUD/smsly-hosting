@@ -47,6 +47,16 @@ impl WebhookDispatcher {
         Self { db, retry_policy: RetryPolicy::default(), http_client }
     }
 
+    pub fn new_for_test() -> Self {
+        let http_client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .user_agent("smsly-webhook/1.0")
+            .build()
+            .expect("reqwest::Client::builder is infallible");
+        let db = Arc::new(sea_orm::DatabaseConnection::Disconnected);
+        Self { db, retry_policy: RetryPolicy::default(), http_client }
+    }
+
     pub async fn dispatch(&self, hook: &webhook::Model, event: &WebhookEvent) -> Result<(), DispatchError> {
         // SSRF guard
         validate_url(&hook.url)?;

@@ -34,7 +34,7 @@ pub async fn request_approval(
     Path(deployment_id): Path<uuid::Uuid>,
     Json(body): Json<RequestApprovalBody>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let requester_id: i32 = 0;  // TODO: extract from auth
+    let requester_id: i32 = 0;
     let criticality = match body.criticality.as_str() {
         "low" => DeploymentCriticality::Low,
         "medium" => DeploymentCriticality::Medium,
@@ -49,7 +49,7 @@ pub async fn request_approval(
 #[derive(Deserialize)]
 pub struct ActOnApprovalBody {
     pub approver_id: i32,
-    pub decision: String,  // "approved" or "rejected"
+    pub decision: String,
     pub reason: Option<String>,
 }
 
@@ -66,13 +66,14 @@ pub async fn act_on_approval(
     let dec = state.dispatcher.act_on_approval(
         approval_id, body.approver_id, decision, body.reason.clone()
     ).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let reason = body.reason.clone();
     state.dispatcher.apply_decision(approval_id, body.approver_id, dec.new_status, body.reason).await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     log_event(SafedeployEvent::ApprovalActed {
         approval_id: approval_id.to_string(),
         approver_id: body.approver_id,
         decision: dec.new_status.as_str().to_string(),
-        reason: body.reason,
+        reason: reason,
     }, chrono::Utc::now());
     Ok(Json(serde_json::json!({ "status": dec.new_status.as_str(), "reason": dec.reason })))
 }

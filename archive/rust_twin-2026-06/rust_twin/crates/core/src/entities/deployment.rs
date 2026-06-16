@@ -19,6 +19,7 @@ pub struct Model {
     pub started_at: Option<DateTimeWithTimeZone>,
     pub finished_at: Option<DateTimeWithTimeZone>,
     pub is_rollback: bool,
+    pub requester_id: Option<i32>,
     pub created_at: DateTimeWithTimeZone,
 }
 

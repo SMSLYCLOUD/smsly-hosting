@@ -179,3 +179,39 @@ pub async fn trigger_deploy(
 
     Ok((StatusCode::ACCEPTED, format!("Deployment {} triggered successfully", inserted_deploy.id)))
 }
+
+pub async fn get_project(
+    State(state): State<Arc<AppState>>,
+    auth_user: AuthUser,
+    Path(project_id): Path<Uuid>,
+) -> Result<Json<ProjectResponse>, (StatusCode, String)> {
+    let project_opt = project::Entity::find_by_id(project_id)
+        .filter(project::Column::OwnerId.eq(auth_user.id))
+        .one(&state.db)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let project_opt = project_opt
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Project not found or access denied".to_string()))?;
+
+    Ok(Json(ProjectResponse::from(project_opt)))
+}
+
+pub async fn list_project_services(
+    State(state): State<Arc<AppState>>,
+    _auth: AuthUser,
+    Path(project_id): Path<Uuid>,
+) -> Result<Json<Vec<crate::handlers::service::ServiceResponse>>, (StatusCode, String)> {
+    let services = service::Entity::find()
+        .filter(service::Column::ProjectId.eq(project_id))
+        .all(&state.db)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let resp: Vec<crate::handlers::service::ServiceResponse> = services
+        .into_iter()
+        .map(Into::into)
+        .collect();
+
+    Ok(Json(resp))
+}
