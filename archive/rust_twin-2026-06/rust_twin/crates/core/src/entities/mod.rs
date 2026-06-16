@@ -12,3 +12,22 @@ pub mod addon;
 pub mod usage;
 pub mod environment_variable;
 pub mod cron;
+
+// P-batch additions (2026-06-17)
+pub mod plan;
+pub mod subscription;
+pub mod invoice;
+pub mod cluster;
+pub mod mesh_node;
+pub mod node_election;
+pub mod heartbeat_log;
+pub mod safedeploy_approval;
+pub mod transfer_log;
+pub mod backup_record;
+pub mod tunnel;
+pub mod webhook;
+pub mod domain;
+pub mod social_account;
+pub mod social_app;
+pub mod social_token;
+pub mod addon_template;

@@ -1,5 +1,6 @@
 use crate::WorkerState;
 use anyhow::{Context, Result};
+use cn_core::deployment_status::DeploymentStatus;
 use cn_core::entities::{deployment, service};
 use infrastructure::{builder::NixpacksBuilder, docker::DockerClient};
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
@@ -77,7 +78,7 @@ async fn handle_smart_deploy(
         .context("Deployment not found in DB")?
         .into();
 
-    deploy_active.status = Set("BUILDING".to_string());
+    deploy_active.status = Set(DeploymentStatus::Building.as_str().to_string());
     deploy_active.save(&state.db).await?;
 
     // 2. Lookup Service
@@ -105,14 +106,23 @@ async fn handle_smart_deploy(
                 .await?
                 .unwrap()
                 .into();
-            deploy_failed.status = Set("FAILED".to_string());
+            deploy_failed.status = Set(DeploymentStatus::DeployFailed.as_str().to_string());
             deploy_failed.save(&state.db).await?;
 
             return Err(e);
         }
     }
 
-    // 4. Run the container via DockerClient
+    // 4. Mark deployment as deploying (state machine: BUILDING -> DEPLOYING -> RUNNING)
+    let mut deploy_deploying: deployment::ActiveModel = deployment::Entity::find_by_id(deployment_id)
+        .one(&state.db)
+        .await?
+        .context("Deployment not found in DB")?
+        .into();
+    deploy_deploying.status = Set(DeploymentStatus::Deploying.as_str().to_string());
+    deploy_deploying.save(&state.db).await?;
+
+    // 5. Run the container via DockerClient
     let docker = DockerClient::new()?;
     let network_name = "smsly-net"; // Matches DOCKER_NETWORK from .env
 
@@ -121,17 +131,30 @@ async fn handle_smart_deploy(
 
     // Run container
     let container_name = format!("svc-{}-{}", svc.slug, commit_hash);
-    let container_id = docker.run_container(&image_name, &container_name, vec![], network_name).await?;
+    let container_id = match docker.run_container(&image_name, &container_name, vec![], network_name).await {
+        Ok(id) => id,
+        Err(e) => {
+            error!("Deploy failed: {}", e);
+            let mut deploy_failed: deployment::ActiveModel = deployment::Entity::find_by_id(deployment_id)
+                .one(&state.db)
+                .await?
+                .unwrap()
+                .into();
+            deploy_failed.status = Set(DeploymentStatus::DeployFailed.as_str().to_string());
+            deploy_failed.save(&state.db).await?;
+            return Err(e);
+        }
+    };
     info!("Container {} started successfully.", container_id);
 
-    // 5. Mark Deployment as Running
+    // 6. Mark Deployment as Running
     let mut deploy_success: deployment::ActiveModel = deployment::Entity::find_by_id(deployment_id)
         .one(&state.db)
         .await?
         .unwrap()
         .into();
 
-    deploy_success.status = Set("RUNNING".to_string());
+    deploy_success.status = Set(DeploymentStatus::Running.as_str().to_string());
     deploy_success.finished_at = Set(Some(chrono::Utc::now().into()));
     deploy_success.save(&state.db).await?;
 

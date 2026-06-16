@@ -104,17 +104,26 @@ name = "api"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "axum-test",
  "chrono",
  "core",
+ "hex",
+ "hmac",
  "redis",
+ "reqwest",
  "sea-orm",
  "serde",
  "serde_json",
+ "sha2",
+ "subtle",
+ "thiserror 1.0.69",
  "tokio",
  "tower",
  "tracing",
+ "url",
+ "urlencoding",
  "uuid",
 ]
 
@@ -804,6 +813,7 @@ dependencies = [
  "serde_json",
  "sha1",
  "sha2",
+ "thiserror 1.0.69",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -4699,6 +4709,12 @@ dependencies = [
  "percent-encoding",
  "serde",
 ]
+
+[[package]]
+name = "urlencoding"
+version = "2.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "daf8dba3b7eb870caf1ddeed7bc9d2a049f3cfdfae7cb521b087cc33ae4c49da"
 
 [[package]]
 name = "utf8-width"

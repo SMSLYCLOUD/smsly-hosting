@@ -14,6 +14,15 @@ sea-orm = { workspace = true }
 uuid = { version = "1.0", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 redis = { version = "0.27", features = ["tokio-comp"] }
+thiserror = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+subtle = { workspace = true }
+reqwest = { workspace = true }
+url = { workspace = true }
+urlencoding = { workspace = true }
+async-trait = { workspace = true }
 
 cn_core = { path = "../core", package = "core" }
 
