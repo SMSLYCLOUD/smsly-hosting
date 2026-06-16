@@ -529,10 +529,13 @@ apt_run() {
 
     while [ "$attempt" -le "$max_attempts" ]; do
         wait_for_apt_lock || return 1
-        set +e
-        output="$("$@" 2>&1)"
-        rc=$?
-        set -e
+        # SECURITY/HARDENING: avoid set +e / set -e toggling. Capture rc via
+        # explicit conditional so set -e stays in effect the whole time.
+        if output="$("$@" 2>&1)"; then
+            rc=0
+        else
+            rc=$?
+        fi
 
         if [ "$rc" -eq 0 ]; then
             [ -n "$output" ] && printf '%s\n' "$output"
@@ -1551,8 +1554,10 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "SMSLY_DISABLE_TIER_GATES" "true" "Disable owner-tier paywall gates in this edition"
     env_ensure_var "$env_file" "SMSLY_ENABLE_STARTUP_CADDY_SYNC" "false" "Keep AppConfig.ready side-effect free; installer/watchers sync edge config"
     env_ensure_var "$env_file" "PGCAT_ADMIN_PASSWORD" "$(gen_hex_secret 24)" "PgCat administration password (mandatory for 1.2+)"
-    # SSH host key check: false by default to support bootstrap/trusted labs without manual known_hosts populating.
-    env_ensure_var "$env_file" "SMSLY_STRICT_SSH_HOST_KEY_CHECK" "false" "SSH host key verification (True=strict, False=accept-first)"
+    # SECURITY: default to true (was false pre-2026-06). Strict SSH host-key
+    # checking is the safe default; only set to "false" in trusted/lab
+    # environments where known_hosts is pre-populated out-of-band.
+    env_ensure_var "$env_file" "SMSLY_STRICT_SSH_HOST_KEY_CHECK" "true" "SSH host key verification (True=strict, False=accept-first)"
     sync_install_mode_env_file "$env_file"
 
     redis_password="$(env_get_value "$env_file" "REDIS_PASSWORD")"
@@ -1919,6 +1924,7 @@ reconcile_compose_stack_after_resume() {
     echo -e "${YELLOW}  -> Resumed checkpoint is stale; reconciling compose stack:${NC}"
     printf '%s\n' "$drift" | sed 's/^/     - /'
 
+    # TODO(install): replace set -e toggle with explicit conditional
     set +e
     compose_stack_up --remove-orphans
     reconcile_rc=$?
@@ -2043,16 +2049,19 @@ run_backend_migrations() {
     if [ -z "$direct_url" ]; then
         direct_url="postgresql://${POSTGRES_USER:-smsly_admin}:${POSTGRES_PASSWORD:-}@${POSTGRES_HOST:-db}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-smsly_hosting}"
     fi
-    set +e
-    docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T \
+    # SECURITY/HARDENING: avoid set +e / set -e toggling. Capture rc via
+    # explicit conditional so set -e stays in effect the whole time.
+    if ! docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T \
         "${user_args[@]}" \
         -e SMSLY_DISABLE_STARTUP_TASKS=true \
         -e SMSLY_MIGRATION_MODE=true \
         -e DIRECT_DATABASE_URL="$direct_url" \
         backend timeout "$timeout_seconds" \
-        python manage.py migrate --database="$migrate_db" --noinput
-    rc=$?
-    set -e
+        python manage.py migrate --database="$migrate_db" --noinput; then
+        rc=$?
+    else
+        rc=0
+    fi
     if [ "$rc" -ne 0 ]; then
         if [ "$rc" -eq 124 ]; then
             echo -e "${RED}  x Migrations timed out after ${timeout_seconds}s.${NC}"
@@ -2065,8 +2074,9 @@ run_backend_migrations() {
 
     # Self-healing: fix node agent DB permissions after migrations.
     # This ensures node_agent_* users have access to newly created tables.
+    # TODO(install): replace set -e toggle with explicit conditional (the
+    # trailing `|| true` already swallows failures, so set +e is redundant).
     echo -e "${BLUE}  -> Fixing node agent database permissions...${NC}"
-    set +e
     docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T \
         "${user_args[@]}" \
         -e SMSLY_DISABLE_STARTUP_TASKS=true \
@@ -2151,10 +2161,18 @@ EOF
     }
     rm -f "$ssl_config"
 
-    # Caddy container runs as UID 1000; install runs as root.
-    # 0644 ensures Caddy can read both cert and key.
+    # SECURITY: private key must be owner-readable only (chmod 600). Caddy
+    # reads cert AND key as UID 1000; we chown the key to that user so the
+    # Caddy container can open it. Cert stays world-readable (chmod 644) for
+    # chain-bundle consumers; key is never world-readable.
     chmod 644 "$cert_file" 2>/dev/null || true
-    chmod 644 "$key_file" 2>/dev/null || true
+    chmod 600 "$key_file" 2>/dev/null || true
+    # Hand ownership to Caddy (UID 1000) when run as root via sudo.
+    if [ -n "${SUDO_USER:-}" ]; then
+        chown "${SUDO_USER}:${SUDO_USER}" "$key_file" 2>/dev/null || chown 1000:1000 "$key_file" 2>/dev/null || true
+    elif [ "$(id -u)" -eq 0 ]; then
+        chown 1000:1000 "$key_file" 2>/dev/null || true
+    fi
     echo -e "${GREEN}  ✓ Self-signed cert generated for $public_ip${NC}"
 }
 
@@ -2415,7 +2433,9 @@ wipe_existing_install() {
     trap - EXIT
     release_install_lock
     echo -e "${GREEN}OK Wipe complete. The server is ready for a fresh install.${NC}"
-    echo -e "${YELLOW}  Run: curl -fsSL https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/main/install.sh -o /tmp/install.sh && sudo bash /tmp/install.sh${NC}"
+    echo -e "${YELLOW}  Run: curl -fsSL https://raw.githubusercontent.com/smsly/smsly-hosting/main/install.sh -o install.sh${NC}"
+    echo -e "${YELLOW}       gpg --verify install.sh  # if you have a signed copy${NC}"
+    echo -e "${YELLOW}       sudo bash install.sh${NC}"
     exit 0
 }
 
@@ -3346,6 +3366,10 @@ print('${REGISTRY_USER:-smsly-registry}:' + bcrypt.hashpw(pw.encode(), bcrypt.ge
 }
 
 debug_platform_status() {
+    # TODO(install): replace set -e toggle with explicit conditional. The
+    # entire body tolerates command failures (each diagnostic line has its own
+    # `|| true` or `2>/dev/null`); leaving set -e toggled off is functional
+    # but discouraged.
     set +e
     echo -e "\n${YELLOW}=== SMSLY DEBUG SNAPSHOT ===${NC}"
     echo "Timestamp: $(date -Iseconds)"
@@ -3848,63 +3872,15 @@ fi
     find "$INSTALL_DIR" -name "*.sh" -exec chmod +x {} \;
     echo -e "${GREEN}  ✓ Script permissions fixed${NC}"
 
-    # ─── Fix SSH provisioner: always auto-add host keys ─────────────────────
-    # The env-var-based approach fails because container env vars are set at
-    # startup and don't hot-reload when .env changes. AutoAddPolicy accepts
-    # unknown hosts once, saves to known_hosts, then verifies subsequently.
-    _PROVISIONER="$INSTALL_DIR/backend/apps/deployments/services/provisioner.py"
-    if [ -f "$_PROVISIONER" ]; then
-        # Replace the strict_host_key_check block with a single AutoAddPolicy line
-        python3 << PYEOF 2>/dev/null || echo -e "${YELLOW}  ⚠ Could not patch provisioner.py${NC}"
-import re
-with open("$_PROVISIONER", "r") as f:
-    code = f.read()
-# Replace both old and new env-var based check patterns
-code = re.sub(
-    r"(strict_host_key_check|_strict)\s*=.*?RejectPolicy\(\)\s*else:\s*.*?AutoAddPolicy\(\)",
-    "client.set_missing_host_key_policy(paramiko.AutoAddPolicy())",
-    code,
-    flags=re.DOTALL,
-)
-# Remove any second occurrence if the first replacement left duplicates
-code = re.sub(
-    r"client\.set_missing_host_key_policy\(paramiko\.AutoAddPolicy\(\)\)\s*\n\s*client\.set_missing_host_key_policy\(paramiko\.AutoAddPolicy\(\)\)",
-    "client.set_missing_host_key_policy(paramiko.AutoAddPolicy())",
-    code,
-)
-with open("$_PROVISIONER", "w") as f:
-    f.write(code)
-print("\033[0;32m  ✓ SSH provisioner patched\033[0m")
-PYEOF
-    fi
-
-    # ─── Fix SSH client: always auto-add host keys ─────────────────────────
-    # The update-server flow uses SSHClient from ssh_client.py (not provisioner).
-    # Same fix: replace the allow_autoadd env check with direct AutoAddPolicy.
-    _SSH_CLIENT="$INSTALL_DIR/backend/apps/deployments/services/ssh_client.py"
-    if [ -f "$_SSH_CLIENT" ]; then
-        python3 << PYEOF 2>/dev/null || echo -e "${YELLOW}  ⚠ Could not patch ssh_client.py${NC}"
-import re
-with open("$_SSH_CLIENT", "r") as f:
-    code = f.read()
-# Replace the allow_autoadd env check block with direct AutoAddPolicy
-code = re.sub(
-    r"allow_autoadd\s*=.*?RejectPolicy\(\)",
-    'self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())',
-    code,
-    flags=re.DOTALL,
-)
-# Remove any duplicate or the old logger.warning block that followed
-code = re.sub(
-    r"client\.load_system_host_keys\(\)\s*\n\s*client\.set_missing_host_key_policy\(paramiko\.AutoAddPolicy\(\)\)\s*\n\s*client\.set_missing_host_key_policy\(paramiko\.AutoAddPolicy\(\)\)",
-    'client.load_system_host_keys()\n        self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())',
-    code,
-)
-with open("$_SSH_CLIENT", "w") as f:
-    f.write(code)
-print("\033[0;32m  ✓ SSH client patched\033[0m")
-PYEOF
-    fi
+    # SECURITY: SSH strict host-key checking is ALWAYS enforced. The previous
+    # installer rewrote apps/deployments/services/provisioner.py and
+    # ssh_client.py to force paramiko.AutoAddPolicy() on every connection, which
+    # accepts any host fingerprint on first contact and is an SSH-MITM backdoor
+    # (CVE-class: TOFU on every deploy target). Strict checking is now the
+    # default; the in-app provisioner/ssh_client code controls policy via the
+    # SMSLY_STRICT_SSH_HOST_KEY_CHECK env var. Do not reintroduce a patch that
+    # silently overwrites that logic from the installer.
+    echo -e "${BLUE}  → SSH strict host-key check enforced (no installer patching of provisioner/ssh_client).${NC}"
 
     # Ensure shared networks exist (prod stack uses external networks)
     ensure_update_networks
@@ -5138,6 +5114,8 @@ if ! is_checkpoint_done "dependencies_installed"; then
 
 # Stop conflicting services if present. Host Caddy conflicts are handled by
 # check_caddy_conflict because master Docker Caddy and node Traefik need port 80.
+# LEGACY: nginx is only used for the bare-metal install path.
+# Docker Compose uses Caddy. See docs/REVERSE_PROXY_DECISION.md.
 for svc in nginx apache2; do
     if systemctl is-active --quiet "$svc" 2>/dev/null; then
         echo -e "${YELLOW}  ⚠ Stopping conflicting service: $svc${NC}"
@@ -5482,28 +5460,25 @@ else
         exit 1
     fi
 
-    # Use the dedicated secrets generation script (single source of truth)
+    # Use the dedicated secrets generation script (single source of truth).
+    # SECURITY: stream secrets directly into shell variables via process
+    # substitution so the plaintext never touches the filesystem. The previous
+    # implementation wrote to $INSTALL_DIR/.secrets.tmp which could leak on
+    # early failure (rm -f only ran on the success path).
     SECRETS_GENERATED=false
-    rm -f "$INSTALL_DIR/.secrets.tmp"
-    python3 "$INSTALL_DIR/scripts/generate_env_secrets.py" 2>/dev/null | grep -E '^[A-Z_]+=' > "$INSTALL_DIR/.secrets.tmp" || true
-    if [ -s "$INSTALL_DIR/.secrets.tmp" ]; then
-        SECRET_KEY="$(grep -m1 '^SECRET_KEY=' "$INSTALL_DIR/.secrets.tmp" | cut -d= -f2-)"
-        FIELD_ENCRYPTION_KEY="$(grep -m1 '^FIELD_ENCRYPTION_KEY=' "$INSTALL_DIR/.secrets.tmp" | cut -d= -f2-)"
-        POSTGRES_PASSWORD="$(grep -m1 '^POSTGRES_PASSWORD=' "$INSTALL_DIR/.secrets.tmp" | cut -d= -f2-)"
-        REDIS_PASSWORD="$(grep -m1 '^REDIS_PASSWORD=' "$INSTALL_DIR/.secrets.tmp" | cut -d= -f2-)"
-        RABBITMQ_PASSWORD="$(grep -m1 '^RABBITMQ_PASSWORD=' "$INSTALL_DIR/.secrets.tmp" | cut -d= -f2-)"
-        GATEWAY_SECRET="$(grep -m1 '^GATEWAY_SECRET=' "$INSTALL_DIR/.secrets.tmp" | cut -d= -f2-)"
-        GITHUB_WEBHOOK_SECRET="$(grep -m1 '^GITHUB_WEBHOOK_SECRET=' "$INSTALL_DIR/.secrets.tmp" | cut -d= -f2-)"
-        AUTOSCALER_API_TOKEN="$(grep -m1 '^AUTOSCALER_API_TOKEN=' "$INSTALL_DIR/.secrets.tmp" | cut -d= -f2-)"
-        FRP_AUTH_TOKEN="$(grep -m1 '^FRP_AUTH_TOKEN=' "$INSTALL_DIR/.secrets.tmp" | cut -d= -f2-)"
-        PGCAT_ADMIN_PASSWORD="$(grep -m1 '^PGCAT_ADMIN_PASSWORD=' "$INSTALL_DIR/.secrets.tmp" | cut -d= -f2-)"
-        if [ -n "$SECRET_KEY" ] && [ -n "$FIELD_ENCRYPTION_KEY" ]; then
-            SECRETS_GENERATED=true
-            echo -e "${GREEN}  ✓ Secrets generated (Fernet key validated)${NC}"
-        else
-            echo -e "${YELLOW}  ⚠ Secrets script ran but Fernet key is missing — generating inline...${NC}"
-        fi
-        rm -f "$INSTALL_DIR/.secrets.tmp"
+    while IFS='=' read -r _smsly_secrets_key _smsly_secrets_val; do
+        case "$_smsly_secrets_key" in
+            SECRET_KEY|FIELD_ENCRYPTION_KEY|POSTGRES_PASSWORD|REDIS_PASSWORD|RABBITMQ_PASSWORD|GATEWAY_SECRET|GITHUB_WEBHOOK_SECRET|AUTOSCALER_API_TOKEN|FRP_AUTH_TOKEN|PGCAT_ADMIN_PASSWORD)
+                printf -v "$_smsly_secrets_key" '%s' "$_smsly_secrets_val"
+                ;;
+        esac
+    done < <(python3 "$INSTALL_DIR/scripts/generate_env_secrets.py" 2>/dev/null | grep -E '^[A-Z_]+=' || true)
+    unset _smsly_secrets_key _smsly_secrets_val
+    if [ -n "${SECRET_KEY:-}" ] && [ -n "${FIELD_ENCRYPTION_KEY:-}" ]; then
+        SECRETS_GENERATED=true
+        echo -e "${GREEN}  ✓ Secrets generated (Fernet key validated)${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ Secrets script ran but Fernet key is missing — generating inline...${NC}"
     fi
 
     # Fallback: if the script didn't produce a valid Fernet key, generate it inline
@@ -5797,6 +5772,9 @@ fi
     echo -e "${BLUE}  → Starting App Stack (Build + Deploy)...${NC}"
     ( while true; do sleep 30; echo -e "${BLUE}      ↳ Progress: Deployment in progress... $(date +%H:%M:%S)${NC}"; done ) &
     HEARTBEAT_PID=$!
+    # TODO(install): replace set -e toggle with explicit conditional. The
+    # conditional rebuild + retry makes a flat `if ! cmd` rewrite risky; the
+    # rc-capture pattern is intentionally retained.
     set +e
     compose_stack_build --no-cache
     DEPLOY_RC=$?
