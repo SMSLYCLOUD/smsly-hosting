@@ -1,5 +1,6 @@
 import os
 import io
+import sys
 import tarfile
 import json
 import uuid
@@ -26,6 +27,57 @@ from apps.deployments.models_backup import ServiceBackup, ServerBackup
 from apps.deployments.models_storage import Volume
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_tar_extractall(tar: tarfile.TarFile, dest: str) -> None:
+    """Validate every member of ``tar`` and extract it into ``dest`` safely.
+
+    Refuses to extract:
+      * members whose path starts with ``/`` or contains ``..`` (path traversal);
+      * symbolic or hard links whose target resolves outside ``dest``;
+      * any symbolic or hard link if the link target cannot be resolved safely.
+
+    On Python 3.12+ we additionally rely on ``filter='data'`` so that the
+    interpreter itself rejects symlinks/hardlinks/devices at extract time.
+    """
+    dest_real = os.path.realpath(dest)
+    for member in tar.getmembers():
+        name = member.name
+        if name.startswith('/') or '..' in name:
+            raise ValueError(f"Unsafe path in backup archive: {name}")
+        if member.issym() or member.islnk():
+            link_target = member.linkname
+            if not link_target:
+                raise ValueError(
+                    f"Refusing link with empty target in backup archive: {name}"
+                )
+            # Compute the resolved target path. For absolute links this is
+            # the link path itself; for relative links it is interpreted
+            # relative to the member's directory inside the archive.
+            if os.path.isabs(link_target):
+                resolved_link = os.path.realpath(link_target)
+            else:
+                member_dir = os.path.dirname(os.path.join(dest_real, name))
+                resolved_link = os.path.realpath(
+                    os.path.join(member_dir, link_target)
+                )
+            if os.path.commonpath([dest_real, resolved_link]) != dest_real:
+                raise ValueError(
+                    f"Refusing link that escapes extract dir in backup "
+                    f"archive: {name} -> {link_target}"
+                )
+
+    if sys.version_info >= (3, 12):
+        tar.extractall(path=dest, filter='data')
+    else:
+        # The explicit per-member checks above already reject symlinks/hard
+        # links whose target leaves ``dest``. We additionally skip the
+        # remaining link-type members (which we have validated) to match
+        # ``filter='data'`` semantics on older interpreters.
+        for member in tar.getmembers():
+            if member.issym() or member.islnk():
+                continue
+            tar.extract(member, path=dest)
 
 
 class BackupEncryptionRequired(Exception):
@@ -461,11 +513,7 @@ class BackupService:
         try:
             # 1. Extract Archive
             with tarfile.open(archive_path, "r:gz") as tar:
-                # Security: reject members with absolute paths or '..' traversal
-                for member in tar.getmembers():
-                    if member.name.startswith('/') or '..' in member.name:
-                        raise ValueError(f"Unsafe path in backup archive: {member.name}")
-                tar.extractall(path=temp_dir)
+                _safe_tar_extractall(tar, temp_dir)
 
             with open(os.path.join(temp_dir, "metadata.json"), 'r') as f:
                 metadata = json.load(f)
@@ -830,11 +878,7 @@ class BackupService:
         try:
             # 1. Extract Archive locally to read metadata
             with tarfile.open(archive_path, "r:gz") as tar:
-                # Security: reject members with absolute paths or '..' traversal
-                for member in tar.getmembers():
-                    if member.name.startswith('/') or '..' in member.name:
-                        raise ValueError(f"Unsafe path in backup archive: {member.name}")
-                tar.extractall(path=temp_dir)
+                _safe_tar_extractall(tar, temp_dir)
 
             with open(os.path.join(temp_dir, "metadata.json"), 'r') as f:
                 metadata = json.load(f)
@@ -1177,10 +1221,7 @@ class BackupService:
 
         try:
             with tarfile.open(archive_path, "r:gz") as tar:
-                for member in tar.getmembers():
-                    if member.name.startswith('/') or '..' in member.name:
-                        raise ValueError(f"Unsafe path in server backup archive: {member.name}")
-                tar.extractall(path=temp_dir)
+                _safe_tar_extractall(tar, temp_dir)
 
             # Restore DB?
             # If we are running this from Django, we can't easily drop/restore the DB we are using.
@@ -1229,10 +1270,7 @@ class BackupService:
         os.makedirs(temp_dir, exist_ok=True)
         try:
             with tarfile.open(archive_path, "r:gz") as tar:
-                for member in tar.getmembers():
-                    if member.name.startswith('/') or '..' in member.name:
-                        raise ValueError(f"Unsafe path in service backup archive: {member.name}")
-                tar.extractall(path=temp_dir)
+                _safe_tar_extractall(tar, temp_dir)
 
             with open(os.path.join(temp_dir, "metadata.json"), 'r') as f:
                 metadata = json.load(f)

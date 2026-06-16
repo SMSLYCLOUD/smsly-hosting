@@ -138,8 +138,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                     "user_email": self.user.email
                 }
             )
-            logger.info("[CONSOLE_DEBUG] TerminalConsumer connected: User %s, PID %s, deployment %s",
-                        self.user, os.getpid(), self.deployment_id)
+            if settings.DEBUG:
+                logger.info("TerminalConsumer connected: deployment %s", self.deployment_id)
 
             # ── STATUS UPDATE: Immediate traffic after accept ──
             try:
@@ -153,7 +153,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             self._send_task = asyncio.create_task(self._send_loop())
             self._setup_task = asyncio.create_task(self._async_setup())
         except Exception as e:
-            logger.error("[CONSOLE_DEBUG] TerminalConsumer.connect() failed: %s", e, exc_info=True)
+            if settings.DEBUG:
+                logger.error("TerminalConsumer.connect() failed: %s", e, exc_info=True)
             if self._accepted:
                 try:
                     await self.send(text_data=json.dumps({'error': 'Internal error'}))
@@ -206,7 +207,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             await self._out_queue.put({'type': 'pong'})
 
             # Force-trigger a prompt by sending a newline to the shell
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, self._send_to_shell, "\n")
             
             # Start reading output
@@ -215,7 +216,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         except asyncio.CancelledError:
             logger.info("Terminal setup task cancelled")
         except Exception as e:
-            logger.error("[CONSOLE_DEBUG] Error during terminal setup: %s", e, exc_info=True)
+            if settings.DEBUG:
+                logger.error("Error during terminal setup: %s", e, exc_info=True)
             msg = '\r\n\x1b[31m[error] internal proxy error\x1b[0m\r\n'
             enc = base64.b64encode(msg.encode('utf-8')).decode('utf-8')
             await self._out_queue.put({'message': enc})
@@ -245,7 +247,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                     # Brief wait for cancellation to propagate
                     await asyncio.wait_for(task, timeout=0.2)
                 except (asyncio.CancelledError, asyncio.TimeoutError):
-                    logger.debug("[CONSOLE_DEBUG] %s task CANCELLED", name)
+                    if settings.DEBUG:
+                        logger.debug("%s task CANCELLED", name)
                 except Exception as e:
                     logger.debug("Error cancelling %s task: %s", name, e)
                 finally:
@@ -267,14 +270,16 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         self.exec_id = None
 
     async def receive(self, text_data=None, bytes_data=None):
-        logger.info("[CONSOLE_DEBUG] receive() called: text_data=%s, bytes_data=%s", bool(text_data), bool(bytes_data))
+        if settings.DEBUG:
+            logger.info("receive() called: text_data=%s, bytes_data=%s", bool(text_data), bool(bytes_data))
         if text_data is None and bytes_data is not None:
             # We ignore binary frames since frontend only sends text
             return
 
         # SECURITY: Re-check authentication on each message
         if not self.user:
-            logger.error("[CONSOLE_DEBUG] Closing 4001: Missing token"); await self.close(code=4001)
+            if settings.DEBUG:
+                logger.error("Closing 4001: Missing token"); await self.close(code=4001)
             return
 
         # 1. Handle structured JSON messages
@@ -322,10 +327,11 @@ class TerminalConsumer(AsyncWebsocketConsumer):
 
         # Forward raw input to the container's exec stdin (via executor)
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, self._send_to_shell, text_data)
         except Exception as e:
-            logger.error("[CONSOLE_DEBUG] Error forwarding input to container: %s", e, exc_info=True)
+            if settings.DEBUG:
+                logger.error("Error forwarding input to container: %s", e, exc_info=True)
 
     def _send_to_shell(self, data):
         """Blocking helper to send data to the container's raw socket."""
@@ -346,7 +352,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         If the exec socket dies, attempts server-side reconnection up to
         3 times before giving up and closing the WebSocket.
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         if not hasattr(self, '_last_activity'):
             self._last_activity = time.time()
@@ -445,22 +451,26 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 enc_text = base64.b64encode(text.encode('utf-8')).decode('utf-8')
                 await self._out_queue.put({'message': enc_text})
         except asyncio.CancelledError:
-            logger.info("[CONSOLE_DEBUG] _read_output task CANCELLED")
+            if settings.DEBUG:
+                logger.info("_read_output task CANCELLED")
         except Exception as e:
             if not self.is_disconnected:
-                logger.error(
-                    "[CONSOLE_DEBUG] _read_output error (PID %s): %s",
-                    os.getpid(), e, exc_info=True)
+                if settings.DEBUG:
+                    logger.error(
+                        "_read_output error: %s",
+                        e, exc_info=True)
             try:
                 await self.close()
             except Exception:
                 pass
         finally:
-            logger.info("[CONSOLE_DEBUG] _read_output task TERMINATED")
+            if settings.DEBUG:
+                logger.info("_read_output task TERMINATED")
 
     async def _send_loop(self):
         """Drains the output queue and sends it to the WebSocket."""
-        logger.info("[CONSOLE_DEBUG] _send_loop task STARTED")
+        if settings.DEBUG:
+            logger.info("_send_loop task STARTED")
         try:
             # SECURITY: Wait for handshake to propagate before sending first frame
             while not self._accepted and not self.is_disconnected:
@@ -491,14 +501,18 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                             break
                 
         except asyncio.CancelledError:
-            logger.info("[CONSOLE_DEBUG] _send_loop task CANCELLED")
+            if settings.DEBUG:
+                logger.info("_send_loop task CANCELLED")
         except Exception as e:
-            logger.error("[CONSOLE_DEBUG] _send_loop error (PID %s): %s", os.getpid(), e)
+            if settings.DEBUG:
+                logger.error("_send_loop error: %s", e)
         finally:
-            logger.info("[CONSOLE_DEBUG] _send_loop task TERMINATED")
+            if settings.DEBUG:
+                logger.info("_send_loop task TERMINATED")
 
     def _blocking_read(self):
-        logger.debug("[CONSOLE_DEBUG] _blocking_read() started")
+        if settings.DEBUG:
+            logger.debug("_blocking_read() started")
         """Blocking read from the exec socket. Runs in executor.
 
         Relies on the underlying docker-py socket timeout.
@@ -533,7 +547,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 return b''
             if 'bad file descriptor' in err_str or getattr(e, 'errno', None) == 9:
                 return None
-            logger.error("[CONSOLE_DEBUG] _blocking_read exception: %s", e, exc_info=True)
+            if settings.DEBUG:
+                logger.error("_blocking_read exception: %s", e, exc_info=True)
             logger.error(
                 "Terminal _blocking_read exception for %s: %s - %s",
                 self.deployment_id, type(e), e)
@@ -574,7 +589,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         Extracts the raw OS socket from docker-py's wrapper so that
         _blocking_read() can use recv() for reliable timeout behavior.
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self._sync_start_exec)
 
     def _sync_start_exec(self):
@@ -785,7 +800,8 @@ class BuildLogConsumer(AsyncWebsocketConsumer):
                 **initial
             }))
         except Exception as e:
-            logger.error("[CONSOLE_DEBUG] BuildLogConsumer.connect() failed: %s", e, exc_info=True)
+            if settings.DEBUG:
+                logger.error("BuildLogConsumer.connect() failed: %s", e, exc_info=True)
             try:
                 await self.send(text_data=json.dumps({'error': 'Internal error'}))
             except Exception:
@@ -980,7 +996,8 @@ class ServiceStatusConsumer(AsyncWebsocketConsumer):
             # Send initial service statuses
             await self._send_initial_services()
         except Exception as e:
-            logger.error("[CONSOLE_DEBUG] ServiceStatusConsumer.connect() failed: %s", e, exc_info=True)
+            if settings.DEBUG:
+                logger.error("ServiceStatusConsumer.connect() failed: %s", e, exc_info=True)
             try:
                 await self.send(text_data=json.dumps({'error': 'Internal error'}))
             except Exception:

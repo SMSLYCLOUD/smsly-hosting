@@ -405,17 +405,16 @@ def voice_alert_critical_task(self, deployment_id: str, error_message: str):
             f"Please check your dashboard immediately."
         )
 
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
         try:
-            result = loop.run_until_complete(
+            result = asyncio.run(
                 smsly_client.send_voice_alert(
                     to_phone=alert_phone,
                     message=message,
                 )
             )
-        finally:
-            loop.close()
+        except Exception as voice_exc:  # pylint: disable=broad-exception-caught
+            logger.exception("send_voice_alert failed: %s", voice_exc)
+            raise
 
         logger.info("Voice alert sent for deployment %s: %s", deployment_id, result)
         return result
@@ -423,7 +422,6 @@ def voice_alert_critical_task(self, deployment_id: str, error_message: str):
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.exception("Failed to send voice alert: %s", exc)
         raise self.retry(exc=exc, countdown=60)
-
 
 @shared_task
 def notify_deployment_success(deployment_id: str):

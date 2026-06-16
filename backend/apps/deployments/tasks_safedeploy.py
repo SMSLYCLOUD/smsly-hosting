@@ -176,8 +176,8 @@ def create_preview_environment_job(preview_id: str):
             p = PreviewEnvironment.objects.get(id=preview_id)
             p.status = PreviewEnvironment.Status.BUILD_FAILED
             p.save()
-        except:
-            pass
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.exception("Failed to mark preview as BUILD_FAILED: %s", exc)
 
 @shared_task
 def create_database_clone_job(preview_id: str):
@@ -282,8 +282,8 @@ def create_database_clone_job(preview_id: str):
             p.status = PreviewEnvironment.Status.DB_CLONE_FAILED
             p.error_message = str(e)
             p.save()
-        except:
-            pass
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.exception("Failed to mark preview as DB_CLONE_FAILED: %s", exc)
 
 @shared_task
 def run_migration_validation_job(preview_id: str):

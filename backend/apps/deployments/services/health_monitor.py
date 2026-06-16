@@ -17,6 +17,7 @@ from celery import shared_task
 from django.core.cache import cache
 from django.utils import timezone
 from apps.deployments.utils import log_event
+from apps.deployments.services.tls_verify import should_verify
 
 logger = logging.getLogger(__name__)
 
@@ -243,10 +244,11 @@ def _build_targets(service, active_deployment):
             )
         for base_url in internal_urls:
             for path in paths:
+                _probe_url = f"{base_url}{path}"
                 _add(
-                    f"{base_url}{path}",
+                    _probe_url,
                     headers={"Host": public_domain},
-                    verify=False,
+                    verify=should_verify(_probe_url),
                 )
 
     # ── Mesh & Private IP Targets (AWS/VPN Optimization) ────────────────
@@ -289,10 +291,11 @@ def _build_targets(service, active_deployment):
         if service_name:
             for port in ports:
                 for path in paths:
+                    _probe_url = f"http://{service_name}:{port}{path}"
                     _add(
-                        f"http://{service_name}:{port}{path}",
+                        _probe_url,
                         headers=direct_headers,
-                        verify=False,
+                        verify=should_verify(_probe_url),
                     )
     return targets
 
