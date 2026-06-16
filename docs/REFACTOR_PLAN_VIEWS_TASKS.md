@@ -8,6 +8,21 @@
 
 ---
 
+## Phase 1 progress (2026-06-16)
+
+- [x] Extracted `AuditLogViewSet` to `views_audit.py` (lines 4,534-4,560 of views.py → 42-line new file)
+- [x] Extracted `SessionTokenView` to `views_auth.py` (lines 4,563-4,599 of views.py → 56-line new file; included a local `EmptySerializer` to avoid a circular import)
+- [x] Extracted `RouteStatusView` to `views_route_status.py` (lines 5,178-5,232 of views.py → 70-line new file)
+- `views.py` line count: 5,832 → 5,718 (net -114 lines, +3 re-export shim lines)
+- Re-exports verified: `from apps.deployments.views import AuditLogViewSet, SessionTokenView, RouteStatusView` works; class identity is preserved (`A1 is A2`).
+- Tests: `test_audit_logging.py`, `test_audit_log_unit.py`, `test_audit_rollback_cancel.py`, `test_auth_etc_safety.py` (8 tests for `SessionTokenView`) all pass. `test_audit_log_target_filter.py` has 2 pre-existing failures unrelated to the refactor (confirmed by re-running against `git stash`-ed state).
+- **Skipped from Phase 1 list (for follow-up phases):**
+  - `RouteRecheckView` — has module-level helper dependencies (`_normalize_request_domain`, `_service_for_domain`) used by `ServiceViewSet`; safer to extract in Phase 2 alongside the other domain actions.
+  - `PlatformResourcesView` (de-dup) — picking which of the two duplicates to keep is a behaviour decision; defer to Phase 2.
+  - `recover_stalled_queued_deployments` — pulls in 3 other module-level helpers (`_resolve_provider_for_service`, `should_skip_review_for_commit_message`, `enqueue_smart_deploy_task`); Phase 3 candidates.
+
+---
+
 ## 1. Current state
 
 `apps/deployments/` has been the dumping ground for every feature added in the
