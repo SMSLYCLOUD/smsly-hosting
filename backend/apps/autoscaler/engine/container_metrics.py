@@ -13,7 +13,6 @@ import json
 import logging
 import os
 import socket
-import subprocess
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -112,36 +111,63 @@ def parse_k8s_memory(mem_str: str) -> float:
 
 
 def docker_stats_legacy() -> dict:
-    """Collect container metrics via ``docker stats --no-stream``."""
-    try:
-        result = subprocess.run(
-            ["docker", "stats", "--no-stream", "--format",
-             "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.NetIO}}\t{{.PIDs}}"],
-            capture_output=True, text=True, timeout=15,
-        )
-        containers = {}
-        for line in result.stdout.strip().split("\n"):
-            if not line.strip():
-                continue
-            parts = line.split("\t")
-            if len(parts) < 6:
-                continue
-            name, cpu_str, mem_usage, mem_pct, net_io, pids = parts
-            mem_parts = mem_usage.split("/")
-            mem_used_mb = parse_mem(mem_parts[0].strip()) if len(mem_parts) >= 1 else 0
-            mem_limit_mb = parse_mem(mem_parts[1].strip()) if len(mem_parts) >= 2 else 0
-            net_parts = net_io.split("/")
-            net_rx = parse_mem(net_parts[0].strip()) if len(net_parts) >= 1 else 0
-            net_tx = parse_mem(net_parts[1].strip()) if len(net_parts) >= 2 else 0
+    """Collect container metrics via the Docker SDK (docker-py).
 
-            containers[name] = {
-                "cpu_percent": _safe_float(cpu_str.replace('%', '')),
+    Replaces the previous ``docker stats`` subprocess invocation, which
+    required the ``docker`` CLI binary in the container image. We talk
+    to the Docker daemon over HTTP via ``docker-py`` and the shared
+    ``apps.cloud.docker_client`` factory, which honors the ``DOCKER_HOST``
+    env var (pointing at the socket-proxy in compose mode) and falls back
+    to the local socket otherwise.
+    """
+    try:
+        from apps.cloud.docker_client import get_docker_client
+
+        client = get_docker_client(timeout=10)
+        containers = {}
+        for container in client.containers.list():
+            try:
+                stats = container.stats(stream=False)
+            except Exception as exc:
+                logger.debug(
+                    "Skipping container %s: %s",
+                    getattr(container, "name", "?"), exc,
+                )
+                continue
+
+            cpu_stats = stats.get("cpu_stats", {}) or {}
+            precpu_stats = stats.get("precpu_stats", {}) or {}
+            cpu_usage = cpu_stats.get("cpu_usage", {}) or {}
+            precpu_usage = precpu_stats.get("cpu_usage", {}) or {}
+            cpu_delta = cpu_usage.get("total_usage", 0) - precpu_usage.get("total_usage", 0)
+            system_delta = cpu_stats.get("system_cpu_usage", 0) - precpu_stats.get("system_cpu_usage", 0)
+            num_cpus = cpu_stats.get("online_cpus") or 1
+            if system_delta > 0 and cpu_delta >= 0:
+                cpu_percent = (cpu_delta / system_delta) * num_cpus * 100.0
+            else:
+                cpu_percent = 0.0
+
+            mem = stats.get("memory_stats", {}) or {}
+            mem_used = mem.get("usage", 0) or 0
+            mem_limit = mem.get("limit", 0) or 0
+            mem_used_mb = mem_used / (1024 * 1024)
+            mem_limit_mb = mem_limit / (1024 * 1024) if mem_limit else 0.0
+            mem_percent = (mem_used / mem_limit * 100.0) if mem_limit else 0.0
+
+            networks = stats.get("networks", {}) or {}
+            rx_bytes = sum(n.get("rx_bytes", 0) for n in networks.values())
+            tx_bytes = sum(n.get("tx_bytes", 0) for n in networks.values())
+
+            pids = (stats.get("pids_stats", {}) or {}).get("current", 0) or 0
+
+            containers[container.name] = {
+                "cpu_percent": round(cpu_percent, 1),
                 "memory_mb": round(mem_used_mb, 1),
                 "memory_limit_mb": round(mem_limit_mb, 1),
-                "memory_percent": _safe_float(mem_pct.replace('%', '')),
-                "net_rx_mb": round(net_rx, 2),
-                "net_tx_mb": round(net_tx, 2),
-                "pids": int(pids) if pids.isdigit() else 0,
+                "memory_percent": round(mem_percent, 1),
+                "net_rx_mb": round(rx_bytes / (1024 * 1024), 2),
+                "net_tx_mb": round(tx_bytes / (1024 * 1024), 2),
+                "pids": int(pids),
             }
         return containers
     except Exception as exc:

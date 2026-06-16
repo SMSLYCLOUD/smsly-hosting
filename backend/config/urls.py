@@ -41,6 +41,8 @@ urlpatterns = [
          include('apps.core.urls_api_keys_alias')),
     path('api/v1/admin/users/',
          include('apps.core.urls_admin_users_alias')),
+    path('api/v1/observability/',
+         include('apps.core.urls_observability_alias')),
     # OAuth callback aliases — the frontend uses
     # /api/v1/accounts/<provider>/login/ but allauth is mounted
     # at /accounts/<provider>/login/. The alias re-exports

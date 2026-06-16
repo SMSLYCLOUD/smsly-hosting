@@ -26,7 +26,7 @@ def patch_runtime_settings():
 
     _patching_in_progress = True
     try:
-        logger.info("[patch] Attempting to sync settings from PlatformConfig...")
+        logger.debug("[patch] Attempting to sync settings from PlatformConfig...")
         import warnings
         from apps.deployments.models import PlatformConfig
         from django.contrib.sites.models import Site
@@ -42,7 +42,7 @@ def patch_runtime_settings():
         effective_domain = pc.domain or getattr(settings, 'DOMAIN', 'localhost')
         effective_use_ssl = pc.use_ssl if pc.domain else (not getattr(settings, 'DEBUG', False))
         
-        logger.info("[patch] Effective domain: %s (SSL: %s)", effective_domain, effective_use_ssl)
+        logger.debug("[patch] Effective domain: %s (SSL: %s)", effective_domain, effective_use_ssl)
 
         # 2. Patch ALLOWED_HOSTS
         if effective_domain and effective_domain not in settings.ALLOWED_HOSTS:
@@ -89,7 +89,7 @@ def patch_runtime_settings():
             # django.contrib.sites migrations run).  Skip silently —
             # the in-memory patches above are still applied.
             logger.debug("[patch] Skipped django_site sync (table may not exist yet): %s", site_exc)
-        logger.info("[patch] Runtime settings synchronized successfully.")
+        logger.debug("[patch] Runtime settings synchronized successfully.")
 
         # Write initial Prometheus target files for docker-labels
         try:

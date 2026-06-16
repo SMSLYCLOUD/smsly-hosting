@@ -162,10 +162,10 @@ class VolumeViewSet(viewsets.ModelViewSet):
             return Volume.objects.filter(
                 service_id=service_uuid,
                 service__owner=self.request.user,
-            )
+            ).order_by("id")
         return Volume.objects.filter(
             service__owner=self.request.user,
-        )
+        ).order_by("id")
 
     def perform_create(self, serializer):
         service_uuid = self._validated_service_uuid()
