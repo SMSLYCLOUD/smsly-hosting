@@ -26,8 +26,12 @@ If you need to revive any of these:
 3. Add tests before shipping. The "rust_twin" stub in particular has a
    `PARITY_REPORT.md` with fabricated identical latencies — replace it with
    a real, end-to-end test suite before claiming parity.
-4. Update or remove the `RUST_TWIN_MODE` branch in `install.sh` and the
-   `rust-ci.yml` workflow if the rebuild effort is going to be deferred.
+
+## Follow-ups (all retired 2026-06)
+
+- [x] `install.sh` RUST_TWIN_MODE branch — removed in Batch S12
+- [x] `pytest.ini:6` `rust_twin` in testpaths — removed in Batch S12
+- [x] `.github/workflows/rust-ci.yml` — deleted in Batch S12
 
 ## Verification
 
