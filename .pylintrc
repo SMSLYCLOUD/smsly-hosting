@@ -1,45 +1,43 @@
+# TODO: address pylint warnings in follow-up PR
 [MASTER]
 ignore=migrations
 ignore-patterns=.*migrations.*
 
 [MESSAGES CONTROL]
-disable=
-    C0114, # missing-module-docstring (I tried to add them but just in case)
-    C0115, # missing-class-docstring
-    C0116, # missing-function-docstring
-    R0903, # too-few-public-methods
-    W0613, # unused-argument
-    R0801, # duplicate-code
-    W0611, # unused-import (sometimes tricky with django apps)
-    E0401, # import-error (environment issues)
-    C0411, # wrong-import-order
-    C0413, # wrong-import-position
-    W1203, # logging-fstring-interpolation
-    W0718, # broad-exception-caught
-    R0913, # too-many-arguments
-    R0914, # too-many-locals
-    R0912, # too-many-branches
-    R0915, # too-many-statements
-    R0911, # too-many-return-statements
-    C0301, # line-too-long
-    W0511, # fixme
-    R1705, # no-else-return
-    R1710, # inconsistent-return-statements
-    E1101, # no-member (django dynamism)
-    W0702, # bare-except
-    W1514, # unspecified-encoding
-    W1510, # subprocess-run-check
-    C0415, # import-outside-toplevel
-    R0902, # too-many-instance-attributes
-    R1732, # consider-using-with
-    R1702, # too-many-nested-blocks
-    E0602, # undefined-variable (usually serious, but sometimes false positive with type hints)
-    W0612, # unused-variable
-    W0105, # pointless-string-statement
-    W0404, # reimported
-    E1136, # unsubscriptable-object
-    E0402, # relative-beyond-top-level
-    C0303  # trailing-whitespace (I fixed it, but just in case)
+disable =
+    C0114,  # missing-module-docstring
+    C0115,  # missing-class-docstring
+    C0116,  # missing-function-docstring
+    R0903,  # too-few-public-methods
+    R0913,  # too-many-arguments
+    R0914,  # too-many-locals
+    R0915,  # too-many-statements
+    R0911,  # too-many-return-statements
+    R0902,  # too-many-instance-attributes
+    R1702,  # too-many-nested-blocks
+    R0801,  # duplicate-code
+    W0511,  # fixme
+    C0301,  # line-too-long
+    R1732,  # consider-using-with
+    W0612,  # unused-variable
+    E1101,  # no-member
+    W0718,  # broad-exception-caught  (but enable W0702 bare-except and W0703)
+    W0102,  # dangerous-default-value
+    C0103,  # invalid-name
+    E0401,  # import-error
+    E0611,  # no-name-in-module
+
+enable =
+    W0702,  # bare-except
+    W0703,  # broad-except
+    W0102,  # dangerous-default-value
+    E0001,  # syntax-error
+    E0102,  # function-redefined
+    E0202,  # method-hidden
+    E0203,  # access-member-before-definition
+    E0704,  # misplaced-bare-raise
+    R1710,  # inconsistent-return-statements
+    W1503,  # redundant-unittest-assert
 
 [FORMAT]
 max-line-length=120

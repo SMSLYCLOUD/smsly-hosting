@@ -1,4 +1,17 @@
+import os
+import sys
+import django
 import pytest
+
+# Ensure backend is on the path
+BACKEND_ROOT = os.path.dirname(os.path.abspath(__file__))
+if BACKEND_ROOT not in sys.path:
+    sys.path.insert(0, BACKEND_ROOT)
+
+# Django setup
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
+django.setup()
+
 
 @pytest.fixture(autouse=True)
 def disable_signature_check(settings):
@@ -19,3 +32,11 @@ def clear_throttle_cache():
     yield
     cache.clear()
 
+
+@pytest.fixture(autouse=True)
+def _isolate_test_environment():
+    """Per-test isolation: clear caches, throttle state, signature checks."""
+    from django.core.cache import cache
+    cache.clear()
+    yield
+    cache.clear()
