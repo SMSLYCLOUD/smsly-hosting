@@ -100,6 +100,16 @@ class SecurityMiddleware:
         if self._has_valid_token_auth_header(request):
             return False
 
+        # SECURITY: also skip when the HttpOnly auth cookie is present.
+        # The login view sets the cookie via ``Set-Cookie`` and the
+        # frontend drops the ``Authorization`` header in favour of
+        # ``withCredentials: true``; without this branch a logged-in
+        # browser user would be forced to provide an HMAC signature
+        # on every request, which the platform's CSRF protection
+        # explicitly does not require.
+        if self._has_valid_token_cookie(request):
+            return False
+
         # Check if a token is passed via query params for downloads
         if self._has_valid_query_token(request):
             return False
@@ -151,6 +161,29 @@ class SecurityMiddleware:
             return Token.objects.filter(key=token_key).exists()
         except Exception:
             logger.exception("Token validation failed in SecurityMiddleware")
+            return False
+
+    def _has_valid_token_cookie(self, request) -> bool:
+        """True if the HttpOnly auth cookie carries a valid DRF token.
+
+        Mirrors ``_has_valid_token_auth_header`` for the cookie transport.
+        We deliberately do NOT accept the ``smsly_``-prefixed API-token
+        scheme here — those tokens are short-lived operational tokens that
+        are never issued to a browser.
+        """
+        from apps.core.auth_cookies import DEV_COOKIE_NAME, PROD_COOKIE_NAME
+
+        token_key = (
+            request.COOKIES.get(PROD_COOKIE_NAME)
+            or request.COOKIES.get(DEV_COOKIE_NAME)
+        )
+        if not token_key:
+            return False
+        try:
+            from rest_framework.authtoken.models import Token
+            return Token.objects.filter(key=token_key).exists()
+        except Exception:
+            logger.exception("Cookie token validation failed in SecurityMiddleware")
             return False
 
     def _verify_signature(self, request):

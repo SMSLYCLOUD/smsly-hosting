@@ -5,7 +5,6 @@ import Link from "next/link";
 import Image from "next/image";
 import { Github, Chrome, Loader2, GitBranch, Code2 } from "lucide-react";
 
-import { setAuthTokenCookie } from "@/lib/auth-cookies";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -70,28 +69,18 @@ export default function RegisterPage() {
         return;
       }
 
+      // The auth token is delivered as an HttpOnly cookie by the
+      // backend's Set-Cookie header; the browser stores and attaches
+      // it automatically on subsequent requests because of
+      // ``credentials: "include"``. We do not write the token to
+      // localStorage — the cookie is the only credential.
       const data = await response.json().catch(() => ({}));
-      let token = data?.key || data?.token || null;
-
-      if (!token) {
-        const tokenResponse = await fetch(`${BACKEND_URL}/api/v1/auth/session-token/`, {
-          method: "GET",
-          credentials: "include",
-        });
-        if (tokenResponse.ok) {
-          const tokenData = await tokenResponse.json();
-          token = tokenData?.token || null;
-        }
-      }
-
-      if (!token) {
+      if (!data?.key && !data?.token) {
         setError("Account created, but token retrieval failed. Please log in.");
         window.location.assign("/login");
         return;
       }
 
-      localStorage.setItem("auth_token", token);
-      setAuthTokenCookie(token);
       window.location.assign("/dashboard");
     } catch {
       setError("Unable to connect to server. Please try again.");

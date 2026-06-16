@@ -787,6 +787,15 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'apps.deployments.api_token_auth.APITokenAuthentication',
         'apps.deployments.api_token_auth.RemoteSyncHMACAuthentication',
+        # SECURITY: ``CookieAwareTokenAuthentication`` extends DRF's
+        # ``TokenAuthentication`` and additionally accepts the HttpOnly
+        # auth cookie set by ``ThrottledLoginView``. It is registered
+        # BEFORE the plain ``TokenAuthentication`` so that the cookie
+        # path runs first when no Authorization header is present.
+        # Both classes share the same Token model and the same validation
+        # logic — the cookie is just a more convenient transport for the
+        # same credential.
+        'apps.core.auth.CookieAwareTokenAuthentication',
         'rest_framework.authentication.TokenAuthentication',
         # SECURITY (Batch G): the legacy CsrfExemptSessionAuthentication
         # fallback was removed. Session-authenticated requests are now

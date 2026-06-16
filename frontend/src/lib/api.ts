@@ -14,23 +14,6 @@ export const api = axios.create({
   withCredentials: true,
 });
 
-function getAuthTokenFromCookie(): string | null {
-  if (typeof document === "undefined") return null;
-  const match = document.cookie.match(/(?:^|;\s*)auth_token=([^;]+)/);
-  return match ? decodeURIComponent(match[1]) : null;
-}
-
-// Interceptor to add auth token
-api.interceptors.request.use((config) => {
-  const token = typeof window !== 'undefined'
-    ? (localStorage.getItem('auth_token') || getAuthTokenFromCookie())
-    : null;
-  if (token) {
-    config.headers.Authorization = `Token ${token}`;
-  }
-  return config;
-});
-
 function isServerProxyUrl(url?: string): boolean {
   if (!url) return false;
   const cleanUrl = url.split('?')[0];
@@ -297,10 +280,11 @@ api.interceptors.response.use(
     }
 
     if (error.response?.status === 401 && typeof window !== 'undefined') {
-      // Only clear stale credentials. Do NOT redirect here — the AuthProvider
-      // is the single source of truth for login redirects. Having two redirect
-      // paths (interceptor + AuthProvider) causes an infinite redirect loop.
-      localStorage.removeItem('auth_token');
+      // Clear any legacy client-side auth state (non-HttpOnly cookies /
+      // localStorage entries from older builds). The HttpOnly cookie
+      // itself is cleared by the backend's logout endpoint — the
+      // AuthProvider is the single source of truth for login redirects
+      // and will surface the 401 by re-rendering without a user.
       clearAuthCookies();
     }
     return Promise.reject(error);

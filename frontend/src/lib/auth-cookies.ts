@@ -1,55 +1,44 @@
 /**
- * Centralized auth cookie management.
+ * Centralized auth cookie helpers.
  *
- * L-2 fix: Deduplicated from login/page.tsx, auth-provider.tsx, and auth/callback/page.tsx.
- * H-3 fix: Enforces Secure flag on HTTPS, uses SameSite=Strict for CSRF protection.
+ * The auth token is delivered by the backend as an HttpOnly cookie
+ * (``__Host-auth_token`` in production, ``auth_token`` in development).
+ * HttpOnly cookies CANNOT be read from JavaScript, so this module
+ * intentionally does NOT expose a token-reading function — any code
+ * that tries to do so would always get ``null`` and silently break
+ * auth.
  *
- * NOTE: True HttpOnly cookies cannot be set via JavaScript (document.cookie).
- * For full HttpOnly protection, the backend should set the cookie via Set-Cookie header.
- * This utility provides the best client-side security available.
+ * The previous implementation wrote a non-HttpOnly client-side
+ * ``auth_token`` cookie AND mirrored the token into ``localStorage``.
+ * Both have been removed as part of the migration to HttpOnly-only
+ * cookies:
+ *
+ * - ``localStorage`` writes are gone — XSS could exfiltrate the token
+ *   and there is no way to scope the storage to the deployment.
+ * - ``document.cookie`` writes are gone — the backend now owns the
+ *   cookie lifecycle (``Set-Cookie`` on login, ``Delete-Cookie`` on
+ *   logout) and a client-written cookie would conflict with the
+ *   ``__Host-`` prefix requirements (Secure, Path=/, no Domain).
+ *
+ * Logout is the only cookie-touching action left. It is implemented
+ * as a backend call (``POST /api/v1/auth/logout/``) that returns
+ * the ``Set-Cookie`` header with ``Max-Age=0``; the browser then
+ * drops the cookie automatically. The wrapper lives in
+ * ``@/lib/auth.ts``.
  */
 
-export const AUTH_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30; // 30 days
-
 /**
- * Set the auth_token cookie with security hardening.
- */
-export function setAuthTokenCookie(token: string): void {
-  const isSecure =
-    typeof window !== "undefined" && window.location.protocol === "https:";
-  const cookieParts = [
-    `auth_token=${encodeURIComponent(token)}`,
-    "path=/",
-    `max-age=${AUTH_COOKIE_MAX_AGE_SECONDS}`,
-    "SameSite=Strict", // H-3 fix: upgraded from Lax to Strict for better CSRF protection
-  ];
-  if (isSecure) {
-    cookieParts.push("Secure");
-  }
-  document.cookie = cookieParts.join("; ");
-}
-
-/**
- * Get the auth token from localStorage or cookie.
- */
-export function getAuthToken(): string | null {
-  if (typeof window === 'undefined') {
-    return null;
-  }
-  const fromStorage = localStorage.getItem('auth_token');
-  if (fromStorage) {
-    return fromStorage;
-  }
-  const match = document.cookie.match(/(?:^|;\s*)auth_token=([^;]+)/);
-  return match ? decodeURIComponent(match[1]) : null;
-}
-
-/**
- * Clear all authentication cookies.
+ * Best-effort cleanup of any legacy client-side auth state left over
+ * from older builds. Safe to call repeatedly. The HttpOnly cookie
+ * itself is cleared by the backend logout endpoint, not by this
+ * function.
  */
 export function clearAuthCookies(): void {
-  document.cookie =
-    "auth_token=; path=/; expires=Thu, 01 Jan 1970 00:00:01 GMT; SameSite=Strict";
-  document.cookie =
-    "sessionid=; path=/; expires=Thu, 01 Jan 1970 00:00:01 GMT; SameSite=Strict";
+  if (typeof document === "undefined") return;
+  // Clear any non-HttpOnly legacy cookies a previous build may have
+  // set. The HttpOnly cookie is removed by the backend's Set-Cookie
+  // response on /api/v1/auth/logout/.
+  for (const name of ["auth_token", "sessionid"]) {
+    document.cookie = `${name}=; path=/; expires=Thu, 01 Jan 1970 00:00:01 GMT; SameSite=Strict`;
+  }
 }
