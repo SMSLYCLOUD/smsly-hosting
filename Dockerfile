@@ -3,7 +3,7 @@
 # Monolithic Dockerfile (single container) for Dockerfile-based PaaS deploys.
 # Runs: Django backend + Next.js frontend + (optional) celery/beat.
 
-FROM node:20-bookworm-slim AS frontend_builder
+FROM node:26-bookworm-slim AS frontend_builder
 WORKDIR /frontend
 
 ARG NEXT_PUBLIC_API_URL=/api/v1
