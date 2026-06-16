@@ -1903,7 +1903,18 @@ class PipelineManager:
         return None
 
     def _build_with_docker(self, context_dir: str, dockerfile_path: str):
-        """Execute Docker build."""
+        """Execute Docker build via the docker-py SDK (no docker CLI required).
+
+        Same U6 pattern as ``apps.autoscaler.engine.container_metrics``:
+        talk to the Docker daemon over HTTP via ``apps.cloud.docker_client``
+        (which honours ``DOCKER_HOST``, pointing at the socket-proxy in
+        compose mode) instead of shelling out to the ``docker`` CLI.  The
+        CLI is not installed in the runtime image (see Batch S5: removed
+        ``docker-ce-cli`` from the backend ``Dockerfile`` to shrink the
+        attack surface), so subprocess-based ``docker build`` invocations
+        crash with ``[Errno 2] No such file or directory: 'docker'`` and
+        break every new deployment.
+        """
         # ── Runtime Hardening: patch outdated base images ──
         self._patch_dockerfile_for_runtime(dockerfile_path)
 
@@ -1912,13 +1923,12 @@ class PipelineManager:
             f"Building with Docker ({os.path.basename(dockerfile_path)})...\n"
         )
 
-        build_args = []
-        env_map = {env.key: env.value for env in self.service.env_vars.all()}
-
-        # Smart arg detection – only pass non-secret build-args.
+        # Smart build-arg detection: only pass non-secret build-args.
         # Secrets are injected at runtime, never baked into the image.
         from apps.cloud.services.build_constants import is_secret_env_var
 
+        env_map = {env.key: env.value for env in self.service.env_vars.all()}
+        build_args_dict = {}
         defined_args = extract_dockerfile_arg_names(dockerfile_path)
         if defined_args:
             for k in defined_args:
@@ -1926,65 +1936,165 @@ class PipelineManager:
                     if is_secret_env_var(k):
                         logger.info("Skipping secret build-arg: %s", k)
                         continue
-                    build_args.extend(["--build-arg", f"{k}={env_map[k]}"])
+                    build_args_dict[k] = env_map[k]
         else:
             # Fallback: pass frontend-like vars (safe, non-secret)
             for k, v in env_map.items():
                 if k.startswith(("NEXT_PUBLIC_", "VITE_", "PUBLIC_")):
-                    build_args.extend(["--build-arg", f"{k}={v}"])
+                    build_args_dict[k] = v
 
         # Pre-flight: remove any orphaned buildkit containers that can
         # block the Docker build (common after a previous build crash/timeout).
         _cleanup_stuck_buildkit()
 
-        # Ensure the default builder uses the docker driver, not
-        # docker-container.  The docker driver loads the image directly
-        # without needing --load, which avoids buildkit-container issues.
-        if not self._ensure_docker_driver():
-            message = (
-                "Refusing to build: failed to recreate the buildx default "
-                "builder with the docker driver. See server logs for the "
-                "underlying docker buildx error."
-            )
-            logger.error("buildx_driver_recreation_aborted_build")
-            append_log(self.deployment, message + "\n")
-            raise BuildError(message)
+        # NOTE: The previous ``_ensure_docker_driver`` step (which used
+        # ``docker buildx inspect`` to confirm the default builder uses
+        # the docker driver) is no longer required: docker-py talks
+        # straight to the Docker Engine API, which always uses the
+        # legacy docker driver for the streamed-context build path.
+        # Skipping it also removes a subprocess call into the missing
+        # ``docker`` CLI.
 
         # Authenticate with the private registry before building so the
         # Docker daemon can pull base images (FROM lines in Dockerfile)
-        # from an auth-enabled registry without 403 errors.
+        # from an auth-enabled registry without 403 errors.  Uses
+        # docker-py so this works without the ``docker`` CLI binary.
         if settings.REGISTRY_USER and settings.REGISTRY_PASSWORD:
-            registry_url = (settings.CONTAINER_REGISTRY_URL or "registry.smsly.cloud").split("://")[-1]
+            registry_url = (
+                settings.CONTAINER_REGISTRY_URL or "registry.smsly.cloud"
+            ).split("://")[-1]
             try:
-                login_proc = subprocess.run(
-                    ["docker", "login", registry_url,
-                     "-u", settings.REGISTRY_USER, "--password-stdin"],
-                    input=settings.REGISTRY_PASSWORD,
-                    capture_output=True, text=True, timeout=30
+                from apps.cloud.docker_client import get_docker_client
+                client = get_docker_client()
+                client.login(
+                    username=settings.REGISTRY_USER,
+                    password=settings.REGISTRY_PASSWORD,
+                    registry=registry_url,
                 )
-                if login_proc.returncode != 0:
-                    logger.warning("Docker login to %s failed: %s", registry_url, login_proc.stderr.strip())
             except Exception as exc:
-                logger.warning("Docker login attempt failed (%s); proceeding without auth", exc)
+                logger.warning(
+                    "Docker login attempt failed (%s); proceeding without auth",
+                    exc,
+                )
 
-        # Only use --cache-from when the image is registry-qualified.
+        # Only use cache_from when the image is registry-qualified.
         # Bare image names (e.g. "smsly/name:tag") cause BuildKit to
         # resolve them to docker.io, triggering "insufficient_scope"
         # errors when the repo doesn't exist or requires auth.
-        registry_host = self.image_name.split("/")[0] if "/" in self.image_name else ""
+        registry_host = (
+            self.image_name.split("/")[0] if "/" in self.image_name else ""
+        )
         use_cache = bool(registry_host) and ("." in registry_host or ":" in registry_host)
+        cache_from = [self.image_name] if use_cache else []
 
-        cmd = [
-            "docker", "build",
-            "-t", self.image_name,
-            "-f", dockerfile_path,
-            "--load",
-            *(["--cache-from", self.image_name] if use_cache else []),
-            *build_args,
-            context_dir
-        ]
+        self._build_via_docker_py(
+            context_dir=context_dir,
+            dockerfile_path=dockerfile_path,
+            tag=self.image_name,
+            buildargs=build_args_dict,
+            cache_from=cache_from,
+        )
 
-        self._run_subprocess(cmd, context_dir)
+    def _build_via_docker_py(
+        self,
+        context_dir: str,
+        dockerfile_path: str,
+        tag: str,
+        buildargs: dict,
+        cache_from: list,
+    ):
+        """Build a Docker image via the docker-py SDK.
+
+        Replaces the previous ``docker build`` subprocess invocation,
+        which required the ``docker`` CLI binary in the container image.
+        The SDK talks to the Docker daemon over HTTP via the shared
+        ``apps.cloud.docker_client`` factory, which honours the
+        ``DOCKER_HOST`` env var (pointing at the socket-proxy in compose
+        mode) and falls back to the local socket otherwise.
+
+        Build output is drained from the SDK generator and written to
+        the deploy log on success (matching the previous subprocess
+        behaviour of one redacted ``append_log`` call at the end).
+        BuildKit cache errors get the same prune-and-retry treatment
+        as the old ``_run_subprocess`` path.
+        """
+        import io
+        import tarfile
+        from apps.cloud.docker_client import get_docker_client
+
+        # The daemon needs the Dockerfile path relative to the build
+        # context root inside the streamed tar.  If the Dockerfile lives
+        # outside the context (rare; mostly monorepo edge cases), fall
+        # back to the basename, which is the common case.
+        dockerfile_rel = os.path.relpath(dockerfile_path, context_dir)
+        if dockerfile_rel.startswith(".."):
+            dockerfile_rel = os.path.basename(dockerfile_path)
+
+        max_attempts = 2
+        for attempt in range(1, max_attempts + 1):
+            # Build a fresh tar of the build context on each attempt;
+            # the buffer is consumed by the SDK and can't be re-read.
+            tar_buffer = io.BytesIO()
+            with tarfile.open(fileobj=tar_buffer, mode="w") as tar:
+                tar.add(context_dir, arcname=".")
+            tar_buffer.seek(0)
+
+            try:
+                client = get_docker_client()
+                image, build_log = client.images.build(
+                    fileobj=tar_buffer,
+                    custom_context=True,
+                    tag=tag,
+                    dockerfile=dockerfile_rel,
+                    buildargs=buildargs or None,
+                    cache_from=cache_from or None,
+                    rm=True,
+                    forcerm=True,
+                )
+            except Exception as exc:
+                err_str = str(exc) or type(exc).__name__
+                redacted_err = redact_values(err_str, self.secret_values)
+                # BuildKit cache corruption -> prune and retry once,
+                # mirroring the previous _run_subprocess path.
+                if (
+                    is_buildkit_cache_error(redacted_err)
+                    and attempt < max_attempts
+                ):
+                    append_log(
+                        self.deployment,
+                        "BuildKit cache corruption detected. "
+                        "Pruning cache and retrying once...\n",
+                    )
+                    prune_buildkit_cache()
+                    continue
+                append_log(self.deployment, redacted_err)
+                if is_buildkit_cache_error(redacted_err):
+                    raise BuildError(
+                        "Docker cache corruption detected after "
+                        "automatic recovery attempt."
+                    ) from exc
+                raise BuildError("Docker build failed") from exc
+
+            # Build started OK -- drain the build log generator to
+            # capture the streamed output, then redacted-log it to the
+            # deploy transaction in a single append (matches the old
+            # subprocess behaviour and avoids one DB write per line).
+            log_chunks = []
+            for entry in build_log:
+                if not isinstance(entry, dict):
+                    continue
+                if "error" in entry and entry["error"]:
+                    raise BuildError(entry["error"].strip())
+                if "stream" in entry and entry["stream"]:
+                    log_chunks.append(entry["stream"])
+
+            full_log = "".join(log_chunks)
+            redacted = redact_values(full_log, self.secret_values)
+            if len(redacted) > 20000:
+                redacted = redacted[-20000:] + "\n...(truncated)"
+            if redacted:
+                append_log(self.deployment, redacted)
+            return
 
     def _ensure_docker_driver(self):
         """
