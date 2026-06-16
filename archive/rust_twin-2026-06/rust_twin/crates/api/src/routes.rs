@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::middleware::hmac::hmac_middleware;
 use crate::middleware::ratelimit::rate_limit_middleware;
-use crate::{handlers::{auth, billing, deployment, domain, project, service, sso, teams, transfer, tunnel, webhook}, AppState};
+use crate::{handlers::{acme, addon, admin, auth, backup, billing, deployment, domain, marketplace, observability, project, service, sso, team, transfer, tunnel, webhook}, AppState};
 
 pub fn create_router(state: Arc<AppState>) -> Router {
     let internal = Router::new()
@@ -19,7 +19,13 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     Router::new()
         .merge(public_routes())
         .merge(internal)
-        .route("/health", get(health))
+        .route("/health", get(observability::health))
+        .route("/health/live", get(observability::health_live))
+        .route("/health/ready", get(observability::health_ready))
+        .route("/metrics", get(observability::metrics))
+        .route("/version", get(observability::version))
+        .route("/.well-known/acme-challenge/:token", get(acme::acme_challenge))
+        .route("/acme/directory", get(acme::acme_directory))
         .layer(from_fn_with_state(
             state.rate_limit.clone(),
             rate_limit_middleware,
@@ -34,6 +40,10 @@ pub fn public_routes() -> Router<Arc<AppState>> {
             Router::new()
                 .route("/auth/register", post(auth::register))
                 .route("/auth/login", post(auth::login))
+                .route("/auth/logout", post(auth::logout))
+                .route("/auth/refresh", post(auth::refresh_token))
+                .route("/auth/me", get(auth::me))
+                .route("/auth/password", post(auth::change_password))
                 .route(
                     "/projects",
                     get(project::list_projects).post(project::create_project),
@@ -56,7 +66,23 @@ pub fn public_routes() -> Router<Arc<AppState>> {
                 .route("/billing/upgrade", post(billing::upgrade_license))
                 .route(
                     "/teams",
-                    get(teams::list_teams).post(teams::create_team),
+                    get(team::list_my_teams).post(team::create_team),
+                )
+                .route(
+                    "/teams/:id",
+                    get(team::get_team).delete(team::delete_team),
+                )
+                .route(
+                    "/teams/:id/members",
+                    get(team::list_team_members).post(team::add_team_member),
+                )
+                .route(
+                    "/teams/:id/members/:user_id",
+                    delete(team::remove_team_member),
+                )
+                .route(
+                    "/teams/:id/transfer-ownership/:user_id",
+                    post(team::transfer_ownership),
                 )
                 .route(
                     "/services/:id/domains",
@@ -80,13 +106,50 @@ pub fn public_routes() -> Router<Arc<AppState>> {
                 .route("/sso/callback", get(sso::oauth_callback))
                 .route("/sso/accounts", get(sso::list_social_accounts))
                 .route(
+                    "/services/:id/backups",
+                    get(backup::list_backups).post(backup::create_backup),
+                )
+                .route(
+                    "/backups/:id",
+                    get(backup::get_backup).delete(backup::delete_backup),
+                )
+                .route("/backups/:id/verify", post(backup::verify_backup))
+                .route("/backups/:id/restore", post(backup::restore_backup))
+                .route("/backups/:id/download", get(backup::download_backup))
+                .route("/backups/retention", post(backup::apply_retention))
+                .route(
                     "/deployments",
                     get(deployment::list_deployments).post(deployment::trigger_deployment),
                 )
                 .route("/deployments/:id", get(deployment::get_deployment))
                 .route("/deployments/:id/cancel", post(deployment::cancel_deployment))
                 .route("/deployments/:id/retry", post(deployment::retry_deployment))
-                .route("/deployments/:id/rollback", post(deployment::rollback_deployment)),
+                .route("/deployments/:id/rollback", post(deployment::rollback_deployment))
+                .route(
+                    "/marketplace/templates",
+                    get(marketplace::list_templates).post(marketplace::install_template),
+                )
+                .route(
+                    "/marketplace/templates/:slug",
+                    get(marketplace::get_template),
+                )
+                .route("/marketplace/categories", get(marketplace::list_categories))
+                .route(
+                    "/services/:id/addons",
+                    get(addon::list_addons).post(addon::create_addon),
+                )
+                .route("/addons/types", get(addon::get_supported_addon_types))
+                .route(
+                    "/addons/:id",
+                    get(addon::get_addon).delete(addon::delete_addon),
+                )
+                .route("/addons/:id/deprovision", post(addon::deprovision_addon))
+                .route("/addons/:id/logs", get(addon::get_addon_logs))
+                .route("/admin/users", get(admin::list_users))
+                .route("/admin/users/:id", get(admin::get_user).patch(admin::update_user))
+                .route("/admin/system/stats", get(admin::system_stats))
+                .route("/admin/audit-log", get(admin::search_audit_log))
+                .route("/admin/kill-switch", post(admin::kill_switch)),
         )
 }
 
@@ -106,8 +169,4 @@ async fn internal_heartbeat(
         axum::http::StatusCode::NOT_IMPLEMENTED,
         "internal heartbeat not yet implemented",
     )
-}
-
-async fn health() -> &'static str {
-    "OK"
 }
