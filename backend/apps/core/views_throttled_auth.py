@@ -17,9 +17,17 @@ brute-force-sensitive endpoints while leaving the bundled
 ``UserDetailsView``, ``LogoutView`` etc. on the global throttle
 (those are authenticated and thus less abusable).
 
+The login view also stamps the auth token as an HttpOnly+SameSite=Strict
+cookie on the response so the frontend can drop the legacy
+``Authorization: Token <key>`` header and rely on
+``withCredentials: true`` to have the browser attach the cookie
+automatically. The token is still returned in the JSON body, so
+existing API clients that read the body keep working unchanged.
+
 The wire-up in ``config/urls.py``:
 
     path('api/v1/auth/login/', ThrottledLoginView.as_view()),
+    path('api/v1/auth/logout/', ThrottledLogoutView.as_view()),
     path('api/v1/auth/password/reset/', ThrottledPasswordResetView.as_view()),
     path('api/v1/auth/registration/', ThrottledRegistrationView.as_view()),
 
@@ -27,12 +35,14 @@ replaces the corresponding ``dj_rest_auth`` URLs.
 """
 from dj_rest_auth.views import (
     LoginView as _BaseLoginView,
+    LogoutView as _BaseLogoutView,
     PasswordResetView as _BasePasswordResetView,
 )
 from dj_rest_auth.registration.views import (
     RegisterView as _BaseRegistrationView,
 )
 
+from apps.core.auth_cookies import delete_auth_cookie, set_auth_cookie
 from apps.deployments.rate_limiting import (
     LoginRateThrottle,
     PasswordResetRateThrottle,
@@ -46,8 +56,52 @@ class ThrottledLoginView(_BaseLoginView):
     10/min per IP matches the platform's intent for login:
     a forgetful user can mistype a few times; an attacker
     cannot spray 278 passwords/sec.
+
+    Also sets the auth token as an HttpOnly+SameSite=Strict cookie
+    on a successful response. The cookie carries the same token that
+    is returned in the JSON body (``{"key": "..."}``), so existing
+    API clients that read the body keep working.
     """
     throttle_classes = [LoginRateThrottle]
+
+    def get_response(self):
+        response = super().get_response()
+        # ``self.token`` is populated by ``dj_rest_auth``'s ``login()``
+        # and is the canonical DRF Token instance. We only stamp the
+        # cookie on a successful login (status 200) — failure responses
+        # have no token and would clear any prior session cookie.
+        if response.status_code == 200 and getattr(self, "token", None):
+            try:
+                set_auth_cookie(response, self.token.key)
+            except Exception:  # noqa: BLE001
+                # Never let a cookie helper crash the login response.
+                # Worst case the user can re-authenticate or the frontend
+                # falls back to the body-returned token via the legacy
+                # ``Authorization: Token`` header.
+                pass
+        return response
+
+
+class ThrottledLogoutView(_BaseLogoutView):
+    """``POST /api/v1/auth/logout/`` that clears the HttpOnly auth cookie.
+
+    ``dj_rest_auth``'s ``LogoutView`` already deletes the server-side
+    token (``request.user.auth_token.delete()``) when SESSION_LOGIN is
+    enabled. This subclass additionally clears the HttpOnly cookie on
+    the response so the browser stops sending it on the next request.
+    """
+    throttle_classes = [LoginRateThrottle]
+
+    def finalize_response(self, request, response, *args, **kwargs):
+        response = super().finalize_response(request, response, *args, **kwargs)
+        try:
+            delete_auth_cookie(response)
+        except Exception:  # noqa: BLE001
+            # If the cookie helper raises, the server-side token has
+            # already been deleted and the frontend can still clear its
+            # own state on the next page load.
+            pass
+        return response
 
 
 class ThrottledPasswordResetView(_BasePasswordResetView):

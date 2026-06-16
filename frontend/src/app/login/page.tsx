@@ -8,7 +8,6 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Github, Chrome, Mail, ArrowLeft, Loader2, GitBranch, Code2 } from "lucide-react";
-import { setAuthTokenCookie } from "@/lib/auth-cookies";
 
 export default function LoginPage() {
   const [showEmailForm, setShowEmailForm] = useState(false);
@@ -20,7 +19,7 @@ export default function LoginPage() {
   const BACKEND_URL = typeof window !== 'undefined'
     ? window.location.origin
     : process.env.NEXT_PUBLIC_API_URL || "https://cloud.smsly.cloud";
-  
+
   const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
@@ -44,28 +43,17 @@ export default function LoginPage() {
       });
 
       if (response.ok) {
+        // The backend's response is the canonical token — it is also
+        // delivered as an HttpOnly cookie via Set-Cookie, which the
+        // browser stores and attaches automatically thanks to
+        // ``credentials: "include"``. We no longer write the token to
+        // localStorage; the body is kept around only so we can confirm
+        // the login succeeded.
         const data = await response.json();
-        let token = data.key || data.token || null;
-
-        if (!token) {
-          // Session-only auth fallback: exchange authenticated session for API token.
-          const tokenResponse = await fetch(`${BACKEND_URL}/api/v1/auth/session-token/`, {
-            method: "GET",
-            credentials: "include",
-          });
-          if (tokenResponse.ok) {
-            const tokenData = await tokenResponse.json();
-            token = tokenData?.token || null;
-          }
-        }
-
-        if (!token) {
+        if (!data?.key && !data?.token) {
           setError("Login succeeded but no auth token was returned. Please try again.");
           return;
         }
-
-        localStorage.setItem("auth_token", token);
-        setAuthTokenCookie(token);
 
         // Full reload avoids Next.js route-cache edge cases around auth redirects.
         window.location.assign("/dashboard");
