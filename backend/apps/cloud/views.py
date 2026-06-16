@@ -923,8 +923,12 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
                         repo_url, destination=temp_dir, token=token
                     )
                 except Exception as e:
+                    logger.warning(
+                        "Repo clone failed for %s: %s",
+                        repo_url, e, exc_info=True,
+                    )
                     return Response(
-                        {'error': f'Failed to clone repository: {str(e)}'},
+                        {'error': 'Repository not found or inaccessible.'},
                         status=status.HTTP_400_BAD_REQUEST
                     )
 
@@ -948,10 +952,8 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
                 return Response(analysis_results)
 
         except Exception as e:
-            import logging
-            logger = logging.getLogger(__name__)
             logger.error("Repo analysis failed: %s", e, exc_info=True)
             return Response(
-                {'error': f'Analysis failed: {str(e)}'},
+                {'error': 'Analysis failed.'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )

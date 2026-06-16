@@ -5,6 +5,7 @@ import logging
 import os
 import base64
 import time
+from django.conf import settings
 from apps.deployments.utils import log_event
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
@@ -53,7 +54,6 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         self._cmd_buffer = "" # Buffer for audit logging
         self._out_queue = asyncio.Queue()
         self.is_disconnected = False
-        self._pulse_task = None
         self._accepted = False
         self._last_activity = time.time()
         self._keepalive_timeout_seconds = self._resolve_keepalive_timeout()
@@ -235,7 +235,6 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             ('_setup_task', "setup"),
             ('_read_task', "read_output"),
             ('_send_task', "send_loop"),
-            ('_pulse_task', "pulse")
         ]
 
         for attr, name in tasks_to_cancel:
@@ -352,7 +351,9 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         if not hasattr(self, '_last_activity'):
             self._last_activity = time.time()
 
-        timeout_seconds = 420.0  # 7 minutes total idle timeout
+        timeout_seconds = float(
+            getattr(settings, "WEBSOCKET_IDLE_TIMEOUT", 420)
+        )
         max_exec_reconnects = 10
         exec_reconnect_count = 0
 

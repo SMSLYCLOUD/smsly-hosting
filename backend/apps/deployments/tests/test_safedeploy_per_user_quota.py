@@ -37,18 +37,22 @@ class PerUserPreviewQuotaTests(TestCase):
     def tearDown(self):
         views_safedeploy.MAX_PREVIEWS_PER_CREATOR = self._original_quota
 
-    def _create_preview(self, user):
+    def _create_preview(self, user, branch="main", sha="abc1234"):
         from apps.deployments.services.safedeploy.branch_preview_manager import BranchPreviewManager
         return BranchPreviewManager().create_preview(
-            self.service, "main", "abc1234", user=user,
+            self.service, branch, sha, user=user,
         )
 
     @patch("apps.deployments.tasks_safedeploy.create_preview_environment_job.delay")
     def test_creator_quota_blocks_after_two_previews(self, mock_delay):
         mock_delay.return_value = None
 
-        self._create_preview(self.owner)
-        self._create_preview(self.owner)
+        p1 = self._create_preview(self.owner, branch="main-1", sha="aaaa111")
+        p1.status = PreviewEnvironment.Status.BUILDING
+        p1.save()
+        p2 = self._create_preview(self.owner, branch="main-2", sha="bbbb222")
+        p2.status = PreviewEnvironment.Status.READY
+        p2.save()
 
         resp = self.client.post(
             self.url,
@@ -60,10 +64,10 @@ class PerUserPreviewQuotaTests(TestCase):
 
     def test_destroyed_previews_do_not_count_against_quota(self):
         # Two destroyed previews must not trip the quota.
-        p1 = self._create_preview(self.owner)
+        p1 = self._create_preview(self.owner, branch="main-1", sha="aaaa111")
         p1.status = PreviewEnvironment.Status.DESTROYED
         p1.save()
-        p2 = self._create_preview(self.owner)
+        p2 = self._create_preview(self.owner, branch="main-2", sha="bbbb222")
         p2.status = PreviewEnvironment.Status.EXPIRED
         p2.save()
 
@@ -86,24 +90,33 @@ class PerUserPreviewQuotaTests(TestCase):
         other = User.objects.create_user(
             username="quota-other", password="p",
         )
-        other_preview = self._create_preview(other)
+        other_preview = self._create_preview(
+            other, branch="other-1", sha="cccc333",
+        )
         other_preview.status = PreviewEnvironment.Status.READY
         other_preview.save()
 
         # The owner can still create up to the per-user cap (2) because the
-        # quota is per-creator.
+        # quota is per-creator. We promote each owner preview to an active
+        # status so they count against the per-creator quota.
         resp1 = self.client.post(
             self.url,
             {"branch_name": "owner-1", "commit_sha": "aaaaaaa1"},
             format="json",
         )
         self.assertEqual(resp1.status_code, 201)
+        PreviewEnvironment.objects.filter(
+            id=resp1.data["id"],
+        ).update(status=PreviewEnvironment.Status.BUILDING)
         resp2 = self.client.post(
             self.url,
             {"branch_name": "owner-2", "commit_sha": "aaaaaaa2"},
             format="json",
         )
         self.assertEqual(resp2.status_code, 201)
+        PreviewEnvironment.objects.filter(
+            id=resp2.data["id"],
+        ).update(status=PreviewEnvironment.Status.BUILDING)
         resp3 = self.client.post(
             self.url,
             {"branch_name": "owner-3", "commit_sha": "aaaaaaa3"},

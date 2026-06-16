@@ -224,19 +224,36 @@ def heartbeat_receive(request):
         )
 
     from .models_mesh import MeshNetwork
-    mesh = (
+    mesh_qs = (
         MeshNetwork.objects
         .filter(is_active=True, peers__server__wg_address=leader_wg_address)
         .distinct()
-        .first()
     )
+    mesh = None
+    if mesh_qs.count() == 1:
+        mesh = mesh_qs.first()
+    elif mesh_qs.count() > 1:
+        logger.warning(
+            "Heartbeat received from peer wg_address=%s matches %d active "
+            "meshes via server; rejecting as ambiguous.",
+            leader_wg_address, mesh_qs.count(),
+        )
+        return Response({"accepted": True})
     if mesh is None:
-        mesh = (
+        peer_qs = (
             MeshNetwork.objects
             .filter(is_active=True, peers__wg_address=leader_wg_address)
             .distinct()
-            .first()
         )
+        if peer_qs.count() == 1:
+            mesh = peer_qs.first()
+        elif peer_qs.count() > 1:
+            logger.warning(
+                "Heartbeat received from peer wg_address=%s matches %d active "
+                "meshes via peer; rejecting as ambiguous.",
+                leader_wg_address, peer_qs.count(),
+            )
+            return Response({"accepted": True})
     if mesh is None:
         logger.warning(
             "Heartbeat received from unknown peer wg_address=%s; "
@@ -274,19 +291,42 @@ def vote_request(request):
         )
 
     from .models_mesh import MeshNetwork
-    mesh = (
+    mesh_qs = (
         MeshNetwork.objects
         .filter(is_active=True, peers__server__wg_address=candidate_wg_address)
         .distinct()
-        .first()
     )
+    mesh = None
+    if mesh_qs.count() == 1:
+        mesh = mesh_qs.first()
+    elif mesh_qs.count() > 1:
+        logger.warning(
+            "Vote request from candidate wg_address=%s matches %d active "
+            "meshes via server; rejecting as ambiguous.",
+            candidate_wg_address, mesh_qs.count(),
+        )
+        return Response(
+            {"error": "Ambiguous: candidate belongs to multiple active meshes"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
     if mesh is None:
-        mesh = (
+        peer_qs = (
             MeshNetwork.objects
             .filter(is_active=True, peers__wg_address=candidate_wg_address)
             .distinct()
-            .first()
         )
+        if peer_qs.count() == 1:
+            mesh = peer_qs.first()
+        elif peer_qs.count() > 1:
+            logger.warning(
+                "Vote request from candidate wg_address=%s matches %d active "
+                "meshes via peer; rejecting as ambiguous.",
+                candidate_wg_address, peer_qs.count(),
+            )
+            return Response(
+                {"error": "Ambiguous: candidate belongs to multiple active meshes"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
     if mesh is None:
         return Response(
             {"error": "No active mesh found for this peer"},

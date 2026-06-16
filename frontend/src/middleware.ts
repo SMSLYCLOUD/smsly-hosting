@@ -51,6 +51,11 @@ function hasSessionCookie(request: NextRequest): boolean {
   return Boolean(session && session.trim());
 }
 
+function hasCsrfTokenCookie(request: NextRequest): boolean {
+  const csrf = request.cookies.get("csrf_token")?.value;
+  return Boolean(csrf && csrf.trim());
+}
+
 export async function middleware(request: NextRequest) {
   if (process.env.NODE_ENV === "development" && DEV_SHORT_CIRCUIT_ENABLED) {
     return NextResponse.next();
@@ -71,10 +76,15 @@ export async function middleware(request: NextRequest) {
 
   const hasApiToken = hasAuthTokenCookie(request);
   const hasSession = hasSessionCookie(request);
+  const hasCsrf = hasCsrfTokenCookie(request);
 
   // Protect dashboard routes. Allow session-only users through so the client
   // can exchange session->token without forcing a hard redirect loop.
   if (protectedPage && !hasApiToken && !hasSession) {
+    return NextResponse.redirect(new URL("/login", request.url));
+  }
+
+  if (protectedPage && hasApiToken && !hasCsrf) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
 

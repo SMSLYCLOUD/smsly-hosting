@@ -160,10 +160,12 @@ class PreviewEnvironmentViewSet(viewsets.ModelViewSet):
         existing = PreviewEnvironment.objects.filter(
             service=service,
             created_by=request.user,
-        ).exclude(status__in=[
-            PreviewEnvironment.Status.DESTROYED,
-            PreviewEnvironment.Status.EXPIRED,
-        ]).count()
+            status__in=[
+                PreviewEnvironment.Status.BUILDING,
+                PreviewEnvironment.Status.READY,
+                PreviewEnvironment.Status.HEALTH_CHECK_RUNNING,
+            ],
+        ).count()
         if existing >= MAX_PREVIEWS_PER_CREATOR:
             return Response(
                 {"error": f"Per-user preview quota exceeded ({existing}/{MAX_PREVIEWS_PER_CREATOR}). Destroy existing previews first."},
