@@ -28,9 +28,20 @@ pub enum Task {
 pub async fn process_payload(state: Arc<WorkerState>, raw_payload: String) -> Result<()> {
     info!("Parsing task payload");
 
-    let task: Task = serde_json::from_str(&raw_payload)
-        .context("Failed to deserialize JSON task payload")?;
+    // Try the Celery bridge first (handles both Celery and native formats).
+    let task = match crate::celery_bridge::parse_celery_message(&raw_payload) {
+        Ok(Some(task)) => task,
+        Ok(None) => {
+            info!("Unknown task, acknowledged");
+            return Ok(());
+        }
+        Err(e) => {
+            error!("Failed to parse payload: {}", e);
+            return Err(anyhow::anyhow!(e));
+        }
+    };
 
+    info!("Processing task: {:?}", task);
     match task {
         Task::SmartDeploy {
             project_id,

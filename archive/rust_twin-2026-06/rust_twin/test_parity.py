@@ -1,102 +1,199 @@
 #!/usr/bin/env python3
-import requests
-import time
-import json
-import concurrent.futures
-from dataclasses import dataclass
+"""
+Real parity measurement harness for rust_twin vs Django.
 
-PYTHON_HOST = "http://localhost:8001"
-RUST_HOST = "http://localhost:8002"
+Replaces the placeholder test_parity.py. Measures actual latency, asserts
+actual status code matches, fails loudly on mismatch.
+"""
+import argparse
+import json
+import os
+import statistics
+import sys
+import time
+from dataclasses import dataclass, asdict, field
+from typing import Optional
+
+import requests
+
 
 @dataclass
-class TestResult:
-    endpoint: str
+class EndpointCase:
     method: str
-    python_status: int
-    rust_status: int
-    python_time_ms: float
-    rust_time_ms: float
-    parity_passed: bool
+    path: str
+    expected_status: int  # status code we expect both sides to return
+    requires_auth: bool = False
+    note: str = ""
 
-def hit_endpoint(host, method, endpoint, payload=None, token=None):
-    url = f"{host}{endpoint}"
-    headers = {}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
 
-    start_time = time.time()
-    try:
-        if method == "GET":
-            resp = requests.get(url, headers=headers, timeout=5)
-        elif method == "POST":
-            resp = requests.post(url, json=payload, headers=headers, timeout=5)
+# The 5 endpoints from the original PARITY_REPORT, but now with REAL assertions
+# about what they should return.
+DEFAULT_CASES = [
+    EndpointCase("GET", "/health", 200, note="Both should return 200 with 'OK' or JSON"),
+    EndpointCase("GET", "/api/v1/projects", 401, note="Both should require auth (401 unauth)"),
+    EndpointCase("GET", "/api/v1/billing/license", 401, note="Both should require auth"),
+    EndpointCase("GET", "/api/v1/teams", 401, note="Both should require auth"),
+    EndpointCase("POST", "/api/v1/auth/login", 400, note="Both should reject empty creds (400)"),
+]
 
-        elapsed = (time.time() - start_time) * 1000
-        return resp.status_code, elapsed
-    except Exception as e:
-        return 0, 0.0
 
-def run_parity_test(endpoint, method="GET", payload=None, token=None):
-    print(f"Testing {method} {endpoint} simultaneously...")
+@dataclass
+class LatencyStats:
+    samples: list  # raw ms samples
+    min_ms: float
+    median_ms: float
+    mean_ms: float
+    p95_ms: float
+    max_ms: float
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-        future_py = executor.submit(hit_endpoint, PYTHON_HOST, method, endpoint, payload, token)
-        future_rs = executor.submit(hit_endpoint, RUST_HOST, method, endpoint, payload, token)
+    @classmethod
+    def from_samples(cls, samples: list) -> "LatencyStats":
+        if not samples:
+            return cls([], 0, 0, 0, 0, 0)
+        return cls(
+            samples=samples,
+            min_ms=round(min(samples), 3),
+            median_ms=round(statistics.median(samples), 3),
+            mean_ms=round(statistics.mean(samples), 3),
+            p95_ms=round(sorted(samples)[int(len(samples) * 0.95)], 3),
+            max_ms=round(max(samples), 3),
+        )
 
-        py_status, py_time = future_py.result()
-        rs_status, rs_time = future_rs.result()
 
-    # We consider parity "passed" if both systems return the same HTTP Status classification (e.g. 20x, 40x)
-    # The new Rust system might return 201 Created while old Python returned 200 OK depending on DRF specifics.
-    parity_passed = str(py_status)[0] == str(rs_status)[0] and py_status != 0
+@dataclass
+class EndpointResult:
+    case: dict
+    django: dict  # {status, latency: LatencyStats, error}
+    rust: dict
+    passed: bool
+    notes: str = ""
 
-    return TestResult(endpoint, method, py_status, rs_status, py_time, rs_time, parity_passed)
 
-def generate_markdown_report(results):
-    with open("PARITY_REPORT.md", "w") as f:
-        f.write("# Grid Python vs. Rust Parity Report\n\n")
-        f.write("This report details the simultaneous endpoint testing against both the legacy Python/Django application and the new Rust/Axum twin.\n\n")
+def measure_side(base_url: str, case: EndpointCase, n: int) -> dict:
+    """Make n calls to the given side. Return a result dict."""
+    statuses = []
+    latencies_ms = []
+    errors = []
+    for _ in range(n):
+        url = f"{base_url.rstrip('/')}{case.path}"
+        try:
+            start = time.perf_counter()
+            resp = requests.request(
+                case.method,
+                url,
+                timeout=10,
+                verify=False,  # self-signed certs OK in lab
+            )
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            statuses.append(resp.status_code)
+            latencies_ms.append(elapsed_ms)
+        except requests.RequestException as e:
+            errors.append(str(e))
+    if errors:
+        return {"error": errors[0], "latency": None, "status": None}
+    return {
+        "status": statuses[0],  # first-call status
+        "all_statuses": statuses,
+        "latency": asdict(LatencyStats.from_samples(latencies_ms)),
+    }
 
-        f.write("| Method | Endpoint | Python Status | Rust Status | Python Latency (ms) | Rust Latency (ms) | Parity Status |\n")
-        f.write("|---|---|---|---|---|---|---|\n")
 
-        total_py_time = 0
-        total_rs_time = 0
+def run_parity(
+    django_url: str,
+    rust_url: str,
+    cases: list,
+    n: int,
+) -> list:
+    results = []
+    for case in cases:
+        django = measure_side(django_url, case, n)
+        rust = measure_side(rust_url, case, n)
+        passed = (
+            django.get("status") == case.expected_status
+            and rust.get("status") == case.expected_status
+        )
+        notes = ""
+        if django.get("status") != case.expected_status:
+            notes += f" Django returned {django.get('status')}, expected {case.expected_status}."
+        if rust.get("status") != case.expected_status:
+            notes += f" Rust returned {rust.get('status')}, expected {case.expected_status}."
+        results.append(
+            EndpointResult(
+                case=asdict(case),
+                django=django,
+                rust=rust,
+                passed=passed,
+                notes=notes.strip(),
+            )
+        )
+    return results
 
-        for res in results:
-            status_emoji = "✅ PASS" if res.parity_passed else "❌ FAIL"
-            f.write(f"| {res.method} | {res.endpoint} | {res.python_status} | {res.rust_status} | {res.python_time_ms:.2f} | {res.rust_time_ms:.2f} | {status_emoji} |\n")
 
-            total_py_time += res.python_time_ms
-            total_rs_time += res.rust_time_ms
+def render_table(results: list) -> str:
+    lines = []
+    lines.append(f"{'METHOD':<7} {'PATH':<30} {'EXPECT':<7} {'DJANGO':<7} {'RUST':<7} {'DJ.MED':<8} {'RS.MED':<8} PASS")
+    for r in results:
+        c = r.case
+        dj = r.django
+        rs = r.rust
+        dj_med = dj["latency"]["median_ms"] if dj.get("latency") else "N/A"
+        rs_med = rs["latency"]["median_ms"] if rs.get("latency") else "N/A"
+        lines.append(
+            f"{c['method']:<7} {c['path']:<30} {c['expected_status']:<7} "
+            f"{dj.get('status', 'ERR'):<7} {rs.get('status', 'ERR'):<7} "
+            f"{str(dj_med):<8} {str(rs_med):<8} {'✅' if r.passed else '❌'}"
+        )
+    return "\n".join(lines)
 
-        f.write("\n## Performance Summary\n")
-        if len(results) > 0:
-            f.write(f"- **Average Python Latency:** {total_py_time / len(results):.2f} ms\n")
-            f.write(f"- **Average Rust Latency:** {total_rs_time / len(results):.2f} ms\n")
 
-        print("\n=> Generated PARITY_REPORT.md successfully.")
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--django-url", default=os.environ.get("DJANGO_URL", "http://localhost:8000"))
+    parser.add_argument("--rust-url", default=os.environ.get("RUST_URL", "http://localhost:8080"))
+    parser.add_argument("--n", type=int, default=10, help="Number of samples per endpoint")
+    parser.add_argument("--out", default="parity_results.json", help="JSON output path")
+    args = parser.parse_args()
+
+    print(f"Django: {args.django_url}")
+    print(f"Rust:   {args.rust_url}")
+    print(f"Samples per endpoint: {args.n}")
+    print()
+
+    results = run_parity(args.django_url, args.rust_url, DEFAULT_CASES, args.n)
+    print(render_table(results))
+    print()
+
+    # JSON output
+    output = {
+        "django_url": args.django_url,
+        "rust_url": args.rust_url,
+        "samples_per_endpoint": args.n,
+        "results": [
+            {
+                "case": r.case,
+                "django": r.django,
+                "rust": r.rust,
+                "passed": r.passed,
+                "notes": r.notes,
+            }
+            for r in results
+        ],
+    }
+    with open(args.out, "w") as f:
+        json.dump(output, f, indent=2)
+    print(f"Full results written to {args.out}")
+
+    # Exit code
+    if all(r.passed for r in results):
+        print("\n[OK] All endpoints pass parity check")
+        sys.exit(0)
+    else:
+        failing = [r for r in results if not r.passed]
+        print(f"\n[FAIL] {len(failing)} endpoint(s) fail parity:")
+        for r in failing:
+            print(f"   {r.case['method']} {r.case['path']}: {r.notes}")
+        sys.exit(1)
+
 
 if __name__ == "__main__":
-    print("Waiting for containers to fully boot...")
-    time.sleep(3) # Give databases a moment
-
-    results = []
-
-    # 1. Health Check
-    results.append(run_parity_test("/health", "GET"))
-
-    # 2. Authentication Rejection (Missing Token)
-    results.append(run_parity_test("/api/v1/projects", "GET"))
-
-    # 3. Billing Singleton Test (Unauthorized)
-    results.append(run_parity_test("/api/v1/billing/license", "GET"))
-
-    # 4. Teams Listing (Unauthorized)
-    results.append(run_parity_test("/api/v1/teams", "GET"))
-
-    # 5. Invalid Login Credentials
-    login_payload = {"username": "non_existent_user", "password": "wrong_password"}
-    results.append(run_parity_test("/api/v1/auth/login", "POST", payload=login_payload))
-
-    generate_markdown_report(results)
+    main()

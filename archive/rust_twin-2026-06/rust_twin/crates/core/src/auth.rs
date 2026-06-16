@@ -1,10 +1,14 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
 };
+use base64::{engine::general_purpose, Engine as _};
+use pbkdf2::pbkdf2_hmac;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
+use sha1::Sha1;
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
@@ -13,31 +17,96 @@ pub struct Claims {
     pub iat: usize,   // Issued at timestamp
 }
 
+/// Hash algorithm as encoded in the stored password string.
+///
+/// The `rust_twin` mirrors the Django backend's `PASSWORD_HASHERS` list
+/// (`Argon2PasswordHasher`, `PBKDF2PasswordHasher`, `BCryptSHA256PasswordHasher`,
+/// `PBKDF2SHA1PasswordHasher`). The first segment of a stored hash (before the
+/// first `$`) identifies which algorithm produced it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HashAlgo {
+    Argon2,
+    BcryptSha256,   // Django's bcrypt_sha256 wrapper (bcrypt over SHA-256 of password)
+    Pbkdf2Sha256,   // Django's pbkdf2_sha256
+    Pbkdf2Sha1,     // Legacy Django pbkdf2_sha1 (kept for migration period)
+}
+
+impl HashAlgo {
+    /// Parse the algorithm prefix from a Django-style hash string.
+    /// Returns None if the prefix is unrecognised.
+    pub fn detect(stored: &str) -> Option<Self> {
+        if stored.starts_with("argon2$") {
+            Some(HashAlgo::Argon2)
+        } else if stored.starts_with("bcrypt_sha256$") {
+            Some(HashAlgo::BcryptSha256)
+        } else if stored.starts_with("pbkdf2_sha256$") {
+            Some(HashAlgo::Pbkdf2Sha256)
+        } else if stored.starts_with("pbkdf2_sha1$") {
+            Some(HashAlgo::Pbkdf2Sha1)
+        } else {
+            None
+        }
+    }
+}
+
 pub struct AuthUtils;
 
 impl AuthUtils {
-    /// Generates an Argon2 hash from a raw password string.
+    /// Hash a password using Argon2 (the default for new accounts in the
+    /// `rust_twin`). The returned string is prefixed with `argon2$` so the
+    /// stored hash is self-describing.
     pub fn hash_password(password: &str) -> Result<String> {
         let salt = SaltString::generate(&mut OsRng);
         let argon2 = Argon2::default();
-        let password_hash = argon2
+        let hash = argon2
             .hash_password(password.as_bytes(), &salt)
-            .map_err(|e| anyhow::anyhow!("Failed to hash password: {}", e))?
+            .map_err(|e| anyhow!("Failed to hash password: {}", e))?
             .to_string();
-        Ok(password_hash)
+        Ok(format!("argon2${}", hash))
     }
 
-    /// Verifies a raw password string against a stored Argon2 hash.
+    /// Verify a raw password against a stored hash, supporting all Django
+    /// hash formats. The algorithm is auto-detected from the stored hash.
     pub fn verify_password(password: &str, stored_hash: &str) -> Result<bool> {
-        let parsed_hash = PasswordHash::new(stored_hash)
-            .map_err(|e| anyhow::anyhow!("Invalid stored password hash format: {}", e))?;
+        let algo = HashAlgo::detect(stored_hash)
+            .ok_or_else(|| anyhow!("Unrecognised password hash format"))?;
+        // Strip the leading "<algo>$" prefix; the remainder is the raw
+        // algorithm-specific hash (e.g. Argon2 PHC string, bcrypt PHC string,
+        // or `iter$salt$hash` for PBKDF2).
+        let raw = stored_hash
+            .splitn(2, '$')
+            .nth(1)
+            .unwrap_or(stored_hash);
 
-        let argon2 = Argon2::default();
-        let is_valid = argon2
-            .verify_password(password.as_bytes(), &parsed_hash)
-            .is_ok();
+        match algo {
+            HashAlgo::Argon2 => {
+                let parsed = PasswordHash::new(raw)
+                    .map_err(|e| anyhow!("Invalid Argon2 hash: {}", e))?;
+                Ok(Argon2::default()
+                    .verify_password(password.as_bytes(), &parsed)
+                    .is_ok())
+            }
+            HashAlgo::BcryptSha256 => verify_bcrypt_sha256(password, raw),
+            HashAlgo::Pbkdf2Sha256 => verify_pbkdf2_sha256(password, raw),
+            HashAlgo::Pbkdf2Sha1 => verify_pbkdf2_sha1(password, raw),
+        }
+    }
 
-        Ok(is_valid)
+    /// Check whether a stored hash should be upgraded to Argon2 on next login.
+    /// PBKDF2 variants are considered legacy; bcrypt_sha256 is acceptable
+    /// but Argon2 is preferred (we keep it upgrade-eligible when the cost
+    /// is low, but for simplicity we treat it as "up to date" here).
+    pub fn needs_rehash(stored_hash: &str) -> bool {
+        match HashAlgo::detect(stored_hash) {
+            Some(HashAlgo::Argon2) | Some(HashAlgo::BcryptSha256) => false,
+            Some(HashAlgo::Pbkdf2Sha256) | Some(HashAlgo::Pbkdf2Sha1) => true,
+            None => true, // unknown format -> force rehash
+        }
+    }
+
+    /// Re-hash a password using Argon2 after a successful verify.
+    pub fn rehash_to_argon2(password: &str) -> Result<String> {
+        Self::hash_password(password)
     }
 
     /// Generates a JWT token for the given user ID, valid for 24 hours.
@@ -75,5 +144,169 @@ impl AuthUtils {
         .context("Failed to decode or validate JWT token")?;
 
         Ok(token_data.claims)
+    }
+}
+
+/// Verify a Django `bcrypt_sha256$` hash.
+///
+/// Django's `BCryptSHA256PasswordHasher`:
+///   1. Computes `SHA-256(password)`,
+///   2. Base64-encodes the 32-byte digest (standard alphabet, no padding), and
+///   3. Runs `bcrypt` over that base64 string with a 72-byte input limit
+///      (bcrypt itself truncates the input).
+///
+/// The portion after `bcrypt_sha256$` is a normal bcrypt PHC string
+/// (`$2b$<cost>$<22-char salt><31-char hash>`).
+fn verify_bcrypt_sha256(password: &str, raw_hash: &str) -> Result<bool> {
+    let mut sha = Sha256::new();
+    sha.update(password.as_bytes());
+    let digest = sha.finalize();
+    // Base64-encode the raw SHA-256 digest (no padding) exactly like Django.
+    let bcrypt_input = general_purpose::STANDARD.encode(digest);
+    Ok(bcrypt::verify(&bcrypt_input, raw_hash).unwrap_or(false))
+}
+
+/// Verify a Django PBKDF2-SHA256 hash. The `raw_hash` portion (after the
+/// algorithm prefix) has the form `iterations$base64(salt)$base64(hash)`.
+fn verify_pbkdf2_sha256(password: &str, raw_hash: &str) -> Result<bool> {
+    let parts: Vec<&str> = raw_hash.split('$').collect();
+    if parts.len() != 3 {
+        return Err(anyhow!(
+            "Malformed pbkdf2_sha256 hash: expected 3 parts, got {}",
+            parts.len()
+        ));
+    }
+    let iterations: u32 = parts[0].parse().context("pbkdf2 iterations")?;
+    let salt = general_purpose::STANDARD
+        .decode(parts[1])
+        .map_err(|e| anyhow!("pbkdf2 salt decode: {}", e))?;
+    let expected = general_purpose::STANDARD
+        .decode(parts[2])
+        .map_err(|e| anyhow!("pbkdf2 hash decode: {}", e))?;
+    let mut actual = vec![0u8; expected.len()];
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, iterations, &mut actual);
+    Ok(actual.as_slice() == expected.as_slice())
+}
+
+/// Verify a legacy Django PBKDF2-SHA1 hash. Same format as SHA-256 but
+/// produces a 20-byte (160-bit) digest.
+fn verify_pbkdf2_sha1(password: &str, raw_hash: &str) -> Result<bool> {
+    let parts: Vec<&str> = raw_hash.split('$').collect();
+    if parts.len() != 3 {
+        return Err(anyhow!(
+            "Malformed pbkdf2_sha1 hash: expected 3 parts, got {}",
+            parts.len()
+        ));
+    }
+    let iterations: u32 = parts[0].parse().context("pbkdf2 iterations")?;
+    let salt = general_purpose::STANDARD
+        .decode(parts[1])
+        .map_err(|e| anyhow!("pbkdf2 salt decode: {}", e))?;
+    let expected = general_purpose::STANDARD
+        .decode(parts[2])
+        .map_err(|e| anyhow!("pbkdf2 hash decode: {}", e))?;
+    let mut actual = vec![0u8; expected.len()];
+    pbkdf2_hmac::<Sha1>(password.as_bytes(), &salt, iterations, &mut actual);
+    Ok(actual.as_slice() == expected.as_slice())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_hash_and_verify_argon2() {
+        let hash = AuthUtils::hash_password("hunter2").unwrap();
+        assert!(hash.starts_with("argon2$"), "expected argon2 prefix, got: {}", hash);
+        assert!(AuthUtils::verify_password("hunter2", &hash).unwrap());
+        assert!(!AuthUtils::verify_password("wrong", &hash).unwrap());
+    }
+
+    #[test]
+    fn test_detect_algorithms() {
+        assert_eq!(
+            HashAlgo::detect("argon2$argon2id$v=19$m=102400,t=2,p=8$abc$def"),
+            Some(HashAlgo::Argon2)
+        );
+        assert_eq!(
+            HashAlgo::detect("bcrypt_sha256$2b$12$abcdefghijklmnopqrstuvabcdefghijklmnopqrstuvwxyz12"),
+            Some(HashAlgo::BcryptSha256)
+        );
+        assert_eq!(
+            HashAlgo::detect("pbkdf2_sha256$600000$YWFhYQ$BBBB"),
+            Some(HashAlgo::Pbkdf2Sha256)
+        );
+        assert_eq!(
+            HashAlgo::detect("pbkdf2_sha1$1000$YWFhYQ$BBBB"),
+            Some(HashAlgo::Pbkdf2Sha1)
+        );
+        assert_eq!(HashAlgo::detect("garbage"), None);
+        assert_eq!(HashAlgo::detect(""), None);
+    }
+
+    #[test]
+    fn test_needs_rehash() {
+        assert!(!AuthUtils::needs_rehash("argon2$argon2id$v=19$..."));
+        assert!(!AuthUtils::needs_rehash(
+            "bcrypt_sha256$2b$12$abcdefghijklmnopqrstuvabcdefghijklmnopqrstuvwxyz12"
+        ));
+        assert!(AuthUtils::needs_rehash("pbkdf2_sha256$600000$..."));
+        assert!(AuthUtils::needs_rehash("pbkdf2_sha1$1000$..."));
+        assert!(AuthUtils::needs_rehash("garbage"));
+    }
+
+    #[test]
+    fn test_verify_pbkdf2_sha256_wrong_password() {
+        // Build a PBKDF2-SHA256 hash in the exact Django format, then verify
+        // that a wrong password is rejected and the right one is accepted.
+        let password = "correct horse battery staple";
+        let salt = general_purpose::STANDARD.encode(b"0123456789abcdef");
+        let iterations: u32 = 1000;
+        let mut buf = [0u8; 32];
+        pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt.as_bytes(), iterations, &mut buf);
+        let expected = general_purpose::STANDARD.encode(buf);
+
+        let stored = format!(
+            "pbkdf2_sha256${}${}${}",
+            iterations,
+            salt.trim_end_matches('='), // Django stores unpadded base64
+            expected.trim_end_matches('=')
+        );
+
+        assert!(AuthUtils::verify_password(password, &stored).unwrap());
+        assert!(!AuthUtils::verify_password("wrong", &stored).unwrap());
+    }
+
+    #[test]
+    fn test_verify_pbkdf2_sha1_wrong_password() {
+        let password = "legacy user";
+        let salt = general_purpose::STANDARD.encode(b"saltysalt1234567");
+        let iterations: u32 = 1000;
+        let mut buf = [0u8; 20];
+        pbkdf2_hmac::<Sha1>(password.as_bytes(), &salt.as_bytes(), iterations, &mut buf);
+        let expected = general_purpose::STANDARD.encode(buf);
+
+        let stored = format!(
+            "pbkdf2_sha1${}${}${}",
+            iterations,
+            salt.trim_end_matches('='),
+            expected.trim_end_matches('=')
+        );
+
+        assert!(AuthUtils::verify_password(password, &stored).unwrap());
+        assert!(!AuthUtils::verify_password("nope", &stored).unwrap());
+    }
+
+    #[test]
+    fn test_rehash_to_argon2() {
+        let new_hash = AuthUtils::rehash_to_argon2("hunter2").unwrap();
+        assert!(new_hash.starts_with("argon2$"));
+        assert!(AuthUtils::verify_password("hunter2", &new_hash).unwrap());
+    }
+
+    #[test]
+    fn test_verify_unrecognised_format_errors() {
+        let res = AuthUtils::verify_password("anything", "not-a-real-hash");
+        assert!(res.is_err());
     }
 }
