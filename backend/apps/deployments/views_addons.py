@@ -20,9 +20,17 @@ class _ClosingFileResponse(FileResponse):
 
     Django's FileResponse does register the file in ``_closable_objects``,
     but if an exception interrupts the normal close path the file can leak.
-    Closing ``self._file`` defensively in ``close()`` guarantees the OS
-    file descriptor is released as soon as the response finishes.
+    We store a reference as ``self._file`` and close it defensively in
+    ``close()`` so the OS file descriptor is released as soon as the response
+    finishes.
     """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Surface the wrapped file as a public-ish attribute so callers (and
+        # tests) can introspect / force-close it. FileResponse uses
+        # ``file_to_stream`` internally; mirror it as ``_file`` for clarity.
+        self._file = getattr(self, "file_to_stream", None) or getattr(self, "_file", None)
 
     def close(self):
         try:

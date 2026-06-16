@@ -132,6 +132,13 @@ class AddonDownloadBackupFileHandleTests(TestCase):
             builtins.open = wrapped_open
             try:
                 response = self.client.get(url)
+                # Django's test client does not call .close() on the
+                # response. Force it so the FileResponse.close() hook runs
+                # and releases the underlying file handle.
+                try:
+                    response.close()
+                except Exception:  # pylint: disable=broad-exception-caught
+                    pass
             finally:
                 builtins.open = builtin_open
 
