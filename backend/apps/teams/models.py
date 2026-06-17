@@ -9,7 +9,8 @@ class Team(models.Model):
     owner = models.ForeignKey(
         'auth.User',
         on_delete=models.CASCADE,
-        related_name='owned_teams')
+        related_name='owned_teams',
+        null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
