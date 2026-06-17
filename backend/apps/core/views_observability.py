@@ -106,19 +106,26 @@ def _scope_query_to_tenant(query: str, service_names: list[str]) -> str:
     """Inject a ``compose_service=~"<names>"`` filter so the query can only
     match the user's own services.
 
-    If the query already has a ``{...}`` selector, the filter is merged
-    into the first selector. Otherwise the query is wrapped in a selector
-    that restricts results to the user's own compose_service names.
+    If the query already has a ``{...}`` selector with a ``compose_service``
+    matcher, the existing matcher is REPLACED with the tenant filter rather
+    than appended. Two matchers for the same label key in one stream selector
+    is invalid LogQL and causes Loki to return 400 Bad Request.
     """
     safe = [re.escape(n) for n in service_names if n]
     if not safe:
         raise ValueError("User has no services to scope the query to.")
-    tenant_filter = f'compose_service=~"{"|".join(safe)}"'
+    tenant_filter = f'compose_service=~"{safe[0] if len(safe) == 1 else "|".join(safe)}"'
     if '{' in query:
         idx = query.index('{')
         end_idx = query.index('}', idx)
         inner = query[idx + 1:end_idx].strip()
-        new_inner = f'{inner}, {tenant_filter}' if inner else tenant_filter
+        # Remove any existing compose_service matcher to avoid duplicate label keys
+        cleaned = re.sub(
+            r'compose_service\s*(?:=|!=|=~|!~)\s*"[^"]*"\s*,?\s*',
+            '',
+            inner,
+        ).strip().strip(',').strip()
+        new_inner = f'{cleaned}, {tenant_filter}' if cleaned else tenant_filter
         return query[:idx + 1] + new_inner + query[end_idx:]
     return '{' + tenant_filter + '}'
 
