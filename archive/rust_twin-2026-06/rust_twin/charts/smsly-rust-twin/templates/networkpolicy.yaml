@@ -1,0 +1,112 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $apiSelector := include "smsly-rust-twin.componentSelectorLabels" (dict "root" . "component" "api") -}}
+{{- $workerSelector := include "smsly-rust-twin.componentSelectorLabels" (dict "root" . "component" "worker") -}}
+{{- $cliSelector := include "smsly-rust-twin.componentSelectorLabels" (dict "root" . "component" "cli-migrate") -}}
+{{- $allAppComponentsSelector := list $apiSelector $workerSelector $cliSelector | concat -}}
+{{- $dnsEgressSelector := dict "namespaceSelector" (dict "matchLabels" (dict "kubernetes.io/metadata.name" "kube-system")) "podSelector" (dict "matchLabels" (dict "k8s-app" "kube-dns")) -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "smsly-rust-twin.fullname" . }}-default-deny
+  labels:
+    {{- include "smsly-rust-twin.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "smsly-rust-twin.fullname" . }}-allow-api-ingress
+  labels:
+    {{- include "smsly-rust-twin.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- $apiSelector | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector: {}
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.service.port }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "smsly-rust-twin.fullname" . }}-allow-dns-egress
+  labels:
+    {{- include "smsly-rust-twin.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "smsly-rust-twin.fullname" . }}-allow-postgres-egress
+  labels:
+    {{- include "smsly-rust-twin.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          - api
+          - worker
+          - cli-migrate
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector: {}
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.postgres.port }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "smsly-rust-twin.fullname" . }}-allow-redis-egress
+  labels:
+    {{- include "smsly-rust-twin.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          - api
+          - worker
+          - cli-migrate
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector: {}
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.redis.port }}
+{{- end }}

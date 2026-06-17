@@ -1,0 +1,29 @@
+{
+  "slug": "postgres",
+  "name": "PostgreSQL 16",
+  "description": "Production-grade relational database with strong SQL compliance and JSON support.",
+  "category": "database",
+  "icon": "postgres.svg",
+  "docker_image": "postgres:16-alpine",
+  "default_port": 5432,
+  "env_schema": {
+    "POSTGRES_USER": { "type": "string", "required": true, "default": "smsly" },
+    "POSTGRES_PASSWORD": { "type": "string", "required": true, "secret": true },
+    "POSTGRES_DB": { "type": "string", "required": true, "default": "smsly" }
+  },
+  "volumes": [
+    { "name": "data", "mount_path": "/var/lib/postgresql/data" }
+  ],
+  "resources": {
+    "cpu_request": "100m",
+    "memory_request": "256Mi",
+    "cpu_limit": "1",
+    "memory_limit": "1Gi"
+  },
+  "health_check": {
+    "type": "tcp",
+    "port": 5432,
+    "retries": 10,
+    "interval_secs": 2
+  }
+}

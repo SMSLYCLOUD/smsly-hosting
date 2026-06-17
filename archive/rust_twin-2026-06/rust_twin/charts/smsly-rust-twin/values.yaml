@@ -1,0 +1,209 @@
+# Default values for smsly-rust-twin.
+# This is the Rust implementation of the SMSLY control plane (api + worker + cli).
+
+nameOverride: ""
+fullnameOverride: ""
+
+# Namespace to create when podSecurityStandards.enabled is true.
+# Leave empty to use the chart fullname.
+namespace: ""
+
+image:
+  repository: smsly/rust-twin
+  pullPolicy: IfNotPresent
+  # Pin a specific tag in production.
+  tag: "0.1.0"
+  # Pin by digest for production hardening (sha256:...).
+  # If set, takes precedence over `tag` at render time.
+  # Example: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  digest: ""
+
+imagePullSecrets: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+
+# ---------------------------------------------------------------------------
+# Pod Security Standards (PSS) — namespace-level enforcement.
+# When podSecurityStandards.enabled is true, the chart creates a Namespace
+# with `pod-security.kubernetes.io/enforce: restricted` (and matching
+# audit/warn labels). Set to false if the namespace is managed out-of-band.
+# Chart default: true (cluster must be k8s >= 1.22 for PSS namespace labels).
+# ---------------------------------------------------------------------------
+podSecurityStandards:
+  enabled: true
+
+# ---------------------------------------------------------------------------
+# PodSecurityPolicy (PSP) — cluster-level enforcement.
+# PSP is only available on k8s <= 1.24 (removed in 1.25). This chart's
+# kubeVersion is >= 1.27, so PSP is opt-in. Flip to true on legacy clusters.
+# On modern clusters, prefer PSS (above) over PSP.
+# ---------------------------------------------------------------------------
+podSecurityPolicy:
+  enabled: false
+
+# Default seccomp profile applied to all pods in the chart.
+seccompProfile: RuntimeDefault
+
+service:
+  type: ClusterIP
+  port: 8080
+
+api:
+  enabled: true
+  replicas: 2
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    runAsNonRoot: true
+    runAsUser: 1000
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: 8080
+    initialDelaySeconds: 15
+    periodSeconds: 20
+    timeoutSeconds: 3
+    failureThreshold: 4
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: 8080
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    successThreshold: 1
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+worker:
+  enabled: true
+  replicas: 1
+  # The worker writes build artifacts to /tmp during container builds, so
+  # readOnlyRootFilesystem is true at the container level, but an emptyDir
+  # volume is mounted at /tmp (see deployment-worker.yaml). The pod-level
+  # securityContext still forbids privilege escalation and host namespaces.
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    runAsNonRoot: true
+    runAsUser: 1000
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1
+      memory: 1Gi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  hosts:
+    - host: chart-example.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# PostgreSQL connection (the chart does not deploy Postgres itself).
+postgres:
+  host: postgres
+  port: 5432
+  database: smsly_rust_twin
+  user: smsly_admin
+  # If set, the secret referenced here must provide the POSTGRES_PASSWORD key.
+  existingSecret: ""
+  existingSecretKey: POSTGRES_PASSWORD
+
+# Redis connection (the chart does not deploy Redis itself).
+redis:
+  host: redis
+  port: 6379
+  # If set, the secret referenced here must provide the REDIS_PASSWORD key.
+  existingSecret: ""
+  existingSecretKey: REDIS_PASSWORD
+
+auth:
+  # JWT secret used by the api binary. If empty, the secret template
+  # will fail-fast with a clear error. In production, set this to a
+  # 32+ byte random string (or supply it via auth.existingJwtSecret).
+  jwtSecret: ""
+  existingJwtSecret: ""
+  existingJwtSecretKey: JWT_SECRET
+
+migrateJob:
+  enabled: true
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+networkPolicy:
+  enabled: true
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+resources: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Autoscaling resources (all opt-in).
+#
+# Precedence note:
+#   * api.replicas    -> superseded by autoscaling.hpa.enabled (HPA controls replicas)
+#   * worker.replicas -> superseded by autoscaling.vpa.enabled (VPA controls requests/limits)
+#                        and/or autoscaling.keda.enabled (KEDA controls replica count).
+#   When an autoscaler is enabled, the static `replicas` value is effectively ignored
+#   by the controller that owns the workload, but it is still rendered into the
+#   Deployment manifest as an initial replica count.
+autoscaling:
+  hpa:
+    # HorizontalPodAutoscaler for the api Deployment (CPU + memory).
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    cpuTarget: 70
+    memoryTarget: 80
+  vpa:
+    # VerticalPodAutoscaler for the worker Deployment. Opt-in: requires
+    # the VPA CRDs (autoscaling.k8s.io/v1) to be installed in the cluster.
+    enabled: false
+    updateMode: Auto
+  keda:
+    # KEDA ScaledObject for the worker Deployment. Opt-in: requires KEDA
+    # to be installed. When both vpa and keda are enabled, KEDA owns the
+    # replica count and VPA owns the resource requests/limits.
+    enabled: false
+    maxReplicas: 5
+    queueName: celery

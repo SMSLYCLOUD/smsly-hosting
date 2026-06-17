@@ -1,0 +1,27 @@
+{
+  "slug": "redis",
+  "name": "Redis 7",
+  "description": "In-memory key/value data store used as cache, message broker, and session store.",
+  "category": "cache",
+  "icon": "redis.svg",
+  "docker_image": "redis:7-alpine",
+  "default_port": 6379,
+  "env_schema": {
+    "REDIS_PASSWORD": { "type": "string", "required": true, "secret": true }
+  },
+  "volumes": [
+    { "name": "data", "mount_path": "/data" }
+  ],
+  "resources": {
+    "cpu_request": "50m",
+    "memory_request": "128Mi",
+    "cpu_limit": "500m",
+    "memory_limit": "512Mi"
+  },
+  "health_check": {
+    "type": "tcp",
+    "port": 6379,
+    "retries": 10,
+    "interval_secs": 2
+  }
+}

@@ -1,0 +1,49 @@
+{{- /*
+PodSecurityPolicy — cluster-level enforcement of the "restricted" baseline.
+
+This PSP is only useful on Kubernetes <= 1.24 (PSP was removed in 1.25).
+The chart's `kubeVersion` is `>= 1.27.0-0`, so PSP is opt-in via
+`podSecurityPolicy.enabled: true`. On modern clusters, prefer
+Pod Security Standards (PSS) via `podSecurityStandards.enabled` and the
+auto-created Namespace in `podsecuritystandards-namespace.yaml`.
+
+To use this PSP, the workload's ServiceAccount must be granted
+`use` on it, e.g.:
+
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    metadata:
+      name: {{ include "smsly-rust-twin.fullname" . }}-psp-user
+    rules:
+      - apiGroups: ['policy']
+        resources: ['podsecuritypolicies']
+        resourceNames: [{{ include "smsly-rust-twin.fullname" . }}-restricted]
+        verbs: ['use']
+
+That wiring is intentionally out of scope for this chart.
+*/ -}}
+{{- if .Values.podSecurityPolicy.enabled }}
+apiVersion: policy/v1beta1
+kind: PodSecurityPolicy
+metadata:
+  name: {{ include "smsly-rust-twin.fullname" . }}-restricted
+  labels:
+    {{- include "smsly-rust-twin.labels" . | nindent 4 }}
+spec:
+  privileged: false
+  allowPrivilegeEscalation: false
+  requiredDropCapabilities:
+    - ALL
+  volumes:
+    - configMap
+    - downwardAPI
+    - emptyDir
+    - secret
+    - persistentVolumeClaim
+  runAsUser:
+    rule: MustRunAsNonRoot
+  seccompProfile:
+    type: RuntimeDefault
+  fsGroup:
+    rule: RunAsAny
+{{- end }}

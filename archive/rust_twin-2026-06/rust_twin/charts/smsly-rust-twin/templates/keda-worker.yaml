@@ -1,0 +1,19 @@
+{{- if .Values.autoscaling.keda.enabled }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "smsly-rust-twin.fullname" . }}-worker
+  labels:
+    {{- include "smsly-rust-twin.componentLabels" (dict "root" . "component" "worker") | nindent 4 }}
+spec:
+  scaleTargetRef:
+    name: {{ include "smsly-rust-twin.fullname" . }}-worker
+  minReplicaCount: 0
+  maxReplicaCount: {{ .Values.autoscaling.keda.maxReplicas | default 5 }}
+  triggers:
+    - type: redis
+      metadata:
+        address: {{ .Values.redis.host }}:{{ .Values.redis.port | default 6379 }}
+        listName: {{ .Values.autoscaling.keda.queueName | default "celery" }}
+        listLength: "5"
+{{- end }}

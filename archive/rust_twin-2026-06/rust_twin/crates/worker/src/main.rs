@@ -8,6 +8,7 @@ use std::sync::Arc;
 use tracing::{error, info};
 
 pub mod celery_bridge;
+pub mod rollback;
 pub mod tasks;
 
 pub struct WorkerState {

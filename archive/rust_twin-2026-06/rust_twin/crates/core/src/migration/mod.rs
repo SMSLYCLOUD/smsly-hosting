@@ -31,3 +31,24 @@ mod m20250617_000028_create_social_apps;
 mod m20250617_000029_create_social_tokens;
 mod m20250617_000030_create_addon_templates;
 mod m20250617_000031_add_deployment_requester_id;
+
+// D-batch (2026-06-19) - Runtime model group
+mod m20250619_000018_create_autoscaler_configs;
+mod m20250619_000019_create_autoscaler_events;
+mod m20250619_000020_create_addon_type_registry;
+mod m20250619_000021_create_addon_instance_metrics;
+mod m20250619_000022_create_cron_runs;
+mod m20250619_000023_create_env_var_audits;
+
+// E-batch (2026-06-19) - Billing
+mod m20250619_000032_create_licenses;
+mod m20250619_000033_create_usage_aggregates;
+mod m20250619_000034_create_payment_methods;
+mod m20250619_000035_create_crypto_invoices;
+
+// C-batch (2026-06-19) - OPS model group
+mod m20250619_000013_create_safedeploy_policies;
+mod m20250619_000014_create_webhook_deliveries;
+mod m20250619_000015_create_notifications;
+mod m20250619_000016_create_notification_preferences;
+mod m20250619_000017_create_api_token_audits;

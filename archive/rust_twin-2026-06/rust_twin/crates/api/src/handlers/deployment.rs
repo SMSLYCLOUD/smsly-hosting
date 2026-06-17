@@ -107,17 +107,32 @@ pub struct TriggerDeploymentBody {
     pub commit_hash: String,
 }
 
+/// Query parameters for `POST /deployments`. The `canary` flag routes the
+/// deployment through the canary state machine (Canary10 → Canary50 → 100%)
+/// instead of the standard 9-state lifecycle.
+#[derive(Debug, Default, Deserialize)]
+pub struct TriggerDeploymentQuery {
+    #[serde(default)]
+    pub canary: bool,
+}
+
 pub async fn trigger_deployment(
     State(state): State<Arc<AppState>>,
+    Query(q): Query<TriggerDeploymentQuery>,
     auth: AuthUser,
     Json(body): Json<TriggerDeploymentBody>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let now = Utc::now();
+    let initial_status = if q.canary {
+        cn_core::canary::CANARY_STATUS_10
+    } else {
+        DeploymentStatus::Queued.as_str()
+    };
     let new_dep = deployment::ActiveModel {
         id: Set(Uuid::new_v4()),
         service_id: Set(body.service_id),
         commit_hash: Set(body.commit_hash),
-        status: Set(DeploymentStatus::Queued.as_str().to_string()),
+        status: Set(initial_status.to_string()),
         is_rollback: Set(false),
         started_at: Set(None),
         finished_at: Set(None),

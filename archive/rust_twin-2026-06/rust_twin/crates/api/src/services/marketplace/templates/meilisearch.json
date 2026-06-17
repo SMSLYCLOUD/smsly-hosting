@@ -1,0 +1,29 @@
+{
+  "slug": "meilisearch",
+  "name": "Meilisearch",
+  "description": "Lightning-fast, typo-tolerant full-text search engine with RESTful API.",
+  "category": "search",
+  "icon": "meilisearch.svg",
+  "docker_image": "getmeili/meilisearch:v1.6",
+  "default_port": 7700,
+  "env_schema": {
+    "MEILI_MASTER_KEY": { "type": "string", "required": true, "secret": true },
+    "MEILI_ENV": { "type": "string", "required": false, "default": "production" }
+  },
+  "volumes": [
+    { "name": "data", "mount_path": "/meili_data" }
+  ],
+  "resources": {
+    "cpu_request": "100m",
+    "memory_request": "256Mi",
+    "cpu_limit": "1",
+    "memory_limit": "1Gi"
+  },
+  "health_check": {
+    "type": "http",
+    "path": "/health",
+    "port": 7700,
+    "retries": 10,
+    "interval_secs": 2
+  }
+}

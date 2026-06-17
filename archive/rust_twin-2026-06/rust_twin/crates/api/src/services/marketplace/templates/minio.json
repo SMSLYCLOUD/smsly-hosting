@@ -1,0 +1,29 @@
+{
+  "slug": "minio",
+  "name": "MinIO",
+  "description": "S3-compatible object storage with high performance and Kubernetes-native support.",
+  "category": "storage",
+  "icon": "minio.svg",
+  "docker_image": "minio/minio:latest",
+  "default_port": 9000,
+  "env_schema": {
+    "MINIO_ROOT_USER": { "type": "string", "required": true, "default": "smsly" },
+    "MINIO_ROOT_PASSWORD": { "type": "string", "required": true, "secret": true }
+  },
+  "command": ["server", "/data", "--console-address", ":9001"],
+  "volumes": [
+    { "name": "data", "mount_path": "/data" }
+  ],
+  "resources": {
+    "cpu_request": "100m",
+    "memory_request": "256Mi",
+    "cpu_limit": "1",
+    "memory_limit": "1Gi"
+  },
+  "health_check": {
+    "type": "tcp",
+    "port": 9000,
+    "retries": 10,
+    "interval_secs": 2
+  }
+}

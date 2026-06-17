@@ -1,0 +1,13 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "smsly-rust-twin.fullname" . }}-api
+  labels:
+    {{- include "smsly-rust-twin.componentLabels" (dict "root" . "component" "api") | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "smsly-rust-twin.componentSelectorLabels" (dict "root" . "component" "api") | nindent 6 }}
+{{- end }}
