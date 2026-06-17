@@ -845,6 +845,15 @@ class PlatformConfig(models.Model):
     max_concurrent_builds = models.PositiveIntegerField(
         default=1,
         help_text="Maximum concurrent builds across the entire node fleet (to prevent OOM)")
+    github_webhook_secret = EncryptedCharField(
+        max_length=512, blank=True, default='',
+        help_text="GitHub webhook secret for push event verification")
+    gitlab_webhook_secret = EncryptedCharField(
+        max_length=512, blank=True, default='',
+        help_text="GitLab webhook secret for push event verification")
+    bitbucket_webhook_secret = EncryptedCharField(
+        max_length=512, blank=True, default='',
+        help_text="Bitbucket webhook secret for push event verification")
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -887,6 +896,15 @@ class PlatformConfig(models.Model):
         token_errors = self.validate_cloudflare_token()
         if token_errors:
             raise ValidationError({"cloudflare_api_token": token_errors})
+
+    def get_webhook_secret(self, provider: str) -> str:
+        """Return webhook secret for the given provider, falling back to env var."""
+        env_key = f'{provider.upper()}_WEBHOOK_SECRET'
+        db_val = getattr(self, f'{provider.lower()}_webhook_secret', '') or ''
+        if db_val:
+            return db_val
+        import os
+        return os.environ.get(env_key, '')
 
     @classmethod
     def load(cls):
