@@ -4870,22 +4870,13 @@ def check_managed_servers_health_task():
         except Exception as exc:
             logger.warning("Health check failed for %s (%s): %s", server.name, server.host, exc)
 
-    # Update Prometheus target files after health checks
+    # Refresh Prometheus target files. Agent deployment (docker-labels, Promtail,
+    # cAdvisor, Node Exporter) is handled by node_watchdog_task to avoid redundant
+    # SSH connections per cycle.
     try:
         from apps.deployments.services.prometheus_targets import (
-            deploy_docker_labels_exporter_on_node,
-            deploy_promtail_on_node,
             write_docker_labels_targets,
         )
-        for server in servers.filter(status=ManagedServer.Status.ONLINE):
-            try:
-                deploy_docker_labels_exporter_on_node(server)
-            except Exception:
-                pass
-            try:
-                deploy_promtail_on_node(server)
-            except Exception:
-                pass
         write_docker_labels_targets()
     except Exception as exc:
         logger.debug("Prometheus target update skipped: %s", exc)

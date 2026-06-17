@@ -35,11 +35,11 @@ if ! command -v docker &> /dev/null; then
     exit 1
 fi
 
-echo "--> Pulling latest images..."
-"${COMPOSE_CMD[@]}" pull backend frontend celery celery-beat || true
+echo "--> Pulling latest images for all services..."
+"${COMPOSE_CMD[@]}" pull || true
 
-echo "--> Restarting services safely..."
-"${COMPOSE_CMD[@]}" up -d backend frontend celery celery-beat || true
+echo "--> Restarting all services safely..."
+"${COMPOSE_CMD[@]}" up -d || true
 
 echo "--> Running post-update health check..."
 sleep 10

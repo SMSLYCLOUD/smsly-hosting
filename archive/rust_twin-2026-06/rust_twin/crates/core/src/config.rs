@@ -6,6 +6,13 @@ pub struct Config {
     // Required Security
     pub secret_key: String,
     pub field_encryption_key: String,
+    /// Shared secret used by the HMAC V2 request-signing middleware
+    /// (`crates/api/src/middleware/hmac.rs`). Read from the
+    /// `SMSLY_AUTH_SECRET` environment variable. Defaults to an empty string
+    /// if unset, which keeps existing dev setups working but must be set in
+    /// any non-debug deployment.
+    #[serde(default, rename = "SMSLY_AUTH_SECRET")]
+    pub auth_secret: String,
 
     // Database
     pub database_url: String,

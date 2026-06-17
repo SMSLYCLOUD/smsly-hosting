@@ -287,7 +287,12 @@ class NixpacksBuilder:
         client = get_docker_client()
 
         # Tag format: registry:5000/image_name
-        full_tag = f"{registry_url}/{image_name}"
+        # Strip http(s):// scheme — Docker image references require host:port format.
+        _tag_url = registry_url
+        for _scheme in ('https://', 'http://'):
+            if _tag_url.startswith(_scheme):
+                _tag_url = _tag_url[len(_scheme):]
+        full_tag = f"{_tag_url}/{image_name}"
 
         try:
             image = client.images.get(image_name)

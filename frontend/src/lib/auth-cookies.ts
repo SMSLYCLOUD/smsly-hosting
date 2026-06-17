@@ -38,7 +38,13 @@ export function clearAuthCookies(): void {
   // Clear any non-HttpOnly legacy cookies a previous build may have
   // set. The HttpOnly cookie is removed by the backend's Set-Cookie
   // response on /api/v1/auth/logout/.
-  for (const name of ["auth_token", "sessionid"]) {
+  // SECURITY: only clear legacy client-side cookies. NEVER clear the
+  // HttpOnly ``sessionid`` cookie — that is the Django session cookie
+  // owned entirely by the backend. Deleting it here would immediately
+  // log the user out after a single transient 401, causing a permanent
+  // redirect loop. The backend clears sessionid on logout via
+  // Set-Cookie: sessionid=; Max-Age=0.
+  for (const name of ["auth_token"]) {
     document.cookie = `${name}=; path=/; expires=Thu, 01 Jan 1970 00:00:01 GMT; SameSite=Strict`;
   }
 }

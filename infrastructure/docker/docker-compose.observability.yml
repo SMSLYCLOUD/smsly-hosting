@@ -66,7 +66,6 @@ services:
     volumes:
       - ../monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
-      - prometheus-targets:/etc/prometheus/paas-targets
       - /opt/smsly-hosting/prometheus-targets:/etc/prometheus/docker-labels-targets:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
     command:
@@ -218,7 +217,6 @@ services:
 volumes:
   loki-data:
   prometheus-data:
-  prometheus-targets:
   grafana-data:
   promtail-positions:
 

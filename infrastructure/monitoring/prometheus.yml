@@ -21,8 +21,10 @@ rule_files: []
   # - /etc/prometheus/rules/*.yml
 
 # Scrape configuration.
-# The 'paas-services' job relies on the backend writing JSON target files
-# to /etc/prometheus/paas-targets/ for dynamically deployed PaaS services.
+# User-application metrics are collected via cAdvisor (container-level CPU/mem/network/disk)
+# and the docker-labels exporter (container metadata). Per-application /metrics
+# scraping is not yet implemented — when added, create a writer for a new
+# file_sd_configs directory and add the corresponding scrape job here.
 scrape_configs:
   # Prometheus itself
   - job_name: 'prometheus'
@@ -71,16 +73,6 @@ scrape_configs:
   - job_name: 'promtail'
     static_configs:
       - targets: ['promtail:9080']
-    metrics_path: /metrics
-    scrape_interval: 30s
-
-  # PaaS User Services - dynamically discovered
-  # Backend writes target files to /etc/prometheus/paas-targets/
-  - job_name: 'paas-services'
-    file_sd_configs:
-      - files:
-          - '/etc/prometheus/paas-targets/*.json'
-        refresh_interval: 60s
     metrics_path: /metrics
     scrape_interval: 30s
 
