@@ -5526,7 +5526,11 @@ def sync_master_db_to_agents_task():
                     file_size / (1024 * 1024), agents.count())
         
         # Push to each lite agent via REST API
-        from .services.transfer_service import _build_hmac_signature
+        # Send raw binary in body (not multipart) so body_hash computed
+        # from file content matches request.body on the receiving end.
+        with open(dump_path, 'rb') as f_body:
+            raw_body_bytes = f_body.read()
+        body_hash = hashlib.sha256(raw_body_bytes).hexdigest()
         
         for agent in agents:
             target_ip = agent.wg_address or agent.private_ip or agent.host
@@ -5537,23 +5541,21 @@ def sync_master_db_to_agents_task():
             timestamp = str(int(time.time()))
             nonce = secrets.token_hex(16)
             
-            import hashlib
-            body_hash = hashlib.sha256(b'').hexdigest()
             raw_sig = f"POST|/api/v1/transfers/incoming/db-backup/|{timestamp}|{nonce}|{body_hash}"
             signature = hmac.new(secret.encode(), raw_sig.encode(), hashlib.sha256).hexdigest()
             
             try:
-                with open(dump_path, 'rb') as f:
-                    resp = requests.post(
-                        url,
-                        files={'backup': ('master_db.sql.gz', f, 'application/gzip')},
-                        headers={
-                            'X-Gateway-Signature-V2': signature,
-                            'X-Request-Timestamp': timestamp,
-                            'X-Request-Nonce': nonce,
-                        },
-                        timeout=600,
-                    )
+                resp = requests.post(
+                    url,
+                    data=raw_body_bytes,
+                    headers={
+                        'X-Gateway-Signature-V2': signature,
+                        'X-Request-Timestamp': timestamp,
+                        'X-Request-Nonce': nonce,
+                        'Content-Type': 'application/gzip',
+                    },
+                    timeout=600,
+                )
                 if resp.ok:
                     logger.info("sync_master_db_to_agents: pushed to agent %s (%s)", agent.name, target_ip)
                 else:
