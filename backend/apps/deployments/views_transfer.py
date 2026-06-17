@@ -504,3 +504,157 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         transfer.error_message = 'Cancelled by user.'
         transfer.save(update_fields=['status', 'error_message'])
         return Response({'status': 'CANCELLED'})
+
+    # ─── Incoming Transfer REST Endpoints ─────────────────────────────────
+    # These replace SSH-based operations. The master calls these endpoints
+    # on the target node's API with HMAC V2 auth. The node executes the
+    # operation locally via the Docker SDK (socket-proxy).
+
+    def _incoming_auth_required(self, request, transfer):
+        """Verify HMAC signature for incoming transfer operations."""
+        raw_body = request.body
+        source_ip = request.META.get('REMOTE_ADDR', '')
+        return _verify_transfer_sync_hmac(request, source_ip, raw_body)
+
+    @action(detail=True, methods=['post'], url_path='incoming/pull-image')
+    def incoming_pull_image(self, request, pk=None):
+        """Pull a Docker image from the registry to this node."""
+        transfer = self.get_object()
+        if not self._incoming_auth_required(request, transfer):
+            return Response({'error': 'Invalid HMAC signature'}, status=status.HTTP_401_UNAUTHORIZED)
+        image = request.data.get('image')
+        if not image:
+            return Response({'error': 'image required'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            from apps.cloud.docker_client import get_docker_client
+            client = get_docker_client()
+            client.images.pull(image)
+            return Response({'status': 'pulled', 'image': image})
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=['post'], url_path='incoming/deploy')
+    def incoming_deploy(self, request, pk=None):
+        """Start a service container on this node using pre-configured params."""
+        transfer = self.get_object()
+        if not self._incoming_auth_required(request, transfer):
+            return Response({'error': 'Invalid HMAC signature'}, status=status.HTTP_401_UNAUTHORIZED)
+        image = request.data.get('image')
+        container_name = request.data.get('container_name')
+        env = request.data.get('env', {})
+        labels = request.data.get('labels', {})
+        network = request.data.get('network', 'smsly-net')
+        restart_policy = request.data.get('restart_policy', 'unless-stopped')
+        if not image or not container_name:
+            return Response({'error': 'image and container_name required'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            from apps.cloud.docker_client import get_docker_client
+            client = get_docker_client()
+            container = client.containers.run(
+                image=image,
+                name=container_name,
+                environment=env,
+                labels=labels,
+                network=network,
+                restart_policy={"Name": restart_policy},
+                detach=True,
+            )
+            return Response({'container_id': container.id, 'status': 'running'})
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=['post'], url_path='incoming/exec')
+    def incoming_exec(self, request, pk=None):
+        """Execute a Python script in this node's backend container (or shell command)."""
+        transfer = self.get_object()
+        if not self._incoming_auth_required(request, transfer):
+            return Response({'error': 'Invalid HMAC signature'}, status=status.HTTP_401_UNAUTHORIZED)
+        script = request.data.get('script')
+        shell = request.data.get('shell', False)
+        container = request.data.get('container', '')
+        if not script:
+            return Response({'error': 'script required'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            if shell:
+                import subprocess
+                result = subprocess.run(
+                    script, shell=True, capture_output=True, text=True, timeout=300,
+                )
+            elif container:
+                from apps.cloud.docker_client import get_docker_client
+                client = get_docker_client()
+                target = client.containers.get(container)
+                exit_code, output = target.exec_run(script)
+                result_text = output.decode() if isinstance(output, bytes) else str(output)
+                return Response({'stdout': result_text, 'exit_code': exit_code})
+            else:
+                import subprocess
+                result = subprocess.run(
+                    ['python3', '-c', script],
+                    capture_output=True, text=True, timeout=300,
+                )
+            return Response({
+                'stdout': result.stdout,
+                'stderr': result.stderr,
+                'exit_code': result.returncode,
+            })
+        except subprocess.TimeoutExpired:
+            return Response({'error': 'Script timed out'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=['post'], url_path='incoming/stop-container')
+    def incoming_stop_container(self, request, pk=None):
+        """Stop and remove a container on this node (used for source-side stop)."""
+        transfer = self.get_object()
+        if not self._incoming_auth_required(request, transfer):
+            return Response({'error': 'Invalid HMAC signature'}, status=status.HTTP_401_UNAUTHORIZED)
+        container_name = request.data.get('container_name')
+        if not container_name:
+            return Response({'error': 'container_name required'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            from apps.cloud.docker_client import get_docker_client
+            client = get_docker_client()
+            try:
+                container = client.containers.get(container_name)
+                container.stop(timeout=10)
+                container.remove()
+            except Exception:
+                pass
+            return Response({'status': 'stopped'})
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=['get'], url_path='incoming/container-status')
+    def incoming_container_status(self, request, pk=None):
+        """Check if a container is running on this node."""
+        transfer = self.get_object()
+        if not self._incoming_auth_required(request, transfer):
+            return Response({'error': 'Invalid HMAC signature'}, status=status.HTTP_401_UNAUTHORIZED)
+        container_name = request.query_params.get('container_name')
+        if not container_name:
+            return Response({'error': 'container_name required'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            from apps.cloud.docker_client import get_docker_client
+            client = get_docker_client()
+            container = client.containers.get(container_name)
+            return Response({
+                'running': container.status == 'running',
+                'status': container.status,
+            })
+        except Exception:
+            return Response({'running': False, 'status': 'not_found'})
+
+    @action(detail=True, methods=['post'], url_path='incoming/ensure-docker')
+    def incoming_ensure_docker(self, request, pk=None):
+        """Check if Docker is installed on this node (always true for containerized backend)."""
+        transfer = self.get_object()
+        if not self._incoming_auth_required(request, transfer):
+            return Response({'error': 'Invalid HMAC signature'}, status=status.HTTP_401_UNAUTHORIZED)
+        try:
+            from apps.cloud.docker_client import get_docker_client
+            client = get_docker_client()
+            client.ping()
+            return Response({'docker_available': True})
+        except Exception as e:
+            return Response({'docker_available': False, 'error': str(e)})

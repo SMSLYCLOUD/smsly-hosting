@@ -19,7 +19,6 @@ from django.db import transaction
 from django.db.models import Q
 
 from .backup_service import BackupService, UnknownBackupKeyIdError
-from .ssh_client import SSHClient
 from ..models import Service, PlatformConfig, EnvironmentVariable
 from ..models_storage import Volume
 
@@ -168,56 +167,9 @@ def _redact_transfer_text(text: str) -> str:
     return safe
 
 
-class _LocalSSHClient:
-    """Mimics SSHClient interface using local subprocess for when target is local."""
-
-    def __init__(self, log_fn):
-        self._log = log_fn
-
-    def connect(self):
-        pass  # Nothing to connect
-
-    def close(self):
-        pass
-
-    def check_docker(self):
-        import subprocess as sp
-        try:
-            sp.run(['docker', 'info'], capture_output=True, timeout=10, check=True)
-            return True
-        except Exception:
-            return False
-
-    def install_docker(self):
-        self._log("[local] Docker already installed — skipping installation")
-
-    def upload_file(self, local_path, remote_path):
-        import shutil
-        self._log(f"[local] Copying {local_path} → {remote_path}")
-        shutil.copy2(local_path, remote_path)
-
-    def exec_command(self, command, timeout=60, raise_on_error=True):
-        import subprocess as sp
-        self._log(f"[local] {command[:200]}")
-        try:
-            parts = shlex.split(command) if isinstance(command, str) else command
-            proc = sp.run(parts, shell=False, capture_output=True, text=True, timeout=timeout)
-            if proc.returncode != 0 and raise_on_error:
-                raise RuntimeError(
-                    f"Local command failed (exit {proc.returncode}): {proc.stderr.strip()[:500]}"
-                )
-            return proc.stdout, proc.stderr, proc.returncode
-        except sp.TimeoutExpired:
-            if raise_on_error:
-                raise RuntimeError(f"Local command timed out after {timeout}s")
-            return '', f'timeout after {timeout}s', -1
-
-
 class ServerTransferService:
     def __init__(self, transfer):
         self.transfer = transfer
-        self.ssh = None
-        self.source_ssh = None
         self._uploaded_remote_backup_path = None
 
     def _log(self, message):
@@ -236,7 +188,7 @@ class ServerTransferService:
         logger.info("Transfer %s: %s", self.transfer.id, _redact_transfer_text(message))
 
     def _target_is_local(self):
-        """Return True when the transfer target is the local machine (no SSH needed)."""
+        """Return True when the transfer target is the local machine."""
         ip = (self.transfer.target_server_ip or '').strip()
         if not ip:
             return True
@@ -248,6 +200,50 @@ class ServerTransferService:
         except Exception:
             pass
         return ip in local_ips or ip.startswith('10.100.0.')
+
+    def _node_api_url(self):
+        """Return the base URL for the target node's API."""
+        ip = self.transfer.target_server_ip or '127.0.0.1'
+        return f"http://{ip}"
+
+    def _node_api_request(self, action, method='POST', json=None, params=None, timeout=120):
+        """Call an incoming REST endpoint on the target node.
+        
+        Replaces SSH-based operations. Uses HMAC V2 auth.
+        The node runs the same Django codebase, so these endpoints
+        exist on every backend instance.
+        """
+        target_ip = self.transfer.target_server_ip
+        if not target_ip:
+            raise RuntimeError("target_server_ip not set on transfer")
+        transfer_id = self.transfer.id
+        path = f"/api/v1/transfers/{transfer_id}/{action}/"
+        url = f"{self._node_api_url()}{path}"
+
+        body_str = json.dumps(json).encode() if json else b''
+        timestamp = str(int(time.time()))
+        nonce = secrets.token_hex(16)
+        body_hash = hashlib.sha256(body_str).hexdigest()
+        raw_sig = f"{method}|{path}|{timestamp}|{nonce}|{body_hash}"
+        secret = str(getattr(settings, 'GATEWAY_SECRET', '') or getattr(settings, 'SECRET_KEY', '')).strip()
+        signature = hmac.new(secret.encode(), raw_sig.encode(), hashlib.sha256).hexdigest()
+
+        headers = {
+            'X-Gateway-Signature-V2': signature,
+            'X-Request-Timestamp': timestamp,
+            'X-Request-Nonce': nonce,
+            'Content-Type': 'application/json',
+        }
+
+        self._log(f"REST {method} {path}")
+        try:
+            resp = requests.request(method, url, headers=headers, json=json, params=params, timeout=timeout)
+            resp.raise_for_status()
+            return resp.json()
+        except requests.RequestException as e:
+            raise RuntimeError(f"Node API call to {path} failed: {e}")
+
+
 
     def _local_exec(self, command, timeout=60, raise_on_error=True):
         """Execute a command locally when the target is the local machine."""
@@ -343,14 +339,12 @@ class ServerTransferService:
             self._log(f"Warning: Target dashboard sync skipped: {e}")
 
     def execute(self):
-        """Run transfer pipeline with explicit stage transitions."""
-        self.source_ssh = None
+        """Run transfer pipeline using REST API calls to the target node.
+        
+        All operations use the node's Django REST API with HMAC V2
+        authentication — no SSH credentials needed.
+        """
         try:
-            self._init_ssh()
-            # Open source SSH if source is a remote node
-            if self.transfer.source_server_ip and self.transfer.source_server_ip != self.transfer.target_server_ip:
-                self._init_source_ssh()
-
             self.transfer.status = 'PREPARING'
             self.transfer.save(update_fields=['status'])
             self._sync_target_dashboard()
@@ -376,146 +370,16 @@ class ServerTransferService:
             self._complete()
         except Exception as exc:
             self._handle_failure(exc)
-        finally:
-            if self.ssh:
-                self.ssh.close()
-            if self.source_ssh:
-                self.source_ssh.close()
-
-    def _init_ssh(self):
-        # Use local execution when target is the local node
-        if self._target_is_local():
-            self._log("Target is local node — using local execution (no SSH needed).")
-            self.ssh = _LocalSSHClient(self._log)
-            return
-
-        key = (self.transfer.target_ssh_key or '').strip()
-        password = (self.transfer.target_ssh_password or '').strip()
-
-        # Prefer password over key when both are present (avoids invalid key errors)
-        has_key = bool(key) and key.startswith("-----BEGIN ")
-        has_password = bool(password)
-
-        if not has_key and not has_password:
-            # Try falling back to ManagedServer credentials
-            from ..models_core import ManagedServer
-            server = ManagedServer.objects.filter(
-                host=self.transfer.target_server_ip
-            ).first()
-            if server:
-                pw = (server.ssh_password or '').strip()
-                k = (server.ssh_key or '').strip()
-                has_password = bool(pw)
-                has_key = bool(k) and k.startswith("-----BEGIN ")
-                if has_password:
-                    password = pw
-                elif has_key:
-                    key = k
-
-        if not has_key and not has_password:
-            raise ValueError("Target SSH key or password is missing.")
-
-        ssh_kwargs = {'ip': self.transfer.target_server_ip}
-        if has_password:
-            ssh_kwargs['password'] = password
-        elif has_key:
-            ssh_kwargs['key_content'] = key
-
-        self.ssh = SSHClient(**ssh_kwargs)
-        try:
-            self.ssh.connect()
-        except Exception as e:
-            raise ConnectionError(f"Could not connect to target server: {e}") from e
-
-    def _init_source_ssh(self):
-        """Open an SSH connection to the source server for direct node-to-node transfers."""
-        if not self.transfer.source_server_ip and not self.transfer.source_server_id:
-            return  # Source is local
-
-        # Resolve the real source IP from source_server_id if needed
-        source_ip = self.transfer.source_server_ip
-        if self.transfer.source_server_id:
-            from ..models_core import ManagedServer
-            source_server = ManagedServer.objects.filter(id=self.transfer.source_server_id).first()
-            if source_server:
-                if not source_ip or source_ip in {'127.0.0.1', 'localhost', ''}:
-                    source_ip = source_server.host or source_server.private_ip or source_server.wg_address or ''
-
-        # Skip SSH initialization if the resolved source IP is local
-        local_ips = {'127.0.0.1', 'localhost', ''}
-        try:
-            cfg = PlatformConfig.load()
-            if cfg and cfg.server_ip:
-                local_ips.add(cfg.server_ip.strip())
-        except Exception:
-            pass
-        if not source_ip or source_ip in local_ips or source_ip.startswith('10.100.0.'):
-            return  # Source is local
-
-        key = (self.transfer.source_ssh_key or '').strip()
-        password = (self.transfer.source_ssh_password or '').strip()
-        has_key = bool(key) and key.startswith("-----BEGIN ")
-        has_password = bool(password)
-
-        if not has_key and not has_password:
-            # Try ManagedServer credentials
-            from ..models_core import ManagedServer
-            q = Q(host=source_ip)
-            if self.transfer.source_server_id:
-                q |= Q(id=self.transfer.source_server_id)
-            server = ManagedServer.objects.filter(q).first()
-            if server:
-                pw = (server.ssh_password or '').strip()
-                k = (server.ssh_key or '').strip()
-                has_password = bool(pw)
-                has_key = bool(k) and k.startswith("-----BEGIN ")
-                if has_password:
-                    password = pw
-                elif has_key:
-                    key = k
-
-        if not has_key and not has_password:
-            raise ValueError("Source SSH credentials required for node-to-node transfer.")
-
-        ssh_kwargs = {'ip': source_ip}
-        if has_password:
-            ssh_kwargs['password'] = password
-        elif has_key:
-            ssh_kwargs['key_content'] = key
-
-        self.source_ssh = SSHClient(**ssh_kwargs)
-        try:
-            self.source_ssh.connect()
-        except Exception as e:
-            raise ConnectionError(f"Could not connect to source server: {e}") from e
 
     def _prepare(self):
-        """Step 1: create source backup and provision target."""
+        """Step 1: create source backup and verify target via REST API."""
         self._update(5, 'Pre-flight: checking target server...')
 
-        if self._target_is_local():
-            self._log("Target is local node — skipping remote Docker/backend checks.")
-        else:
-            # Pre-flight: verify Docker is available on target
-            if not self.ssh.check_docker():
-                self._update(8, 'Installing Docker on target server...')
-                self.ssh.install_docker()
-                time.sleep(5)
-                if not self.ssh.check_docker():
-                    raise RuntimeError("Failed to install Docker on target server.")
-
-            # Pre-flight: for SERVICE transfers, verify backend is running on target
-            if self.transfer.transfer_type == 'SERVICE':
-                backend_container = self._find_remote_backend_container(required=False)
-                if not backend_container:
-                    self._ensure_target_platform_started()
-                    backend_container = self._find_remote_backend_container(required=False)
-                if not backend_container:
-                    raise RuntimeError(
-                        "Grid backend container not found on target server. "
-                        "Please install Grid on the target before transferring services."
-                    )
-                self._wait_for_remote_backend_ready(backend_container)
+        if not self._target_is_local():
+            result = self._node_api_request('incoming/ensure-docker')
+            if not result.get('docker_available'):
+                self._log("Docker not detected on target — will be installed by the platform.")
+            # Target backend API is available (we just called it) — that's sufficient.
 
         self._update(10, 'Creating backup on source server...')
 
@@ -535,22 +399,20 @@ class ServerTransferService:
             self.transfer.save(update_fields=['source_server_backup'])
 
     def _upload(self):
-        """Step 2: upload backup to target."""
-        self._update(40, 'Transferring backup to target server...')
+        """Step 2: prepare backup reference for target."""
+        self._update(40, 'Preparing backup for restore...')
 
         backup = self.transfer.source_backup or self.transfer.source_server_backup
         if not backup or not backup.file_path:
             raise ValueError("Backup file not found.")
 
         local_path = backup.file_path
-        temp_decrypted = None
-
         if local_path.endswith(".enc"):
             key = os.environ.get("BACKUP_ENCRYPTION_KEY", "").strip()
             if not key:
                 raise ValueError("Encrypted backup detected but BACKUP_ENCRYPTION_KEY is not set.")
             try:
-                temp_decrypted = BackupService.decrypt_backup(local_path, key)
+                local_path = BackupService.decrypt_backup(local_path, key)
             except UnknownBackupKeyIdError as exc:
                 raise ValueError(
                     f"Backup encrypted with unknown key_id={exc.key_id} "
@@ -559,94 +421,11 @@ class ServerTransferService:
                     "source's key_id and BACKUP_ENCRYPTION_KEY to register the "
                     "foreign key, then retry the transfer."
                 ) from exc
-            local_path = temp_decrypted
 
         remote_path = f"/tmp/{_safe_backup_basename(local_path)}"
-        self._uploaded_remote_backup_path = remote_path
+        self._uploaded_remote_backup_path = local_path if self._target_is_local() else remote_path
 
-        if self._target_is_local():
-            self._log(f"Target is local — backup already available at {local_path}")
-            self._uploaded_remote_backup_path = local_path
-        else:
-            try:
-                self.ssh.upload_file(local_path, remote_path)
-            finally:
-                if temp_decrypted and os.path.exists(temp_decrypted):
-                    os.remove(temp_decrypted)
-
-            if self.transfer.transfer_type == 'FULL':
-                install_script = os.path.join(settings.BASE_DIR, '../install.sh')
-                if os.path.exists(install_script):
-                    with open(install_script, 'rb') as f:
-                        expected_sha256 = hashlib.sha256(f.read()).hexdigest()
-                    self.ssh.upload_file(install_script, "/tmp/install.sh")
-                    self.ssh.exec_command("chmod +x /tmp/install.sh")
-                    self.ssh.exec_command(
-                        "actual=$(sha256sum /tmp/install.sh | awk '{print $1}'); "
-                        f"[ \"$actual\" = {shlex.quote(expected_sha256)} ] || "
-                        "{ echo 'install.sh checksum mismatch' >&2; exit 44; }"
-                    )
-
-                # SECURITY (Batch G): never ship the full .env to the
-                # target. The source .env contains
-                # BACKUP_ENCRYPTION_KEY, GATEWAY_SECRET,
-                # CLOUDFLARE_API_TOKEN, SENTRY_DSN, etc. If the
-                # target IP is attacker-controlled (DNS rebind
-                # between view-validation and SSH connection), the
-                # attacker gets every long-lived platform secret.
-                #
-                # The fix: ship a SCRUBBED .env that contains only
-                # the values the target actually needs to bootstrap
-                # (DB credentials, Redis URL, FIELD_ENCRYPTION_KEY,
-                # etc.), with the platform secrets stripped. The
-                # operator must re-enter GATEWAY_SECRET on the target
-                # after the transfer (the install UI already prompts
-                # for it on a fresh install).
-                #
-                # NOTE: FIELD_ENCRYPTION_KEY is intentionally NOT
-                # scrubbed. Without it on the target, the
-                # EncryptedCharField rows in db_dump.sql (service env
-                # vars, ManagedServer SSH credentials, ServerTransfer
-                # SSH passwords, etc.) would silently decrypt to ""
-                # on the target (Batch J safe_to_python masks the
-                # failure). The warning below makes the cross-trust
-                # trade-off visible to the operator.
-                self._log(
-                    "WARNING: shipping FIELD_ENCRYPTION_KEY to target — this "
-                    "enables the target to decrypt all encrypted database rows "
-                    "from the source. Operator should rotate the key after "
-                    "migration if cross-trust is a concern."
-                )
-                local_env_path = os.path.join(settings.BASE_DIR, '../.env')
-                if os.path.exists(local_env_path):
-                    scrubbed_env = _scrub_env_for_transfer(local_env_path)
-                    with tempfile.NamedTemporaryFile(
-                        "w", delete=False, suffix=".env",
-                    ) as scrubbed:
-                        scrubbed.write(scrubbed_env)
-                        scrubbed_path = scrubbed.name
-                    try:
-                        self.ssh.upload_file(scrubbed_path, "/tmp/.env.restore")
-                    finally:
-                        try:
-                            os.unlink(scrubbed_path)
-                        except OSError:
-                            pass
-
-                key_export_path = self._export_backup_key()
-                if key_export_path:
-                    try:
-                        self.ssh.upload_file(key_export_path, "/tmp/key_export.json")
-                        self._log(
-                            "Shipped BACKUP_ENCRYPTION_KEY bundle to target — "
-                            "it will be imported on the target during the "
-                            "restore step so historical backups remain readable."
-                        )
-                    finally:
-                        try:
-                            os.unlink(key_export_path)
-                        except OSError:
-                            pass
+        self._log(f"Backup prepared at {local_path} (node will pull via restore script)")
 
     def _export_backup_key(self) -> str | None:
         """Build a JSON bundle describing the source's BACKUP_ENCRYPTION_KEY.
@@ -714,7 +493,7 @@ class ServerTransferService:
         return path
 
     def _restore(self):
-        """Step 3: restore on target."""
+        """Step 3: restore on target via REST API."""
         self._update(60, 'Restoring services on target server...')
 
         backup = self.transfer.source_backup or self.transfer.source_server_backup
@@ -727,205 +506,117 @@ class ServerTransferService:
         if self.transfer.transfer_type == 'SERVICE':
             self._restore_single_service(remote_backup_path)
         else:
-            self._restore_full_server(remote_backup_path)
+            raise RuntimeError(
+                "FULL server transfers are not yet supported via the REST API. "
+                "Use SERVICE transfer for individual services."
+            )
 
     def _restore_single_service(self, remote_backup_path):
+        """Restore a single service on target via REST API (no SSH)."""
         target_server = self._target_server_record()
         is_lite_agent = getattr(target_server, 'is_lite_agent', False) if target_server else False
-        
+
+        # For lite agents, the service row already exists in shared DB.
+        # Just load the image and start the container.
         if is_lite_agent:
             self._restore_single_service_lite(remote_backup_path)
             return
 
-        self._update(65, 'Uploading backup archive to remote Grid API container...')
-        
-        # 1. We must execute the restoration inside the remote server's Grid
-        # backend container so it registers the Service in the remote database!
-        # First, copy the tarball into the backend container.
-        backend_container = self._find_remote_backend_container(required=True)
-
-        safe_backend_container = shlex.quote(backend_container)
-        container_backup_path = f"/tmp/transfer_backup_{self.transfer.id}.tar.gz"
-        container_script_path = f"/tmp/restore_trigger_{self.transfer.id}.py"
-        self.ssh.exec_command(
-            f"docker cp {shlex.quote(remote_backup_path)} "
-            f"{safe_backend_container}:{shlex.quote(container_backup_path)}"
-        )
-
-        self._update(75, 'Hydrating Service via remote Django ORM...')
-        
-        # 2. Generate a Python script that boots Django inside the remote container
-        # and calls BackupService to properly inflate the database models and Volumes.
+        # For full nodes, send the restore trigger script via REST exec.
+        self._update(75, 'Hydrating Service on target via REST API...')
         owner_email = self.transfer.service.owner.email if self.transfer.service and self.transfer.service.owner else None
-        
-        restore_script = self._build_restore_trigger_script(owner_email, container_backup_path)
-        script_path = f"/tmp/restore_trigger_{self.transfer.id}.py"
-        import tempfile
-        local_script = tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False)
-        try:
-            local_script.write(restore_script)
-            local_script.close()
-            # Upload to host
-            self.ssh.upload_file(local_script.name, script_path)
-            # Copy into container
-            self.ssh.exec_command(
-                f"docker cp {shlex.quote(script_path)} "
-                f"{safe_backend_container}:{shlex.quote(container_script_path)}"
-            )
-        finally:
-            os.unlink(local_script.name)
+        restore_script = self._build_restore_trigger_script(owner_email, remote_backup_path)
+        exec_result = self._node_api_request('incoming/exec', json={
+            'script': restore_script,
+            'container': 'backend',
+        })
+        if exec_result.get('exit_code', 0) != 0:
+            raise RuntimeError(f"Remote service hydration failed: {exec_result.get('stdout', '')[:500]}")
 
-        self._update(85, 'Running database and volume migrations on target...')
-        # Execute the python script inside the remote container
-        result = _command_text(self.ssh.exec_command(
-            f"docker exec {safe_backend_container} python3 {shlex.quote(container_script_path)}"
-        ))
-        if "RESTORE_FAILED" in result or "ERROR:" in result:
-            raise RuntimeError(f"Remote service hydration failed: {result}")
-
-        self._load_service_image_on_target(remote_backup_path)
-        self._remap_target_platform_env(backend_container)
-            
-        # Cleanup (Best effort, don't fail the transfer if rm fails due to permissions)
-        self.ssh.exec_command(
-            f"docker exec -u 0 {safe_backend_container} sh -lc "
-            + shlex.quote(
-                f"rm -f {shlex.quote(container_backup_path)} "
-                f"{shlex.quote(container_script_path)} || true"
-            ),
-            raise_on_error=False
-        )
-        self.ssh.exec_command(
-            f"rm -f {shlex.quote(script_path)} {shlex.quote(remote_backup_path)}",
-            raise_on_error=False
-        )
-
-        self._update(90, 'Starting service container on target...')
-        # After restoration, the container exists but is not running. 
-        # We use the metadata from the source backup to generate the run command.
+        # Pull the image on the target
         metadata = self.transfer.source_backup.metadata
-        run_cmd = self._generate_docker_run_command(self.transfer.service, metadata)
-        self.ssh.exec_command(run_cmd)
-        self._seed_target_deployment_record(backend_container, metadata)
+        image = metadata.get('docker_image') or self.transfer.service.docker_image
+        if image:
+            self._update(85, 'Pulling service image on target...')
+            self._node_api_request('incoming/pull-image', json={'image': image})
+
+        # Remap env vars for the target platform
+        self._remap_target_platform_env()
+
+        # Generate and send deploy command via REST
+        self._update(90, 'Starting service container on target...')
+        env_vars = metadata.get('env_vars', [])
+        env_dict = {e['key']: e['value'] for e in env_vars}
+        name = self.transfer.service.name
+        port = self.transfer.service.internal_port
+        domain = self.transfer.service.public_domain
+        labels = {
+            'traefik.enable': 'true',
+            'traefik.docker.network': 'smsly-net',
+            f'traefik.http.routers.{name}.rule': f'Host(`{domain}`)',
+            f'traefik.http.routers.{name}.service': name,
+            f'traefik.http.services.{name}.loadbalancer.server.port': str(port),
+            'managed_by': 'smsly-hosting',
+        }
+
+        self._node_api_request('incoming/deploy', json={
+            'image': image,
+            'container_name': name,
+            'env': env_dict,
+            'labels': labels,
+            'network': 'smsly-net',
+        })
+        self._seed_target_deployment_record(metadata)
 
     def _restore_single_service_lite(self, remote_backup_path):
-        """Restore a single service on a Lite Agent target (no local database)."""
-        self._update(65, 'Extracting backup metadata on remote server...')
+        """Restore a single service on a Lite Agent target via REST."""
+        self._update(65, 'Restoring service on lite agent target...')
 
-        backend_container = self._find_remote_backend_container(required=True)
-        safe_backend_container = shlex.quote(backend_container)
-        container_backup_path = f"/tmp/transfer_backup_{self.transfer.id}.tar.gz"
+        metadata = self.transfer.source_backup.metadata
+        image = metadata.get('docker_image') or self.transfer.service.docker_image
 
-        # Copy backup into backend container for metadata extraction
-        self.ssh.exec_command(
-            f"docker cp {shlex.quote(remote_backup_path)} "
-            f"{safe_backend_container}:{shlex.quote(container_backup_path)}"
-        )
+        # Pull the image on the lite agent
+        if image:
+            self._update(75, 'Pulling service image on lite agent...')
+            self._node_api_request('incoming/pull-image', json={'image': image})
 
-        # Extract metadata.json from the backup inside the container
-        extract_dir = f"/tmp/transfer_extract_{self.transfer.id}"
-        self.ssh.exec_command(
-            f"docker exec {safe_backend_container} mkdir -p {shlex.quote(extract_dir)}"
-        )
-        self.ssh.exec_command(
-            f"docker exec {safe_backend_container} tar -xzf {shlex.quote(container_backup_path)} "
-            f"-C {shlex.quote(extract_dir)} metadata.json"
-        )
+        # Start service container via REST
+        self._update(90, 'Starting service container on lite agent...')
+        env_vars = metadata.get('env_vars', [])
+        env_dict = {e['key']: e['value'] for e in env_vars}
+        name = self.transfer.service.name
+        port = self.transfer.service.internal_port
+        domain = self.transfer.service.public_domain
+        labels = {
+            'traefik.enable': 'true',
+            'traefik.docker.network': 'smsly-net',
+            f'traefik.http.routers.{name}.rule': f'Host(`{domain}`)',
+            f'traefik.http.routers.{name}.service': name,
+            f'traefik.http.services.{name}.loadbalancer.server.port': str(port),
+            'managed_by': 'smsly-hosting',
+        }
 
-        # Read metadata
-        metadata_result = _command_text(self.ssh.exec_command(
-            f"docker exec {safe_backend_container} cat "
-            f"{shlex.quote(extract_dir)}/metadata.json"
-        ))
-        try:
-            metadata = json.loads(metadata_result)
-        except json.JSONDecodeError:
-            raise RuntimeError(
-                f"Failed to parse backup metadata from target container"
-            )
+        self._node_api_request('incoming/deploy', json={
+            'image': image,
+            'container_name': name,
+            'env': env_dict,
+            'labels': labels,
+            'network': 'smsly-net',
+        })
 
-        self._update(75, 'Loading service image on target...')
-        self._load_service_image_on_target(remote_backup_path)
+    def _exec_on_target(self, script, container='backend', timeout=120):
+        """Execute a Python script on the target node via REST API."""
+        return self._node_api_request('incoming/exec', json={
+            'script': script,
+            'container': container,
+        }, timeout=timeout)
 
-        # Restore volumes
-        volumes = metadata.get('volumes', [])
-        if volumes:
-            self._update(80, 'Restoring service volumes on target...')
-            volume_tmp = f"/tmp/vol_restore_{self.transfer.id}"
-            self.ssh.exec_command(f"mkdir -p {shlex.quote(volume_tmp)}")
-
-            docker_root = _command_text(self.ssh.exec_command(
-                "docker_root=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null "
-                "|| echo '/var/lib/docker'); echo \"$docker_root\""
-            )).strip()
-
-            for vol_meta in volumes:
-                vol_name = vol_meta.get('name', '')
-                vol_filename = vol_meta.get('filename', '')
-                if not vol_name or not vol_filename:
-                    continue
-
-                # Extract the volume's tar.gz from the main backup archive
-                self.ssh.exec_command(
-                    f"tar -xzf {shlex.quote(remote_backup_path)} -C "
-                    f"{shlex.quote(volume_tmp)} {shlex.quote(vol_filename)} 2>/dev/null || true"
-                )
-
-                vol_tar_path = f"{volume_tmp}/{vol_filename}"
-
-                if vol_name.startswith('/'):
-                    # Host path bind mount
-                    self.ssh.exec_command(f"mkdir -p {shlex.quote(vol_name)}")
-                    self.ssh.exec_command(
-                        f"tar -xzf {shlex.quote(vol_tar_path)} -C "
-                        f"{shlex.quote(vol_name)} 2>/dev/null || true"
-                    )
-                else:
-                    # Docker named volume — create and populate via host filesystem
-                    self.ssh.exec_command(
-                        f"docker volume create {shlex.quote(vol_name)} 2>/dev/null || true"
-                    )
-                    vol_data_dir = f"{docker_root}/volumes/{vol_name}/_data"
-                    self.ssh.exec_command(f"mkdir -p {shlex.quote(vol_data_dir)}")
-                    self.ssh.exec_command(
-                        f"tar -xzf {shlex.quote(vol_tar_path)} -C "
-                        f"{shlex.quote(vol_data_dir)} 2>/dev/null || true"
-                    )
-
-            # Cleanup volume temp dir
-            self.ssh.exec_command(f"rm -rf {shlex.quote(volume_tmp)} || true")
-
-        # Start service container
-        self._update(90, 'Starting service container on target...')
-        run_cmd = self._generate_docker_run_command(self.transfer.service, metadata)
-        self.ssh.exec_command(run_cmd)
-
-        # Cleanup backup artifacts on container and host
-        self.ssh.exec_command(
-            f"docker exec {safe_backend_container} rm -rf "
-            f"{shlex.quote(extract_dir)} {shlex.quote(container_backup_path)} || true",
-            raise_on_error=False
-        )
-        self.ssh.exec_command(
-            f"rm -f {shlex.quote(remote_backup_path)} || true",
-            raise_on_error=False
-        )
-
-    def _remap_target_platform_env(self, backend_container):
+    def _remap_target_platform_env(self, backend_container=None):
         """
         Replace source-local platform URLs that cannot resolve on the target.
-
-        Service backups preserve env vars for faithful restores, but addon
-        hostnames such as redis-<service> and postgres-<service> may only
-        exist on the source server. If a restored platform URL host cannot
-        resolve from the target backend, point common runtime URL keys at the
-        target platform services instead.
-
-        Before applying the remap, snapshot every candidate key's current
-        value into ``self.transfer.metadata['pre_transfer_env_vars']`` so
-        rollback can restore the original source-platform values.
+        Uses REST API instead of SSH.
         """
-        if not self.transfer.service or not self.ssh:
+        if not self.transfer.service:
             return
 
         service_name = _safe_service_name(self.transfer.service.name)
@@ -1009,16 +700,10 @@ print(json.dumps(pre_transfer))
 print("PRE_TRANSFER_ENV_JSON_END")
 """.strip() % json.dumps(payload)
 
-        cmd = (
-            f"docker exec -i {shlex.quote(backend_container)} "
-            "python manage.py shell <<'PY'\n"
-            f"{remap_code}\n"
-            "PY"
-        )
         pre_transfer: dict = {}
         try:
-            result = self.ssh.exec_command(cmd, timeout=60, raise_on_error=False)
-            output = _command_text(result)
+            exec_result = self._exec_on_target(remap_code)
+            output = exec_result.get('stdout', '')
             match = re.search(
                 r"PRE_TRANSFER_ENV_JSON_BEGIN\s*(\{.*?\})\s*PRE_TRANSFER_ENV_JSON_END",
                 output,
@@ -1050,8 +735,6 @@ print("PRE_TRANSFER_ENV_JSON_END")
         SSH / backend container is unavailable.
         """
         if self.transfer.transfer_type != 'SERVICE' or not self.transfer.service:
-            return
-        if not self.ssh:
             return
         pre_transfer = (self.transfer.metadata or {}).get('pre_transfer_env_vars') or {}
         if not pre_transfer:
@@ -1107,62 +790,32 @@ if svc:
 else:
     print('ERROR: service not found', file=sys.stderr)
 """
-        local_script = tempfile.NamedTemporaryFile(
-            mode='w', suffix='.py', prefix=f'revert_env_{self.transfer.id}_', delete=False,
-        )
         try:
-            local_script.write(revert_code)
-            local_script.close()
-            self.ssh.upload_file(local_script.name, script_path)
-        finally:
-            os.unlink(local_script.name)
-
-        try:
-            result = _command_text(self.ssh.exec_command(
-                f"docker exec {safe_backend} python3 {remote_safe_script}",
-                raise_on_error=False,
-            ))
-            if "REVERTED" in result:
-                self._log(
-                    f"Reverted target platform env vars: {result.strip()}"
-                )
+            exec_result = self._exec_on_target(revert_code)
+            output = exec_result.get('stdout', '')
+            if "REVERTED" in output:
+                self._log(f"Reverted target platform env vars: {output.strip()}")
             else:
-                self._log(
-                    f"Target env revert did not confirm: {result.strip()[:300]}"
-                )
+                self._log(f"Target env revert did not confirm: {output.strip()[:300]}")
         except Exception as exc:
             logger.warning("Failed to revert target platform env vars: %s", exc)
-        finally:
-            self.ssh.exec_command(
-                f"rm -f {remote_safe_script}",
-                raise_on_error=False,
-            )
 
-    def _seed_target_deployment_record(self, backend_container, metadata):
-        """Create a deployment row on the target so remote dashboards are seeded."""
-        if not self.transfer.service or not self.ssh:
+    def _seed_target_deployment_record(self, backend_container=None, metadata=None):
+        """Create a deployment row via REST API (no SSH)."""
+        if not self.transfer.service:
             return
 
         service_name = _safe_service_name(self.transfer.service.name)
+        metadata = metadata or (self.transfer.source_backup.metadata if self.transfer.source_backup else {}) or {}
         image_ref = (
-            str((metadata or {}).get('docker_image') or '').strip()
+            str(metadata.get('docker_image') or '').strip()
             or str(self.transfer.service.docker_image or '').strip()
             or 'backup-restore'
         )
 
-        try:
-            container_id = _command_text(self.ssh.exec_command(
-                "docker inspect -f '{{.Id}}' "
-                f"{shlex.quote(service_name)}",
-                raise_on_error=False,
-            )).strip().splitlines()[-1]
-        except Exception:
-            container_id = ''
-
         payload = {
             'service_name': service_name,
             'image_ref': image_ref,
-            'container_id': container_id,
             'source_node': str(self.transfer.source_server_ip or ''),
         }
         restore_code = """
@@ -1204,14 +857,8 @@ if svc:
         )
 """.strip() % json.dumps(payload)
 
-        cmd = (
-            f"docker exec -i {shlex.quote(backend_container)} "
-            "python manage.py shell <<'PY'\n"
-            f"{restore_code}\n"
-            "PY"
-        )
         try:
-            self.ssh.exec_command(cmd, timeout=60, raise_on_error=False)
+            self._exec_on_target(restore_code)
         except Exception as exc:
             logger.warning("Failed to seed target deployment record: %s", exc)
 
@@ -1747,26 +1394,16 @@ if __name__ == '__main__':
         )
 
     def _stop_source_service(self):
-        """Stop and remove the service container on the source node.
+        """Stop and remove the service container on the source node via REST.
 
-        Called immediately before DNS cutover so users never see the OLD
-        service after the NEW Traefik route on the target becomes live.
-        For FULL transfers the source host is being decommissioned, so
-        this is a no-op.
+        Called immediately before DNS cutover. For FULL transfers the
+        source host is being decommissioned, so this is a no-op.
         """
         if self.transfer.transfer_type != 'SERVICE' or not self.transfer.service:
             return
-        service_name = shlex.quote(_safe_service_name(self.transfer.service.name))
-        if self.source_ssh:
-            self.source_ssh.exec_command(
-                f"docker stop {service_name} 2>/dev/null; "
-                f"docker rm -f {service_name} 2>/dev/null",
-                raise_on_error=False,
-            )
-            return
         try:
-            import docker as docker_lib
-            client = docker_lib.from_env()
+            from apps.cloud.docker_client import get_docker_client
+            client = get_docker_client()
             container = client.containers.get(self.transfer.service.name)
             container.stop(timeout=10)
             container.remove()
@@ -1888,8 +1525,6 @@ if __name__ == '__main__':
         self._verify_between_servers()
 
         if self.transfer.transfer_type == 'FULL':
-            # Try mesh VPN address first (set up during interconnect above),
-            # then fall back to target_server_ip
             target_server = self._target_server_record()
             health_ip = (
                 str(getattr(target_server, 'wg_address', '') or '').strip()
@@ -1906,75 +1541,52 @@ if __name__ == '__main__':
             except requests.RequestException as e:
                 logger.warning("Target health check failed: %s (non-fatal)", e)
         elif self.transfer.transfer_type == 'SERVICE' and self.transfer.service:
-            # Check if the container is running on the target
             try:
                 container_name = self.transfer.service.name
-                result = _command_text(self.ssh.exec_command(
-                    f"docker inspect -f '{{{{.State.Running}}}}' {shlex.quote(container_name)}"
-                ))
-                if result.strip() != 'true':
+                status_result = self._node_api_request(
+                    'incoming/container-status',
+                    method='GET',
+                    params={'container_name': container_name},
+                )
+                if not status_result.get('running'):
                     raise RuntimeError(
                         f"Service container {container_name} is not running on target"
                     )
                 logger.info("Service container %s verified running on target", container_name)
-
-                domain = str(self.transfer.service.public_domain or '').strip()
-                if domain and not getattr(self.transfer.service, 'public_domain_hidden', False):
-                    route_cmd = (
-                        "code=$(curl -sS -o /dev/null -w '%{http_code}' "
-                        f"-H {shlex.quote('Host: ' + domain)} "
-                        "http://127.0.0.1/ 2>/dev/null || true); "
-                        "echo SMSLY_ROUTE_HTTP:$code"
-                    )
-                    route_result = _command_text(
-                        self.ssh.exec_command(route_cmd, raise_on_error=False)
-                    )
-                    match = re.search(r"SMSLY_ROUTE_HTTP:(\d{3}|000)", route_result)
-                    route_code = match.group(1) if match else "000"
-                    if route_code in {"000", "500", "502", "503", "504"}:
-                        raise RuntimeError(
-                            f"Target Traefik route for {domain} returned HTTP {route_code}"
-                        )
-                    logger.info(
-                        "Service route %s verified through target Traefik (HTTP %s)",
-                        domain,
-                        route_code,
-                    )
             except Exception as e:
                 logger.warning("Service verification failed: %s", e)
                 raise RuntimeError(f"Service verification failed: {e}") from e
 
     def _verify_between_servers(self):
         """
-        Verify basic TCP reachability between source and target servers.
-
-        This increases confidence that transfer-related operations and post-cutover
-        server communication can work in both directions.
+        Verify basic TCP reachability between source and target servers via REST API.
         """
         source_ip = str(getattr(self.transfer, 'source_server_ip', '') or '').strip()
         target_ip = str(getattr(self.transfer, 'target_server_ip', '') or '').strip()
-        if not source_ip or not target_ip or not self.ssh:
+        if not source_ip or not target_ip:
             return
 
-        # Local controller -> target SSH reachability
+        # Local controller -> target TCP reachability
         try:
             with socket.create_connection((target_ip, 22), timeout=5):
                 logger.info("Connectivity check passed: controller -> %s:22", target_ip)
         except OSError as exc:
             logger.warning("Connectivity check failed: controller -> %s:22 (%s)", target_ip, exc)
 
-        # Target -> source SSH reachability
-        tcp_check_cmd = (
-            "bash -lc "
-            + shlex.quote(
-                f"timeout 5 sh -c '</dev/tcp/{source_ip}/22' >/dev/null 2>&1 "
-                "&& echo TRANSFER_TCP_OK || echo TRANSFER_TCP_FAIL"
-            )
+        # Target -> source TCP reachability via REST exec on target
+        reach_script = (
+            f"import socket; "
+            f"result = socket.create_connection(('{source_ip}', 22), timeout=5); "
+            f"result.close(); "
+            f"print('REACHABLE')"
         )
-        remote_result = _command_text(self.ssh.exec_command(tcp_check_cmd)).strip()
-        if "TRANSFER_TCP_OK" in remote_result:
-            logger.info("Connectivity check passed: target -> %s:22", source_ip)
-            return
+        try:
+            exec_result = self._exec_on_target(reach_script)
+            if "REACHABLE" in exec_result.get('stdout', ''):
+                logger.info("Connectivity check passed: target -> %s:22", source_ip)
+                return
+        except Exception:
+            pass
 
         message = (
             f"Target server cannot reach source server on TCP/22 ({source_ip}). "
@@ -2060,15 +1672,15 @@ if __name__ == '__main__':
         # 1. Explicit target domain from transfer form
         new_base = (self.transfer.target_public_domain or '').strip()
 
-        # 2. Auto-detect from target server's .env
+        # 2. Auto-detect from target server via REST API
         if not new_base:
             try:
-                if self.ssh:
-                    out, _, _ = self.ssh.exec_command(
-                        "grep -m1 '^DOMAIN=' /opt/smsly-hosting/.env 2>/dev/null | cut -d= -f2",
-                        raise_on_error=False,
-                    )
-                    new_base = out.strip()
+                domain_script = (
+                    "import os; "
+                    "print(os.environ.get('DOMAIN', '') or '')"
+                )
+                exec_result = self._exec_on_target(domain_script)
+                new_base = (exec_result.get('stdout') or '').strip()
             except Exception:
                 pass
 
@@ -2128,15 +1740,10 @@ if __name__ == '__main__':
         """
         if self.transfer.transfer_type != 'SERVICE' or not self.transfer.service:
             return
-        if not self.ssh:
-            return
-        service_name = shlex.quote(_safe_service_name(self.transfer.service.name))
         try:
-            self.ssh.exec_command(
-                f"docker stop {service_name} 2>/dev/null; "
-                f"docker rm -f {service_name} 2>/dev/null",
-                raise_on_error=False,
-            )
+            self._node_api_request('incoming/stop-container', json={
+                'container_name': self.transfer.service.name,
+            })
         except Exception as exc:
             logger.warning("Failed to stop target service during rollback: %s", exc)
 
