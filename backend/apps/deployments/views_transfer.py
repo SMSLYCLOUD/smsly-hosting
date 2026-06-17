@@ -3,11 +3,13 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import socket
 import time
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 from django.db.models import Q
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action, throttle_classes
@@ -668,3 +670,74 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
             return Response({'docker_available': True})
         except Exception as e:
             return Response({'docker_available': False, 'error': str(e)})
+
+    @action(detail=False, methods=['post'], url_path='incoming/db-backup')
+    def incoming_db_backup(self, request):
+        """
+        Receive and store a master DB backup on this node.
+        Used for disaster recovery — if the master goes down, this node
+        can help restore the database on a replacement master.
+
+        Expects multipart/form-data with a 'backup' file field containing
+        a gzipped pg_dump. Stored at DB_BACKUP_DIR with a timestamp.
+        """
+        if not self._incoming_auth_required(request, None):
+            return Response({'error': 'Invalid HMAC signature'}, status=status.HTTP_401_UNAUTHORIZED)
+
+        backup_file = request.FILES.get('backup')
+        if not backup_file:
+            return Response({'error': 'backup file required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        backup_dir = getattr(settings, 'DB_BACKUP_DIR', '/opt/smsly-hosting/backups/master-db')
+        try:
+            os.makedirs(backup_dir, exist_ok=True)
+            timestamp = timezone.now().strftime('%Y%m%d_%H%M%S')
+            dest_path = os.path.join(backup_dir, f'master_db_{timestamp}.sql.gz')
+
+            with open(dest_path, 'wb') as f:
+                for chunk in backup_file.chunks(8192):
+                    f.write(chunk)
+
+            # Keep only the 5 most recent backups
+            existing = sorted(
+                [os.path.join(backup_dir, f) for f in os.listdir(backup_dir) if f.endswith('.sql.gz')],
+                key=os.path.getmtime,
+            )
+            while len(existing) > 5:
+                old = existing.pop(0)
+                try:
+                    os.remove(old)
+                except OSError:
+                    pass
+
+            return Response({
+                'status': 'stored',
+                'path': dest_path,
+                'size_bytes': backup_file.size,
+            })
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=['get'], url_path='incoming/db-backup/status')
+    def incoming_db_backup_status(self, request):
+        """Return info about the latest stored master DB backup on this node."""
+        if not self._incoming_auth_required(request, None):
+            return Response({'error': 'Invalid HMAC signature'}, status=status.HTTP_401_UNAUTHORIZED)
+
+        backup_dir = getattr(settings, 'DB_BACKUP_DIR', '/opt/smsly-hosting/backups/master-db')
+        try:
+            backups = sorted(
+                [f for f in os.listdir(backup_dir) if f.endswith('.sql.gz')],
+                key=lambda f: os.path.getmtime(os.path.join(backup_dir, f)),
+                reverse=True,
+            )
+            latest = backups[0] if backups else None
+            latest_path = os.path.join(backup_dir, latest) if latest else None
+            return Response({
+                'backups_available': len(backups),
+                'latest': latest,
+                'latest_size_bytes': os.path.getsize(latest_path) if latest_path and os.path.exists(latest_path) else 0,
+                'backup_dir': backup_dir,
+            })
+        except Exception as e:
+            return Response({'backups_available': 0, 'error': str(e)})
