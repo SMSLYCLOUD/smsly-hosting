@@ -27,6 +27,8 @@ from django.db.models import Q, Count, Avg, F, ExpressionWrapper, DurationField
 from django.utils.http import content_disposition_header
 from django.core import signing
 from apps.deployments.services.github_webhooks import setup_github_webhook
+from apps.deployments.services.gitlab_webhooks import setup_gitlab_webhook
+from apps.deployments.services.bitbucket_webhooks import setup_bitbucket_webhook
 import threading
 from .ai_router import (
     DEFAULT_AI_ROUTER_API_BASE,
@@ -437,6 +439,21 @@ def _cancel_stale_in_progress_deployments(service):
     return count
 
 
+def _setup_provider_webhook(user, repo_url: str):
+    """Dispatch webhook setup to the correct provider based on repo URL."""
+    from urllib.parse import urlparse as _urlparse
+    hostname = _urlparse(repo_url).hostname or ''
+    if 'github' in hostname:
+        from apps.deployments.services.github_webhooks import setup_github_webhook
+        setup_github_webhook(user, repo_url)
+    elif 'gitlab' in hostname:
+        from apps.deployments.services.gitlab_webhooks import setup_gitlab_webhook
+        setup_gitlab_webhook(user, repo_url)
+    elif 'bitbucket' in hostname:
+        from apps.deployments.services.bitbucket_webhooks import setup_bitbucket_webhook
+        setup_bitbucket_webhook(user, repo_url)
+
+
 def _has_active_deployment(service):
     """
     Check if a service already has an active deployment in progress.
@@ -742,15 +759,14 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
         service = serializer.save(owner=self.request.user, server=server)
 
-        # Setup GitHub Webhook only for direct user actions. Node-to-node
-        # remote sync uses APIToken auth and should not mutate repo webhooks.
+        # Setup provider webhook only for direct user actions.
         if (
             not self._is_remote_sync_request()
             and service.deploy_type == 'GIT'
             and service.repository_url
         ):
             threading.Thread(
-                target=setup_github_webhook,
+                target=_setup_provider_webhook,
                 args=(self.request.user, service.repository_url),
                 daemon=True
             ).start()
@@ -762,8 +778,6 @@ class ServiceViewSet(viewsets.ModelViewSet):
         
         if 'server' in serializer.validated_data:
             server = serializer.validated_data.get('server')
-            
-            # Seamless: If no server is assigned during update, default to primary
             if not server:
                 server = ManagedServer.get_primary()
                 if not server:
@@ -772,13 +786,12 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     ).order_by('?').first()
                 if server:
                     logger.info("Auto-assigning server %s to service %s during update", server.name, serializer.instance.name)
-            
             ServerGuard.assert_user_workload_allowed(server)
             service = serializer.save(server=server)
         else:
             service = serializer.save()
 
-        # Setup GitHub Webhook if repo URL changed or was newly set
+        # Setup provider webhook if repo URL changed
         new_repo_url = service.repository_url
         if (
             not self._is_remote_sync_request()
@@ -787,7 +800,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
             and new_repo_url != old_repo_url
         ):
             threading.Thread(
-                target=setup_github_webhook,
+                target=_setup_provider_webhook,
                 args=(self.request.user, new_repo_url),
                 daemon=True
             ).start()
