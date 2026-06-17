@@ -13,6 +13,7 @@ function BitbucketCallbackContent() {
 
   useEffect(() => {
     const code = searchParams.get("code");
+    const state = searchParams.get("state");
     const error = searchParams.get("error");
 
     if (error) {
@@ -29,7 +30,7 @@ function BitbucketCallbackContent() {
 
     const exchangeCode = async () => {
       try {
-        const res = await api.post("/integrations/bitbucket/oauth-callback/", { code });
+        const res = await api.post("/integrations/bitbucket/oauth-callback/", { code, state });
         setStatus("success");
         setMessage(`Bitbucket connected as ${res.data?.account?.login || "your account"}!`);
         setTimeout(() => router.push("/settings"), 2000);
