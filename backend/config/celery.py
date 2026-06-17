@@ -216,6 +216,12 @@ app.conf.beat_schedule = {
         'schedule': 3600.0,
         'options': {'expires': 3600.0},
     },
+    # Push master DB snapshot to all lite agents every 6 hours
+    'sync-master-db-to-agents-every-6h': {
+        'task': 'apps.deployments.tasks.sync_master_db_to_agents_task',
+        'schedule': 21600.0,
+        'options': {'expires': 21600.0},
+    },
 }
 
 
