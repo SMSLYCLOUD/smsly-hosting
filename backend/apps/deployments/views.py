@@ -369,29 +369,31 @@ class CaddySecretOrAdminPermission(permissions.BasePermission):
     """
     Permission gate for the Caddy ``on_demand_tls`` 'ask' endpoint.
 
-    Allows access if EITHER:
+    Caddy v2's ``on_demand_tls.ask`` directive cannot send custom HTTP
+    headers, so ``X-Caddy-Secret`` is NOT checked here (it would always
+    fail). Instead, the endpoint relies on:
+    
+    * domain ownership verification (looks up the domain in the DB)
+    * per-apex daily cert issuance cap (default 20 hostnames/day)
+    * IP-based rate limiting (60 requests/min via ``caddy_ask`` scope)
 
-    * the request carries ``X-Caddy-Secret`` matching ``settings.CADDY_ASK_SECRET``
-      (machine-to-machine Caddy), OR
-    * the request is from an authenticated admin user (human operator inspecting
-      the endpoint).
-
-    All other requests are denied with HTTP 401.
+    Authenticated admin users can also access the endpoint for manual
+    inspection, e.g. to see why a domain is being rejected.
     """
 
-    message = "Caddy ask endpoint requires a valid X-Caddy-Secret header or admin authentication."
+    message = "Caddy ask endpoint requires admin authentication or a registered domain."
 
     def has_permission(self, request, view):
-        provided = request.headers.get("X-Caddy-Secret", "")
-        expected = str(getattr(settings, "CADDY_ASK_SECRET", "") or "")
-        if expected and provided and hmac.compare_digest(provided, expected):
-            return True
+        # Caddy v2 cannot send custom headers in the on_demand_tls.ask
+        # request, so X-Caddy-Secret is intentionally not checked here.
+        # The endpoint performs its own domain verification + rate limiting
+        # + daily cert cap instead.
         user = getattr(request, "user", None)
         if user is not None and getattr(user, "is_authenticated", False) and (
             getattr(user, "is_superuser", False) or getattr(user, "is_staff", False)
         ):
             return True
-        return False
+        return True  # Allow anonymous — Caddy ask requests have no auth
 
 
 _IN_PROGRESS_DEPLOYMENT_STATUSES = [
