@@ -13,6 +13,7 @@ from django.conf import settings
 from django.db.models import Sum
 from django.utils import timezone
 from rest_framework import serializers, status, viewsets, permissions
+from rest_framework.throttling import AnonRateThrottle
 from rest_framework.decorators import action
 from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -311,6 +312,10 @@ class InvoicesView(GenericAPIView):
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
+class WebhookRateThrottle(AnonRateThrottle):
+    rate = '60/minute'
+
+
 class StripeWebhookView(GenericAPIView):
     """
     Stripe webhook endpoint.
@@ -322,6 +327,7 @@ class StripeWebhookView(GenericAPIView):
 
     serializer_class = EmptySerializer
     permission_classes = [AllowAny]
+    throttle_classes = [WebhookRateThrottle]
 
     def post(self, request):
         # pylint: disable=too-many-locals, too-many-statements, too-many-return-statements, too-many-branches
@@ -425,6 +431,7 @@ class FlutterwaveWebhookView(GenericAPIView):
 
     serializer_class = EmptySerializer
     permission_classes = [AllowAny]
+    throttle_classes = [WebhookRateThrottle]
 
     def post(self, request):
         # pylint: disable=too-many-return-statements
@@ -498,6 +505,7 @@ class CryptomusWebhookView(GenericAPIView):
 
     serializer_class = EmptySerializer
     permission_classes = [AllowAny]
+    throttle_classes = [WebhookRateThrottle]
 
     def post(self, request):
         # pylint: disable=too-many-return-statements
