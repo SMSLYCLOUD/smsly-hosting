@@ -800,21 +800,21 @@ class Deployment(TimeStampedModel):
 
     def save(self, *args, **kwargs):
         self.full_clean()
-        # When a deployment becomes ACTIVE, deactivate all other ACTIVE
-        # deployments for the same service (only one can be live at a time).
         if self.status == self.Status.ACTIVE and self.service_id:
-            exclude_pks = [self.pk]
-            # Don't demote the remote execution deployment that this
-            # tracking deployment supervises (shared-DB lite-agent case).
-            if self.remote_deployment_id:
-                try:
-                    exclude_pks.append(uuid.UUID(self.remote_deployment_id))
-                except (ValueError, TypeError):
-                    pass
-            Deployment.objects.filter(
-                service_id=self.service_id,
-                status=self.Status.ACTIVE,
-            ).exclude(pk__in=exclude_pks).update(status=self.Status.INACTIVE)
+            from django.db import transaction
+            with transaction.atomic():
+                locked = Deployment.objects.select_for_update().filter(
+                    service_id=self.service_id,
+                    status=self.Status.ACTIVE,
+                )
+                if self.pk:
+                    locked = locked.exclude(pk=self.pk)
+                if self.remote_deployment_id:
+                    try:
+                        locked = locked.exclude(pk=uuid.UUID(self.remote_deployment_id))
+                    except (ValueError, TypeError):
+                        pass
+                locked.update(status=self.Status.INACTIVE)
         super().save(*args, **kwargs)
 
 

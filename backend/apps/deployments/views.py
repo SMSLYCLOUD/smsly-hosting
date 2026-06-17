@@ -22,7 +22,7 @@ from django.db.models import Prefetch
 from django.conf import settings
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
-from django.db import DataError, IntegrityError, transaction
+from django.db import DataError, IntegrityError, transaction, models
 from django.db.models import Q, Count, Avg, F, ExpressionWrapper, DurationField
 from django.utils.http import content_disposition_header
 from django.core import signing
@@ -442,11 +442,16 @@ def _has_active_deployment(service):
     Check if a service already has an active deployment in progress.
     Returns the existing deployment if found, None otherwise.
     Prevents rapid-fire deployment spam from the dashboard.
+    Uses select_for_update to prevent race conditions on concurrent deploys.
     """
+    from django.db import transaction
     _cancel_stale_in_progress_deployments(service)
-    return service.deployments.filter(
-        status__in=_IN_PROGRESS_DEPLOYMENT_STATUSES
-    ).order_by('-created_at').first()
+    with transaction.atomic():
+        qs = Deployment.objects.select_for_update().filter(
+            service=service,
+            status__in=_IN_PROGRESS_DEPLOYMENT_STATUSES,
+        ).order_by('-created_at')[:1]
+        return qs.first()
 
 
 def _resolve_provider_for_service(service: Service, prefer_local: bool = False):
@@ -518,8 +523,11 @@ def _service_for_domain(domain: str):
     direct = Service.objects.filter(public_domain=domain, public_domain_hidden=False).first()
     if direct:
         return direct
-
-    for service in Service.objects.only("id", "custom_domains"):
+    try:
+        return Service.objects.filter(custom_domains__contains=[domain]).first()
+    except Exception:
+        pass
+    for service in Service.objects.only("id", "custom_domains")[:500]:
         values = [
             str(value or "").strip().lower()
             for value in (service.custom_domains or [])
@@ -1517,11 +1525,14 @@ class ServiceViewSet(viewsets.ModelViewSet):
         parent = self.get_object()
         previews = Service.objects.filter(
             parent_service=parent, is_preview=True
-        ).order_by('-created_at')
+        ).order_by('-created_at').prefetch_related(
+            models.Prefetch('deployments', queryset=Deployment.objects.order_by('-created_at'))
+        )
 
         data = []
         for preview in previews:
-            latest_deploy = preview.deployments.order_by('-created_at').first()
+            deploys = list(preview.deployments.all()[:1])
+            latest_deploy = deploys[0] if deploys else None
             data.append({
                 'id': str(preview.id),
                 'name': preview.name,
@@ -2576,7 +2587,8 @@ class ServiceViewSet(viewsets.ModelViewSet):
         result = defaultdict(list)
         # SECURITY: scope to the caller's accessible services via get_queryset()
         # so the sidebar cannot be used to enumerate other tenants' services.
-        for svc in self.get_queryset():
+        # Limit to 200 services to prevent unbounded queries.
+        for svc in self.get_queryset()[:200]:
             # ``svc.repo`` is stored as a full URL in the model; we only need the
             # owner/repo slug for display.
             repo_slug = svc.repository_url.split('/')[-1] if svc.repository_url else str(svc.id)

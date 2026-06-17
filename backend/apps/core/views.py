@@ -8,6 +8,7 @@ import logging
 import os
 from django.utils import timezone
 from django.contrib.auth.models import User
+from django.db.models import Q
 from apps.deployments.models import Service, Deployment
 from apps.deployments.models_addons import Addon
 from .models import APIKey
@@ -57,65 +58,22 @@ class DashboardOverviewView(GenericAPIView):
         now = timezone.now()
         start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-        # Services
-        services = Service.objects.filter(owner=user).prefetch_related('deployments')
-        running_services = 0
-        failed_services = 0
-        stopped_services = 0
-        unknown_services = 0
-
-        for service in services:
-            # Primary check: Use service status first
-            if service.status == Service.Status.ACTIVE:
-                latest = service.deployments.order_by('-created_at').first()
-                if latest and latest.status in {
-                    Deployment.Status.ACTIVE,
-                    # SECURITY (Batch H): ``STAGED`` was referenced here
-                    # but does not exist on ``Deployment.Status``. The
-                    # line crashed with AttributeError on every dashboard
-                    # render, returning 500 to the user. Removed; the
-                    # existing ``ACTIVE`` and ``HEALTH_CHECK`` values
-                    # already cover the "running" set.
-                    Deployment.Status.HEALTH_CHECK,
-                }:
-                    running_services += 1
-                elif latest and latest.status in {
-                    Deployment.Status.BUILDING,
-                    Deployment.Status.DEPLOYING,
-                    Deployment.Status.REVIEW,
-                    Deployment.Status.QUEUED,
-                    Deployment.Status.MIGRATION_RUNNING,
-                    # SECURITY (Batch H follow-up): ``TRAFFIC_SHIFTING`` was
-                    # referenced here but does not exist on
-                    # ``Deployment.Status`` (it was removed from the model
-                    # along with ``STAGED`` and ``MONITORING`` in an
-                    # unrecorded refactor; only migrations 0050/0068 still
-                    # list it as a column choice). The line crashed with
-                    # AttributeError on every dashboard render, returning
-                    # 500 and triggering a page-reload loop. Removed; the
-                    # remaining in-progress states already cover running.
-                }:
-                    running_services += 1
-                elif latest and latest.status == Deployment.Status.FAILED:
-                    failed_services += 1
-                else:
-                    # Service is active but no valid deployment
-                    running_services += 1
-            elif service.status == Service.Status.DELETION_PENDING:
-                stopped_services += 1
-            elif service.status == Service.Status.DELETION_FAILED:
-                failed_services += 1
-            elif service.status == Service.Status.DELETED:
-                stopped_services += 1
-            else:  # UNKNOWN status
-                unknown_services += 1
+        # Services — count by status in a single aggregated query (no N+1)
+        total = Service.objects.filter(owner=user).count()
+        running = Service.objects.filter(owner=user, status=Service.Status.ACTIVE).count()
+        failed = Service.objects.filter(owner=user, status=Service.Status.DELETION_FAILED).count()
+        stopped = Service.objects.filter(
+            owner=user,
+            status__in=[Service.Status.DELETION_PENDING, Service.Status.DELETED],
+        ).count()
+        unknown = total - running - failed - stopped
 
         service_stats = {
-            "total": services.count(),
-            "running": running_services,
-            "failed": failed_services,
-            "stopped": stopped_services,
-            "unknown": unknown_services,
+            "total": total,
+            "running": running,
+            "failed": failed,
+            "stopped": stopped,
+            "unknown": max(0, unknown),
         }
 
         # Deployments this month
