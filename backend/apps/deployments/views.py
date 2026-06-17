@@ -4808,6 +4808,9 @@ class DomainConfigView(GenericAPIView):
             'use_ssl': config.use_ssl,
             'wildcard_subdomains': config.wildcard_subdomains,
             'cloudflare_api_token_set': bool(config.cloudflare_api_token),
+            'github_webhook_secret_set': bool(config.github_webhook_secret) or bool(os.environ.get('GITHUB_WEBHOOK_SECRET', '')),
+            'gitlab_webhook_secret_set': bool(config.gitlab_webhook_secret) or bool(os.environ.get('GITLAB_WEBHOOK_SECRET', '')),
+            'bitbucket_webhook_secret_set': bool(config.bitbucket_webhook_secret) or bool(os.environ.get('BITBUCKET_WEBHOOK_SECRET', '')),
             'server_ip': config.server_ip or '',
             'caddy_status': config.caddy_status,
             'updated_at': config.updated_at,
@@ -4892,6 +4895,10 @@ class DomainConfigView(GenericAPIView):
                     data.get('cloudflare_api_token') or ''
                 ).strip()
             clearing_token = 'cloudflare_api_token' in data and not config.cloudflare_api_token
+            for _secret_field in ('github_webhook_secret', 'gitlab_webhook_secret', 'bitbucket_webhook_secret'):
+                if _secret_field in data:
+                    val = str(data.get(_secret_field) or '').strip()
+                    setattr(config, _secret_field, val)
             if 'server_ip' in data:
                 config.server_ip = str(data.get('server_ip') or '').strip() or None
 
