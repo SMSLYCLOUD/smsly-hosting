@@ -18,7 +18,7 @@ from .views_blueprints import BlueprintViewSet
 from .views_topology import TopologyViewSet
 from .views_analysis import RepoAnalysisView
 from .views_chat import AIChatView
-from .views_webhooks import GitHubWebhookView
+from .views_webhooks import GitHubWebhookView, GitLabWebhookView, BitbucketWebhookView
 from .views_tunnels import TunnelViewSet
 from .views_subdomains import subdomains_list_create, subdomains_release
 from .views_health_webhook import ServiceHealthWebhookView
@@ -120,6 +120,8 @@ urlpatterns = [
     path('analyze-repo/', RepoAnalysisView.as_view(), name='analyze-repo'),
     path('ai-chat/', AIChatView.as_view(), name='ai-chat'),
     path('webhooks/github/', GitHubWebhookView.as_view(), name='github-webhook'),
+    path('webhooks/gitlab/', GitLabWebhookView.as_view(), name='gitlab-webhook'),
+    path('webhooks/bitbucket/', BitbucketWebhookView.as_view(), name='bitbucket-webhook'),
     path('services/<uuid:service_id>/health/webhook/', ServiceHealthWebhookView.as_view(), name='service-health-webhook'),
     path('system/config/', SystemConfigView.as_view(), name='system-config'),
     path('system/domain-config/', DomainConfigView.as_view(), name='domain-config'),

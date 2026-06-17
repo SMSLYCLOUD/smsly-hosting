@@ -13,6 +13,7 @@ function GitLabCallbackContent() {
 
   useEffect(() => {
     const code = searchParams.get("code");
+    const state = searchParams.get("state");
     const error = searchParams.get("error");
 
     if (error) {
@@ -29,7 +30,7 @@ function GitLabCallbackContent() {
 
     const exchangeCode = async () => {
       try {
-        const res = await api.post("/integrations/gitlab/oauth-callback/", { code });
+        const res = await api.post("/integrations/gitlab/oauth-callback/", { code, state });
         setStatus("success");
         setMessage(`GitLab connected as ${res.data?.account?.login || "your account"}!`);
         setTimeout(() => router.push("/settings"), 2000);

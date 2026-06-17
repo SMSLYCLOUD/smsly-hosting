@@ -23,6 +23,7 @@ function GitHubCallbackContent() {
 
   useEffect(() => {
     const code = searchParams.get("code");
+    const state = searchParams.get("state");
     const error = searchParams.get("error");
 
     if (error) {
@@ -44,7 +45,7 @@ function GitHubCallbackContent() {
     const exchangeCode = async () => {
       try {
         const res = await api.post("/integrations/github/oauth-callback/", {
-          code,
+          code, state,
         });
         setStatus("success");
         setMessage(
