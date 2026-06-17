@@ -40,10 +40,23 @@ fail() { echo -e "${RED}[✗]${NC} $1"; exit 1; }
 
 # Parse args
 DB_URL=""
+REPLICA_URL=""
 for arg in "$@"; do
     case "$arg" in
-        --db-url=*) DB_URL="${arg#*=}" ;;
-        --help|-h)  echo "Usage: $0 [--db-url=postgresql://user:pass@host:5432/dbname]" && exit 0 ;;
+        --db-url=*)     DB_URL="${arg#*=}" ;;
+        --replica-url=*) REPLICA_URL="${arg#*=}" ;;
+        --help|-h)
+            echo "Usage: $0 [--db-url=URL] [--replica-url=URL]"
+            echo ""
+            echo "  --db-url         Primary database URL (main DB or promoted replica)"
+            echo "  --replica-url    Read replica URL (tried if --db-url is unreachable)"
+            echo ""
+            echo "DB resolution order:"
+            echo "  1. --db-url (explicit primary)"
+            echo "  2. --replica-url (explicit replica — promote manually first if needed)"
+            echo "  3. DATABASE_URL from agent .env (original master DB if still reachable)"
+            echo "  4. Local Postgres + restore from agent backup (last resort)"
+            exit 0 ;;
     esac
 done
 
@@ -105,17 +118,29 @@ resolve_db() {
     return 1
 }
 
-# Priority 1: --db-url parameter
+# Priority 1: --db-url parameter (explicit primary — main DB or promoted replica)
 if [ -n "$DB_URL" ]; then
-    log "Using explicit --db-url..."
+    log "Trying --db-url (primary database)..."
     if resolve_db "$DB_URL"; then
         RESOLVED_DB_URL="$DB_URL"
+        ok "Connected to primary database"
     else
-        fail "Provided --db-url is not reachable: $DB_URL"
+        warn "Primary database not reachable at $DB_URL"
     fi
 fi
 
-# Priority 2: DATABASE_URL from agent's .env (master's DB might still be up)
+# Priority 2: --replica-url parameter (explicit replica — promote manually first)
+if [ -z "$RESOLVED_DB_URL" ] && [ -n "$REPLICA_URL" ]; then
+    log "Trying --replica-url (read replica)..."
+    if resolve_db "$REPLICA_URL"; then
+        RESOLVED_DB_URL="$REPLICA_URL"
+        ok "Connected to replica — ensure it has been promoted to primary (pg_ctl promote)"
+    else
+        warn "Replica not reachable at $REPLICA_URL"
+    fi
+fi
+
+# Priority 3: DATABASE_URL from agent's .env (original master DB if still reachable)
 if [ -z "$RESOLVED_DB_URL" ]; then
     AGENT_DB_URL=$(grep -m1 '^DATABASE_URL=' .env 2>/dev/null | cut -d= -f2- || echo "")
     if [ -n "$AGENT_DB_URL" ]; then
