@@ -583,10 +583,20 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
             elif container:
                 from apps.cloud.docker_client import get_docker_client
                 client = get_docker_client()
-                target = client.containers.get(container)
-                exit_code, output = target.exec_run(script)
-                result_text = output.decode() if isinstance(output, bytes) else str(output)
-                return Response({'stdout': result_text, 'exit_code': exit_code})
+                try:
+                    target = client.containers.get(container)
+                except Exception:
+                    targets = client.containers.list(filters={"name": container})
+                    if not targets:
+                        return Response(
+                            {'error': f'Container matching "{container}" not found'},
+                            status=status.HTTP_404_NOT_FOUND,
+                        )
+                    target = targets[0]
+                # Use list-form command so docker-py doesn't shlex.split() multi-line scripts
+                exit_code, output = target.exec_run(["python3", "-c", script])
+                output_text = output.decode() if isinstance(output, bytes) else str(output)
+                return Response({'stdout': output_text, 'exit_code': exit_code})
             else:
                 import subprocess
                 result = subprocess.run(

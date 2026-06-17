@@ -220,11 +220,19 @@ class ServerTransferService:
         path = f"/api/v1/transfers/{transfer_id}/{action}/"
         url = f"{self._node_api_url()}{path}"
 
+        # Build the exact path the server will see (with query params)
+        # so HMAC signatures match on both sides.
+        sig_path = path
+        if params:
+            from urllib.parse import urlencode
+            qs = urlencode(params)
+            sig_path = f"{path}?{qs}"
+
         body_str = json.dumps(json).encode() if json else b''
         timestamp = str(int(time.time()))
         nonce = secrets.token_hex(16)
         body_hash = hashlib.sha256(body_str).hexdigest()
-        raw_sig = f"{method}|{path}|{timestamp}|{nonce}|{body_hash}"
+        raw_sig = f"{method}|{sig_path}|{timestamp}|{nonce}|{body_hash}"
         secret = str(getattr(settings, 'GATEWAY_SECRET', '') or getattr(settings, 'SECRET_KEY', '')).strip()
         signature = hmac.new(secret.encode(), raw_sig.encode(), hashlib.sha256).hexdigest()
 

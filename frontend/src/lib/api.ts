@@ -280,12 +280,24 @@ api.interceptors.response.use(
     }
 
     if (error.response?.status === 401 && typeof window !== 'undefined') {
-      // Clear any legacy client-side auth state (non-HttpOnly cookies /
-      // localStorage entries from older builds). The HttpOnly cookie
-      // itself is cleared by the backend's logout endpoint — the
-      // AuthProvider is the single source of truth for login redirects
-      // and will surface the 401 by re-rendering without a user.
       clearAuthCookies();
+      // Redirect to login if on a protected page and not already heading there.
+      // The AuthProvider handles the /auth/user/ 401 separately; this interceptor
+      // catches 401s on ALL other endpoints so the user doesn't see broken pages.
+      const path = window.location.pathname;
+      if (
+        path !== '/login' &&
+        path !== '/register' &&
+        !path.startsWith('/auth/') &&
+        isProtectedPath(path)
+      ) {
+        const loopKey = '__401_redirect_ts';
+        const last = Number(sessionStorage.getItem(loopKey) || 0);
+        if (Date.now() - last > 5000) {
+          sessionStorage.setItem(loopKey, String(Date.now()));
+          window.location.replace('/login');
+        }
+      }
     }
     return Promise.reject(error);
   }
