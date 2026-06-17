@@ -129,12 +129,52 @@ if [ -n "$DB_URL" ]; then
     fi
 fi
 
-# Priority 2: --replica-url parameter (explicit replica — promote manually first)
+# Priority 2: --replica-url parameter — auto-promote if in recovery mode
+promote_replica() {
+    local url="$1"
+    log "Checking if replica is in recovery mode..."
+    local in_recovery
+    in_recovery=$(psql "$url" -t -A -c "SELECT pg_is_in_recovery();" 2>/dev/null || echo "unknown")
+    if [ "$in_recovery" = "t" ]; then
+        log "Replica is in recovery — promoting to primary..."
+        local promoted
+        promoted=$(psql "$url" -t -A -c "SELECT pg_promote();" 2>/dev/null || echo "f")
+        if [ "$promoted" = "t" ]; then
+            log "Promotion initiated — waiting for replica to become writable..."
+            for i in $(seq 1 30); do
+                sleep 2
+                local check
+                check=$(psql "$url" -t -A -c "SELECT pg_is_in_recovery();" 2>/dev/null || echo "t")
+                if [ "$check" = "f" ]; then
+                    ok "Replica promoted to primary successfully"
+                    return 0
+                fi
+            done
+            warn "Replica promotion timed out after 60s"
+            return 1
+        else
+            warn "pg_promote() returned false — check replica configuration"
+            return 1
+        fi
+    elif [ "$in_recovery" = "f" ]; then
+        ok "Replica is already writable (not in recovery)"
+        return 0
+    else
+        warn "Cannot determine replica state at $url"
+        return 1
+    fi
+}
+
 if [ -z "$RESOLVED_DB_URL" ] && [ -n "$REPLICA_URL" ]; then
-    log "Trying --replica-url (read replica)..."
+    log "Trying --replica-url..."
     if resolve_db "$REPLICA_URL"; then
-        RESOLVED_DB_URL="$REPLICA_URL"
-        ok "Connected to replica — ensure it has been promoted to primary (pg_ctl promote)"
+        if promote_replica "$REPLICA_URL"; then
+            RESOLVED_DB_URL="$REPLICA_URL"
+            ok "Connected to promoted replica as new primary"
+        else
+            warn "Replica reachable but promotion failed — using as read-only fallback"
+            RESOLVED_DB_URL="$REPLICA_URL"
+        fi
     else
         warn "Replica not reachable at $REPLICA_URL"
     fi
