@@ -1685,15 +1685,18 @@ export interface Addon {
 
 export const backupsApi = {
   importKey: async (scope: 'service' | 'server', payload: { key_id: string; key_material: string; label?: string }): Promise<{ key_id: string; fingerprint: string; source: string; created: boolean }> => {
-    const res = await api.post(`/backups/${scope}/import-key/`, payload);
+    const prefix = scope === 'server' ? '/server/backups' : '/backups';
+    const res = await api.post(`${prefix}/import-key/`, payload);
     return res.data;
   },
   getHeader: async (scope: 'service' | 'server', backupId: string): Promise<{ magic: string; key_id: string; fingerprint: string }> => {
-    const res = await api.get(`/backups/${scope}/${backupId}/header/`);
+    const prefix = scope === 'server' ? '/server/backups' : '/backups';
+    const res = await api.get(`${prefix}/${backupId}/header/`);
     return res.data;
   },
   list: async (scope: 'service' | 'server'): Promise<any[]> => {
-    const res = await api.get(`/backups/${scope}/`);
+    const prefix = scope === 'server' ? '/server/backups' : '/backups';
+    const res = await api.get(`${prefix}/`);
     return Array.isArray(res.data) ? res.data : (res.data?.results || []);
   },
 };
@@ -2048,6 +2051,6 @@ export const cloudProviderApi = {
 export const ecosystemApi = {
   bulkUpdateEnvironment: (data: { app_ids: string[]; env_vars: Record<string, string> }) =>
     api.post('/ecosystem/bulk-update-environment/', data).then(r => r.data),
-  cachedScan: () => api.get('/ecosystem/cached-scan/').then(r => r.data),
+  cachedScan: () => api.get('/ecosystem/cached-scan/').then(r => r.data.has_cache ? r.data.plan : null),
 };
 
