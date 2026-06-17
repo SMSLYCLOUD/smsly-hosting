@@ -845,6 +845,11 @@ class PlatformConfig(models.Model):
     max_concurrent_builds = models.PositiveIntegerField(
         default=1,
         help_text="Maximum concurrent builds across the entire node fleet (to prevent OOM)")
+    caddy_ask_secret = EncryptedCharField(
+        max_length=512, blank=True, default='',
+        help_text="Caddy on_demand_tls ask shared secret. Set via UI — if empty, "
+                  "falls back to CADDY_ASK_SECRET env var. A random ephemeral value "
+                  "is generated on each restart if neither is configured.")
     github_webhook_secret = EncryptedCharField(
         max_length=512, blank=True, default='',
         help_text="GitHub webhook secret for push event verification")

@@ -369,31 +369,53 @@ class CaddySecretOrAdminPermission(permissions.BasePermission):
     """
     Permission gate for the Caddy ``on_demand_tls`` 'ask' endpoint.
 
-    Caddy v2's ``on_demand_tls.ask`` directive cannot send custom HTTP
-    headers, so ``X-Caddy-Secret`` is NOT checked here (it would always
-    fail). Instead, the endpoint relies on:
-    
-    * domain ownership verification (looks up the domain in the DB)
-    * per-apex daily cert issuance cap (default 20 hostnames/day)
-    * IP-based rate limiting (60 requests/min via ``caddy_ask`` scope)
+    Allows access if EITHER:
 
-    Authenticated admin users can also access the endpoint for manual
-    inspection, e.g. to see why a domain is being rejected.
+    * the request carries ``secret`` query param matching
+      ``CADDY_ASK_SECRET`` (embedded in the Caddyfile ask URL as
+      ``?secret=<value>`` — Caddy v2 can send query params), OR
+    * the request is from an authenticated admin user.
+
+    ``CADDY_ASK_SECRET`` is read from PlatformConfig DB first, then
+    falls back to the ``CADDY_ASK_SECRET`` env var. If neither is set,
+    the endpoint still allows access for backward compatibility with
+    existing Caddyfiles, protected by domain verification + rate limits.
     """
 
-    message = "Caddy ask endpoint requires admin authentication or a registered domain."
+    message = "Caddy ask endpoint requires a valid secret or admin authentication."
 
     def has_permission(self, request, view):
-        # Caddy v2 cannot send custom headers in the on_demand_tls.ask
-        # request, so X-Caddy-Secret is intentionally not checked here.
-        # The endpoint performs its own domain verification + rate limiting
-        # + daily cert cap instead.
+        expected = self._get_expected_secret()
+        if expected:
+            provided = request.query_params.get("secret", "")
+            if provided and hmac.compare_digest(provided, expected):
+                return True
+            # Also check X-Caddy-Secret header for older Caddyfile compatibility
+            header_provided = request.headers.get("X-Caddy-Secret", "")
+            if header_provided and hmac.compare_digest(header_provided, expected):
+                return True
         user = getattr(request, "user", None)
         if user is not None and getattr(user, "is_authenticated", False) and (
             getattr(user, "is_superuser", False) or getattr(user, "is_staff", False)
         ):
             return True
-        return True  # Allow anonymous — Caddy ask requests have no auth
+        # No secret configured — allow through with domain + rate limit protections only
+        if not expected:
+            return True
+        return False
+
+    @staticmethod
+    def _get_expected_secret():
+        """Return CADDY_ASK_SECRET from PlatformConfig DB, with env var fallback."""
+        try:
+            from .models_core import PlatformConfig
+            cfg = PlatformConfig.load()
+            db_secret = str(getattr(cfg, 'caddy_ask_secret', '') or '').strip()
+            if db_secret:
+                return db_secret
+        except Exception:
+            pass
+        return str(getattr(settings, "CADDY_ASK_SECRET", "") or "")
 
 
 _IN_PROGRESS_DEPLOYMENT_STATUSES = [
