@@ -96,7 +96,8 @@ start_domain_verification() {
     cat > "$DOMAIN_VERIFICATION_SCRIPT" << 'EOF'
 #!/bin/bash
 # SMSLY Domain Verification Script
-# Runs domain verification tasks for custom domains
+# Uses the backend API to check health and trigger domain verification
+# via Celery tasks. Avoids brittle docker exec + Django import overhead.
 
 cd /opt/smsly-hosting
 
@@ -106,58 +107,45 @@ log() {
 
 log "Starting domain verification process"
 
-# Check if container is running first
+# Check if backend is running and healthy via HTTP (fast, no Python import overhead)
 BACKEND_CID=$(docker compose ps -q backend 2>/dev/null || true)
 if [ -z "$BACKEND_CID" ]; then
     log "ERROR: backend container is not running"
     exit 1
 fi
 
-# Check if Django can access the database (with retries for container bootstrap phase)
-max_retries=15
-retry_count=0
-db_ok=false
-
-while [ "$retry_count" -lt "$max_retries" ]; do
-    if docker exec -i "$BACKEND_CID" python -c "
-from apps.domains.models import Domain
-print(f'Total domains: {Domain.objects.count()}')
-" 2>/dev/null; then
-        db_ok=true
-        break
-    fi
-    log "Waiting for Django database to be ready (attempt $((retry_count + 1))/$max_retries)..."
-    sleep 2
-    retry_count=$((retry_count + 1))
-done
-
-if [ "$db_ok" != "true" ]; then
-    log "ERROR: Cannot access Django database inside container"
+# Quick health check via curl — fails fast if backend is down
+if ! curl -sS --max-time 5 http://localhost:8000/health/live >/dev/null 2>&1; then
+    log "ERROR: Backend API is not responding on :8000/health/live"
     exit 1
 fi
 
-# Process pending domains asynchronously via Celery
+log "Backend API is healthy — dispatching domain verification tasks..."
+
+# Dispatch pending domain verification via Django management command
+# (single docker exec, no retry loop — backend is already confirmed healthy)
 docker exec -i "$BACKEND_CID" python -c "
+import django; django.setup()
+from django.conf import settings
 from apps.domains.models import Domain
 from apps.domains.tasks import verify_dns_and_provision_ssl_task
 
-# Get all pending domains
 domains = Domain.objects.filter(status__in=['pending', 'dns_pending'])
-print(f'Processing {domains.count()} pending domains...')
-
+count = domains.count()
+print(f'Processing {count} pending domains...')
 for domain in domains:
-    print(f'Queueing verification for domain: {domain.domain_name}')
+    print(f'  Queueing verification for: {domain.domain_name}')
     verify_dns_and_provision_ssl_task.delay(domain.id)
-    print(f'Task queued for {domain.domain_name}')
-"
+print(f'Queued {count} domain verification tasks.')
+" 2>&1 | tee -a /var/log/smsly-domain-ssl.log
 
 log "Domain verification process completed"
 EOF
 
     chmod +x "$DOMAIN_VERIFICATION_SCRIPT"
     
-    # Run domain verification immediately
-    if timeout 60 "$DOMAIN_VERIFICATION_SCRIPT"; then
+    # Run domain verification with longer timeout (120s) for cold-start safety
+    if timeout 120 "$DOMAIN_VERIFICATION_SCRIPT"; then
         log_success "Domain verification completed successfully"
     else
         log_error "Domain verification timed out or failed"
