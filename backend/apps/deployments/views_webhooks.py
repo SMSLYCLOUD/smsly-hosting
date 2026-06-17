@@ -26,8 +26,15 @@ class GitHubWebhookView(GenericAPIView):
     authentication_classes = []
     permission_classes = []
 
+    def _get_secret(self):
+        from .models_core import PlatformConfig
+        try:
+            return PlatformConfig.load().get_webhook_secret('github')
+        except Exception:
+            return getattr(settings, 'GITHUB_WEBHOOK_SECRET', '')
+
     def post(self, request):
-        webhook_secret = getattr(settings, 'GITHUB_WEBHOOK_SECRET', '')
+        webhook_secret = self._get_secret()
         if not webhook_secret:
             logger.error("GITHUB_WEBHOOK_SECRET not configured — rejecting webhook")
             return Response({'error': 'Webhook processing unavailable'},

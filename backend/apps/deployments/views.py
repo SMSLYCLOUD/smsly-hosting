@@ -4685,6 +4685,8 @@ class SystemConfigView(GenericAPIView):
 
             # Webhook
             'GITHUB_WEBHOOK_SECRET_SET': bool(getattr(settings, 'GITHUB_WEBHOOK_SECRET', '')),
+            'GITLAB_WEBHOOK_SECRET_SET': bool(getattr(settings, 'GITLAB_WEBHOOK_SECRET', '')),
+            'BITBUCKET_WEBHOOK_SECRET_SET': bool(getattr(settings, 'BITBUCKET_WEBHOOK_SECRET', '')),
 
             # Maintenance actions available to admins (labels only, no flags)
             'maintenance_actions': [
