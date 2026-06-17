@@ -5477,3 +5477,93 @@ def refresh_managed_server_health(self, server_id: str):
         logger.warning("refresh_managed_server_health: server %s not found", server_id)
     except Exception as exc:
         logger.exception("refresh_managed_server_health failed for %s: %s", server_id, exc)
+
+
+@shared_task(soft_time_limit=600, time_limit=900)
+def sync_master_db_to_agents_task():
+    """
+    Periodically push a compressed pg_dump of the master database to all
+    connected lite agents. Enables disaster recovery: if the master goes
+    down, any agent's backup can restore the database on a replacement master.
+    
+    Runs every 6 hours via Celery beat.
+    """
+    import subprocess
+    import tempfile
+    import shutil
+    
+    from .models_servers import ManagedServer
+    from django.conf import settings
+    
+    agents = ManagedServer.objects.filter(
+        is_lite_agent=True,
+        status=ManagedServer.Status.ONLINE,
+    )
+    if not agents.exists():
+        logger.info("sync_master_db_to_agents: no lite agents connected — skipping")
+        return
+    
+    db_url = getattr(settings, 'DATABASE_URL', '')
+    if not db_url:
+        logger.warning("sync_master_db_to_agents: DATABASE_URL not configured — skipping")
+        return
+    
+    tmp_dir = tempfile.mkdtemp(prefix='master_db_sync_')
+    dump_path = os.path.join(tmp_dir, 'master_db.sql.gz')
+    
+    try:
+        # Create compressed pg_dump
+        result = subprocess.run(
+            ['pg_dump', db_url, '--no-owner', '--no-acl', '-Z', '9', '-f', dump_path],
+            capture_output=True, text=True, timeout=300,
+        )
+        if result.returncode != 0:
+            logger.error("sync_master_db_to_agents: pg_dump failed: %s", result.stderr[:500])
+            return
+        
+        file_size = os.path.getsize(dump_path)
+        logger.info("sync_master_db_to_agents: dump created (%.1f MB), pushing to %d agents",
+                    file_size / (1024 * 1024), agents.count())
+        
+        # Push to each lite agent via REST API
+        from .services.transfer_service import _build_hmac_signature
+        
+        for agent in agents:
+            target_ip = agent.wg_address or agent.private_ip or agent.host
+            if not target_ip:
+                continue
+            url = f"http://{target_ip}/api/v1/transfers/incoming/db-backup/"
+            secret = str(getattr(settings, 'GATEWAY_SECRET', '') or getattr(settings, 'SECRET_KEY', ''))
+            timestamp = str(int(time.time()))
+            nonce = secrets.token_hex(16)
+            
+            import hashlib
+            body_hash = hashlib.sha256(b'').hexdigest()
+            raw_sig = f"POST|/api/v1/transfers/incoming/db-backup/|{timestamp}|{nonce}|{body_hash}"
+            signature = hmac.new(secret.encode(), raw_sig.encode(), hashlib.sha256).hexdigest()
+            
+            try:
+                with open(dump_path, 'rb') as f:
+                    resp = requests.post(
+                        url,
+                        files={'backup': ('master_db.sql.gz', f, 'application/gzip')},
+                        headers={
+                            'X-Gateway-Signature-V2': signature,
+                            'X-Request-Timestamp': timestamp,
+                            'X-Request-Nonce': nonce,
+                        },
+                        timeout=600,
+                    )
+                if resp.ok:
+                    logger.info("sync_master_db_to_agents: pushed to agent %s (%s)", agent.name, target_ip)
+                else:
+                    logger.warning("sync_master_db_to_agents: agent %s returned %s", agent.name, resp.status_code)
+            except requests.RequestException as e:
+                logger.warning("sync_master_db_to_agents: failed to push to agent %s: %s", agent.name, e)
+    
+    except subprocess.TimeoutExpired:
+        logger.error("sync_master_db_to_agents: pg_dump timed out")
+    except Exception as e:
+        logger.error("sync_master_db_to_agents: failed: %s", e)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)

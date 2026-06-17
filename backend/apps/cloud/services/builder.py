@@ -333,20 +333,23 @@ class NixpacksBuilder:
                 return full_tag, None
 
             # ── Fallback: push via docker CLI ───────────────────────────
-            # The pipeline's _build_image() already ran `docker login` via
-            # subprocess, which stores creds in ~/.docker/config.json.
-            # Use that as a fallback.
-            logger.info("SDK push failed; retrying via docker CLI for %s", full_tag)
-            cli_result = subprocess.run(
-                ["docker", "push", full_tag],
-                capture_output=True, text=True, timeout=300,
-            )
-            if cli_result.returncode == 0:
-                logger.info("CLI push succeeded for %s", full_tag)
-                return full_tag, None
-
-            cli_error = cli_result.stderr.strip() or error_msg
-            logger.error("CLI push also failed: %s", cli_error)
+            # The docker CLI is intentionally NOT installed in the backend
+            # container (security: Dockerfile removed docker-ce-cli). Only
+            # attempt this fallback if the binary is actually available.
+            cli_error = error_msg
+            if shutil.which('docker'):
+                logger.info("SDK push failed; retrying via docker CLI for %s", full_tag)
+                cli_result = subprocess.run(
+                    ["docker", "push", full_tag],
+                    capture_output=True, text=True, timeout=300,
+                )
+                if cli_result.returncode == 0:
+                    logger.info("CLI push succeeded for %s", full_tag)
+                    return full_tag, None
+                cli_error = cli_result.stderr.strip() or error_msg
+                logger.error("CLI push also failed: %s", cli_error)
+            else:
+                logger.info("SDK push failed; docker CLI not available in container — returning SDK error")
             return image_name, cli_error  # fallback to local
 
         except Exception as e:
