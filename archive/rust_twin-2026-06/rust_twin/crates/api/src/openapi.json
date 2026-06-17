@@ -1,0 +1,546 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "SMSLY Hosting API (rust_twin)",
+    "version": "0.1.0",
+    "description": "Hand-written OpenAPI 3.1 spec for the SMSLY rust_twin Axum API. This describes the subset of endpoints the Next.js frontend needs in order to transparently target either the Django backend (port 8000) or the rust_twin (port 8080). The spec is intentionally a subset — only the paths the frontend currently calls are documented. Full route table lives in crates/api/src/routes.rs."
+  },
+  "servers": [
+    { "url": "http://localhost:8080", "description": "rust_twin (Axum) — default in this archive" },
+    { "url": "http://localhost:8000", "description": "Django backend — drop-in parity target" }
+  ],
+  "tags": [
+    { "name": "health" },
+    { "name": "metrics" },
+    { "name": "auth" },
+    { "name": "projects" },
+    { "name": "services" },
+    { "name": "deployments" },
+    { "name": "billing" },
+    { "name": "teams" }
+  ],
+  "components": {
+    "securitySchemes": {
+      "cookieAuth": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "auth_token",
+        "description": "HttpOnly auth_token cookie set by /auth/login and /auth/register"
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": { "type": "string" }
+        }
+      },
+      "Status": {
+        "type": "object",
+        "required": ["status"],
+        "properties": {
+          "status": { "type": "string", "example": "ok" }
+        }
+      },
+      "RegisterRequest": {
+        "type": "object",
+        "required": ["username", "email", "password"],
+        "properties": {
+          "username": { "type": "string", "minLength": 3 },
+          "email":    { "type": "string", "format": "email" },
+          "password": { "type": "string", "minLength": 8 }
+        }
+      },
+      "LoginRequest": {
+        "type": "object",
+        "required": ["username", "password"],
+        "properties": {
+          "username": { "type": "string" },
+          "password": { "type": "string" }
+        }
+      },
+      "RefreshRequest": {
+        "type": "object",
+        "required": ["refresh_token"],
+        "properties": {
+          "refresh_token": { "type": "string" }
+        }
+      },
+      "PasswordChangeRequest": {
+        "type": "object",
+        "required": ["old_password", "new_password"],
+        "properties": {
+          "old_password": { "type": "string" },
+          "new_password": { "type": "string", "minLength": 8 }
+        }
+      },
+      "AuthResponse": {
+        "type": "object",
+        "required": ["user_id", "username", "email", "access_token", "refresh_token", "expires_in"],
+        "properties": {
+          "user_id":       { "type": "integer" },
+          "username":      { "type": "string" },
+          "email":         { "type": "string", "format": "email" },
+          "access_token":  { "type": "string" },
+          "refresh_token": { "type": "string" },
+          "expires_in":    { "type": "integer", "description": "seconds" }
+        }
+      },
+      "User": {
+        "type": "object",
+        "required": ["id", "username", "email", "is_superuser", "is_staff", "is_active", "date_joined"],
+        "properties": {
+          "id":           { "type": "integer" },
+          "username":     { "type": "string" },
+          "email":        { "type": "string", "format": "email" },
+          "is_superuser": { "type": "boolean" },
+          "is_staff":     { "type": "boolean" },
+          "is_active":    { "type": "boolean" },
+          "date_joined":  { "type": "string", "format": "date-time" }
+        }
+      },
+      "Project": {
+        "type": "object",
+        "required": ["id", "name", "slug", "description", "is_default", "owner_id"],
+        "properties": {
+          "id":          { "type": "string", "format": "uuid" },
+          "name":        { "type": "string" },
+          "slug":        { "type": "string" },
+          "description": { "type": "string" },
+          "is_default":  { "type": "boolean" },
+          "owner_id":    { "type": "integer" }
+        }
+      },
+      "CreateProjectRequest": {
+        "type": "object",
+        "required": ["name", "slug"],
+        "properties": {
+          "name":        { "type": "string" },
+          "slug":        { "type": "string" },
+          "description": { "type": "string", "nullable": true }
+        }
+      },
+      "Service": {
+        "type": "object",
+        "required": ["id", "project_id", "slug", "name", "deploy_type", "branch", "created_at", "updated_at"],
+        "properties": {
+          "id":              { "type": "string", "format": "uuid" },
+          "project_id":      { "type": "string", "format": "uuid" },
+          "slug":            { "type": "string" },
+          "name":            { "type": "string" },
+          "deploy_type":     { "type": "string", "example": "git" },
+          "repository_url":  { "type": "string", "nullable": true },
+          "branch":          { "type": "string" },
+          "root_directory":  { "type": "string", "nullable": true },
+          "created_at":      { "type": "string", "format": "date-time" },
+          "updated_at":      { "type": "string", "format": "date-time" }
+        }
+      },
+      "CreateServiceRequest": {
+        "type": "object",
+        "required": ["project_id", "slug", "name", "deploy_type", "branch"],
+        "properties": {
+          "project_id":     { "type": "string", "format": "uuid" },
+          "slug":           { "type": "string" },
+          "name":           { "type": "string" },
+          "deploy_type":    { "type": "string" },
+          "repository_url": { "type": "string", "nullable": true },
+          "branch":         { "type": "string" },
+          "root_directory": { "type": "string", "nullable": true }
+        }
+      },
+      "Deployment": {
+        "type": "object",
+        "required": ["id", "service_id", "commit_hash", "status", "status_enum", "is_rollback", "created_at"],
+        "properties": {
+          "id":           { "type": "string", "format": "uuid" },
+          "service_id":   { "type": "string", "format": "uuid" },
+          "commit_hash":  { "type": "string" },
+          "status":       { "type": "string", "example": "QUEUED" },
+          "status_enum":  { "type": "string", "example": "QUEUED" },
+          "is_rollback":  { "type": "boolean" },
+          "requester_id": { "type": "integer", "nullable": true },
+          "created_at":   { "type": "string", "format": "date-time" },
+          "started_at":   { "type": "string", "format": "date-time", "nullable": true },
+          "finished_at":  { "type": "string", "format": "date-time", "nullable": true }
+        }
+      },
+      "TriggerDeploymentRequest": {
+        "type": "object",
+        "required": ["service_id", "commit_hash"],
+        "properties": {
+          "service_id":  { "type": "string", "format": "uuid" },
+          "commit_hash": { "type": "string" }
+        }
+      },
+      "DeploymentList": {
+        "type": "object",
+        "required": ["items", "page", "per_page", "total"],
+        "properties": {
+          "items":    { "type": "array", "items": { "$ref": "#/components/schemas/Deployment" } },
+          "page":     { "type": "integer" },
+          "per_page": { "type": "integer" },
+          "total":    { "type": "integer" }
+        }
+      },
+      "Plan": {
+        "type": "object",
+        "required": ["id", "code", "name", "max_services", "max_team_members", "max_domains_per_service", "monthly_price_cents", "yearly_price_cents", "is_active"],
+        "properties": {
+          "id":                     { "type": "integer" },
+          "code":                   { "type": "string", "example": "pro" },
+          "name":                   { "type": "string" },
+          "description":            { "type": "string", "nullable": true },
+          "max_services":           { "type": "integer" },
+          "max_team_members":       { "type": "integer" },
+          "max_domains_per_service":{ "type": "integer" },
+          "monthly_price_cents":    { "type": "integer" },
+          "yearly_price_cents":     { "type": "integer" },
+          "is_active":              { "type": "boolean" }
+        }
+      },
+      "Subscription": {
+        "type": "object",
+        "required": ["id", "user_id", "plan", "status", "started_at", "current_period_end", "payment_provider"],
+        "properties": {
+          "id":                  { "type": "string", "format": "uuid" },
+          "user_id":             { "type": "integer" },
+          "plan":                { "$ref": "#/components/schemas/Plan" },
+          "status":              { "type": "string", "example": "active" },
+          "started_at":          { "type": "string", "format": "date-time" },
+          "current_period_end":  { "type": "string", "format": "date-time" },
+          "payment_provider":    { "type": "string", "example": "stripe" },
+          "cancel_at":           { "type": "string", "format": "date-time", "nullable": true },
+          "cancelled_at":        { "type": "string", "format": "date-time", "nullable": true }
+        }
+      },
+      "UpgradeSubscriptionRequest": {
+        "type": "object",
+        "required": ["target_tier", "payment_id", "payment_provider"],
+        "properties": {
+          "target_tier":     { "type": "string", "example": "pro" },
+          "payment_id":      { "type": "string" },
+          "payment_provider":{ "type": "string", "enum": ["stripe", "cryptomus"] }
+        }
+      },
+      "Team": {
+        "type": "object",
+        "required": ["id", "name", "owner_id", "member_count", "created_at"],
+        "properties": {
+          "id":           { "type": "string", "format": "uuid" },
+          "name":         { "type": "string" },
+          "owner_id":     { "type": "integer" },
+          "member_count": { "type": "integer" },
+          "created_at":   { "type": "string", "format": "date-time" }
+        }
+      },
+      "CreateTeamRequest": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  },
+  "security": [ { "cookieAuth": [] } ],
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": ["health"],
+        "summary": "Combined health probe (text/plain \"OK\")",
+        "security": [],
+        "responses": {
+          "200": { "description": "Process is alive", "content": { "text/plain": { "schema": { "type": "string", "example": "OK" } } } }
+        }
+      }
+    },
+    "/health/live": {
+      "get": {
+        "tags": ["health"],
+        "summary": "Liveness — process up, no dependency check",
+        "security": [],
+        "responses": {
+          "200": { "description": "Alive", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "tags": ["health"],
+        "summary": "Readiness — DB reachable",
+        "security": [],
+        "responses": {
+          "200":         { "description": "DB up",   "content": { "application/json": { "schema": { "type": "object", "properties": { "status": { "type": "string" }, "db": { "type": "string" } } } } } },
+          "503":         { "description": "DB down", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "tags": ["metrics"],
+        "summary": "Prometheus text-format metrics",
+        "security": [],
+        "responses": {
+          "200": { "description": "Metrics", "content": { "text/plain": { "schema": { "type": "string" } } } }
+        }
+      }
+    },
+    "/api/v1/auth/register": {
+      "post": {
+        "tags": ["auth"],
+        "summary": "Register a new user",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RegisterRequest" } } }
+        },
+        "responses": {
+          "201": { "description": "Created — sets auth_token cookie", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthResponse" } } } },
+          "409": { "description": "Username or email already taken", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "tags": ["auth"],
+        "summary": "Log in with username/password",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LoginRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "OK — sets auth_token cookie", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthResponse" } } } },
+          "401": { "description": "Invalid credentials", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "403": { "description": "Account inactive",   "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "tags": ["auth"],
+        "summary": "Log out — clears the auth_token cookie",
+        "security": [],
+        "responses": {
+          "200": { "description": "Logged out", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } }
+        }
+      }
+    },
+    "/api/v1/auth/refresh": {
+      "post": {
+        "tags": ["auth"],
+        "summary": "Exchange a refresh_token for a new access token",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RefreshRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Refreshed — sets auth_token cookie", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthResponse" } } } },
+          "401": { "description": "Invalid refresh token", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "tags": ["auth"],
+        "summary": "Current authenticated user",
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/User" } } } },
+          "401": { "description": "Not authenticated", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/v1/auth/password": {
+      "post": {
+        "tags": ["auth"],
+        "summary": "Change the current user's password",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PasswordChangeRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Password changed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Status" } } } },
+          "401": { "description": "Old password incorrect", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/v1/projects": {
+      "get": {
+        "tags": ["projects"],
+        "summary": "List projects owned by the current user",
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Project" } } } } }
+        }
+      },
+      "post": {
+        "tags": ["projects"],
+        "summary": "Create a project",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateProjectRequest" } } }
+        },
+        "responses": {
+          "201": { "description": "Created", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Project" } } } },
+          "400": { "description": "Slug already exists for owner", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/v1/projects/{id}": {
+      "get": {
+        "tags": ["projects"],
+        "summary": "Get a project by id",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Project" } } } },
+          "404": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/v1/services": {
+      "get": {
+        "tags": ["services"],
+        "summary": "List services (optionally filtered by project_id)",
+        "parameters": [
+          { "name": "project_id", "in": "query", "required": false, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "page",       "in": "query", "required": false, "schema": { "type": "integer", "default": 1 } },
+          { "name": "per_page",   "in": "query", "required": false, "schema": { "type": "integer", "default": 20, "maximum": 100 } }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "object", "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/Service" } }, "total": { "type": "integer" }, "page": { "type": "integer" } } } } } }
+        }
+      },
+      "post": {
+        "tags": ["services"],
+        "summary": "Create a service",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateServiceRequest" } } }
+        },
+        "responses": {
+          "201": { "description": "Created", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Service" } } } }
+        }
+      }
+    },
+    "/api/v1/services/{id}": {
+      "get": {
+        "tags": ["services"],
+        "summary": "Get a service by id",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Service" } } } },
+          "404": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/v1/deployments": {
+      "get": {
+        "tags": ["deployments"],
+        "summary": "List deployments (paginated, filterable)",
+        "parameters": [
+          { "name": "service_id", "in": "query", "required": false, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "status",     "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "page",       "in": "query", "required": false, "schema": { "type": "integer", "default": 1 } },
+          { "name": "per_page",   "in": "query", "required": false, "schema": { "type": "integer", "default": 20, "maximum": 100 } }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeploymentList" } } } }
+        }
+      },
+      "post": {
+        "tags": ["deployments"],
+        "summary": "Trigger a new deployment",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TriggerDeploymentRequest" } } }
+        },
+        "responses": {
+          "202": { "description": "Accepted — deployment queued", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Deployment" } } } }
+        }
+      }
+    },
+    "/api/v1/deployments/{id}": {
+      "get": {
+        "tags": ["deployments"],
+        "summary": "Get a deployment by id",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Deployment" } } } },
+          "404": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/v1/billing/plans": {
+      "get": {
+        "tags": ["billing"],
+        "summary": "List active billing plans",
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Plan" } } } } }
+        }
+      }
+    },
+    "/api/v1/billing/subscription": {
+      "get": {
+        "tags": ["billing"],
+        "summary": "Get the current user's active subscription (falls back to free plan)",
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Subscription" } } } }
+        }
+      },
+      "post": {
+        "tags": ["billing"],
+        "summary": "Upgrade or switch subscription tier",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpgradeSubscriptionRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "object", "properties": { "subscription_id": { "type": "string", "format": "uuid" }, "plan": { "type": "string" }, "status": { "type": "string" } } } } } },
+          "404": { "description": "Plan not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/v1/teams": {
+      "get": {
+        "tags": ["teams"],
+        "summary": "List teams the current user is a member of",
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Team" } } } } }
+        }
+      },
+      "post": {
+        "tags": ["teams"],
+        "summary": "Create a team (current user becomes OWNER)",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateTeamRequest" } } }
+        },
+        "responses": {
+          "201": { "description": "Created", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Team" } } } }
+        }
+      }
+    },
+    "/api/v1/teams/{id}": {
+      "get": {
+        "tags": ["teams"],
+        "summary": "Get a team by id (must be a member)",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "description": "OK", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Team" } } } },
+          "403": { "description": "Not a team member", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "404": { "description": "Team not found",     "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    }
+  }
+}

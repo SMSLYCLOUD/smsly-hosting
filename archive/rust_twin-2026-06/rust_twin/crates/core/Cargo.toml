@@ -16,6 +16,7 @@ tracing-subscriber = { workspace = true }
 sea-orm = { workspace = true }
 dotenvy = { workspace = true }
 envy = "0.4"
+uuid = { workspace = true }
 
 # Authentication
 jsonwebtoken = "9.3"
@@ -31,3 +32,7 @@ base64 = { workspace = true }
 hex = { workspace = true }
 bcrypt = { workspace = true }
 thiserror = { workspace = true }
+rand = "0.8"
+boringtun = "0.6"
+
+infrastructure = { path = "../infrastructure" }

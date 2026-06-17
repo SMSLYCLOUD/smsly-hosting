@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use bollard::{
-    container::{Config, CreateContainerOptions, StartContainerOptions, LogsOptions},
+    container::{Config, CreateContainerOptions, LogsOptions, StartContainerOptions, StopContainerOptions},
     network::CreateNetworkOptions,
     Docker,
 };
@@ -137,5 +137,35 @@ impl DockerClient {
         }
 
         Ok(())
+    }
+
+    /// Stops a running container by name or id.
+    ///
+    /// Sends `POST /containers/{name}/stop` with a 10-second graceful
+    /// shutdown window. Bollard returns `Error` (a 404 in most cases) if the
+    /// container is already gone; we treat that as success so the rollback
+    /// flow is idempotent — a missing container is not an error.
+    pub async fn stop_container(&self, container_name: &str) -> Result<()> {
+        info!("Stopping container: {}", container_name);
+
+        let options = Some(StopContainerOptions { t: 10 });
+
+        match self
+            .engine
+            .stop_container(container_name, options)
+            .await
+        {
+            Ok(()) => {
+                info!("Container {} stopped successfully.", container_name);
+                Ok(())
+            }
+            Err(e) => {
+                warn!(
+                    "stop_container({}) returned: {} (treating as no-op)",
+                    container_name, e
+                );
+                Ok(())
+            }
+        }
     }
 }

@@ -1,0 +1,20 @@
+apiVersion: v2
+name: smsly-rust-twin
+description: SMSLY PaaS control plane (Rust implementation)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - paas
+  - hosting
+  - rust
+  - axum
+  - kubernetes
+  - helm
+home: https://smsly.cloud
+sources:
+  - https://github.com/SMSLYCLOUD/smsly-hosting
+maintainers:
+  - name: smsly-team
+    email: admin@smsly.cloud
+kubeVersion: ">=1.27.0-0"

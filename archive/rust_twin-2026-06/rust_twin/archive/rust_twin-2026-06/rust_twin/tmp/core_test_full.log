@@ -1,0 +1,40 @@
+﻿cargo :     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.19s
+At line:1 char:97
++ ... twin\tmp" | Out-Null; cargo test -p core --lib --offline 2>&1 | Out-F ...
++                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Finished `t...get(s) in 1.19s:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+     Running unittests src\lib.rs (target\debug\deps\core-7c6ee3be49179a98.exe)
+
+running 27 tests
+test auth::tests::test_detect_algorithms ... ok
+test auth::tests::test_needs_rehash ... ok
+test deployment_status::tests::can_transition_cancellation_paths ... ok
+test auth::tests::test_drf_token_store_roundtrip ... ok
+test auth::tests::test_generate_drf_token_format ... ok
+test auth::tests::test_verify_unrecognised_format_errors ... ok
+test auth::tests::test_signed_token_issue ... ok
+test deployment_status::tests::can_transition_happy_path ... ok
+test deployment_status::tests::can_transition_rejects_skipping_and_backward_steps ... ok
+test deployment_status::tests::can_transition_retry_failed_to_queued ... ok
+test deployment_status::tests::can_transition_rollback_path ... ok
+test auth::tests::test_generate_drf_token_unique ... ok
+test deployment_status::tests::can_transition_terminal_states_have_no_exits ... ok
+test deployment_status::tests::is_terminal_matches_9_state_table ... ok
+test deployment_status::tests::roundtrip_awaiting_approval ... ok
+test deployment_status::tests::roundtrip_building ... ok
+test deployment_status::tests::roundtrip_cancelled ... ok
+test deployment_status::tests::roundtrip_deploying ... ok
+test deployment_status::tests::roundtrip_failed ... ok
+test deployment_status::tests::roundtrip_queued ... ok
+test deployment_status::tests::roundtrip_rolled_back ... ok
+test deployment_status::tests::roundtrip_rolling_out ... ok
+test deployment_status::tests::roundtrip_running ... ok
+test auth::tests::test_verify_pbkdf2_sha1_wrong_password ... ok
+test auth::tests::test_verify_pbkdf2_sha256_wrong_password ... ok
+test auth::tests::test_rehash_to_argon2 ... ok
+test auth::tests::test_hash_and_verify_argon2 ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.51s
+

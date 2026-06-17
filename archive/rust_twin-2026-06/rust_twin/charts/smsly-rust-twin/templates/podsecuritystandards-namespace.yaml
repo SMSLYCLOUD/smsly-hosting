@@ -1,0 +1,30 @@
+{{- /*
+Pod Security Standards — namespace-level enforcement.
+
+When `podSecurityStandards.enabled: true` (chart default), the chart
+creates a Namespace with the `restricted` profile applied via
+`pod-security.kubernetes.io/{enforce,audit,warn}` labels.
+
+PSS is the modern replacement for PodSecurityPolicy (PSP), which was
+removed in Kubernetes 1.25. The chart supports both — prefer PSS on
+clusters >= 1.22 and PSP on clusters <= 1.24.
+
+The namespace name defaults to the chart fullname. Override with
+`Values.namespace` if your release targets a pre-existing namespace
+(remember to set `podSecurityStandards.enabled: false` in that case
+to avoid a Namespace already-exists error).
+*/ -}}
+{{- if .Values.podSecurityStandards.enabled }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.namespace | default (include "smsly-rust-twin.fullname" .) }}
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: latest
+    {{- include "smsly-rust-twin.labels" . | nindent 4 }}
+{{- end }}

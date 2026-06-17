@@ -1,0 +1,46 @@
+{{- if and .Values.migrateJob.enabled .Values.api.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "smsly-rust-twin.fullname" . }}-migrate
+  labels:
+    {{- include "smsly-rust-twin.componentLabels" (dict "root" . "component" "cli-migrate") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "1"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migrateJob.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrateJob.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "smsly-rust-twin.componentSelectorLabels" (dict "root" . "component" "cli-migrate") | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "smsly-rust-twin.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "smsly-rust-twin.securityContext" . | nindent 8 }}
+      containers:
+        - name: cli
+          image: {{ include "smsly-rust-twin.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- include "smsly-rust-twin.containerSecurityContext" . | nindent 12 }}
+          command:
+            - /usr/local/bin/cli
+          args:
+            - migrate
+          envFrom:
+            - configMapRef:
+                name: {{ include "smsly-rust-twin.fullname" . }}-config
+            - secretRef:
+                name: {{ include "smsly-rust-twin.fullname" . }}-secret
+          resources:
+            {{- toYaml .Values.migrateJob.resources | nindent 12 }}
+{{- end }}

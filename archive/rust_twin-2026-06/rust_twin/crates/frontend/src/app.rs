@@ -3,6 +3,9 @@ use leptos_router::*;
 use reqwest::{header, Client};
 use serde::{Deserialize, Serialize};
 
+#[path = "pages/mod.rs"]
+pub mod pages;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectResponse {
     pub id: String,
@@ -40,6 +43,11 @@ pub fn App() -> impl IntoView {
                         <div class="space-x-4">
                             <A href="/" class="hover:underline">"Dashboard"</A>
                             <A href="/projects" class="hover:underline">"Projects"</A>
+                            <A href="/admin/users" class="hover:underline">"Users"</A>
+                            <A href="/admin/services" class="hover:underline">"Services"</A>
+                            <A href="/admin/deployments" class="hover:underline">"Deployments"</A>
+                            <A href="/admin/billing" class="hover:underline">"Billing"</A>
+                            <A href="/admin/audit-log" class="hover:underline">"Audit"</A>
                             <A href="/login" class="hover:underline font-semibold border border-white px-3 py-1 rounded">"Login"</A>
                         </div>
                     </div>
@@ -50,6 +58,11 @@ pub fn App() -> impl IntoView {
                         <Route path="/" view=Dashboard/>
                         <Route path="/login" view=Login/>
                         <Route path="/projects" view=Projects/>
+                        <Route path="/admin/users" view=pages::admin_users::AdminUsers/>
+                        <Route path="/admin/services" view=pages::admin_services::AdminServices/>
+                        <Route path="/admin/deployments" view=pages::admin_deployments::AdminDeployments/>
+                        <Route path="/admin/billing" view=pages::admin_billing::AdminBilling/>
+                        <Route path="/admin/audit-log" view=pages::admin_audit::AdminAuditLog/>
                         <Route path="/*any" view=NotFound/>
                     </Routes>
                 </div>

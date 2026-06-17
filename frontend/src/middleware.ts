@@ -76,11 +76,85 @@ function hasCsrfTokenCookie(request: NextRequest): boolean {
     return true;
 }
 
+/**
+ * Cookie name issued by the rust_twin backend. In production this carries
+ * the `__Host-` prefix and is `Secure` + `HttpOnly`; in development (HTTP)
+ * the same logical token is also accepted under the `__Host-smsly_token`
+ * name for parity. We do NOT touch the Django `__Host-auth_token` cookie
+ * here — that backend reads it from `Cookie:` itself, and rewriting the
+ * Authorization header for Django requests would just cause duplicate
+ * auth and would break pages that already carry the Django token.
+ */
+const RUST_TWIN_AUTH_COOKIES = [
+  "__Host-smsly_token",
+  "smsly_token",
+] as const;
+
+function getRustTwinToken(request: NextRequest): string | null {
+  for (const name of RUST_TWIN_AUTH_COOKIES) {
+    const value = request.cookies.get(name)?.value;
+    if (value && value.trim().length > 0) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function isStaticAsset(pathname: string): boolean {
+  if (pathname.startsWith("/_next/static/")) return true;
+  if (pathname.startsWith("/_next/image/")) return true;
+  if (pathname === "/favicon.ico") return true;
+  if (pathname === "/robots.txt") return true;
+  if (pathname === "/sitemap.xml") return true;
+  if (pathname.startsWith("/_next/data/")) return true;
+  if (pathname === "/manifest.json") return true;
+  if (/\.(?:png|jpg|jpeg|gif|webp|avif|svg|ico|css|js|map|woff2?|ttf|otf|eot|mp4|webm|mp3|wav|ogg|pdf|txt)$/i.test(pathname)) {
+    return true;
+  }
+  return false;
+}
+
+function isApiRequest(pathname: string): boolean {
+  if (pathname.startsWith("/api/")) return true;
+  if (pathname === "/health" || pathname.startsWith("/health/")) return true;
+  if (pathname === "/metrics") return true;
+  if (pathname === "/openapi.json") return true;
+  return false;
+}
+
+function injectRustTwinAuthHeader(request: NextRequest): NextResponse {
+  const requestHeaders = new Headers(request.headers);
+  const existingAuth = requestHeaders.get("authorization");
+  if (existingAuth && existingAuth.trim().length > 0) {
+    return NextResponse.next({ request: { headers: requestHeaders } });
+  }
+  const token = getRustTwinToken(request);
+  if (token) {
+    requestHeaders.set("authorization", `Token ${token}`);
+    console.debug(
+      `[middleware] injected Authorization for ${request.nextUrl.pathname}`,
+    );
+  }
+  return NextResponse.next({ request: { headers: requestHeaders } });
+}
+
 export async function middleware(request: NextRequest) {
   if (process.env.NODE_ENV === "development" && DEV_SHORT_CIRCUIT_ENABLED) {
     return NextResponse.next();
   }
   const pathname = request.nextUrl.pathname;
+
+  // Skip static assets entirely — no auth header injection, no logging.
+  if (isStaticAsset(pathname)) {
+    return NextResponse.next();
+  }
+
+  // API/health/metrics/openapi paths: inject the rust_twin auth header
+  // (if a token cookie is present) and pass through. We do NOT enforce
+  // page-level auth on these — that's the backend's job.
+  if (isApiRequest(pathname)) {
+    return injectRustTwinAuthHeader(request);
+  }
 
   // Allow the callback page through so it can complete auth.
   if (isCallbackPage(pathname)) {
@@ -115,6 +189,13 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
+    // Auth-header injection for the upstream API proxy.
+    "/api/:path*",
+    "/health",
+    "/health/:path*",
+    "/metrics",
+    "/openapi.json",
+    // Page-level protection (unchanged from before).
     "/dashboard/:path*",
     "/new/:path*",
     "/services/:path*",
