@@ -691,11 +691,26 @@ def generate_caddyfile(config) -> str:
     cloudflare_token = (getattr(config, "cloudflare_api_token", "") or "").strip()
     
     # Global options for On-Demand TLS
-    sections.append("""{
-    on_demand_tls {
-        ask http://backend:8000/api/v1/services/check-domain/
-    }
-}""")
+    # The secret is embedded as a query parameter (Caddy v2's on_demand_tls.ask
+    # cannot send custom headers, but it CAN include query strings in the URL).
+    _ask_secret = ""
+    try:
+        from apps.deployments.models_core import PlatformConfig
+        _cfg = PlatformConfig.load()
+        _ask_secret = str(getattr(_cfg, 'caddy_ask_secret', '') or '').strip()
+    except Exception:
+        pass
+    if not _ask_secret:
+        _ask_secret = str(getattr(settings, "CADDY_ASK_SECRET", "") or "")
+    _ask_url = "http://backend:8000/api/v1/services/check-domain/"
+    if _ask_secret:
+        import urllib.parse
+        _ask_url += f"?secret={urllib.parse.quote(_ask_secret, safe='')}"
+    sections.append(f"""\u007b
+    on_demand_tls \u007b
+        ask {_ask_url}
+    \u007d
+\u007d""")
 
     # Reject placeholder/dummy tokens
     _FAKE_TOKENS = {
