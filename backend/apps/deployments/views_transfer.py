@@ -678,15 +678,15 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         Used for disaster recovery — if the master goes down, this node
         can help restore the database on a replacement master.
 
-        Expects multipart/form-data with a 'backup' file field containing
+        Expects raw binary body (Content-Type: application/gzip) containing
         a gzipped pg_dump. Stored at DB_BACKUP_DIR with a timestamp.
         """
         if not self._incoming_auth_required(request, None):
             return Response({'error': 'Invalid HMAC signature'}, status=status.HTTP_401_UNAUTHORIZED)
 
-        backup_file = request.FILES.get('backup')
-        if not backup_file:
-            return Response({'error': 'backup file required'}, status=status.HTTP_400_BAD_REQUEST)
+        raw_body = request.body
+        if not raw_body or len(raw_body) < 100:
+            return Response({'error': 'Empty or invalid backup data'}, status=status.HTTP_400_BAD_REQUEST)
 
         backup_dir = getattr(settings, 'DB_BACKUP_DIR', '/opt/smsly-hosting/backups/master-db')
         try:
@@ -695,8 +695,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
             dest_path = os.path.join(backup_dir, f'master_db_{timestamp}.sql.gz')
 
             with open(dest_path, 'wb') as f:
-                for chunk in backup_file.chunks(8192):
-                    f.write(chunk)
+                f.write(raw_body)
 
             # Keep only the 5 most recent backups
             existing = sorted(
@@ -713,7 +712,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
             return Response({
                 'status': 'stored',
                 'path': dest_path,
-                'size_bytes': backup_file.size,
+                'size_bytes': len(raw_body),
             })
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
