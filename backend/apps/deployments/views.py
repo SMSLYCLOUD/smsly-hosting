@@ -5308,7 +5308,11 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
         elif not request.user.is_authenticated:
             return Response({'error': 'Authentication credentials were not provided.'}, status=status.HTTP_401_UNAUTHORIZED)
 
-        backup = self.get_object()
+        # Bypass get_queryset() which filters by request.user — signed/AllowAny
+        # requests have an AnonymousUser that crashes the queryset filter.
+        backup = self.queryset.model.objects.filter(pk=pk).first()
+        if not backup:
+            return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
         file_path = backup.file_path
 
         if not file_path or not os.path.exists(file_path):
@@ -5463,7 +5467,11 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
         elif not request.user.is_authenticated:
             return Response({'error': 'Authentication credentials were not provided.'}, status=status.HTTP_401_UNAUTHORIZED)
 
-        backup = self.get_object()
+        # Bypass get_queryset() which filters by request.user — signed/AllowAny
+        # requests have an AnonymousUser that crashes the queryset filter.
+        backup = self.queryset.model.objects.filter(pk=pk).first()
+        if not backup:
+            return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
         file_path = backup.file_path
 
         if not file_path or not os.path.exists(file_path):

@@ -373,7 +373,6 @@ services:
     volumes:
       - ./infrastructure/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
-      - prometheus_targets:/etc/prometheus/paas-targets
       - /opt/smsly-hosting/prometheus-targets:/etc/prometheus/docker-labels-targets:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
     command:
@@ -518,7 +517,6 @@ volumes:
   postgres_data:
   registry_data:
   prometheus_data:
-  prometheus_targets:
   rabbitmq_data:
   backups_data:
   loki_data:

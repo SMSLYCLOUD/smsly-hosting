@@ -3896,9 +3896,12 @@ fi
                  # Custom Domain SSL Setup for Frontend Update
                  if should_manage_caddy; then  # Only for master mode
                      echo -e "\n${YELLOW}[UPDATE] Setting up Custom Domain SSL Services...${NC}"
-                     if [ -f "install-custom-domain-ssl.sh" ]; then
-                         echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
-                         bash install-custom-domain-ssl.sh install
+                    if [ -f "install-custom-domain-ssl.sh" ]; then
+                        echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
+                        bash install-custom-domain-ssl.sh install
+                    elif [ -f "$SCRIPT_DIR/scripts/legacy/install-custom-domain-ssl.sh" ]; then
+                        echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
+                        bash "$SCRIPT_DIR/scripts/legacy/install-custom-domain-ssl.sh" install
 
                          # Start the services
                          echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
@@ -3975,16 +3978,19 @@ fi
                  docker compose -f "$COMPOSE_FILE" up -d --no-deps $celery_svcs
              fi
              
-             # Custom Domain SSL Setup for Backend Update
-             if should_manage_caddy; then  # Only for master mode
-                 echo -e "\n${YELLOW}[UPDATE] Setting up Custom Domain SSL Services...${NC}"
-                 if [ -f "install-custom-domain-ssl.sh" ]; then
-                     echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
-                     bash install-custom-domain-ssl.sh install
-                     
-                     # Start the services
-                     echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
-                     /opt/smsly-hosting/smsly-domain-ssl-manager.sh start
+              # Custom Domain SSL Setup for Backend Update
+              if should_manage_caddy; then  # Only for master mode
+                  echo -e "\n${YELLOW}[UPDATE] Setting up Custom Domain SSL Services...${NC}"
+                  if [ -f "install-custom-domain-ssl.sh" ]; then
+                      echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
+                      bash install-custom-domain-ssl.sh install
+                  elif [ -f "$SCRIPT_DIR/scripts/legacy/install-custom-domain-ssl.sh" ]; then
+                      echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
+                      bash "$SCRIPT_DIR/scripts/legacy/install-custom-domain-ssl.sh" install
+                      
+                      # Start the services
+                      echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
+                      /opt/smsly-hosting/smsly-domain-ssl-manager.sh start
                      
                      # Enable auto-start on boot (if not already enabled)
                      echo -e "${BLUE}  → Ensuring auto-start on boot...${NC}"
@@ -4050,16 +4056,19 @@ fi
              fi
              set_checkpoint "update_db_migrated"
              
-             # Custom Domain SSL Setup for Half Update
-             if should_manage_caddy; then  # Only for master mode
-                 echo -e "\n${YELLOW}[UPDATE] Setting up Custom Domain SSL Services...${NC}"
-                 if [ -f "install-custom-domain-ssl.sh" ]; then
-                     echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
-                     bash install-custom-domain-ssl.sh install
-                     
-                     # Start the services
-                     echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
-                     /opt/smsly-hosting/smsly-domain-ssl-manager.sh start
+              # Custom Domain SSL Setup for Half Update
+              if should_manage_caddy; then  # Only for master mode
+                  echo -e "\n${YELLOW}[UPDATE] Setting up Custom Domain SSL Services...${NC}"
+                  if [ -f "install-custom-domain-ssl.sh" ]; then
+                      echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
+                      bash install-custom-domain-ssl.sh install
+                  elif [ -f "$SCRIPT_DIR/scripts/legacy/install-custom-domain-ssl.sh" ]; then
+                      echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
+                      bash "$SCRIPT_DIR/scripts/legacy/install-custom-domain-ssl.sh" install
+                      
+                      # Start the services
+                      echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
+                      /opt/smsly-hosting/smsly-domain-ssl-manager.sh start
                      
                      # Enable auto-start on boot (if not already enabled)
                      echo -e "${BLUE}  → Ensuring auto-start on boot...${NC}"
@@ -6727,19 +6736,23 @@ if should_manage_caddy; then  # Only for master mode
     if [ -f "install-custom-domain-ssl.sh" ]; then
         echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
         bash install-custom-domain-ssl.sh install
-        
-        # Start the services
-        echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
-        /opt/smsly-hosting/smsly-domain-ssl-manager.sh start
-        
-        # Enable auto-start on boot
-        echo -e "${BLUE}  → Enabling auto-start on boot...${NC}"
-        /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable
-        
-        echo -e "${GREEN}  ✓ Custom domain SSL services configured${NC}"
+    elif [ -f "$SCRIPT_DIR/scripts/legacy/install-custom-domain-ssl.sh" ]; then
+        echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
+        bash "$SCRIPT_DIR/scripts/legacy/install-custom-domain-ssl.sh" install
     else
         echo -e "${YELLOW}  ⚠ Custom domain SSL manager not found, skipping setup${NC}"
+        return
     fi
+    
+    # Start the services
+    echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
+    /opt/smsly-hosting/smsly-domain-ssl-manager.sh start
+    
+    # Enable auto-start on boot
+    echo -e "${BLUE}  → Enabling auto-start on boot...${NC}"
+    /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable
+    
+    echo -e "${GREEN}  ✓ Custom domain SSL services configured${NC}"
 fi
 
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
