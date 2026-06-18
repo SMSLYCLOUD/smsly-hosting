@@ -1,0 +1,43 @@
+global:
+  resolve_timeout: 5m
+  slack_api_url: '{{ .Env.ALERT_SLACK_WEBHOOK_URL }}'
+  smtp_smarthost: '{{ .Env.ALERT_SMTP_HOST }}:{{ .Env.ALERT_SMTP_PORT }}'
+  smtp_from: '{{ .Env.ALERT_SMTP_FROM }}'
+  smtp_auth_username: '{{ .Env.ALERT_SMTP_USER }}'
+  smtp_auth_password: '{{ .Env.ALERT_SMTP_PASS }}'
+
+route:
+  group_by: ['alertname', 'severity']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: 'default'
+  routes:
+    - receiver: 'critical'
+      matchers:
+        - severity = critical
+      repeat_interval: 1h
+    - receiver: 'warning'
+      matchers:
+        - severity = warning
+
+receivers:
+  - name: 'default'
+    slack_configs:
+      - channel: '#alerts'
+        title: '{{ .Env.ALERT_ENV | default "smsly" }} | {{ .GroupLabels.alertname }}'
+        text: '{{ .CommonAnnotations.description }}'
+    email_configs:
+      - to: '{{ .Env.ALERT_EMAIL_TO }}'
+
+  - name: 'critical'
+    slack_configs:
+      - channel: '#alerts-critical'
+        title: '{{ .Env.ALERT_ENV | default "smsly" }} | {{ .GroupLabels.alertname }}'
+        text: '{{ .CommonAnnotations.description }}'
+
+  - name: 'warning'
+    slack_configs:
+      - channel: '#alerts'
+        title: '{{ .Env.ALERT_ENV | default "smsly" }} | {{ .GroupLabels.alertname }}'
+        text: '{{ .CommonAnnotations.description }}'

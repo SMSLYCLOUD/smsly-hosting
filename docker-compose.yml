@@ -39,6 +39,47 @@ services:
       retries: 5
       start_period: 5s
 
+  # ============================================================
+  # Language Ecosystem Caches
+  # ============================================================
+
+  # APT package cache (Debian/Ubuntu)
+  apt-cacher:
+    image: sameersbn/apt-cacher-ng:latest
+    container_name: smsly-apt-cacher
+    restart: unless-stopped
+    volumes:
+      - apt_cache:/var/cache/apt-cacher-ng
+      - apt_log:/var/log/apt-cacher-ng
+    networks:
+      - smsly-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:3142/acng-report.html || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    labels:
+      - managed_by=smsly-hosting
+
+  # npm registry cache
+  verdaccio:
+    image: verdaccio/verdaccio:latest
+    container_name: smsly-verdaccio
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:4873:4873"
+    volumes:
+      - verdaccio_data:/verdaccio
+    networks:
+      - smsly-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:4873/-/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    labels:
+      - managed_by=smsly-hosting
+
   # Fast worker (Heartbeats, Metrics) - Low latency, high frequency
   celery-fast:
     build:
@@ -70,6 +111,8 @@ services:
     env_file: .env
     environment:
       - DOCKER_HOST=tcp://socket-proxy:2375
+      - APT_CACHE_HOST=http://apt-cacher:3142
+      - NPM_REGISTRY_URL=http://verdaccio:4873
     # SECURITY: removed `./:/platform-src:ro` bind mount. The full host repo
     # exposed every source file, secret, and build artefact to the deploy
     # worker. install.sh is now mounted as a single file; all other paths
@@ -205,6 +248,8 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - DOCKER_HOST=tcp://socket-proxy:2375
+      - APT_CACHE_HOST=http://apt-cacher:3142
+      - NPM_REGISTRY_URL=http://verdaccio:4873
     depends_on:
       db:
         condition: service_healthy
@@ -522,3 +567,6 @@ volumes:
   loki_data:
   promtail_positions:
   grafana_data:
+  apt_cache:
+  apt_log:
+  verdaccio_data:
