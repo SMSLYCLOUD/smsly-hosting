@@ -2,6 +2,7 @@
 from allauth.account.adapter import DefaultAccountAdapter
 from allauth.socialaccount.adapter import DefaultSocialAccountAdapter
 from django.conf import settings
+from django.urls import reverse
 
 
 class CustomAccountAdapter(DefaultAccountAdapter):
@@ -14,12 +15,19 @@ class CustomSocialAccountAdapter(DefaultSocialAccountAdapter):
     def get_connect_redirect_url(self, request, socialaccount):
         return settings.LOGIN_REDIRECT_URL
 
-    @property
-    def callback_url_overrides(self) -> dict:
-        """Map provider IDs to env-configured callback URL overrides."""
-        return {
+    def get_callback_url(self, request, provider):
+        """
+        Build the OAuth callback URL, checking provider-specific env overrides first.
+        Falls back to the standard allauth reverse('PROVIDER_callback') pattern.
+        """
+        provider_id = provider.id if hasattr(provider, 'id') else str(provider)
+        overrides = {
             'github': getattr(settings, 'GITHUB_OAUTH_CALLBACK_URL', None),
             'gitlab': getattr(settings, 'GITLAB_OAUTH_CALLBACK_URL', None),
             'bitbucket_oauth2': getattr(settings, 'BITBUCKET_OAUTH_CALLBACK_URL', None),
             'google': getattr(settings, 'GOOGLE_OAUTH_CALLBACK_URL', None),
         }
+        override = overrides.get(provider_id)
+        if override:
+            return override
+        return super().get_callback_url(request, provider)
