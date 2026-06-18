@@ -39,9 +39,11 @@ from .views_replication import ReplicationViewSet
 from .views_project import ProjectViewSet
 from .views_updates import PlatformUpdateViewSet
 from .views_node_exchange import node_token_exchange, node_token_exchange_via_gateway
+from .views_device import register_device, list_devices, revoke_device
 from .views_autoscale import ScalingViewSet
 from .views_cloud_storage import CloudStorageViewSet
 from .views_slow_query import SlowQueryViewSet
+from .views_recovery import recovery_phrase_generate, recovery_phrase_verify
 
 # Create main router
 router = DefaultRouter()
@@ -167,4 +169,11 @@ urlpatterns = [
     path('auth/node-token-exchange/', node_token_exchange, name='node-token-exchange'),
     path('auth/node-token-exchange-hmac/', node_token_exchange_via_gateway, name='node-token-exchange-hmac'),
     path('deployments/remote-trigger/', RemoteTriggerView.as_view(), name='deployment-remote-trigger'),
+    # Device trust — hardware fingerprint-based device enrollment
+    path('devices/register/', register_device, name='device-register'),
+    path('devices/', list_devices, name='device-list'),
+    path('devices/<uuid:device_id>/revoke/', revoke_device, name='device-revoke'),
+    # Recovery phrase — 12-word BIP39 last-resort account recovery
+    path('auth/recovery/generate/', recovery_phrase_generate, name='recovery-generate'),
+    path('auth/recovery/verify/', recovery_phrase_verify, name='recovery-verify'),
 ]
