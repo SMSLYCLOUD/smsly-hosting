@@ -278,6 +278,62 @@ def build_agent_lite_install_env(
     )
 
 
+def _restrict_ssh_key_to_master_ip(ssh, server: ManagedServer) -> None:
+    """
+    Generate an ephemeral SSH key pair and add the public key to the node's
+    authorized_keys with a ``from="<master-ip>"`` restriction.
+
+    The private key is stored encrypted on the ManagedServer record for
+    future self-healing. The ``from="..."`` restriction ensures the key
+    can ONLY be used from the master's IP address — even if the private
+    key is stolen, it cannot be used from a different network location.
+    """
+    import io
+    master_ip = os.environ.get("PUBLIC_IP") or "127.0.0.1"
+    key_buf = io.StringIO()
+    try:
+        import paramiko.rsakey as _r
+        key = _r.RSAKey.generate(4096)
+        key.write_private_key(key_buf)
+        priv_key_pem = key_buf.getvalue()
+        pub_key_line = f"{key.get_name()} {key.get_base64()}"
+    except Exception:
+        # Fallback: generate via subprocess if paramiko key gen fails
+        import subprocess as _sp, tempfile as _tf
+        _tmp = _tf.NamedTemporaryFile(delete=False, suffix='.key')
+        _tmp.close()
+        try:
+            _sp.run(['ssh-keygen', '-t', 'rsa', '-b', '4096', '-f', _tmp.name, '-N', '', '-q'],
+                    capture_output=True, timeout=30, check=True)
+            with open(f'{_tmp.name}.pub') as _pf:
+                pub_key_line = _pf.read().strip().split(' ', 2)
+                pub_key_line = f"{pub_key_line[0]} {pub_key_line[1]}"
+            with open(_tmp.name) as _pf:
+                priv_key_pem = _pf.read()
+        finally:
+            try: os.unlink(_tmp.name)
+            except Exception: pass
+            try: os.unlink(f'{_tmp.name}.pub')
+            except Exception: pass
+
+    # Add to authorized_keys with IP restriction
+    restricted_line = f'from="{master_ip}" {pub_key_line} smsly-self-heal\n'
+    cmd = (
+        f'mkdir -p ~/.ssh && chmod 700 ~/.ssh && '
+        f'grep -qF "smsly-self-heal" ~/.ssh/authorized_keys 2>/dev/null || '
+        f'echo {shlex.quote(restricted_line)} >> ~/.ssh/authorized_keys && '
+        f'chmod 600 ~/.ssh/authorized_keys'
+    )
+    try:
+        ssh.exec_command(cmd, timeout=15, raise_on_error=False)
+        # Store the private key (IP-restricted, encrypted at rest)
+        server.ssh_key = priv_key_pem
+        server.save(update_fields=['ssh_key', 'updated_at'])
+        _append_log(server, f"🔒 IP-restricted SSH key added (from=\"{master_ip}\")")
+    except Exception as exc:
+        _append_log(server, f"⚠ IP-restricted SSH key skipped: {exc}")
+
+
 def _schedule_remote_reboot(ssh, server: ManagedServer, reason: str) -> bool:
     """Schedule a best-effort reboot after successful provisioning/update."""
     command = (
@@ -817,6 +873,12 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
         # -- Step 1: Connect --
         ssh = _get_ssh_client(server)
         _append_log(server, "✅ SSH connection established")
+
+        # -- Step 1b: Add IP-restricted SSH key to node's authorized_keys --
+        # Even if the private key is stolen, it can only be used from the
+        # master's IP address. This prevents credential theft from other
+        # network locations.
+        _restrict_ssh_key_to_master_ip(ssh, server)
 
         # -- Step 2: Upload install script --
         _append_log(server, "📦 Uploading install script...")
