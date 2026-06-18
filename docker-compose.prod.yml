@@ -139,6 +139,49 @@ services:
       resources:
         limits:
           memory: ${DOCKER_MIRROR_MEMORY_LIMIT:-512M}
+  apt-cacher:
+    image: sameersbn/apt-cacher-ng:latest
+    container_name: smsly-apt-cacher
+    restart: unless-stopped
+    volumes:
+      - apt_cache:/var/cache/apt-cacher-ng
+      - apt_log:/var/log/apt-cacher-ng
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:3142/acng-report.html || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    labels:
+      - managed_by=smsly-hosting
+    networks:
+      - smsly-net
+    deploy:
+      resources:
+        limits:
+          memory: ${APT_CACHE_MEMORY_LIMIT:-256M}
+
+  verdaccio:
+    image: verdaccio/verdaccio:latest
+    container_name: smsly-verdaccio
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:4873:4873"
+    volumes:
+      - verdaccio_data:/verdaccio
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:4873/-/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    labels:
+      - managed_by=smsly-hosting
+    networks:
+      - smsly-net
+    deploy:
+      resources:
+        limits:
+          memory: ${VERDACCIO_MEMORY_LIMIT:-256M}
+
   backend:
     build:
       context: ./backend
@@ -156,8 +199,11 @@ services:
       MASTER_MESH_IP: ${MASTER_MESH_IP:-}
       CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-127.0.0.1:5000}
       DOCKER_HOST: tcp://socket-proxy:2375
+      BUILDKIT_HOST: tcp://buildkitd:1234
       SMSLY_ENABLE_STARTUP_CADDY_SYNC: ${SMSLY_ENABLE_STARTUP_CADDY_SYNC:-true}
       SMSLY_BUILDS_DIR: /opt/smsly-hosting/builds
+      APT_CACHE_HOST: http://apt-cacher:3142
+      NPM_REGISTRY_URL: http://verdaccio:4873
     depends_on:
       pgcat:
         condition: service_healthy
@@ -394,9 +440,12 @@ services:
       MASTER_MESH_IP: ${MASTER_MESH_IP:-}
       CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-127.0.0.1:5000}
       DOCKER_HOST: tcp://socket-proxy:2375
+      BUILDKIT_HOST: tcp://buildkitd:1234
       DOCKER_NETWORK: smsly-net
       BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
       SMSLY_BUILDS_DIR: /opt/smsly-hosting/builds
+      APT_CACHE_HOST: http://apt-cacher:3142
+      NPM_REGISTRY_URL: http://verdaccio:4873
     depends_on:
       pgcat:
         condition: service_healthy
@@ -616,6 +665,24 @@ services:
           memory: ${RABBITMQ_MEMORY_RESERVATION:-256M}
         limits:
           memory: ${RABBITMQ_MEMORY_LIMIT:-1G}
+  buildkitd:
+    image: moby/buildkit:latest
+    container_name: smsly-buildkitd
+    restart: unless-stopped
+    privileged: true
+    networks:
+      - smsly-net
+    volumes:
+      - buildkit_data:/var/lib/buildkit
+    tmpfs:
+      - /tmp
+    command:
+      - --addr=tcp://0.0.0.0:1234
+    healthcheck:
+      test: ["CMD", "buildctl", "debug", "workers"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
   caddy:
     build:
       context: .
@@ -678,3 +745,7 @@ volumes:
   backups_data: null
   rabbitmq_data: null
   letsencrypt_data: null
+  apt_cache: null
+  apt_log: null
+  verdaccio_data: null
+  buildkit_data: null

@@ -13,12 +13,11 @@ global:
 alerting:
   alertmanagers:
     - static_configs:
-        - targets: []
-          # - alertmanager:9093
+        - targets: ['alertmanager:9093']
 
 # Rule files
-rule_files: []
-  # - /etc/prometheus/rules/*.yml
+rule_files:
+  - /etc/prometheus/rules/*.yml
 
 # Scrape configuration.
 # User-application metrics are collected via cAdvisor (container-level CPU/mem/network/disk)

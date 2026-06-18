@@ -65,6 +65,7 @@ services:
       - "127.0.0.1:9090:9090"
     volumes:
       - ../monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../monitoring/rules/:/etc/prometheus/rules/:ro
       - prometheus-data:/prometheus
       - /opt/smsly-hosting/prometheus-targets:/etc/prometheus/docker-labels-targets:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -84,6 +85,31 @@ services:
         limits:
           cpus: '${PROMETHEUS_CPU_LIMIT:-0.5}'
           memory: ${PROMETHEUS_MEMORY_LIMIT:-512M}
+    labels:
+      - managed_by=smsly-hosting
+
+  # Alertmanager - Alert management and notification routing
+  alertmanager:
+    image: prom/alertmanager:v0.26.0
+    container_name: smsly-alertmanager
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    volumes:
+      - ../monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    networks:
+      - smsly-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9093/-/healthy || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: ${ALERTMANAGER_MEMORY_LIMIT:-256M}
     labels:
       - managed_by=smsly-hosting
 
@@ -219,6 +245,7 @@ volumes:
   prometheus-data:
   grafana-data:
   promtail-positions:
+  alertmanager-data:
 
 networks:
   smsly-net:
