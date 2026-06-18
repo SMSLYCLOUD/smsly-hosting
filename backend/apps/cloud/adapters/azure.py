@@ -2,6 +2,7 @@ from typing import Dict, Any, List, Optional
 from .base import BaseCloudAdapter
 
 try:
+    from azure.mgmt.resource import ResourceManagementClient
     from azure.mgmt.appcontainers import ContainerAppsAPIClient
     from azure.mgmt.appcontainers.models import (
         ContainerApp, Template, Container, EnvironmentVar,
@@ -11,6 +12,7 @@ try:
     HAS_AZURE_SDK = True
 except ImportError:
     HAS_AZURE_SDK = False
+    ResourceManagementClient = None
     ContainerAppsAPIClient = None
     ContainerApp = Template = Container = EnvironmentVar = None
     Configuration = Ingress = TrafficWeight = None
