@@ -103,7 +103,7 @@ class ServiceViewSetThrottleTests(TestCase):
         must return [] (no throttles); write methods must
         return the burst + deployment throttles.
         """
-        from apps.deployments.views import ServiceViewSet
+        from apps.deployments.views_service import ServiceViewSet
         from rest_framework.test import APIRequestFactory
         factory = APIRequestFactory()
         for method in ('get', 'head', 'options'):
@@ -154,7 +154,7 @@ class DeploymentViewSetThrottleTests(TestCase):
         self.client.force_authenticate(self.user)
 
     def test_get_throttles_returns_empty_for_safe_methods(self):
-        from apps.deployments.views import DeploymentViewSet
+        from apps.deployments.views_deployment import DeploymentViewSet
         from rest_framework.test import APIRequestFactory
         factory = APIRequestFactory()
         for method in ('get', 'head', 'options'):

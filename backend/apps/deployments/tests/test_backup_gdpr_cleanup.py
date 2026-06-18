@@ -13,7 +13,7 @@ from apps.deployments.models_backup import (
     ServiceBackup,
 )
 from apps.deployments.services.backup_service import purge_user_backups
-from apps.deployments.tasks import purge_user_backups_task
+from apps.deployments.tasks_backup import purge_user_backups_task
 
 
 User = get_user_model()

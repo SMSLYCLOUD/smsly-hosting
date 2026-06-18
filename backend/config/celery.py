@@ -43,6 +43,38 @@ def register_extra_tasks(sender, **kwargs):  # pylint: disable=unused-argument
     import apps.deployments.services.provisioner  # noqa: F401
     import apps.addons.tasks  # noqa: F401
     import apps.deployments.tasks  # noqa: F401
+    import apps.deployments.tasks_deploy
+    import apps.deployments.tasks_deploy_local
+    import apps.deployments.tasks_deploy_remote
+    import apps.deployments.tasks_build
+    import apps.deployments.tasks_ai_router
+    import apps.deployments.tasks_templates
+    import apps.deployments.tasks_addons
+    import apps.deployments.tasks_backup
+    import apps.deployments.tasks_transfer
+    import apps.deployments.tasks_platform_update
+    import apps.deployments.tasks_maintenance
+    import apps.deployments.tasks_server_update
+    import apps.deployments.tasks_health
+    import apps.deployments.tasks_caddy
+    import apps.deployments.tasks_utils
+
+    import apps.deployments.tasks_deploy
+    import apps.deployments.tasks_deploy_local
+    import apps.deployments.tasks_deploy_remote
+    import apps.deployments.tasks_build
+    import apps.deployments.tasks_ai_router
+    import apps.deployments.tasks_templates
+    import apps.deployments.tasks_addons
+    import apps.deployments.tasks_backup
+    import apps.deployments.tasks_transfer
+    import apps.deployments.tasks_platform_update
+    import apps.deployments.tasks_maintenance
+    import apps.deployments.tasks_server_update
+    import apps.deployments.tasks_health
+    import apps.deployments.tasks_caddy
+    import apps.deployments.tasks_utils
+
     import apps.deployments.tasks_alerts  # noqa: F401
     import apps.deployments.tasks_ai  # noqa: F401
     import apps.deployments.tasks_ecosystem  # noqa: F401
@@ -72,12 +104,12 @@ app.conf.task_queues = (
 app.conf.task_create_missing_queues = True
 
 app.conf.task_routes = {
-    'apps.deployments.tasks.smart_deploy_task': {'queue': 'deploy'},
-    'apps.deployments.tasks.resume_deploy_task': {'queue': 'deploy'},
-    'apps.deployments.tasks.provision_addon_task': {'queue': 'deploy'},
-    'apps.deployments.tasks.deprovision_addon_task': {'queue': 'deploy'},
-    'apps.deployments.tasks.backup_addon_task': {'queue': 'deploy'},
-    'apps.deployments.tasks.restore_addon_task': {'queue': 'deploy'},
+    'apps.deployments.tasks_deploy.smart_deploy_task': {'queue': 'deploy'},
+    'apps.deployments.tasks_deploy.resume_deploy_task': {'queue': 'deploy'},
+    'apps.deployments.tasks_addons.provision_addon_task': {'queue': 'deploy'},
+    'apps.deployments.tasks_addons.deprovision_addon_task': {'queue': 'deploy'},
+    'apps.deployments.tasks_addons.backup_addon_task': {'queue': 'deploy'},
+    'apps.deployments.tasks_addons.restore_addon_task': {'queue': 'deploy'},
     'apps.deployments.tasks_election.heartbeat_task': {'queue': 'fast'},
     'apps.deployments.services.provisioner.cleanup_stale_server_provisioning': {'queue': 'deploy'},
     'apps.deployments.tasks_ecosystem.ecosystem_scan_task': {'queue': 'deploy'},
@@ -91,8 +123,8 @@ app.conf.task_routes = {
     'apps.deployments.tasks_safedeploy.run_preview_health_check_job': {'queue': 'deploy'},
     'apps.deployments.tasks_safedeploy.expire_stale_previews_job': {'queue': 'fast'},
     'apps.deployments.tasks_safedeploy.destroy_preview_environment_job': {'queue': 'deploy'},
-    'apps.deployments.tasks.update_remote_server_task': {'queue': 'deploy'},
-    'apps.deployments.tasks.self_heal_remote_deployment': {'queue': 'deploy'},
+    'apps.deployments.tasks_server_update.update_remote_server_task': {'queue': 'deploy'},
+    'apps.deployments.tasks_deploy_remote.self_heal_remote_deployment': {'queue': 'deploy'},
 }
 
 app.conf.beat_schedule = {
@@ -182,19 +214,19 @@ app.conf.beat_schedule = {
     },
     # Auto-repair inter-node auth every 5 minutes
     'auto-auth-nodes-every-5m': {
-        'task': 'apps.deployments.tasks.auto_authenticate_nodes_task',
+        'task': 'apps.deployments.tasks_health.auto_authenticate_nodes_task',
         'schedule': 300.0,
         'options': {'expires': 300.0},
     },
     # Check health of all managed servers every 5 minutes
     'check-managed-servers-health-every-5m': {
-        'task': 'apps.deployments.tasks.check_managed_servers_health_task',
+        'task': 'apps.deployments.tasks_health.check_managed_servers_health_task',
         'schedule': 300.0,
         'options': {'expires': 300.0},
     },
     # Node watchdog — checks all remote servers and auto-heals every 5 minutes
     'node-watchdog-every-5m': {
-        'task': 'apps.deployments.tasks.node_watchdog_task',
+        'task': 'apps.deployments.tasks_health.node_watchdog_task',
         'schedule': 300.0,
         'options': {'expires': 300.0},
     },
@@ -206,7 +238,7 @@ app.conf.beat_schedule = {
     },
     # Run scheduled backups every 15 minutes
     'run-scheduled-backups-every-15m': {
-        'task': 'apps.deployments.tasks.run_scheduled_backups_task',
+        'task': 'apps.deployments.tasks_backup.run_scheduled_backups_task',
         'schedule': 900.0,
         'options': {'expires': 900.0},
     },

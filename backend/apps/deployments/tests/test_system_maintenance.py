@@ -10,7 +10,7 @@ from rest_framework.test import APIClient
 from apps.cloud.models import CloudProvider
 from apps.deployments.models_addons import Addon
 from apps.deployments.models_core import Service
-from apps.deployments.tasks import _clear_orphaned_runtime_resources
+from apps.deployments.tasks_maintenance import _clear_orphaned_runtime_resources
 
 
 User = get_user_model()

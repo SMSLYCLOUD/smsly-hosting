@@ -12,11 +12,11 @@ from apps.deployments.models_audit import AuditLog
 from apps.deployments.serializers import (
     PreviewEnvironmentSerializer, DeploymentApprovalSerializer,
     PreviewCreateSerializer, PreviewRebuildSerializer,
-    ApprovalApproveSerializer, ApprovalRejectSerializer,
+    ApprovalRejectSerializer,
 )
 from apps.deployments.services.safedeploy.branch_preview_manager import BranchPreviewManager
 from apps.deployments.permissions import CanApproveDeployment, CanManagePreviews
-from apps.teams.permissions import get_team_q_filter, assert_can_write, assert_can_delete
+from apps.teams.permissions import get_team_q_filter, assert_can_write
 
 logger = logging.getLogger(__name__)
 

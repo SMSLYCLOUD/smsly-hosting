@@ -257,7 +257,7 @@ class Orchestrator:
         )
 
         # Trigger async deployment (import here to avoid circular)
-        from apps.deployments.tasks import enqueue_smart_deploy_task
+        from apps.deployments.tasks_deploy import enqueue_smart_deploy_task
         provider = service.provider
         if provider:
             try:
