@@ -329,6 +329,7 @@ export function FleetRadar({ services }: FleetRadarProps) {
     return () => {
       cancelAnimationFrame(animationRef.current);
       if (rendererRef.current && containerRef.current) {
+        // eslint-disable-next-line react-hooks/exhaustive-deps
         containerRef.current.removeChild(rendererRef.current.domElement);
         rendererRef.current.dispose();
       }

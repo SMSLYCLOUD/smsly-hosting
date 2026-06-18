@@ -95,19 +95,20 @@ async function getCanvasFingerprint(): Promise<string> {
 }
 
 // ── WebGL fingerprint ─────────────────────────────────────────────────
-function getWebGLFingerprint(): Record<string, string | null> {
+function getWebGLFingerprint(): Record<string, string | boolean | null> {
   try {
     const canvas = document.createElement('canvas');
     const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
     if (!gl) return { supported: false };
+    const webgl = gl as WebGLRenderingContext;
 
-    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    const ext = webgl.getExtension('WEBGL_debug_renderer_info');
     return {
       supported: true,
-      vendor: gl.getParameter(ext!.UNMASKED_VENDOR_WEBGL),
-      renderer: gl.getParameter(ext!.UNMASKED_RENDERER_WEBGL),
-      version: gl.getParameter(gl.VERSION),
-      shading_language_version: gl.getParameter(gl.SHADING_LANGUAGE_VERSION),
+      vendor: webgl.getParameter(ext!.UNMASKED_VENDOR_WEBGL),
+      renderer: webgl.getParameter(ext!.UNMASKED_RENDERER_WEBGL),
+      version: webgl.getParameter(webgl.VERSION),
+      shading_language_version: webgl.getParameter(webgl.SHADING_LANGUAGE_VERSION),
     };
   } catch {
     return { supported: false, error: 'blocked' };

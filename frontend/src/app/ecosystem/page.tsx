@@ -214,6 +214,7 @@ export default function EcosystemPage() {
             } catch {}
         };
         checkActivePlan();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     // Poll for scan task completion

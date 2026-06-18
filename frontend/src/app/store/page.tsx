@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { Database, Layout, Box, Cpu, Search, Cloud, Activity, Brain } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -183,11 +184,7 @@ export default function AppStorePage() {
                                     <CardHeader className="flex flex-row items-start gap-4 space-y-0">
                                         <div className={`p-3 rounded-xl shadow-sm flex items-center justify-center overflow-hidden ${app.logo_url || app.icon ? 'bg-background border' : `text-white ${color}`}`}>
                                             {app.logo_url || app.icon ? (
-                                                <img 
-                                                    src={app.logo_url || app.icon} 
-                                                    alt={app.name} 
-                                                    className="w-7 h-7 object-contain"
-                                                />
+                                                <Image src={app.logo_url || app.icon} alt={app.name} className="w-7 h-7 object-contain" unoptimized />
                                             ) : (
                                                 <Icon size={24} />
                                             )}
