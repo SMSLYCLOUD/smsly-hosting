@@ -166,6 +166,9 @@ export NEEDRESTART_MODE="${NEEDRESTART_MODE:-a}"
 # ─── Source library modules ───────────────────────────────────────────────────
 LIB_DIR="$SCRIPT_DIR/lib"
 for lib in "$LIB_DIR"/*.sh; do
+    # Skip mode-entry files — they are sourced on-demand by the
+    # mode dispatch below (they contain inline code, not just functions).
+    case "$lib" in */fresh.sh|*/update.sh) continue ;; esac
     [ -f "$lib" ] && source "$lib"
 done
 
