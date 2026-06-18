@@ -43,19 +43,14 @@ class BitbucketWebhookHandler:
             return False
 
         repo = payload.get('repository', {}) or {}
-        services = Service.objects.filter(
-            repository_url__icontains=repo.get('full_name', '').replace('/', '-'),
-            branch=branch,
-            deploy_type='GIT',
-            is_preview=False,
+        from ..services.repo_matcher import match_service_repo
+        candidates = Service.objects.filter(
+            branch=branch, deploy_type='GIT', is_preview=False,
         )
-        if not services.exists():
-            services = Service.objects.filter(
-                repository_url__icontains=repo.get('full_name', ''),
-                branch=branch,
-                deploy_type='GIT',
-                is_preview=False,
-            )
+        services = [
+            s for s in candidates
+            if s.repository_url and match_service_repo(s.repository_url, repo.get('full_name', ''))
+        ]
 
         count = 0
         for service in services:

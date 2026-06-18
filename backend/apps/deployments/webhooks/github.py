@@ -82,13 +82,15 @@ class GitHubWebhookHandler:
         commit_hash = payload.get('after')
         commit_message = payload.get('head_commit', {}).get('message', '')
 
-        # Find services listening to this repo/branch
-        services = Service.objects.filter(
-            repository_url__icontains=repo_url,
-            branch=branch,
-            deploy_type='GIT',
-            is_preview=False  # Do not trigger on preview services themselves
+        # Find services listening to this repo/branch — exact owner/repo match
+        from ..services.repo_matcher import match_service_repo
+        candidates = Service.objects.filter(
+            branch=branch, deploy_type='GIT', is_preview=False,
         )
+        services = [
+            s for s in candidates
+            if s.repository_url and match_service_repo(s.repository_url, repo_url)
+        ]
 
         triggered_count = 0
         for service in services:
@@ -135,14 +137,15 @@ class GitHubWebhookHandler:
             return False
 
         # Find the Parent Service (the one deployed from the base branch)
-        parent_services = Service.objects.filter(
-            repository_url__icontains=repo_url,
-            branch=base_ref,
-            deploy_type='GIT',
-            is_preview=False
+        from ..services.repo_matcher import match_service_repo
+        candidates = Service.objects.filter(
+            branch=base_ref, deploy_type='GIT', is_preview=False,
         )
-
-        if not parent_services.exists():
+        parent_services = [
+            s for s in candidates
+            if s.repository_url and match_service_repo(s.repository_url, repo_url)
+        ]
+        if not parent_services:
             logger.info(
                 f"No parent service found for PR #{pr_number} on {repo_url} (base: {base_ref})")
             return False
