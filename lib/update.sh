@@ -422,8 +422,6 @@ fi
              ;;
           half)
             echo -e "${BLUE}  → [HALF UPDATE] Rebuilding changed services from cache (no image pulls)${NC}"
-            echo -e "${YELLOW}  ⚠ Half update skips base image pulls — if the build cache is stale,"
-            echo -e "${YELLOW}     run 'sudo bash install.sh --update' for a full pull+rebuild later.${NC}"
 
             # 1. Rebuild frontend from cached layers (no --pull, no new base images)
             if [ "$MODE_NODE" != "true" ]; then
@@ -512,17 +510,7 @@ fi
                 CORE_SERVICES="backend celery celery-deploy celery-fast celery-beat"
             fi
 
-            # 2. Tag current images as pre-update backup before removing them
-            echo -e "${BLUE}    ↳ Tagging current core images as pre-update backup...${NC}"
-            for svc in $CORE_SERVICES; do
-                img=$(docker compose -f "$COMPOSE_FILE" config --images 2>/dev/null | grep -i "$svc" || true)
-                if [ -n "$img" ]; then
-                    backup_tag="${img}:pre-update-$(date +%Y%m%d)"
-                    docker tag "$img" "$backup_tag" 2>/dev/null || true
-                fi
-            done
-
-            # 3. Remove old PaaS images (NOT addon images) to free up space BEFORE the build
+            # 2. Remove old PaaS images (NOT addon images) to free up space BEFORE the build
             # We untag them so docker compose build has to make new ones. Running containers keep the actual image data alive.
             echo -e "${BLUE}    ↳ Untagging old core images...${NC}"
             for svc in $CORE_SERVICES; do
@@ -1368,3 +1356,4 @@ RESTORE_EOF
     echo -e "${YELLOW}  Runtime recovery:  sudo bash install.sh --recover${NC}"
     echo -e "${YELLOW}  Fix permissions:   sudo bash install.sh --fix-permissions${NC}"
     exit 0
+fi

@@ -1085,9 +1085,6 @@ echo -e "${BLUE}  → Collecting Static Files...${NC}"
     docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic --noinput
 
     sync_platform_domain_state "$INSTALL_DIR/.env"
-else
-    echo -e "${BLUE}  → Rust Twin: Skipping static file collection (handled by Trunk WASM bundler)...${NC}"
-fi
     set_checkpoint "database_initialized"
 fi
 fi
@@ -1914,3 +1911,75 @@ elif [ "$MODE_NODE" = "true" ]; then
     echo -e "   UI/HTTPS:    Managed by Master (frontend/Caddy disabled here)"
     echo -e "   Credentials: $CREDENTIALS_FILE"
 else
+    if [ "${USE_SSL:-false}" = "true" ] && [ -n "$SUMMARY_DOMAIN" ]; then
+        echo -e "   URL:         https://$SUMMARY_DOMAIN"
+    else
+        echo -e "   URL:         http://$SUMMARY_PUBLIC_IP"
+    fi
+    echo -e "   Admin:       /admin"
+    echo -e "   Credentials: $CREDENTIALS_FILE"
+fi
+echo -e "   Install Log: $LOG_FILE"
+echo -e "   Location:    $INSTALL_DIR"
+echo -e "   Memory:      $(free -m | awk '/^Mem:/{print $7}')MB available"
+echo -e "   Swap:        $(free -m | awk '/^Swap:/{print $2}')MB total"
+
+# ─── Custom Domain SSL Integration ───────────────────────────────────────────
+if should_manage_caddy; then  # Only for master mode
+    echo -e "\n${YELLOW}[9/9] Setting up Custom Domain SSL Services...${NC}"
+    
+    # Check if custom domain SSL manager script exists
+    SSL_SCRIPT="install-custom-domain-ssl.sh"
+    [ -f "$SSL_SCRIPT" ] || SSL_SCRIPT="$SCRIPT_DIR/scripts/legacy/install-custom-domain-ssl.sh"
+    if [ -f "$SSL_SCRIPT" ]; then
+        echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
+        bash "$SSL_SCRIPT" install
+        
+        # Start the services
+        echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
+        /opt/smsly-hosting/smsly-domain-ssl-manager.sh start
+        
+        # Enable auto-start on boot
+        echo -e "${BLUE}  → Enabling auto-start on boot...${NC}"
+        /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable
+        
+        echo -e "${GREEN}  ✓ Custom domain SSL services configured${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ Custom domain SSL manager not found, skipping setup${NC}"
+    fi
+fi
+
+echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
+if [ "$MODE_AGENT_LITE" != "true" ]; then
+    echo -e "   CLI:         'smsly services list'${NC}"
+fi
+echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
+echo -e "${YELLOW}  View credentials:   cat $CREDENTIALS_FILE${NC}"
+echo -e "${YELLOW}  View logs:          cat $LOG_FILE${NC}"
+if [ -f "$INSTALL_DIR/.recovery_phrase" ] && [ -s "$INSTALL_DIR/.recovery_phrase" ]; then
+    echo -e "${YELLOW}  Recovery phrase:    cat $INSTALL_DIR/.recovery_phrase${NC}"
+fi
+if is_master_mode; then
+    echo -e "${YELLOW}  Update frontend:    sudo bash install.sh --update-frontend${NC}"
+fi
+echo -e "${YELLOW}  Update backend:     sudo bash install.sh --update-backend${NC}"
+echo -e "${YELLOW}  Full update:        sudo bash install.sh --update${NC}"
+echo -e "${YELLOW}  Runtime refresh:    sudo bash install.sh --refresh${NC}"
+echo -e "${YELLOW}  Runtime recovery:   sudo bash install.sh --recover${NC}"
+echo -e "${YELLOW}  Debug snapshot:     sudo bash install.sh --debug${NC}"
+echo -e "${YELLOW}  Wipe install:       sudo bash install.sh --wipe${NC}"
+
+# ─── Verification Check Summary ──────────────────────────────────────────────
+if [ "$VERIFY_PASS_COUNT" -eq "$VERIFY_TOTAL" ]; then
+    echo -e "\n${GREEN}  ✓ All $VERIFY_TOTAL/$VERIFY_TOTAL verification checks passed.${NC}"
+    echo -e "${YELLOW}  If needed, run 'sudo reboot' manually to apply sysctl changes.${NC}"
+else
+    echo -e "\n${RED}  ⚠ Only $VERIFY_PASS_COUNT/$VERIFY_TOTAL checks passed.${NC}"
+    echo -e "${YELLOW}  Fix the failed checks above. You can run 'sudo reboot' manually if sysctl changes were made.${NC}"
+    if [ "${SMSLY_STRICT_VERIFY:-0}" = "1" ]; then
+        echo -e "${RED}  ✗ Strict verification is enabled; failing installation.${NC}"
+        exit 1
+    fi
+fi
+
+exit 0
