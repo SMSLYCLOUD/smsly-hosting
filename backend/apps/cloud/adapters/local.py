@@ -238,11 +238,7 @@ class LocalAdapter(BaseCloudAdapter):
         healthcheck = kwargs.pop('healthcheck', None)
         restart_policy = kwargs.pop('restart_policy', 'unless-stopped')
         command = kwargs.pop('command', None)
-        if self.k8s_client:
-            return self._deploy_k8s(
-                service_name, image, env_vars, cpu, memory, replicas,
-                healthcheck=healthcheck, vpa_enabled=vpa_enabled)
-        elif self.docker_client:
+        if self.docker_client:
             return self._deploy_docker(
                 service_name, image, env_vars, volumes=volumes,
                 healthcheck=healthcheck, cpu=cpu, memory=memory,
@@ -949,118 +945,7 @@ class LocalAdapter(BaseCloudAdapter):
                     env: Dict[str, str], cpu: int, memory: int,
                     replicas: int = 1, healthcheck: Dict = None,
                     vpa_enabled: bool = True, **kwargs) -> str:
-        namespace = 'default'
-        port = int(env.get('PORT', 8000))
-
-        # Build liveness/readiness probes from healthcheck config
-        probes = {}
-        if healthcheck and healthcheck.get('path'):
-            hc_path = healthcheck['path']
-            if not hc_path.startswith('/'):
-                hc_path = f'/{hc_path}'
-            hc_port = int(healthcheck.get('port', port))
-            hc_interval = int(healthcheck.get('interval', 30))
-            hc_timeout = int(healthcheck.get('timeout', 5))
-            http_probe = client.V1HTTPGetAction(
-                path=hc_path, port=hc_port
-            )
-            probes['liveness_probe'] = client.V1Probe(
-                http_get=http_probe,
-                initial_delay_seconds=30,
-                period_seconds=hc_interval,
-                timeout_seconds=hc_timeout,
-                failure_threshold=3,
-            )
-            probes['readiness_probe'] = client.V1Probe(
-                http_get=http_probe,
-                initial_delay_seconds=10,
-                period_seconds=max(10, hc_interval // 2),
-                timeout_seconds=hc_timeout,
-                failure_threshold=3,
-            )
-
-        # 1. Deployment
-        deployment = client.V1Deployment(
-            metadata=client.V1ObjectMeta(name=name),
-            spec=client.V1DeploymentSpec(
-                replicas=replicas,
-                selector=client.V1LabelSelector(match_labels={"app": name}),
-                template=client.V1PodTemplateSpec(
-                    metadata=client.V1ObjectMeta(labels={"app": name}),
-                    spec=client.V1PodSpec(
-                        containers=[
-                            client.V1Container(
-                                name=name,
-                                image=image,
-                                ports=[client.V1ContainerPort(container_port=port)],
-                                env=[
-                                    client.V1EnvVar(
-                                        name=k,
-                                        value=v) for k,
-                                    v in env.items()],
-                                resources=client.V1ResourceRequirements(
-                                    requests={
-                                        "cpu": f"{cpu}m", "memory": f"{memory}Mi"},
-                                    limits=None if vpa_enabled else {"cpu": f"{cpu * 2}m",
-                                            "memory": f"{memory * 2}Mi"}
-                                ),
-                                **probes,
-                            )
-                        ]
-                    )
-                )
-            )
-        )
-
-        try:
-            self.k8s_apps.create_namespaced_deployment(
-                namespace=namespace, body=deployment)
-        except client.exceptions.ApiException as e:
-            if e.status == 409:
-                self.k8s_apps.patch_namespaced_deployment(
-                    name=name, namespace=namespace, body=deployment)
-            else:
-                raise
-
-        # 2. Service (ClusterIP) for Discovery
-        svc = client.V1Service(
-            metadata=client.V1ObjectMeta(name=name),
-            spec=client.V1ServiceSpec(
-                selector={"app": name},
-                ports=[
-                    client.V1ServicePort(
-                        port=80,
-                        target_port=port)],
-                type="ClusterIP"
-            )
-        )
-
-        try:
-            self.k8s_client.create_namespaced_service(
-                namespace=namespace, body=svc)
-        except client.exceptions.ApiException as e:
-            if e.status != 409:
-                logger.warning(f"Failed to create service for {name}: {e}")
-
-        # 3. Handle Extra DNS Alias (e.g. for addons)
-        alias_name = kwargs.get('alias_name')
-        if alias_name and alias_name != name:
-            alias_svc = client.V1Service(
-                metadata=client.V1ObjectMeta(name=alias_name),
-                spec=client.V1ServiceSpec(
-                    selector={"app": name},
-                    ports=[client.V1ServicePort(port=80, target_port=port)],
-                    type="ClusterIP"
-                )
-            )
-            try:
-                self.k8s_client.create_namespaced_service(
-                    namespace=namespace, body=alias_svc)
-            except client.exceptions.ApiException as e:
-                if e.status != 409:
-                    logger.warning(f"Failed to create alias service {alias_name}: {e}")
-
-        return f"k8s://{namespace}/{name}"
+        raise NotImplementedError("Kubernetes deployment is not supported. Use Docker or a lite agent.")
 
     # --- Serverless Functions Implementation ---
     def deploy_function(self, function_name: str,
@@ -1148,9 +1033,7 @@ EOF
             return self._deploy_docker_function(
                 function_name, image, env_vars, volumes, entrypoint, code_mount)
 
-        # Fallback for K8s (simplified)
-        return self._deploy_k8s(
-            function_name, image, env_vars, cpu=100, memory=128)
+        raise RuntimeError("No local orchestrator available (Kubernetes deployment is not supported)")
 
     # pylint: disable=too-many-positional-arguments, R0917
     def _deploy_docker_function(self, name: str, image: str, env: Dict[str, str],

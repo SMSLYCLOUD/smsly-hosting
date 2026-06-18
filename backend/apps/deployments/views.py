@@ -2981,11 +2981,9 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 timeout (int, optional, default 30),
                 on_success (callable(resp)->Response, optional),
                 on_error (callable(resp|None)->Response, optional),
-                retry (callable(resp, orchestrator, remote_id, config)->Response|None, optional),
-                k8s_handler (callable(container_id, path)->Response, optional),
-                k8s_command (list, optional).
+                retry (callable(resp, orchestrator, remote_id, config)->Response|None, optional).
             local_action: callable(container, path=None) -> Response.
-            path: Optional path string for symlink resolution and K8s command.
+            path: Optional path string for symlink resolution.
 
         Returns:
             Response
@@ -3040,16 +3038,6 @@ class ServiceViewSet(viewsets.ModelViewSet):
         # Local execution (only reached when target is local)
         container = resolve_running_container(service, latest_deploy)
         if container is None:
-            container_id = (latest_deploy.container_id or "")
-            if container_id.startswith('k8s://'):
-                k8s_handler = remote_config.get('k8s_handler')
-                if k8s_handler:
-                    return k8s_handler(container_id, path)
-                if path is not None:
-                    k8s_command = remote_config.get('k8s_command')
-                    if k8s_command:
-                        return self._k8s_exec_file_op(container_id, k8s_command)
-                return Response({'error': 'K8s operation not supported'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
             return Response({'error': 'No running container found'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
         # Symlink resolution for Docker containers
@@ -3122,133 +3110,16 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 'params': {'path': path},
                 'timeout': 30,
                 'retry': _retry_browse,
-                'k8s_handler': lambda cid, p: self._k8s_file_browse(cid, p),
             },
             local_action=lambda container, path=None: self._exec_file_list(container, path or '/'),
             path=path,
         )
 
     def _k8s_file_browse(self, container_id: str, path: str):
-        """List files via K8s exec into the pod."""
-        try:
-            from kubernetes import client as k8s_client, config as k8s_config
-            try:
-                k8s_config.load_incluster_config()
-            except BaseException:
-                k8s_config.load_kube_config()
-            parts = container_id.replace('k8s://', '').split('/', 1)
-            namespace = parts[0] if len(parts) > 1 else 'default'
-            pod_name = parts[-1]
-            core_v1 = k8s_client.CoreV1Api()
-
-            cmd_chain = [
-                ['ls', '-la', '--time-style=long-iso', path],
-                ['ls', '-la', path],
-                ['python3', '-c', (
-                    "import os,stat,datetime,sys\n"
-                    "p=sys.argv[1]\n"
-                    "for f in os.listdir(p):\n"
-                    " fp=os.path.join(p,f)\n"
-                    " s=os.lstat(fp)\n"
-                    " mt=datetime.datetime.fromtimestamp(s.st_mtime).strftime('%Y-%m-%d %H:%M')\n"
-                    " print(stat.filemode(s.st_mode),s.st_nlink,s.st_uid,s.st_gid,s.st_size,mt,f)"
-                ), path],
-            ]
-            output = ""
-            last_err = ""
-            for cmd in cmd_chain:
-                try:
-                    resp = core_v1.connect_get_namespaced_pod_exec(
-                        pod_name, namespace,
-                        command=cmd,
-                        stderr=True, stdin=False,
-                        stdout=True, tty=False,
-                        _request_timeout=30,
-                    )
-                    output = resp
-                    if isinstance(output, bytes):
-                        output = output.decode('utf-8', errors='replace')
-                    if not any(err in output for err in (
-                        'unrecognized option', 'invalid option',
-                        'No such file', 'cannot access',
-                        'No such file or directory', 'command not found',
-                        'executable file not found',
-                    )):
-                        break
-                    last_err = output
-                    output = ""
-                except Exception:
-                    continue
-
-            if not output or 'No such file' in output or 'cannot access' in output or 'No such file or directory' in output:
-                fallback_path = '/' if path == '/app' else ('/app' if path == '/' else None)
-                if fallback_path:
-                    path = fallback_path
-                    for cmd in cmd_chain:
-                        try:
-                            resp = core_v1.connect_get_namespaced_pod_exec(
-                                pod_name, namespace,
-                                command=cmd,
-                                stderr=True, stdin=False,
-                                stdout=True, tty=False,
-                                _request_timeout=30,
-                            )
-                            output = resp
-                            if isinstance(output, bytes):
-                                output = output.decode('utf-8', errors='replace')
-                            if not any(err in output for err in (
-                                'unrecognized option', 'invalid option',
-                                'No such file', 'cannot access',
-                                'No such file or directory', 'command not found',
-                                'executable file not found',
-                            )):
-                                break
-                            last_err = output
-                            output = ""
-                        except Exception:
-                            continue
-
-            if not output:
-                return Response(
-                    {'error': 'Failed to list directory', 'details': last_err or output},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            files = self._parse_ls_output(output)
-            return Response({'path': path, 'files': files})
-        except ImportError:
-            return Response({'error': 'Kubernetes client not available'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-        except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        raise NotImplementedError("Kubernetes deployment is not supported. Use Docker or a lite agent.")
 
     def _k8s_exec_file_op(self, container_id: str, command_args: list):
-        """Execute a file operation command inside a K8s pod."""
-        try:
-            from kubernetes import client as k8s_client, config as k8s_config
-            try:
-                k8s_config.load_incluster_config()
-            except BaseException:
-                k8s_config.load_kube_config()
-            parts = container_id.replace('k8s://', '').split('/', 1)
-            namespace = parts[0] if len(parts) > 1 else 'default'
-            pod_name = parts[-1]
-            core_v1 = k8s_client.CoreV1Api()
-            resp = core_v1.connect_get_namespaced_pod_exec(
-                pod_name, namespace,
-                command=command_args,
-                stderr=True, stdin=False,
-                stdout=True, tty=False,
-                _request_timeout=30,
-            )
-            output = resp
-            if isinstance(output, bytes):
-                output = output.decode('utf-8', errors='replace')
-            if 'No such file' in output or 'cannot access' in output:
-                return Response({'error': 'Path not found', 'details': output}, status=status.HTTP_400_BAD_REQUEST)
-            return Response({'output': output})
-        except ImportError:
-            return Response({'error': 'Kubernetes client not available'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-        except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        raise NotImplementedError("Kubernetes deployment is not supported. Use Docker or a lite agent.")
 
     def _exec_file_list(self, container, path: str):
         """List files via Docker exec with fallback chain for containers missing coreutils."""
@@ -3425,7 +3296,6 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     {'error': 'Failed to delete on remote node', 'details': resp.text if resp else 'Timeout'},
                     status=status.HTTP_400_BAD_REQUEST,
                 ),
-                'k8s_command': ['rm', '-rf', path],
             },
             local_action=lambda container, path=None: self._local_file_delete(container, path),
             path=path,
@@ -3469,7 +3339,6 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     {'error': 'Failed to mkdir on remote node', 'details': resp.text if resp else 'Timeout'},
                     status=status.HTTP_400_BAD_REQUEST,
                 ),
-                'k8s_command': ['mkdir', '-p', path],
             },
             local_action=lambda container, path=None: self._local_file_mkdir(container, path),
             path=path,
@@ -3514,7 +3383,6 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     {'error': 'Failed to read file on remote node', 'details': resp.text if resp else 'Timeout'},
                     status=status.HTTP_400_BAD_REQUEST,
                 ),
-                'k8s_command': ['cat', path],
             },
             local_action=lambda container, path=None: self._local_file_read(container, path),
             path=path,
@@ -3567,7 +3435,6 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     {'error': 'Failed to write file on remote node', 'details': resp.text if resp else 'Timeout'},
                     status=status.HTTP_400_BAD_REQUEST,
                 ),
-                'k8s_command': ['sh', '-c', f'cat > {path}'],
             },
             local_action=lambda container, path=None: self._local_file_write(container, path, content),
             path=path,
@@ -3670,7 +3537,6 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     {'error': 'Failed to upload file on remote node', 'details': resp.text if resp else 'Timeout'},
                     status=status.HTTP_400_BAD_REQUEST,
                 ),
-                'k8s_command': ['sh', '-c', f'base64 -d > {path}'],
             },
             local_action=lambda container, path=None: self._local_file_upload(container, path, file_bytes),
             path=path,

@@ -1,3 +1,4 @@
+# NOT USED — kept for reference.
 # pylint: disable=line-too-long,too-many-instance-attributes,bare-except,logging-fstring-interpolation,import-outside-toplevel,too-few-public-methods
 """Clusters module."""
 # pylint: disable=no-member
