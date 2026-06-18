@@ -39,6 +39,10 @@ from apps.deployments.models_servers import ManagedServer
 
 logger = logging.getLogger(__name__)
 
+# Pinned SHA-256 of the canonical install.sh. Used by _load_install_script
+# to verify the script hasn't been tampered with.
+EXPECTED_INSTALL_SCRIPT_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
 
 def _env_int(name: str, default: int, minimum: int = 0) -> int:
     try:

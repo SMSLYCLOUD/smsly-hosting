@@ -207,3 +207,21 @@ class CronJobCreateRateThrottle(UserRateThrottle):
     ``settings.DEFAULT_THROTTLE_RATES['cron_jobs_create']``.
     """
     scope = 'cron_jobs_create'
+
+
+class AddonDeleteRateThrottle(UserRateThrottle):
+    """Throttle on DELETE /api/v1/addons/{id}/.
+
+    Rate from
+    ``settings.DEFAULT_THROTTLE_RATES['addon_delete']``.
+    """
+    scope = 'addon_delete'
+
+
+class TokenCreateRateThrottle(UserRateThrottle):
+    """Throttle on POST /api/v1/tokens/create/.
+
+    Rate from
+    ``settings.DEFAULT_THROTTLE_RATES['token_create']``.
+    """
+    scope = 'token_create'

@@ -39,6 +39,10 @@ logger = logging.getLogger(__name__)
 CHALLENGE_TTL = 120
 # Cache prefix
 CHALLENGE_CACHE_PREFIX = "attest_challenge_"
+# Max outstanding nonces before the challenge endpoint returns 503
+CHALLENGE_CACHE_MAX_ENTRIES = 100
+# Cache key for the challenge count counter
+CHALLENGE_COUNT_CACHE_KEY = "attest_challenge_count"
 
 
 @api_view(["POST"])

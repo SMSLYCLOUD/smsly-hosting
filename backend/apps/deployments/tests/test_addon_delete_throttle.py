@@ -19,7 +19,7 @@ from rest_framework.test import APIClient
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import Service
 from apps.deployments.models_addons import Addon
-from apps.deployments.views_addons import AddonDeleteRateThrottle
+from apps.deployments.rate_limiting import AddonDeleteRateThrottle
 
 
 User = get_user_model()
