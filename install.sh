@@ -1035,12 +1035,11 @@ EOF
     local _entry
     for _entry in "${_master_secrets_to_sync[@]}"; do
         local _key="${_entry%%|*}"
-        local _master_val="${MASTER_ENV_"${_key}":-}"
-        # If the env var wasn't set in the current shell, try
-        # to read it directly from the master's .env file.
-        # (MASTER_ENV_<KEY> isn't actually exported; the
-        # env_get_value helper below reads from the file on disk.)
-        if [ -z "$_master_val" ] && [ -f "$MASTER_ENV_FILE" ]; then
+        # Read the master secret from the master's .env file.
+        # MASTER_ENV_<KEY> env vars are NOT exported by the provisioner;
+        # secrets are written to a temporary file and read via env_get_value.
+        local _master_val=""
+        if [ -f "$MASTER_ENV_FILE" ]; then
             _master_val="$(env_get_value "$MASTER_ENV_FILE" "$_key" 2>/dev/null || true)"
         fi
         if [ -n "$_master_val" ]; then

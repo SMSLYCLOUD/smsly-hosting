@@ -3077,29 +3077,31 @@ class ServiceViewSet(viewsets.ModelViewSet):
             }, status=status.HTTP_400_BAD_REQUEST)
 
         def _retry_browse(resp, orchestrator, remote_id, config):
-            """Retry file_browse with fallback path (/app <-> /)."""
+            """Retry file_browse with fallback paths."""
             original_path = config.get('params', {}).get('path', '')
-            if original_path not in ('/app', '/'):
-                return None
-            fallback_path = '/' if original_path == '/app' else '/app'
-            logger.warning(
-                f"Remote file_browse failed for path {original_path}, "
-                f"trying fallback: {fallback_path}. "
-                f"Error: {resp.status_code if resp else 'Timeout'}"
-            )
-            try:
-                fallback_resp = orchestrator._request(
-                    method='GET',
-                    path=f"/api/v1/services/{remote_id}/file-browse/",
-                    params={'path': fallback_path},
-                    timeout=10,
+            fallback_paths = ['/app', '/', '/var/www', '/opt', '/home']
+            tried = {original_path}
+            for fb in fallback_paths:
+                if fb in tried:
+                    continue
+                tried.add(fb)
+                logger.warning(
+                    f"Remote file_browse failed for path {original_path}, "
+                    f"trying fallback: {fb}."
                 )
-                if fallback_resp and fallback_resp.status_code == 200:
-                    data = fallback_resp.json()
-                    data['path'] = fallback_path
-                    return Response(data)
-            except Exception:
-                pass
+                try:
+                    fb_resp = orchestrator._request(
+                        method='GET',
+                        path=f"/api/v1/services/{remote_id}/file-browse/",
+                        params={'path': fb},
+                        timeout=10,
+                    )
+                    if fb_resp and fb_resp.status_code == 200:
+                        data = fb_resp.json()
+                        data['path'] = fb
+                        return Response(data)
+                except Exception:
+                    pass
             return None
 
         return self._dispatch_file_operation(

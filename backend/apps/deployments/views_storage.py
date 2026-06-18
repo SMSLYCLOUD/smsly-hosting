@@ -630,3 +630,40 @@ class VolumeViewSet(viewsets.ModelViewSet):
             return Response({'message': 'File written successfully', 'path': path})
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=['post'], url_path='upload')
+    def file_upload(self, request, pk=None, service_pk=None):
+        """Upload a file to the volume via multipart form data."""
+        volume = self.get_object()
+        path = request.data.get('path')
+        if 'file' not in request.FILES or not path:
+            return Response({'error': 'file and path are required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        uploaded_file = request.FILES['file']
+        file_bytes = uploaded_file.read()
+
+        try:
+            path = validate_and_sanitize_path(path, skip_system_check=True)
+        except ValueError as e:
+            return Response({'error': 'Invalid path', 'details': str(e)}, status=status.HTTP_403_FORBIDDEN)
+
+        mount = posixpath.normpath(volume.mount_path).rstrip('/') or '/'
+        resolved = posixpath.normpath(path)
+        if not (resolved == mount or resolved.startswith(mount + "/")):
+            return Response(
+                {'error': f'Path {path} escapes the volume mount {volume.mount_path}'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return self._volume_dispatch(
+            volume,
+            {
+                'method': 'POST',
+                'path_suffix': 'file-write',
+                'payload': {'path': path, 'content': file_bytes.decode('utf-8', errors='replace')},
+                'timeout': 60,
+                'fallthrough_on_exception': True,
+            },
+            local_action=lambda container, p: self._local_volume_file_write(container, p, file_bytes.decode('utf-8', errors='replace')),
+            path=path,
+        )
