@@ -549,6 +549,7 @@ INSTALLED_APPS = [
     'apps.deployments',
     'apps.cloud',
     'apps.teams',
+    'apps.organizations',
     'apps.billing',
     'apps.domains',
     'apps.intelligence',
