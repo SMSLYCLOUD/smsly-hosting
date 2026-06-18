@@ -85,7 +85,11 @@ def register_device(request):
     return Response({
         'device_token': device_token,
         'is_new': True,
-        'message': 'Device registered successfully',
+        'message': (
+            'Device registered. Note: device trust is OPTIONAL — it is NOT '
+            'enforced by the platform. It only helps you recognize your own '
+            'devices. No access restrictions are applied based on this fingerprint.'
+        ),
     }, status=status.HTTP_201_CREATED)
 
 

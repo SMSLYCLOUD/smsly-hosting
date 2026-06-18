@@ -51,7 +51,14 @@ def two_factor_enable(request):
     return Response({
         'provisioning_uri': uri,
         'device_id': str(device.id),
-        'secret': device.key,  # Base32 encoded secret
+        'secret': device.key,
+        'warning': (
+            '⚠️ 2FA is OPTIONAL. Before enabling, ensure you have backup codes '
+            'or a recovery phrase saved. If you lose your authenticator device '
+            'and have no backup method, you will be locked out of your account. '
+            'Generate backup codes at GET /api/v1/auth/2fa/backup-codes/ AFTER '
+            'confirming setup. Store them somewhere safe.'
+        ),
     })
 
 
