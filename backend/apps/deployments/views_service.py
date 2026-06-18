@@ -49,3 +49,4 @@ from .views_domains import ServiceDomainActionsMixin
 from .views_ai_router import ServiceAIRouterActionsMixin
 
 class ServiceViewSet(ServiceFileActionsMixin, ServiceEnvVarActionsMixin, ServiceDomainActionsMixin, ServiceAIRouterActionsMixin, viewsets.ModelViewSet):
+    """Combined ViewSet for services, composed from domain-specific mixins."""
