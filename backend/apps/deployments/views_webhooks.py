@@ -51,11 +51,6 @@ class GitHubWebhookView(GenericAPIView):
         if not should_process:
             return Response({'status': 'duplicate', 'delivery_id': delivery_id})
 
-        from apps.licensing.models import PlatformLicense
-        tier_gates_disabled = bool(getattr(settings, "SMSLY_DISABLE_TIER_GATES", False))
-        if PlatformLicense.load().is_community and not tier_gates_disabled:
-            return Response({'message': 'Auto-deploy disabled in Community tier', 'triggered': False})
-
         try:
             result = handler.handle_event(event_type, request.data, delivery_id=delivery_id)
             return Response({'message': 'Webhook processed', 'triggered': result})
@@ -93,11 +88,6 @@ class GitLabWebhookView(GenericAPIView):
         if not should_process:
             return Response({'status': 'duplicate', 'delivery_id': delivery_id})
 
-        from apps.licensing.models import PlatformLicense
-        tier_gates_disabled = bool(getattr(settings, "SMSLY_DISABLE_TIER_GATES", False))
-        if PlatformLicense.load().is_community and not tier_gates_disabled:
-            return Response({'message': 'Auto-deploy disabled in Community tier', 'triggered': False})
-
         try:
             result = handler.handle_event(event_type, request.data, delivery_id=delivery_id)
             return Response({'message': 'Webhook processed', 'triggered': result})
@@ -134,11 +124,6 @@ class BitbucketWebhookView(GenericAPIView):
         _, should_process = _check_bitbucket(delivery_id, event_type)
         if not should_process:
             return Response({'status': 'duplicate', 'delivery_id': delivery_id})
-
-        from apps.licensing.models import PlatformLicense
-        tier_gates_disabled = bool(getattr(settings, "SMSLY_DISABLE_TIER_GATES", False))
-        if PlatformLicense.load().is_community and not tier_gates_disabled:
-            return Response({'message': 'Auto-deploy disabled in Community tier', 'triggered': False})
 
         try:
             result = handler.handle_event(event_type, request.data, delivery_id=delivery_id)

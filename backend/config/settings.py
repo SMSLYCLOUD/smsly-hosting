@@ -133,7 +133,7 @@ GATEWAY_SECRET = _resolve_gateway_secret()
 # apps.deployments.views. That helper records an immutable
 # AuditLog entry so an operator flipping the env var cannot
 # silently unlock paid features — there is always a fingerprint.
-SMSLY_DISABLE_TIER_GATES = config("SMSLY_DISABLE_TIER_GATES", default=False, cast=bool)
+SMSLY_DISABLE_TIER_GATES = config("SMSLY_DISABLE_TIER_GATES", default=True, cast=bool)
 # Maximum file size in bytes for container file_read (default: 10MB)
 SMSLY_MAX_FILE_READ_SIZE = max(1, int(config("SMSLY_MAX_FILE_READ_SIZE", default=10 * 1024 * 1024)))
 # Enable transfer pipeline by default; can be turned off for hardened environments
