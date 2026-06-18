@@ -1,6 +1,5 @@
 import logging
 logger = logging.getLogger(__name__)
-import logging
 import random
 import re
 import shlex
@@ -103,8 +102,6 @@ def execute_server_transfer_task(self, transfer_id):
 
 @shared_task(bind=True)
 def rollback_transfer_task(self, transfer_id):
-    from .models_transfer import ServerTransfer as TransferModel
-    from apps.deployments.services.transfer_service import ServerTransferService
 
     lock_key = f"server-transfer-rollback:{transfer_id}"
     if not cache.add(lock_key, "1", timeout=1800):
