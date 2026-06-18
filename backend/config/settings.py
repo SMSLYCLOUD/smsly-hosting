@@ -515,6 +515,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'corsheaders',
     'drf_spectacular',
+    'drf_spectacular_sidecar',
     'django_celery_results',
     'encrypted_model_fields',
     'rest_framework.authtoken',
@@ -792,6 +793,16 @@ STORAGES = {
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # REST Framework
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'Grid PaaS API',
+    'DESCRIPTION': 'SMSLY Hosting Control Plane — self-hosted PaaS API',
+    'VERSION': '3.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'SWAGGER_UI_DIST': 'SIDECAR',
+    'SWAGGER_UI_FAVICON_HREF': 'SIDECAR',
+    'REDOC_DIST': 'SIDECAR',
+}
+
 REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',

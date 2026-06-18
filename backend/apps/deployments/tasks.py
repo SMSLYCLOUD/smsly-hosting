@@ -5569,3 +5569,47 @@ def sync_master_db_to_agents_task():
         logger.error("sync_master_db_to_agents: failed: %s", e)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+@shared_task(soft_time_limit=600, time_limit=900)
+def registry_garbage_collection_task():
+    """
+    Periodically run Docker registry garbage collection to reclaim disk
+    space from deleted/unused image layers.
+
+    Runs: docker exec <registry> registry garbage-collect /etc/docker/registry/config.yml
+    Removes blobs that are no longer referenced by any manifest.
+    Safe to run while the registry is serving reads.
+    """
+    registry_container = "smsly-hosting-registry-1"
+
+    try:
+        dry_run = subprocess.run(
+            ["docker", "exec", registry_container, "registry", "garbage-collect",
+             "--dry-run", "/etc/docker/registry/config.yml"],
+            capture_output=True, text=True, timeout=120,
+        )
+        if dry_run.returncode != 0:
+            logger.warning("registry_gc: dry-run failed: %s", dry_run.stderr[:500])
+            return
+
+        freed_lines = [l for l in dry_run.stdout.split('\n') if 'marking blob' in l.lower() or 'blob eligible' in l.lower()]
+        logger.info("registry_gc: dry-run found %d blobs eligible for removal", len(freed_lines))
+
+        result = subprocess.run(
+            ["docker", "exec", registry_container, "registry", "garbage-collect",
+             "/etc/docker/registry/config.yml"],
+            capture_output=True, text=True, timeout=300,
+        )
+        if result.returncode == 0:
+            for line in result.stdout.split('\n'):
+                if 'recovered' in line.lower() or 'blob' in line.lower():
+                    logger.info("registry_gc: %s", line.strip())
+            logger.info("registry_gc: garbage collection completed successfully")
+        else:
+            logger.warning("registry_gc: failed: %s", result.stderr[:500])
+
+    except subprocess.TimeoutExpired:
+        logger.error("registry_gc: timed out")
+    except Exception as e:
+        logger.error("registry_gc: error: %s", e)

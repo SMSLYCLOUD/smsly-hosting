@@ -4,6 +4,7 @@ from django.urls import path, include, re_path
 from django.conf import settings
 from config.health import health_check, liveness_check, readiness_check
 from apps.deployments.views_addons import toggle_bucket_public_api
+from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
 
 
 urlpatterns = [
@@ -111,3 +112,10 @@ try:
         urlpatterns += [path('api/v1/legacy/', include(tunnel_urls()))]
 except ImportError:
     pass  # tunnels module not installed
+
+# ─── OpenAPI Schema & Docs ────────────────────────────────────────────
+urlpatterns += [
+    path('api/docs/schema/', SpectacularAPIView.as_view(), name='schema'),
+    path('api/docs/swagger/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
+    path('api/docs/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
+]
