@@ -1,78 +1,55 @@
-# pylint: disable=invalid-name
-"""
-Celery tasks for ecosystem-level deployment.
-
-Pipeline:
-1. Scan repositories -> generate deploy plan.
-2. Materialize all services/deployments from plan.
-3. Execute deployments in dependency-aware waves with strict gating.
-"""
-
 import logging
-import os
-import re
-import secrets
-import string
-from collections import defaultdict
-from urllib.parse import urlparse, urlunparse
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
-
-from celery import shared_task
-from celery.exceptions import SoftTimeLimitExceeded
-from django.utils import timezone
-from django.conf import settings
-
-from apps.deployments.services.task_encryption import encrypt_arg, decrypt_arg
-
 logger = logging.getLogger(__name__)
-
-# SEC-ZT-007: Ecosystem plan schema validation keys
-_PLAN_REQUIRED_KEYS = {"services"}
-_PLAN_OPTIONAL_KEYS = {
-    "addons", "manifest", "wave_size", "server_id", "ai_provider",
-    "ecosystem_name", "deploy_sequence",
-    "total_repos_scanned", "deployable_repos",
-    "scan_warning_count", "scan_warnings", "message",
-}
-_SERVICE_REQUIRED_KEYS = {"repo"}
-_SERVICE_OPTIONAL_KEYS = {
-    "name", "stack", "build", "port", "env_vars", "depends_on",
-    "addons", "branch", "deploy_order", "skip", "server_id",
-    "health_check_path", "root_directory", "deploy_mode",
-    "compose_file", "docker_compose_file", "compose_main_service",
-    "main_service", "default_branch",
-}
-_SERVICE_VALID_BUILDS = {"nixpacks", "docker", "dockerfile", "docker-compose", "compose", "static"}
-_VALID_PORT_RANGE = (1, 65535)
-
-_SECRET_HINTS = ("KEY", "SECRET", "PASSWORD", "TOKEN", "DSN")
-_EXTERNAL_SECRETS = {
-    "OPENAI_API_KEY",
-    "GROK_API_KEY",
-    "GEMINI_API_KEY",
-    "CLAUDE_API_KEY",
-    "JULES_API_KEY",
-    "ANTHROPIC_API_KEY",
-    "STRIPE_SECRET_KEY",
-    "API_KEY",
-}
-
-_DEFAULT_WAVE_SIZE = 2
-_MIN_FREE_MEMORY_MB = 512
-_MAX_WAVE_SIZE = 50
-_WAVE_RECHECK_SECONDS = 15
-_MAX_WAVE_RECHECKS = 480  # 2h (480 * 15s)
-_SMSLY_CORE_HINTS = {
-    "smsly-core",
-    "smsly-platform-api",
-    "platform-api",
-}
-_ADDON_ENV_ALIASES = {
-    "POSTGRES": ("DATABASE_URL", "POSTGRES_URL"),
-    "REDIS": ("REDIS_URL", "CACHE_URL"),
-    "MONGODB": ("MONGODB_URI", "MONGODB_URL"),
-}
-
+import logging
+import random
+import re
+import shlex
+import shutil
+import tempfile
+import subprocess
+import os
+import json
+import time
+import zipfile
+import secrets
+import threading
+from contextlib import contextmanager
+from urllib.parse import unquote, urlparse
+import docker
+import requests
+from celery import shared_task
+import apps.deployments.tasks_safedeploy
+from django.conf import settings
+from django.core.cache import cache
+from django.utils import timezone
+from django.db.models import Sum
+from apps.cloud.models import CloudProvider
+from apps.cloud.services.builder import NixpacksBuilder
+from apps.cloud.services.compute import ComputeService
+from apps.cloud.services.function_provisioner import FunctionProvisioner
+from apps.deployments.ai_router import DEFAULT_AI_ROUTER_API_BASE, DEFAULT_AI_ROUTER_UI_BASE, DEFAULT_BRAID_ALIAS, generate_ai_router_proxy_config, get_ollama_model_name, is_ai_router_service, is_ollama_service
+from apps.deployments.models import Service, Deployment, EnvironmentVariable, PlatformConfig
+from apps.deployments.models_addons import Addon, Backup
+from apps.deployments.models_backup import BackupSchedule, ServiceBackup
+from apps.deployments.models_storage import Volume
+from apps.deployments.models_transfer import ServerTransfer
+from apps.deployments.services.backup_service import BackupService
+from apps.deployments.services.pipeline import PipelineManager, PipelineError
+from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+from apps.deployments.services.tls_verify import should_verify
+from apps.deployments.services.transfer_service import ServerTransferService
+from apps.deployments.utils import append_log, broadcast_status, build_local_source_bundle, update_stage, is_deployment_local
+from services.addon_provisioner import addon_provisioner
+from .tasks_deploy import smart_deploy_task
+from .tasks_deploy import smart_deploy_task
+from .tasks_deploy import smart_deploy_task
+from .tasks_deploy import smart_deploy_task
+from .tasks_deploy import smart_deploy_task
+from .tasks_deploy import smart_deploy_task
+from .tasks_deploy import smart_deploy_task
+from .tasks_deploy import smart_deploy_task
+from .tasks_deploy import smart_deploy_task
+from .tasks_deploy import smart_deploy_task
 
 def _canonical_repo_ref(raw: Any) -> str:
     """Normalize repo references to owner/name when possible."""

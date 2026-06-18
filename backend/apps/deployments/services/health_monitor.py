@@ -528,7 +528,7 @@ def _trigger_restart(service, service_key: str) -> bool:
     try:
         from apps.cloud.models import CloudProvider
         from apps.deployments.models import Deployment
-        from apps.deployments.tasks import enqueue_smart_deploy_task
+        from apps.deployments.tasks_deploy import enqueue_smart_deploy_task
 
         # Do not stack restarts while any deployment for this service is in flight.
         in_flight_statuses = [

@@ -1,7 +1,7 @@
 import os
 import pytest
 from unittest.mock import patch
-from apps.deployments.tasks import one_click_deploy_template_task
+from apps.deployments.tasks_templates import one_click_deploy_template_task
 from apps.deployments.models import Service, EnvironmentVariable
 from django.contrib.auth import get_user_model
 

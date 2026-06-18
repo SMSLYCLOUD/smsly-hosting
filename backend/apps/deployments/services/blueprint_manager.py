@@ -5,7 +5,7 @@ import logging
 from django.conf import settings
 from apps.deployments.models import Service, Deployment, EnvironmentVariable
 from apps.deployments.models_addons import Addon
-from apps.deployments.tasks import smart_deploy_task, provision_addon_task
+from apps.deployments.tasks_deploy import smart_deploy_task, provision_addon_task
 from apps.cloud.models import CloudProvider
 
 logger = logging.getLogger(__name__)

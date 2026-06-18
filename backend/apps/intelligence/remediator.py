@@ -8,7 +8,7 @@ from django.db import transaction
 from django.utils import timezone
 from apps.deployments.models import Service, Deployment
 from apps.deployments.models_audit import AuditLog
-from apps.deployments.tasks import enqueue_smart_deploy_task, _resolve_provider_for_service
+from apps.deployments.tasks_deploy import enqueue_smart_deploy_task, _resolve_provider_for_service
 from .providers import _cached_ask
 
 logger = logging.getLogger(__name__)

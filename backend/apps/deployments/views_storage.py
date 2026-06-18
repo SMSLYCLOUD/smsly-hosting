@@ -3,7 +3,6 @@ import os
 import posixpath
 import re
 import uuid
-import mimetypes
 
 from django.http import StreamingHttpResponse
 from django.core.exceptions import ValidationError as DjangoValidationError

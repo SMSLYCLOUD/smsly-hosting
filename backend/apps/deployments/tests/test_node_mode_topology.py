@@ -11,7 +11,7 @@ from apps.deployments.services.provisioner import (
     server_connection_mode,
     server_install_mode,
 )
-from apps.deployments.tasks import provision_addon_task
+from apps.deployments.tasks_addons import provision_addon_task
 from services.caddy_manager import apply_caddyfile
 
 

@@ -1023,7 +1023,7 @@ class SelfHealingOrchestrator:
 
         self._log(f"Rolling back to deployment {previous.id}")
         try:
-            from .tasks import smart_deploy_task
+            from .tasks_deploy import smart_deploy_task
             new_deployment = DeploymentModel.objects.create(
                 service=service,
                 commit_hash=previous.commit_hash or "HEAD",

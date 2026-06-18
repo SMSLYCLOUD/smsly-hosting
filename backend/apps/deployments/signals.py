@@ -436,7 +436,7 @@ def sync_preview_status_on_deployment_change(sender, instance, created, **kwargs
             # If the preview transitioned to READY, ensure Caddy is updated
             if new_status == PreviewEnvironment.Status.READY:
                 try:
-                    from apps.deployments.tasks import _regenerate_caddyfile
+                    from apps.deployments.tasks_caddy import _regenerate_caddyfile
                     _regenerate_caddyfile()
                 except Exception as caddy_exc:
                     logger.warning("Failed to regenerate Caddyfile on preview ready: %s", caddy_exc)
@@ -453,7 +453,7 @@ def regenerate_caddyfile_on_service_deletion(sender, instance, **kwargs):
     """Regenerate Caddyfile when a service is deleted to clean up routes."""
     logger = logging.getLogger(__name__)
     try:
-        from apps.deployments.tasks import _regenerate_caddyfile
+        from apps.deployments.tasks_caddy import _regenerate_caddyfile
         _regenerate_caddyfile()
         logger.info("Caddyfile regenerated after service %s deletion", instance.name)
     except Exception as exc:
@@ -682,7 +682,7 @@ def deprovision_addon_on_delete(sender, instance, **kwargs):
     """
     log = logging.getLogger(__name__)
     try:
-        from .tasks import deprovision_addon_task
+        from .tasks_addons import deprovision_addon_task
         try:
             deprovision_addon_task.delay(str(instance.id))
         except Exception:

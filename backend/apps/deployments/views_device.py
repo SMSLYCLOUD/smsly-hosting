@@ -1,12 +1,9 @@
 """Device trust API — hardware-fingerprint-based device enrollment."""
 import hashlib
-import hmac
 import json
 import logging
 import secrets
-import time
 
-from django.conf import settings
 from django.utils import timezone
 from rest_framework import permissions, status
 from rest_framework.decorators import api_view, permission_classes
