@@ -8,6 +8,7 @@ from django.http import FileResponse
 from apps.cloud.docker_client import get_docker_client
 import re
 from django.db.models import Q
+from apps.teams.permissions import get_team_q_filter, assert_can_write, assert_can_delete
 from .models_addons import Addon
 from .models import Service, EnvironmentVariable
 import logging
@@ -80,10 +81,9 @@ class AddonViewSet(viewsets.ModelViewSet):
     # ==========================================================================
     def get_queryset(self):
         """Filter addons to only those belonging to the user's accessible services."""
+        allowed_services = Service.objects.filter(get_team_q_filter(self.request.user))
         qs = self.queryset.filter(
-            Q(service__owner=self.request.user) | 
-            Q(service__project__team__members__user=self.request.user) |
-            Q(service__owner__isnull=True)
+            Q(service__in=allowed_services) | Q(service__owner__isnull=True)
         ).distinct()
         project_id = self.request.query_params.get('project_id')
         if project_id:
@@ -94,13 +94,7 @@ class AddonViewSet(viewsets.ModelViewSet):
         # SECURITY: Verify user has access to the service before creating addon
         service = serializer.validated_data.get('service')
         if service:
-            has_access = (
-                service.owner == self.request.user or 
-                (service.project and service.project.team and service.project.team.members.filter(user=self.request.user).exists())
-            )
-            if not has_access:
-                from rest_framework.exceptions import PermissionDenied
-                raise PermissionDenied("Access denied to this service.")
+            assert_can_write(self.request.user, service, action='create addon')
 
         addon = serializer.save()
 
@@ -121,6 +115,7 @@ class AddonViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
+        assert_can_delete(self.request.user, instance.service)
         self.perform_destroy(instance)
         return Response(
             {
@@ -160,13 +155,7 @@ class AddonViewSet(viewsets.ModelViewSet):
         # Allow updating properties like public_domain
         service = serializer.instance.service
         if service:
-            has_access = (
-                service.owner == self.request.user or 
-                (service.project and service.project.team and service.project.team.members.filter(user=self.request.user).exists())
-            )
-            if not has_access:
-                from rest_framework.exceptions import PermissionDenied
-                raise PermissionDenied("Access denied to this service.")
+            assert_can_write(self.request.user, service, action='update addon')
 
         addon = serializer.save()
         # If public_domain changed, re-provision to update proxy labels
@@ -178,6 +167,7 @@ class AddonViewSet(viewsets.ModelViewSet):
     def expose(self, request, pk=None):
         """Auto-generate and assign a public domain for this addon."""
         addon = self.get_object()
+        assert_can_write(self.request.user, addon.service, action='expose addon')
         from .models_core import Service
         base_domain = Service.default_public_base_domain()
 
@@ -198,6 +188,7 @@ class AddonViewSet(viewsets.ModelViewSet):
     def reprovision(self, request, pk=None):
         """Manually trigger re-provisioning to update labels or network configuration."""
         addon = self.get_object()
+        assert_can_write(self.request.user, addon.service, action='reprovision addon')
         from .tasks import provision_addon_task
         provision_addon_task.delay(str(addon.id))
         return Response({'status': 'reprovision_started'})
@@ -206,6 +197,7 @@ class AddonViewSet(viewsets.ModelViewSet):
     def deprovision(self, request, pk=None):
         """Delete addon container and remove from service."""
         addon = self.get_object()
+        assert_can_delete(self.request.user, addon.service)
         from .tasks import deprovision_addon_task
         deprovision_addon_task.delay(addon_id=str(addon.id))
         return Response({'status': 'deprovisioning'},

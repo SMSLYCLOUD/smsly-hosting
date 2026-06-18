@@ -1,8 +1,10 @@
 """Views Cron module."""
 from rest_framework import viewsets, permissions, serializers
+from django.db.models import Q
 from .models_cron import CronJob
 from .models import Service
 from .rate_limiting import CronJobCreateRateThrottle
+from apps.teams.permissions import get_team_q_filter, assert_can_write, assert_can_delete
 
 
 class CronJobSerializer(serializers.ModelSerializer):
@@ -26,9 +28,9 @@ class CronJobViewSet(viewsets.ModelViewSet):
         # Filter by service if provided in query params or nested
         # /api/v1/services/{id}/cron/
         if 'service_pk' in self.kwargs:
-            from django.db.models import Q
+            allowed_services = Service.objects.filter(get_team_q_filter(self.request.user))
             return CronJob.objects.filter(
-                Q(service__owner=self.request.user) | Q(service__project__team__members__user=self.request.user),
+                Q(service__in=allowed_services),
                 service_id=self.kwargs['service_pk']
             ).distinct().order_by("id")
         return CronJob.objects.none()  # Should be nested
@@ -40,11 +42,9 @@ class CronJobViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         service = Service.objects.get(pk=self.kwargs['service_pk'])
-        has_access = (
-            service.owner == self.request.user or
-            (service.project and service.project.team and service.project.team.members.filter(user=self.request.user).exists())
-        )
-        if not has_access:
-            from rest_framework.exceptions import PermissionDenied
-            raise PermissionDenied("You do not have access to this service.")
+        assert_can_write(self.request.user, service, action='create cron job')
         serializer.save(service=service)
+
+    def perform_destroy(self, instance):
+        assert_can_delete(self.request.user, instance.service)
+        instance.delete()

@@ -67,6 +67,7 @@ from celery.result import AsyncResult
 from apps.cloud.docker_client import get_docker_client
 from .utils import validate_and_sanitize_path
 from apps.deployments.utils import resolve_running_container
+from apps.teams.permissions import get_team_q_filter, assert_can_write, assert_can_delete, user_can_read
 
 
 class ZeroTrustHMACAuthentication(authentication.BaseAuthentication):
@@ -737,15 +738,12 @@ class ServiceViewSet(viewsets.ModelViewSet):
     throttle_classes: list = []
 
     def get_queryset(self):
-        """ZH-001 FIX: Return services owned by user. APITokens (remote proxies) skip owner check."""
-        qs = self.queryset.prefetch_related('deployments')
-        # hasattr(self.request.auth, 'prefix') means this is an APIToken from another server
-        if self.request.user.is_superuser or hasattr(self.request.auth, 'prefix'):
-            return qs.all().order_by('-created_at')
-        return qs.filter(
-            Q(owner=self.request.user) |
-            Q(project__team__members__user=self.request.user)
-        ).distinct().order_by('-created_at')
+        user = self.request.user
+        if not user or not user.is_authenticated:
+            return self.queryset.none()
+        return self.queryset.filter(
+            get_team_q_filter(user)
+        ).select_related('project').prefetch_related('deployments')
 
     def _is_remote_sync_request(self):
         logger.debug("Checking remote sync request...")
@@ -763,6 +761,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         return has_header and (is_api_token or is_hmac_remote_sync)
 
     def perform_create(self, serializer):
+        assert_can_write(self.request.user)
         from .models_core import ManagedServer
         server = serializer.validated_data.get('server')
         
@@ -796,6 +795,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
             ).start()
 
     def perform_update(self, serializer):
+        assert_can_write(self.request.user, serializer.instance)
         from .models_core import ManagedServer
         
         old_repo_url = serializer.instance.repository_url if serializer.instance else None
@@ -832,6 +832,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
+        assert_can_delete(self.request.user, instance)
         force = _parse_bool(request.query_params.get('force'))
         if self._is_remote_sync_request():
             return self._destroy_remote_sync(instance, force=force)
@@ -972,6 +973,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         Cancels any active deployments and marks the service as stopped.
         """
         service = self.get_object()
+        assert_can_write(self.request.user, service)
 
         try:
             from apps.deployments.utils_target import resolve_active_execution_target
@@ -1032,11 +1034,12 @@ class ServiceViewSet(viewsets.ModelViewSet):
           2. `docker restart` it
           3. Re-mark it ACTIVE
 
-        With force_rebuild=true (full pipeline, minutes):
-          1. Cancel active deployments
-          2. Queue a fresh build + deploy
+         With force_rebuild=true (full pipeline, minutes):
+           1. Cancel active deployments
+           2. Queue a fresh build + deploy
         """
         service = self.get_object()
+        assert_can_write(self.request.user, service)
         force_rebuild = _parse_bool(request.data.get('force_rebuild', False))
 
         # Clear health monitor restart state (ends exponential backoff)
@@ -1283,6 +1286,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         When target_server_id is a worker UUID, deploy to that specific node.
         """
         service = self.get_object()
+        assert_can_write(self.request.user, service)
         ref = request.data.get('ref', 'HEAD')
         is_remote_sync = self._is_remote_sync_request()
         requested_skip_review = _parse_bool(request.data.get('skip_review', False))
@@ -1969,6 +1973,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
             )
             return Response(serializer.data)
 
+        assert_can_write(self.request.user, service)
         payload_vars = request.data.get('vars')
         if payload_vars is not None:
             if not isinstance(payload_vars, list):
@@ -2168,6 +2173,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     context={'request': request, 'reveal_secrets': reveal_secrets},
                 ).data
             )
+        assert_can_write(self.request.user, service)
         if request.method.upper() == 'DELETE':
             var.delete()
             return Response(status=status.HTTP_204_NO_CONTENT)
@@ -2242,6 +2248,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         Body: { "domain": "myapp.com" }
         """
         service = self.get_object()
+        assert_can_write(self.request.user, service)
         domain, domain_error = _normalize_request_domain(
             request.data.get('domain', '')
         )
@@ -2740,6 +2747,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         Body: { "domain": "myapp.com" }
         """
         service = self.get_object()
+        assert_can_write(self.request.user, service)
         domain, domain_error = _normalize_request_domain(
             request.data.get('domain', '')
         )
@@ -2861,6 +2869,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         Body: { "domain": "myapp.com" }
         """
         service = self.get_object()
+        assert_can_write(self.request.user, service)
         domain, domain_error = _normalize_request_domain(
             request.data.get('domain', '')
         )
@@ -3530,6 +3539,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
     def file_write(self, request, pk=None):
         """Write contents to a file in the running container."""
         service = self.get_object()
+        assert_can_write(self.request.user, service)
         path = request.data.get('path')
         content = request.data.get('content')
 
@@ -3596,6 +3606,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         """Upload a file to the running container."""
         import base64
         service = self.get_object()
+        assert_can_write(self.request.user, service)
         path = request.data.get('path')
 
         if 'file' in request.FILES:
