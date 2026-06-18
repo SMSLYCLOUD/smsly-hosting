@@ -17,6 +17,11 @@ import re
 
 logger = logging.getLogger(__name__)
 
+# Reserved labels that cannot be used as subdomains
+# Only block subdomains that would conflict with the platform's own HTTP routing
+# or that are reserved by IANA/RFC for special use.
+RESERVED_LABELS = frozenset({'admin', 'api', 'mail', 'smtp', 'imap'})
+
 # Max subdomains per user (adjustable per tier in future)
 MAX_SUBDOMAINS_PER_USER = 5
 
