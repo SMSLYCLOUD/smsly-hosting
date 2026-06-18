@@ -3,6 +3,7 @@ import os
 import posixpath
 import re
 import uuid
+import base64
 
 from django.http import StreamingHttpResponse
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -608,9 +609,14 @@ class VolumeViewSet(viewsets.ModelViewSet):
             if not base_name or base_name.startswith('/') or '..' in base_name.split('/'):
                 return Response({'error': 'Invalid filename'}, status=status.HTTP_400_BAD_REQUEST)
 
+            # Accept bytes or str; encode str to bytes
+            if isinstance(content, str):
+                file_data = content.encode('utf-8')
+            else:
+                file_data = content
+
             tar_stream = io.BytesIO()
             with tarfile.open(fileobj=tar_stream, mode='w') as tar:
-                file_data = content.encode('utf-8')
                 tarinfo = tarfile.TarInfo(name=base_name)
                 tarinfo.size = len(file_data)
                 tarinfo.mtime = int(time.time())
@@ -659,10 +665,10 @@ class VolumeViewSet(viewsets.ModelViewSet):
             {
                 'method': 'POST',
                 'path_suffix': 'file-write',
-                'payload': {'path': path, 'content': file_bytes.decode('utf-8', errors='replace')},
+                'payload': {'path': path, 'content': file_bytes.decode('utf-8', errors='replace') if path.lower().endswith(('.txt','.log','.json','.yaml','.yml','.xml','.csv','.md','.env','.ini','.cfg','.conf','.sql','.py','.js','.ts','.html','.css','.sh')) else base64.b64encode(file_bytes).decode('ascii'), 'content_binary': not path.lower().endswith(('.txt','.log','.json','.yaml','.yml','.xml','.csv','.md','.env','.ini','.cfg','.conf','.sql','.py','.js','.ts','.html','.css','.sh'))},
                 'timeout': 60,
                 'fallthrough_on_exception': True,
             },
-            local_action=lambda container, p: self._local_volume_file_write(container, p, file_bytes.decode('utf-8', errors='replace')),
+            local_action=lambda container, p: self._local_volume_file_write(container, p, file_bytes),
             path=path,
         )
