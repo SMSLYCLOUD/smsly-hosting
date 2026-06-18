@@ -222,6 +222,12 @@ app.conf.beat_schedule = {
         'schedule': 21600.0,
         'options': {'expires': 21600.0},
     },
+    # Run registry garbage collection every 24 hours
+    'registry-gc-every-24h': {
+        'task': 'apps.deployments.tasks.registry_garbage_collection_task',
+        'schedule': 86400.0,
+        'options': {'expires': 86400.0},
+    },
 }
 
 
