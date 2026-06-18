@@ -1386,6 +1386,20 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
             except Exception as exc:
                 _append_log(server, f"⚠️ Auto token exchange failed (non-critical): {exc}")
 
+        # -- Step 9: Ephemeral SSH — discard credentials after provisioning --
+        # The SSH key/password used during provisioning is now deleted from
+        # the master's database. The master can no longer SSH into this node.
+        # The user's own SSH access (password/key) is completely unchanged.
+        # Even a full master compromise cannot re-SSH into this node.
+        _append_log(server, "🔑 Provisioning SSH was ephemeral — wiping credentials from master...")
+        try:
+            server.ssh_password = ''
+            server.ssh_key = ''
+            server.save(update_fields=['ssh_password', 'ssh_key', 'updated_at'])
+            _append_log(server, "✓ SSH credentials wiped — master can no longer SSH into this node")
+        except Exception as exc:
+            _append_log(server, f"⚠ SSH credential wipe skipped (non-critical): {exc}")
+
         if not skip_reboot and _env_bool("SMSLY_PROVISION_REBOOT_ON_SUCCESS", default=True):
             _append_log(server, "Scheduling remote reboot after successful provisioning.")
             if _schedule_remote_reboot(ssh, server, "provisioning"):
