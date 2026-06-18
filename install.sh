@@ -177,6 +177,7 @@ FIX_DOMAIN_MODE="false"
 FIX_PERMISSIONS_MODE="false"
 FORCE_REDEPLOY="false"
 RECREATE_TRAEFIK="false"
+OBSERVABILITY_MODE="false"
 
 # ─── Source library modules ───────────────────────────────────────────────────
 LIB_DIR="$SCRIPT_DIR/lib"
@@ -217,6 +218,7 @@ for arg in "$@"; do
         --fix-permissions) FIX_PERMISSIONS_MODE="true" ;;
         --force-redeploy)  FORCE_REDEPLOY="true" ;;
         --recreate-traefik) RECREATE_TRAEFIK="true" ;;
+        --observability) OBSERVABILITY_MODE="true" ;;
         --help|-h)
             echo "Usage: sudo bash install.sh [--mode=...] [--update|--update-half|--update-frontend|--update-backend|--refresh|--recover|--debug|--wipe|--clear|--fix-domain|--fix-permissions]"
             echo ""
@@ -347,6 +349,28 @@ fi
 # ─── Refresh Mode ─────────────────────────────────────────────────────────────
 if [ "$REFRESH_MODE" = "true" ]; then
     safe_refresh_runtime_services
+    exit 0
+fi
+
+# ─── Observability Mode ────────────────────────────────────────────────────────
+deploy_observability_stack() {
+    echo -e "${BLUE}  → Deploying observability stack (Grafana, Loki, Prometheus)...${NC}"
+    if [ -f "$INSTALL_DIR/infrastructure/docker/docker-compose.observability.yml" ]; then
+        mkdir -p "$INSTALL_DIR/prometheus-targets"
+        chown -R 1000:1000 "$INSTALL_DIR/prometheus-targets" 2>/dev/null || true
+        chmod 2777 "$INSTALL_DIR/prometheus-targets" 2>/dev/null || true
+        docker compose -f "$INSTALL_DIR/infrastructure/docker/docker-compose.observability.yml" pull --ignore-pull-failures || \
+            echo -e "${YELLOW}  ⚠ Observability stack pull failed (non-fatal)${NC}"
+        docker compose -f "$INSTALL_DIR/infrastructure/docker/docker-compose.observability.yml" up -d --pull always || \
+            echo -e "${YELLOW}  ⚠ Observability stack start failed (non-fatal)${NC}"
+        echo -e "${GREEN}  ✓ Observability stack deployed${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ Observability compose file not found at infrastructure/docker/docker-compose.observability.yml${NC}"
+    fi
+}
+
+if [ "${OBSERVABILITY_MODE:-false}" = "true" ]; then
+    deploy_observability_stack
     exit 0
 fi
 
