@@ -488,8 +488,11 @@ elif 'SITE_URL' not in locals():
 
 # GitHub OAuth Callback URL (explicit override to prevent redirect_uri mismatch)
 # If set, this value is used verbatim for GitHub OAuth redirect_uri
-# Format: https://your-domain.com/auth/github/callback
+# Format: https://your-domain.com/accounts/github/login/callback/
 GITHUB_OAUTH_CALLBACK_URL = config('GITHUB_OAUTH_CALLBACK_URL', default=None)
+GITLAB_OAUTH_CALLBACK_URL = config('GITLAB_OAUTH_CALLBACK_URL', default=None)
+BITBUCKET_OAUTH_CALLBACK_URL = config('BITBUCKET_OAUTH_CALLBACK_URL', default=None)
+GOOGLE_OAUTH_CALLBACK_URL = config('GOOGLE_OAUTH_CALLBACK_URL', default=None)
 
 # Stripe Billing (optional but required for paid plans)
 STRIPE_SECRET_KEY = config('STRIPE_SECRET_KEY', default='')
@@ -679,6 +682,18 @@ SOCIALACCOUNT_PROVIDERS = {
             'user',
             'repo',
             'read:org',
+        ],
+    },
+    'gitlab': {
+        'SCOPE': [
+            'read_user',
+            'api',
+        ],
+    },
+    'bitbucket_oauth2': {
+        'SCOPE': [
+            'account',
+            'repository',
         ],
     },
     'google': {
