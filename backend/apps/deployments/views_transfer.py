@@ -1,12 +1,14 @@
 import ipaddress
 import hashlib
 import hmac
+import json
 import logging
 import os
 import socket
 import time
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.utils import timezone
 from django.db.models import Q
 from rest_framework import viewsets, permissions, status
@@ -17,7 +19,7 @@ from .models_transfer import ServerTransfer
 from .serializers import ServerTransferSerializer, ServerTransferCreateSerializer
 from .models import Service, PlatformConfig
 from .models_servers import ManagedServer
-from .tasks_transfer import execute_server_transfer_task, rollback_transfer_task
+from .tasks import execute_server_transfer_task, rollback_transfer_task
 from .services.server_guard import ServerGuard
 
 logger = logging.getLogger(__name__)

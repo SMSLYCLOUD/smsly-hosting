@@ -42,7 +42,6 @@ from apps.deployments.utils import append_log, broadcast_status, build_local_sou
 from services.addon_provisioner import addon_provisioner
 
 
-
 @shared_task(bind=True, max_retries=3)
 def provision_addon_task(self, addon_id: str):
     """Provision an addon Docker container and inject env vars."""
@@ -109,7 +108,6 @@ def provision_addon_task(self, addon_id: str):
         raise self.retry(exc=e, countdown=30)
 
 
-
 @shared_task
 def deprovision_addon_task(addon_id: str):
     """Delete addon container."""
@@ -122,7 +120,6 @@ def deprovision_addon_task(addon_id: str):
         addon.save()
     except Exception as e: # pylint: disable=broad-exception-caught
         logger.error("Deprovision failed: %s", e)
-
 
 
 @shared_task(bind=True, max_retries=3)
@@ -148,7 +145,6 @@ def backup_addon_task(self, addon_id: str):
         raise self.retry(exc=e, countdown=30)
 
 
-
 @shared_task(bind=True)
 def restore_addon_task(self, backup_id: str):
     """Restore a backup to the addon."""
@@ -158,7 +154,6 @@ def restore_addon_task(self, backup_id: str):
         addon_provisioner.restore_backup(backup.addon, backup.file_path)
     except Exception as e:
         raise e
-
 
 
 @shared_task(bind=True, max_retries=3)

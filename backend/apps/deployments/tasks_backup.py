@@ -42,7 +42,6 @@ from apps.deployments.utils import append_log, broadcast_status, build_local_sou
 from services.addon_provisioner import addon_provisioner
 
 
-
 @shared_task(bind=True, soft_time_limit=3600, time_limit=3900, max_retries=3, default_retry_delay=300)
 def create_service_backup_task(self, service_id, backup_type='MANUAL', backup_id=None):
     from .services.backup_service import BackupService
@@ -66,7 +65,6 @@ def create_service_backup_task(self, service_id, backup_type='MANUAL', backup_id
         raise
 
 
-
 @shared_task(bind=True, soft_time_limit=7200, time_limit=7500, max_retries=2, default_retry_delay=600)
 def create_server_backup_task(self, backup_id=None):
     from apps.deployments.utils import log_event
@@ -81,7 +79,6 @@ def create_server_backup_task(self, backup_id=None):
     )
     backup_service = BackupService()
     backup_service.backup_server(backup_id=backup_id)
-
 
 
 @shared_task(bind=True, soft_time_limit=3600, max_retries=2, default_retry_delay=300)
@@ -107,7 +104,6 @@ def restore_service_backup_task(self, backup_id, target_service_id=None, request
     )
 
 
-
 @shared_task(bind=True, soft_time_limit=7200, time_limit=7500)
 def restore_server_backup_task(self, backup_id, requesting_user_id=None):
     from apps.deployments.utils import log_event
@@ -123,7 +119,6 @@ def restore_server_backup_task(self, backup_id, requesting_user_id=None):
     )
     backup_service = BackupService()
     backup_service.restore_server(backup_id=backup_id, requesting_user_id=requesting_user_id)
-
 
 
 @shared_task(bind=True, soft_time_limit=7200, time_limit=7500, max_retries=2, default_retry_delay=120)
@@ -172,7 +167,6 @@ def purge_user_backups_task(self, user_id, actor: str = 'system', force: bool = 
     return counters
 
 
-
 @shared_task
 def cleanup_old_backups_task():
     """Delete backups older than retention_days per schedule."""
@@ -205,7 +199,6 @@ def cleanup_old_backups_task():
         except Exception as exc:
             logger.warning("Backup cleanup failed for schedule %s: %s", sched.id, exc)
     return cleaned
-
 
 
 @shared_task

@@ -1,5 +1,8 @@
 import logging
 logger = logging.getLogger(__name__)
+from .tasks_platform_update import _clear_directory_contents
+from .tasks_server_update import _append_remote_update_log
+from .tasks_platform_update import platform_update_task
 import logging
 import random
 import re
@@ -42,13 +45,6 @@ from apps.deployments.utils import append_log, broadcast_status, build_local_sou
 from services.addon_provisioner import addon_provisioner
 
 
-from .tasks_platform_update import _clear_directory_contents
-from .tasks_server_update import _append_remote_update_log
-from .tasks_platform_update import platform_update_task
-from .tasks_platform_update import platform_update_task
-from .tasks_server_update import _append_remote_update_log
-from .tasks_platform_update import _clear_directory_contents
-
 def _extract_addon_id_from_name(name: str) -> str:
     prefix = "smsly-addon-"
     if not name.startswith(prefix):
@@ -56,7 +52,6 @@ def _extract_addon_id_from_name(name: str) -> str:
     remainder = name[len(prefix):]
     parts = remainder.split("-", 1)
     return parts[1] if len(parts) == 2 else ""
-
 
 
 def _is_stale_maintenance_container(
@@ -98,7 +93,6 @@ def _is_stale_maintenance_container(
         return canonical_name not in active_service_names, "managed service missing from DB"
 
     return False, "not a managed stale container"
-
 
 
 def _clear_orphaned_runtime_resources() -> dict:
@@ -161,7 +155,6 @@ def _clear_orphaned_runtime_resources() -> dict:
         "cache": cache_results,
         "images_reclaimed_bytes": image_prune.get("SpaceReclaimed", 0),
     }
-
 
 
 @shared_task(bind=True, soft_time_limit=300, time_limit=360)
@@ -270,7 +263,6 @@ def run_maintenance_task(self, command_flag: str, lock_key: str = ""):
             cache.delete(lock_key)
 
 
-
 class ThrottledLogAppender:
     """Buffers and throttles database saves for remote server update logs to avoid lockups."""
     def __init__(self, server, interval=1.5):
@@ -296,7 +288,6 @@ class ThrottledLogAppender:
             _append_remote_update_log(self.server, self.buffer)
             self.buffer = ""
             self.last_save = time.time()
-
 
 
 @shared_task(soft_time_limit=600, time_limit=900)

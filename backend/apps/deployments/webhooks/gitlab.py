@@ -6,7 +6,7 @@ import logging
 from django.conf import settings
 from apps.deployments.models import Service, Deployment
 from apps.deployments.models_audit import WebhookDelivery
-from apps.deployments.tasks_deploy import smart_deploy_task
+from apps.deployments.tasks import smart_deploy_task
 
 logger = logging.getLogger(__name__)
 

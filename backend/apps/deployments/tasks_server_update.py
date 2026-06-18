@@ -1,7 +1,7 @@
 import logging
 logger = logging.getLogger(__name__)
-REMOTE_UPDATE_LOG_LIMIT = 300_000
-
+from .tasks_maintenance import ThrottledLogAppender
+from .tasks_utils import _env_bool
 import logging
 import random
 import re
@@ -44,11 +44,7 @@ from apps.deployments.utils import append_log, broadcast_status, build_local_sou
 from services.addon_provisioner import addon_provisioner
 
 
-from .tasks_maintenance import ThrottledLogAppender
-from .tasks_utils import _env_bool
-from .tasks_utils import _env_bool
-from .tasks_maintenance import ThrottledLogAppender
-
+REMOTE_UPDATE_LOG_LIMIT = 300_000
 @shared_task(name="apps.deployments.tasks.update_remote_server_task")
 def update_remote_server_task(server_id: str):
     """
@@ -370,7 +366,6 @@ def update_remote_server_task(server_id: str):
         cache.delete(lock_key)
 
 
-
 def _redact_remote_update_log(text: str) -> str:
     """Redact credentials before persisting remote update output."""
     if not text:
@@ -383,7 +378,6 @@ def _redact_remote_update_log(text: str) -> str:
         safe,
     )
     return safe
-
 
 
 def _append_remote_update_log(server, message: str):
@@ -400,7 +394,6 @@ def _append_remote_update_log(server, message: str):
         )
     server.provision_logs = combined
     server.save(update_fields=["provision_logs", "updated_at"])
-
 
 
 def _remote_update_preflight_script(hosting_path: str) -> str:
@@ -436,7 +429,6 @@ fi
 """
 
 
-
 def _remote_update_postflight_script(hosting_path: str) -> str:
     quoted_path = shlex.quote(hosting_path)
     return f"""
@@ -466,7 +458,6 @@ done
 echo "WARNING: no local health endpoint responded after update" >&2
 exit 0
 """
-
 
 
 def _run_ssh_command(ssh, command, timeout=None, raise_on_error=True, callback=None):

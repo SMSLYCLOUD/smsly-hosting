@@ -5,11 +5,12 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.conf import settings
 from django.http import FileResponse
+from apps.cloud.docker_client import get_docker_client
 import re
 from django.db.models import Q
 from apps.teams.permissions import get_team_q_filter, assert_can_write, assert_can_delete
 from .models_addons import Addon
-from .models import Service
+from .models import Service, EnvironmentVariable
 import logging
 
 logger = logging.getLogger(__name__)
@@ -108,7 +109,7 @@ class AddonViewSet(viewsets.ModelViewSet):
 
         # Trigger async provisioning via Celery (uses Docker-native
         # provisioner)
-        from .tasks_addons import provision_addon_task
+        from .tasks import provision_addon_task
         provision_addon_task.delay(addon_id=str(addon.id))
 
 
@@ -128,7 +129,7 @@ class AddonViewSet(viewsets.ModelViewSet):
 
     def perform_destroy(self, instance):
         """Set status to pending and queue async deletion."""
-        from .tasks_addons import delete_addon_task
+        from .tasks import delete_addon_task
         from .models_addons import Addon
         
         instance.status = Addon.Status.DELETION_PENDING
@@ -145,7 +146,7 @@ class AddonViewSet(viewsets.ModelViewSet):
 
         instance.status = Addon.Status.DELETION_PENDING
         instance.save(update_fields=['status'])
-        from .tasks_addons import delete_addon_task
+        from .tasks import delete_addon_task
         delete_addon_task.delay(str(instance.id))
 
         return Response({"message": "Retry cleanup initiated."}, status=status.HTTP_202_ACCEPTED)
@@ -159,7 +160,7 @@ class AddonViewSet(viewsets.ModelViewSet):
         addon = serializer.save()
         # If public_domain changed, re-provision to update proxy labels
         if 'public_domain' in serializer.validated_data:
-            from .tasks_addons import provision_addon_task
+            from .tasks import provision_addon_task
             provision_addon_task.delay(str(addon.id))
 
     @action(detail=True, methods=['post'])
@@ -178,7 +179,7 @@ class AddonViewSet(viewsets.ModelViewSet):
         addon.public_domain = generated_domain
         addon.save(update_fields=['public_domain'])
 
-        from .tasks_addons import provision_addon_task
+        from .tasks import provision_addon_task
         provision_addon_task.delay(str(addon.id))
 
         return Response({'public_domain': generated_domain})
@@ -188,7 +189,7 @@ class AddonViewSet(viewsets.ModelViewSet):
         """Manually trigger re-provisioning to update labels or network configuration."""
         addon = self.get_object()
         assert_can_write(self.request.user, addon.service, action='reprovision addon')
-        from .tasks_addons import provision_addon_task
+        from .tasks import provision_addon_task
         provision_addon_task.delay(str(addon.id))
         return Response({'status': 'reprovision_started'})
 
@@ -197,7 +198,7 @@ class AddonViewSet(viewsets.ModelViewSet):
         """Delete addon container and remove from service."""
         addon = self.get_object()
         assert_can_delete(self.request.user, addon.service)
-        from .tasks_addons import deprovision_addon_task
+        from .tasks import deprovision_addon_task
         deprovision_addon_task.delay(addon_id=str(addon.id))
         return Response({'status': 'deprovisioning'},
                         status=status.HTTP_202_ACCEPTED)
@@ -246,7 +247,7 @@ class AddonViewSet(viewsets.ModelViewSet):
     def backup(self, request, pk=None):
         """Trigger a backup for this addon."""
         addon = self.get_object()
-        from .tasks_addons import backup_addon_task
+        from .tasks import backup_addon_task
         task = backup_addon_task.delay(addon_id=str(addon.id))
         return Response({'status': 'backup_started', 'task_id': task.id}, status=status.HTTP_202_ACCEPTED)
 
@@ -263,7 +264,7 @@ class AddonViewSet(viewsets.ModelViewSet):
         if not Backup.objects.filter(id=backup_id, addon=addon).exists():
             return Response({'error': 'Backup not found for this addon'}, status=status.HTTP_404_NOT_FOUND)
 
-        from .tasks_addons import restore_addon_task
+        from .tasks import restore_addon_task
         task = restore_addon_task.delay(backup_id=backup_id)
         return Response({'status': 'restore_started', 'task_id': task.id}, status=status.HTTP_202_ACCEPTED)
 

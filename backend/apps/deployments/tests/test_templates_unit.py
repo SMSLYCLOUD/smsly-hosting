@@ -83,7 +83,7 @@ User = get_user_model()
 @patch('apps.deployments.tasks.addon_provisioner.provision_dispatch')
 def test_all_ai_templates_dry_run(mock_addon_provisioner, mock_subprocess_run, mock_smart_deploy):
     mock_addon_provisioner.return_value = ('test-uuid', 'postgres://...')
-    from apps.deployments.tasks_templates import one_click_deploy_template_task
+    from apps.deployments.tasks import one_click_deploy_template_task
 
     # Mock subprocess.run to avoid docker manifest inspect calls
     mock_subprocess_run.return_value = MagicMock(returncode=0)

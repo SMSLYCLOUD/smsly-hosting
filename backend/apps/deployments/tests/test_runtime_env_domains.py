@@ -6,7 +6,7 @@ from django.test import TestCase
 
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import EnvironmentVariable, Service
-from apps.deployments.tasks_deploy_local import _build_runtime_env
+from apps.deployments.tasks import _build_runtime_env
 
 
 class RuntimeEnvDomainAssemblyTests(TestCase):

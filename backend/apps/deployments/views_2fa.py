@@ -2,6 +2,7 @@
 Two-Factor Authentication (TOTP) views.
 """
 import logging
+import base64
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -123,6 +124,7 @@ def two_factor_login(request):
     On success, logs the user in fully.
     """
     from django.contrib.auth import login
+    from django.contrib.auth import get_user as get_session_user
 
     token = request.data.get('token', '')
     user_id = request.session.get('2fa_user_id')

@@ -42,7 +42,6 @@ from apps.deployments.utils import append_log, broadcast_status, build_local_sou
 from services.addon_provisioner import addon_provisioner
 
 
-
 @shared_task(bind=True, soft_time_limit=3600, time_limit=4200)
 def execute_server_transfer_task(self, transfer_id):
     from .models_transfer import ServerTransfer as TransferModel
@@ -99,7 +98,6 @@ def execute_server_transfer_task(self, transfer_id):
         return {"status": "FAILED", "error": str(exc)}
     finally:
         cache.delete(lock_key)
-
 
 
 @shared_task(bind=True)

@@ -1,46 +1,9 @@
 import logging
 logger = logging.getLogger(__name__)
-_SERVICE_DB_MAP = {
-    'smsly-backend':            'smsly_backend',
-    'smsly-platform-api':       'smsly_backend',
-    'smsly-hosting-backend':    'smsly_hosting',
-    'smsly-identity':           'smsly_identity',
-    'smsly-audit':              'smsly_audit',
-    'smsly-transaction-chain':  'smsly_txchain',
-    'smsly-helper':             'ainav',
-    'lina-deluxe':              'lina',
-    'fegloire':                 'buyforfront',
-    'buyforfront':              'buyforfront',
-    'smsly-marketer':           'marketer',
-}
-
-_SERVICE_URL_PATTERNS = {
-    'SMSLY_BACKEND_URL':      ['smsly-backend', 'smsly-platform-api', 'backend'],
-    'BACKEND_URL':            ['smsly-backend', 'backend'],
-    'IDENTITY_SERVICE_URL':   ['smsly-identity', 'identity'],
-    'PLATFORM_API_URL':       ['smsly-platform-api', 'platform-api'],
-    'AUDIT_SERVICE_URL':      ['smsly-audit', 'audit'],
-    'TRANSACTION_CHAIN_URL':  ['smsly-transaction-chain', 'transaction-chain', 'txchain'],
-    'SECURITY_GATEWAY_URL':   ['smsly-gateway', 'gateway'],
-    'POLICY_SERVICE_URL':     ['smsly-policy', 'policy'],
-    'RATE_LIMIT_SERVICE_URL': ['smsly-rate-limit', 'rate-limit'],
-    'VIDEO_SERVICE_URL':      ['smsly-video', 'video-service'],
-    'VOICE_SERVICE_URL':      ['smsly-voice', 'voice'],
-    'HOSTING_SERVICE_URL':    ['smsly-hosting', 'hosting'],
-    'NEXT_PUBLIC_API_URL':    ['backend', 'api', 'platform-api'],
-}
-
-_PROPAGATED_SECRETS = {
-    'INTERNAL_API_SECRET',
-    'GATEWAY_SECRET',
-    'JWT_SECRET',
-}
-
-_SERVICE_REDIS_DB = {
-    'smsly-helper':     1,
-    'smsly-marketer':   4,
-}
-
+from .tasks_utils import _env_bool
+from .tasks_deploy_remote import _is_traefik_not_ready
+from .tasks_utils import _env_int
+from .tasks_deploy_remote import _route_misroute_reason
 import logging
 import random
 import re
@@ -83,22 +46,49 @@ from apps.deployments.utils import append_log, broadcast_status, build_local_sou
 from services.addon_provisioner import addon_provisioner
 
 
-from .tasks_utils import _env_int
-from .tasks_deploy_remote import _is_traefik_not_ready
-from .tasks_utils import _env_bool
-from .tasks_deploy_remote import _route_misroute_reason
-from .tasks_deploy_remote import _is_traefik_not_ready
-from .tasks_deploy_remote import _route_misroute_reason
-from .tasks_utils import _env_bool
-from .tasks_utils import _env_int
-
+_SERVICE_DB_MAP = {
+    'smsly-backend':            'smsly_backend',
+    'smsly-platform-api':       'smsly_backend',
+    'smsly-hosting-backend':    'smsly_hosting',
+    'smsly-identity':           'smsly_identity',
+    'smsly-audit':              'smsly_audit',
+    'smsly-transaction-chain':  'smsly_txchain',
+    'smsly-helper':             'ainav',
+    'lina-deluxe':              'lina',
+    'fegloire':                 'buyforfront',
+    'buyforfront':              'buyforfront',
+    'smsly-marketer':           'marketer',
+}
+_SERVICE_URL_PATTERNS = {
+    'SMSLY_BACKEND_URL':      ['smsly-backend', 'smsly-platform-api', 'backend'],
+    'BACKEND_URL':            ['smsly-backend', 'backend'],
+    'IDENTITY_SERVICE_URL':   ['smsly-identity', 'identity'],
+    'PLATFORM_API_URL':       ['smsly-platform-api', 'platform-api'],
+    'AUDIT_SERVICE_URL':      ['smsly-audit', 'audit'],
+    'TRANSACTION_CHAIN_URL':  ['smsly-transaction-chain', 'transaction-chain', 'txchain'],
+    'SECURITY_GATEWAY_URL':   ['smsly-gateway', 'gateway'],
+    'POLICY_SERVICE_URL':     ['smsly-policy', 'policy'],
+    'RATE_LIMIT_SERVICE_URL': ['smsly-rate-limit', 'rate-limit'],
+    'VIDEO_SERVICE_URL':      ['smsly-video', 'video-service'],
+    'VOICE_SERVICE_URL':      ['smsly-voice', 'voice'],
+    'HOSTING_SERVICE_URL':    ['smsly-hosting', 'hosting'],
+    'NEXT_PUBLIC_API_URL':    ['backend', 'api', 'platform-api'],
+}
+_PROPAGATED_SECRETS = {
+    'INTERNAL_API_SECRET',
+    'GATEWAY_SECRET',
+    'JWT_SECRET',
+}
+_SERVICE_REDIS_DB = {
+    'smsly-helper':     1,
+    'smsly-marketer':   4,
+}
 def _docker_safe_segment(value: str, fallback: str = "app") -> str:
     """Normalize strings used in Docker image tags and names."""
     slug = re.sub(r"[^a-z0-9_.-]+", "-", str(value or "").lower()).strip("-.")
     if not slug:
         slug = fallback
     return slug[:63]
-
 
 
 def _detect_exposed_port(service, image_name: str = None) -> int | None:
@@ -148,13 +138,11 @@ def _detect_exposed_port(service, image_name: str = None) -> int | None:
     return None
 
 
-
 def _coerce_int(value, default: int) -> int:
     try:
         return int(value)
     except (TypeError, ValueError):
         return default
-
 
 
 def _is_legacy_default_healthcheck(service: Service) -> bool:
@@ -172,7 +160,6 @@ def _is_legacy_default_healthcheck(service: Service) -> bool:
         and _coerce_int(service.health_check_timeout, 15) == 15
         and _coerce_int(service.health_check_retries, 8) == 8
     )
-
 
 
 def _build_platform_healthcheck(service: Service, env_vars: dict) -> dict | None:
@@ -204,7 +191,6 @@ def _build_platform_healthcheck(service: Service, env_vars: dict) -> dict | None
         "timeout": service.health_check_timeout,
         "retries": service.health_check_retries,
     }
-
 
 
 def _build_runtime_env(service: Service, image_name: str = None) -> dict:
@@ -389,7 +375,6 @@ def _build_runtime_env(service: Service, image_name: str = None) -> dict:
     return env_vars
 
 
-
 def _smart_derive_database_vars(env_vars: dict):
     """Parse DATABASE_URL into individual DB_* vars for apps that need them."""
     db_url = env_vars.get('DATABASE_URL', '')
@@ -421,7 +406,6 @@ def _smart_derive_database_vars(env_vars: dict):
         pass  # Don't block deploy if URL parsing fails
 
 
-
 def _smart_derive_redis_vars(env_vars: dict):
     """Parse REDIS_URL into Celery broker/backend vars."""
     redis_url = env_vars.get('REDIS_URL', '')
@@ -448,7 +432,6 @@ def _smart_derive_redis_vars(env_vars: dict):
         env_vars.setdefault('CACHE_URL', redis_url)
     except Exception:
         pass  # Don't block deploy if URL parsing fails
-
 
 
 def _infer_database_name(service: Service) -> str:
@@ -479,7 +462,6 @@ def _infer_database_name(service: Service) -> str:
     return re.sub(r'[^a-z0-9_]', '_', svc_name)[:63]
 
 
-
 def _ensure_database_exists(base_url: str, db_name: str):
     """
     Ensure the target database exists on the shared Postgres server.
@@ -505,7 +487,6 @@ def _ensure_database_exists(base_url: str, db_name: str):
             conn.close()
 
 
-
 def _is_low_resource_service(service: Service) -> bool:
     try:
         cpu_threshold = float(os.environ.get("LOW_RESOURCE_CPU_CORES_THRESHOLD", "0.75"))
@@ -529,7 +510,6 @@ def _is_low_resource_service(service: Service) -> bool:
     )
 
 
-
 def _local_route_timeout_seconds(service: Service) -> int:
     if _is_low_resource_service(service):
         return _env_int(
@@ -540,7 +520,6 @@ def _local_route_timeout_seconds(service: Service) -> int:
     return _env_int("LOCAL_ROUTE_READY_TIMEOUT_SECONDS", 60, minimum=10)
 
 
-
 def _local_container_timeout_seconds(service: Service) -> int:
     if _is_low_resource_service(service):
         return _env_int(
@@ -549,7 +528,6 @@ def _local_container_timeout_seconds(service: Service) -> int:
             minimum=60,
         )
     return _env_int("LOCAL_CONTAINER_HEALTH_TIMEOUT_SECONDS", 480, minimum=60)
-
 
 
 def _wait_for_local_container_healthy(
@@ -653,7 +631,6 @@ def _wait_for_local_container_healthy(
         f"[HEALTH-CHECK] Timed out waiting for container health ({last_state}).\n",
     )
     return False
-
 
 
 def _wait_for_local_route_ready(
@@ -835,7 +812,6 @@ def _wait_for_local_route_ready(
         f"Last error: {last_error or 'unknown'}\n",
     )
     return False
-
 
 
 def _link_ecosystem(service: Service, env_vars: dict):

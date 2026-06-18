@@ -1,13 +1,7 @@
 import logging
 logger = logging.getLogger(__name__)
-SHARED_OLLAMA_RAM_FRACTION = 0.25  # 25% of total host RAM
-SHARED_OLLAMA_MIN_RAM_MB = 2048    # 2 GB — minimum viable for any LLM
-SHARED_OLLAMA_MAX_RAM_MB = 8192    # 8 GB — practical ceiling on most VPS
-SHARED_OLLAMA_MIN_CPU_CORES = 1.0
-SHARED_OLLAMA_MAX_CPU_CORES = 4.0
-SHARED_OLLAMA_NAME_PREFIX = "ollama-cpp-shared"
-SHARED_OLLAMA_PORT = 11434
-
+from .tasks_deploy import delete_service_task
+from .tasks_deploy import smart_deploy_task
 import logging
 import random
 import re
@@ -50,11 +44,13 @@ from apps.deployments.utils import append_log, broadcast_status, build_local_sou
 from services.addon_provisioner import addon_provisioner
 
 
-from .tasks_deploy import delete_service_task
-from .tasks_deploy import smart_deploy_task
-from .tasks_deploy import smart_deploy_task
-from .tasks_deploy import delete_service_task
-
+SHARED_OLLAMA_RAM_FRACTION = 0.25  # 25% of total host RAM
+SHARED_OLLAMA_MIN_RAM_MB = 2048    # 2 GB — minimum viable for any LLM
+SHARED_OLLAMA_MAX_RAM_MB = 8192    # 8 GB — practical ceiling on most VPS
+SHARED_OLLAMA_MIN_CPU_CORES = 1.0
+SHARED_OLLAMA_MAX_CPU_CORES = 4.0
+SHARED_OLLAMA_NAME_PREFIX = "ollama-cpp-shared"
+SHARED_OLLAMA_PORT = 11434
 def _escalate_to_ai(deployment, service, container_logs):
     """
     Escalate an unknown runtime error to AI models with full code context.
@@ -119,7 +115,6 @@ def _escalate_to_ai(deployment, service, container_logs):
         append_log(deployment, f"\n🤖 AI diagnosis unavailable: {e}\n")
 
 
-
 def _detect_safe_ollama_ram_mb() -> int:
     """
     Determine a safe RAM allocation for the shared Ollama CPP based on
@@ -151,7 +146,6 @@ def _detect_safe_ollama_ram_mb() -> int:
         return 4096
 
 
-
 def _detect_safe_ollama_cpu() -> float:
     """Detect safe CPU allocation for shared Ollama."""
     try:
@@ -163,7 +157,6 @@ def _detect_safe_ollama_cpu() -> float:
         return round(allocated, 1)
     except Exception:
         return 2.0
-
 
 
 def _ensure_shared_ollama_cpp(service, provider) -> str | None:
@@ -260,7 +253,6 @@ def _ensure_shared_ollama_cpp(service, provider) -> str | None:
         return None
 
 
-
 def _pull_ollama_models_into_shared(shared_ollama_id: str, models: list):
     """
     Pull Ollama models into the shared Ollama CPP container.
@@ -283,7 +275,6 @@ def _pull_ollama_models_into_shared(shared_ollama_id: str, models: list):
             )
     except Exception as exc:
         logger.warning("Failed to pull models into shared Ollama %s: %s", shared_ollama_id, exc)
-
 
 
 def _cleanup_shared_ollama_if_unused(project):

@@ -138,7 +138,7 @@ class AuditLogDomainBackupTest(TestCase):
         self.assertEqual(log.metadata["result"], "success")
 
     def test_restore_service_backup_task_writes_audit_log(self):
-        from apps.deployments.tasks_backup import restore_service_backup_task
+        from apps.deployments.tasks import restore_service_backup_task
         from apps.deployments.services.backup_service import BackupService
 
         backup = ServiceBackup.objects.create(

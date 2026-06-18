@@ -145,7 +145,7 @@ class TemplateViewSet(viewsets.GenericViewSet):
 
             from apps.deployments.models import Service, EnvironmentVariable
             from apps.cloud.models import CloudProvider
-            from apps.deployments.tasks_templates import one_click_deploy_template_task
+            from apps.deployments.tasks import one_click_deploy_template_task
 
             # Resolve provider (prefer existing active provider, else create LOCAL fallback).
             provider = CloudProvider.objects.filter(is_active=True).first()

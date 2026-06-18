@@ -34,7 +34,7 @@ from django.utils import timezone
 
 from apps.core.auth import APIKeyAuthentication
 from apps.deployments.models import Deployment
-from apps.deployments.tasks_deploy import enqueue_smart_deploy_task
+from apps.deployments.tasks import enqueue_smart_deploy_task
 from apps.intelligence.analyzer import LogAnalyzer
 from apps.intelligence.cost import CostAdvisor
 from apps.intelligence.models import AIProviderSettings

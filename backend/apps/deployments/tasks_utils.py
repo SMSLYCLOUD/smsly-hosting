@@ -1,14 +1,5 @@
 import logging
 logger = logging.getLogger(__name__)
-AUTO_APPROVE_COMMIT_MARKERS = (
-    "auto-redeploy",
-    "auto-remediation",
-    "auto-rollback",
-    "auto-restart",
-    "[auto-fix]",
-    "service restart",
-)
-
 import logging
 import random
 import re
@@ -51,11 +42,17 @@ from apps.deployments.utils import append_log, broadcast_status, build_local_sou
 from services.addon_provisioner import addon_provisioner
 
 
-
+AUTO_APPROVE_COMMIT_MARKERS = (
+    "auto-redeploy",
+    "auto-remediation",
+    "auto-rollback",
+    "auto-restart",
+    "[auto-fix]",
+    "service restart",
+)
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = str(os.environ.get(name, str(default))).strip().lower()
     return raw in {"1", "true", "yes", "on"}
-
 
 
 def _env_int(name: str, default: int, minimum: int = 0) -> int:
@@ -66,12 +63,10 @@ def _env_int(name: str, default: int, minimum: int = 0) -> int:
     return max(minimum, value)
 
 
-
 def should_skip_review_for_commit_message(message: str) -> bool:
     """Return True for system-created deployments that must not pause at REVIEW."""
     normalized = str(message or "").strip().lower()
     return any(marker in normalized for marker in AUTO_APPROVE_COMMIT_MARKERS)
-
 
 
 def _current_agent_node_queue() -> str:

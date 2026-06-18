@@ -42,7 +42,6 @@ from apps.deployments.utils import append_log, broadcast_status, build_local_sou
 from services.addon_provisioner import addon_provisioner
 
 
-
 def _regenerate_caddyfile():
     """Regenerate and apply the Caddyfile with current service domains.
 

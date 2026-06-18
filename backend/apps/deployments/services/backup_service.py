@@ -644,7 +644,7 @@ class BackupService:
 
             logger.info("Restore complete. Queueing deployment.")
             from apps.deployments.models import Deployment
-            from apps.deployments.tasks_deploy import enqueue_smart_deploy_task, _resolve_provider_for_service
+            from apps.deployments.tasks import enqueue_smart_deploy_task, _resolve_provider_for_service
             
             provider = _resolve_provider_for_service(target_service, prefer_local=True)
             if provider:
@@ -957,7 +957,7 @@ class BackupService:
 
             logger.info("Remote restore complete. Queueing deployment.")
             from apps.deployments.models import Deployment
-            from apps.deployments.tasks_deploy import enqueue_smart_deploy_task, _resolve_provider_for_service
+            from apps.deployments.tasks import enqueue_smart_deploy_task, _resolve_provider_for_service
             
             provider = _resolve_provider_for_service(target_service, prefer_local=False)
             if provider:

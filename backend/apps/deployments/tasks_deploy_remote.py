@@ -1,5 +1,8 @@
 import logging
 logger = logging.getLogger(__name__)
+from .tasks_deploy import _handle_failure
+from .tasks_deploy import enqueue_smart_deploy_task
+from .tasks_caddy import _regenerate_caddyfile
 import logging
 import random
 import re
@@ -41,13 +44,6 @@ from apps.deployments.services.transfer_service import ServerTransferService
 from apps.deployments.utils import append_log, broadcast_status, build_local_source_bundle, update_stage, is_deployment_local
 from services.addon_provisioner import addon_provisioner
 
-
-from .tasks_caddy import _regenerate_caddyfile
-from .tasks_deploy import enqueue_smart_deploy_task
-from .tasks_deploy import _handle_failure
-from .tasks_deploy import _handle_failure
-from .tasks_caddy import _regenerate_caddyfile
-from .tasks_deploy import enqueue_smart_deploy_task
 
 def _handle_remote_deployment_legacy(deployment, server):
     """Delegate deployment to a remote server and poll for status."""
@@ -127,7 +123,6 @@ def _handle_remote_deployment_legacy(deployment, server):
     _handle_failure(None, deployment, "Remote deployment timed out", "Remote Timeout")
 
 
-
 def _remote_failure_message(orchestrator, fallback: str) -> str:
     """Append the last upstream error from RemoteOrchestrator when available."""
     try:
@@ -137,7 +132,6 @@ def _remote_failure_message(orchestrator, fallback: str) -> str:
     if detail:
         return f"{fallback}: {detail}"
     return fallback
-
 
 
 def _stop_local_service_container(service_name: str):
@@ -163,10 +157,8 @@ def _stop_local_service_container(service_name: str):
         logger.warning(f"Docker client unavailable on Master: {e}")
 
 
-
 def _remote_deploy_failed(deployment, orchestrator, fallback_msg, stage):
     _handle_failure(None, deployment, _remote_failure_message(orchestrator, fallback_msg), stage)
-
 
 
 def _handle_remote_deployment(deployment, server, skip_review=False, image_name=None):
@@ -254,7 +246,6 @@ def _handle_remote_deployment(deployment, server, skip_review=False, image_name=
     )
 
 
-
 def _resume_remote_deployment(deployment, server):
     """Approve/resume an existing remote deployment and keep polling it."""
     from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
@@ -303,7 +294,6 @@ def _resume_remote_deployment(deployment, server):
     )
 
 
-
 def _copy_remote_deployment_fields(deployment, remote_status: dict):
     """Mirror useful remote deployment fields onto the controller row."""
     update_fields = []
@@ -334,7 +324,6 @@ def _copy_remote_deployment_fields(deployment, remote_status: dict):
     if update_fields:
         update_fields.append("updated_at")
         deployment.save(update_fields=update_fields)
-
 
 
 def _poll_remote_deployment(
@@ -539,7 +528,6 @@ def _poll_remote_deployment(
         broadcast_status(deployment)
 
 
-
 def _is_traefik_not_ready(response: requests.Response) -> bool:
     """
     Detect Traefik's default no-route 404 response.
@@ -554,7 +542,6 @@ def _is_traefik_not_ready(response: requests.Response) -> bool:
     content_type = (response.headers.get("Content-Type") or "").lower()
     nosniff = (response.headers.get("X-Content-Type-Options") or "").lower()
     return content_type.startswith("text/plain") and nosniff == "nosniff"
-
 
 
 def _route_misroute_reason(response: requests.Response) -> str:
@@ -592,7 +579,6 @@ def _route_misroute_reason(response: requests.Response) -> str:
         return "service hostname rendered the platform homepage"
 
     return ""
-
 
 
 @shared_task(bind=True, max_retries=0, soft_time_limit=600, time_limit=660)

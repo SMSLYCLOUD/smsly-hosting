@@ -1,6 +1,24 @@
 import logging
 logger = logging.getLogger(__name__)
-from apps.intelligence.models import AIProviderSettings
+from .tasks_deploy_remote import _handle_remote_deployment
+from .tasks_deploy_local import _wait_for_local_container_healthy
+from .tasks_utils import _env_bool
+from .tasks_deploy_local import _local_route_timeout_seconds
+from .tasks_deploy_remote import _resume_remote_deployment
+from .tasks_utils import _env_int
+from .tasks_deploy_local import _build_runtime_env
+from .tasks_deploy_remote import self_heal_remote_deployment
+from .tasks_utils import _current_agent_node_queue
+from .tasks_build import _build_uploaded_source
+from .tasks_utils import should_skip_review_for_commit_message
+from .tasks_deploy_remote import _poll_remote_deployment
+from .tasks_build import _build_function
+from .tasks_caddy import _regenerate_caddyfile
+from .tasks_deploy_local import _build_platform_healthcheck
+from .tasks_ai_router import _cleanup_shared_ollama_if_unused
+from .tasks_ai_router import _escalate_to_ai
+from .tasks_deploy_local import _wait_for_local_route_ready
+from .tasks_deploy_local import _local_container_timeout_seconds
 import logging
 import random
 import re
@@ -43,45 +61,7 @@ from apps.deployments.utils import append_log, broadcast_status, build_local_sou
 from services.addon_provisioner import addon_provisioner
 
 
-from .tasks_caddy import _regenerate_caddyfile
-from .tasks_build import _build_function
-from .tasks_deploy_remote import _resume_remote_deployment
-from .tasks_deploy_remote import _poll_remote_deployment
-from .tasks_ai_router import _cleanup_shared_ollama_if_unused
-from .tasks_deploy_local import _local_route_timeout_seconds
-from .tasks_deploy_local import _wait_for_local_container_healthy
-from .tasks_deploy_local import _wait_for_local_route_ready
-from .tasks_deploy_local import _build_platform_healthcheck
-from .tasks_deploy_local import _build_runtime_env
-from .tasks_utils import should_skip_review_for_commit_message
-from .tasks_utils import _current_agent_node_queue
-from .tasks_deploy_remote import self_heal_remote_deployment
-from .tasks_utils import _env_bool
-from .tasks_build import _build_uploaded_source
-from .tasks_deploy_remote import _handle_remote_deployment
-from .tasks_deploy_local import _local_container_timeout_seconds
-from .tasks_utils import _env_int
-from .tasks_ai_router import _escalate_to_ai
-from .tasks_utils import _env_bool
-from .tasks_deploy_local import _build_runtime_env
-from .tasks_build import _build_uploaded_source
-from .tasks_deploy_local import _local_container_timeout_seconds
-from .tasks_deploy_remote import _poll_remote_deployment
-from .tasks_ai_router import _cleanup_shared_ollama_if_unused
-from .tasks_deploy_remote import self_heal_remote_deployment
-from .tasks_utils import should_skip_review_for_commit_message
-from .tasks_ai_router import _escalate_to_ai
-from .tasks_caddy import _regenerate_caddyfile
-from .tasks_deploy_remote import _resume_remote_deployment
-from .tasks_deploy_local import _wait_for_local_route_ready
-from .tasks_utils import _env_int
-from .tasks_deploy_local import _local_route_timeout_seconds
-from .tasks_utils import _current_agent_node_queue
-from .tasks_deploy_remote import _handle_remote_deployment
-from .tasks_deploy_local import _build_platform_healthcheck
-from .tasks_deploy_local import _wait_for_local_container_healthy
-from .tasks_build import _build_function
-
+from apps.intelligence.models import AIProviderSettings
 @shared_task(
     bind=True,
     max_retries=3,
@@ -225,7 +205,6 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
         _handle_failure(self, deployment, str(e), "System Failure")
 
 
-
 @shared_task(
     bind=True,
     max_retries=2,
@@ -299,7 +278,6 @@ def resume_deploy_task(self, deployment_id: str, provider_id: str):
         _handle_failure(self, deployment, str(e), "System Failure")
 
 
-
 def enqueue_smart_deploy_task(
     deployment_id: str,
     provider_id: str,
@@ -325,7 +303,6 @@ def enqueue_smart_deploy_task(
             routing_key=queue,
         )
     return smart_deploy_task.delay(**kwargs)
-
 
 
 def recover_stalled_queued_deployments(limit: int = 100) -> dict:
@@ -396,7 +373,6 @@ def recover_stalled_queued_deployments(limit: int = 100) -> dict:
     return results
 
 
-
 def _resolve_provider_for_service(service: Service, prefer_local: bool = False):
     """
     Strict one-to-one provider resolution. No silent fallbacks.
@@ -433,7 +409,6 @@ def _resolve_provider_for_service(service: Service, prefer_local: bool = False):
     ).first()
 
 
-
 def _deployment_effective_server(deployment):
     """Return the server this deployment should use, honoring explicit local."""
     if bool(getattr(deployment, "target_is_local", False)):
@@ -465,14 +440,12 @@ def _deployment_effective_server(deployment):
     return None
 
 
-
 def _is_local_deployment_server(server, config) -> bool:
     return (
         not server
         or bool(getattr(server, "is_primary", False))
         or str(getattr(server, "host", "") or "") == str(getattr(config, "server_ip", "") or "")
     )
-
 
 
 @contextmanager
@@ -622,7 +595,6 @@ def fleet_build_lock(deployment):
                 delattr(fleet_build_lock, "_attempt_count")
 
 
-
 def _run_managed_image_post_deploy_hooks(deployment, service: Service, container_id: str) -> None:
     """
     Run post-deploy hooks for Docker-image managed AI services.
@@ -723,7 +695,6 @@ def _run_managed_image_post_deploy_hooks(deployment, service: Service, container
             pass
 
 
-
 def _do_promote(deployment, provider):
     """
     Shared promotion logic for both auto and manual promote.
@@ -806,7 +777,6 @@ def _do_promote(deployment, provider):
         _wait_for_local_route_ready(
             deployment, service, timeout_seconds=route_timeout,
         )
-
 
 
 def _deploy_container(deployment, provider, image_name):
@@ -1088,7 +1058,6 @@ def _deploy_container(deployment, provider, image_name):
         raise e
 
 
-
 @shared_task(bind=True, max_retries=0, soft_time_limit=120, time_limit=150)
 def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
                          image_name):
@@ -1279,7 +1248,6 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
     broadcast_status(deployment)
 
 
-
 def _handle_failure(task, deployment, error_msg, reason):
     """Centralized failure handling with pattern resolver + AI escalation."""
     logger.error("%s: %s", reason, error_msg)
@@ -1409,7 +1377,6 @@ def _handle_failure(task, deployment, error_msg, reason):
     # investigated, not blindly retried. Users can manually redeploy.
     logger.error("Deployment failed (%s), not retrying: %s", reason, error_msg)
     return
-
 
 
 @shared_task(bind=True, max_retries=3)

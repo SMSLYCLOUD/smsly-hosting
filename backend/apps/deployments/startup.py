@@ -59,7 +59,7 @@ def _sync_caddy_once(delay: float = 3.0):
 
         # 2. Trigger Auto-Authentication for nodes missing API tokens
         try:
-            from apps.deployments.tasks_health import auto_authenticate_nodes_task
+            from apps.deployments.tasks import auto_authenticate_nodes_task
             auto_authenticate_nodes_task.delay()
             logger.info("Startup: Triggered auto-authentication task for nodes.")
         except Exception as e:

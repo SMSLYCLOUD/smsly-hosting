@@ -37,6 +37,8 @@ logger = logging.getLogger(__name__)
 MANAGED_SERVER_HEALTH_TIMEOUT = 10
 
 
+from .views_auth import ZeroTrustHMACAuthentication
+
 def _append_unique(values: list[str], value: str):
     normalized = str(value or "").strip().rstrip("/")
     if normalized and normalized not in values:
@@ -1193,7 +1195,7 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
     @throttle_classes([ServerCheckAllThrottle])
     def check_all(self, request):
         """Health check all servers — dispatched to Celery for parallelism."""
-        from .tasks_health import refresh_managed_server_health
+        from .tasks import refresh_managed_server_health
         servers = list(self.get_queryset())
         for server in servers:
             refresh_managed_server_health.delay(str(server.id))
@@ -1511,7 +1513,7 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
-            from apps.deployments.tasks_deploy_remote import self_heal_remote_deployment
+            from apps.deployments.tasks import self_heal_remote_deployment
             self_heal_remote_deployment.delay(
                 deployment_id=str(deployment.id),
                 server_id=str(server.id),

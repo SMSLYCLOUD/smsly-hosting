@@ -368,7 +368,7 @@ class ProductionDeploymentPipeline:
         actual build + container work runs. skip_review=True prevents the
         safedeploy pre-check at the top of smart_deploy_task from re-firing.
         """
-        from apps.deployments.tasks_deploy import enqueue_smart_deploy_task
+        from apps.deployments.tasks import enqueue_smart_deploy_task
         service = deployment.service
         provider_id = str(service.provider.id) if service and service.provider else None
         result = enqueue_smart_deploy_task(

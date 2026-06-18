@@ -10,7 +10,7 @@ django.setup()
 
 from django.contrib.auth import get_user_model
 from rest_framework.test import APIRequestFactory
-from apps.deployments.views_service import ServiceViewSet
+from apps.deployments.views import ServiceViewSet
 from apps.deployments.models import Service, EnvironmentVariable
 from apps.deployments.models_servers import ManagedServer
 

@@ -1,7 +1,5 @@
 import logging
 logger = logging.getLogger(__name__)
-import hashlib
-import hmac
 import logging
 import random
 import re
@@ -44,7 +42,8 @@ from apps.deployments.utils import append_log, broadcast_status, build_local_sou
 from services.addon_provisioner import addon_provisioner
 
 
-
+import hashlib
+import hmac
 @shared_task(name="apps.deployments.tasks.auto_authenticate_nodes_task")
 def auto_authenticate_nodes_task():
     """
@@ -72,7 +71,6 @@ def auto_authenticate_nodes_task():
     if count > 0:
         logger.info("Auto-Auth Task completed: Fixed %d node(s)", count)
     return count
-
 
 
 @shared_task(name="apps.deployments.tasks.check_managed_servers_health_task")
@@ -109,7 +107,6 @@ def check_managed_servers_health_task():
     if checked:
         logger.info("Health check task: refreshed %d/%d servers", checked, servers.count())
     return checked
-
 
 
 @shared_task(bind=True, max_retries=0, soft_time_limit=300, time_limit=330)
@@ -233,7 +230,6 @@ def node_watchdog_task(self):
     return results
 
 
-
 @shared_task(bind=True, max_retries=2)
 def refresh_managed_server_health(self, server_id: str):
     """Refresh the health/status of a single managed server."""
@@ -246,7 +242,6 @@ def refresh_managed_server_health(self, server_id: str):
         logger.warning("refresh_managed_server_health: server %s not found", server_id)
     except Exception as exc:
         logger.exception("refresh_managed_server_health failed for %s: %s", server_id, exc)
-
 
 
 @shared_task(soft_time_limit=600, time_limit=900)

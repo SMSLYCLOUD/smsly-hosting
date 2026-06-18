@@ -13,7 +13,7 @@ from unittest.mock import patch, MagicMock
 from cryptography.fernet import Fernet
 from apps.deployments.models import Service, Project, EnvironmentVariable
 from apps.deployments.models_backup import ServiceBackup, BackupSchedule
-from apps.deployments.tasks_backup import cleanup_old_backups_task
+from apps.deployments.tasks import cleanup_old_backups_task
 from apps.deployments.services.backup_service import BackupService
 from django.contrib.auth import get_user_model
 

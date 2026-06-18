@@ -33,6 +33,7 @@ class TopologyViewSet(viewsets.GenericViewSet):
         SECURITY: Enforces Hybrid RBAC — strictly linked to project.
         """
         from django.db.models import Q
+        from rest_framework.exceptions import ValidationError
 
         project_id = request.query_params.get('project_id')
         

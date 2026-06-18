@@ -42,7 +42,6 @@ from apps.deployments.utils import append_log, broadcast_status, build_local_sou
 from services.addon_provisioner import addon_provisioner
 
 
-
 @shared_task(bind=True, max_retries=0)
 def platform_update_task(self, update_id: str):
     """Execute platform update in background."""
@@ -57,7 +56,6 @@ def platform_update_task(self, update_id: str):
     perform_update(update)
 
 
-
 @shared_task(bind=True, max_retries=0)
 def platform_rollback_task(self, update_id: str):
     """Execute platform rollback in background (avoids blocking the request thread)."""
@@ -70,7 +68,6 @@ def platform_rollback_task(self, update_id: str):
         return
 
     _rollback(update)
-
 
 
 def _clear_directory_contents(path: str) -> dict:

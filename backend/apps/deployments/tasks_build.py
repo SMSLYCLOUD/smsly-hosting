@@ -1,5 +1,6 @@
 import logging
 logger = logging.getLogger(__name__)
+from .tasks_deploy_local import _docker_safe_segment
 import logging
 import random
 import re
@@ -41,9 +42,6 @@ from apps.deployments.services.transfer_service import ServerTransferService
 from apps.deployments.utils import append_log, broadcast_status, build_local_source_bundle, update_stage, is_deployment_local
 from services.addon_provisioner import addon_provisioner
 
-
-from .tasks_deploy_local import _docker_safe_segment
-from .tasks_deploy_local import _docker_safe_segment
 
 def _build_function(deployment, service) -> str:
     """Build serverless function image."""
@@ -118,7 +116,6 @@ def _build_function(deployment, service) -> str:
     finally:
         if build_dir:
             shutil.rmtree(build_dir, ignore_errors=True)
-
 
 
 def _build_uploaded_source(deployment, service) -> str:
@@ -197,7 +194,6 @@ def _build_uploaded_source(deployment, service) -> str:
             shutil.rmtree(build_dir, ignore_errors=True)
 
 
-
 def _resolve_upload_zip_path(repository_url: str) -> str:
     """Extract a local file path from file:// repository URLs."""
     parsed = urlparse(repository_url or "")
@@ -215,7 +211,6 @@ def _resolve_upload_zip_path(repository_url: str) -> str:
     if not os.path.isfile(zip_path):
         raise FileNotFoundError(f"Uploaded source archive not found: {zip_path}")
     return zip_path
-
 
 
 def _safe_extract_zip(zip_path: str, destination: str):

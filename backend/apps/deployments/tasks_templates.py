@@ -1,5 +1,8 @@
 import logging
 logger = logging.getLogger(__name__)
+from .tasks_ai_router import _pull_ollama_models_into_shared
+from .tasks_deploy import smart_deploy_task
+from .tasks_ai_router import _ensure_shared_ollama_cpp
 import logging
 import random
 import re
@@ -41,13 +44,6 @@ from apps.deployments.services.transfer_service import ServerTransferService
 from apps.deployments.utils import append_log, broadcast_status, build_local_source_bundle, update_stage, is_deployment_local
 from services.addon_provisioner import addon_provisioner
 
-
-from .tasks_ai_router import _ensure_shared_ollama_cpp
-from .tasks_ai_router import _pull_ollama_models_into_shared
-from .tasks_deploy import smart_deploy_task
-from .tasks_deploy import smart_deploy_task
-from .tasks_ai_router import _pull_ollama_models_into_shared
-from .tasks_ai_router import _ensure_shared_ollama_cpp
 
 @shared_task(bind=True, max_retries=0)
 def one_click_deploy_template_task(self, service_id: str, template_id: str):
