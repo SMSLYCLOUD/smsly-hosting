@@ -45,3 +45,4 @@ from apps.teams.permissions import get_team_q_filter, assert_can_write, assert_c
 
 
 class ServiceEnvVarActionsMixin:
+    """Mixin providing env var actions for ServiceViewSet."""

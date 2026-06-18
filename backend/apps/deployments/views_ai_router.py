@@ -45,3 +45,4 @@ from apps.teams.permissions import get_team_q_filter, assert_can_write, assert_c
 
 
 class ServiceAIRouterActionsMixin:
+    """Mixin providing AI router actions for ServiceViewSet."""
