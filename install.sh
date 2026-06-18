@@ -163,6 +163,19 @@ GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC
 export DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}"
 export NEEDRESTART_MODE="${NEEDRESTART_MODE:-a}"
 
+# ─── Mode variable defaults (must be set before lib/ops.sh sourcing) ───────────
+UPDATE_MODE=""
+WIPE_MODE="false"
+RECOVER_MODE="false"
+REFRESH_MODE="false"
+DEBUG_MODE="false"
+VERIFY_MODE="false"
+CLEAR_MODE="false"
+FIX_DOMAIN_MODE="false"
+FIX_PERMISSIONS_MODE="false"
+FORCE_REDEPLOY="false"
+RECREATE_TRAEFIK="false"
+
 # ─── Source library modules ───────────────────────────────────────────────────
 LIB_DIR="$SCRIPT_DIR/lib"
 for lib in "$LIB_DIR"/*.sh; do
@@ -182,17 +195,6 @@ LOCK_FILE="/tmp/smsly-install.lock"
 CADDY_LAST_GOOD="$INSTALL_DIR/caddy-config/Caddyfile.smsly-last-good"
 
 # ─── Second argument parser ────────────────────────────────────────────────────
-UPDATE_MODE=""
-WIPE_MODE="false"
-RECOVER_MODE="false"
-REFRESH_MODE="false"
-DEBUG_MODE="false"
-VERIFY_MODE="false"
-CLEAR_MODE="false"
-FIX_DOMAIN_MODE="false"
-FIX_PERMISSIONS_MODE="false"
-FORCE_REDEPLOY="false"
-RECREATE_TRAEFIK="false"
 
 for arg in "$@"; do
     case "$arg" in
