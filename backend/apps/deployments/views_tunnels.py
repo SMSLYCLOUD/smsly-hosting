@@ -21,6 +21,12 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+# Ports that users are allowed to use for tunnels.
+ALLOWED_TUNNEL_PORTS = set(range(1024, 10000)) | set(range(20000, 30000))
+# Service ports that are always denied, even if they fall inside the allowed range.
+DENIED_TUNNEL_PORTS = frozenset({22, 25, 80, 443, 587, 993, 3306, 5432, 6379, 8443})
+
+
 def get_tunnel_base_domain() -> str:
     """Resolve the active tunnel base domain from Django settings."""
     return getattr(settings, 'TUNNEL_BASE_DOMAIN', 'tunnel.localhost')
