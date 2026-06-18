@@ -19,7 +19,6 @@ from urllib.parse import unquote, urlparse
 import docker
 import requests
 from celery import shared_task
-import apps.deployments.tasks_safedeploy
 from django.conf import settings
 from django.core.cache import cache
 from django.utils import timezone
@@ -45,9 +44,6 @@ from services.addon_provisioner import addon_provisioner
 
 from .tasks_caddy import _regenerate_caddyfile
 from .tasks_build import _build_function
-from .tasks_deploy_remote import _resume_remote_deployment
-from .tasks_deploy_remote import _poll_remote_deployment
-from .tasks_ai_router import _cleanup_shared_ollama_if_unused
 from .tasks_deploy_local import _local_route_timeout_seconds
 from .tasks_deploy_local import _wait_for_local_container_healthy
 from .tasks_deploy_local import _wait_for_local_route_ready
@@ -55,29 +51,20 @@ from .tasks_deploy_local import _build_platform_healthcheck
 from .tasks_deploy_local import _build_runtime_env
 from .tasks_utils import should_skip_review_for_commit_message
 from .tasks_utils import _current_agent_node_queue
-from .tasks_deploy_remote import self_heal_remote_deployment
 from .tasks_utils import _env_bool
 from .tasks_build import _build_uploaded_source
-from .tasks_deploy_remote import _handle_remote_deployment
 from .tasks_deploy_local import _local_container_timeout_seconds
 from .tasks_utils import _env_int
-from .tasks_ai_router import _escalate_to_ai
 from .tasks_utils import _env_bool
 from .tasks_deploy_local import _build_runtime_env
 from .tasks_build import _build_uploaded_source
 from .tasks_deploy_local import _local_container_timeout_seconds
-from .tasks_deploy_remote import _poll_remote_deployment
-from .tasks_ai_router import _cleanup_shared_ollama_if_unused
-from .tasks_deploy_remote import self_heal_remote_deployment
 from .tasks_utils import should_skip_review_for_commit_message
-from .tasks_ai_router import _escalate_to_ai
 from .tasks_caddy import _regenerate_caddyfile
-from .tasks_deploy_remote import _resume_remote_deployment
 from .tasks_deploy_local import _wait_for_local_route_ready
 from .tasks_utils import _env_int
 from .tasks_deploy_local import _local_route_timeout_seconds
 from .tasks_utils import _current_agent_node_queue
-from .tasks_deploy_remote import _handle_remote_deployment
 from .tasks_deploy_local import _build_platform_healthcheck
 from .tasks_deploy_local import _wait_for_local_container_healthy
 from .tasks_build import _build_function
@@ -1281,6 +1268,7 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
 
 
 def _handle_failure(task, deployment, error_msg, reason):
+    from .tasks_deploy_remote import self_heal_remote_deployment
     """Centralized failure handling with pattern resolver + AI escalation."""
     logger.error("%s: %s", reason, error_msg)
 

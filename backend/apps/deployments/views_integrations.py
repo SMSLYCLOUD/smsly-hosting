@@ -188,7 +188,6 @@ def _get_github_oauth_callback_url(request) -> str:
     return f"{site_url}/auth/github/callback"
 
 
-
 def _is_ip_or_localhost(url_str: str) -> bool:
     """Return True if the URL contains a raw IP address or localhost."""
     from urllib.parse import urlparse

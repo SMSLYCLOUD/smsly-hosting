@@ -27,7 +27,6 @@ from urllib.parse import unquote, urlparse
 import docker
 import requests
 from celery import shared_task
-import apps.deployments.tasks_safedeploy
 from django.conf import settings
 from django.core.cache import cache
 from django.utils import timezone

@@ -46,18 +46,5 @@ from apps.teams.permissions import get_team_q_filter, assert_can_write, assert_c
 
 import logging
 logger = logging.getLogger(__name__)
-from .views_service import ServiceViewSet
-from .views_deployment import DeploymentViewSet, RemoteTriggerView
-from .views_backup import ServiceBackupViewSet, ServerBackupViewSet, BackupScheduleViewSet
-from .views_system import SystemConfigView, PlatformResourcesView, RouteRecheckView
-from .views_domains import DomainConfigView
-from .views_audit import AuditLogViewSet
-from .views_auth import SessionTokenView, ZeroTrustHMACAuthentication, CaddySecretOrAdminPermission
-from .views_route_status import RouteStatusView
-from .views_system import _redact_caddyfile_preview
 
 
-
-from .views_auth import CaddySecretOrAdminPermission
-from .views_auth import ZeroTrustHMACAuthentication
-from .views_system import _redact_caddyfile_preview
