@@ -16,6 +16,7 @@ from apps.deployments.serializers import (
 )
 from apps.deployments.services.safedeploy.branch_preview_manager import BranchPreviewManager
 from apps.deployments.permissions import CanApproveDeployment, CanManagePreviews
+from apps.teams.permissions import get_team_q_filter, assert_can_write, assert_can_delete
 
 logger = logging.getLogger(__name__)
 
@@ -120,8 +121,9 @@ class PreviewEnvironmentViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         service_id = self.kwargs.get('service_pk')
+        allowed_services = Service.objects.filter(get_team_q_filter(self.request.user))
         qs = self.queryset.filter(
-            Q(service__owner=self.request.user) | Q(service__project__team__members__user=self.request.user)
+            Q(service__in=allowed_services)
         ).distinct()
         if service_id:
             return qs.filter(service_id=service_id)
@@ -152,6 +154,7 @@ class PreviewEnvironmentViewSet(viewsets.ModelViewSet):
         service = self._get_service(service_id)
         if service is None:
             return Response({"error": "Service not found"}, status=status.HTTP_404_NOT_FOUND)
+        assert_can_write(self.request.user, service, action='create preview')
 
         flag_error = self._check_service_feature_flags(service)
         if flag_error:
@@ -203,6 +206,7 @@ class PreviewEnvironmentViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def rebuild(self, request, pk=None, service_pk=None):
         preview = self.get_object()
+        assert_can_write(self.request.user, preview.service, action='rebuild preview')
 
         if preview.status == PreviewEnvironment.Status.DESTROYING:
             return Response(
@@ -229,6 +233,7 @@ class PreviewEnvironmentViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='destroy_preview')
     def destroy_preview(self, request, pk=None, service_pk=None):
         preview = self.get_object()
+        assert_can_write(self.request.user, preview.service, action='destroy preview')
 
         if preview.status == PreviewEnvironment.Status.BUILDING:
             return Response(
@@ -303,6 +308,8 @@ class DeploymentApprovalViewSet(viewsets.ModelViewSet):
             except DeploymentApproval.DoesNotExist:
                 return Response({"error": "Approval not found"}, status=status.HTTP_404_NOT_FOUND)
 
+            assert_can_write(self.request.user, approval.service, action='approve deployment')
+
             if approval.status != DeploymentApproval.Status.PENDING:
                 return Response(
                     {"error": f"Approval is in {approval.status} status, not PENDING."},
@@ -347,6 +354,7 @@ class DeploymentApprovalViewSet(viewsets.ModelViewSet):
         approval = self._get_approval_for_service(pk, service_pk)
         if approval is None:
             return Response({"error": "Approval not found"}, status=status.HTTP_404_NOT_FOUND)
+        assert_can_write(self.request.user, approval.service, action='reject deployment')
 
         deployment = approval.deployment
         if deployment is None:
