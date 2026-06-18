@@ -43,10 +43,8 @@ from apps.deployments.utils import append_log, broadcast_status, build_local_sou
 from services.addon_provisioner import addon_provisioner
 
 
-from .tasks_maintenance import ThrottledLogAppender
 from .tasks_utils import _env_bool
 from .tasks_utils import _env_bool
-from .tasks_maintenance import ThrottledLogAppender
 
 @shared_task(name="apps.deployments.tasks.update_remote_server_task")
 def update_remote_server_task(server_id: str):
@@ -54,6 +52,7 @@ def update_remote_server_task(server_id: str):
     SSH into a connected server and run the resilient installer update flow.
     """
     from apps.deployments.models import ManagedServer
+    from .tasks_maintenance import ThrottledLogAppender
 
     try:
         server = ManagedServer.objects.get(id=server_id)

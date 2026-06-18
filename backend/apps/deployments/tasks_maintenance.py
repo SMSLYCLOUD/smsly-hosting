@@ -42,10 +42,8 @@ from services.addon_provisioner import addon_provisioner
 
 
 from .tasks_platform_update import _clear_directory_contents
-from .tasks_server_update import _append_remote_update_log
 from .tasks_platform_update import platform_update_task
 from .tasks_platform_update import platform_update_task
-from .tasks_server_update import _append_remote_update_log
 from .tasks_platform_update import _clear_directory_contents
 
 def _extract_addon_id_from_name(name: str) -> str:
@@ -287,6 +285,8 @@ class ThrottledLogAppender:
             self.flush()
 
     def flush(self):
+        from .tasks_server_update import _append_remote_update_log
+
         if self.buffer:
             try:
                 self.server.refresh_from_db(fields=["provision_logs"])
