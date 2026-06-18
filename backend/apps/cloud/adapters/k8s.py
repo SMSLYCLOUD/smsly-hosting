@@ -1,3 +1,4 @@
+# NOT USED — K8s deployment is not supported. Kept for reference.
 """Kubernetes module."""
 import logging
 from typing import Dict, Any, List
