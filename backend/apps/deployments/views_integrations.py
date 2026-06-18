@@ -520,6 +520,9 @@ def _get_gitlab_app():
 
 
 def _get_gitlab_oauth_callback_url(request) -> str:
+    override = getattr(settings, 'GITLAB_OAUTH_CALLBACK_URL', None)
+    if override:
+        return override
     site_url = _get_site_url(request)
     return f"{site_url}/auth/gitlab/callback"
 
@@ -713,6 +716,9 @@ def _get_bitbucket_app():
 
 
 def _get_bitbucket_oauth_callback_url(request) -> str:
+    override = getattr(settings, 'BITBUCKET_OAUTH_CALLBACK_URL', None)
+    if override:
+        return override
     site_url = _get_site_url(request)
     return f"{site_url}/auth/bitbucket/callback"
 
