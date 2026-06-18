@@ -15,6 +15,7 @@ import secrets
 import subprocess
 import time
 
+from django.conf import settings
 from apps.deployments.domain_utils import normalize_domain
 
 logger = logging.getLogger(__name__)
