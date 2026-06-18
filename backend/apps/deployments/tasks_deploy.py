@@ -1,5 +1,6 @@
 import logging
 logger = logging.getLogger(__name__)
+from typing import Pattern
 from apps.intelligence.models import AIProviderSettings
 import logging
 import random
