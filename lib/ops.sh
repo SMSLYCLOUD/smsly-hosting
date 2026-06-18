@@ -69,14 +69,6 @@ wipe_existing_install() {
     echo -e "${YELLOW}       sudo bash install.sh${NC}"
     exit 0
 }
-
-if [ "$WIPE_MODE" = "true" ]; then
-    wipe_existing_install
-fi
-
-# =============================================================================
-# FIX-PERMISSIONS — Fix .env and shared directory permissions for container
-# =============================================================================
 fix_env_permissions() {
     local env_file="${1:-$INSTALL_DIR/.env}"
     echo -e "${BLUE}  → Fixing .env permissions...${NC}"
@@ -111,10 +103,6 @@ fix_env_permissions() {
         fi
     done
 }
-
-# =============================================================================
-# FIX-DOMAIN MODE — Fix domain/IP sync between .env, DB PlatformConfig, and Caddy
-# =============================================================================
 fix_domain_sync() {
     local target_domain="${1:-}"
     local env_file="$INSTALL_DIR/.env"
@@ -208,59 +196,6 @@ CADDYFIX
 
     echo -e "${GREEN}  ✓ Domain fix complete for: $target_domain${NC}"
 }
-
-if [ "${FIX_DOMAIN_MODE:-false}" = "true" ]; then
-    if [ "$EUID" -ne 0 ]; then
-        echo -e "${RED}x Please run as root (sudo bash install.sh --fix-domain)${NC}"
-        exit 1
-    fi
-    if [ ! -f "$INSTALL_DIR/.env" ] || [ ! -f "$INSTALL_DIR/$COMPOSE_FILE" ]; then
-        echo -e "${RED}x SMSLY installation not found at $INSTALL_DIR. Run fresh install first.${NC}"
-        exit 1
-    fi
-    cd "$INSTALL_DIR"
-    if ! should_manage_caddy; then
-        echo -e "${YELLOW}  → --fix-domain is master-only because node/agent modes do not manage Caddy/HTTPS.${NC}"
-        exit 0
-    fi
-    ensure_local_ignores
-    if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
-        echo -e "${YELLOW}  ! Local changes detected - stashing before repository sync${NC}"
-        git stash push --include-untracked -m "install-sync-$(date +%s)" >/dev/null 2>&1 || true
-    fi
-
-    # Git pull latest code first to get all SEC-xxx fixes
-    echo -e "${BLUE}  → Pulling latest installer code...${NC}"
-    git config --global --add safe.directory "$INSTALL_DIR" 2>/dev/null || true
-    if ! git fetch origin main 2>/dev/null; then
-        git -c http.sslVerify=false fetch origin main 2>/dev/null || true
-    fi
-    if ! git checkout -B main origin/main 2>/dev/null; then
-        git -c http.sslVerify=false checkout -B main origin/main 2>/dev/null || true
-    fi
-    echo -e "${GREEN}  ✓ Code updated${NC}"
-
-    # Detect current or prompt for domain
-    FIX_DOMAIN="${DOMAIN:-}"
-    if [ -z "$FIX_DOMAIN" ]; then
-        FIX_DOMAIN="$(env_get_value "$INSTALL_DIR/.env" "DOMAIN" 2>/dev/null || true)"
-    fi
-    while [ -z "$FIX_DOMAIN" ] || echo "$FIX_DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; do
-        if [ -n "$FIX_DOMAIN" ]; then
-            echo -e "${YELLOW}  ⚠ Current DOMAIN is an IP address ($FIX_DOMAIN). Enter your real domain.${NC}"
-        fi
-        echo -e "${BLUE}  Enter your domain (e.g., app.example.com):${NC}"
-        read -p "  Domain: " FIX_DOMAIN < /dev/tty
-        FIX_DOMAIN="$(echo "$FIX_DOMAIN" | xargs)"
-    done
-
-    fix_domain_sync "$FIX_DOMAIN"
-
-    # Re-exec into --update to rebuild Caddy container with new config
-    echo -e "${BLUE}  → Running --update to apply changes...${NC}"
-    export NO_SCREEN=true
-    export DOMAIN="$FIX_DOMAIN"
-    export USE_SSL="true"
 recover_runtime_stack() {
     echo -e "${BLUE}  -> Running runtime recovery (network + core services + edge)...${NC}"
 
@@ -326,7 +261,6 @@ print('${REGISTRY_USER:-smsly-registry}:' + bcrypt.hashpw(pw.encode(), bcrypt.ge
 
     echo -e "${GREEN}  OK Runtime recovery completed${NC}"
 }
-
 debug_platform_status() {
     # TODO(install): replace set -e toggle with explicit conditional. The
     # entire body tolerates command failures (each diagnostic line has its own
