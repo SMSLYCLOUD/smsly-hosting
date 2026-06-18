@@ -407,9 +407,8 @@ class BackupService:
             backup.save()
             self._prune_old_backups(ServiceBackup, service_id=service.id)
 
-            # Upload to S3 if a scheduled backup with cloud config
-            if backup_type == 'SCHEDULED':
-                _upload_to_cloud_if_configured(service, filepath)
+            # Upload to S3 if a cloud destination is configured
+            _upload_to_cloud_if_configured(service, filepath)
 
             # Clean up temp image if we created one
             if image_tag and image_tag.startswith("backup/"):

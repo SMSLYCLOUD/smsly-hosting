@@ -1,5 +1,8 @@
 from typing import Dict, Any, List, Optional
+import logging
 from .base import BaseCloudAdapter
+
+logger = logging.getLogger(__name__)
 
 try:
     from azure.mgmt.resource import ResourceManagementClient
@@ -9,6 +12,7 @@ try:
         Configuration, Ingress, TrafficWeight
     )
     from azure.identity import ClientSecretCredential
+    from azure.storage.blob import BlobServiceClient
     HAS_AZURE_SDK = True
 except ImportError:
     HAS_AZURE_SDK = False
@@ -17,6 +21,7 @@ except ImportError:
     ContainerApp = Template = Container = EnvironmentVar = None
     Configuration = Ingress = TrafficWeight = None
     ClientSecretCredential = None
+    BlobServiceClient = None
 
 class AzureAdapter(BaseCloudAdapter):
     def __init__(self, tenant_id: str, client_id: str,
@@ -110,8 +115,22 @@ class AzureAdapter(BaseCloudAdapter):
         raise NotImplementedError("Azure Functions integration pending.")
 
     def create_bucket(self, bucket_name: str, public: bool = False) -> str:
-        # Azure Blob Storage Implementation
-        return f"https://{bucket_name}.blob.core.windows.net/"
+        """Create an Azure Blob Storage container.
+
+        Requires the 'azure-storage-blob' package and a storage account
+        whose name is set via adapter extra config or constructor.
+        Falls back to returning the URL without creating the container.
+        """
+        try:
+            account_url = getattr(self, '_storage_account_url', None)
+            if not account_url:
+                raise ValueError("storage_account_url not configured")
+            blob_svc = BlobServiceClient(account_url=account_url, credential=self.credential)
+            container_client = blob_svc.create_container(bucket_name)
+            return container_client.url
+        except Exception as exc:
+            logger.warning("Azure create_bucket failed: %s. Returning URL as stub.", exc)
+            return f"https://{bucket_name}.blob.core.windows.net/"
 
     def provision_database(self, db_name: str, engine: str,
                            version: str) -> str:

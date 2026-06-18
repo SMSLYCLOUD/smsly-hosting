@@ -7,7 +7,8 @@ from django.db import models
 
 
 class Volume(models.Model):
-    _VOLUME_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+    # Aligned with name validator in views_storage.py
+    _VOLUME_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,62}$")
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     # Use string reference to avoid circular import

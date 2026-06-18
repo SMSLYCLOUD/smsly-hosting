@@ -1,6 +1,5 @@
 import logging
 logger = logging.getLogger(__name__)
-import logging
 import random
 import re
 import shlex
@@ -68,7 +67,6 @@ def create_service_backup_task(self, service_id, backup_type='MANUAL', backup_id
 
 @shared_task(bind=True, soft_time_limit=7200, time_limit=7500, max_retries=2, default_retry_delay=600)
 def create_server_backup_task(self, backup_id=None):
-    from apps.deployments.utils import log_event
     log_event(
         action='BACKUP_CREATE',
         target='Server',
@@ -85,7 +83,6 @@ def create_server_backup_task(self, backup_id=None):
 
 @shared_task(bind=True, soft_time_limit=3600, max_retries=2, default_retry_delay=300)
 def restore_service_backup_task(self, backup_id, target_service_id=None, requesting_user_id=None, raise_on_snapshot_failure=False):
-    from apps.deployments.utils import log_event
     log_event(
         action='BACKUP_RESTORE',
         target=f'Backup: {backup_id}',
@@ -109,7 +106,6 @@ def restore_service_backup_task(self, backup_id, target_service_id=None, request
 
 @shared_task(bind=True, soft_time_limit=7200, time_limit=7500)
 def restore_server_backup_task(self, backup_id, requesting_user_id=None):
-    from apps.deployments.utils import log_event
     log_event(
         action='BACKUP_RESTORE',
         target=f'Backup: {backup_id}',
@@ -177,8 +173,6 @@ def cleanup_old_backups_task():
     """Delete backups older than retention_days per schedule."""
     from .models_backup import BackupSchedule, ServiceBackup, ServerBackup
     from datetime import timedelta
-    from django.utils import timezone
-    import os
 
     schedules = BackupSchedule.objects.filter(enabled=True)
     cleaned = 0
@@ -211,8 +205,6 @@ def cleanup_old_backups_task():
 def run_scheduled_backups_task():
     """Execute all due BackupSchedule entries."""
     from .models_backup import BackupSchedule
-    from .services.backup_service import BackupService
-    from django.utils import timezone
     import croniter
     from datetime import datetime
 
