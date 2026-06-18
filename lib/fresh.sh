@@ -943,10 +943,10 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
     else
         echo -e "${BLUE}  → Deploying Observability Stack...${NC}"
         if [ -f "infrastructure/docker/docker-compose.observability.yml" ]; then
-            docker compose -f infrastructure/docker/docker-compose.observability.yml pull 2>/dev/null || \
-                echo -e "${YELLOW}  ⚠ Observability stack pull failed${NC}"
-            docker compose -f infrastructure/docker/docker-compose.observability.yml up -d 2>/dev/null || \
-                echo -e "${YELLOW}  ⚠ Observability stack failed to start${NC}"
+            docker compose -f infrastructure/docker/docker-compose.observability.yml pull --ignore-pull-failures || \
+                echo -e "${YELLOW}  ⚠ Observability stack pull failed (non-fatal)${NC}"
+            docker compose -f infrastructure/docker/docker-compose.observability.yml up -d --pull always || \
+                echo -e "${YELLOW}  ⚠ Observability stack start failed (non-fatal)${NC}"
         fi
     fi
     # Deploy docker-labels exporter to all remote nodes and regenerate target files
