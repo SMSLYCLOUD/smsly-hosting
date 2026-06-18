@@ -21,7 +21,6 @@ longer sufficient on its own.
 
 import logging
 
-from django.conf import settings
 from django.contrib.auth import authenticate
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes, throttle_classes

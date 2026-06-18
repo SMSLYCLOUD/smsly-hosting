@@ -6,7 +6,6 @@ from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from django.utils import timezone
 from rest_framework import serializers, viewsets, permissions, status
-from rest_framework.decorators import action
 from rest_framework.response import Response
 from .models import Service
 from .models_metrics import ServiceMetric

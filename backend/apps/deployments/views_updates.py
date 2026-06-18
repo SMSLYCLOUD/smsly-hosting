@@ -41,7 +41,7 @@ class PlatformUpdateViewSet(viewsets.ReadOnlyModelViewSet):
         update = PlatformUpdate.objects.create(initiated_by='api')
 
         # Run async
-        from .tasks import platform_update_task
+        from .tasks_platform_update import platform_update_task
         platform_update_task.delay(update_id=str(update.id))
 
         return Response(
@@ -57,7 +57,7 @@ class PlatformUpdateViewSet(viewsets.ReadOnlyModelViewSet):
                 {'error': 'Rollback not available'},
                 status=status.HTTP_400_BAD_REQUEST)
 
-        from .tasks import platform_rollback_task
+        from .tasks_platform_update import platform_rollback_task
         platform_rollback_task.delay(update_id=str(update.id))
         update.status = 'ROLLING_BACK'
         update.save(update_fields=['status'])

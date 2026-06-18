@@ -1,19 +1,65 @@
 import logging
-import os
+logger = logging.getLogger(__name__)
+import logging
+import random
+import re
+import shlex
 import shutil
 import tempfile
-import time
 import subprocess
-import hashlib
+import os
+import json
+import time
+import zipfile
+import secrets
+import threading
+from contextlib import contextmanager
+from urllib.parse import unquote, urlparse
+import docker
+import requests
 from celery import shared_task
+import apps.deployments.tasks_safedeploy
 from django.conf import settings
-from apps.deployments.models_safedeploy import PreviewEnvironment, DatabaseClone, MigrationValidation, DeploymentArtifact
-from apps.deployments.services.safedeploy.postgres_snapshot_manager import PostgresSnapshotManager
-from apps.deployments.services.safedeploy.django_adapter import DjangoAdapter
-from apps.deployments.models_core import Service, EnvironmentVariable, Deployment
-from apps.deployments.models_addons import Addon
-logger = logging.getLogger(__name__)
-
+from django.core.cache import cache
+from django.utils import timezone
+from django.db.models import Sum
+from apps.cloud.models import CloudProvider
+from apps.cloud.services.builder import NixpacksBuilder
+from apps.cloud.services.compute import ComputeService
+from apps.cloud.services.function_provisioner import FunctionProvisioner
+from apps.deployments.ai_router import DEFAULT_AI_ROUTER_API_BASE, DEFAULT_AI_ROUTER_UI_BASE, DEFAULT_BRAID_ALIAS, generate_ai_router_proxy_config, get_ollama_model_name, is_ai_router_service, is_ollama_service
+from apps.deployments.models import Service, Deployment, EnvironmentVariable, PlatformConfig
+from apps.deployments.models_addons import Addon, Backup
+from apps.deployments.models_backup import BackupSchedule, ServiceBackup
+from apps.deployments.models_storage import Volume
+from apps.deployments.models_transfer import ServerTransfer
+from apps.deployments.services.backup_service import BackupService
+from apps.deployments.services.pipeline import PipelineManager, PipelineError
+from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+from apps.deployments.services.tls_verify import should_verify
+from apps.deployments.services.transfer_service import ServerTransferService
+from apps.deployments.utils import append_log, broadcast_status, build_local_source_bundle, update_stage, is_deployment_local
+from services.addon_provisioner import addon_provisioner
+from .tasks_deploy import delete_service_task
+from .tasks_deploy import enqueue_smart_deploy_task
+from .tasks_deploy import delete_service_task
+from .tasks_deploy import enqueue_smart_deploy_task
+from .tasks_deploy import enqueue_smart_deploy_task
+from .tasks_deploy import delete_service_task
+from .tasks_deploy import enqueue_smart_deploy_task
+from .tasks_deploy import delete_service_task
+from .tasks_deploy import enqueue_smart_deploy_task
+from .tasks_deploy import delete_service_task
+from .tasks_deploy import delete_service_task
+from .tasks_deploy import enqueue_smart_deploy_task
+from .tasks_deploy import enqueue_smart_deploy_task
+from .tasks_deploy import delete_service_task
+from .tasks_deploy import enqueue_smart_deploy_task
+from .tasks_deploy import delete_service_task
+from .tasks_deploy import enqueue_smart_deploy_task
+from .tasks_deploy import delete_service_task
+from .tasks_deploy import delete_service_task
+from .tasks_deploy import enqueue_smart_deploy_task
 
 def _preview_service_name(preview: PreviewEnvironment) -> str:
     return f"preview-{preview.id.hex}"
@@ -146,7 +192,7 @@ def _dispatch_preview_deployment(deployment: Deployment, provider_id: str | None
         logger.info("Skipping preview deployment dispatch while CELERY_TASK_ALWAYS_EAGER is enabled")
         return None
 
-    from apps.deployments.tasks import enqueue_smart_deploy_task
+    from apps.deployments.tasks_deploy import enqueue_smart_deploy_task
     return enqueue_smart_deploy_task(str(deployment.id), provider_id, skip_review=True)
 
 def checkout_code(repo_url: str, branch: str, commit_sha: str, target_dir: str, token: str = None) -> str:
@@ -581,7 +627,7 @@ def destroy_preview_environment_job(preview_id: str):
         if transient_service:
             transient_service.status = Service.Status.DELETION_PENDING
             transient_service.save()
-            from apps.deployments.tasks import delete_service_task
+            from apps.deployments.tasks_deploy import delete_service_task
             delete_service_task.delay(str(transient_service.id))
             # Allow time for the container to be torn down before destroying the DB.
             # The container deletion is async via Celery; the DB destroy is sync.

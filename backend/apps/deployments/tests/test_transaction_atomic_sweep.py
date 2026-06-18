@@ -136,7 +136,7 @@ class AddDomainAtomicTests(APITestCase):
 
     @patch('apps.domains.tasks.verify_dns_and_provision_ssl_task')
     def test_add_domain_succeeds(self, _mock_verify):
-        from apps.deployments.views import ServiceViewSet
+        from apps.deployments.views_service import ServiceViewSet
         with patch.object(ServiceViewSet, '_sync_caddy', return_value={'ok': True}):
             resp = self.client.post(
                 self.url, {'domain': 'example.com'}, format='json',

@@ -18,7 +18,6 @@ class WebhookSchemaSerializer(serializers.Serializer):
 
 class WebhookRateThrottle(permissions.BasePermission):
     """Placeholder — real throttling is done by the webhook provider's retry."""
-    pass
 
 
 class GitHubWebhookView(GenericAPIView):

@@ -248,7 +248,7 @@ class EnvironmentVariableAPITests(APITestCase):
 
     def test_build_runtime_env_filters_ciphertext(self):
         """_build_runtime_env should exclude environment variables that are still Fernet ciphertext."""
-        from apps.deployments.tasks import _build_runtime_env
+        from apps.deployments.tasks_deploy_local import _build_runtime_env
         from cryptography.fernet import Fernet
         key = Fernet.generate_key()
         f = Fernet(key)

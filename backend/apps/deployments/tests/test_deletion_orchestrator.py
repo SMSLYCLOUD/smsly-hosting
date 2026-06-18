@@ -4,7 +4,7 @@ from django.test import TestCase
 from apps.deployments.services.deletion_orchestrator import DeletionOrchestrator
 from apps.deployments.models_core import ManagedServer, Service
 from apps.deployments.models_addons import Addon
-from apps.deployments.tasks import delete_service_task
+from apps.deployments.tasks_deploy import delete_service_task
 import uuid
 
 User = get_user_model()

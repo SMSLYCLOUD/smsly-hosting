@@ -1,6 +1,6 @@
 """Auto-scaling API: analyze services and manage replicas."""
 from django.shortcuts import get_object_or_404
-from rest_framework import viewsets, permissions, status, serializers
+from rest_framework import viewsets, permissions, serializers
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
