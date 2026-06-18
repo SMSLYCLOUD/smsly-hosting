@@ -48,8 +48,12 @@ from .tasks_deploy import smart_deploy_task
 from .tasks_deploy import smart_deploy_task
 from .tasks_deploy import smart_deploy_task
 from .tasks_deploy import smart_deploy_task
-from .tasks_deploy import smart_deploy_task
-from .tasks_deploy import smart_deploy_task
+
+# Module-level constants (ecosystem scanning thresholds)
+_MIN_FREE_MEMORY_MB = 256
+_WAVE_RECHECK_SECONDS = 300
+_MAX_WAVE_RECHECKS = 10
+_MAX_WAVE_SIZE = 5
 
 def _canonical_repo_ref(raw: Any) -> str:
     """Normalize repo references to owner/name when possible."""
