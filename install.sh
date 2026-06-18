@@ -6403,13 +6403,50 @@ print('CREATED' if created else 'EXISTS')
         echo -e "${GREEN}  ✓ Local Docker cloud provider ready${NC}"
     fi
 fi
-echo -e "${BLUE}  → Keeping backend entrypoint bootstrap disabled; installer controls migrations...${NC}"
+    echo -e "${BLUE}  → Keeping backend entrypoint bootstrap disabled; installer controls migrations...${NC}"
 env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
 if should_manage_caddy; then
     env_set_value "$INSTALL_DIR/.env" "SMSLY_ENABLE_STARTUP_CADDY_SYNC" "true"
 else
     env_set_value "$INSTALL_DIR/.env" "SMSLY_ENABLE_STARTUP_CADDY_SYNC" "false"
 fi
+
+    # ─── Generate Recovery Phrase ─────────────────────────────────────────
+    echo -e "${BLUE}  → Generating 12-word recovery phrase...${NC}"
+    RECOVERY_PHRASE="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+from apps.deployments.views_recovery import recovery_phrase_generate
+from django.test.client import RequestFactory
+factory = RequestFactory()
+request = factory.get('/api/v1/auth/recovery/generate/')
+request.user = __import__('django').contrib.auth.get_user_model().objects.filter(is_superuser=True).first()
+from django.contrib.sessions.middleware import SessionMiddleware
+from django.middleware.csrf import CsrfViewMiddleware
+# Minimal request setup for the view to work
+response = recovery_phrase_generate(request)
+import json
+print(json.dumps(response.data))
+" 2>/dev/null | tail -1 || true)"
+    if [ -n "$RECOVERY_PHRASE" ]; then
+        RECOVERY_PHRASE_TEXT="$(printf '%s' "$RECOVERY_PHRASE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('phrase',''))" 2>/dev/null || true)"
+        if [ -n "$RECOVERY_PHRASE_TEXT" ]; then
+            echo -e "${GREEN}  ✓ Recovery phrase generated${NC}"
+            echo -e "$RECOVERY_PHRASE_TEXT" > "$INSTALL_DIR/.recovery_phrase"
+            chmod 600 "$INSTALL_DIR/.recovery_phrase"
+            echo -e ""
+            echo -e "${YELLOW}════════════════════════════════════════════════════════════${NC}"
+            echo -e "${YELLOW}   ⚠  ACCOUNT RECOVERY PHRASE — WRITE THIS DOWN             ${NC}"
+            echo -e "${YELLOW}   This is the ONLY time this phrase is displayed.            ${NC}"
+            echo -e "${YELLOW}   If all trusted devices are lost, this 12-word phrase       ${NC}"
+            echo -e "${YELLOW}   is your last resort to recover admin access.               ${NC}"
+            echo -e "${YELLOW}                                                              ${NC}"
+            echo -e "${YELLOW}   $RECOVERY_PHRASE_TEXT${NC}"
+            echo -e "${YELLOW}                                                              ${NC}"
+            echo -e "${YELLOW}   Stored (encrypted) in: $INSTALL_DIR/.recovery_phrase${NC}"
+            echo -e "${YELLOW}════════════════════════════════════════════════════════════${NC}"
+            echo -e ""
+        fi
+    fi
+
     set_checkpoint "admin_created"
 fi
 fi
@@ -7162,6 +7199,9 @@ fi
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
 echo -e "${YELLOW}  View credentials:   cat $CREDENTIALS_FILE${NC}"
 echo -e "${YELLOW}  View logs:          cat $LOG_FILE${NC}"
+if [ -f "$INSTALL_DIR/.recovery_phrase" ] && [ -s "$INSTALL_DIR/.recovery_phrase" ]; then
+    echo -e "${YELLOW}  Recovery phrase:    cat $INSTALL_DIR/.recovery_phrase${NC}"
+fi
 if is_master_mode; then
     echo -e "${YELLOW}  Update frontend:    sudo bash install.sh --update-frontend${NC}"
 fi
