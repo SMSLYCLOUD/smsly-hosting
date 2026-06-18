@@ -59,6 +59,7 @@ urlpatterns = [
     path('api/v1/notifications/', include('apps.notifications.urls')),
     path('api/v1/core/', include('apps.core.urls')),
     path('api/v1/domains/', include('apps.domains.urls')),
+    path('api/v1/organizations/', include('apps.organizations.urls')),
 
     # Auth — the three brute-force-sensitive endpoints
     # (login, password reset, registration) are mounted from
