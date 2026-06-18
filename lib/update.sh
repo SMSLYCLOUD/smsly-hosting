@@ -914,7 +914,7 @@ for domain in Domain.objects.select_related('service').filter(
 }
 
 ${cf_domain} {
-    reverse_proxy {$SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
+    reverse_proxy ${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
     encode gzip
     log {
         output file /var/log/caddy/access.log
@@ -927,7 +927,7 @@ ${cf_domain} {
     }
 ${cf_known_stanza}
     handle {
-        reverse_proxy {$SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
+        reverse_proxy ${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
     }
 }
 
