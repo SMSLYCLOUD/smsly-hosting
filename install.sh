@@ -193,6 +193,8 @@ SNAPSHOT_FILE="$INSTALL_DIR/.update-safe-snapshot"
 BACKUP_DIR="$INSTALL_DIR/.update-backups"
 LOCK_FILE="/tmp/smsly-install.lock"
 CADDY_LAST_GOOD="$INSTALL_DIR/caddy-config/Caddyfile.smsly-last-good"
+SMSLY_BRANCH="${SMSLY_BRANCH:-main}"
+SMSLY_GIT_REMOTE="${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}"
 
 # ─── Second argument parser ────────────────────────────────────────────────────
 
