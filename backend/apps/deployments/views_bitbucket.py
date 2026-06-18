@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
+
 import requests
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
@@ -14,17 +16,76 @@ logger = logging.getLogger(__name__)
 
 
 def _get_bitbucket_token(user):
+    """Retrieve the stored Bitbucket OAuth token for *user*, refreshing if expired."""
     try:
         from allauth.socialaccount.models import SocialAccount, SocialToken
+        from django.utils import timezone
+
         account = SocialAccount.objects.filter(user=user, provider="bitbucket_oauth2").order_by("-id").first()
         if not account:
             return None
         token_obj = SocialToken.objects.filter(account=account).order_by("-id").first()
         if not token_obj:
             return None
+
+        if token_obj.expires_at and token_obj.expires_at <= timezone.now():
+            refreshed = _refresh_bitbucket_token(token_obj)
+            if not refreshed:
+                return None
+
         return token_obj.token
     except Exception:
         return None
+
+
+def _refresh_bitbucket_token(token_obj):
+    """Use the refresh token to obtain a new Bitbucket access token."""
+    from django.utils import timezone
+    refresh_token = getattr(token_obj, "token_secret", None)
+    if not refresh_token:
+        logger.warning("No refresh token stored for Bitbucket — user must reconnect")
+        return False
+
+    try:
+        from allauth.socialaccount.models import SocialApp
+
+        app = SocialApp.objects.filter(provider="bitbucket_oauth2").first()
+        if not app:
+            logger.error("No Bitbucket SocialApp configured")
+            return False
+
+        resp = requests.post(
+            "https://bitbucket.org/site/oauth2/access_token",
+            auth=(app.client_id, app.secret),
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+            },
+            headers={"Accept": "application/json"},
+            timeout=15,
+        )
+        if not resp.ok:
+            logger.warning("Bitbucket token refresh failed: %s", resp.text[:200])
+            return False
+
+        data = resp.json()
+        new_token = data.get("access_token", "")
+        if not new_token:
+            return False
+
+        token_obj.token = new_token
+        token_obj.token_secret = data.get("refresh_token", refresh_token)
+        if "expires_in" in data:
+            try:
+                token_obj.expires_at = timezone.now() + timedelta(seconds=int(data["expires_in"]))
+            except (ValueError, TypeError):
+                pass
+        token_obj.save()
+        logger.info("Bitbucket token refreshed successfully")
+        return True
+    except Exception as exc:
+        logger.error("Bitbucket token refresh failed: %s", exc)
+        return False
 
 
 @extend_schema(responses=OpenApiTypes.OBJECT)

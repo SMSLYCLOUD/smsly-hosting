@@ -36,12 +36,14 @@ class GitLabWebhookHandler:
         if not repo_url or not branch:
             return {'message': 'Missing repo URL or branch', 'triggered': False}
 
-        services = Service.objects.filter(
-            repository_url__icontains=repo_url.split('/')[-1].replace('.git', ''),
-            branch=branch,
-            deploy_type='GIT',
-            is_preview=False,
+        from ..services.repo_matcher import match_service_repo
+        candidates = Service.objects.filter(
+            branch=branch, deploy_type='GIT', is_preview=False,
         )
+        services = [
+            s for s in candidates
+            if s.repository_url and match_service_repo(s.repository_url, repo_url)
+        ]
         count = 0
         for service in services:
             deployment = Deployment.objects.create(
