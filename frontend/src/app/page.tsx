@@ -184,6 +184,104 @@ const features = [
         description: "Web-based SSH into any running container. Debug, inspect logs, run migrations, and manage state without leaving the dashboard.",
         color: "text-teal-500",
         bg: "bg-teal-500/10"
+    },
+    {
+        icon: Folders,
+        title: "File Browser",
+        description: "Browse, upload, download, and edit files inside any running container or attached volume — no CLI needed.",
+        color: "text-yellow-500",
+        bg: "bg-yellow-500/10"
+    },
+    {
+        icon: Search,
+        title: "Real-Time Log Streaming",
+        description: "Tail container logs in real time with Loki-powered search, filtering, and multi-service aggregation — all in your browser.",
+        color: "text-sky-500",
+        bg: "bg-sky-500/10"
+    },
+    {
+        icon: BarChart3,
+        title: "Metrics Dashboard",
+        description: "CPU, memory, network, and disk metrics powered by Prometheus and cAdvisor. Historical graphs and live snapshots for every service.",
+        color: "text-emerald-500",
+        bg: "bg-emerald-500/10"
+    },
+    {
+        icon: Cpu,
+        title: "Horizontal Scaling",
+        description: "Scale any service horizontally across replicas. Adjust CPU, memory, and replica count per service with instant apply.",
+        color: "text-orange-500",
+        bg: "bg-orange-500/10"
+    },
+    {
+        icon: Timer,
+        title: "Cron Jobs",
+        description: "Schedule recurring tasks per service. Define cron expressions or pre-set intervals — backups, cleanup, pings, and automation.",
+        color: "text-rose-500",
+        bg: "bg-rose-500/10"
+    },
+    {
+        icon: Network,
+        title: "Lite Edge Agents",
+        description: "Extend your grid to any VPS or edge location. Lite agents share your master database and registry while running local workloads.",
+        color: "text-purple-500",
+        bg: "bg-purple-500/10"
+    },
+    {
+        icon: Users,
+        title: "Teams & Collaboration",
+        description: "Invite team members with role-based access. Manage services, deployments, and environments together — unlimited seats, no per-user pricing.",
+        color: "text-blue-500",
+        bg: "bg-blue-500/10"
+    },
+    {
+        icon: Key,
+        title: "API Tokens & CLI",
+        description: "Generate scoped API tokens for automated workflows. Full-featured CLI for deployments, logs, secrets, env vars, domains, and certificates.",
+        color: "text-fuchsia-500",
+        bg: "bg-fuchsia-500/10"
+    },
+    {
+        icon: RefreshCw,
+        title: "Blue-Green Deployments",
+        description: "Zero-downtime deployments with automatic traffic shifting. Run two identical environments and switch instantly on success.",
+        color: "text-cyan-500",
+        bg: "bg-cyan-500/10"
+    },
+    {
+        icon: Shield,
+        title: "Safe Deploy & Approvals",
+        description: "Stage rollouts behind approval gates. Deploy to preview, run verification checks, and promote to production with a single click.",
+        color: "text-indigo-500",
+        bg: "bg-indigo-500/10"
+    },
+    {
+        icon: Cable,
+        title: "Docker & Kubernetes Targets",
+        description: "Deploy to Docker or Kubernetes clusters. The platform auto-detects your runtime and applies the right orchestrator strategy.",
+        color: "text-sky-500",
+        bg: "bg-sky-500/10"
+    },
+    {
+        icon: Activity,
+        title: "Topology Visualization",
+        description: "Interactive service dependency graph showing connections between apps, addons, volumes, domains, and tunnels — updated in real time.",
+        color: "text-emerald-500",
+        bg: "bg-emerald-500/10"
+    },
+    {
+        icon: Lock,
+        title: "Custom SSL Manager",
+        description: "Upload and manage your own SSL certificates per custom domain. Full Let's Encrypt integration with automatic renewal.",
+        color: "text-violet-500",
+        bg: "bg-violet-500/10"
+    },
+    {
+        icon: ArrowRight,
+        title: "Disaster Recovery",
+        description: "Automatic master DB snapshots pushed to every lite agent. One-click promote an agent to master if the primary fails — no data loss.",
+        color: "text-rose-500",
+        bg: "bg-rose-500/10"
     }
 ];
 
