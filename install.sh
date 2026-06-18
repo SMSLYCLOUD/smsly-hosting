@@ -12,6 +12,8 @@ set -euo pipefail
 
 # ─── Defaults for unset env vars ─────────────────────────────────────────────
 export SMSLY_SERVICE_PROXY_UPSTREAM=${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
+export SMSLY_BRANCH="${SMSLY_BRANCH:-main}"
+export SMSLY_GIT_REMOTE="${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}"
 
 # ─── Root Check ──────────────────────────────────────────────────────────────
 if [ "$EUID" -ne 0 ]; then
