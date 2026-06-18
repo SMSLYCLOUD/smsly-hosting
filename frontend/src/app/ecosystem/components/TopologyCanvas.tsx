@@ -146,7 +146,7 @@ export function TopologyCanvas({ plan, servers, callbacks }: any) {
 
     setNodes(layoutedNodes);
     setEdges(layoutedEdges);
-  }, [plan, servers]); // callbacks omitted intentionally to avoid re-layouting constantly
+  }, [plan, servers, setNodes, setEdges, callbacks]);
 
   const onLayout = useCallback(
     (direction: string) => {
@@ -159,7 +159,7 @@ export function TopologyCanvas({ plan, servers, callbacks }: any) {
       setNodes([...layoutedNodes]);
       setEdges([...layoutedEdges]);
     },
-    [nodes, edges]
+    [nodes, edges, setNodes, setEdges],
   );
 
   return (

@@ -114,6 +114,7 @@ export default function ReplicationPage() {
         } finally {
             setChecking(false);
         }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [selectedMesh, toast]);
 
     useEffect(() => { fetchMeshes(); }, [fetchMeshes]);

@@ -56,6 +56,7 @@ export function CloudStorageTab({ serviceId }: { serviceId?: string }) {
       setDestinations(Array.isArray(res.data) ? res.data : res.data?.results || []);
     } catch { toast({ title: "Failed to load destinations", variant: "destructive" }); }
     finally { setLoading(false); }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serviceId]);
 
   useEffect(() => { fetchDestinations(); }, [fetchDestinations]);

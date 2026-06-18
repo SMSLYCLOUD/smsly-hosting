@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { addonsApi, Addon } from '@/lib/api';
@@ -70,7 +71,7 @@ export default function AddonDetailPage() {
             </Link>
             <span className="text-3xl block h-8 w-8 relative">
               {(meta as any)?.logo ? (
-                <img src={(meta as any).logo} alt={meta?.label || ''} className="w-full h-full object-contain" />
+                <Image src={(meta as any).logo} alt={meta?.label || ''} className="w-full h-full object-contain" unoptimized />
               ) : (
                 <Database className="w-full h-full text-muted-foreground" />
               )}

@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import Image from 'next/image';
 import { useRouter } from "next/navigation"
 import { Github, Box, Layers, ArrowRight, Loader2, Search, Sparkles, Zap, Settings2, Rocket, CheckCircle2, Code2, Database, Globe, GitBranch, Key, SkipForward, Server, Monitor, Wifi, WifiOff, Filter, Tag, LayoutGrid, ListFilter } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -594,7 +595,7 @@ export default function NewServicePage() {
                       >
                         <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-zinc-900/50 border border-zinc-800 overflow-hidden p-1">
                           {(t.icon || t.logo_url)?.startsWith('http') || (t.icon || t.logo_url)?.startsWith('/') ? (
-                            <img src={t.icon || t.logo_url} alt={t.name} className="h-7 w-7 object-contain" />
+                            <Image src={t.icon || t.logo_url} alt={t.name} className="h-7 w-7 object-contain" unoptimized />
                           ) : (
                             <span className="text-xl">{t.icon || t.logo_url || '📦'}</span>
                           )}

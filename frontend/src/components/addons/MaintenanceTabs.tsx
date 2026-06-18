@@ -65,7 +65,7 @@ export function MaintenanceTabs({ addonId }: MaintenanceTabsProps) {
     } finally {
       setStatsLoading(false);
     }
-  }, [addonId]);
+  }, [addonId, toast]);
 
   const fetchTables = useCallback(async () => {
     setTablesLoading(true);
@@ -77,7 +77,7 @@ export function MaintenanceTabs({ addonId }: MaintenanceTabsProps) {
     } finally {
       setTablesLoading(false);
     }
-  }, [addonId]);
+  }, [addonId, toast]);
 
   const fetchCredentials = useCallback(async () => {
     setCredsLoading(true);
@@ -89,7 +89,7 @@ export function MaintenanceTabs({ addonId }: MaintenanceTabsProps) {
     } finally {
       setCredsLoading(false);
     }
-  }, [addonId]);
+  }, [addonId, toast]);
 
   useEffect(() => {
     if (activeTab === 'overview') fetchStats();

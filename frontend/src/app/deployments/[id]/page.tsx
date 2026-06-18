@@ -53,6 +53,7 @@ export default function DeploymentWatchPage() {
         clearInterval(interval);
         resetSpaceOpsState(); // Reset background on unmount
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   useEffect(() => {
@@ -62,8 +63,7 @@ export default function DeploymentWatchPage() {
     const interval = setInterval(() => {
         setLogs(prev => prev + `[${new Date().toISOString()}] Waiting for status update...\n`);
     }, 3000);
-    return () => clearInterval(interval);
-  }, [deployment?.status]);
+  }, [deployment?.status, deployment]);
 
   if (loading) {
     return (

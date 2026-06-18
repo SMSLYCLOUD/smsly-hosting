@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   ShieldCheck, 
   Database, 
@@ -77,9 +77,10 @@ export const SafeDeployPanel: React.FC<SafeDeployPanelProps> = ({ serviceId, pre
       })
       .catch(() => {})
       .finally(() => setLoadingCommits(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [githubRepo, branchName]);
 
-  const fetchPreviews = async () => {
+  const fetchPreviews = useCallback(async () => {
     try {
       const res = await api.get(`/services/${serviceId}/previews/`);
       const data = res.data;
@@ -90,13 +91,13 @@ export const SafeDeployPanel: React.FC<SafeDeployPanelProps> = ({ serviceId, pre
     } finally {
       setLoading(false);
     }
-  };
+  }, [serviceId]);
 
   useEffect(() => {
     fetchPreviews();
-    const interval = setInterval(fetchPreviews, 10000); // Poll every 10s
+    const interval = setInterval(fetchPreviews, 10000);
     return () => clearInterval(interval);
-  }, [serviceId]);
+  }, [serviceId, fetchPreviews]);
 
   const handleCreatePreview = async () => {
     if (!branchName || !commitSha) {

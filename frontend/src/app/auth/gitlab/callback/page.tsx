@@ -41,6 +41,7 @@ function GitLabCallbackContent() {
     };
 
     exchangeCode();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (

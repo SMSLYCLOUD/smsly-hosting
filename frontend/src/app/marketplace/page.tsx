@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import Image from 'next/image';
 import { Database, Archive, Play, Trash2, StopCircle, RefreshCw, Loader2, ServerIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"
@@ -246,7 +247,7 @@ export default function MarketplacePage() {
                         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                             <CardTitle className="text-sm font-medium">{item.name}</CardTitle>
                             {item.logo ? (
-                                <img src={item.logo} alt={item.name} className="h-6 w-6 object-contain" />
+                                <Image src={item.logo} alt={item.name} className="h-6 w-6 object-contain" unoptimized />
                             ) : (
                                 <span className="text-sm font-mono text-muted-foreground">??</span>
                             )}
@@ -280,7 +281,7 @@ export default function MarketplacePage() {
                                     <div className="flex items-center gap-4 mb-4 sm:mb-0">
                                         <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center text-xl overflow-hidden p-2">
                                             {meta?.logo ? (
-                                                <img src={meta.logo} alt={meta.name} className="w-full h-full object-contain" />
+                                                <Image src={meta.logo} alt={meta.name} className="w-full h-full object-contain" unoptimized />
                                             ) : (
                                                 <span className="text-sm font-mono text-muted-foreground">?</span>
                                             )}
