@@ -117,7 +117,6 @@ def _candidate_api_urls(server) -> list[str]:
     return urls
 
 
-
 def _extract_health_version(response) -> str:
     try:
         payload = response.json()

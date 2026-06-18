@@ -18,7 +18,6 @@ from urllib.parse import unquote, urlparse
 import docker
 import requests
 from celery import shared_task
-import apps.deployments.tasks_safedeploy
 from django.conf import settings
 from django.core.cache import cache
 from django.utils import timezone
@@ -45,9 +44,6 @@ from services.addon_provisioner import addon_provisioner
 from .tasks_caddy import _regenerate_caddyfile
 from .tasks_deploy import enqueue_smart_deploy_task
 from .tasks_deploy import _handle_failure
-from .tasks_deploy import _handle_failure
-from .tasks_caddy import _regenerate_caddyfile
-from .tasks_deploy import enqueue_smart_deploy_task
 
 def _handle_remote_deployment_legacy(deployment, server):
     """Delegate deployment to a remote server and poll for status."""

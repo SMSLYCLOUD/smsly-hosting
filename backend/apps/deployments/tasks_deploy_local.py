@@ -59,7 +59,6 @@ from urllib.parse import unquote, urlparse
 import docker
 import requests
 from celery import shared_task
-import apps.deployments.tasks_safedeploy
 from django.conf import settings
 from django.core.cache import cache
 from django.utils import timezone
@@ -83,14 +82,7 @@ from apps.deployments.utils import append_log, broadcast_status, build_local_sou
 from services.addon_provisioner import addon_provisioner
 
 
-from .tasks_utils import _env_int
-from .tasks_deploy_remote import _is_traefik_not_ready
-from .tasks_utils import _env_bool
-from .tasks_deploy_remote import _route_misroute_reason
-from .tasks_deploy_remote import _is_traefik_not_ready
-from .tasks_deploy_remote import _route_misroute_reason
-from .tasks_utils import _env_bool
-from .tasks_utils import _env_int
+from .tasks_utils import _env_int, _env_bool
 
 def _docker_safe_segment(value: str, fallback: str = "app") -> str:
     """Normalize strings used in Docker image tags and names."""
@@ -667,6 +659,8 @@ def _wait_for_local_route_ready(
 
     If timeout_seconds <= 0, polls indefinitely (capped by Celery task timeout).
     """
+    from .tasks_deploy_remote import _is_traefik_not_ready, _route_misroute_reason
+
     host = (service.public_domain or "").strip()
     if not host:
         return True
