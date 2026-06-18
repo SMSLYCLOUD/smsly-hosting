@@ -515,6 +515,9 @@ CRYPTOMUS_API_KEY = config('CRYPTOMUS_API_KEY', default='')
 IS_AGENT_MODE = os.environ.get('MODE') == 'agent'
 
 INSTALLED_APPS = [
+    'django_otp',
+    'django_otp.plugins.otp_totp',
+    'django_otp.plugins.otp_static',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.sites',  # Required for allauth
@@ -608,6 +611,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'django_otp.middleware.OTPMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'apps.core.middleware.security.SecurityMiddleware',  # Zero Trust HMAC V2

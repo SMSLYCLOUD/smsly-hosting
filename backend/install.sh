@@ -6772,6 +6772,35 @@ echo -e "${YELLOW}  Runtime recovery:   sudo bash install.sh --recover${NC}"
 echo -e "${YELLOW}  Debug snapshot:     sudo bash install.sh --debug${NC}"
 echo -e "${YELLOW}  Wipe install:       sudo bash install.sh --wipe${NC}"
 
+# ─── Capture SSH Installer Device Trust ──────────────────────────────────────
+# Record the SSH client's public key fingerprint as a trusted device so the
+# platform can recognize this machine on future administrative operations.
+if [ -n "$SSH_CONNECTION" ] && command -v ssh-add &>/dev/null; then
+    SSH_CLIENT_IP=$(echo "$SSH_CONNECTION" | awk '{print $1}')
+    SSH_KEY_FP=$(ssh-add -l 2>/dev/null | head -1 | awk '{print $2}')
+    if [ -n "$SSH_KEY_FP" ]; then
+        echo -e "${BLUE}  → Registering SSH client key as trusted device: ${SSH_KEY_FP}${NC}"
+        docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+import os, json
+from apps.deployments.models_core import TrustedDevice
+from django.contrib.auth import get_user_model
+user = get_user_model().objects.filter(is_superuser=True).first()
+if user:
+    TrustedDevice.objects.get_or_create(
+        user=user,
+        ssh_key_fingerprint='${SSH_KEY_FP}',
+        defaults={
+            'trust_method': 'ssh_key',
+            'label': 'SSH Installer (${SSH_CLIENT_IP})',
+            'ip_address': '${SSH_CLIENT_IP}',
+            'fingerprint_hash': os.urandom(16).hex(),
+        }
+    )
+    print('SSH installer device registered.')
+" 2>/dev/null || echo -e "${YELLOW}  ⚠ Could not register SSH device trust (non-critical)${NC}"
+    fi
+fi
+
 # ─── Verification Check Summary ──────────────────────────────────────────────
 if [ "$VERIFY_PASS_COUNT" -eq "$VERIFY_TOTAL" ]; then
     echo -e "\n${GREEN}  ✓ All $VERIFY_TOTAL/$VERIFY_TOTAL verification checks passed.${NC}"

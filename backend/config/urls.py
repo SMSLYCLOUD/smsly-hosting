@@ -71,6 +71,7 @@ urlpatterns = [
     # resolution race.
     path('api/v1/auth/', include('apps.core.urls_throttled_auth')),
     path('api/v1/auth/', include('dj_rest_auth.urls')),
+    path('api/v1/auth/2fa/', include('apps.deployments.urls_2fa')),
     path(
         'api/v1/auth/registration/',
         include('dj_rest_auth.registration.urls')),

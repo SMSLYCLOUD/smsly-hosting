@@ -61,6 +61,12 @@ class ManagedServer(models.Model):
         default=dict, blank=True,
         help_text="Cloud provider metadata (VPC ID, Instance ID, etc.)"
     )
+    hardware_fingerprint = models.JSONField(
+        default=dict, blank=True,
+        help_text="Captured hardware identifiers collected during provisioning "
+                  "(CPU serial, DMI UUID, MAC addresses, disk serials). Used for "
+                  "node identity attestation — verifies the same hardware is connecting.",
+    )
 
     # ── Connection credentials ──
     api_url = models.URLField(
@@ -859,6 +865,11 @@ class PlatformConfig(models.Model):
     bitbucket_webhook_secret = EncryptedCharField(
         max_length=512, blank=True, default='',
         help_text="Bitbucket webhook secret for push event verification")
+    recovery_phrase_hash = EncryptedCharField(
+        max_length=512, blank=True, default='',
+        help_text="SHA-256 hash of the 12-word recovery phrase (salted). "
+                  "Used as last-resort admin account access if all trusted devices are lost.",
+    )
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -988,3 +999,79 @@ class PlatformConfig(models.Model):
     def __str__(self):
         mode = "SSL" if self.use_ssl else "HTTP"
         return f"Platform Config ({self.domain or 'IP-only'} / {mode})"
+
+
+class TrustedDevice(models.Model):
+    """
+    A trusted device authorized to administer this platform.
+
+    During first sign-in, the device is enrolled by capturing a hardware
+    fingerprint (CPU cores, platform, screen, canvas hash) and storing it
+    alongside a cryptographically-random device token. Subsequent sign-ins
+    from unrecognized devices require out-of-band verification.
+
+    This prevents credential-stuffing attacks: even with valid credentials,
+    an attacker cannot access the platform from an unrecognized device.
+    """
+    user = models.ForeignKey(
+        'auth.User', on_delete=models.CASCADE,
+        related_name='trusted_devices',
+    )
+    device_token = models.CharField(
+        max_length=128, unique=True,
+        help_text="Cryptographically random token stored in browser localStorage",
+    )
+    fingerprint_hash = models.CharField(
+        max_length=128, db_index=True,
+        help_text="SHA-256 hash of combined hardware/software fingerprint signals",
+    )
+    fingerprint_data = models.JSONField(
+        blank=True, default=dict,
+        help_text="Raw fingerprint signals (canvas hash, WebGL, audio, fonts, CPU, GPU, etc.)",
+    )
+    trust_method = models.CharField(
+        max_length=32, default='browser',
+        choices=[
+            ('browser', 'Browser fingerprint'),
+            ('ssh_key', 'SSH public key'),
+            ('api_token', 'API token'),
+            ('manual', 'Manually approved'),
+        ],
+        help_text="How this device was enrolled",
+    )
+    ssh_key_fingerprint = models.CharField(
+        max_length=128, blank=True, default='',
+        help_text="SHA-256 fingerprint of SSH public key (for SSH trust method)",
+    )
+    label = models.CharField(
+        max_length=255, blank=True, default='',
+        help_text="User-assigned label (e.g. 'Work Laptop', 'iPhone')",
+    )
+    ip_address = models.GenericIPAddressField(
+        blank=True, null=True,
+        help_text="IP address at time of enrollment",
+    )
+    user_agent = models.TextField(
+        blank=True, default='',
+        help_text="User-Agent string at time of enrollment",
+    )
+    trust_score = models.IntegerField(
+        default=0,
+        help_text="Aggregated trust score (0-100). Incremented on successful "
+                  "interactions, decremented on suspicious activity.",
+    )
+    trust_score_updated_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text="Last time the trust score was modified.",
+    )
+    last_seen_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        verbose_name = "Trusted Device"
+        verbose_name_plural = "Trusted Devices"
+        ordering = ['-last_seen_at']
+
+    def __str__(self):
+        return f"{self.label or self.fingerprint_hash[:16]}... ({self.user})"
