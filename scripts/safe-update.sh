@@ -84,13 +84,38 @@ safe_update_snapshot() {
     mkdir -p "$BACKUP_DIR"
     export SNAPSHOT_FILE BACKUP_DIR
 
-    local prev_hash; prev_hash=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+    local prev_hash
+    if [ -n "${SMSLY_PRE_UPDATE_HEAD:-}" ]; then
+        prev_hash="$SMSLY_PRE_UPDATE_HEAD"
+    else
+        prev_hash=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+    fi
     local prev_branch; prev_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
     local backup_file="$BACKUP_DIR/pre-update-$(date +%Y%m%d-%H%M%S).sql"
 
     docker exec smsly-hosting-db-1 pg_dump -U smsly_admin smsly_hosting > "$backup_file" 2>/dev/null && \
         _ok "DB backup: $(du -h "$backup_file" | cut -f1)" || \
         { _warn "DB backup failed — continuing without safety net"; backup_file=""; }
+
+    # Backup .env (restored on rollback)
+    if [ -f "$INSTALL_DIR/.env" ]; then
+        cp "$INSTALL_DIR/.env" "$BACKUP_DIR/pre-update.env" 2>/dev/null && _ok ".env backed up" || _warn ".env backup failed"
+    fi
+
+    # Redis RDB snapshot (non-fatal — container may not be running)
+    if docker exec smsly-hosting-redis-1 redis-cli SAVE 2>/dev/null; then
+        _ok "Redis RDB saved"
+        docker cp smsly-hosting-redis-1:/data/dump.rdb "$BACKUP_DIR/pre-update-redis.rdb" 2>/dev/null || true
+    else
+        _warn "Redis backup skipped (container may not be running)"
+    fi
+
+    # RabbitMQ definitions export (non-fatal — container or rabbitmqadmin may not be available)
+    if docker exec smsly-hosting-rabbitmq-1 rabbitmqadmin export "$BACKUP_DIR/pre-update-rabbitmq-defs.json" 2>/dev/null; then
+        _ok "RabbitMQ definitions exported"
+    else
+        _warn "RabbitMQ export skipped (container or rabbitmqadmin not available)"
+    fi
 
     cat > "$SNAPSHOT_FILE" <<SNAPEOF
 PREV_HASH=$prev_hash
@@ -129,7 +154,7 @@ safe_update_post_verify() {
     fi
 
     local traefik_ok=false
-    for i in 1 2 3; do
+    for i in 1 2 3 4 5; do
         local traefik_status
         traefik_status=$(docker inspect smsly-hosting-traefik-1 --format='{{.State.Health.Status}}' 2>/dev/null || echo "unknown")
         if [ "$traefik_status" = "healthy" ]; then
@@ -138,7 +163,7 @@ safe_update_post_verify() {
             break
         fi
         curl -sf http://127.0.0.1:8082/ping >/dev/null 2>&1 && { _ok "Traefik: responding"; traefik_ok=true; break; }
-        [ "$i" -lt 3 ] && sleep 5
+        [ "$i" -lt 5 ] && sleep 10
     done
     [ "$traefik_ok" = "true" ] || { _warn "Traefik: not responding"; failed=$((failed + 1)); }
 
@@ -168,6 +193,11 @@ safe_update_rollback() {
         else
             _fail "Git reset failed"; return 1
         fi
+    fi
+
+    # Restore .env from pre-update backup
+    if [ -f "$BACKUP_DIR/pre-update.env" ]; then
+        cp "$BACKUP_DIR/pre-update.env" "$INSTALL_DIR/.env" 2>/dev/null && _ok ".env restored" || _warn ".env restore failed"
     fi
 
     # Clear stale lock from the failed original install.sh
