@@ -2527,7 +2527,7 @@ print(f'PlatformConfig domain set to: {cfg.domain}')
 }
 
 $target_domain {
-    reverse_proxy {$SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
+    reverse_proxy ${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
     encode gzip
     log {
         output file /var/log/caddy/access.log
@@ -2544,7 +2544,7 @@ ${fix_ip} {
         path /.well-known/acme-challenge/*
     }
     handle @acme {
-        reverse_proxy {$SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
+        reverse_proxy ${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
     }
     @redirectable {
         not header_regexp host ^([0-9]{1,3}[.]){3}[0-9]{1,3}(:[0-9]+)?$
@@ -2555,7 +2555,7 @@ ${fix_ip} {
     }
     redir @redirectable https://{host}{uri} 308
     handle {
-        reverse_proxy {$SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
+        reverse_proxy ${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
     }
 }
 CADDYFIX
@@ -2906,7 +2906,7 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
 }
 
 ${domain_block_label} {
-    reverse_proxy {$SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
+    reverse_proxy ${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
     encode gzip
     log {
         output file /var/log/caddy/access.log
@@ -2923,7 +2923,7 @@ ${safe_ip} {
         path /.well-known/acme-challenge/*
     }
     handle @acme {
-        reverse_proxy {$SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
+        reverse_proxy ${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
     }
     @redirectable {
         not header_regexp host ^([0-9]{1,3}[.]){3}[0-9]{1,3}(:[0-9]+)?$
@@ -2934,7 +2934,7 @@ ${safe_ip} {
     }
     redir @redirectable https://{host}{uri} 308
     handle {
-        reverse_proxy {$SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
+        reverse_proxy ${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
     }
 }
 
@@ -4482,7 +4482,7 @@ for domain in Domain.objects.select_related('service').filter(
 }
 
 ${cf_domain} {
-    reverse_proxy {$SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
+    reverse_proxy ${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
     encode gzip
     log {
         output file /var/log/caddy/access.log
@@ -4495,7 +4495,7 @@ ${cf_domain} {
     }
 ${cf_known_stanza}
     handle {
-        reverse_proxy {$SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
+        reverse_proxy ${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
     }
 }
 
