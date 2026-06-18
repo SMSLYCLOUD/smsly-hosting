@@ -28,6 +28,19 @@ from django.core.exceptions import ImproperlyConfigured
 
 _SECRET_KEY_RAW = str(config('SECRET_KEY', default='')).strip()
 _FIELD_ENCRYPTION_KEY_RAW = str(config('FIELD_ENCRYPTION_KEY', default='')).strip()
+# SECURITY: FIELD_ENCRYPTION_KEY_FILE allows storing the encryption key in a
+# separate file with restricted permissions (chmod 600, root owned) instead of
+# .env. If the file path is set, it takes precedence over the env var.
+#   /opt/smsly-hosting/secrets/field-encryption-key
+_FIELD_ENCRYPTION_KEY_FILE = str(config('FIELD_ENCRYPTION_KEY_FILE', default='')).strip()
+if not _FIELD_ENCRYPTION_KEY_RAW and _FIELD_ENCRYPTION_KEY_FILE:
+    try:
+        with open(_FIELD_ENCRYPTION_KEY_FILE) as _f:
+            _FIELD_ENCRYPTION_KEY_RAW = _f.read().strip()
+    except (FileNotFoundError, PermissionError, OSError) as _exc:
+        raise ImproperlyConfigured(
+            f"Cannot read FIELD_ENCRYPTION_KEY_FILE={_FIELD_ENCRYPTION_KEY_FILE}: {_exc}"
+        ) from _exc
 
 if not _SECRET_KEY_RAW:
     raise ImproperlyConfigured(
