@@ -117,18 +117,28 @@ def sync_service_status_on_deployment_change(sender, instance, created, **kwargs
         # Broadcast the status change via WebSocket
         channel_layer = get_channel_layer()
         if channel_layer:
+            # Broadcast to the owner AND all team members so they
+            # receive real-time updates for services they can manage.
+            user_ids = {service.owner_id}
+            if service.project_id and service.project.team_id:
+                from apps.teams.models import TeamMember
+                member_ids = TeamMember.objects.filter(
+                    team_id=service.project.team_id,
+                ).values_list('user_id', flat=True)
+                user_ids.update(member_ids)
             try:
-                async_to_sync(channel_layer.group_send)(
-                    f"user_services_{service.owner.id}",
-                    {
-                        'type': 'service_status_update',
-                        'service_id': str(service.id),
-                        'service_name': service.name,
-                        'status': new_status,
-                        'deployment_status': latest_deployment.status if latest_deployment else 'unknown',
-                        'updated_at': service.updated_at.isoformat(),
-                    }
-                )
+                for uid in user_ids:
+                    async_to_sync(channel_layer.group_send)(
+                        f"user_services_{uid}",
+                        {
+                            'type': 'service_status_update',
+                            'service_id': str(service.id),
+                            'service_name': service.name,
+                            'status': new_status,
+                            'deployment_status': latest_deployment.status if latest_deployment else 'unknown',
+                            'updated_at': service.updated_at.isoformat(),
+                        }
+                    )
             except Exception as e:
                 logging.getLogger(__name__).warning(
                     "Failed to broadcast service status update for %s: %s", service.id, e
@@ -172,16 +182,26 @@ def broadcast_service_status_change(sender, instance, created, **kwargs):
     # Get the latest deployment for this service
     latest_deployment = instance.deployments.order_by('-created_at').first()
     
-    # Broadcast the status change
+    # Broadcast the status change to owner + team members.
     channel_layer = get_channel_layer()
-    if channel_layer and instance.owner:
+    if channel_layer:
+        user_ids = set()
+        if instance.owner_id:
+            user_ids.add(instance.owner_id)
+        if instance.project_id and instance.project.team_id:
+            from apps.teams.models import TeamMember
+            member_ids = TeamMember.objects.filter(
+                team_id=instance.project.team_id,
+            ).values_list('user_id', flat=True)
+            user_ids.update(member_ids)
         try:
-            async_to_sync(channel_layer.group_send)(
-                f"user_services_{instance.owner.id}",
-                {
-                    'type': 'service_status_update',
-                    'service_id': str(instance.id),
-                    'service_name': instance.name,
+            for uid in user_ids:
+                async_to_sync(channel_layer.group_send)(
+                    f"user_services_{uid}",
+                    {
+                        'type': 'service_status_update',
+                        'service_id': str(instance.id),
+                        'service_name': instance.name,
                     'status': instance.status,
                     'deployment_status': latest_deployment.status if latest_deployment else 'unknown',
                     'updated_at': instance.updated_at.isoformat(),
