@@ -650,13 +650,20 @@ fi
             --env-file /opt/smsly-hosting/.env \
             -f infrastructure/docker/docker-compose.observability.yml \
             up -d --pull always
+        # Restart containers whose bind-mounted config or environment may have
+        # changed.  docker compose up -d only recreates on IMAGE changes, so
+        # config-file updates require an explicit restart.
         docker restart smsly-grafana 2>/dev/null || true
+        docker restart smsly-alertmanager 2>/dev/null || true
+        docker restart smsly-prometheus 2>/dev/null || true
         docker restart smsly-docker-labels 2>/dev/null || true
         docker restart smsly-promtail 2>/dev/null || true
-        # Deploy docker-labels exporter to all remote nodes and regenerate target files
+        # Deploy/update docker-labels exporter to all remote nodes and
+        # regenerate Prometheus file_sd target files (docker-labels,
+        # cAdvisor, Node Exporter).
         backend_container=$(docker ps --format '{{.Names}}' | grep -E '^smsly-hosting-backend(-1)?$' | head -1)
         if [ -n "$backend_container" ]; then
-            docker exec "$backend_container" python manage.py deploy_docker_labels_exporters 2>/dev/null || true
+            docker exec "$backend_container" python manage.py deploy_docker_labels_exporters --force 2>/dev/null || true
         fi
         echo -e "${GREEN}  ✓ Observability stack updated${NC}"
     fi
