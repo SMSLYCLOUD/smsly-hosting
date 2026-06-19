@@ -301,7 +301,10 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         source_is_local = source_server_ip in {'127.0.0.1', 'localhost'} or (
             local_cfg_ip and source_server_ip == local_cfg_ip
         )
-        if not source_is_local and not is_safe_ip(source_server_ip, allow_private=False):
+        # Allow private IPs if the source resolves to a known ManagedServer
+        # (WireGuard mesh addresses or internal VPC IPs are valid sources).
+        source_is_managed = source_server and source_server.status == 'ONLINE'
+        if not source_is_local and not source_is_managed and not is_safe_ip(source_server_ip, allow_private=False):
             logger.warning(
                 "Transfer failed: Source IP %s blocked by SSRF protection (user=%s).",
                 source_server_ip, request.user,
@@ -310,7 +313,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
                 {
                     'error': (
                         'Source server IP is in a forbidden range (SSRF protection). '
-                        'Only public IPs or the local node IP are allowed.'
+                        'Only public IPs, known managed servers, or the local node IP are allowed.'
                     )
                 },
                 status=status.HTTP_400_BAD_REQUEST,
