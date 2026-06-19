@@ -1,44 +1,15 @@
 import logging
 logger = logging.getLogger(__name__)
-import logging
-import random
-import re
-import shlex
-import shutil
-import tempfile
-import subprocess
-import os
-import json
-import time
-import zipfile
-import secrets
-import threading
-from contextlib import contextmanager
-from urllib.parse import unquote, urlparse
-import docker
-import requests
 from celery import shared_task
 from django.conf import settings
-from django.core.cache import cache
-from django.utils import timezone
-from django.db.models import Sum
-from apps.cloud.models import CloudProvider
-from apps.cloud.services.builder import NixpacksBuilder
-from apps.cloud.services.compute import ComputeService
-from apps.cloud.services.function_provisioner import FunctionProvisioner
-from apps.deployments.ai_router import DEFAULT_AI_ROUTER_API_BASE, DEFAULT_AI_ROUTER_UI_BASE, DEFAULT_BRAID_ALIAS, generate_ai_router_proxy_config, get_ollama_model_name, is_ai_router_service, is_ollama_service
-from apps.deployments.models import Service, Deployment, EnvironmentVariable, PlatformConfig
-from apps.deployments.models_addons import Addon, Backup
-from apps.deployments.models_backup import BackupSchedule, ServiceBackup
-from apps.deployments.models_storage import Volume
-from apps.deployments.models_transfer import ServerTransfer
-from apps.deployments.services.backup_service import BackupService
-from apps.deployments.services.pipeline import PipelineManager, PipelineError
-from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
-from apps.deployments.services.tls_verify import should_verify
-from apps.deployments.services.transfer_service import ServerTransferService
-from apps.deployments.utils import append_log, broadcast_status, build_local_source_bundle, update_stage, is_deployment_local
-from services.addon_provisioner import addon_provisioner
+from django.db import models as db_models
+from apps.deployments.models import Service
+from apps.deployments.models_replica import ServiceReplica
+
+# AUTOSCALE_BATCH_SIZE: maximum services to process per cursor page.
+# The periodic task walks all eligible services in batches to avoid
+# a single long-running query holding locks or OOMing.
+AUTOSCALE_BATCH_SIZE = 20
 
 @shared_task(
     name='apps.deployments.tasks_autoscale.analyze_all_services_task',
@@ -62,7 +33,7 @@ def analyze_all_services_task(self):
         )
         qs = Service.objects.filter(status='RUNNING').distinct()
         qs = qs.filter(
-            models.Q(id__in=base) | models.Q(compose_file='', deploy_mode='SINGLE')
+            db_models.Q(id__in=base) | db_models.Q(compose_file='', deploy_mode='SINGLE')
         )
         if last_id is not None:
             qs = qs.filter(id__gt=last_id)

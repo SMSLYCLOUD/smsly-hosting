@@ -38,14 +38,28 @@ def check_autoscale_task():
 
 
 def _evaluate_scaling(service, ServiceMetric):
-    """Evaluate whether a service needs scaling.
+    """Evaluate whether a service needs scaling — LEGACY.
 
-    Retained for backward compatibility with existing tests and any
-    direct callers. Implements the original simple policy:
-      - avg CPU over 2m > target → scale up by 1
-      - avg CPU over 5m < target*0.5 → scale down by 1
-    Uses the dedicated ``last_scale_at`` field for cooldowns.
+    This function is retained for backward compatibility with existing
+    tests. It is NO LONGER CALLED by the production autoscale path;
+    that uses the unified ``DecisionEngine`` + ``Reconciler`` in
+    ``apps.autoscaler.engine``.
+
+    IMPORTANT: This function previously mutated ``service.min_replicas``
+    to track the computed replica count, which is semantically wrong.
+    ``min_replicas`` is a user-facing configuration hint, not a runtime
+    replica counter. The unified engine uses actual ``ServiceReplica``
+    rows for replica tracking instead. This legacy function now ONLY
+    computes the recommendation — it no longer modifies the service
+    record.
     """
+    import warnings
+    warnings.warn(
+        "_evaluate_scaling is deprecated. Use apps.autoscaler.engine.pipeline.analyze_and_apply().",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
     from apps.deployments.services.server_guard import ServerGuard
 
     if ServerGuard.is_control_plane(getattr(service, "server", None)):
@@ -53,7 +67,7 @@ def _evaluate_scaling(service, ServiceMetric):
             "Autoscale skipped for %s: control-plane server is not a workload target",
             service.name,
         )
-        return
+        return None
 
     now = timezone.now()
 
@@ -63,10 +77,10 @@ def _evaluate_scaling(service, ServiceMetric):
     if last_scaled:
         time_since_scale = now - last_scaled
         if time_since_scale < timedelta(minutes=1):
-            return  # Global 1-minute cooldown for any scaling to prevent rapid flapping
+            return None  # Global 1-minute cooldown for any scaling to prevent rapid flapping
 
     target_cpu = service.autoscale_cpu_target
-    # Count actual running replicas (home instance + spawned replicas)
+    # Count actual running replicas
     from apps.deployments.models_replica import ServiceReplica
     running_replicas = ServiceReplica.objects.filter(
         service=service, status='RUNNING'
@@ -80,7 +94,7 @@ def _evaluate_scaling(service, ServiceMetric):
     ).order_by('-timestamp')
 
     if not recent_metrics.exists():
-        return  # No metrics, can't decide
+        return None  # No metrics, can't decide
 
     avg_cpu = sum(m.cpu_percent for m in recent_metrics) / recent_metrics.count()
 
@@ -91,10 +105,9 @@ def _evaluate_scaling(service, ServiceMetric):
             "⬆ Scaling UP %s: %d → %d replicas (CPU: %.1f%% > %d%%)",
             service.name, current_replicas, new_replicas, avg_cpu, target_cpu,
         )
-        service.min_replicas = new_replicas
         service.last_scale_at = now
-        service.save(update_fields=['min_replicas', 'last_scale_at'])
-        return
+        service.save(update_fields=['last_scale_at'])
+        return {'action': 'scale_up', 'replicas': new_replicas}
 
     # Scale DOWN: CPU < 50% of target for 5+ minutes
     five_min_metrics = ServiceMetric.objects.filter(
@@ -107,7 +120,7 @@ def _evaluate_scaling(service, ServiceMetric):
 
         if avg_cpu_5m < scale_down_threshold and current_replicas > 1:
             if last_scaled and (now - last_scaled) < timedelta(minutes=5):
-                return  # 5-minute cooldown for scale down operations
+                return None  # 5-minute cooldown for scale down operations
 
             new_replicas = max(current_replicas - 1, 1)
             logger.info(
@@ -115,6 +128,8 @@ def _evaluate_scaling(service, ServiceMetric):
                 service.name, current_replicas, new_replicas,
                 avg_cpu_5m, scale_down_threshold,
             )
-            service.min_replicas = new_replicas
             service.last_scale_at = now
-            service.save(update_fields=['min_replicas', 'last_scale_at'])
+            service.save(update_fields=['last_scale_at'])
+            return {'action': 'scale_down', 'replicas': new_replicas}
+
+    return None

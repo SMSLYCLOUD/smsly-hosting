@@ -6,7 +6,6 @@ from rest_framework.response import Response
 
 from apps.deployments.models_core import Service, ManagedServer
 from apps.deployments.models_replica import ServiceReplica
-from apps.deployments.services.scaling_ai import ScalingAnalyzer
 from apps.deployments.services.node_scorer import NodeScorer
 from apps.deployments.services.spawning_service import SpawningService
 
@@ -42,10 +41,15 @@ class ScalingViewSet(viewsets.GenericViewSet):
 
     @action(detail=True, methods=['post'])
     def analyze(self, request, pk=None):
-        """Analyze a service and return scaling recommendation."""
+        """Analyze a service and return scaling recommendation.
+
+        Uses the unified DecisionEngine (same as the Celery periodic
+        autoscale task) so the REST endpoint and the automatic scaling
+        always agree on the recommendation.
+        """
+        from apps.autoscaler.engine.pipeline import analyze_only
         service = Service.objects.get(id=pk, owner=request.user)
-        analyzer = ScalingAnalyzer(service)
-        result = analyzer.analyze()
+        result = analyze_only(service)
         return Response(result)
 
     @action(detail=True, methods=['get', 'put'])
