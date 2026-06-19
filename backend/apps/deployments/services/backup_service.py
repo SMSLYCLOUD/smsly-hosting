@@ -1578,12 +1578,25 @@ class BackupService:
                 pass
             return enc_path
         except Exception as e:
+            # Clean up the partial encrypted file.
             try:
                 if os.path.exists(enc_path):
                     os.remove(enc_path)
             except OSError:
                 pass
-            logger.error(f"Encryption failed for {path}: {e}")
+            # If encryption is required by policy, DO NOT fall back to
+            # cleartext — delete the original and raise so the caller
+            # knows the backup is unsafe.
+            if self._backup_encryption_required():
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+                raise BackupEncryptionRequired(
+                    f"Encryption failed for {path}: {e}. "
+                    "BACKUP_REQUIRE_ENCRYPTION is set — refusing to retain cleartext backup."
+                ) from e
+            logger.error("Encryption failed for %s (cleartext retained): %s", path, e)
             return path
 
     @staticmethod
