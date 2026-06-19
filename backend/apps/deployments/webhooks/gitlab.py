@@ -13,7 +13,14 @@ logger = logging.getLogger(__name__)
 
 class GitLabWebhookHandler:
     def verify_signature(self, request) -> bool:
-        secret = settings.GITLAB_WEBHOOK_SECRET
+        secret = getattr(settings, 'GITLAB_WEBHOOK_SECRET', '')
+        try:
+            from apps.deployments.models_core import PlatformConfig
+            db_secret = PlatformConfig.load().get_webhook_secret('gitlab')
+            if db_secret:
+                secret = db_secret
+        except Exception:
+            pass
         if not secret:
             logger.warning("GITLAB_WEBHOOK_SECRET not set, rejecting webhook")
             return False

@@ -55,8 +55,13 @@ class APIKeyAuthentication(BaseAuthentication):
             # Note: We might have multiple keys with same prefix theoretically,
             # but usually it's unique enough for first-pass lookup.
             # We filter by prefix first to avoid expensive hashing for every key.
-            keys = APIKey.objects.filter(prefix=prefix, user__is_active=True).select_related("user")
-            
+            now = timezone.now()
+            keys = APIKey.objects.filter(
+                prefix=prefix, user__is_active=True,
+            ).exclude(
+                expires_at__isnull=False, expires_at__lt=now,
+            ).select_related("user")
+
             for api_key in keys:
                 if check_password(raw_key, api_key.key_hash):
                     # Update last used
