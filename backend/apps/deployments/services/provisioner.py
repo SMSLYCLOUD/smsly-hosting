@@ -596,6 +596,35 @@ def _load_install_script():
             with open(path, "r", encoding="utf-8") as install_file:
                 content = install_file.read()
                 _verify(content, f"local:{path}")
+                # Inline the lib/*.sh modules so the script is self-contained
+                # when uploaded to a remote VPS (lib/ directory isn't uploaded).
+                lib_dir = os.path.join(os.path.dirname(path), "lib")
+                if os.path.isdir(lib_dir):
+                    inline_lines = []
+                    for lib_file in sorted(os.listdir(lib_dir)):
+                        if not lib_file.endswith(".sh"):
+                            continue
+                        if lib_file in ("fresh.sh", "update.sh"):
+                            continue
+                        lib_path = os.path.join(lib_dir, lib_file)
+                        with open(lib_path, "r", encoding="utf-8") as lf:
+                            lib_content = lf.read()
+                        inline_lines.append(
+                            f"# --- lib/{lib_file} ---\n{lib_content}\n"
+                            f"# --- end lib/{lib_file} ---"
+                        )
+                    if inline_lines:
+                        inline_block = "\n\n".join(inline_lines)
+                        # Replace the entire lib sourcing loop with inline content
+                        content = content.replace(
+                            'for lib in "$LIB_DIR"/*.sh; do\n'
+                            '    # Skip mode-entry files \u2014 they are sourced on-demand by the\n'
+                            '    # mode dispatch below (they contain inline code, not just functions).\n'
+                            '    case "$lib" in */fresh.sh|*/update.sh) continue ;; esac\n'
+                            '    [ -f "$lib" ] && source "$lib"\n'
+                            'done\n',
+                            inline_block + "\n"
+                        )
                 return content, f"local:{path}"
 
     script_url = (
