@@ -1112,8 +1112,28 @@ class BackupService:
                         subprocess.run(cmd, env=env, stdout=f, check=True)
 
             except Exception as e:
-                logger.warning(f"Database backup failed (skipping): {e}")
-                # We might want to fail hard here in strict mode
+                logger.error("Database backup FAILED — aborting server backup: %s", e)
+                raise RuntimeError(f"Database dump failed: {e}") from e
+
+            # 1b. Include .env file for configuration recovery
+            env_source = "/opt/smsly-hosting/.env"
+            if os.path.exists(env_source):
+                shutil.copy2(env_source, os.path.join(temp_dir, ".env"))
+
+            # 1c. Include SSL certificates if they exist
+            cert_dirs = [
+                "/opt/smsly-hosting/caddy-config",
+                "/etc/letsencrypt",
+                "/opt/smsly-hosting/ssl",
+            ]
+            ssl_dir = os.path.join(temp_dir, "ssl")
+            for cert_dir in cert_dirs:
+                if os.path.isdir(cert_dir):
+                    os.makedirs(ssl_dir, exist_ok=True)
+                    try:
+                        shutil.copytree(cert_dir, os.path.join(ssl_dir, os.path.basename(cert_dir)), dirs_exist_ok=True)
+                    except Exception:
+                        pass  # Non-critical
 
             # 2. Services Backup
             services_dir = os.path.join(temp_dir, "services")
@@ -1222,21 +1242,19 @@ class BackupService:
             with tarfile.open(archive_path, "r:gz") as tar:
                 _safe_tar_extractall(tar, temp_dir)
 
-            # Restore DB?
-            # If we are running this from Django, we can't easily drop/restore the DB we are using.
-            # So we skip DB restore here and assume it's done via CLI or manual steps if needed,
-            # OR we only restore data tables.
-            # For the requirements, "Implement server restore path" likely implies restoring services.
+            # Restore the PostgreSQL database from the bundled dump.
+            db_dump = os.path.join(temp_dir, "db_dump.sql")
+            if os.path.exists(db_dump) and os.path.getsize(db_dump) > 0:
+                self._restore_database_from_dump(db_dump)
+            elif os.path.exists(db_dump):
+                logger.warning("db_dump.sql is empty — skipping database restore.")
+            else:
+                logger.warning("No db_dump.sql found in server backup.")
 
-            # The bundled db_dump.sql is intentionally NOT restored. Surfacing a
-            # loud warning here so operators don't believe a full restore
-            # happened when it didn't.
-            if os.path.exists(os.path.join(temp_dir, "db_dump.sql")):
-                logger.warning(
-                    "restore_server: the bundled db_dump.sql was NOT restored. "
-                    "Operators must restore the database manually via psql. "
-                    "See docs/DISASTER_RECOVERY.md for the procedure."
-                )
+            # Restore platform config if present.
+            platform_config_path = os.path.join(temp_dir, "platform_config.json")
+            if os.path.exists(platform_config_path):
+                self._restore_platform_config(platform_config_path)
 
             # Check if this is a full server backup (services/ dir) or a single service backup
             services_dir = os.path.join(temp_dir, "services")
@@ -1256,6 +1274,59 @@ class BackupService:
                 shutil.rmtree(temp_dir)
             if cleanup_archive and os.path.exists(cleanup_archive):
                 os.remove(cleanup_archive)
+
+    def _restore_database_from_dump(self, dump_path):
+        """Restore PostgreSQL database from a pg_dump file via the DB container."""
+        logger.info("Restoring PostgreSQL database from %s ...", dump_path)
+        try:
+            pg_container = None
+            for c in (self.docker_client.containers.list() if self.docker_client else []):
+                c_image = (c.image.tags[0] if c.image.tags else '').lower()
+                c_name = c.name.lower()
+                if 'postgres' in c_image and 'pgcat' not in c_name:
+                    pg_container = c
+                    break
+                if (('-db-' in c_name or c_name.endswith('-db')) and 'pgcat' not in c_name):
+                    pg_container = c
+
+            if not pg_container:
+                raise RuntimeError("No PostgreSQL container found for database restore.")
+
+            # Copy the dump file into the container and restore.
+            import subprocess as _sp
+            _sp.run(
+                ['docker', 'cp', dump_path, f'{pg_container.name}:/tmp/db_dump.sql'],
+                check=True, timeout=60,
+            )
+            _sp.run(
+                ['docker', 'exec', pg_container.name,
+                 'psql', '-U', 'postgres', '-f', '/tmp/db_dump.sql'],
+                check=True, timeout=600,
+            )
+            _sp.run(
+                ['docker', 'exec', pg_container.name, 'rm', '/tmp/db_dump.sql'],
+                check=False, timeout=10,
+            )
+            logger.info("Database restored successfully from server backup.")
+        except Exception as exc:
+            logger.error("Database restore failed: %s. The backup archive is intact; operators can restore manually via psql.", exc)
+            raise
+
+    def _restore_platform_config(self, config_path):
+        """Restore platform domain/SSL config from backup JSON."""
+        try:
+            import json as _json
+            with open(config_path, 'r') as f:
+                data = _json.load(f)
+            from apps.deployments.models import PlatformConfig
+            cfg = PlatformConfig.load()
+            for field in ('domain', 'use_ssl', 'wildcard_subdomains', 'server_ip'):
+                if field in data and data[field]:
+                    setattr(cfg, field, data[field])
+            cfg.save()
+            logger.info("Platform config restored from server backup.")
+        except Exception as exc:
+            logger.warning("Failed to restore platform_config.json: %s", exc)
 
     def _restore_service_from_file(self, filepath, owner=None):
         """Restore a service from a backup archive file.

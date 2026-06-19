@@ -4159,58 +4159,21 @@ def create_service_backup_task(self, service_id, backup_type='MANUAL', backup_id
             raise self.retry(exc=exc)
         raise
 
-@shared_task(bind=True, soft_time_limit=7200, time_limit=7500, max_retries=2, default_retry_delay=600)
-def create_server_backup_task(self, backup_id=None):
-    from apps.deployments.utils import log_event
-    log_event(
-        action='BACKUP_CREATE',
-        target='Server',
-        actor='system',
-        metadata={
-            'backup_id': str(backup_id) if backup_id else None,
-            'scope': 'server',
-        },
-    )
-    backup_service = BackupService()
-    backup_service.backup_server(backup_id=backup_id)
+# ── Backup tasks re-exported from tasks_backup (single source of truth) ──
+# These tasks are defined in tasks_backup.py with correct signatures,
+# retry config, and schedule_id handling.  Importing them here so the
+# view imports (which reference .tasks) continue to work without
+# maintaining duplicate definitions.
 
-@shared_task(bind=True, soft_time_limit=3600, max_retries=2, default_retry_delay=300)
-def restore_service_backup_task(self, backup_id, target_service_id=None, requesting_user_id=None, raise_on_snapshot_failure=False):
-    from apps.deployments.utils import log_event
-    log_event(
-        action='BACKUP_RESTORE',
-        target=f'Backup: {backup_id}',
-        actor='system',
-        metadata={
-            'backup_id': str(backup_id),
-            'target_service_id': str(target_service_id) if target_service_id else None,
-            'requesting_user_id': str(requesting_user_id) if requesting_user_id else None,
-            'scope': 'service',
-        },
-    )
-    backup_service = BackupService()
-    backup_service.restore_service(
-        backup_id,
-        target_service_id=target_service_id,
-        requesting_user_id=requesting_user_id,
-        raise_on_snapshot_failure=raise_on_snapshot_failure,
-    )
-
-@shared_task(bind=True, soft_time_limit=7200, time_limit=7500)
-def restore_server_backup_task(self, backup_id, requesting_user_id=None):
-    from apps.deployments.utils import log_event
-    log_event(
-        action='BACKUP_RESTORE',
-        target=f'Backup: {backup_id}',
-        actor='system',
-        metadata={
-            'backup_id': str(backup_id),
-            'requesting_user_id': str(requesting_user_id) if requesting_user_id else None,
-            'scope': 'server',
-        },
-    )
-    backup_service = BackupService()
-    backup_service.restore_server(backup_id=backup_id, requesting_user_id=requesting_user_id)
+from apps.deployments.tasks_backup import (  # noqa: E402, F401
+    create_service_backup_task,
+    create_server_backup_task,
+    restore_service_backup_task,
+    restore_server_backup_task,
+    cleanup_old_backups_task,
+    run_scheduled_backups_task,
+    purge_user_backups_task,
+)
 
 
 @shared_task(bind=True, soft_time_limit=7200, time_limit=7500, max_retries=2, default_retry_delay=120)
