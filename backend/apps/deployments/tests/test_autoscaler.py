@@ -32,10 +32,11 @@ class AutoscalerTest(TestCase):
         now = timezone.now()
         ServiceMetric.objects.create(service=self.service, cpu_usage=90, cpu_limit=100, memory_usage=100, memory_limit=200, timestamp=now - timedelta(minutes=1))
 
-        _evaluate_scaling(self.service, ServiceMetric)
+        result = _evaluate_scaling(self.service, ServiceMetric)
 
-        self.service.refresh_from_db()
-        self.assertEqual(self.service.min_replicas, 2)  # capped at max_replicas
+        self.assertIsNotNone(result)
+        self.assertEqual(result['action'], 'scale_up')
+        self.assertEqual(result['replicas'], 2)  # capped at max_replicas
 
     def test_scale_up_increases_replicas(self):
         self.service.min_replicas = 1
@@ -45,10 +46,11 @@ class AutoscalerTest(TestCase):
         now = timezone.now()
         ServiceMetric.objects.create(service=self.service, cpu_usage=90, cpu_limit=100, memory_usage=100, memory_limit=200, timestamp=now - timedelta(minutes=1))
 
-        _evaluate_scaling(self.service, ServiceMetric)
+        result = _evaluate_scaling(self.service, ServiceMetric)
 
-        self.service.refresh_from_db()
-        self.assertEqual(self.service.min_replicas, 2)
+        self.assertIsNotNone(result)
+        self.assertEqual(result['action'], 'scale_up')
+        self.assertEqual(result['replicas'], 2)
 
     def test_scale_down_respects_absolute_minimum(self):
         self.service.min_replicas = 1
@@ -58,10 +60,11 @@ class AutoscalerTest(TestCase):
         now = timezone.now()
         ServiceMetric.objects.create(service=self.service, cpu_usage=10, cpu_limit=100, memory_usage=100, memory_limit=200, timestamp=now - timedelta(minutes=1))
 
-        _evaluate_scaling(self.service, ServiceMetric)
+        result = _evaluate_scaling(self.service, ServiceMetric)
 
-        self.service.refresh_from_db()
-        self.assertEqual(self.service.min_replicas, 1) # Should not drop below 1
+        # min_replicas=1 means current_replicas=1 (home instance + 0 running replicas)
+        # Should not drop below 1 → no scale-down
+        self.assertIsNone(result)
 
     def test_scale_down_decreases_replicas(self):
         self.service.min_replicas = 2
@@ -72,10 +75,11 @@ class AutoscalerTest(TestCase):
         now = timezone.now()
         ServiceMetric.objects.create(service=self.service, cpu_usage=10, cpu_limit=100, memory_usage=100, memory_limit=200, timestamp=now - timedelta(minutes=1))
 
-        _evaluate_scaling(self.service, ServiceMetric)
+        result = _evaluate_scaling(self.service, ServiceMetric)
 
-        self.service.refresh_from_db()
-        self.assertEqual(self.service.min_replicas, 1)  # 2 - 1 = 1
+        self.assertIsNotNone(result)
+        self.assertEqual(result['action'], 'scale_down')
+        self.assertEqual(result['replicas'], 1)  # 2 - 1 = 1
 
 
     def test_cooldown_prevents_rapid_scaling(self):
@@ -87,10 +91,9 @@ class AutoscalerTest(TestCase):
         now = timezone.now()
         ServiceMetric.objects.create(service=self.service, cpu_usage=90, cpu_limit=100, memory_usage=100, memory_limit=200, timestamp=now - timedelta(minutes=1))
 
-        _evaluate_scaling(self.service, ServiceMetric)
+        result = _evaluate_scaling(self.service, ServiceMetric)
 
-        self.service.refresh_from_db()
-        self.assertEqual(self.service.min_replicas, 1) # Should not scale up due to 1m cooldown
+        self.assertIsNone(result)  # Should not scale up due to 1m cooldown
 
     def test_scale_down_cooldown(self):
         self.service.min_replicas = 2
@@ -101,7 +104,6 @@ class AutoscalerTest(TestCase):
         now = timezone.now()
         ServiceMetric.objects.create(service=self.service, cpu_usage=10, cpu_limit=100, memory_usage=100, memory_limit=200, timestamp=now - timedelta(minutes=1))
 
-        _evaluate_scaling(self.service, ServiceMetric)
+        result = _evaluate_scaling(self.service, ServiceMetric)
 
-        self.service.refresh_from_db()
-        self.assertEqual(self.service.min_replicas, 2) # Should not scale down due to 5m cooldown
+        self.assertIsNone(result)  # Should not scale down due to 5m cooldown
