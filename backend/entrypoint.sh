@@ -132,8 +132,17 @@ setup_social_apps_nonfatal() {
 
 ensure_caddy_config_writable() {
     if [ -d /caddy-config ]; then
+        # Try chmod first (fast path, works if uid 1000 already owns it).
         chmod -R u+rwX,g+rwX /caddy-config 2>/dev/null || true
-        find /caddy-config -type d -exec chmod 2770 {} + 2>/dev/null || true
+        find /caddy-config -type d -exec chmod 2775 {} + 2>/dev/null || true
+        # Verify write access with a probe file. If it fails, the host
+        # directory is owned by root and needs a one-time chown from the host.
+        if ! touch /caddy-config/.perm_probe 2>/dev/null; then
+            echo "[entrypoint] WARNING: /caddy-config is not writable by uid $(id -u)." >&2
+            echo "[entrypoint] Run on host: sudo chown -R 1000:1000 /opt/smsly-hosting/caddy-config" >&2
+        else
+            rm -f /caddy-config/.perm_probe
+        fi
     fi
 }
 ensure_caddy_config_writable
