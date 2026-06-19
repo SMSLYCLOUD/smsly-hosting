@@ -945,6 +945,8 @@ REST_FRAMEWORK = {
         'server_run_command': '10/minute',
         # SECURITY (Batch I): topology N+1 query cap.
         'topology_list': '30/minute',
+        # SECURITY: contact form anti-spam.  Anonymous POSTs.
+        'contact': '5/hour',
         # SECURITY (Issue 20): the cloud-storage ``templates``
         # endpoint is a no-DB convenience action that returns the
         # static TEMPLATES list. A scripted caller could probe it

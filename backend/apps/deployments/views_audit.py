@@ -24,12 +24,26 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
         return super().retrieve(request, *args, **kwargs)
 
     def get_queryset(self):
-        """ZH-001 FIX: Filter audit logs to only show entries for the requesting user."""
-        if self.request.user.is_superuser:
+        user = self.request.user
+        if user.is_superuser:
             qs = AuditLog.objects.all()
         else:
-            username = self.request.user.get_username()
-            qs = AuditLog.objects.filter(actor=username)
+            username = user.get_username()
+            # Base filter: user is the actor OR the log targets one of
+            # the user's services (so they can see admin interventions
+            # on their own resources).
+            from apps.deployments.models import Service
+            owned_service_names = list(
+                Service.objects.filter(owner=user).values_list("name", flat=True)
+            )
+            owned_service_ids = list(
+                Service.objects.filter(owner=user).values_list("id", flat=True)
+            )
+            qs = AuditLog.objects.filter(
+                Q(actor=username) |
+                Q(target__in=owned_service_names) |
+                Q(target__in=[str(uid) for uid in owned_service_ids])
+            )
 
         # Search filter
         search = self.request.query_params.get('search', '').strip()
