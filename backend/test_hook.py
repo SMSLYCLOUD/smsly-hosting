@@ -3,7 +3,7 @@ import django
 
 import pytest
 
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "core.settings")
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 
 
 @pytest.mark.django_db
