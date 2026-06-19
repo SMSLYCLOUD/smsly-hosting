@@ -114,19 +114,22 @@ if [ -z "$BACKEND_CID" ]; then
     exit 1
 fi
 
-# Quick health check via curl — fails fast if backend is down
-if ! curl -sS --max-time 5 http://localhost:8000/health/live >/dev/null 2>&1; then
-    log "ERROR: Backend API is not responding on :8000/health/live"
-    exit 1
-fi
+# Wait for the backend to be truly ready (gunicorn workers started).
+# Curl may succeed on /health/live before Django is fully bootstrapped.
+for i in $(seq 1 12); do
+    if curl -sS --max-time 5 http://localhost:8000/health/live >/dev/null 2>&1; then
+        break
+    fi
+    log "Backend not ready yet (attempt $i/12)..."
+    sleep 5
+done
 
-log "Backend API is healthy — dispatching domain verification tasks..."
+log "Backend API is responding — dispatching domain verification tasks..."
 
-# Dispatch pending domain verification via Django management command
-# (single docker exec, no retry loop — backend is already confirmed healthy)
-docker exec -i "$BACKEND_CID" python -c "
-import django; django.setup()
-from django.conf import settings
+# Dispatch pending domain verification via Django management command.
+# Uses the backend's own manage.py context so DJANGO_SETTINGS_MODULE
+# and the Python path are always correct.
+docker exec -i "$BACKEND_CID" python manage.py shell -c "
 from apps.domains.models import Domain
 from apps.domains.tasks import verify_dns_and_provision_ssl_task
 
@@ -144,11 +147,16 @@ EOF
 
     chmod +x "$DOMAIN_VERIFICATION_SCRIPT"
     
-    # Run domain verification with longer timeout (120s) for cold-start safety
-    if timeout 120 "$DOMAIN_VERIFICATION_SCRIPT"; then
+    # Run domain verification with 5-minute timeout for cold-start safety
+    # (Django import can take 60-90 s on cold container start).
+    local _exit_code=0
+    timeout 300 "$DOMAIN_VERIFICATION_SCRIPT" || _exit_code=$?
+    if [ $_exit_code -eq 0 ]; then
         log_success "Domain verification completed successfully"
+    elif [ $_exit_code -eq 124 ]; then
+        log_error "Domain verification timed out after 5 minutes"
     else
-        log_error "Domain verification timed out or failed"
+        log_error "Domain verification failed with exit code $_exit_code"
     fi
 }
 
