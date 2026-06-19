@@ -569,7 +569,7 @@ class VolumeViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Path traversal blocked'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            sanitized = validate_and_sanitize_path(resolved, skip_system_check=False)
+            sanitized = validate_and_sanitize_path(resolved, skip_system_check=True)
         except ValueError as e:
             return Response({'error': 'Invalid path', 'details': str(e)}, status=status.HTTP_403_FORBIDDEN)
 
