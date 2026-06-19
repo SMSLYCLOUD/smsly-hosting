@@ -8,4 +8,9 @@ COPY entrypoint.sh /entrypoint.sh
 COPY render_pgcat_config.py /scripts/render_pgcat_config.py
 RUN chmod +x /entrypoint.sh /scripts/render_pgcat_config.py
 
+# Drop privileges after setup.  PgCat binds to 10.100.0.1:5432 via
+# docker-compose port mapping — it does not need root for binding.
+RUN addgroup -S pgcat && adduser -S pgcat -G pgcat
+USER pgcat
+
 ENTRYPOINT ["/entrypoint.sh"]
