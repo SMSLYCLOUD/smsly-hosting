@@ -42,7 +42,9 @@ from django.contrib.auth import get_user_model
 User = get_user_model()
 username = 'admin'
 email = 'admin@smsly.cloud'
-password = 'agbonsalo' # Standard inter-node password
+# Generate a random password if one isn't already set via env.
+import secrets as _secrets, os as _os
+password = _os.environ.get('DJANGO_SUPERUSER_PASSWORD', '') or _secrets.token_urlsafe(24)
 if not User.objects.filter(username=username).exists():
     User.objects.create_superuser(username, email, password)
     print(f'✅ Created superuser: {username}')

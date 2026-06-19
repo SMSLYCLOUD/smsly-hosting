@@ -254,7 +254,7 @@ class TopologyViewSet(viewsets.GenericViewSet):
         try:
             from .models_tunnels import Tunnel
             tunnels = Tunnel.objects.filter(
-                user=request.user, is_active=True
+                owner=request.user, is_active=True
             )
             for tunnel in tunnels:
                 # Tunnel doesn't directly link to a service in the model,

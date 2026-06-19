@@ -1,6 +1,7 @@
 """Blueprint Manager module."""
 import json
 import os
+import re
 import logging
 from django.conf import settings
 from apps.deployments.models import Service, Deployment, EnvironmentVariable
@@ -18,6 +19,9 @@ class BlueprintManager:
         self.user = user
 
     def load_blueprint(self, name: str):
+        # Reject path traversal: only allow alphanumeric names with hyphens.
+        if not re.match(r'^[a-zA-Z0-9_-]+$', name):
+            raise ValueError(f"Invalid blueprint name: {name}")
         path = os.path.join(settings.BASE_DIR, 'blueprints', f'{name}.json')
         with open(path, 'r') as f:
             return json.load(f)
