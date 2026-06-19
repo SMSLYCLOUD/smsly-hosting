@@ -42,6 +42,8 @@ def validate_ssrf(value):
     # Block IPs in reserved/private ranges
     try:
         ip = ipaddress.ip_address(hostname)
+        if ip.is_unspecified:
+            raise ValidationError(f"Unspecified IPs ({hostname}) are not allowed.")
         if ip.is_loopback:
             raise ValidationError(f"Loopback IPs ({hostname}) are not allowed.")
         if ip.is_private:

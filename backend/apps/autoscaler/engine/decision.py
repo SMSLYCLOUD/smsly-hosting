@@ -137,7 +137,10 @@ class DecisionEngine:
             r.action = 'scale_up'
             r.urgency = 'critical'
             r.reason = 'OOM/crash detected — immediate scaling.'
-            r.scale_up_by = max(2, self.running_replicas + 2)
+            r.scale_up_by = min(
+                max(2, self.running_replicas + 2),
+                max(1, self.max_replicas - self.running_replicas),
+            )
             return r
 
         # Spawn in flight — defer
