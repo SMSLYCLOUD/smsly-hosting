@@ -14,7 +14,14 @@ logger = logging.getLogger(__name__)
 
 class BitbucketWebhookHandler:
     def verify_signature(self, request) -> bool:
-        secret = settings.BITBUCKET_WEBHOOK_SECRET
+        secret = getattr(settings, 'BITBUCKET_WEBHOOK_SECRET', '')
+        try:
+            from apps.deployments.models_core import PlatformConfig
+            db_secret = PlatformConfig.load().get_webhook_secret('bitbucket')
+            if db_secret:
+                secret = db_secret
+        except Exception:
+            pass
         if not secret:
             logger.warning("BITBUCKET_WEBHOOK_SECRET not set, rejecting webhook")
             return False
