@@ -431,6 +431,10 @@ class BackupScheduleSerializer(serializers.ModelSerializer):
     class Meta:
         model = BackupSchedule
         fields = '__all__'
+        extra_kwargs = {
+            's3_access_key': {'write_only': True},
+            's3_secret_key': {'write_only': True},
+        }
 
     def validate_s3_endpoint(self, value):
         from .models_backup import validate_endpoint_url

@@ -5481,6 +5481,21 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
             for chunk in uploaded.chunks():
                 f.write(chunk)
 
+        # Enforce at-rest encryption policy. If BACKUP_REQUIRE_ENCRYPTION
+        # is set, refuse to store an unencrypted uploaded backup.
+        svc = BackupService()
+        try:
+            dest_path = svc._maybe_encrypt(dest_path)
+        except Exception as exc:
+            try:
+                os.remove(dest_path)
+            except OSError:
+                pass
+            return Response(
+                {'error': f'Failed to encrypt uploaded backup: {exc}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
         file_size = os.path.getsize(dest_path)
 
         # Create a ServerBackup record pointing to the uploaded file

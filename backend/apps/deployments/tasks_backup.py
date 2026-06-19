@@ -42,7 +42,7 @@ from services.addon_provisioner import addon_provisioner
 
 
 @shared_task(bind=True, soft_time_limit=3600, time_limit=3900, max_retries=3, default_retry_delay=300)
-def create_service_backup_task(self, service_id, backup_type='MANUAL', backup_id=None):
+def create_service_backup_task(self, service_id, backup_type='MANUAL', backup_id=None, schedule_id=None):
     from .services.backup_service import BackupService
     from apps.deployments.utils import log_event
     log_event(
@@ -62,11 +62,26 @@ def create_service_backup_task(self, service_id, backup_type='MANUAL', backup_id
         if self.request.retries < self.max_retries:
             raise self.retry(exc=exc)
         raise
+    finally:
+        # Update the schedule's last_run only AFTER the backup completes
+        # (success or failure). This prevents the race where last_run was
+        # set before the task ran, causing missed schedules on failure.
+        if schedule_id:
+            _touch_schedule_last_run(schedule_id)
 
+
+
+def _touch_schedule_last_run(schedule_id):
+    """Update the BackupSchedule.last_run to now (called after backup completes)."""
+    try:
+        from django.utils import timezone as tz
+        BackupSchedule.objects.filter(id=schedule_id).update(last_run=tz.now())
+    except Exception:
+        pass
 
 
 @shared_task(bind=True, soft_time_limit=7200, time_limit=7500, max_retries=2, default_retry_delay=600)
-def create_server_backup_task(self, backup_id=None):
+def create_server_backup_task(self, backup_id=None, schedule_id=None):
     log_event(
         action='BACKUP_CREATE',
         target='Server',
@@ -78,6 +93,8 @@ def create_server_backup_task(self, backup_id=None):
     )
     backup_service = BackupService()
     backup_service.backup_server(backup_id=backup_id)
+    if schedule_id:
+        _touch_schedule_last_run(schedule_id)
 
 
 
@@ -217,14 +234,16 @@ def run_scheduled_backups_task():
             next_run = cron.get_next(datetime)
             if sched.last_run and sched.last_run >= timezone.make_aware(datetime.fromtimestamp(next_run), timezone.get_current_timezone()):
                 continue
-            sched.last_run = now
+            # Compute next_run now but defer last_run — the Celery task
+            # updates it AFTER the backup completes to prevent the race
+            # where a failed task leaves the schedule thinking it ran.
             sched.next_run = timezone.make_aware(datetime.fromtimestamp(cron.get_next(datetime)))
-            sched.save(update_fields=['last_run', 'next_run'])
+            sched.save(update_fields=['next_run'])
 
             if sched.is_server_wide:
-                create_server_backup_task.delay()
+                create_server_backup_task.delay(schedule_id=sched.id)
             elif sched.service:
-                create_service_backup_task.delay(str(sched.service.id), backup_type='SCHEDULED')
+                create_service_backup_task.delay(str(sched.service.id), backup_type='SCHEDULED', schedule_id=sched.id)
             ran += 1
         except Exception as exc:
             logger.warning("Scheduled backup failed for schedule %s: %s", sched.id, exc)
