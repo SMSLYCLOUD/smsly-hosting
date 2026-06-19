@@ -778,8 +778,11 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 ).order_by('?').first()
             if server:
                 logger.info("Auto-assigning server %s to service %s", server.name, serializer.validated_data.get('name'))
-        
-        ServerGuard.assert_user_workload_allowed(server)
+            else:
+                logger.warning("No server available for service %s", serializer.validated_data.get('name'))
+
+        if server:
+            ServerGuard.assert_user_workload_allowed(server)
 
         deploy_type = serializer.validated_data.get('deploy_type', 'GIT')
 
