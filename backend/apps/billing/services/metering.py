@@ -12,14 +12,14 @@ logger = logging.getLogger(__name__)
 class UsageMeter:
     """Tracks resource usage per user per billing period."""
 
-    def record_usage(self, user, resource_type, quantity, timestamp=None):
-        """Record a usage data point (called by Celery tasks)."""
+    def record_usage(self, service, cpu_cores, memory_mb, cost, timestamp=None):
+        """Record a usage data point for a service (called by Celery tasks)."""
         from ..models import UsageRecord
         UsageRecord.objects.create(
-            user=user,
-            resource_type=resource_type,
-            quantity=quantity,
-            recorded_at=timestamp or timezone.now(),
+            service=service,
+            cpu_cores=cpu_cores,
+            memory_mb=memory_mb,
+            cost=cost,
         )
 
     def get_usage_summary(self, user, period_start, period_end):
@@ -94,9 +94,8 @@ class UsageMeter:
 
         plan = sub.plan
 
-        # Base cost
-        cost = plan.price_monthly_usd if sub.billing_cycle == 'MONTHLY' else plan.price_yearly_usd / 12
-        cost = Decimal(cost)
+        # Base cost — yearly subscribers pay the full annual price.
+        cost = Decimal(plan.price_monthly_usd if sub.billing_cycle == 'MONTHLY' else plan.price_yearly_usd)
 
         summary = self.get_usage_summary(user, period_start, period_end)
 
@@ -133,26 +132,20 @@ class UsageMeter:
         return cost.quantize(Decimal('0.01'))
 
     def _get_price(self, resource_type, default):
+        """Return the unit price for a resource, falling back to *default*.
+
+        NOTE: ResourcePrice.price_per_unit_monthly is a monthly price.
+        For CPU and RAM (hourly resources) the caller must divide by 720
+        if it uses the DB value.  The *default* values are already hourly
+        so they are used directly.
+        """
         try:
             rp = ResourcePrice.objects.get(resource_type=resource_type, is_active=True)
-            return rp.price_per_unit_monthly # This field name suggests monthly price, but for CPU/RAM it should be hourly?
-            # Based on models.py: price_per_unit_monthly.
-            # If the model stores monthly price, we need to convert to hourly for CPU/RAM.
-            # Let's assume for CPU/RAM the model stores Hourly price, or we divide by 720.
-            # actually, let's look at how I used it in tasks.py: "0.01 per vCPU/hour"
-            # If I put 0.01 in the DB, is it monthly or hourly?
-            # The field says `price_per_unit_monthly`.
-            # If I want to be consistent, I should treat it as monthly price and divide by 720 for hourly resources.
-            # OR, I just assume the value in DB is the unit price used for calculation.
-            # Given the name `price_per_unit_monthly`, let's assume it means "Price for 1 unit for 1 month".
-            # So hourly price = price / 720.
-
-            # However, standard cloud billing often quotes hourly.
-            # To be safe and simple: I will assume the DB stores the "Unit Price" appropriate for the resource.
-            # For CPU -> Hourly price. For Storage -> Monthly price.
-            # But the field name is `price_per_unit_monthly`.
-            # I will fallback to `default` which I know is correct for hourly ($0.01)
-
+            # price_per_unit_monthly is the monthly price. For hourly
+            # resources (CPU, RAM) divide by 720 hours/month.
+            if resource_type in ('CPU', 'RAM'):
+                return rp.price_per_unit_monthly / Decimal(720)
+            return rp.price_per_unit_monthly
         except ResourcePrice.DoesNotExist:
             return default
 

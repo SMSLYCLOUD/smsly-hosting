@@ -593,11 +593,18 @@ class SubscriptionViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['POST'])
     def cancel(self, request):
         sub = self.get_queryset().filter(status='ACTIVE').first()
-        if sub:
-            sub.status = 'CANCELLED'
-            sub.save()
-            return Response({'status': 'Subscription cancelled'})
-        return Response({'error': 'No active subscription'}, status=status.HTTP_400_BAD_REQUEST)
+        if not sub:
+            return Response({'error': 'No active subscription'}, status=status.HTTP_400_BAD_REQUEST)
+        # Cancel Stripe subscription if one exists.
+        try:
+            from apps.billing.services.stripe import StripeService
+            if sub.user.billing_account.stripe_subscription_id:
+                StripeService.cancel_subscription(sub.user)
+        except Exception as e:
+            logger.warning("Failed to cancel Stripe subscription for %s: %s", sub.user, e)
+        sub.status = 'CANCELLED'
+        sub.save()
+        return Response({'status': 'Subscription cancelled'})
 
 
 class InvoiceViewSet(viewsets.ReadOnlyModelViewSet):

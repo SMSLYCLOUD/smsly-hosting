@@ -21,7 +21,9 @@ def setup_gitlab_webhook(user, repo_url: str) -> bool:
     hostname = parsed.hostname or ''
 
     # Normalize gitlab.com vs self-hosted GitLab
-    if 'gitlab' not in hostname and hostname not in gitlab_url:
+    # Allow any hostname that matches the configured GITLAB_URL, not
+    # just hosts containing the literal string 'gitlab' (self-hosted).
+    if hostname not in gitlab_url and 'gitlab' not in hostname:
         return False
 
     # Extract owner/repo from URL (supports gitlab.com/owner/repo and self-hosted)

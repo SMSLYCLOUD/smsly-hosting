@@ -3601,12 +3601,12 @@ class DeploymentViewSet(viewsets.ModelViewSet):
                 user_action="Choose a deployment that has a valid commit hash/image artifact.",
             )
 
-        if target_deployment.status not in ('ACTIVE', 'SUCCEEDED'):
+        if target_deployment.status != 'ACTIVE':
             return _error_response(
                 "ROLLBACK_BLOCKED",
-                f"Cannot rollback to a {target_deployment.status} deployment. Only successful deployments can be rolled back to.",
+                f"Cannot rollback to a {target_deployment.status} deployment. Only ACTIVE deployments can be rolled back to.",
                 details={"deployment_id": str(target_deployment.id), "status": target_deployment.status},
-                user_action="Pick a previous ACTIVE/SUCCEEDED deployment.",
+                user_action="Pick a previous ACTIVE deployment.",
             )
 
         # Create new deployment record for the rollback

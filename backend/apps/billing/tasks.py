@@ -110,14 +110,22 @@ def generate_monthly_invoices():
 
 @shared_task(soft_time_limit=600, time_limit=660)
 def send_payment_reminders():
-    """Run daily — send reminders for overdue invoices."""
+    """Run daily — mark past-due invoices OVERDUE and send reminders."""
     try:
+        now = timezone.now()
+        # Transition SENT → OVERDUE for invoices past their due_date.
+        overdue_count = Invoice.objects.filter(
+            status='SENT', due_date__lt=now,
+        ).update(status='OVERDUE')
+        if overdue_count:
+            logger.info("Marked %d invoices OVERDUE.", overdue_count)
+
         overdue_invoices = Invoice.objects.filter(status='OVERDUE')
         for invoice in overdue_invoices:
             # Here we would send email
-            logger.info(f"Sending reminder for overdue invoice {invoice.id}")
+            logger.info("Sending reminder for overdue invoice %s", invoice.id)
     except Exception as e:
-        logger.error(f"Error sending payment reminders: {e}")
+        logger.error("Error sending payment reminders: %s", e)
 
 @shared_task(soft_time_limit=600, time_limit=660)
 def aggregate_daily_revenue():
