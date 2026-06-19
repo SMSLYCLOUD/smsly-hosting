@@ -1,5 +1,6 @@
 """Node scoring for auto-scaling — ranks ManagedServers by available resources."""
 import logging
+import re
 import requests
 from django.conf import settings
 
@@ -86,4 +87,5 @@ class NodeScorer:
 
     @staticmethod
     def _node_ip(node):
-        return node.wg_address or node.private_ip or node.host or ''
+        raw = node.wg_address or node.private_ip or node.host or ''
+        return re.escape(raw)  # escape regex meta-chars for PromQL instance=~ pattern

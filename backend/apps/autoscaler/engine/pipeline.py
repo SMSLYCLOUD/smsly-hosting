@@ -90,9 +90,9 @@ def analyze_and_apply(service, *, now=None, min_interval_seconds: int = 0) -> Sc
     # 3. Per-service cooldown overrides (from alert_config JSON).
     # If set, they take precedence over the global SCALE_COOLDOWN_*
     # environment variables.
-    alert_cfg = service.alert_config or {}
-    cooldown_up = alert_cfg.pop('cooldown_up_min', None)
-    cooldown_down = alert_cfg.pop('cooldown_down_min', None)
+    alert_cfg = dict(service.alert_config or {})  # copy to avoid mutating the DB field
+    cooldown_up = alert_cfg.get('cooldown_up_min')
+    cooldown_down = alert_cfg.get('cooldown_down_min')
 
     # 4. Decide
     engine = DecisionEngine(
@@ -128,9 +128,9 @@ def analyze_only(service, *, now=None) -> dict:
         service=service, status='RUNNING',
     ).order_by('-created_at').first()
 
-    alert_cfg = service.alert_config or {}
-    cooldown_up = alert_cfg.pop('cooldown_up_min', None)
-    cooldown_down = alert_cfg.pop('cooldown_down_min', None)
+    alert_cfg = dict(service.alert_config or {})  # copy to avoid mutating the DB field
+    cooldown_up = alert_cfg.get('cooldown_up_min')
+    cooldown_down = alert_cfg.get('cooldown_down_min')
 
     engine = DecisionEngine(
         metrics,
