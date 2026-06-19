@@ -135,7 +135,7 @@ def _validate_offline(license_obj):
 
         public_key.verify(
             base64.b64decode(signature_b64),
-            payload_b64.encode(),
+            base64.b64decode(payload_b64),
             padding.PKCS1v15(),
             hashes.SHA256()
         )

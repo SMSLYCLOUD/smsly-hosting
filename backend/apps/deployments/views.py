@@ -3046,7 +3046,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         # Symlink resolution for Docker containers
         if path is not None:
             try:
-                path = validate_and_sanitize_path(path, container=container)
+                path = validate_and_sanitize_path(path, skip_system_check=True, container=container)
             except Exception:
                 pass
 
@@ -3060,7 +3060,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         path = request.query_params.get('path', '/')
 
         try:
-            path = validate_and_sanitize_path(path)
+            path = validate_and_sanitize_path(path, skip_system_check=True)
         except Exception as e:
             logger.warning("file_browse 400: Path validation failed for %s: %s", path, str(e))
             return Response({
@@ -3162,7 +3162,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Path required'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            path = validate_and_sanitize_path(path)
+            path = validate_and_sanitize_path(path, skip_system_check=True)
         except Exception as e:
             return Response({'error': 'Path validation failed', 'details': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -3210,7 +3210,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Path required'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            path = validate_and_sanitize_path(path)
+            path = validate_and_sanitize_path(path, skip_system_check=True)
         except Exception as e:
             return Response({'error': 'Path validation failed', 'details': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -3253,7 +3253,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Path required'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            path = validate_and_sanitize_path(path)
+            path = validate_and_sanitize_path(path, skip_system_check=True)
         except Exception as e:
             return Response({'error': 'Path validation failed', 'details': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -3297,7 +3297,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Path parameter is required'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            path = validate_and_sanitize_path(path)
+            path = validate_and_sanitize_path(path, skip_system_check=True)
         except Exception as e:
             return Response({'error': 'Path validation failed', 'details': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -3349,7 +3349,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Path and content parameters are required'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            path = validate_and_sanitize_path(path)
+            path = validate_and_sanitize_path(path, skip_system_check=True)
         except Exception as e:
             return Response({'error': 'Path validation failed', 'details': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -3447,7 +3447,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 path = resolved
 
         try:
-            path = validate_and_sanitize_path(path, skip_system_check=False)
+            path = validate_and_sanitize_path(path, skip_system_check=True)
         except Exception as e:
             return Response({'error': 'Path validation failed', 'details': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -3676,7 +3676,11 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         service.save()
 
         # Resume the deployment
-        resume_deploy_task.delay(deployment_id=str(deployment.id))
+        provider = _resolve_provider_for_service(service)
+        provider_id = str(provider.id) if provider else None
+        if not provider_id:
+            return Response({"error": "No cloud provider configured for this service."}, status=400)
+        resume_deploy_task.delay(deployment_id=str(deployment.id), provider_id=provider_id)
         
         AuditLog(
             actor=request.user.get_username(),

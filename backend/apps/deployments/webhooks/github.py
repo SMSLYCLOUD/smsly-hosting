@@ -48,7 +48,17 @@ class GitHubWebhookHandler:
         """
         Verify that the request came from GitHub.
         """
-        secret = settings.GITHUB_WEBHOOK_SECRET
+        # Read from PlatformConfig first (the view layer), then fall back
+        # to settings.py.  Both must be checked so the view and handler
+        # always agree on the secret.
+        secret = getattr(settings, 'GITHUB_WEBHOOK_SECRET', '')
+        try:
+            from apps.deployments.models_core import PlatformConfig
+            db_secret = PlatformConfig.load().get_webhook_secret('github')
+            if db_secret:
+                secret = db_secret
+        except Exception:
+            pass
         if not secret:
             logger.warning("GITHUB_WEBHOOK_SECRET not set, rejecting webhook")
             return False  # SECURITY: Fail closed - never skip verification

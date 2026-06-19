@@ -12,6 +12,7 @@ Uses the same Docker network as deployed services for internal connectivity.
 """
 import os
 import secrets
+import shlex
 import subprocess
 import logging
 import time
@@ -732,13 +733,16 @@ class AddonProvisioner:
             connection_url = f"postgresql://{db_user}:{password}@{hostname}:{port}/{db_name}"
 
         elif addon_type == 'REDIS':
+            # Docker requires the image BEFORE the command. The previous
+            # order placed redis-server first, which Docker interpreted
+            # as the image name, producing "Unable to find image".
             cmd_parts.extend([
-                'redis-server', '--requirepass', password,
                 '-v', f'{container_name}-data:/data',
             ])
             if alias_name:
                 cmd_parts.extend(['--network-alias', alias_name])
             cmd_parts.append(image)
+            cmd_parts.extend(['redis-server', '--requirepass', password])
             cmd_str = ' '.join(shlex.quote(p) for p in cmd_parts)
             hostname = alias_name or container_name
             connection_url = f"redis://:{password}@{hostname}:{port}/0"
@@ -1371,8 +1375,9 @@ class AddonProvisioner:
                         logger.info(f"{container_name} is healthy at {url}")
                         return
                 except Exception:
-                    time.sleep(1)
-                    continue
+                    pass
+                time.sleep(1)
+                continue
             else:
                 import socket
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -1560,25 +1565,21 @@ class AddonProvisioner:
                 subprocess.run(['docker', 'cp', f'{container_name}:/data/dump.rdb', backup_path], check=True)
 
             elif addon.addon_type == 'MYSQL':
-                mysql_password = self._get_container_env(
-                    container_name, 'MYSQL_ROOT_PASSWORD'
-                )
-
+                # Use the container's existing env var — never put the
+                # password on the command line where 'ps aux' can see it.
                 with open(backup_path, 'wb') as backup_file:
                     subprocess.run(
-                        ['docker', 'exec', container_name, 'mysqldump', '-u', 'root', f'--password={mysql_password}', 'app_db'],
+                        ['docker', 'exec', container_name,
+                         'sh', '-c', 'mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" app_db'],
                         check=True,
                         stdout=backup_file,
                     )
 
             elif addon.addon_type == 'MONGODB':
-                mongo_password = self._get_container_env(
-                    container_name, 'MONGO_INITDB_ROOT_PASSWORD'
-                )
-
                 with open(backup_path, 'wb') as backup_file:
                     subprocess.run(
-                        ['docker', 'exec', container_name, 'mongodump', '--username=app_user', f'--password={mongo_password}', '--db=app_db', '--archive'],
+                        ['docker', 'exec', container_name,
+                         'sh', '-c', 'mongodump --username=app_user --password="$MONGO_INITDB_ROOT_PASSWORD" --db=app_db --archive'],
                         check=True,
                         stdout=backup_file,
                     )
@@ -1634,23 +1635,19 @@ class AddonProvisioner:
                 subprocess.run(['docker', 'start', container_name], check=True)
 
             elif addon.addon_type == 'MYSQL':
-                mysql_password = self._get_container_env(
-                    container_name, 'MYSQL_ROOT_PASSWORD'
-                )
                 with open(validated_backup_path, 'rb') as backup_file:
                     subprocess.run(
-                        ['docker', 'exec', '-i', container_name, 'mysql', '-u', 'root', f'--password={mysql_password}', 'app_db'],
+                        ['docker', 'exec', '-i', container_name,
+                         'sh', '-c', 'mysql -u root -p"$MYSQL_ROOT_PASSWORD" app_db'],
                         stdin=backup_file,
                         check=True,
                     )
 
             elif addon.addon_type == 'MONGODB':
-                mongo_password = self._get_container_env(
-                    container_name, 'MONGO_INITDB_ROOT_PASSWORD'
-                )
                 with open(validated_backup_path, 'rb') as backup_file:
                     subprocess.run(
-                        ['docker', 'exec', '-i', container_name, 'mongorestore', '--username=app_user', f'--password={mongo_password}', '--db=app_db', '--archive'],
+                        ['docker', 'exec', '-i', container_name,
+                         'sh', '-c', 'mongorestore --username=app_user --password="$MONGO_INITDB_ROOT_PASSWORD" --db=app_db --archive'],
                         stdin=backup_file,
                         check=True,
                     )
