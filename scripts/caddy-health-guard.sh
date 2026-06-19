@@ -126,8 +126,9 @@ apply_candidate() {
     true
     sleep 3
     if docker compose ps -q caddy 2>/dev/null | grep -q .; then
-    cp "$CADDY_CONF" "$LAST_GOOD_CONF" 2>/dev/null || true
-    sync_active_to_shared
+        cp "$CADDY_CONF" "$LAST_GOOD_CONF" 2>/dev/null || true
+        sync_active_to_shared
+    fi
 }
 
 write_safe_fallback() {
