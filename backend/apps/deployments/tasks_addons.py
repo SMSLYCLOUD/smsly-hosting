@@ -130,7 +130,16 @@ def backup_addon_task(self, addon_id: str):
     backup = None
     try:
         addon = Addon.objects.get(id=addon_id)
-        backup = Backup.objects.create(addon=addon, status=Backup.Status.PENDING)
+        # Only create the Backup record on the first attempt.
+        # Retries reuse the same record to avoid orphaned PENDING rows.
+        if self.request.retries == 0:
+            backup = Backup.objects.create(addon=addon, status=Backup.Status.PENDING)
+        else:
+            backup = Backup.objects.filter(
+                addon=addon, status=Backup.Status.PENDING,
+            ).order_by('-created_at').first()
+            if not backup:
+                backup = Backup.objects.create(addon=addon, status=Backup.Status.PENDING)
         path = addon_provisioner.create_backup(addon)
         backup.file_path = path
         backup.status = Backup.Status.COMPLETED
