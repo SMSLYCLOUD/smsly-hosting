@@ -9,6 +9,11 @@ RUN pip install --no-cache-dir -r requirements.tunnel.txt
 # Copy tunnel server
 COPY backend/services/tunnels/ ./tunnels/
 
+# Create non-root user for runtime
+RUN addgroup --system tunnel && adduser --system --ingroup tunnel tunnel && \
+    chown -R tunnel:tunnel /app
+USER tunnel
+
 # Expose ports
 EXPOSE 8080
 

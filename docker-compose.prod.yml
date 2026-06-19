@@ -669,7 +669,10 @@ services:
     image: moby/buildkit:latest
     container_name: smsly-buildkitd
     restart: unless-stopped
-    privileged: true
+    security_opt:
+      - no-new-privileges:true
+    cap_add:
+      - SYS_ADMIN
     networks:
       - smsly-net
     volumes:
