@@ -14,6 +14,7 @@ from .models_addons import Addon
 from .models_audit import AuditLog
 from .models_storage import Volume
 from .models_cron import CronJob
+from .models_backup import BackupSchedule
 from .utils import log_event
 from services.caddy_manager import generate_caddyfile, apply_caddyfile
 
@@ -668,6 +669,33 @@ def validate_cron_schedule_pre_save(sender, instance, **kwargs):
                 f"(minimum gap detected: {minute_gap}s)."
             )
         })
+
+
+@receiver(pre_save, sender=BackupSchedule)
+def validate_backup_schedule_cron_pre_save(sender, instance, **kwargs):
+    """Validate BackupSchedule.cron_expression — same rules as CronJob.schedule."""
+    cron_expr = getattr(instance, "cron_expression", None)
+    if cron_expr is None or not isinstance(cron_expr, str):
+        return
+    cron_expr = cron_expr.strip()
+    if not cron_expr:
+        raise ValidationError({"cron_expression": "cron_expression is required."})
+    fields = cron_expr.split()
+    if len(fields) != _CRON_FIELD_COUNT:
+        raise ValidationError({
+            "cron_expression": (
+                f"cron expression must have exactly {_CRON_FIELD_COUNT} fields; "
+                f"got {len(fields)}."
+            )
+        })
+    for field in fields:
+        if not _CRON_FIELD_RE.match(field):
+            raise ValidationError({
+                "cron_expression": (
+                    f"invalid characters in cron field {field!r}; "
+                    "only digits, '*', '/', ',', '-' and whitespace are allowed."
+                )
+            })
 
 
 @receiver(pre_delete, sender=Addon)

@@ -39,6 +39,7 @@ from .ai_router import (
     serialize_ai_router_config,
 )
 from .models import Service, Deployment, EnvironmentVariable, PlatformConfig
+from apps.deployments.utils_file_browser import exec_file_list
 from .serializers import (
     ServiceSerializer, DeploymentSerializer,
     DeploymentTriggerSerializer, EnvVarSerializer,
@@ -3075,6 +3076,10 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
         def _retry_browse(resp, orchestrator, remote_id, config):
             """Retry file_browse with fallback paths."""
+            # Stop retrying if the error indicates the node is down or unreachable
+            if resp is None or resp.status_code >= 500:
+                return resp
+
             original_path = config.get('params', {}).get('path', '')
             fallback_paths = ['/app', '/', '/var/www', '/opt', '/home']
             tried = {original_path}
@@ -3111,7 +3116,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 'timeout': 30,
                 'retry': _retry_browse,
             },
-            local_action=lambda container, path=None: self._exec_file_list(container, path or '/'),
+            local_action=lambda container, path=None: exec_file_list(container, path or '/', fallback_to_root=True),
             path=path,
         )
 
@@ -3120,47 +3125,6 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
     def _k8s_exec_file_op(self, container_id: str, command_args: list):
         raise NotImplementedError("Kubernetes deployment is not supported. Use Docker or a lite agent.")
-
-    def _exec_file_list(self, container, path: str):
-        """List files via Docker exec with fallback chain for containers missing coreutils."""
-        try:
-            cmd_chain = [
-                ["ls", "-la", "--time-style=long-iso", path],
-                ["ls", "-la", path],
-                # Python-based fallback for distroless/minimal images without ls
-                ["python3", "-c", (
-                    "import os,stat,datetime,sys\n"
-                    "p=sys.argv[1]\n"
-                    "for f in os.listdir(p):\n"
-                    " fp=os.path.join(p,f)\n"
-                    " s=os.lstat(fp)\n"
-                    " mt=datetime.datetime.fromtimestamp(s.st_mtime).strftime('%Y-%m-%d %H:%M')\n"
-                    " print(stat.filemode(s.st_mode),s.st_nlink,s.st_uid,s.st_gid,s.st_size,mt,f)"
-                ), path],
-            ]
-            exit_code = 1
-            output = b""
-            for cmd in cmd_chain:
-                exit_code, output = container.exec_run(cmd)
-                if exit_code == 0:
-                    break
-
-            if exit_code != 0:
-                fallback_path = '/' if path == '/app' else ('/app' if path == '/' else None)
-                if fallback_path:
-                    path = fallback_path
-                    for cmd in cmd_chain:
-                        exit_code, output = container.exec_run(cmd)
-                        if exit_code == 0:
-                            break
-
-            if exit_code != 0:
-                logger.warning("_exec_file_list 400: ls command failed. Code: %s, Output: %s", exit_code, output.decode('utf-8', errors='replace'))
-                return Response({'error': 'Failed to list directory', 'details': output.decode('utf-8', errors='replace')}, status=status.HTTP_400_BAD_REQUEST)
-            files = self._parse_ls_output(output.decode('utf-8', errors='replace'))
-            return Response({'path': path, 'files': files})
-        except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     def _resolve_remote_server(self, service, latest_deploy):
         """
@@ -3186,38 +3150,6 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     Q(host=host) | Q(private_ip=host)
                 ).first()
         return None
-
-    def _parse_ls_output(self, output: str) -> list:
-        """Parse `ls -la` output into file dicts. Supports standard and long-iso time styles."""
-        import re
-        files = []
-        lines = output.splitlines()
-        if lines and lines[0].startswith('total'):
-            lines = lines[1:]
-        for line in lines:
-            parts = line.split()
-            if not parts:
-                continue
-                
-            # Detect if time-style=long-iso (e.g. 2026-05-24)
-            if len(parts) >= 8 and re.match(r'\d{4}-\d{2}-\d{2}', parts[5]):
-                date = f"{parts[5]} {parts[6]}"
-                name = " ".join(parts[7:])
-            elif len(parts) >= 9:
-                # Standard ls -la output: Month Day Time
-                date = f"{parts[5]} {parts[6]} {parts[7]}"
-                name = " ".join(parts[8:])
-            else:
-                continue
-                
-            files.append({
-                'permissions': parts[0],
-                'user': parts[2],
-                'size': parts[4],
-                'date': date,
-                'name': name,
-            })
-        return files
 
     @action(detail=True, methods=['get'], url_path='file-download')
     def file_download(self, request, pk=None):
@@ -5535,6 +5467,16 @@ class BackupScheduleViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         return super().destroy(request, *args, **kwargs)
+
+    def perform_destroy(self, instance):
+        # Mirror _validate_schedule_access for the delete path.
+        if instance.is_server_wide and not self.request.user.is_superuser:
+            raise PermissionDenied("Only admins can delete server-wide backup schedules.")
+        if instance.service:
+            from apps.deployments.views import ServiceBackupViewSet
+            if not ServiceBackupViewSet._user_can_access_service(self.request.user, instance.service):
+                raise PermissionDenied("You do not have access to this service.")
+        super().perform_destroy(instance)
 
     def get_queryset(self):
         qs = self.queryset
