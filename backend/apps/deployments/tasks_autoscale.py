@@ -31,7 +31,7 @@ def analyze_all_services_task(self):
         base = ServiceReplica.objects.filter(status='RUNNING').values_list(
             'service_id', flat=True
         )
-        qs = Service.objects.filter(status='RUNNING').distinct()
+        qs = Service.objects.filter(status='ACTIVE').distinct()
         qs = qs.filter(
             db_models.Q(id__in=base) | db_models.Q(compose_file='', deploy_mode='SINGLE')
         )
