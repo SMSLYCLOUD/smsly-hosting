@@ -559,13 +559,17 @@ def _load_install_script():
     required_sha = os.environ.get("SMSLY_INSTALL_SCRIPT_SHA256", "").strip()
 
     candidates = [
-        # /app/install.sh if bundled into the backend container
+        # /app/install.sh — the Docker-bundled copy, always current.
+        # This is backend/install.sh which is self-contained (no lib/
+        # sourcing needed). It is always in sync with the backend image.
+        "/app/install.sh",
+        # Absolute-path fallback for non-standard container layouts.
         os.path.abspath(
             os.path.join(os.path.dirname(__file__), "../../../install.sh")
         ),
+        # Host filesystem copy — only used in local development.
+        # In production this can be stale; the bundled copy is preferred.
         os.path.abspath(os.path.join(os.getcwd(), "install.sh")),
-        # Fallback for some container layouts
-        "/app/install.sh",
     ]
 
     # Auto-calculate SHA from local candidates if environment variable is missing
@@ -636,10 +640,19 @@ def _load_install_script():
                                 + content[_e + len(_end) + 1:]
                             )
                         else:
-                            # Sentinel markers not found — the install.sh
-                            # variant may be self-contained (no lib/ sourcing
-                            # loop). Skip inlining gracefully.
-                            pass
+                            # Sentinel markers not found — fall back to regex
+                            # replacement of the lib sourcing loop.  This handles
+                            # older install.sh files on the host filesystem that
+                            # pre-date the sentinel-marker approach.
+                            content = re.sub(
+                                r'for lib in "\$LIB_DIR"/\*\.sh; do\s*\n'
+                                r'(?:\s*#.*\n)*'
+                                r'\s*case "\$lib" in \*/fresh\.sh\|\*/update\.sh\) continue ;; esac\s*\n'
+                                r'\s*\[ -f "\$lib" \] && source "\$lib"\s*\n'
+                                r'\s*done\s*\n',
+                                "\n" + inline_block + "\n",
+                                content,
+                            )
                 return content, f"local:{path}"
 
     script_url = (
