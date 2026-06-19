@@ -269,7 +269,10 @@ export default function ServiceDetailPage() {
     };
 
     useEffect(() => {
-        const key = localStorage.getItem('smsly_ai_key');
+        // SECURITY: AI key stored only in sessionStorage (cleared on tab close).
+        // Never use localStorage for API keys — they persist across sessions
+        // and are accessible to any XSS payload.
+        const key = sessionStorage.getItem('smsly_ai_key');
         if (key) setAiKey(key);
     }, []);
 
@@ -741,7 +744,7 @@ export default function ServiceDetailPage() {
                                 <button
                                     className="bg-primary text-primary-foreground px-4 py-2 rounded font-bold hover:opacity-90"
                                     onClick={() => {
-                                        localStorage.setItem('smsly_ai_key', aiKey);
+                                        sessionStorage.setItem('smsly_ai_key', aiKey);
                                         toast({ title: 'AI Key saved', description: 'Key stored locally in your browser.' });
                                     }}
                                 >

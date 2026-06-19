@@ -31,7 +31,10 @@ class DeploymentStateManager:
         # 1. Validate Transition
         allowed_targets = ALLOWED_DEPLOYMENT_TRANSITIONS.get(current_status, [])
         if target_status != current_status and target_status not in allowed_targets:
-             logger.warning(f"Invalid transition from {current_status} to {target_status} for deployment {deployment.id}")
+            raise ValueError(
+                f"Invalid deployment state transition: {current_status} -> {target_status}. "
+                f"Allowed transitions from {current_status}: {allowed_targets}."
+            )
 
         # 2. Update State
         deployment.status = target_status
