@@ -37,23 +37,35 @@ scrape_configs:
     metrics_path: /metrics
     scrape_interval: 30s
 
-  # System container metrics via cAdvisor (not for user services)
+  # System container metrics via cAdvisor (local + remote nodes)
   - job_name: 'cadvisor'
     static_configs:
       - targets: ['cadvisor:8080']
+        labels:
+          node: local
+    file_sd_configs:
+      - files:
+          - '/etc/prometheus/docker-labels-targets/cadvisor-remote.json'
+        refresh_interval: 60s
 
   # Docker container labels (docker_id -> service_name mapping)
   - job_name: 'docker-labels'
     file_sd_configs:
       - files:
-          - '/etc/prometheus/docker-labels-targets/*.json'
+          - '/etc/prometheus/docker-labels-targets/docker-labels*.json'
         refresh_interval: 60s
     scrape_interval: 30s
 
-  # Node metrics
+  # Node metrics (local + remote nodes)
   - job_name: 'node'
     static_configs:
       - targets: ['node-exporter:9100']
+        labels:
+          node: local
+    file_sd_configs:
+      - files:
+          - '/etc/prometheus/docker-labels-targets/node-exporter-remote.json'
+        refresh_interval: 60s
 
   # Traefik (internal Prometheus metrics endpoint)
   - job_name: 'traefik'

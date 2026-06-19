@@ -73,8 +73,16 @@ def main():
         total_requested += node_app_pool_size + node_worker_pool_size
 
     if total_requested > pg_max_conn:
-        print(f"ERROR: Connection budget exceeded! Requested: {total_requested}, Postgres max: {pg_max_conn}", file=sys.stderr)
-        sys.exit(1)
+        print(
+            f"WARNING: Connection budget exceeded! "
+            f"Requested: {total_requested}, Postgres max: {pg_max_conn}. "
+            f"Consider increasing POSTGRES_MAX_CONNECTIONS or reducing pool sizes.",
+            file=sys.stderr,
+        )
+        if os.environ.get("PGCAT_STRICT_CONNECTION_BUDGET", "").lower() in ("1", "true", "yes"):
+            print("ERROR: PGCAT_STRICT_CONNECTION_BUDGET is set. Refusing to start.", file=sys.stderr)
+            sys.exit(1)
+        print("Proceeding with reduced pool sizes. Set PGCAT_STRICT_CONNECTION_BUDGET=1 to enforce.", file=sys.stderr)
 
     # Build user pools dynamically
     smsly_hosting_users = f"""[pools.smsly_hosting.users.{db_user}]

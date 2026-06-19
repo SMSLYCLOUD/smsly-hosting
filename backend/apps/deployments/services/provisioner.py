@@ -782,7 +782,7 @@ def _provision_node_db_credentials(server: ManagedServer):
                 cur.execute(sql.SQL("ALTER USER {} WITH PASSWORD %s").format(sql.Identifier(username)), (password,))
                 is_new_user = True
 
-            # Grant access to the primary database
+            # Grant database-level access
             parsed = urlparse(master_db_url)
             db_name = parsed.path.lstrip('/')
 
@@ -790,21 +790,13 @@ def _provision_node_db_credentials(server: ManagedServer):
                 sql.Identifier(db_name), sql.Identifier(username)
             ))
 
-            # Connect to the target DB to grant schema permissions
-            conn.close()
-
-            target_db_url = master_db_url.replace(f"/{db_name}", f"/{db_name}")
-            conn = psycopg2.connect(target_db_url)
-            conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-            with conn.cursor() as target_cur:
-                # Grant schema access
-                target_cur.execute(sql.SQL("GRANT ALL PRIVILEGES ON SCHEMA public TO {}").format(sql.Identifier(username)))
-                # Grant access to all existing tables and sequences
-                target_cur.execute(sql.SQL("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO {}").format(sql.Identifier(username)))
-                target_cur.execute(sql.SQL("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO {}").format(sql.Identifier(username)))
-                # CRITICAL: Auto-grant permissions on future tables created by migrations
-                target_cur.execute(sql.SQL("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO {}").format(sql.Identifier(username)))
-                target_cur.execute(sql.SQL("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO {}").format(sql.Identifier(username)))
+            # Grant schema-level permissions (same connection, same DB)
+            cur.execute(sql.SQL("GRANT ALL PRIVILEGES ON SCHEMA public TO {}").format(sql.Identifier(username)))
+            cur.execute(sql.SQL("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO {}").format(sql.Identifier(username)))
+            cur.execute(sql.SQL("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO {}").format(sql.Identifier(username)))
+            # CRITICAL: Auto-grant permissions on future tables created by migrations
+            cur.execute(sql.SQL("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO {}").format(sql.Identifier(username)))
+            cur.execute(sql.SQL("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO {}").format(sql.Identifier(username)))
 
         logger.info("Provisioned Master DB credentials for node %s: %s (new_user=%s)", server.name, username, is_new_user)
         if not isinstance(server.provider_metadata, dict):
@@ -828,23 +820,98 @@ def _restart_pgcat():
     render_pgcat_config.py queries the DB for all lite-agent rows and builds
     PgCat user pools for each.  A restart causes that script to run again,
     picking up any newly-provisioned node agent credentials.
+
+    NOTE: PgCat currently requires a full restart to pick up new user pools.
+    A hot-reload via SIGHUP could be investigated in the future to avoid the
+    brief (~10 s) connectivity disruption for existing nodes.
     """
+    import time as _time
     try:
         import docker as docker_lib
         client = docker_lib.from_env()
-        # Container name follows docker-compose naming convention:
-        # <project>-<service>-<replica>
+        pgcat_name = None
         for name in ("smsly-hosting-pgcat-1", "smsly-hosting-pgcat"):
             try:
-                container = client.containers.get(name)
-                container.restart(timeout=10)
-                logger.info("Restarted PgCat container %s to pick up new node agent pools.", name)
-                return
+                client.containers.get(name)
+                pgcat_name = name
+                break
             except docker_lib.errors.NotFound:
                 continue
-        logger.warning("PgCat container not found — node agent pools may not be active until next restart.")
+
+        if not pgcat_name:
+            logger.warning(
+                "PgCat container not found — node agent pools will not be "
+                "active until the next PgCat restart."
+            )
+            return
+
+        container = client.containers.get(pgcat_name)
+        container.restart(timeout=10)
+        logger.info(
+            "Restarted PgCat container %s to pick up new node agent pools.",
+            pgcat_name,
+        )
+
+        # Wait for PgCat to become healthy so the newly provisioned agent
+        # does not encounter a connection-refused error on first connect.
+        deadline = _time.monotonic() + 30
+        while _time.monotonic() < deadline:
+            try:
+                container.reload()
+                health = container.attrs.get("State", {}).get("Health", {}).get("Status")
+                if health == "healthy":
+                    logger.info("PgCat %s is healthy after restart.", pgcat_name)
+                    return
+            except Exception:
+                pass
+            _time.sleep(2)
+
+        logger.warning(
+            "PgCat %s did not become healthy within 30 s after restart. "
+            "Node agent pools may not be active.",
+            pgcat_name,
+        )
     except Exception as e:
-        logger.warning("Could not restart PgCat: %s — node agent pools may not be active until next restart.", e)
+        logger.warning(
+            "Could not restart PgCat: %s — node agent pools may not be "
+            "active until the next PgCat restart.",
+            e,
+        )
+
+
+def _verify_agent_db_connectivity(ssh, server: ManagedServer):
+    """Verify that a freshly provisioned agent can reach its DB through PgCat.
+
+    After WireGuard is set up, the agent's backend should be able to connect
+    to the master PgCat at MASTER_MESH_IP:5432.  We SSH into the agent and
+    query the local health endpoint, which checks database connectivity.
+    """
+    if server_install_mode(server) != "agent-lite":
+        return  # Nodes run their own PostgreSQL; nothing to verify
+
+    _append_log(server, "Verifying agent DB connectivity via health endpoint...")
+    deadline = getattr(server, "_start_time", 0) + 120
+    import time as _time
+    while _time.monotonic() < deadline:
+        try:
+            _stdin, stdout, _stderr = ssh.exec_command(
+                "curl -sf --max-time 5 http://localhost:8000/health/ 2>/dev/null",
+                timeout=10,
+            )
+            body = stdout.read().decode("utf-8", errors="replace").strip()
+            if '"status":"healthy"' in body or '"database":"healthy"' in body:
+                _append_log(server, "Agent DB connectivity verified (health endpoint reports healthy).")
+                return
+        except Exception:
+            pass
+        _time.sleep(5)
+
+    _append_log(
+        server,
+        "Agent health endpoint did not report healthy within the wait window. "
+        "The node will be marked ONLINE but may require a manual restart if "
+        "the database connection does not recover on its own.",
+    )
 
 
 @shared_task(bind=True, max_retries=0, soft_time_limit=1860, time_limit=1920)
@@ -1423,6 +1490,12 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                     )
             except Exception:
                 pass
+
+        # -- Post-provision health verification ----------------------------------
+        # After WireGuard is up, the agent should be able to reach the master DB
+        # via the mesh IP.  Verify before marking ONLINE so we don't strand an
+        # agent that looks healthy but cannot connect to its database.
+        _verify_agent_db_connectivity(ssh, server)
 
         server.provision_status = ManagedServer.ProvisionStatus.DONE
         server.status = ManagedServer.Status.ONLINE
