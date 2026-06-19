@@ -39,7 +39,8 @@ class TestE2EClusterSimulator(TestCase):
 
         # Mock SSH channel returning credentials
         mock_channel = MagicMock()
-        mock_channel.recv_ready.side_effect = [True, False] * 100 # Ensure it can handle many loops
+        import itertools
+        mock_channel.recv_ready.side_effect = itertools.cycle([True, False])
         mock_channel.recv.return_value = b"[cred] Credentials saved. api_url=http://mock api_token=smsly_123"
         mock_channel.exit_status_ready.return_value = True
         mock_channel.recv_exit_status.return_value = 0
@@ -93,7 +94,7 @@ class TestE2EClusterSimulator(TestCase):
 
         # Mock SSH channel returning failure first time, then success
         mock_channel = MagicMock()
-        mock_channel.recv_ready.side_effect = [True, False] * 100
+        mock_channel.recv_ready.side_effect = itertools.cycle([True, False])
         mock_channel.recv.return_value = b"Error during installation"
         mock_channel.exit_status_ready.return_value = True
         mock_channel.recv_exit_status.return_value = 1
