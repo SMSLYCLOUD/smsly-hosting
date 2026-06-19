@@ -96,6 +96,8 @@ urlpatterns = [
     path('addons/<uuid:pk>/deprovision/', AddonViewSet.as_view({'post': 'deprovision'}), name='addon-deprovision-direct'),
     path('services/check-domain/', ServiceViewSet.as_view({'get': 'check_domain'}), name='service-check-domain-direct'),
     path('services/check-domain', ServiceViewSet.as_view({'get': 'check_domain'}), name='service-check-domain-direct-noslash'),
+    path('topology/ecosystem/', TopologyViewSet.as_view({'get': 'ecosystem'}), name='topology-ecosystem'),
+    path('topology/ecosystem', TopologyViewSet.as_view({'get': 'ecosystem'}), name='topology-ecosystem-noslash'),
 ] + router.urls + [
 
     path('templates/', TemplateViewSet.as_view({'get': 'list'}), name='template-list'),
