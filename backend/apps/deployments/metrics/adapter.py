@@ -10,7 +10,7 @@ from decouple import config
 
 logger = logging.getLogger(__name__)
 
-PROMETHEUS_URL = config('PROMETHEUS_URL', default='http://prometheus:9090')
+PROMETHEUS_URL = config('PROMETHEUS_URL', default='http://smsly-prometheus:9090')
 PROMETHEUS_TIMEOUT = 5  # seconds
 
 

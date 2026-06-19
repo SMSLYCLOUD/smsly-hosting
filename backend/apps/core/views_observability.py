@@ -15,11 +15,11 @@ from rest_framework.throttling import UserRateThrottle
 
 logger = logging.getLogger(__name__)
 
-GRAFANA_INTERNAL_URL = config('GRAFANA_INTERNAL_URL', default='http://grafana:3000')
+GRAFANA_INTERNAL_URL = config('GRAFANA_INTERNAL_URL', default='http://smsly-grafana:3000')
 GRAFANA_USER = config('GRAFANA_ADMIN_USER', default='admin')
 GRAFANA_PASSWORD = config('GRAFANA_PASSWORD', default='')
-LOKI_INTERNAL_URL = config('LOKI_INTERNAL_URL', default='http://loki:3100')
-PROMETHEUS_INTERNAL_URL = config('PROMETHEUS_INTERNAL_URL', default='http://prometheus:9090')
+LOKI_INTERNAL_URL = config('LOKI_INTERNAL_URL', default='http://smsly-loki:3100')
+PROMETHEUS_INTERNAL_URL = config('PROMETHEUS_INTERNAL_URL', default='http://smsly-prometheus:9090')
 
 PROXY_TIMEOUT = 15
 

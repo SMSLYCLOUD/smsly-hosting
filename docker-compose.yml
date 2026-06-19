@@ -533,10 +533,10 @@ services:
       - GF_SERVER_SERVE_FROM_SUB_PATH=true
       # SECURITY: anonymous access disabled; embedding off; strict same-site
       # cookies. Re-enable embedding/anon only behind a trusted SSO proxy.
-      - GF_AUTH_ANONYMOUS_ENABLED=false
-      # - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer   # disabled with anonymous auth
-      - GF_SECURITY_ALLOW_EMBEDDING=false
-      - GF_SECURITY_COOKIE_SAMESITE=strict
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      - GF_SECURITY_ALLOW_EMBEDDING=true
+      - GF_SECURITY_COOKIE_SAMESITE=lax
     volumes:
       - grafana_data:/var/lib/grafana
     networks:

@@ -117,6 +117,14 @@ safe_update_snapshot() {
         _warn "RabbitMQ export skipped (container or rabbitmqadmin not available)"
     fi
 
+    # Snapshot current images to prevent pruning and enable instant rollback
+    _step "Snapshotting Docker Images"
+    for img in smsly-hosting_backend smsly-hosting_frontend smsly-hosting_celery; do
+        if docker image inspect "$img:latest" >/dev/null 2>&1; then
+            docker tag "$img:latest" "$img:rollback-safe" 2>/dev/null && _ok "Tagged $img:rollback-safe" || _warn "Failed to tag $img:rollback-safe"
+        fi
+    done
+
     cat > "$SNAPSHOT_FILE" <<SNAPEOF
 PREV_HASH=$prev_hash
 PREV_BRANCH=$prev_branch
@@ -202,7 +210,17 @@ safe_update_rollback() {
 
     # Clear stale lock from the failed original install.sh
     rm -f /tmp/smsly-install.lock 2>/dev/null || true
-    SMSLY_SKIP_GIT_SYNC=true bash "$INSTALL_DIR/install.sh" --update >/dev/null 2>&1 || _warn "Rollback install had issues"
+    
+    # Instant rollback: restore images from snapshot instead of rebuilding
+    _step "Restoring Docker Images"
+    for img in smsly-hosting_backend smsly-hosting_frontend smsly-hosting_celery; do
+        if docker image inspect "$img:rollback-safe" >/dev/null 2>&1; then
+            docker tag "$img:rollback-safe" "$img:latest" 2>/dev/null && _ok "Restored $img:latest" || _warn "Failed to restore $img:latest"
+        fi
+    done
+    
+    # Restart core services with the restored images
+    docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps backend frontend celery celery-worker celery-deploy celery-fast celery-beat pgcat 2>/dev/null || _warn "Docker compose up had issues during rollback"
 
     # Restore DB if backed up
     if [ -n "${BACKUP_FILE:-}" ] && [ -f "$BACKUP_FILE" ]; then
@@ -239,6 +257,15 @@ safe_update_cleanup() {
     else
         _ok "No stale containers to clean"
     fi
+    
+    # Clean up the rollback tags so old images can be pruned
+    _step "Cleaning Up Image Snapshots"
+    for img in smsly-hosting_backend smsly-hosting_frontend smsly-hosting_celery; do
+        if docker image inspect "$img:rollback-safe" >/dev/null 2>&1; then
+            docker rmi "$img:rollback-safe" >/dev/null 2>&1 && _ok "Removed tag $img:rollback-safe" || true
+        fi
+    done
+    
     return 0
 }
 

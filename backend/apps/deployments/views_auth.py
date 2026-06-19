@@ -53,9 +53,9 @@ class SessionTokenView(GenericAPIView):
                 {"error": "Authentication required"},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
-        Token.objects.filter(user=user).delete()
-        new_token = Token.objects.create(user=user)
-        return Response({'token': new_token.key})
+        from django.core import signing
+        token = signing.dumps({'user_id': user.id}, salt='ws-terminal')
+        return Response({'token': token})
 
 class ZeroTrustHMACAuthentication(authentication.BaseAuthentication):
     """

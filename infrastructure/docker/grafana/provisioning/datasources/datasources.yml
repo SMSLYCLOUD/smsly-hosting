@@ -3,11 +3,11 @@ datasources:
   - name: Prometheus
     type: prometheus
     uid: prometheus
-    url: http://prometheus:9090
+    url: http://smsly-prometheus:9090
     access: proxy
     isDefault: true
   - name: Loki
     type: loki
     uid: loki
-    url: http://loki:3100
+    url: http://smsly-loki:3100
     access: proxy
