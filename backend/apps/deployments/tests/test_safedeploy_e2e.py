@@ -93,7 +93,7 @@ class PreviewOwnershipTests(APITestCase):
 
         self.client.force_authenticate(user=self.intruder)
         r = self.client.get(self._url())
-        self.assertIn(r.status_code, [http_status.HTTP_403_FORBIDDEN, http_status.HTTP_200_OK])
+        self.assertIn(r.status_code, [http_status.HTTP_403_FORBIDDEN, http_status.HTTP_404_NOT_FOUND])
 
     def test_team_member_can_create_preview(self):
         team = Team.objects.create(name="review-team", owner=self.owner)
