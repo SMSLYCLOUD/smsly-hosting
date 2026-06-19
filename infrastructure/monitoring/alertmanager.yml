@@ -1,10 +1,10 @@
 global:
   resolve_timeout: 5m
-  slack_api_url: '{{ .Env.ALERT_SLACK_WEBHOOK_URL }}'
-  smtp_smarthost: '{{ .Env.ALERT_SMTP_HOST }}:{{ .Env.ALERT_SMTP_PORT }}'
-  smtp_from: '{{ .Env.ALERT_SMTP_FROM }}'
-  smtp_auth_username: '{{ .Env.ALERT_SMTP_USER }}'
-  smtp_auth_password: '{{ .Env.ALERT_SMTP_PASS }}'
+  slack_api_url: '{{ .Env.ALERT_SLACK_WEBHOOK_URL | default "" }}'
+  smtp_smarthost: '{{ .Env.ALERT_SMTP_HOST | default "localhost" }}:{{ .Env.ALERT_SMTP_PORT | default "25" }}'
+  smtp_from: '{{ .Env.ALERT_SMTP_FROM | default "alertmanager@localhost" }}'
+  smtp_auth_username: '{{ .Env.ALERT_SMTP_USER | default "" }}'
+  smtp_auth_password: '{{ .Env.ALERT_SMTP_PASS | default "" }}'
 
 route:
   group_by: ['alertname', 'severity']
@@ -28,7 +28,7 @@ receivers:
         title: '{{ .Env.ALERT_ENV | default "smsly" }} | {{ .GroupLabels.alertname }}'
         text: '{{ .CommonAnnotations.description }}'
     email_configs:
-      - to: '{{ .Env.ALERT_EMAIL_TO }}'
+      - to: '{{ .Env.ALERT_EMAIL_TO | default "" }}'
 
   - name: 'critical'
     slack_configs:

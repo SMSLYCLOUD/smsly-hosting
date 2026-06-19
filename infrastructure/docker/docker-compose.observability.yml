@@ -96,6 +96,15 @@ services:
     command:
       - --config.file=/etc/alertmanager/alertmanager.yml
       - --storage.path=/alertmanager
+    environment:
+      - ALERT_SLACK_WEBHOOK_URL=${ALERT_SLACK_WEBHOOK_URL:-}
+      - ALERT_SMTP_HOST=${ALERT_SMTP_HOST:-}
+      - ALERT_SMTP_PORT=${ALERT_SMTP_PORT:-}
+      - ALERT_SMTP_FROM=${ALERT_SMTP_FROM:-}
+      - ALERT_SMTP_USER=${ALERT_SMTP_USER:-}
+      - ALERT_SMTP_PASS=${ALERT_SMTP_PASS:-}
+      - ALERT_EMAIL_TO=${ALERT_EMAIL_TO:-}
+      - ALERT_ENV=${ALERT_ENV:-smsly}
     volumes:
       - ../monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
       - alertmanager-data:/alertmanager

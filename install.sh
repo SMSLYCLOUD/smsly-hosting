@@ -180,6 +180,7 @@ RECREATE_TRAEFIK="false"
 OBSERVABILITY_MODE="false"
 
 # ─── Source library modules ───────────────────────────────────────────────────
+# --- BEGIN_LIB_SOURCING ---
 LIB_DIR="$SCRIPT_DIR/lib"
 for lib in "$LIB_DIR"/*.sh; do
     # Skip mode-entry files — they are sourced on-demand by the
@@ -187,6 +188,7 @@ for lib in "$LIB_DIR"/*.sh; do
     case "$lib" in */fresh.sh|*/update.sh) continue ;; esac
     [ -f "$lib" ] && source "$lib"
 done
+# --- END_LIB_SOURCING ---
 
 # ─── Runtime constants ────────────────────────────────────────────────────────
 LOG_FILE="/var/log/smsly-install.log"
@@ -356,12 +358,37 @@ fi
 deploy_observability_stack() {
     echo -e "${BLUE}  → Deploying observability stack (Grafana, Loki, Prometheus)...${NC}"
     if [ -f "$INSTALL_DIR/infrastructure/docker/docker-compose.observability.yml" ]; then
+        # Ensure Grafana has a non-empty admin password (Grafana >=11 requires it).
+        if [ -z "${GRAFANA_PASSWORD:-}" ]; then
+            GRAFANA_PASSWORD="$(python3 -c "import secrets,string; print(''.join(secrets.choice(string.ascii_letters+string.digits+'-_') for _ in range(40)))" 2>/dev/null || openssl rand -base64 30 | tr -d '+/=' )"
+            export GRAFANA_PASSWORD
+            if [ -f "$INSTALL_DIR/.env" ]; then
+                if grep -q '^GRAFANA_PASSWORD=' "$INSTALL_DIR/.env" 2>/dev/null; then
+                    sed -i "s|^GRAFANA_PASSWORD=.*|GRAFANA_PASSWORD=$GRAFANA_PASSWORD|" "$INSTALL_DIR/.env"
+                else
+                    echo "GRAFANA_PASSWORD=$GRAFANA_PASSWORD" >> "$INSTALL_DIR/.env"
+                fi
+            fi
+            echo -e "${GREEN}  ✓ Auto-generated Grafana admin password${NC}"
+        fi
+
+        # Ensure prometheus-targets dir exists with correct ownership for
+        # non-root container uid 1000.
         mkdir -p "$INSTALL_DIR/prometheus-targets"
-        chown -R 1000:1000 "$INSTALL_DIR/prometheus-targets" 2>/dev/null || true
+        if ! chown -R 1000:1000 "$INSTALL_DIR/prometheus-targets" 2>/dev/null; then
+            echo -e "${YELLOW}  ⚠ Could not chown prometheus-targets to uid 1000 — target files may fail${NC}"
+        fi
         chmod 2777 "$INSTALL_DIR/prometheus-targets" 2>/dev/null || true
-        docker compose -f "$INSTALL_DIR/infrastructure/docker/docker-compose.observability.yml" pull --ignore-pull-failures || \
+
+        docker compose \
+            --env-file "$INSTALL_DIR/.env" \
+            -f "$INSTALL_DIR/infrastructure/docker/docker-compose.observability.yml" \
+            pull --ignore-pull-failures || \
             echo -e "${YELLOW}  ⚠ Observability stack pull failed (non-fatal)${NC}"
-        docker compose -f "$INSTALL_DIR/infrastructure/docker/docker-compose.observability.yml" up -d --pull always || \
+        docker compose \
+            --env-file "$INSTALL_DIR/.env" \
+            -f "$INSTALL_DIR/infrastructure/docker/docker-compose.observability.yml" \
+            up -d --pull always || \
             echo -e "${YELLOW}  ⚠ Observability stack start failed (non-fatal)${NC}"
         echo -e "${GREEN}  ✓ Observability stack deployed${NC}"
     else
