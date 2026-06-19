@@ -491,6 +491,38 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         return Response({'status': 'rollback_started'})
 
     @action(detail=True, methods=['post'])
+    def extend_rollback(self, request, pk=None):
+        """Extend the rollback deadline by N hours (default 24).
+
+        Body: {"hours": 48}
+        """
+        transfer = self.get_object()
+        if transfer.status != 'COMPLETED':
+            return Response(
+                {'error': 'Can only extend rollback for COMPLETED transfers.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not transfer.rollback_deadline:
+            return Response(
+                {'error': 'This transfer has no rollback deadline.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        hours = int(request.data.get('hours', 24))
+        if hours < 1 or hours > 720:  # max 30 days
+            return Response(
+                {'error': 'hours must be between 1 and 720.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        from datetime import timedelta
+        transfer.rollback_deadline = transfer.rollback_deadline + timedelta(hours=hours)
+        transfer.save(update_fields=['rollback_deadline', 'updated_at'])
+        return Response({
+            'status': 'deadline_extended',
+            'rollback_deadline': transfer.rollback_deadline.isoformat(),
+            'added_hours': hours,
+        })
+
+    @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
         transfer = self.get_object()
         if transfer.status in {'COMPLETED', 'FAILED', 'ROLLED_BACK'}:

@@ -1643,7 +1643,11 @@ if __name__ == '__main__':
     def _complete(self):
         self.transfer.status = 'COMPLETED'
         self.transfer.completed_at = timezone.now()
-        self.transfer.rollback_deadline = timezone.now() + timedelta(hours=48)
+        # TRANSFER_ROLLBACK_HOURS: override the default 48 h rollback window.
+        # Longer windows give more time to validate the cutover before the
+        # source is cleaned up; shorter windows reduce the dual-running cost.
+        rollback_hours = int(os.environ.get("TRANSFER_ROLLBACK_HOURS", "48"))
+        self.transfer.rollback_deadline = timezone.now() + timedelta(hours=max(1, rollback_hours))
         self.transfer.target_ssh_key = ''
         self.transfer.target_ssh_password = ''
 
