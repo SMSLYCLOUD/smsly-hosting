@@ -1526,44 +1526,59 @@ if __name__ == '__main__':
 
     def _verify(self):
         self._update(95, 'Verifying services on target server...')
-        time.sleep(15)
 
         # Interconnect old and new servers automatically so they can communicate
         self._interconnect_servers()
         self._verify_between_servers()
 
-        if self.transfer.transfer_type == 'FULL':
-            target_server = self._target_server_record()
-            health_ip = (
-                str(getattr(target_server, 'wg_address', '') or '').strip()
-                or self.transfer.target_server_ip
-            )
-            url = f"http://{health_ip}:8000/health"
-            try:
-                resp = requests.get(url, timeout=10)
-                if resp.status_code >= 500:
-                    raise RuntimeError(
+        # Retry loop: containers and health endpoints need warm-up time
+        # after deploy.  A fixed sleep is fragile on slow disks/networks.
+        deadline = time.monotonic() + 120
+        last_error = None
+        while time.monotonic() < deadline:
+            if self.transfer.transfer_type == 'FULL':
+                target_server = self._target_server_record()
+                health_ip = (
+                    str(getattr(target_server, 'wg_address', '') or '').strip()
+                    or self.transfer.target_server_ip
+                )
+                url = f"http://{health_ip}:8000/health"
+                try:
+                    resp = requests.get(url, timeout=10)
+                    if 200 <= resp.status_code < 500:
+                        logger.info("Target health check passed (HTTP %s)", resp.status_code)
+                        break
+                    last_error = RuntimeError(
                         f"Target health check returned HTTP {resp.status_code}"
                     )
-                logger.info("Target health check passed (HTTP %s)", resp.status_code)
-            except requests.RequestException as e:
-                logger.warning("Target health check failed: %s (non-fatal)", e)
-        elif self.transfer.transfer_type == 'SERVICE' and self.transfer.service:
-            try:
-                container_name = self.transfer.service.name
-                status_result = self._node_api_request(
-                    'incoming/container-status',
-                    method='GET',
-                    params={'container_name': container_name},
-                )
-                if not status_result.get('running'):
-                    raise RuntimeError(
+                except requests.RequestException as e:
+                    last_error = e
+            elif self.transfer.transfer_type == 'SERVICE' and self.transfer.service:
+                try:
+                    container_name = self.transfer.service.name
+                    status_result = self._node_api_request(
+                        'incoming/container-status',
+                        method='GET',
+                        params={'container_name': container_name},
+                    )
+                    if status_result.get('running'):
+                        logger.info("Service container %s verified running on target", container_name)
+                        break
+                    last_error = RuntimeError(
                         f"Service container {container_name} is not running on target"
                     )
-                logger.info("Service container %s verified running on target", container_name)
-            except Exception as e:
-                logger.warning("Service verification failed: %s", e)
-                raise RuntimeError(f"Service verification failed: {e}") from e
+                except Exception as e:
+                    last_error = e
+            else:
+                break  # No verification needed for other transfer types
+
+            time.sleep(5)
+
+        else:
+            # Loop exhausted without success
+            raise RuntimeError(
+                f"Verification timed out after 120 s: {last_error}"
+            ) from last_error
 
     def _verify_between_servers(self):
         """
