@@ -63,14 +63,17 @@ def _is_node_server(server) -> bool:
 
 def _is_internal_target(url: str) -> bool:
     """Return True when a remote URL should use mesh/IP transport semantics."""
+    import ipaddress
     parsed = urlparse(str(url or ""))
     host = parsed.hostname or ""
-    internal_prefixes = ("10.", "172.16.", "192.168.", "100.64.", "127.")
-    is_internal = (
-        host == "localhost"
-        or host.startswith(internal_prefixes)
-        or _host_is_ip(host)
-    )
+    # Only treat RFC 1918 / CGNAT / loopback / link-local IPs as internal.
+    # Public IPs must use full TLS verification.
+    try:
+        addr = ipaddress.ip_address(host)
+        is_private = addr.is_private or addr.is_loopback or addr.is_link_local
+    except ValueError:
+        is_private = host == "localhost"
+    is_internal = is_private
     logger.debug(
         "is_internal_target url=%s host=%s is_internal=%s",
         url,

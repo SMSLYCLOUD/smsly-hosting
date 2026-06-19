@@ -4,12 +4,16 @@ Operates on the ``apps.domains.models.Domain`` model so the frontend's
 ``/domains`` page can list, create, update, and delete custom domains
 across all services owned by the requesting user.
 """
+import logging
+from django.db import IntegrityError
 from rest_framework import serializers, viewsets, permissions, status
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.decorators import action
 
 from .models import Domain, DomainStatus
+
+logger = logging.getLogger(__name__)
 
 
 class GlobalDomainSerializer(serializers.ModelSerializer):
@@ -100,23 +104,30 @@ class GlobalDomainViewSet(viewsets.ModelViewSet):
                     and service.project.team.members.filter(user=request.user).exists())):
             raise PermissionDenied("You do not have access to this service.")
 
-        existing = Domain.objects.filter(domain_name=domain_name).first()
-        if existing:
+        try:
+            domain, created = Domain.objects.get_or_create(
+                domain_name=domain_name,
+                defaults={'service': service, 'status': DomainStatus.PENDING},
+            )
+        except IntegrityError:
+            existing = Domain.objects.filter(domain_name=domain_name).first()
             return Response(
                 {'error': f'Domain {domain_name} is already registered.'},
                 status=status.HTTP_409_CONFLICT,
             )
 
-        domain = Domain.objects.create(
-            domain_name=domain_name,
-            service=service,
-            status=DomainStatus.PENDING,
-        )
-        try:
-            from .tasks import verify_dns_and_provision_ssl_task
-            verify_dns_and_provision_ssl_task.delay(domain.id)
-        except Exception:
-            pass
+        if not created and domain.service_id != service.id:
+            return Response(
+                {'error': f'Domain {domain_name} is already registered to another service.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        if created:
+            try:
+                from .tasks import verify_dns_and_provision_ssl_task
+                verify_dns_and_provision_ssl_task.delay(domain.id)
+            except Exception as exc:
+                logger.warning("Failed to dispatch domain verification for %s: %s", domain_name, exc)
 
         return Response(self.get_serializer(domain).data, status=status.HTTP_201_CREATED)
 

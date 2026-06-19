@@ -110,6 +110,7 @@ class SSLMonitorService:
                 )
                 domain_obj.ssl_active = False
                 domain_obj.last_error = "Domain resolves to an internal address."
+                domain_obj.checked_at = timezone.now()
                 domain_obj.save(update_fields=['ssl_active', 'last_error', 'checked_at'])
                 return
 
@@ -137,14 +138,15 @@ class SSLMonitorService:
         except Exception as e:
             domain_obj.ssl_active = False
             domain_obj.last_error = str(e)
-            # Only mark SSL_FAILED after consecutive failures (transient protection)
-            fail_count = getattr(domain_obj, '_ssl_fail_count', 0) + 1
+            domain_obj.checked_at = timezone.now()
+            # Only mark SSL_FAILED after consecutive failures (transient protection).
+            fail_count = domain_obj.ssl_fail_count + 1
+            domain_obj.ssl_fail_count = fail_count
             if fail_count >= 3:
                 if domain_obj.status == DomainStatus.ACTIVE:
                     domain_obj.status = DomainStatus.SSL_FAILED
-            domain_obj._ssl_fail_count = fail_count
-            domain_obj.save(update_fields=['ssl_active', 'status', 'last_error', 'checked_at'])
-            logger.warning(f"SSL check failed for {domain} (attempt {fail_count}): {e}")
+            domain_obj.save(update_fields=['ssl_active', 'status', 'last_error', 'checked_at', 'ssl_fail_count'])
+            logger.warning("SSL check failed for %s (attempt %d): %s", domain, fail_count, e)
 
     def _alert(self, domain, days, owner):
         msg = f"SSL Certificate for {domain} expires in {days} days."
