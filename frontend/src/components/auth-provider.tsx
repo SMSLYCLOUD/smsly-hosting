@@ -1,8 +1,14 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import api from "@/lib/api";
 import { clearAuthCookies } from "@/lib/auth-cookies";
+import {
+  isProtectedPath,
+  isAuthPage,
+  canRedirectToLogin,
+  resetRedirectGuard,
+} from "@/lib/paths";
 
 interface User {
   pk: number;
@@ -19,82 +25,54 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType>({ user: null, loading: true });
 
-function isProtectedPath(path: string): boolean {
-  const protectedPrefixes = [
-    "/dashboard",
-    "/services",
-    "/deployments",
-    "/new",
-    "/project",
-    "/settings",
-    "/billing",
-    "/servers",
-    "/tunnels",
-    "/intelligence",
-    "/backups",
-    "/transfers",
-    "/admin-dashboard",
-    "/topology",
-    "/functions",
-  ];
-  return protectedPrefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
-}
+/** Interval between periodic /auth/user/ revalidation (ms). */
+const AUTH_REVALIDATE_INTERVAL = 60_000;
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const revalidateTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    const fetchUser = async () => {
-      const path = window.location.pathname;
-
-      // The auth token is an HttpOnly cookie that the browser attaches
-      // automatically. There is no client-side token to read, write, or
-      // sync into localStorage. A successful /auth/user/ response means
-      // the cookie was valid; a 401 means the user is logged out.
+    const fetchUser = async (isRevalidate = false) => {
       try {
         const res = await api.get("/auth/user/");
         setUser(res.data);
+        if (!isRevalidate) resetRedirectGuard();
 
-        if (path === "/login" || path === "/register") {
-          // Avoid Next.js route-cache edge cases: force a navigation.
-          // The same 5-second loop guard used in the 401 branch below
-          // is required here too — without it, a stale-but-valid
-          // session returning 200 on /login then 401 on /dashboard
-          // (or vice versa) will spin forever between the two pages.
-          const loopKey = '__auth_redirect_ts';
-          const lastRedirect = Number(sessionStorage.getItem(loopKey) || 0);
-          const tooRecent = Date.now() - lastRedirect < 5000;
-          if (!tooRecent) {
-            sessionStorage.setItem(loopKey, String(Date.now()));
+        const path = window.location.pathname;
+        if (isAuthPage(path)) {
+          if (canRedirectToLogin()) {
             window.location.replace("/dashboard");
           }
         }
-      } catch (error) {
-        // Not authenticated. Clear any legacy client-side state from
-        // older builds (the HttpOnly cookie itself is set/cleared by
-        // the backend, not here).
+      } catch {
         clearAuthCookies();
         setUser(null);
 
-        // Guard against infinite redirect loops: if a session-exchanged
-        // token immediately fails /auth/user/, don't redirect again as
-        // it will just loop. Use a sessionStorage flag to prevent
-        // rapid re-redirects.
-        const loopKey = '__auth_redirect_ts';
-        const lastRedirect = Number(sessionStorage.getItem(loopKey) || 0);
-        const now = Date.now();
-        const tooRecent = now - lastRedirect < 5000; // within 5 seconds
-
-        if (isProtectedPath(path) && !tooRecent) {
-          sessionStorage.setItem(loopKey, String(now));
+        const path = window.location.pathname;
+        if (isProtectedPath(path) && canRedirectToLogin()) {
           window.location.replace("/login");
         }
       } finally {
         setLoading(false);
       }
     };
+
     fetchUser();
+
+    // Periodic revalidation — detects stale sessions without waiting
+    // for an API call to return 401.  If the token has expired, the
+    // user is redirected to /login before they see broken UI.
+    revalidateTimer.current = setInterval(() => {
+      fetchUser(true);
+    }, AUTH_REVALIDATE_INTERVAL);
+
+    return () => {
+      if (revalidateTimer.current) {
+        clearInterval(revalidateTimer.current);
+      }
+    };
   }, []);
 
   return (

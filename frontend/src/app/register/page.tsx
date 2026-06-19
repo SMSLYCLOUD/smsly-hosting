@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { Github, Chrome, Loader2, GitBranch, Code2 } from "lucide-react";
+import { resetRedirectGuard } from "@/lib/paths";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -81,6 +82,7 @@ export default function RegisterPage() {
         return;
       }
 
+      resetRedirectGuard();
       window.location.assign("/dashboard");
     } catch {
       setError("Unable to connect to server. Please try again.");
