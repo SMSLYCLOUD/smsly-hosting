@@ -24,6 +24,11 @@ class Command(BaseCommand):
             action="store_true",
             help="Only write Prometheus target files, don't deploy containers",
         )
+        parser.add_argument(
+            "--force",
+            action="store_true",
+            help="Force re-deploy even if containers are already running",
+        )
 
     def handle(self, *args, **options):
         from apps.deployments.models_core import ManagedServer
@@ -36,6 +41,7 @@ class Command(BaseCommand):
         )
 
         node_filter = options.get("node", "")
+        force = options.get("force", False)
 
         if node_filter:
             servers = ManagedServer.objects.filter(
@@ -70,7 +76,7 @@ class Command(BaseCommand):
                 continue
 
             self.stdout.write(f"Deploying to {server.name} ({server.host})...")
-            success = deploy_docker_labels_exporter_on_node(server)
+            success = deploy_docker_labels_exporter_on_node(server, force=force)
             if success:
                 deployed += 1
                 self.stdout.write(self.style.SUCCESS(f"  ✓ docker-labels on {server.name}"))
@@ -80,7 +86,7 @@ class Command(BaseCommand):
 
             # Also deploy Promtail for log collection
             self.stdout.write(f"  → Deploying Promtail on {server.name}...")
-            if deploy_promtail_on_node(server):
+            if deploy_promtail_on_node(server, force=force):
                 promtail_deployed += 1
                 self.stdout.write(self.style.SUCCESS(f"  ✓ Promtail on {server.name}"))
             else:
@@ -88,8 +94,8 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.WARNING(f"  ⚠ Promtail on {server.name} (will retry via watchdog)"))
 
             self.stdout.write(f"  → Deploying cAdvisor + Node Exporter on {server.name}...")
-            cadvisor_ok = deploy_cadvisor_on_node(server)
-            node_ok = deploy_node_exporter_on_node(server)
+            cadvisor_ok = deploy_cadvisor_on_node(server, force=force)
+            node_ok = deploy_node_exporter_on_node(server, force=force)
             if cadvisor_ok and node_ok:
                 self.stdout.write(self.style.SUCCESS(f"  ✓ cAdvisor + Node Exporter on {server.name}"))
             else:

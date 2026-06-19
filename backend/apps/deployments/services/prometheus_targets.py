@@ -122,7 +122,7 @@ def write_docker_labels_targets():
     )
 
 
-def deploy_docker_labels_exporter_on_node(server):
+def deploy_docker_labels_exporter_on_node(server, force: bool = False):
     """SSH into a remote ManagedServer and deploy the docker-labels exporter container."""
     from apps.deployments.services.ssh_client import SSHClient
 
@@ -143,15 +143,16 @@ def deploy_docker_labels_exporter_on_node(server):
 
     tmp = None
     try:
-        # 0. Check if exporter is already running
-        out, _err, _code = client.exec_command(
-            "docker inspect smsly-docker-labels --format='{{.State.Status}}' 2>/dev/null",
-            raise_on_error=False,
-        )
-        existing_status = out.strip()
-        if existing_status == "running":
-            logger.debug("docker-labels exporter already running on %s", server.name)
-            return True
+        # 0. Check if exporter is already running — skip if not forced
+        if not force:
+            out, _err, _code = client.exec_command(
+                "docker inspect smsly-docker-labels --format='{{.State.Status}}' 2>/dev/null",
+                raise_on_error=False,
+            )
+            existing_status = out.strip()
+            if existing_status == "running":
+                logger.debug("docker-labels exporter already running on %s", server.name)
+                return True
 
         # 1. Write exporter script to temp file and upload
         exporter_script = _get_exporter_script_content()
@@ -219,7 +220,7 @@ def _node_bind_ip(server) -> str:
     return wg if wg else "0.0.0.0"
 
 
-def deploy_cadvisor_on_node(server):
+def deploy_cadvisor_on_node(server, force: bool = False):
     """SSH into a remote server and deploy cAdvisor for container metrics."""
     from apps.deployments.services.ssh_client import SSHClient
     client = SSHClient(
@@ -251,7 +252,7 @@ def deploy_cadvisor_on_node(server):
         except Exception: pass
 
 
-def deploy_node_exporter_on_node(server):
+def deploy_node_exporter_on_node(server, force: bool = False):
     """SSH into a remote server and deploy Node Exporter for host metrics."""
     from apps.deployments.services.ssh_client import SSHClient
     client = SSHClient(
@@ -284,7 +285,7 @@ def deploy_node_exporter_on_node(server):
 PROMTAIL_PORT = 9080
 
 
-def deploy_promtail_on_node(server):
+def deploy_promtail_on_node(server, force: bool = False):
     """SSH into a remote ManagedServer and deploy a Promtail log collector container.
 
     The Promtail pushes container logs to the primary (VPS) Loki instance.
@@ -336,20 +337,23 @@ def deploy_promtail_on_node(server):
         client.exec_command(f"mkdir -p {remote_dir}")
         client.upload_file(tmp.name, remote_config)
 
-        # 1. Check if container exists — if so, just reload config
+        # 1. Check if container exists — if so, reload or recreate
         out, _err, _code = client.exec_command(
             "docker inspect smsly-promtail --format='{{.State.Status}}' 2>/dev/null",
             raise_on_error=False,
         )
         if out.strip() == "running":
-            # Container already running — hot-reload the updated config
-            client.exec_command(
-                "docker exec smsly-promtail kill -HUP 1 2>/dev/null || "
-                "docker restart smsly-promtail 2>/dev/null",
-                raise_on_error=False,
-            )
-            logger.info("Promtail config updated + reloaded on %s", server.name)
-            return True
+            if not force:
+                # Hot-reload the updated config without disrupting the container
+                client.exec_command(
+                    "docker exec smsly-promtail kill -HUP 1 2>/dev/null || "
+                    "docker restart smsly-promtail 2>/dev/null",
+                    raise_on_error=False,
+                )
+                logger.info("Promtail config updated + reloaded on %s", server.name)
+                return True
+            # Force: remove and recreate from scratch
+            client.exec_command("docker rm -f smsly-promtail 2>/dev/null")
 
         # 2. Container doesn't exist — create it
         client.exec_command("docker pull grafana/promtail:2.9.3 2>/dev/null", raise_on_error=False)
