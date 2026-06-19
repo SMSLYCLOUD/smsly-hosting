@@ -43,7 +43,7 @@ class EcosystemEnvResolver:
             self.shared_secrets[group_name] = {}
             for var_key, config in group_data.get("vars", {}).items():
                 if config.get("source") == "generated":
-                    length = config.get("min_length", 48)
+                    length = min(config.get("min_length", 48), 1024)  # cap to prevent DoS
                     self.shared_secrets[group_name][var_key] = generate_strong_secret(length)
 
     def validate_and_resolve(self) -> Tuple[bool, Dict[str, Any], List[str]]:
