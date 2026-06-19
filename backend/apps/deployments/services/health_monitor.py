@@ -606,11 +606,6 @@ def _trigger_restart(service, service_key: str) -> bool:
             status=Deployment.Status.QUEUED,
             commit_message="Auto-restart after health check failure (fallback to last successful commit)",
         )
-        cache.set(
-            _restart_key(service_key),
-            {**(state or {}), "last_fallback_deployment_id": str(new_deployment.id)},
-            timeout=STATE_TTL_SECONDS,
-        )
         service.health_status = "starting"
         service.save(update_fields=["health_status", "updated_at"])
 
@@ -628,7 +623,17 @@ def _trigger_restart(service, service_key: str) -> bool:
                 + f"\n[ERROR] Failed to queue auto-restart task: {exc}\n"
             )
             new_deployment.save(update_fields=["status", "finished_at", "build_logs", "updated_at"])
+            # Clear the restart state so the next failure can retry
+            # instead of permanently blocking auto-restart.
+            cache.delete(_restart_key(service_key))
             return False
+
+        # Only record last_fallback_deployment_id AFTER successful enqueue.
+        cache.set(
+            _restart_key(service_key),
+            {**(state or {}), "last_fallback_deployment_id": str(new_deployment.id)},
+            timeout=STATE_TTL_SECONDS,
+        )
         _record_restart_attempt(service_key)
 
         state = cache.get(_restart_key(service_key)) or {}

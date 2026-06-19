@@ -1864,8 +1864,23 @@ class PipelineManager:
                 )
                 return
 
-            container = self.local_adapter.docker_client.containers.get(container_name)
-            if self.local_adapter._wait_container_healthy(container.id, timeout_seconds=180):  # pylint: disable=protected-access
+            from apps.cloud.docker_client import get_docker_client
+            client = get_docker_client()
+            container = client.containers.get(container_name)
+            # Simple health poll — the compose adapter isn't available here.
+            import time as _time
+            deadline = _time.monotonic() + 180
+            healthy = False
+            while _time.monotonic() < deadline:
+                try:
+                    c = client.containers.get(container_name)
+                    if c.status == 'running':
+                        healthy = True
+                        break
+                except Exception:
+                    pass
+                _time.sleep(3)
+            if healthy:
                 append_log(self.deployment, "[hook] LiteLLM router catalog synced.\n")
             else:
                 append_log(self.deployment, "[hook] Router restart completed but health did not recover in time.\n")
