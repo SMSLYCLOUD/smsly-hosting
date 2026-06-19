@@ -51,6 +51,7 @@ def register_extra_tasks(sender, **kwargs):  # pylint: disable=unused-argument
     import apps.deployments.tasks_templates
     import apps.deployments.tasks_addons
     import apps.deployments.tasks_backup
+    import apps.deployments.tasks_cron
     import apps.deployments.tasks_transfer
     import apps.deployments.tasks_platform_update
     import apps.deployments.tasks_maintenance
@@ -67,6 +68,7 @@ def register_extra_tasks(sender, **kwargs):  # pylint: disable=unused-argument
     import apps.deployments.tasks_templates
     import apps.deployments.tasks_addons
     import apps.deployments.tasks_backup
+    import apps.deployments.tasks_cron
     import apps.deployments.tasks_transfer
     import apps.deployments.tasks_platform_update
     import apps.deployments.tasks_maintenance
@@ -241,6 +243,18 @@ app.conf.beat_schedule = {
         'task': 'apps.deployments.tasks_backup.run_scheduled_backups_task',
         'schedule': 900.0,
         'options': {'expires': 900.0},
+    },
+    # Clean up expired backups every 6 hours
+    'cleanup-old-backups-every-6h': {
+        'task': 'apps.deployments.tasks_backup.cleanup_old_backups_task',
+        'schedule': 21600.0,
+        'options': {'expires': 21600.0},
+    },
+    # Dispatch due cron jobs every minute
+    'check-cron-jobs-every-1m': {
+        'task': 'apps.deployments.tasks_cron.check_cron_jobs',
+        'schedule': 60.0,
+        'options': {'expires': 60.0},
     },
     # Expire stale preview environments hourly
     'expire-stale-previews': {

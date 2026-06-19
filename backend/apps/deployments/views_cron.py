@@ -45,6 +45,10 @@ class CronJobViewSet(viewsets.ModelViewSet):
         assert_can_write(self.request.user, service, action='create cron job')
         serializer.save(service=service)
 
+    def perform_update(self, serializer):
+        assert_can_write(self.request.user, serializer.instance.service, action='update cron job')
+        serializer.save()
+
     def perform_destroy(self, instance):
         assert_can_delete(self.request.user, instance.service)
         instance.delete()

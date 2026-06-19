@@ -1,95 +1,103 @@
 import logging
-logger = logging.getLogger(__name__)
-import logging
-import random
-import re
-import shlex
-import shutil
-import tempfile
-import subprocess
-import os
-import json
-import time
-import zipfile
-import secrets
-import threading
-from contextlib import contextmanager
-from urllib.parse import unquote, urlparse
-import docker
-import requests
-from celery import shared_task
-from django.conf import settings
-from django.core.cache import cache
-from django.utils import timezone
-from django.db.models import Sum
-from apps.cloud.models import CloudProvider
-from apps.cloud.services.builder import NixpacksBuilder
-from apps.cloud.services.compute import ComputeService
-from apps.cloud.services.function_provisioner import FunctionProvisioner
-from apps.deployments.ai_router import DEFAULT_AI_ROUTER_API_BASE, DEFAULT_AI_ROUTER_UI_BASE, DEFAULT_BRAID_ALIAS, generate_ai_router_proxy_config, get_ollama_model_name, is_ai_router_service, is_ollama_service
-from apps.deployments.models import Service, Deployment, EnvironmentVariable, PlatformConfig
-from apps.deployments.models_addons import Addon, Backup
-from apps.deployments.models_backup import BackupSchedule, ServiceBackup
-from apps.deployments.models_storage import Volume
-from apps.deployments.models_transfer import ServerTransfer
-from apps.deployments.services.backup_service import BackupService
-from apps.deployments.services.pipeline import PipelineManager, PipelineError
-from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
-from apps.deployments.services.tls_verify import should_verify
-from apps.deployments.services.transfer_service import ServerTransferService
-from apps.deployments.utils import append_log, broadcast_status, build_local_source_bundle, update_stage, is_deployment_local
-from services.addon_provisioner import addon_provisioner
+from datetime import datetime
 
-@shared_task
-def check_cron_jobs():
-    """
-    Periodic task to check for due cron jobs.
-    This should be run every minute by Celery Beat.
+import croniter
+from celery import shared_task
+from django.utils import timezone
+
+from apps.deployments.models_cron import CronJob
+
+logger = logging.getLogger(__name__)
+
+# Minimum interval between executions for the same cron job (seconds).
+# Prevents rapid-fire runs when a schedule is very tight (e.g. */1 * * * *).
+_CRON_MIN_INTERVAL = 60
+
+
+@shared_task(
+    bind=True,
+    soft_time_limit=120,
+    time_limit=180,
+    max_retries=0,
+)
+def check_cron_jobs(self):
+    """Periodic task: dispatch every due cron job to its own task.
+
+    Registered in Celery beat once per minute. Uses croniter to
+    determine which jobs are actually due so a */5 schedule does
+    not fire every 60 s.
     """
     now = timezone.now()
-    jobs = CronJob.objects.filter(is_active=True)
+    dispatched = 0
+    for job in CronJob.objects.filter(is_active=True).select_related('service'):
+        try:
+            cron = croniter.croniter(job.schedule, now)
+            next_ts = cron.get_next(datetime)
+            next_due = timezone.make_aware(
+                datetime.fromtimestamp(next_ts),
+                timezone.get_current_timezone(),
+            )
 
-    # In a real implementation, we would use a cron library to check
-    # if the 'schedule' matches 'now'. For now, we simulate execution
-    # if it hasn't run in the last X minutes.
+            # Not due yet — skip
+            if job.last_run_at and next_due > now:
+                continue
 
-    for job in jobs:
-        # Simplification: Assume all jobs run every minute for demo
-        # Real logic: if croniter(job.schedule).is_due(now): ...
+            # Enforce a minimum interval to prevent tight-schedule abuse
+            if job.last_run_at and (now - job.last_run_at).total_seconds() < _CRON_MIN_INTERVAL:
+                continue
 
-        trigger_cron_job.delay(job_id=str(job.id))
+            trigger_cron_job.delay(job_id=str(job.id))
+            dispatched += 1
+        except Exception as exc:
+            logger.warning("Scheduling check failed for cron job %s: %s", job.id, exc)
+
+    return {'dispatched': dispatched}
 
 
-@shared_task
-def trigger_cron_job(job_id):
+@shared_task(
+    bind=True,
+    soft_time_limit=300,
+    time_limit=360,
+    max_retries=1,
+    default_retry_delay=120,
+)
+def trigger_cron_job(self, job_id):
+    """Execute a single cron job inside its service container."""
     try:
-        job = CronJob.objects.get(id=job_id)
-        service = job.service
+        job = CronJob.objects.select_related('service').get(id=job_id)
+    except CronJob.DoesNotExist:
+        logger.warning("Cron job %s not found — skipping", job_id)
+        return
 
-        # Find active deployment container
-        latest_deploy = service.deployments.filter(status='ACTIVE').first()
-        if not latest_deploy or not latest_deploy.container_id:
-            logger.warning(f"No active container for cron job {job.name}")
-            return
+    if not job.is_active:
+        return
 
-        adapter = LocalAdapter()
-        # Use exec_container to run the command
-        # Note: This is simplified. exec_container returns a socket for interactive use.
-        # We need a non-interactive exec.
-        # We'll assume the adapter has a method or we'll add one.
+    service = job.service
+    now = timezone.now()
 
-        # Let's use docker client directly for one-off exec if needed,
-        # or enhance adapter.
-        if adapter.docker_client:
-            container = adapter.docker_client.containers.get(
-                latest_deploy.container_id)
-            exit_code, output = container.exec_run(job.command, detach=False)
+    # Find the active deployment container
+    latest_deploy = service.deployments.filter(status='ACTIVE').first()
+    if not latest_deploy or not latest_deploy.container_id:
+        logger.warning("No active container for cron job %s (%s)", job.name, job.id)
+        return
 
-            logger.info(
-                f"Cron {job.name} finished with exit code {exit_code}. Output: {output.decode('utf-8')[:100]}...")
+    try:
+        from apps.cloud.docker_client import get_docker_client
+        client = get_docker_client()
+        container = client.containers.get(latest_deploy.container_id)
+        exit_code, output = container.exec_run(job.command, detach=False)
 
-            job.last_run_at = timezone.now()
-            job.save()
-
-    except Exception as e:
-        logger.error(f"Failed to run cron job {job_id}: {e}")
+        logger.info(
+            "Cron %s (service=%s) exit=%d output=%.200s",
+            job.name, service.name, exit_code,
+            (output or b'').decode('utf-8', errors='replace'),
+        )
+    except Exception as exc:
+        logger.error("Failed to run cron job %s: %s", job.name, exc)
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=exc)
+        # Final failure — still update last_run so it doesn't get
+        # stuck in a retry loop forever.
+    finally:
+        job.last_run_at = now
+        job.save(update_fields=['last_run_at', 'updated_at'])
