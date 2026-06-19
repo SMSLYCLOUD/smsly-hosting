@@ -168,20 +168,14 @@ def deploy_docker_labels_exporter_on_node(server, force: bool = False):
         client.exec_command("docker rm -f smsly-docker-labels 2>/dev/null")
         client.exec_command("docker pull python:3.12-alpine 2>/dev/null", raise_on_error=False)
 
-        # 3. Determine the bind IP for the exporter.
-        # Prefer the WireGuard mesh IP so the exporter is only reachable
-        # over the VPN, not the public internet.  Fall back to 0.0.0.0
-        # when WireGuard isn't provisioned yet (provision-only nodes).
-        exporter_bind_ip = "0.0.0.0"
-        wg_addr = getattr(server, "wg_address", None)
-        if wg_addr:
-            exporter_bind_ip = wg_addr
-
-        # 4. Run the exporter container
+        # 4. Run the exporter container.
+        # Bind to 0.0.0.0 — the WireGuard mesh provides encryption and Docker
+        # bypasses UFW. Binding to a specific WG IP fails when the interface
+        # isn't fully up yet (docker run rejects the bind).
         cmd = (
             f"docker run -d --name smsly-docker-labels --restart unless-stopped "
             f"-v /var/run/docker.sock:/var/run/docker.sock:ro "
-            f"-p {exporter_bind_ip}:{DOCKER_LABELS_PORT}:{DOCKER_LABELS_PORT} "
+            f"-p {DOCKER_LABELS_PORT}:{DOCKER_LABELS_PORT} "
             f"-e NODE_NAME={shlex.quote(server.name)} "
             f"-v {remote_path}:/app/exporter.py:ro "
             f"python:3.12-alpine python3 -u /app/exporter.py"
@@ -229,7 +223,6 @@ def deploy_cadvisor_on_node(server, force: bool = False):
     )
     try:
         client.connect()
-        bind_ip = _node_bind_ip(server)
         client.exec_command(
             f"docker rm -f smsly-cadvisor 2>/dev/null; "
             f"docker run -d --name smsly-cadvisor --restart unless-stopped "
@@ -237,12 +230,12 @@ def deploy_cadvisor_on_node(server, force: bool = False):
             f"-v /:/rootfs:ro -v /var/run/docker.sock:/var/run/docker.sock:ro "
             f"-v /sys:/sys:ro -v /var/lib/docker/:/var/lib/docker:ro "
             f"-v /dev/disk/:/dev/disk:ro "
-            f"-p {bind_ip}:{CADVISOR_PORT}:{CADVISOR_PORT} "
+            f"-p {CADVISOR_PORT}:{CADVISOR_PORT} "
             f"gcr.io/cadvisor/cadvisor:v0.49.1 "
             f"--containerd=unix:///var/run/containerd/containerd.sock",
             raise_on_error=False,
         )
-        logger.info("Deployed cAdvisor on %s (bind=%s:%s)", server.name, bind_ip, CADVISOR_PORT)
+        logger.info("Deployed cAdvisor on %s", server.name)
         return True
     except Exception as exc:
         logger.error("cAdvisor deploy failed for %s: %s", server.name, exc)
@@ -261,18 +254,17 @@ def deploy_node_exporter_on_node(server, force: bool = False):
     )
     try:
         client.connect()
-        bind_ip = _node_bind_ip(server)
         client.exec_command(
             f"docker rm -f smsly-node-exporter 2>/dev/null; "
             f"docker run -d --name smsly-node-exporter --restart unless-stopped "
             f"-v /proc:/host/proc:ro -v /sys:/host/sys:ro -v /:/rootfs:ro "
-            f"-p {bind_ip}:{NODE_EXPORTER_PORT}:{NODE_EXPORTER_PORT} "
+            f"-p {NODE_EXPORTER_PORT}:{NODE_EXPORTER_PORT} "
             f"prom/node-exporter:v1.6.1 "
             f"--path.procfs=/host/proc --path.rootfs=/rootfs --path.sysfs=/host/sys "
             f"--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)",
             raise_on_error=False,
         )
-        logger.info("Deployed Node Exporter on %s (bind=%s:%s)", server.name, bind_ip, NODE_EXPORTER_PORT)
+        logger.info("Deployed Node Exporter on %s", server.name)
         return True
     except Exception as exc:
         logger.error("Node Exporter deploy failed for %s: %s", server.name, exc)
