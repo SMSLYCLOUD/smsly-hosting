@@ -615,16 +615,26 @@ def _load_install_script():
                         )
                     if inline_lines:
                         inline_block = "\n\n".join(inline_lines)
-                        # Replace the entire lib sourcing loop with inline content
-                        content = content.replace(
-                            'for lib in "$LIB_DIR"/*.sh; do\n'
-                            '    # Skip mode-entry files \u2014 they are sourced on-demand by the\n'
-                            '    # mode dispatch below (they contain inline code, not just functions).\n'
-                            '    case "$lib" in */fresh.sh|*/update.sh) continue ;; esac\n'
-                            '    [ -f "$lib" ] && source "$lib"\n'
-                            'done\n',
-                            inline_block + "\n"
-                        )
+                        # Replace the lib sourcing block delimited by sentinel
+                        # markers. This is robust against encoding / whitespace
+                        # variations that would break a fragile str.replace().
+                        _start = "--- BEGIN_LIB_SOURCING ---"
+                        _end = "--- END_LIB_SOURCING ---"
+                        _s = content.find(_start)
+                        _e = content.find(_end)
+                        if _s != -1 and _e != -1 and _e > _s:
+                            # Keep the LIB_DIR line (it is before the marker);
+                            # trim from start marker through end marker line.
+                            content = (
+                                content[:_s]
+                                + "\n" + inline_block + "\n"
+                                + content[_e + len(_end) + 1:]
+                            )
+                        else:
+                            # Sentinel markers not found — the install.sh
+                            # variant may be self-contained (no lib/ sourcing
+                            # loop). Skip inlining gracefully.
+                            pass
                 return content, f"local:{path}"
 
     script_url = (

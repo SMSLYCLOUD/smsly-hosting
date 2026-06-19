@@ -28,7 +28,11 @@ PROXY_TIMEOUT = 15
 # SSRF on the in-cluster observability backends.
 MAX_PROMETHEUS_QUERY_LENGTH = 4096
 MAX_LOKI_QUERY_LENGTH = 4096
-SAFE_QUERY_CHARS_RE = re.compile(r"^[a-zA-Z0-9_=.{}, !\"'\(\)\[\]:\-]+$")
+# Allow valid LogQL / PromQL characters. Includes regex operators (~, |, +, *, ?,
+# ^, $, \), log-range syntax (> <), and backtick for LogQL label matchers.
+SAFE_QUERY_CHARS_RE = re.compile(
+    r"^[a-zA-Z0-9_=.{}, !\"'\(\)\[\]:\-~|+*?^$\\><`]+$"
+)
 ALLOWED_LOKI_LABELS = frozenset({
     'service', 'job', 'level', 'status', 'method', 'route',
 })
@@ -102,19 +106,40 @@ def _user_owned_service_names(user) -> list[str]:
     return out
 
 
+def _escape_logql_regex_literal(name: str) -> str:
+    """Escape RE2 regex meta-characters in *name* so it can be used as a
+    literal inside a ``=~"..."`` matcher.
+
+    Unlike ``re.escape()`` this does NOT escape ``-`` (which is only special
+    inside ``[]`` in RE2) because LogQL/RE2 rejects over-escaped hyphens as
+    invalid regex.
+    """
+    _logql_meta = re.compile(r'([\\|.+*?^${}()\[\]])')
+    return _logql_meta.sub(r'\\\1', name)
+
+
 def _scope_query_to_tenant(query: str, service_names: list[str]) -> str:
-    """Inject a ``compose_service=~"<names>"`` filter so the query can only
+    """Inject a ``compose_service=…"<names>"`` filter so the query can only
     match the user's own services.
+
+    Uses ``=`` (exact) for a single service and ``=~`` (regex) with ``|`` for
+    multiple services.
 
     If the query already has a ``{...}`` selector with a ``compose_service``
     matcher, the existing matcher is REPLACED with the tenant filter rather
     than appended. Two matchers for the same label key in one stream selector
     is invalid LogQL and causes Loki to return 400 Bad Request.
     """
-    safe = [re.escape(n) for n in service_names if n]
-    if not safe:
+    names = [n for n in service_names if n]
+    if not names:
         raise ValueError("User has no services to scope the query to.")
-    tenant_filter = f'compose_service=~"{safe[0] if len(safe) == 1 else "|".join(safe)}"'
+
+    if len(names) == 1:
+        tenant_filter = f'compose_service="{names[0]}"'
+    else:
+        escaped = [_escape_logql_regex_literal(n) for n in names]
+        tenant_filter = f'compose_service=~"{"|".join(escaped)}"'
+
     if '{' in query:
         idx = query.index('{')
         end_idx = query.index('}', idx)

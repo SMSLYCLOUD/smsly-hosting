@@ -642,9 +642,14 @@ fi
     if [ "$MODE_AGENT_LITE" != "true" ] && [ "$MODE_NODE" != "true" ]; then
         echo -e "${BLUE}  → Updating observability stack...${NC}"
         mkdir -p /opt/smsly-hosting/prometheus-targets
-        chown -R 1000:1000 /opt/smsly-hosting/prometheus-targets 2>/dev/null || true
+        if ! chown -R 1000:1000 /opt/smsly-hosting/prometheus-targets 2>/dev/null; then
+            echo -e "${YELLOW}  ⚠ Could not chown prometheus-targets to uid 1000${NC}"
+        fi
         chmod 2777 /opt/smsly-hosting/prometheus-targets 2>/dev/null || true
-        docker compose -f infrastructure/docker/docker-compose.observability.yml up -d --pull always
+        docker compose \
+            --env-file /opt/smsly-hosting/.env \
+            -f infrastructure/docker/docker-compose.observability.yml \
+            up -d --pull always
         docker restart smsly-grafana 2>/dev/null || true
         docker restart smsly-docker-labels 2>/dev/null || true
         docker restart smsly-promtail 2>/dev/null || true

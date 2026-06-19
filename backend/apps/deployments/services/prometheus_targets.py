@@ -18,6 +18,28 @@ TARGETS_DIR = os.environ.get(
 DOCKER_LABELS_PORT = int(os.environ.get("DOCKER_LABELS_PORT", "9234"))
 
 
+def _ensure_target_dir_writable() -> bool:
+    """Try to make TARGETS_DIR writable. Returns True if writable after attempt."""
+    try:
+        os.makedirs(TARGETS_DIR, exist_ok=True)
+    except OSError:
+        pass
+
+    if os.access(TARGETS_DIR, os.W_OK):
+        return True
+
+    # Attempt self-healing: chmod the directory if the kernel allows it
+    # (may succeed with CAP_FOWNER or if running as root).
+    try:
+        os.chmod(TARGETS_DIR, 0o2777)
+        if os.access(TARGETS_DIR, os.W_OK):
+            return True
+    except OSError:
+        pass
+
+    return False
+
+
 def write_docker_labels_targets():
     """Write Prometheus file_sd target files for all remote docker-labels exporters."""
     try:
@@ -26,7 +48,14 @@ def write_docker_labels_targets():
         logger.warning("ManagedServer model not available — skipping target generation")
         return
 
-    os.makedirs(TARGETS_DIR, exist_ok=True)
+    if not _ensure_target_dir_writable():
+        logger.warning(
+            "Prometheus targets directory %s is not writable. "
+            "Run the following on the host to fix: "
+            "  chown -R 1000:1000 %s && chmod 2777 %s",
+            TARGETS_DIR, TARGETS_DIR, TARGETS_DIR,
+        )
+        return
 
     # Local node target
     local_targets = [
