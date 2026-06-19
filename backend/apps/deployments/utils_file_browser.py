@@ -27,6 +27,10 @@ def parse_ls_output(output: str) -> list:
         else:
             continue
             
+        # Strip symlink target from name (e.g., "link -> target")
+        if " -> " in name:
+            name = name.split(" -> ", 1)[0]
+            
         files.append({
             'permissions': parts[0],
             'user': parts[2],

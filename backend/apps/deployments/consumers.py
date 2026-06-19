@@ -1118,9 +1118,12 @@ class ServiceStatusConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def _get_user_services(self):
-        """Get all services for the authenticated user."""
+        """Get all services for the authenticated user, including team projects."""
+        from django.db.models import Q
         from apps.deployments.models import Service, Deployment
-        services = Service.objects.filter(owner=self.user).prefetch_related(
+        services = Service.objects.filter(
+            Q(owner=self.user) | Q(project__team__members__user=self.user)
+        ).distinct().prefetch_related(
             'deployments', 'deployments__service'
         )
         
