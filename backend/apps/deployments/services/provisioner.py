@@ -325,7 +325,12 @@ def _restrict_ssh_key_to_master_ip(ssh, server: ManagedServer) -> None:
         f'chmod 600 ~/.ssh/authorized_keys'
     )
     try:
-        ssh.exec_command(cmd, timeout=15, raise_on_error=False)
+        # Paramiko's exec_command doesn't accept raise_on_error; use
+        # timeout alone and check exit status manually.
+        _stdin, _stdout, _stderr = ssh.exec_command(cmd, timeout=15)
+        _exit = _stdout.channel.recv_exit_status()
+        if _exit != 0:
+            raise RuntimeError(f"SSH command exited with code {_exit}")
         # Store the private key (IP-restricted, encrypted at rest)
         server.ssh_key = priv_key_pem
         server.save(update_fields=['ssh_key', 'updated_at'])
