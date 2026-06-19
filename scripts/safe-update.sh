@@ -220,7 +220,7 @@ safe_update_rollback() {
     done
     
     # Restart core services with the restored images
-    docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps backend frontend celery celery-worker celery-deploy celery-fast celery-beat pgcat 2>/dev/null || _warn "Docker compose up had issues during rollback"
+    docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps backend frontend celery celery-deploy celery-fast celery-beat pgcat 2>/dev/null || _warn "Docker compose up had issues during rollback"
 
     # Restore DB if backed up
     if [ -n "${BACKUP_FILE:-}" ] && [ -f "$BACKUP_FILE" ]; then

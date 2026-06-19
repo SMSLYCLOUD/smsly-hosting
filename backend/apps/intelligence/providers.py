@@ -8,6 +8,7 @@ All providers work together when multiple keys are configured:
 - 0 providers: mock fallback
 """
 import os
+import json as _json
 import logging
 import hashlib
 import threading
