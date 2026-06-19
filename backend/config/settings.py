@@ -956,6 +956,10 @@ REST_FRAMEWORK = {
         # SECURITY (Issue 137): cron-jobs POST is uncapped, a user
         # can spam cron jobs. Cap at 10/hour per user.
         'cron_jobs_create': '10/hour',
+        # SECURITY: AI endpoints were missing throttle rates →
+        # ImproperlyConfigured crash on any AI chat/analysis call.
+        'ai_chat': '30/minute',
+        'ai_analysis': '10/minute',
     },
 }
 # SECURITY (Batch H): API_RATE_LIMIT was 1000 (per-IP per-minute)
