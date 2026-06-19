@@ -92,10 +92,33 @@ def write_docker_labels_targets():
     if remote_targets:
         _write_target_file("docker-labels-remote.json", remote_targets)
 
+    # Also generate file_sd targets for remote cAdvisor and Node Exporter
+    cadvisor_targets = []
+    node_exporter_targets = []
+    for server in remote_servers:
+        reachable_ip = server.wg_address or server.private_ip or server.host
+        if not reachable_ip:
+            continue
+        cadvisor_targets.append({
+            "targets": [f"{reachable_ip}:{CADVISOR_PORT}"],
+            "labels": {"node": server.name, "host": server.host, "job": "cadvisor"},
+        })
+        node_exporter_targets.append({
+            "targets": [f"{reachable_ip}:{NODE_EXPORTER_PORT}"],
+            "labels": {"node": server.name, "host": server.host, "job": "node-exporter"},
+        })
+
+    if cadvisor_targets:
+        _write_target_file("cadvisor-remote.json", cadvisor_targets)
+    if node_exporter_targets:
+        _write_target_file("node-exporter-remote.json", node_exporter_targets)
+
     logger.info(
-        "Wrote %d local + %d remote docker-labels targets",
+        "Wrote %d local + %d remote docker-labels, %d cadvisor, %d node-exporter targets",
         len(local_targets),
         len(remote_targets),
+        len(cadvisor_targets),
+        len(node_exporter_targets),
     )
 
 
@@ -144,11 +167,20 @@ def deploy_docker_labels_exporter_on_node(server):
         client.exec_command("docker rm -f smsly-docker-labels 2>/dev/null")
         client.exec_command("docker pull python:3.12-alpine 2>/dev/null", raise_on_error=False)
 
-        # 3. Run the exporter container
+        # 3. Determine the bind IP for the exporter.
+        # Prefer the WireGuard mesh IP so the exporter is only reachable
+        # over the VPN, not the public internet.  Fall back to 0.0.0.0
+        # when WireGuard isn't provisioned yet (provision-only nodes).
+        exporter_bind_ip = "0.0.0.0"
+        wg_addr = getattr(server, "wg_address", None)
+        if wg_addr:
+            exporter_bind_ip = wg_addr
+
+        # 4. Run the exporter container
         cmd = (
             f"docker run -d --name smsly-docker-labels --restart unless-stopped "
             f"-v /var/run/docker.sock:/var/run/docker.sock:ro "
-            f"-p {DOCKER_LABELS_PORT}:{DOCKER_LABELS_PORT} "
+            f"-p {exporter_bind_ip}:{DOCKER_LABELS_PORT}:{DOCKER_LABELS_PORT} "
             f"-e NODE_NAME={shlex.quote(server.name)} "
             f"-v {remote_path}:/app/exporter.py:ro "
             f"python:3.12-alpine python3 -u /app/exporter.py"
@@ -177,6 +209,16 @@ def deploy_docker_labels_exporter_on_node(server):
             pass
 
 
+CADVISOR_PORT = 8080
+NODE_EXPORTER_PORT = 9100
+
+
+def _node_bind_ip(server) -> str:
+    """Return the WireGuard mesh IP if available, else 0.0.0.0."""
+    wg = getattr(server, "wg_address", None)
+    return wg if wg else "0.0.0.0"
+
+
 def deploy_cadvisor_on_node(server):
     """SSH into a remote server and deploy cAdvisor for container metrics."""
     from apps.deployments.services.ssh_client import SSHClient
@@ -186,18 +228,20 @@ def deploy_cadvisor_on_node(server):
     )
     try:
         client.connect()
+        bind_ip = _node_bind_ip(server)
         client.exec_command(
-            "docker rm -f smsly-cadvisor 2>/dev/null; "
-            "docker run -d --name smsly-cadvisor --restart unless-stopped "
-            "--privileged "
-            "-v /:/rootfs:ro -v /var/run/docker.sock:/var/run/docker.sock:ro "
-            "-v /sys:/sys:ro -v /var/lib/docker/:/var/lib/docker:ro "
-            "-v /dev/disk/:/dev/disk:ro "
-            "gcr.io/cadvisor/cadvisor:v0.49.1 "
-            "--containerd=unix:///var/run/containerd/containerd.sock",
+            f"docker rm -f smsly-cadvisor 2>/dev/null; "
+            f"docker run -d --name smsly-cadvisor --restart unless-stopped "
+            f"--privileged "
+            f"-v /:/rootfs:ro -v /var/run/docker.sock:/var/run/docker.sock:ro "
+            f"-v /sys:/sys:ro -v /var/lib/docker/:/var/lib/docker:ro "
+            f"-v /dev/disk/:/dev/disk:ro "
+            f"-p {bind_ip}:{CADVISOR_PORT}:{CADVISOR_PORT} "
+            f"gcr.io/cadvisor/cadvisor:v0.49.1 "
+            f"--containerd=unix:///var/run/containerd/containerd.sock",
             raise_on_error=False,
         )
-        logger.info("Deployed cAdvisor on %s", server.name)
+        logger.info("Deployed cAdvisor on %s (bind=%s:%s)", server.name, bind_ip, CADVISOR_PORT)
         return True
     except Exception as exc:
         logger.error("cAdvisor deploy failed for %s: %s", server.name, exc)
@@ -216,16 +260,18 @@ def deploy_node_exporter_on_node(server):
     )
     try:
         client.connect()
+        bind_ip = _node_bind_ip(server)
         client.exec_command(
-            "docker rm -f smsly-node-exporter 2>/dev/null; "
-            "docker run -d --name smsly-node-exporter --restart unless-stopped "
-            "-v /proc:/host/proc:ro -v /sys:/host/sys:ro -v /:/rootfs:ro "
-            "prom/node-exporter:v1.6.1 "
-            "--path.procfs=/host/proc --path.rootfs=/rootfs --path.sysfs=/host/sys "
-            "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)",
+            f"docker rm -f smsly-node-exporter 2>/dev/null; "
+            f"docker run -d --name smsly-node-exporter --restart unless-stopped "
+            f"-v /proc:/host/proc:ro -v /sys:/host/sys:ro -v /:/rootfs:ro "
+            f"-p {bind_ip}:{NODE_EXPORTER_PORT}:{NODE_EXPORTER_PORT} "
+            f"prom/node-exporter:v1.6.1 "
+            f"--path.procfs=/host/proc --path.rootfs=/rootfs --path.sysfs=/host/sys "
+            f"--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)",
             raise_on_error=False,
         )
-        logger.info("Deployed Node Exporter on %s", server.name)
+        logger.info("Deployed Node Exporter on %s (bind=%s:%s)", server.name, bind_ip, NODE_EXPORTER_PORT)
         return True
     except Exception as exc:
         logger.error("Node Exporter deploy failed for %s: %s", server.name, exc)
