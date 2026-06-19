@@ -33,6 +33,9 @@ class Domain(models.Model):
     issued_at = models.DateTimeField(blank=True, null=True)
     expires_at = models.DateTimeField(blank=True, null=True)
 
+    checked_at = models.DateTimeField(blank=True, null=True)
+    ssl_fail_count = models.IntegerField(default=0)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

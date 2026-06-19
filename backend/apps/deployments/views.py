@@ -2728,6 +2728,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
     def retry_domain(self, request, pk=None):
         """Retry domain verification"""
         service = self.get_object()
+        assert_can_write(request.user, service, action='retry domain verification')
         domain_name = request.data.get('domain', '').strip().lower()
         if not domain_name:
             return Response({'error': 'Domain required'}, status=status.HTTP_400_BAD_REQUEST)
