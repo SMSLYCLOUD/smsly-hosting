@@ -4,16 +4,11 @@ from typing import Optional
 
 def normalize_repo_url(url: str) -> Optional[str]:
     """
-    Normalize a repository URL to ``{owner}/{repo}`` format for matching.
+    Normalize a repository URL to ``{host}/{owner}/{repo}`` format for matching.
 
-    Handles:
-    - https://github.com/owner/repo
-    - https://github.com/owner/repo.git
-    - git@github.com:owner/repo.git
-    - ssh://git@github.com/owner/repo.git
-    - http://gitlab.com/owner/repo
-    - https://bitbucket.org/owner/repo
-    - ``owner/repo`` (already normalized)
+    Includes the host so ``github.com/owner/repo`` and ``gitlab.com/owner/repo``
+    are distinct — a webhook from one provider will never match a service
+    configured for another.
 
     Returns ``None`` if the URL cannot be parsed.
     """
@@ -33,14 +28,11 @@ def normalize_repo_url(url: str) -> Optional[str]:
             url = url[len(prefix):]
             break
 
-    # Now should be host/owner/repo
     parts = url.split('/')
     if len(parts) >= 3:
-        # host/owner/repo → owner/repo
-        return '/'.join(parts[-2:])
+        return '/'.join(parts[-3:])  # host/owner/repo
     if len(parts) == 2:
-        # Already owner/repo
-        return url
+        return url  # owner/repo (no host to disambiguate)
     return None
 
 

@@ -1652,11 +1652,17 @@ class AddonProvisioner:
                         check=True,
                     )
             else:
-                logger.warning(f"Native restore not implemented for {addon.addon_type}, skipping gracefully.")
-            
+                logger.warning("Native restore not implemented for %s, skipping gracefully.", addon.addon_type)
+
+            # Clean up the backup file after a successful restore.
+            try:
+                os.remove(backup_path)
+            except OSError:
+                pass
+
             return True
         except Exception as e:
-            logger.error(f"Restore failed for {addon.id}: {e}")
+            logger.error("Restore failed for %s: %s", addon.id, e)
             raise e
 
 # Singleton instance
