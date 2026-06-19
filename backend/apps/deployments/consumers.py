@@ -128,7 +128,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             self._accepted = True
 
             # ── INITIALIZE ──
-            log_event(
+            from asgiref.sync import sync_to_async
+            await sync_to_async(log_event)(
                 action="CONSOLE_SESSION_STARTED",
                 target=f"Deployment: {self.deployment_id}",
                 actor=self.user,
@@ -310,7 +311,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             for char in text_data:
                 if char in ('\r', '\n'):
                     if self._cmd_buffer.strip():
-                        log_event(
+                        from asgiref.sync import sync_to_async
+                        await sync_to_async(log_event)(
                             action="CONSOLE_COMMAND_EXECUTED",
                             target=f"Deployment: {self.deployment_id}",
                             actor=self.user,
@@ -1046,13 +1048,30 @@ class ServiceStatusConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def _authenticate_token(self, token_key):
         """Validate token and return user with enhanced error handling."""
-        from rest_framework.authtoken.models import Token
         from django.core.cache import cache
+        from django.contrib.auth import get_user_model
+        from django.core import signing
         import hashlib
         
         if not token_key or not isinstance(token_key, str):
             logger.warning("Invalid token format: %s", type(token_key))
             return None
+            
+        User = get_user_model()
+        
+        # 1. Try to decode as a short-lived signed token (frontend WebSocket auth)
+        try:
+            # Token valid for 60 seconds
+            data = signing.loads(token_key, salt='ws-terminal', max_age=60)
+            user = User.objects.get(id=data['user_id'])
+            if user.is_active and user.has_perm('deployments.view_deployment'):
+                return user
+        except Exception:
+            # Not a signed token, proceed to check if it's a DRF token
+            pass
+            
+        # 2. Fallback to checking if it's a long-lived DRF token
+        from rest_framework.authtoken.models import Token
         
         # Basic token format validation (should be 40 chars hex)
         if len(token_key) != 40 or not all(c in '0123456789abcdef' for c in token_key):

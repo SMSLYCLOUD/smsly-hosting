@@ -29,8 +29,8 @@ from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
-PROMETHEUS_URL = getattr(settings, 'PROMETHEUS_INTERNAL_URL', 'http://prometheus:9090')
-LOKI_URL = getattr(settings, 'LOKI_INTERNAL_URL', 'http://loki:3100')
+PROMETHEUS_URL = getattr(settings, 'PROMETHEUS_INTERNAL_URL', 'http://smsly-prometheus:9090')
+LOKI_URL = getattr(settings, 'LOKI_INTERNAL_URL', 'http://smsly-loki:3100')
 TIMEOUT = 12
 
 # ── Deterministic thresholds ──────────────────────────────────────────────

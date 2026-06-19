@@ -5,7 +5,7 @@ from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
-PROMETHEUS_URL = getattr(settings, 'PROMETHEUS_INTERNAL_URL', 'http://prometheus:9090')
+PROMETHEUS_URL = getattr(settings, 'PROMETHEUS_INTERNAL_URL', 'http://smsly-prometheus:9090')
 TIMEOUT = 10
 
 
