@@ -14,6 +14,7 @@ from rest_framework.response import Response
 from .models_storage import Volume
 from .models import Service
 from .utils import resolve_running_container, validate_and_sanitize_path
+from apps.deployments.utils_file_browser import exec_file_list
 
 logger = logging.getLogger(__name__)
 
@@ -332,32 +333,28 @@ class VolumeViewSet(viewsets.ModelViewSet):
                 'timeout': 30,
                 'fallthrough_on_exception': True,
             },
-            local_action=lambda container, p: self._local_volume_browse(container, p),
+            local_action=lambda container, p: self._local_volume_browse(container, p, mount),
             path=path,
         )
 
-    def _local_volume_browse(self, container, path):
+    def _local_volume_browse(self, container, path, mount):
+        # Resolve real path inside container to prevent symlink escapes
         exit_code, output = container.exec_run(
-            ["ls", "-la", "--time-style=long-iso", path], user="root")
+            ["readlink", "-f", path], user="root"
+        )
         if exit_code != 0:
-            return Response({'error': 'Failed to list directory', 'details': output.decode()},
-                            status=status.HTTP_400_BAD_REQUEST)
-
-        files = []
-        lines = output.decode('utf-8').splitlines()
-        if lines and lines[0].startswith('total'):
-            lines = lines[1:]
-        for line in lines:
-            parts = line.split()
-            if len(parts) >= 8:
-                files.append({
-                    'permissions': parts[0],
-                    'user': parts[2],
-                    'size': parts[4],
-                    'date': f"{parts[5]} {parts[6]}",
-                    'name': " ".join(parts[7:])
-                })
-        return Response({'path': path, 'files': files})
+            # Fallback for distroless
+            exit_code, output = container.exec_run(
+                ["python3", "-c", "import os,sys; print(os.path.realpath(sys.argv[1]))", path], user="root"
+            )
+            
+        if exit_code == 0:
+            real_path = output.decode('utf-8').strip()
+            # If path resolution succeeds but points outside mount, reject.
+            if not (real_path == mount or real_path.startswith(mount + "/")):
+                return Response({'error': 'Path escapes volume mount'}, status=status.HTTP_403_FORBIDDEN)
+                
+        return exec_file_list(container, path, fallback_to_root=False, user="root")
 
     @action(detail=True, methods=['post'], url_path='delete-file')
     def delete_file(self, request, pk=None, service_pk=None):

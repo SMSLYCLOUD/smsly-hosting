@@ -762,7 +762,9 @@ class ServiceViewSet(viewsets.ModelViewSet):
         return has_header and (is_api_token or is_hmac_remote_sync)
 
     def perform_create(self, serializer):
-        assert_can_write(self.request.user)
+        project = serializer.validated_data.get('project')
+        if project:
+            assert_can_write(self.request.user, project, action='create service in')
         from .models_core import ManagedServer
         server = serializer.validated_data.get('server')
         

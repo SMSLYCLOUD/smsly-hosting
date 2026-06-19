@@ -510,15 +510,8 @@ fi
                 CORE_SERVICES="backend celery celery-deploy celery-fast celery-beat"
             fi
 
-            # 2. Remove old PaaS images (NOT addon images) to free up space BEFORE the build
-            # We untag them so docker compose build has to make new ones. Running containers keep the actual image data alive.
-            echo -e "${BLUE}    ↳ Untagging old core images...${NC}"
-            for svc in $CORE_SERVICES; do
-                img=$(docker compose -f "$COMPOSE_FILE" config --images 2>/dev/null | grep -i "$svc" || true)
-                if [ -n "$img" ]; then
-                    docker rmi "$img" 2>/dev/null || true
-                fi
-            done
+            # 2. Skip untagging old PaaS images to prevent zero-downtime gaps on container restarts.
+            # Docker compose build will simply overwrite the tag; old images will become dangling and cleaned later.
 
             # 3. Prune dangling build cache
             echo -e "${BLUE}    ↳ Pruning build cache...${NC}"
@@ -717,6 +710,8 @@ if not created and not cp.is_active:
     docker builder prune -f --filter "until=24h" 2>/dev/null || true
     # Prune stale rollback backup containers left from failed blue-green promotions
     docker container prune -f --filter "status=exited" 2>/dev/null || true
+    # Prune dangling images left over after the new images were tagged
+    docker image prune -f 2>/dev/null || true
     for ctr in $(docker ps -a --filter "status=exited" --filter "name=-rollback-" --format '{{.Names}}' 2>/dev/null || true); do
         docker rm -f "$ctr" 2>/dev/null || true
     done
