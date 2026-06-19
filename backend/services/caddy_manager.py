@@ -1194,8 +1194,20 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
 
         os.makedirs(CADDY_CONFIG_DIR, exist_ok=True)
         # Ensure the caddy-config directory is readable by the Caddy container
-        # which runs as uid 1000 (nextjs user).
+        # which runs as uid 1000 (nextjs user). Try chmod first, then test
+        # write access with a probe file so we fail fast with a clear message.
         os.chmod(CADDY_CONFIG_DIR, 0o775)
+        try:
+            probe = os.path.join(CADDY_CONFIG_DIR, ".perm_probe")
+            with open(probe, "w") as f:
+                f.write("ok")
+            os.remove(probe)
+        except (OSError, PermissionError):
+            raise PermissionError(
+                f"Cannot write to {CADDY_CONFIG_DIR}. "
+                "Fix host permissions: sudo chown -R 1000:1000 "
+                f"{CADDY_CONFIG_DIR} && sudo chmod 775 {CADDY_CONFIG_DIR}"
+            )
 
         with open(CADDY_FILE_PATH, "w", encoding="utf-8") as handle:
             handle.write(content)
