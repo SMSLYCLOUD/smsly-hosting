@@ -24,6 +24,7 @@ class PlatformUpdateError(Exception):
 
 
 INSTALL_DIR = os.environ.get('INSTALL_DIR', '/opt/smsly-hosting')
+SMSLY_BRANCH = os.environ.get('SMSLY_BRANCH', 'main')
 COMPOSE_FILE = os.path.join(INSTALL_DIR, 'docker-compose.prod.yml')
 # Shared bind mount used by caddy-watcher and smsly-update-watcher.  Inside the
 # containers it is mounted at /caddy-config; on the host it is
@@ -234,14 +235,48 @@ def perform_update(update_record) -> bool:
 
 
 def _rollback(update_record) -> bool:
-    """Mark rollback as unsupported for watcher-based UI updates."""
+    """Roll back to the previous git commit captured in snapshot_data."""
     from apps.core.services.audit_service import AuditService
 
-    update_record.status = 'FAILED'
-    update_record.can_rollback = False
-    update_record.error_message = 'Automatic rollback is not available for host watcher updates.'
-    update_record.completed_at = timezone.now()
-    update_record.save()
-    update_record.append_log('Automatic rollback is unavailable; run the installer manually if recovery is needed.')
-    AuditService.log("paas_rollback_failed", target=f"update_{update_record.id}", status="failed")
-    return False
+    prev_commit = (update_record.snapshot_data or {}).get('commit', '')
+    if not prev_commit:
+        update_record.status = 'FAILED'
+        update_record.can_rollback = False
+        update_record.error_message = 'No previous commit recorded — cannot rollback.'
+        update_record.completed_at = timezone.now()
+        update_record.save()
+        update_record.append_log('Rollback failed: no previous commit in snapshot.')
+        AuditService.log("paas_rollback_failed", target=f"update_{update_record.id}", status="failed")
+        return False
+
+    update_record.append_log(f'Rolling back to commit {prev_commit[:8]}...')
+    try:
+        # Checkout the previous commit and re-run the installer.
+        ok, out = _run(['git', 'fetch', 'origin', SMSLY_BRANCH])
+        update_record.append_log(f'git fetch: {out[:500]}')
+        ok, out = _run(['git', 'checkout', prev_commit])
+        update_record.append_log(f'git checkout: {out[:500]}')
+        if not ok:
+            raise RuntimeError(f'git checkout failed: {out}')
+
+        # Trigger a fast redeploy of core services with the old code.
+        ok, out = _run(
+            ['bash', str(INSTALL_DIR / 'install.sh'), '--update-backend', '--no-screen'],
+            env={**os.environ, 'NON_INTERACTIVE': '1', 'NO_SCREEN': 'true'},
+        )
+        update_record.append_log(f'install.sh --update-backend: {out[:500]}')
+        update_record.status = 'ROLLED_BACK'
+        update_record.can_rollback = False
+        update_record.completed_at = timezone.now()
+        update_record.save()
+        AuditService.log("paas_rollback_success", target=f"update_{update_record.id}", status="rolled_back")
+        return True
+    except Exception as exc:
+        update_record.status = 'FAILED'
+        update_record.can_rollback = False
+        update_record.error_message = str(exc)[:2000]
+        update_record.completed_at = timezone.now()
+        update_record.save()
+        update_record.append_log(f'Rollback failed: {exc}')
+        AuditService.log("paas_rollback_failed", target=f"update_{update_record.id}", status="failed")
+        return False
