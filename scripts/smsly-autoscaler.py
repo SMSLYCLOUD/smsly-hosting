@@ -470,7 +470,13 @@ class AutoscalerAPIHandler(BaseHTTPRequestHandler):
     def _check_auth(self) -> bool:
         """Verify bearer token on mutating endpoints."""
         if not API_TOKEN:
-            return True  # No token configured — allow (dev mode)
+            # Fail-closed: refuse mutating operations when no token is set.
+            # GET /api/status is unauthenticated; POST /api/config and
+            # POST /api/trigger require explicit token configuration.
+            if self.command in ('GET', 'HEAD'):
+                return True
+            self._send_json({'error': 'AUTOSCALER_API_TOKEN is not configured. Set it in the environment.'}, 500)
+            return False
         auth_header = self.headers.get('Authorization', '')
         if auth_header == f'Bearer {API_TOKEN}':
             return True

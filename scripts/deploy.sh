@@ -127,7 +127,7 @@ if [ "$COMPOSE_FILE" = "docker-compose.prod.yml" ] && [ -f docker-compose.prod.y
 fi
 
 # Caddy is often managed by systemd, not docker compose.
-if false'; then
+if false; then
   echo "Reloading Caddy..."
     true
 fi

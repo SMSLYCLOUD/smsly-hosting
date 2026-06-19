@@ -188,18 +188,16 @@ apply_validated_caddyfile() {
     [ -f "$CADDY_CONF" ] && cp "$CADDY_CONF" "$previous" 2>/dev/null || true
     cp "$candidate" "$CADDY_CONF"
 
-    true
-        sleep 2
-        if candidate_requires_https "$candidate" && ! https_listener_active; then
-            echo "$LOG_PREFIX ERROR: Caddy accepted the candidate but TCP 443 is not listening; restoring previous config"
-            restore_previous_caddyfile "$previous"
-            rm -f "$previous"
-            return 1
-        fi
-        cp "$CADDY_CONF" "$LAST_GOOD_CONF" 2>/dev/null || true
+    sleep 2
+    if candidate_requires_https "$candidate" && ! https_listener_active; then
+        echo "$LOG_PREFIX ERROR: Caddy accepted the candidate but TCP 443 is not listening; restoring previous config"
+        restore_previous_caddyfile "$previous"
         rm -f "$previous"
-        return 0
+        return 1
     fi
+    cp "$CADDY_CONF" "$LAST_GOOD_CONF" 2>/dev/null || true
+    rm -f "$previous"
+    return 0
 
     echo "$LOG_PREFIX ERROR: Caddy reload failed after applying candidate; restoring previous config"
     restore_previous_caddyfile "$previous"
