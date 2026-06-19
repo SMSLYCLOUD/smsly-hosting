@@ -52,3 +52,7 @@ class OrganizationSSOSerializer(serializers.ModelSerializer):
         model = OrganizationSSO
         fields = '__all__'
         read_only_fields = ['id', 'created_at', 'updated_at', 'organization']
+        extra_kwargs = {
+            'oidc_client_secret': {'write_only': True},
+            'saml_x509_cert': {'write_only': True},
+        }

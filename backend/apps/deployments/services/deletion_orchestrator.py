@@ -146,8 +146,10 @@ class DeletionOrchestrator:
                 c_name = c.name.lower()
                 slug_lower = service.slug.lower() if hasattr(service, 'slug') else service.name.lower()
 
-                # "slug", "slug-frontend", "slug-green-xyz"
-                if slug_lower in c_name:
+                # Match containers whose name STARTS with the slug followed
+                # by a separator (-, _).  A bare substring match would catch
+                # unrelated containers (e.g. slug='app' matching 'flux-app').
+                if c_name == slug_lower or c_name.startswith(slug_lower + '-') or c_name.startswith(slug_lower + '_'):
                     containers.add(c)
                     continue
 
@@ -175,8 +177,9 @@ class DeletionOrchestrator:
                     containers.add(c)
                     continue
 
-                # 2. Check legacy name pattern
-                if str(addon.id) in c.name:
+                # 2. Check legacy name pattern (container name starts with smsly-addon-)
+                addon_prefix = f"smsly-addon-"
+                if c.name.lower().startswith(addon_prefix) and str(addon.id)[:8] in c.name:
                     containers.add(c)
                     continue
 

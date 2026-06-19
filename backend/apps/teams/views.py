@@ -59,11 +59,13 @@ class TeamViewSet(viewsets.ModelViewSet):
             email = serializer.validated_data['email']
             role = serializer.validated_data['role']
             
-            # Find user by email
+            # Find user by email.  Return 403 (not 404) to prevent
+            # email enumeration — an attacker cannot distinguish
+            # "no such account" from "no permission".
             try:
-                user = User.objects.get(email=email)
+                user = User.objects.get(email__iexact=email)
             except User.DoesNotExist:
-                return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+                return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
 
             # Check if already member
             if TeamMember.objects.filter(team=team, user=user).exists():
