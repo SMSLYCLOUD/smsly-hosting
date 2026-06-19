@@ -31,6 +31,7 @@ click-didyoumean==0.3.1
 click-plugins==1.1.1.2
 click-repl==0.3.0
 constantly==23.10.4
+croniter==6.0.0
 cryptography==46.0.4
 daphne==4.2.1
 distro==1.9.0

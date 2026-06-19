@@ -83,14 +83,14 @@ class AddonViewSet(viewsets.ModelViewSet):
         allowed_services = Service.objects.filter(get_team_q_filter(self.request.user))
         qs = self.queryset.filter(
             Q(service__in=allowed_services)
-        ).distinct()
+        )
         # Superusers can see ownerless (orphaned) addons for cleanup.
         if self.request.user.is_superuser:
             qs = qs | self.queryset.filter(service__owner__isnull=True)
         project_id = self.request.query_params.get('project_id')
         if project_id:
             qs = qs.filter(service__project_id=project_id)
-        return qs
+        return qs.distinct()
 
     def perform_create(self, serializer):
         # SECURITY: Verify user has access to the service before creating addon
