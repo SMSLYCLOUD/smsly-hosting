@@ -49,14 +49,16 @@ class AutoscalerCooldownFieldTests(TestCase):
         baseline_updated_at = self.service.updated_at
         self.assertIsNone(self.service.last_scale_at)
 
-        _evaluate_scaling(self.service, ServiceMetric)
+        result = _evaluate_scaling(self.service, ServiceMetric)
 
         self.service.refresh_from_db()
-        # The autoscaler should have bumped min_replicas from 1 to 2.
-        self.assertEqual(self.service.min_replicas, 2)
+        # The legacy function now returns a dict instead of mutating min_replicas.
+        self.assertIsNotNone(result)
+        self.assertEqual(result['action'], 'scale_up')
+        self.assertEqual(result['replicas'], 2)
         # last_scale_at should now be set
         self.assertIsNotNone(self.service.last_scale_at)
-        # updated_at should NOT have changed (we only save min_replicas + last_scale_at)
+        # updated_at should NOT have changed
         self.assertEqual(self.service.updated_at, baseline_updated_at)
 
     def test_health_status_update_does_not_reset_cooldown(self):
