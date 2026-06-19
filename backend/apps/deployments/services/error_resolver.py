@@ -58,10 +58,10 @@ ERROR_PATTERNS = [
             'Django is rejecting requests because ALLOWED_HOSTS is not configured. '
             'The domain needs to be added to ALLOWED_HOSTS.'
         ),
-        'auto_fix': {
-            'env': {'ALLOWED_HOSTS': '*'},
-            'action': 'Set ALLOWED_HOSTS=* (the app should further restrict in production)',
-        },
+            'auto_fix': {
+                'env': {'ALLOWED_HOSTS': '.onrender.com,.railway.app,localhost,127.0.0.1'},
+                'action': 'Set ALLOWED_HOSTS to common PaaS domains (restrict further in production)',
+            },
     },
     {
         'regex': re.compile(

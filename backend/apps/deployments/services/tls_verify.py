@@ -140,7 +140,7 @@ def resolve_tls_verify_for_url(candidate_url: str) -> Tuple[bool, Optional[str]]
         # Plain HTTP has no certificate to verify.
         return False, None
     fingerprint = os.environ.get(
-        "SMSLY_MASTER_TLS_CERT SHA256", ""
+        "SMSLY_MASTER_TLS_CERT_SHA256", ""
     ).strip()
     if fingerprint:
         return True, fingerprint

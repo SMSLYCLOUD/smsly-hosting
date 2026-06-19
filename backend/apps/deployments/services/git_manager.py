@@ -48,8 +48,8 @@ class GitManager:
         # Clean destination
         cleaned_url = repo_url.rstrip('/')
         repo_name = cleaned_url.split('/')[-1].replace('.git', '')
-        if not repo_name:
-            # Fallback for root domains or empty names
+        # Prevent path traversal: reject names containing .. or /
+        if not repo_name or '..' in repo_name or '/' in repo_name or '\\' in repo_name:
             repo_name = f"repo-{uuid.uuid4().hex[:8]}"
 
         repo_dir = os.path.join(destination, repo_name)
