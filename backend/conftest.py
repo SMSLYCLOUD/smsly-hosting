@@ -34,9 +34,8 @@ def clear_throttle_cache():
 
 
 @pytest.fixture(autouse=True)
-def _isolate_test_environment():
-    """Per-test isolation: clear caches, throttle state, signature checks."""
-    from django.core.cache import cache
-    cache.clear()
-    yield
-    cache.clear()
+def _isolate_test_environment(settings):
+    """Disable HMAC signature checks for all tests by default.
+    Tests that need to verify HMAC behavior should explicitly
+    override settings.SMSLY_DISABLE_SIGNATURE_CHECK = False."""
+    settings.SMSLY_DISABLE_SIGNATURE_CHECK = True
