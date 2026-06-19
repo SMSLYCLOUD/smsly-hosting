@@ -32,7 +32,10 @@ def check_autoscale_task():
 
     for service in services:
         try:
-            analyze_and_apply(service)
+            # 120 s dedup window: the 3-min sweep always wins.  This
+            # prevents the 30 s quick-check from duplicating work that
+            # the 3-min batch task is already doing.
+            analyze_and_apply(service, min_interval_seconds=120)
         except Exception as e:
             logger.error("Autoscale check failed for %s: %s", service.name, e)
 

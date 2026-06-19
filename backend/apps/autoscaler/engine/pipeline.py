@@ -27,13 +27,19 @@ from .reconciler import Reconciler, ScaleResult
 logger = logging.getLogger(__name__)
 
 
-def analyze_and_apply(service, *, now=None) -> ScaleResult:
+def analyze_and_apply(service, *, now=None, min_interval_seconds: int = 0) -> ScaleResult:
     """One-shot: collect metrics → decide → reconcile. Returns ScaleResult.
 
     Accepts either a ``Service`` instance or its UUID string. The
     Celery task path passes strings to avoid carrying ORM instances
     across the broker boundary.
+
+    If *min_interval_seconds* > 0, the function skips services that
+    were analysed within that window (dedup cache).  The 30 s task
+    passes 120 so the slower 3-min sweep always wins for services
+    that qualify for both.
     """
+    from django.core.cache import cache as django_cache
     from apps.deployments.models_core import Service
 
     now = now or timezone.now()
@@ -47,6 +53,16 @@ def analyze_and_apply(service, *, now=None) -> ScaleResult:
                 recommendation=Recommendation(),
                 applied=False, error='service not found',
             )
+
+    # Dedup: skip if another task analysed this service recently.
+    if min_interval_seconds > 0:
+        cache_key = f'autoscale_last:{service.id}'
+        if django_cache.get(cache_key):
+            return ScaleResult(
+                recommendation=Recommendation(reason='dedup: recently analysed'),
+                applied=False,
+            )
+        django_cache.set(cache_key, '1', timeout=min_interval_seconds)
 
     # 1. Metrics
     metrics = MetricsCollector(service).collect()
@@ -71,7 +87,14 @@ def analyze_and_apply(service, *, now=None) -> ScaleResult:
                   last_destroyed.destroyed_at if last_destroyed and last_destroyed.destroyed_at else None]
     last_event = max((c for c in candidates if c is not None), default=None)
 
-    # 3. Decide
+    # 3. Per-service cooldown overrides (from alert_config JSON).
+    # If set, they take precedence over the global SCALE_COOLDOWN_*
+    # environment variables.
+    alert_cfg = service.alert_config or {}
+    cooldown_up = alert_cfg.pop('cooldown_up_min', None)
+    cooldown_down = alert_cfg.pop('cooldown_down_min', None)
+
+    # 4. Decide
     engine = DecisionEngine(
         metrics,
         running_replicas=running,
@@ -80,6 +103,8 @@ def analyze_and_apply(service, *, now=None) -> ScaleResult:
         last_scale_at=last_event,
         spawning_in_progress=spawning,
         now=now,
+        **({'cooldown_up_min': int(cooldown_up)} if cooldown_up is not None else {}),
+        **({'cooldown_down_min': int(cooldown_down)} if cooldown_down is not None else {}),
     )
     rec: Recommendation = engine.decide()
 
@@ -103,6 +128,10 @@ def analyze_only(service, *, now=None) -> dict:
         service=service, status='RUNNING',
     ).order_by('-created_at').first()
 
+    alert_cfg = service.alert_config or {}
+    cooldown_up = alert_cfg.pop('cooldown_up_min', None)
+    cooldown_down = alert_cfg.pop('cooldown_down_min', None)
+
     engine = DecisionEngine(
         metrics,
         running_replicas=running,
@@ -111,6 +140,8 @@ def analyze_only(service, *, now=None) -> dict:
         last_scale_at=last_spawned.created_at if last_spawned else service.last_scale_at,
         spawning_in_progress=spawning,
         now=now,
+        **({'cooldown_up_min': int(cooldown_up)} if cooldown_up is not None else {}),
+        **({'cooldown_down_min': int(cooldown_down)} if cooldown_down is not None else {}),
     )
     rec = engine.decide()
     return {
