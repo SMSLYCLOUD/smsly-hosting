@@ -47,10 +47,10 @@ class OrganizationViewSet(viewsets.ModelViewSet):
         role = serializer.validated_data['role']
 
         User = get_user_model()
-        user = User.objects.filter(email=email).first()
+        user = User.objects.filter(email__iexact=email).first()
         if not user:
             return Response(
-                {'error': f'No user found with email {email}. They must register first.'},
+                {'error': 'Invitation could not be sent. Ensure the email is registered.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

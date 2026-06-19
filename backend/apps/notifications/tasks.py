@@ -205,12 +205,19 @@ def _dispatch_webhook(user, title: str, message: str, metadata: dict, webhook_ur
             send_discord_notification(text, url)
             result['provider'] = 'discord'
         else:
-            # Generic webhook — POST JSON payload
+            # Generic webhook — POST JSON payload.  Validate the URL
+            # against SSRF before making the request.
+            from apps.notifications.webhooks import _validate_notification_url
+            try:
+                _validate_notification_url(url)
+            except ValueError as exc:
+                raise ValueError(f"Webhook URL rejected: {exc}") from exc
+
             payload = {
                 'title': title,
                 'message': message,
                 'event_type': metadata.get('event_type', ''),
-                'source': 'cloudneuron',
+                'source': 'smsly',
                 'timestamp': timezone.now().isoformat(),
             }
             response = requests.post(url, json=payload, timeout=REQUEST_TIMEOUT)

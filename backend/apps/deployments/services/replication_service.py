@@ -12,6 +12,7 @@ Handles:
 """
 
 import logging
+import re
 import base64
 import json
 import ipaddress
@@ -32,7 +33,8 @@ def _yaml_scalar(value) -> str:
 
 def _bounded_error(exc, limit=2000) -> str:
     safe = str(exc).replace("\x00", "")
-    safe = safe.replace("repl_pass", "***")
+    # Redact any 20+ char hex/token-like strings (passwords and secrets).
+    safe = re.sub(r'[A-Za-z0-9\-_=+/]{20,}', '***', safe)
     return safe[:limit]
 
 
