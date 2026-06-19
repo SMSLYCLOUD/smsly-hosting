@@ -8,6 +8,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Github, Chrome, Mail, ArrowLeft, Loader2, GitBranch, Code2 } from "lucide-react";
+import { resetRedirectGuard } from "@/lib/paths";
 
 export default function LoginPage() {
   const [showEmailForm, setShowEmailForm] = useState(false);
@@ -55,6 +56,7 @@ export default function LoginPage() {
           return;
         }
 
+        resetRedirectGuard();
         // Full reload avoids Next.js route-cache edge cases around auth redirects.
         window.location.assign("/dashboard");
       } else {

@@ -238,28 +238,7 @@ api.interceptors.response.use(
   }
 );
 
-function isProtectedPath(path: string): boolean {
-  const protectedPrefixes = [
-    '/dashboard',
-    '/services',
-    '/projects',
-    '/deployments',
-    '/new',
-    '/project',
-    '/settings',
-    '/billing',
-    '/servers',
-    '/tunnels',
-    '/intelligence',
-    '/backups',
-    '/restore',
-    '/transfers',
-    '/admin-dashboard',
-    '/topology',
-    '/functions',
-  ];
-  return protectedPrefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
-}
+import { isProtectedPath, canRedirectToLogin } from "@/lib/paths";
 
 // Auto-clear stale tokens on 401 and redirect to login
 api.interceptors.response.use(
@@ -269,8 +248,6 @@ api.interceptors.response.use(
     const requestUrl = String(error?.config?.url || '');
 
     // Deploy actions intentionally return 409 when another deploy is active.
-    // Treat this as a non-fatal app state so callers can display a friendly
-    // "already deploying" message instead of surfacing Axios stack traces.
     if (
       statusCode === 409 &&
       /\/services\/[^/]+\/deploy\/?$/.test(requestUrl) &&
@@ -281,22 +258,15 @@ api.interceptors.response.use(
 
     if (error.response?.status === 401 && typeof window !== 'undefined') {
       clearAuthCookies();
-      // Redirect to login if on a protected page and not already heading there.
-      // The AuthProvider handles the /auth/user/ 401 separately; this interceptor
-      // catches 401s on ALL other endpoints so the user doesn't see broken pages.
       const path = window.location.pathname;
       if (
         path !== '/login' &&
         path !== '/register' &&
         !path.startsWith('/auth/') &&
-        isProtectedPath(path)
+        isProtectedPath(path) &&
+        canRedirectToLogin()
       ) {
-        const loopKey = '__401_redirect_ts';
-        const last = Number(sessionStorage.getItem(loopKey) || 0);
-        if (Date.now() - last > 5000) {
-          sessionStorage.setItem(loopKey, String(Date.now()));
-          window.location.replace('/login');
-        }
+        window.location.replace('/login');
       }
     }
     return Promise.reject(error);

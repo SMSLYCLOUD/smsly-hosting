@@ -4,6 +4,7 @@ import { useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { clearAuthCookies } from "@/lib/auth-cookies";
+import { resetRedirectGuard } from "@/lib/paths";
 
 // Prevent static prerendering — this page needs runtime URL params
 export const dynamic = "force-dynamic";
@@ -54,6 +55,7 @@ function CallbackContent() {
         // credential is whatever cookie the backend's Set-Cookie
         // header attached. No localStorage write, no client-side
         // cookie write — the backend owns the cookie lifecycle.
+        resetRedirectGuard();
         window.location.replace("/dashboard");
         return;
       }

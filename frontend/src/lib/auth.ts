@@ -20,7 +20,7 @@ import { clearAuthCookies } from "@/lib/auth-cookies";
  */
 export async function logout(): Promise<void> {
   try {
-    await api.post("/accounts/logout/", {});
+    await api.post("/auth/logout/", {});
   } catch {
     // Swallow network errors: the goal of logout is to land the user
     // on the login page, and a half-failed logout should still get

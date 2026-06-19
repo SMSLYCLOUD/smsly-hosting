@@ -1,5 +1,11 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import {
+  PROTECTED_PREFIXES,
+  isProtectedPath,
+  isAuthPage,
+  isCallbackPage,
+} from "@/lib/paths";
 
 const DEV_SHORT_CIRCUIT_ENABLED = false;
 
@@ -7,38 +13,6 @@ if (process.env.NODE_ENV === "production" && DEV_SHORT_CIRCUIT_ENABLED) {
   throw new Error(
     "DEV_SHORT_CIRCUIT_ENABLED must not be true in production builds",
   );
-}
-
-const PROTECTED_PREFIXES = [
-  "/dashboard",
-  "/new",
-  "/services",
-  "/deployments",
-  "/topology",
-  "/billing",
-  "/admin-dashboard",
-  "/project",
-  "/store",
-  "/marketplace",
-  "/settings",
-  "/ecosystem",
-  "/intelligence",
-  "/servers",
-  "/tunnels",
-  "/templates",
-  "/reseller",
-];
-
-function isProtectedPath(pathname: string): boolean {
-  return PROTECTED_PREFIXES.some((p) => pathname.startsWith(p));
-}
-
-function isAuthPage(pathname: string): boolean {
-  return pathname === "/login" || pathname === "/register";
-}
-
-function isCallbackPage(pathname: string): boolean {
-  return pathname.startsWith("/auth/callback");
 }
 
 function hasAuthTokenCookie(request: NextRequest): boolean {
@@ -213,6 +187,9 @@ export const config = {
     "/tunnels/:path*",
     "/templates/:path*",
     "/reseller/:path*",
+    "/backups/:path*",
+    "/transfers/:path*",
+    "/functions/:path*",
     "/login",
     "/register",
     "/auth/:path*",
