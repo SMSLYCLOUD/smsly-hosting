@@ -82,8 +82,11 @@ class AddonViewSet(viewsets.ModelViewSet):
         """Filter addons to only those belonging to the user's accessible services."""
         allowed_services = Service.objects.filter(get_team_q_filter(self.request.user))
         qs = self.queryset.filter(
-            Q(service__in=allowed_services) | Q(service__owner__isnull=True)
+            Q(service__in=allowed_services)
         ).distinct()
+        # Superusers can see ownerless (orphaned) addons for cleanup.
+        if self.request.user.is_superuser:
+            qs = qs | self.queryset.filter(service__owner__isnull=True)
         project_id = self.request.query_params.get('project_id')
         if project_id:
             qs = qs.filter(service__project_id=project_id)
@@ -411,8 +414,7 @@ def toggle_bucket_public_api(request, pk):
         try:
             addon = Addon.objects.filter(
                 Q(service__owner=request.user) |
-                Q(service__project__team__members__user=request.user) |
-                Q(service__owner__isnull=True)
+                Q(service__project__team__members__user=request.user)
             ).distinct().get(pk=pk)
         except Addon.DoesNotExist:
             if settings.DEBUG:
