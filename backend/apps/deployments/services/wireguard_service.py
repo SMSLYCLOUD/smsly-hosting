@@ -434,8 +434,10 @@ class WireGuardService:
         safe_iface = shlex.quote(iface)
         commands = [
             "apk add wireguard-tools iptables >/dev/null 2>&1 || true",
-            # Check if kernel module is loaded on the host
-            "lsmod | grep -q wireguard || (echo 'WIREGUARD_MODULE_MISSING' && exit 1)",
+            # Check if kernel module is loaded on the host.
+            # Use /proc/modules directly — Alpine images do not ship
+            # kmod/lsmod, and installing it wastes time on every restart.
+            "grep -q wireguard /proc/modules || (echo 'WIREGUARD_MODULE_MISSING' && exit 1)",
             f"wg-quick down {safe_iface} >/dev/null 2>&1 || true",
             f"wg-quick up {safe_iface}"
         ]

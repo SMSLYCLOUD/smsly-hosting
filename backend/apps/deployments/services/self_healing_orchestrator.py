@@ -209,8 +209,15 @@ class SelfHealingOrchestrator:
     def _track_heal_attempt(self, scope: str) -> int:
         """Increment and return the heal attempt count for this scope."""
         key = f"selfheal:attempts:{scope}"
-        count = int(cache.get(key, 0) or 0) + 1
-        cache.set(key, count, timeout=HEAL_STATE_TTL)
+        try:
+            # Atomic INCR when the backend supports it (Redis/Memcached).
+            count = cache.incr(key)
+        except (ValueError, AttributeError):
+            # Fallback for backends that don't support incr (e.g. LocMem).
+            count = (int(cache.get(key, 0) or 0) + 1)
+            cache.set(key, count, timeout=HEAL_STATE_TTL)
+        if count == 1:
+            cache.set(key, count, timeout=HEAL_STATE_TTL)  # set initial TTL
         return count
 
     def _reset_heal_state(self, scope: str):
