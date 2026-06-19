@@ -94,3 +94,5 @@ SAFECADDY
 # Returns 0 if Caddy config needs fixing, 1 if it's fine.
 caddy_needs_fix() {
     # Export CF token from systemd override so caddy validate can resolve {env.CLOUDFLARE_API_TOKEN}
+    return 1
+}

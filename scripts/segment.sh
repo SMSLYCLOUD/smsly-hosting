@@ -1,3 +1,6 @@
+ensure_container_on_network() {
+    local container_name="$1"
+    local network_name="$2"
     [ -z "$container_name" ] && return 0
 
     docker container inspect "$container_name" >/dev/null 2>&1 || return 0
