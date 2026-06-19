@@ -321,7 +321,7 @@ if DOMAIN and DOMAIN != 'localhost':
     _grid_wildcard = f'.{DOMAIN}'
     if _grid_wildcard not in ALLOWED_HOSTS:
         ALLOWED_HOSTS.append(_grid_wildcard)
-APPEND_SLASH = False
+APPEND_SLASH = True
 
 JULES_ALLOWED_HOSTS = config(
     'JULES_ALLOWED_HOSTS',
