@@ -72,20 +72,23 @@ const STACK_COLORS: Record<string, string> = {
 
 type Step = 'idle' | 'selection' | 'scanning' | 'review' | 'deploying' | 'done';
 
+// SECURITY: Use sessionStorage, not localStorage. The deployment plan
+// contains environment variable values that may include secrets.
+// sessionStorage is cleared when the tab closes, limiting exposure.
 function saveState(key: string, value: any) {
-    try { localStorage.setItem(`ecosystem:${key}`, JSON.stringify(value)); } catch {}
+    try { sessionStorage.setItem(`ecosystem:${key}`, JSON.stringify(value)); } catch {}
 }
 
 function loadState<T>(key: string, fallback: T): T {
     try {
-        const stored = localStorage.getItem(`ecosystem:${key}`);
+        const stored = sessionStorage.getItem(`ecosystem:${key}`);
         return stored ? JSON.parse(stored) : fallback;
     } catch { return fallback; }
 }
 
 function clearState() {
     ['step', 'plan', 'planId', 'scanTaskId', 'deployTaskId', 'selectedRepos', 'aiProvider'].forEach(
-        key => localStorage.removeItem(`ecosystem:${key}`)
+        key => sessionStorage.removeItem(`ecosystem:${key}`)
     );
 }
 
