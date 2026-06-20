@@ -101,7 +101,6 @@ services:
     restart: unless-stopped
     entrypoint: /entrypoint.sh
     command:
-      - --config.file=/etc/alertmanager/alertmanager.generated.yml
       - --storage.path=/alertmanager
     environment:
       - ALERT_SLACK_WEBHOOK_URL=${ALERT_SLACK_WEBHOOK_URL:-}

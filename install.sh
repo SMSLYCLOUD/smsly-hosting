@@ -426,6 +426,9 @@ deploy_observability_stack() {
         fi
         chmod 2777 "$INSTALL_DIR/prometheus-targets" 2>/dev/null || true
 
+        # Ensure scripts mounted into containers are executable (git may not preserve +x).
+        chmod +x "$INSTALL_DIR"/scripts/alertmanager-entrypoint.sh 2>/dev/null || true
+
         docker compose \
             --env-file "$INSTALL_DIR/.env" \
             -f "$INSTALL_DIR/infrastructure/docker/docker-compose.observability.yml" \
