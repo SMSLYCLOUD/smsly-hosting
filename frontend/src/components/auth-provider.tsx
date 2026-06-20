@@ -47,6 +47,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           }
         }
       } catch {
+        // Clear HttpOnly cookies by calling backend logout before redirecting.
+        // Without this the __Host-auth_token cookie survives in the browser,
+        // the middleware sees it on /login and redirects back to /dashboard.
+        fetch('/api/v1/auth/logout/', { method: 'POST', credentials: 'include' }).catch(() => {});
         clearAuthCookies();
         setUser(null);
 
