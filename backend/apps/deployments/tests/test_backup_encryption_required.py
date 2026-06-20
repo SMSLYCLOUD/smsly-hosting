@@ -7,6 +7,7 @@ missing, the backup service must refuse to write the backup in cleartext
 and raise :class:`BackupEncryptionRequired`.
 """
 
+import contextlib
 import os
 import tempfile
 from unittest.mock import patch
@@ -14,7 +15,6 @@ from unittest.mock import patch
 from cryptography.fernet import Fernet
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
-
 
 User = get_user_model()
 
@@ -70,10 +70,8 @@ class BackupEncryptionRequiredTests(TestCase):
                         os.remove(path)
                     parent = os.path.dirname(path)
                     if os.path.isdir(parent):
-                        try:
+                        with contextlib.suppress(OSError):
                             os.rmdir(parent)
-                        except OSError:
-                            pass
 
     @patch.dict(os.environ, {}, clear=False)
     def test_backup_require_encryption_via_settings_true_and_no_key_raises(self):
@@ -89,10 +87,8 @@ class BackupEncryptionRequiredTests(TestCase):
                             os.remove(path)
                         parent = os.path.dirname(path)
                         if os.path.isdir(parent):
-                            try:
+                            with contextlib.suppress(OSError):
                                 os.rmdir(parent)
-                            except OSError:
-                                pass
 
     @patch.dict(os.environ, {}, clear=False)
     def test_backup_with_key_succeeds_and_is_encrypted(self):
@@ -126,10 +122,8 @@ class BackupEncryptionRequiredTests(TestCase):
                         os.remove(path)
                     parent = os.path.dirname(path)
                     if os.path.isdir(parent):
-                        try:
+                        with contextlib.suppress(OSError):
                             os.rmdir(parent)
-                        except OSError:
-                            pass
 
     @patch.dict(os.environ, {}, clear=False)
     def test_backup_require_encryption_false_silently_allows_missing_key(self):
@@ -139,20 +133,17 @@ class BackupEncryptionRequiredTests(TestCase):
             os.environ,
             {"BACKUP_REQUIRE_ENCRYPTION": "false", "BACKUP_ENCRYPTION_KEY": ""},
             clear=False,
-        ):
-            with override_settings(BACKUP_REQUIRE_ENCRYPTION=False):
-                archive = self._write_fake_archive()
-                try:
-                    result = self.BackupService()._maybe_encrypt(archive)
-                    self.assertEqual(result, archive)
-                    self.assertTrue(os.path.exists(archive))
-                finally:
-                    for path in (archive,):
-                        if os.path.exists(path):
-                            os.remove(path)
-                        parent = os.path.dirname(path)
-                        if os.path.isdir(parent):
-                            try:
-                                os.rmdir(parent)
-                            except OSError:
-                                pass
+        ), override_settings(BACKUP_REQUIRE_ENCRYPTION=False):
+            archive = self._write_fake_archive()
+            try:
+                result = self.BackupService()._maybe_encrypt(archive)
+                self.assertEqual(result, archive)
+                self.assertTrue(os.path.exists(archive))
+            finally:
+                for path in (archive,):
+                    if os.path.exists(path):
+                        os.remove(path)
+                    parent = os.path.dirname(path)
+                    if os.path.isdir(parent):
+                        with contextlib.suppress(OSError):
+                            os.rmdir(parent)

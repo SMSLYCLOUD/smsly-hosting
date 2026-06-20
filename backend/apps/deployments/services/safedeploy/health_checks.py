@@ -1,9 +1,11 @@
-import requests
 import time
-from typing import Tuple
+
+import requests
+
 from apps.deployments.models_safedeploy import HealthCheckResult
 
-def perform_health_check(url: str) -> Tuple[bool, HealthCheckResult]:
+
+def perform_health_check(url: str) -> tuple[bool, HealthCheckResult]:
     start_time = time.time()
     try:
         response = requests.get(url, timeout=10)

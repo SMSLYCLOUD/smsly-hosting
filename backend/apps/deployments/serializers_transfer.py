@@ -1,4 +1,5 @@
 from rest_framework import serializers
+
 from .models_transfer import ServerTransfer
 
 
@@ -87,7 +88,7 @@ class ServerTransferCreateSerializer(serializers.Serializer):
         service_id = attrs.get('service_id')
         target_server_ip = attrs.get('target_server_ip')
         target_server_id = attrs.get('target_server_id')
-        source_server_ip = attrs.get('source_server_ip')
+        attrs.get('source_server_ip')
         source_server_id = attrs.get('source_server_id')
 
         if transfer_type == 'SERVICE' and not service_id:

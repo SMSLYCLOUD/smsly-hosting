@@ -5,37 +5,39 @@ SSHes into a fresh VPS, uploads and runs install.sh,
 then auto-registers the server with the API credentials.
 """
 
+import contextlib
+import hashlib
+import hmac as hmac_mod
 import io
 import ipaddress
+import json
 import logging
 import os
 import re
+import secrets
 import shlex
 import subprocess
 import time
-import hashlib
-import hmac as hmac_mod
-import json
-import secrets
-import requests
-from urllib.parse import urlparse
 from datetime import timedelta
+from urllib.parse import urlparse
 
-from django.conf import settings
-from django.utils import timezone
-
-from apps.deployments.utils import (
-    build_local_source_bundle as utils_build_bundle,
-    get_source_root_dir as utils_get_source_root,
-)
 import paramiko
+import requests
+from asgiref.sync import async_to_sync
 from celery import shared_task
 from celery.exceptions import SoftTimeLimitExceeded
 from channels.layers import get_channel_layer
-from asgiref.sync import async_to_sync
+from django.conf import settings
 from django.db import transaction
+from django.utils import timezone
 
 from apps.deployments.models_servers import ManagedServer
+from apps.deployments.utils import (
+    build_local_source_bundle as utils_build_bundle,
+)
+from apps.deployments.utils import (
+    get_source_root_dir as utils_get_source_root,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -299,7 +301,8 @@ def _restrict_ssh_key_to_master_ip(ssh, server: ManagedServer) -> None:
         pub_key_line = f"{key.get_name()} {key.get_base64()}"
     except Exception:
         # Fallback: generate via subprocess if paramiko key gen fails
-        import subprocess as _sp, tempfile as _tf
+        import subprocess as _sp
+        import tempfile as _tf
         _tmp = _tf.NamedTemporaryFile(delete=False, suffix='.key')
         _tmp.close()
         try:
@@ -311,10 +314,10 @@ def _restrict_ssh_key_to_master_ip(ssh, server: ManagedServer) -> None:
             with open(_tmp.name) as _pf:
                 priv_key_pem = _pf.read()
         finally:
-            try: os.unlink(_tmp.name)
-            except Exception: pass
-            try: os.unlink(f'{_tmp.name}.pub')
-            except Exception: pass
+            with contextlib.suppress(Exception):
+                os.unlink(_tmp.name)
+            with contextlib.suppress(Exception):
+                os.unlink(f'{_tmp.name}.pub')
 
     # Add to authorized_keys with IP restriction
     restricted_line = f'from="{master_ip}" {pub_key_line} smsly-self-heal\n'
@@ -386,14 +389,12 @@ def _harden_master_firewall(server: ManagedServer) -> None:
     # ── UFW rules for lite agent service ports ──────────────────────────
     if getattr(server, "is_lite_agent", False):
         for port in ("5432", "6379", "5672"):
-            try:
+            with contextlib.suppress(Exception):
                 subprocess.run(
                     ["ufw", "allow", "from", validated_ip,
                      "to", "any", "port", port, "proto", "tcp"],
                     capture_output=True, timeout=5,
                 )
-            except Exception:
-                pass
 
     # ── iptables DOCKER-USER rule for registry port 5000 ────────────────
     # Ensure chain exists (idempotent — ignore "already exists")
@@ -502,7 +503,7 @@ if kill -0 "$pid" 2>/dev/null; then
 fi
 rm -f "$lock"
 """
-    stdin, stdout, stderr = ssh.exec_command(command)
+    _stdin, stdout, stderr = ssh.exec_command(command)
     exit_code = stdout.channel.recv_exit_status()
     output = (
         stdout.read().decode("utf-8", errors="replace")
@@ -602,7 +603,7 @@ def _load_install_script():
 
     for path in candidates:
         if os.path.isfile(path):
-            with open(path, "r", encoding="utf-8") as install_file:
+            with open(path, encoding="utf-8") as install_file:
                 content = install_file.read()
                 _verify(content, f"local:{path}")
                 # Inline the lib/*.sh modules so the script is self-contained
@@ -616,7 +617,7 @@ def _load_install_script():
                         if lib_file in ("fresh.sh", "update.sh"):
                             continue
                         lib_path = os.path.join(lib_dir, lib_file)
-                        with open(lib_path, "r", encoding="utf-8") as lf:
+                        with open(lib_path, encoding="utf-8") as lf:
                             lib_content = lf.read()
                         inline_lines.append(
                             f"# --- lib/{lib_file} ---\n{lib_content}\n"
@@ -691,8 +692,9 @@ def _broadcast_provision_log(server: ManagedServer, message: str):
 def _append_log(server: ManagedServer, line: str):
     """Append a line to provision_logs and broadcast."""
     import re
-    from django.utils import timezone
     import uuid
+
+    from django.utils import timezone
     timestamp = timezone.now().strftime("%Y-%m-%d %H:%M:%S")
     correlation_id = getattr(server, "_provision_correlation_id", None)
     if not correlation_id:
@@ -725,7 +727,7 @@ def _get_ssh_client(server: ManagedServer) -> paramiko.SSHClient:
     else:
         client.set_missing_host_key_policy(paramiko.WarningPolicy())
         import warnings
-        warnings.warn("Strict SSH host key checking is disabled. This is insecure!")
+        warnings.warn("Strict SSH host key checking is disabled. This is insecure!", stacklevel=2)
 
 
     connect_kwargs = {
@@ -773,15 +775,12 @@ def _provision_node_db_credentials(server: ManagedServer):
     metadata = server.provider_metadata or {}
     existing_pass = metadata.get("node_db_password")
 
-    if existing_pass:
-        password = existing_pass
-    else:
-        password = secrets.token_urlsafe(24)
+    password = existing_pass or secrets.token_urlsafe(24)
 
     try:
         import psycopg2
-        from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
         from psycopg2 import sql
+        from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
         conn = psycopg2.connect(master_db_url)
         conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
@@ -1039,7 +1038,7 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
             try:
                 bundle_size = os.path.getsize(local_bundle_path)
                 _append_log(server, f"ℹ️ Local bundle size: {bundle_size / 1024 / 1024:.2f} MB")
-                
+
                 # Re-open SFTP for the bundle put
                 sftp_bundle = ssh.open_sftp()
                 try:
@@ -1072,10 +1071,8 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                 run_prefix = "cd /tmp/smsly-hosting-src && "
             finally:
                 if os.path.exists(local_bundle_path):
-                    try:
+                    with contextlib.suppress(OSError):
                         os.remove(local_bundle_path)
-                    except OSError:
-                        pass
 
         # -- Step 3: Run install script --
         _prepare_remote_install_lock(ssh, server)
@@ -1165,10 +1162,8 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
 
             elapsed = time.monotonic() - started_at
             if elapsed > PROVISION_TIMEOUT_SECONDS:
-                try:
+                with contextlib.suppress(Exception):
                     channel.close()
-                except Exception:
-                    pass
                 raise TimeoutError(
                     f"Install script timed out after {PROVISION_TIMEOUT_SECONDS} seconds"
                 )
@@ -1194,14 +1189,12 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                 raise RuntimeError(f"Install script failed with exit code {exit_code}")
 
         # Scrub installer artifacts (may contain injected tokens)
-        try:
+        with contextlib.suppress(Exception):
             ssh.exec_command(
                 "shred -u /tmp/smsly-install.sh /tmp/smsly-hosting-src.tar.gz "
                 "/tmp/smsly-hosting-src 2>/dev/null || "
                 "rm -rf /tmp/smsly-install.sh /tmp/smsly-hosting-src.tar.gz /tmp/smsly-hosting-src"
             )
-        except Exception:
-            pass
 
         # -- Step 4: Extract credentials --
         _append_log(server, "[cred] Reading credentials from server...")
@@ -1295,7 +1288,7 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
 
         remote_gateway_secret = ""
         try:
-            stdin, stdout, stderr = ssh.exec_command(
+            _stdin, stdout, stderr = ssh.exec_command(
                 "grep -E '^GATEWAY_SECRET=' /opt/smsly-hosting/.env "
                 "2>/dev/null | head -1"
             )
@@ -1525,10 +1518,10 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
         # Deploy docker-labels exporter on the newly provisioned node
         try:
             from apps.deployments.services.prometheus_targets import (
-                deploy_docker_labels_exporter_on_node,
-                deploy_promtail_on_node,
                 deploy_cadvisor_on_node,
+                deploy_docker_labels_exporter_on_node,
                 deploy_node_exporter_on_node,
+                deploy_promtail_on_node,
                 write_docker_labels_targets,
             )
             _append_log(server, "Deploying observability agents...")
@@ -1609,10 +1602,8 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
         _append_log(server, f"\n❌ Provisioning failed: {exc}")
     finally:
         if local_bundle_path and os.path.exists(local_bundle_path):
-            try:
+            with contextlib.suppress(OSError):
                 os.remove(local_bundle_path)
-            except OSError:
-                pass
         try:
             if ssh is not None:
                 ssh.close()

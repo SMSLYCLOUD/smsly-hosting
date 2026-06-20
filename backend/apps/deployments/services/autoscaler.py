@@ -9,9 +9,10 @@ compatibility with the existing test suite and the original simple
 service's autoscale_cpu_target" semantics.
 """
 import logging
+from datetime import timedelta
+
 from celery import shared_task
 from django.utils import timezone
-from datetime import timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +26,8 @@ def check_autoscale_task():
     cannot double-spawn replicas for the same service — the engine
     uses a per-service lock inside ``Reconciler``.
     """
-    from apps.deployments.models import Service
     from apps.autoscaler.engine.pipeline import analyze_and_apply
+    from apps.deployments.models import Service
 
     services = Service.objects.filter(max_replicas__gt=1)
 

@@ -1,13 +1,13 @@
-import subprocess
-import os
 import logging
-from typing import Tuple, Dict
+import os
+import subprocess
+
 from .redaction import redact_secrets
 
 logger = logging.getLogger(__name__)
 
 class CommandExecutor:
-    def run(self, cmd: str, cwd: str, env: Dict[str, str] = None, timeout: int = 120) -> Tuple[int, str, str]:
+    def run(self, cmd: str, cwd: str, env: dict[str, str] | None = None, timeout: int = 120) -> tuple[int, str, str]:
         import shlex
         run_env = os.environ.copy()
         if env:
@@ -15,10 +15,7 @@ class CommandExecutor:
         logger.info(f"Executing command in {cwd}: {cmd}")
 
         # Security: Do not use shell=True. Use shlex to safely split the command.
-        if isinstance(cmd, str):
-            cmd_list = shlex.split(cmd)
-        else:
-            cmd_list = cmd
+        cmd_list = shlex.split(cmd) if isinstance(cmd, str) else cmd
 
         try:
             result = subprocess.run(cmd_list, shell=False, cwd=cwd, env=run_env, capture_output=True, text=True, timeout=timeout)

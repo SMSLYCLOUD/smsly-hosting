@@ -1,14 +1,13 @@
 # pylint: disable=invalid-name
 """Resilience tests for AI intelligence report/anomaly endpoints."""
 
-from unittest.mock import patch
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.db import DatabaseError
-from rest_framework.test import APIClient
 from django.test import TestCase
-
+from rest_framework.test import APIClient
 
 User = get_user_model()
 

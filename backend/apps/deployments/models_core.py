@@ -1,15 +1,17 @@
 """Core models for Deployments app."""
+import contextlib
 import ipaddress
-import uuid
 import re
-from django.db import models
+import uuid
+
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
+from django.db import models
 from django.utils.translation import gettext_lazy as _
-from encrypted_model_fields.fields import EncryptedCharField
-from apps.cloud.models import CloudProvider
 from encrypted_model_fields.fields import EncryptedCharField, EncryptedTextField
+
+from apps.cloud.models import CloudProvider
 
 
 class ManagedServer(models.Model):
@@ -514,14 +516,14 @@ class Service(TimeStampedModel):
             self.slug = re.sub(r'[^a-z0-9]+', '-', self.name.lower()).strip('-')
             if not self.slug:
                 self.slug = str(self.id)[:8]
-            
+
             # Ensure uniqueness
             original_slug = self.slug
             counter = 1
             slug_exists = Service.objects.filter(slug=self.slug)
             if self.pk:
                 slug_exists = slug_exists.exclude(pk=self.pk)
-            
+
             while slug_exists.exists():
                 self.slug = f"{original_slug}-{counter}"
                 counter += 1
@@ -816,10 +818,8 @@ class Deployment(TimeStampedModel):
                 if self.pk:
                     locked = locked.exclude(pk=self.pk)
                 if self.remote_deployment_id:
-                    try:
+                    with contextlib.suppress(ValueError, TypeError):
                         locked = locked.exclude(pk=uuid.UUID(self.remote_deployment_id))
-                    except (ValueError, TypeError):
-                        pass
                 locked.update(status=self.Status.INACTIVE)
         super().save(*args, **kwargs)
 
@@ -930,6 +930,7 @@ class PlatformConfig(models.Model):
         during initial startup/migration phases.
         """
         import os
+
         from django.db import connection
 
         # Schema Guard: Check if the table exists before querying

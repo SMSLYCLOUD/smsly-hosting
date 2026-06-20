@@ -9,16 +9,13 @@ import re
 import secrets
 import tarfile
 import tempfile
-import hashlib
-from urllib.parse import urlparse
 
-from django.conf import settings
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
 
-def log_event(action: str, target: str = 'none', actor: str = 'system', metadata: dict = None):
+def log_event(action: str, target: str = 'none', actor: str = 'system', metadata: dict | None = None):
     """
     Exhaustive Audit Logging helper.
     Ensures consistent detailed event capture across the platform.
@@ -29,7 +26,7 @@ def log_event(action: str, target: str = 'none', actor: str = 'system', metadata
         meta = metadata or {}
         if 'timestamp' not in meta:
             meta['timestamp'] = timezone.now().isoformat()
-            
+
         return AuditLog.objects.create(
             actor=actor,
             action=action,
@@ -142,7 +139,7 @@ def estimate_resources_from_deps(source_dir: str) -> dict:
         path = os.path.join(source_dir, req_file)
         if os.path.isfile(path):
             try:
-                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                with open(path, encoding='utf-8', errors='ignore') as f:
                     for line in f:
                         pkg = (line.strip().split('==')[0].split('>=')[0]
                                .split('<=')[0].split('[')[0].split('#')[0]
@@ -165,7 +162,7 @@ def extract_dockerfile_arg_names(dockerfile_path: str) -> set[str]:
     """
     arg_names: set[str] = set()
     try:
-        with open(dockerfile_path, "r", encoding="utf-8") as fh:
+        with open(dockerfile_path, encoding="utf-8") as fh:
             for raw in fh:
                 line = raw.strip()
                 if not line or line.startswith("#"):
@@ -249,9 +246,10 @@ def get_github_oauth_token_for_user(user):
             refresh_token = getattr(token, "token_secret", None)
             if refresh_token:
                 try:
-                    from allauth.socialaccount.models import SocialApp
-                    import requests as http_requests
                     from datetime import timedelta
+
+                    import requests as http_requests
+                    from allauth.socialaccount.models import SocialApp
 
                     app = SocialApp.objects.filter(provider="github").first()
                     if app:
@@ -294,8 +292,8 @@ def broadcast_log(deployment, log_line):
     Safe to call from sync Celery tasks.
     """
     try:
-        from channels.layers import get_channel_layer
         from asgiref.sync import async_to_sync
+        from channels.layers import get_channel_layer
 
         channel_layer = get_channel_layer()
         if channel_layer:
@@ -316,8 +314,8 @@ def broadcast_log(deployment, log_line):
 def broadcast_status(deployment):
     """Broadcast deployment status change via WebSocket."""
     try:
-        from channels.layers import get_channel_layer
         from asgiref.sync import async_to_sync
+        from channels.layers import get_channel_layer
 
         channel_layer = get_channel_layer()
         if channel_layer:
@@ -341,8 +339,8 @@ def broadcast_status(deployment):
 def broadcast_pipeline(deployment):
     """Broadcast pipeline stages update via WebSocket."""
     try:
-        from channels.layers import get_channel_layer
         from asgiref.sync import async_to_sync
+        from channels.layers import get_channel_layer
 
         channel_layer = get_channel_layer()
         if channel_layer:
@@ -387,7 +385,6 @@ def update_stage(deployment, name, status, duration=None):
     broadcast_pipeline(deployment)
 
 
-import re
 
 def append_log(deployment, log_line):
     """
@@ -398,6 +395,7 @@ def append_log(deployment, log_line):
         return
 
     import uuid
+
     from django.utils import timezone
     correlation_id = getattr(deployment, "_deploy_correlation_id", None)
     if not correlation_id:
@@ -434,7 +432,7 @@ def get_default_env_value(key: str, scan_result: dict, service_name: str) -> tup
         return secrets.token_urlsafe(32), True
 
     if key_upper in ('DATABASE_URL', 'DB_URL', 'DB_URI', 'SQLALCHEMY_DATABASE_URI', 'SQLALCHEMY_DATABASE_URL'):
-        stack = scan_result.get('stack', '')
+        scan_result.get('stack', '')
         deps = scan_result.get('dependencies', [])
         dep_str = ' '.join(deps) if isinstance(deps, list) else str(deps)
         platform_db = os.environ.get('DATABASE_URL', 'postgresql://user:password@db:5432/dbname')
@@ -559,7 +557,6 @@ def resolve_running_container(service, deployment=None):
     Returns a docker Container object, or None if no running container is found.
     """
     from apps.cloud.docker_client import get_docker_client
-    from apps.deployments.models import Deployment
 
     if deployment is None:
         deployment = service.deployments.filter(status='ACTIVE').order_by('-created_at').first()

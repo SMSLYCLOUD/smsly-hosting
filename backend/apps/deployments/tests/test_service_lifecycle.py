@@ -9,14 +9,15 @@ Validates:
   - Deploy action on service endpoint
 """
 from unittest.mock import MagicMock, patch
+
 from django.contrib.auth.models import User
 from django.test import override_settings
 from django.utils import timezone
-from rest_framework.test import APITestCase
 from rest_framework import status as http_status
-from apps.deployments.models import Service, Deployment, ManagedServer
-from apps.cloud.models import CloudProvider
+from rest_framework.test import APITestCase
 
+from apps.cloud.models import CloudProvider
+from apps.deployments.models import Deployment, ManagedServer, Service
 
 TEST_CACHES = {
     "default": {

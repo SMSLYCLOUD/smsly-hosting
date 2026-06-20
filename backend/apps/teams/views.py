@@ -1,14 +1,16 @@
 """Views module."""
 import logging
 from smtplib import SMTPException
-from rest_framework import viewsets, permissions, status
+
+from django.conf import settings
+from django.contrib.auth.models import User
+from django.core.mail import send_mail
+from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from django.contrib.auth.models import User
+
 from .models import Team, TeamMember
-from .serializers import TeamSerializer, InviteMemberSerializer, TeamMemberSerializer
-from django.core.mail import send_mail
-from django.conf import settings
+from .serializers import InviteMemberSerializer, TeamMemberSerializer, TeamSerializer
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +60,7 @@ class TeamViewSet(viewsets.ModelViewSet):
         if serializer.is_valid():
             email = serializer.validated_data['email']
             role = serializer.validated_data['role']
-            
+
             # Find user by email.  Return 403 (not 404) to prevent
             # email enumeration — an attacker cannot distinguish
             # "no such account" from "no permission".
@@ -122,12 +124,12 @@ class TeamViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
         user_id = request.data.get('user_id')
-        
+
         try:
             member = TeamMember.objects.get(team=team, user__id=user_id)
             if member.role == TeamMember.Role.ADMIN and team.members.filter(role=TeamMember.Role.ADMIN).count() == 1:
                 return Response({'error': 'Cannot remove last admin'}, status=status.HTTP_400_BAD_REQUEST)
-            
+
             member.delete()
             return Response({'status': 'removed'})
         except TeamMember.DoesNotExist:

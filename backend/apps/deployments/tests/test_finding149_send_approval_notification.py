@@ -24,7 +24,6 @@ from apps.deployments.models import Service
 from apps.deployments.models_safedeploy import DeploymentApproval
 from apps.deployments.views_safedeploy import send_approval_notification
 
-
 User = get_user_model()
 
 

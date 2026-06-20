@@ -1,10 +1,15 @@
 import unittest
 from unittest.mock import patch
+
 from django.contrib.auth.models import User
 from django.test import TestCase
-from apps.deployments.services.safedeploy.django_adapter import DjangoAdapter
-from apps.deployments.services.safedeploy.branch_preview_manager import BranchPreviewManager
+
 from apps.deployments.models_safedeploy import MigrationValidation
+from apps.deployments.services.safedeploy.branch_preview_manager import (
+    BranchPreviewManager,
+)
+from apps.deployments.services.safedeploy.django_adapter import DjangoAdapter
+
 
 class DjangoAdapterTestCase(unittest.TestCase):
     def test_classify_migration_risk_critical(self):
@@ -34,7 +39,8 @@ class DjangoAdapterTestCase(unittest.TestCase):
         self.assertTrue(report['can_auto_deploy'])
         self.assertEqual(report['risk_score'], 0)
 
-from apps.deployments.services.safedeploy.redaction import redact_secrets
+from apps.deployments.services.safedeploy.redaction import redact_secrets  # noqa: E402
+
 
 class RedactionTestCase(unittest.TestCase):
     def test_redact_secrets(self):
@@ -48,11 +54,17 @@ class RedactionTestCase(unittest.TestCase):
         self.assertIn("[REDACTED]", redacted2)
         self.assertNotIn("sk-test-12345", redacted2)
 
-from apps.deployments.services.safedeploy.postgres_snapshot_manager import PostgresSnapshotManager
-from apps.deployments.models_core import Service, EnvironmentVariable, Deployment
-from apps.deployments.models_safedeploy import PreviewEnvironment
-from apps.deployments.tasks_safedeploy import _make_clone_database_name, provision_preview_service_job
-from apps.cloud.models import CloudProvider
+from apps.cloud.models import CloudProvider  # noqa: E402
+from apps.deployments.models_core import Deployment, EnvironmentVariable, Service  # noqa: E402
+from apps.deployments.models_safedeploy import PreviewEnvironment  # noqa: E402
+from apps.deployments.services.safedeploy.postgres_snapshot_manager import (  # noqa: E402
+    PostgresSnapshotManager,
+)
+from apps.deployments.tasks_safedeploy import (  # noqa: E402
+    _make_clone_database_name,
+    provision_preview_service_job,
+)
+
 
 class PostgresSnapshotManagerTestCase(unittest.TestCase):
     @patch('subprocess.run')

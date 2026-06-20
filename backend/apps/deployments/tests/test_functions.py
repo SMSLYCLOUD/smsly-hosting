@@ -1,9 +1,11 @@
-from django.test import TestCase
-import tempfile
 import os
 import shutil
-from unittest.mock import patch, MagicMock
+import tempfile
+
+from django.test import TestCase
+
 from apps.cloud.services.function_provisioner import FunctionProvisioner
+
 
 class MockService:
     def __init__(self, runtime, code):
@@ -26,12 +28,12 @@ class FunctionProvisionerTest(TestCase):
         self.assertTrue(os.path.exists(os.path.join(self.build_dir, "server.js")))
         self.assertTrue(os.path.exists(os.path.join(self.build_dir, "package.json")))
 
-        with open(os.path.join(self.build_dir, "Dockerfile"), "r") as f:
+        with open(os.path.join(self.build_dir, "Dockerfile")) as f:
             content = f.read()
             self.assertIn("USER node", content) # Security check for non-root user
             self.assertNotIn("npm install", content)
 
-        with open(os.path.join(self.build_dir, "server.js"), "r") as f:
+        with open(os.path.join(self.build_dir, "server.js")) as f:
             content = f.read()
             self.assertIn("/health", content)
             self.assertNotIn("require('express')", content)
@@ -43,12 +45,12 @@ class FunctionProvisionerTest(TestCase):
         self.assertTrue(os.path.exists(os.path.join(self.build_dir, "Dockerfile")))
         self.assertTrue(os.path.exists(os.path.join(self.build_dir, "main.py")))
         self.assertTrue(os.path.exists(os.path.join(self.build_dir, "server.py")))
-        with open(os.path.join(self.build_dir, "Dockerfile"), "r") as f:
+        with open(os.path.join(self.build_dir, "Dockerfile")) as f:
             content = f.read()
             self.assertIn("USER function_user", content) # Security check for non-root user
             self.assertNotIn("pip install", content)
 
-        with open(os.path.join(self.build_dir, "server.py"), "r") as f:
+        with open(os.path.join(self.build_dir, "server.py")) as f:
             content = f.read()
             self.assertIn("/health", content)
             self.assertIn("ThreadingHTTPServer", content)

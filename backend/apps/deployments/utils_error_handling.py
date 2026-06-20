@@ -5,8 +5,8 @@ This module provides structured error responses and consistent error formatting
 across all API endpoints and WebSocket consumers.
 """
 import logging
-from typing import Dict, Any, Optional, Union
 from enum import Enum
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -34,14 +34,14 @@ class ErrorSeverity(Enum):
 
 class StandardizedError(Exception):
     """Base class for standardized errors."""
-    
+
     def __init__(
         self,
         message: str,
         error_type: ErrorType,
         severity: ErrorSeverity = ErrorSeverity.MEDIUM,
-        details: Optional[Dict[str, Any]] = None,
-        user_message: Optional[str] = None
+        details: dict[str, Any] | None = None,
+        user_message: str | None = None
     ):
         self.message = message
         self.error_type = error_type
@@ -53,13 +53,13 @@ class StandardizedError(Exception):
 
 class ValidationError(StandardizedError):
     """Validation error with structured details."""
-    
+
     def __init__(
         self,
         message: str,
-        field: Optional[str] = None,
-        details: Optional[Dict[str, Any]] = None,
-        user_message: Optional[str] = None
+        field: str | None = None,
+        details: dict[str, Any] | None = None,
+        user_message: str | None = None
     ):
         super().__init__(
             message=message,
@@ -73,13 +73,13 @@ class ValidationError(StandardizedError):
 
 class AuthenticationError(StandardizedError):
     """Authentication error with specific context."""
-    
+
     def __init__(
         self,
         message: str,
-        token_info: Optional[str] = None,
-        details: Optional[Dict[str, Any]] = None,
-        user_message: Optional[str] = None
+        token_info: str | None = None,
+        details: dict[str, Any] | None = None,
+        user_message: str | None = None
     ):
         super().__init__(
             message=message,
@@ -93,14 +93,14 @@ class AuthenticationError(StandardizedError):
 
 class AuthorizationError(StandardizedError):
     """Authorization error with permission context."""
-    
+
     def __init__(
         self,
         message: str,
-        required_permission: Optional[str] = None,
-        user_id: Optional[int] = None,
-        details: Optional[Dict[str, Any]] = None,
-        user_message: Optional[str] = None
+        required_permission: str | None = None,
+        user_id: int | None = None,
+        details: dict[str, Any] | None = None,
+        user_message: str | None = None
     ):
         super().__init__(
             message=message,
@@ -115,15 +115,15 @@ class AuthorizationError(StandardizedError):
 
 class ExternalServiceError(StandardizedError):
     """Error when external services fail."""
-    
+
     def __init__(
         self,
         message: str,
         service_name: str,
-        service_error: Optional[str] = None,
-        status_code: Optional[int] = None,
-        details: Optional[Dict[str, Any]] = None,
-        user_message: Optional[str] = None
+        service_error: str | None = None,
+        status_code: int | None = None,
+        details: dict[str, Any] | None = None,
+        user_message: str | None = None
     ):
         super().__init__(
             message=message,
@@ -138,18 +138,18 @@ class ExternalServiceError(StandardizedError):
 
 
 def create_error_response(
-    error: Union[StandardizedError, Exception],
+    error: StandardizedError | Exception,
     include_details: bool = False,
-    request_id: Optional[str] = None
-) -> Dict[str, Any]:
+    request_id: str | None = None
+) -> dict[str, Any]:
     """
     Create a standardized error response dictionary.
-    
+
     Args:
         error: The error to format
         include_details: Whether to include technical details
         request_id: Optional request ID for tracking
-        
+
     Returns:
         Dict with standardized error structure
     """
@@ -163,10 +163,10 @@ def create_error_response(
             },
             "request_id": request_id
         }
-        
+
         if include_details and error.details:
             response["error"]["details"] = error.details
-        
+
         return response
     else:
         # Handle generic exceptions
@@ -183,12 +183,12 @@ def create_error_response(
 
 
 def log_error(
-    error: Union[StandardizedError, Exception],
-    context: Optional[Dict[str, Any]] = None
+    error: StandardizedError | Exception,
+    context: dict[str, Any] | None = None
 ) -> None:
     """
     Log errors with structured context.
-    
+
     Args:
         error: The error to log
         context: Additional context information
@@ -198,13 +198,13 @@ def log_error(
         "severity": error.severity.value if isinstance(error, StandardizedError) else "high",
         "message": str(error),
     }
-    
+
     if isinstance(error, StandardizedError) and error.details:
         log_data["details"] = error.details
-    
+
     if context:
         log_data["context"] = context
-    
+
     if isinstance(error, StandardizedError) and error.severity == ErrorSeverity.CRITICAL:
         logger.critical(f"Critical error: {log_data}")
     elif isinstance(error, StandardizedError) and error.severity == ErrorSeverity.HIGH:
@@ -218,7 +218,7 @@ def log_error(
 def handle_api_error(func):
     """
     Decorator to handle API errors consistently.
-    
+
     Wraps API view functions to catch and format errors consistently.
     """
     def wrapper(*args, **kwargs):
@@ -226,11 +226,11 @@ def handle_api_error(func):
             return func(*args, **kwargs)
         except StandardizedError as e:
             log_error(e)
-            from rest_framework.response import Response
             from rest_framework import status
-            
+            from rest_framework.response import Response
+
             error_response = create_error_response(e)
-            
+
             # Set appropriate HTTP status code based on error type
             if e.error_type == ErrorType.VALIDATION_ERROR:
                 status_code = status.HTTP_400_BAD_REQUEST
@@ -244,14 +244,14 @@ def handle_api_error(func):
                 status_code = status.HTTP_429_TOO_MANY_REQUESTS
             else:
                 status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
-            
+
             return Response(error_response, status=status_code)
         except Exception as e:
             logger.exception(f"Unexpected error in API endpoint: {e}")
-            from rest_framework.response import Response
             from rest_framework import status
-            
+            from rest_framework.response import Response
+
             error_response = create_error_response(e)
             return Response(error_response, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    
+
     return wrapper

@@ -21,24 +21,20 @@ import json
 import logging
 import os
 import re
-import subprocess
 import shutil
+import subprocess
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, List
+from typing import Any
 
 import backoff
 from celery import shared_task
 from django.conf import settings
-from django.utils import timezone
 
-from apps.core.auth import APIKeyAuthentication
 from apps.deployments.models import Deployment
 from apps.deployments.tasks_deploy import enqueue_smart_deploy_task
-from apps.intelligence.analyzer import LogAnalyzer
-from apps.intelligence.cost import CostAdvisor
 from apps.intelligence.models import AIProviderSettings
-from apps.intelligence.providers import ask_with_fallback, get_configured_providers
+from apps.intelligence.providers import ask_with_fallback
 from apps.intelligence.views import _json_safe
 from apps.scripts.github import GitHubClient
 
@@ -54,11 +50,11 @@ class FixResult:
     """Result of a Jules auto-fix attempt."""
 
     success: bool
-    pr_url: Optional[str] = None
-    pr_number: Optional[int] = None
-    fix_description: Optional[str] = None
-    error: Optional[str] = None
-    deployment_id: Optional[str] = None
+    pr_url: str | None = None
+    pr_number: int | None = None
+    fix_description: str | None = None
+    error: str | None = None
+    deployment_id: str | None = None
 
 
 def _collect_failure_context(deployment_id: str, logs: str, service=None) -> str:
@@ -121,7 +117,7 @@ def _ask_jules_for_fix(prompt: str) -> str:
         raise
 
 
-def _parse_jules_response(raw: str) -> Dict[str, Any]:
+def _parse_jules_response(raw: str) -> dict[str, Any]:
     """Extract and validate the JSON fix payload from Jules response.
 
     The expected structure is:
@@ -175,8 +171,8 @@ def _parse_jules_response(raw: str) -> Dict[str, Any]:
 
 
 def _apply_fix_to_repo(
-    repo_path: Optional[str],
-    files_to_change: Dict[str, str],
+    repo_path: str | None,
+    files_to_change: dict[str, str],
     branch_name: str,
     repo_url: str = "",
 ) -> bool:
@@ -210,7 +206,7 @@ def _apply_fix_to_repo(
     try:
         os.chdir(repo_path)
 
-        def _run_git(args: List[str]) -> subprocess.CompletedProcess:
+        def _run_git(args: list[str]) -> subprocess.CompletedProcess:
             result = subprocess.run(
                 ["git", *args],
                 check=False,
@@ -254,7 +250,7 @@ def _apply_fix_to_repo(
         _run_git([
             "commit",
             "-m",
-            f"fix: auto-fix deployment failure via Jules AI",
+            "fix: auto-fix deployment failure via Jules AI",
         ])
         _run_git(["push", "origin", branch_name])
 
@@ -280,7 +276,7 @@ def _create_pr(
     branch_name: str,
     title: str,
     body: str,
-) -> Optional[str]:
+) -> str | None:
     """Create a Pull Request on GitHub."""
     try:
         pr = github_client.create_pull_request(
@@ -309,7 +305,7 @@ def jules_fix_deployment_failure(
     logs: str,
     repo_path: str,
     repo_url: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     React to a deployment failure, use Jules to fix it, open a PR.
 
@@ -362,7 +358,7 @@ def jules_fix_deployment_failure(
             result.pr_url = pr_url
             result.fix_description = fix_description
             logger.info("PR created: %s", pr_url)
-            
+
             # Auto-redeploy from the PR branch if enabled (global toggle with per-service override)
             settings_obj = AIProviderSettings.get_solo()
             per_service_override = deployment.service.environment_variables.filter(
@@ -384,7 +380,7 @@ def jules_fix_deployment_failure(
                         commit_message=f"[auto-fix] Deploying Jules fix from branch {branch_name}",
                         status=Deployment.Status.QUEUED,
                     )
-                    
+
                     # Enqueue deployment (skip_review=True ensures it bypasses the manual review pause)
                     provider = deployment.service.provider or getattr(deployment, 'target_server', None)
                     provider_id = provider.id if provider else None

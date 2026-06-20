@@ -1,6 +1,5 @@
 # pylint: disable=invalid-name
 """Tests for Issue 104: AuditLogViewSet.get_queryset includes user-service logs."""
-import uuid
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -8,7 +7,6 @@ from rest_framework.test import APIClient
 
 from apps.deployments.models import Service
 from apps.deployments.models_audit import AuditLog
-
 
 User = get_user_model()
 

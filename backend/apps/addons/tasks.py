@@ -1,6 +1,9 @@
 from celery import shared_task
+
 from apps.deployments.models_addons import Addon
+
 from .services.maintenance import AddonMaintenanceService
+
 
 @shared_task
 def addon_health_check_all():

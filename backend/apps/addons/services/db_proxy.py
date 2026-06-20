@@ -1,10 +1,11 @@
+import contextlib
 import logging
-import json
 import re
+
 import sqlparse
-from sqlparse.sql import Statement
-from django.core.cache import cache
 from apps.deployments.models_addons import Addon
+from django.core.cache import cache
+from sqlparse.sql import Statement
 
 logger = logging.getLogger(__name__)
 
@@ -192,10 +193,8 @@ class DatabaseProxy:
             return self._execute_readonly(cleaned_sql, limit)
         finally:
             if lock_key is not None:
-                try:
+                with contextlib.suppress(Exception):
                     cache.delete(lock_key)
-                except Exception:
-                    pass
 
     def _execute_readonly(self, sql: str, limit: int) -> dict:
         """Open a connection, force READ ONLY at the SQL level, and run ``sql``."""
@@ -233,10 +232,8 @@ class DatabaseProxy:
                 conn.rollback()
             except Exception:
                 logger.warning("rollback failed on db proxy connection", exc_info=True)
-            try:
+            with contextlib.suppress(Exception):
                 conn.close()
-            except Exception:
-                pass
 
     # ── Redis ──
     def redis_info(self) -> dict:

@@ -2,10 +2,11 @@
 import os
 import re
 import sys
-from pathlib import Path
-from decouple import config, Csv
-import dj_database_url
 import warnings
+from pathlib import Path
+
+import dj_database_url
+from decouple import Csv, config
 
 warnings.filterwarnings("ignore", category=UserWarning, module="dj_rest_auth.registration.serializers")
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -24,7 +25,7 @@ def _env_bool(name: str, default: str = 'False') -> bool:
     return raw in ('1', 'true', 'yes', 'on')
 
 
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import ImproperlyConfigured  # noqa: E402
 
 _SECRET_KEY_RAW = str(config('SECRET_KEY', default='')).strip()
 _FIELD_ENCRYPTION_KEY_RAW = str(config('FIELD_ENCRYPTION_KEY', default='')).strip()
@@ -218,8 +219,8 @@ def _validate_registry_url():
     scheme is present. The scheme is then validated and the host is
     checked against the platform allowlist.
     """
-    from urllib.parse import urlparse
     import ipaddress
+    from urllib.parse import urlparse
 
     url = os.environ.get('CONTAINER_REGISTRY_URL', '').strip()
     if not url:
@@ -265,13 +266,12 @@ if IS_TESTING:
     GITHUB_WEBHOOK_SECRET = _GITHUB_WEBHOOK_SECRET_RAW or 'test-github-webhook-secret'
 elif DEBUG:
     GITHUB_WEBHOOK_SECRET = _GITHUB_WEBHOOK_SECRET_RAW or 'replace_me_with_random_string'
+elif _GITHUB_WEBHOOK_SECRET_RAW:
+    GITHUB_WEBHOOK_SECRET = _GITHUB_WEBHOOK_SECRET_RAW
 else:
-    if _GITHUB_WEBHOOK_SECRET_RAW:
-        GITHUB_WEBHOOK_SECRET = _GITHUB_WEBHOOK_SECRET_RAW
-    else:
-        import secrets as _secrets
-        print("[settings] ERROR: GITHUB_WEBHOOK_SECRET missing in production. Generating random value (webhooks will break until this is set explicitly).")
-        GITHUB_WEBHOOK_SECRET = _secrets.token_hex(64)
+    import secrets as _secrets
+    print("[settings] ERROR: GITHUB_WEBHOOK_SECRET missing in production. Generating random value (webhooks will break until this is set explicitly).")
+    GITHUB_WEBHOOK_SECRET = _secrets.token_hex(64)
 # SECURITY: No wildcard default - prevents host header injection
 # (DOMAIN moved to top of file)
 _DEFAULT_TUNNEL_BASE_DOMAIN = 'tunnel.localhost'
@@ -427,8 +427,9 @@ _skip_platform_sync = (
 )
 if not _skip_platform_sync:
     try:
-        import psycopg2
         from urllib.parse import urlparse
+
+        import psycopg2
 
         db_url = _resolve_db_url()
         if db_url:
@@ -946,7 +947,6 @@ REST_FRAMEWORK = {
         # so the throttle resets quickly during incident
         # response.
         'server_health': '30/minute',
-        'server_run_command': '10/minute',
         # SECURITY (Batch I): topology N+1 query cap.
         'topology_list': '30/minute',
         # SECURITY: contact form anti-spam.  Anonymous POSTs.

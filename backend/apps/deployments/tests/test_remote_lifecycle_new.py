@@ -1,7 +1,14 @@
-from django.test import TestCase
-from unittest.mock import patch, MagicMock
-from apps.deployments.models import ManagedServer, Project, Service, Deployment, ServerTransfer
+
 from django.contrib.auth import get_user_model
+from django.test import TestCase
+
+from apps.deployments.models import (
+    Deployment,
+    ManagedServer,
+    Project,
+    ServerTransfer,
+    Service,
+)
 
 User = get_user_model()
 
@@ -24,7 +31,7 @@ class RemoteLifecycleTests(TestCase):
         self.assertEqual(deployment.status, Deployment.Status.ACTIVE)
 
     def test_remote_transfer_lifecycle(self):
-        target_server = ManagedServer.objects.create(name='Target Node', owner=self.user, private_ip='10.0.0.3', project=self.project)
+        ManagedServer.objects.create(name='Target Node', owner=self.user, private_ip='10.0.0.3', project=self.project)
         transfer = ServerTransfer.objects.create(
             owner=self.user,
             source_server_ip='10.0.0.2',

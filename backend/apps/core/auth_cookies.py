@@ -22,11 +22,9 @@ This module is also consumed by DRF's auth class
 middleware (``apps.core.middleware.security.SecurityMiddleware``) which
 treats the cookie as a valid auth credential and skips HMAC enforcement.
 """
-from typing import Optional, Tuple
 
 from django.conf import settings
 from django.http import HttpResponse
-
 
 # 30 days — matches the lifetime the rest of the platform uses for long-lived
 # auth tokens.
@@ -93,7 +91,7 @@ def delete_auth_cookie(response: HttpResponse) -> None:
     response.delete_cookie(PROD_COOKIE_NAME, path="/")
 
 
-def get_cookie_token(request) -> Optional[str]:
+def get_cookie_token(request) -> str | None:
     """Read the auth token from the HttpOnly cookie on the request.
 
     Returns the production cookie value first (if present), then falls back

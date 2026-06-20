@@ -1,6 +1,8 @@
 from django.test import TestCase
-from apps.deployments.services.ecosystem_graph import build_ecosystem_graph
+
 from apps.deployments.services.ecosystem_env import EcosystemEnvResolver, is_weak_value
+from apps.deployments.services.ecosystem_graph import build_ecosystem_graph
+
 
 class TestEcosystemEnvSafe(TestCase):
     def test_weak_values(self):
@@ -30,7 +32,7 @@ class TestEcosystemEnvSafe(TestCase):
         """
         graph = build_ecosystem_graph(manifest_yaml)
         resolver = EcosystemEnvResolver(graph)
-        success, envs, errors = resolver.validate_and_resolve()
+        success, _envs, errors = resolver.validate_and_resolve()
 
         self.assertFalse(success)
         self.assertIn("Service 'api' missing external required env 'EXTERNAL_KEY'", errors)

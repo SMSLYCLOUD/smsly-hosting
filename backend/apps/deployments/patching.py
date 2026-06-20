@@ -2,9 +2,10 @@
 Runtime patching for Django settings.
 Allows dynamic domain whitelisting and SITE_URL updates from PlatformConfig.
 """
-import re
 import logging
+import re
 import threading
+
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
@@ -28,8 +29,10 @@ def patch_runtime_settings():
     try:
         logger.debug("[patch] Attempting to sync settings from PlatformConfig...")
         import warnings
-        from apps.deployments.models import PlatformConfig
+
         from django.contrib.sites.models import Site
+
+        from apps.deployments.models import PlatformConfig
 
         # Suppress Django's "Accessing the database during app initialization"
         # warning — this DB access is intentional and required so ALLOWED_HOSTS
@@ -37,28 +40,28 @@ def patch_runtime_settings():
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", message="Accessing the database during app initialization")
             pc = PlatformConfig.load()
-        
+
         # 1. Determine Effective Domain/Protocol
         effective_domain = pc.domain or getattr(settings, 'DOMAIN', 'localhost')
         effective_use_ssl = pc.use_ssl if pc.domain else (not getattr(settings, 'DEBUG', False))
-        
+
         logger.debug("[patch] Effective domain: %s (SSL: %s)", effective_domain, effective_use_ssl)
 
         # 2. Patch ALLOWED_HOSTS
         if effective_domain and effective_domain not in settings.ALLOWED_HOSTS:
             settings.ALLOWED_HOSTS.append(effective_domain)
             logger.info("[patch] Added %s to ALLOWED_HOSTS", effective_domain)
-            
+
         # 3. Patch Security Origins
         is_ip = bool(re.fullmatch(r'\d{1,3}(?:\.\d{1,3}){3}', effective_domain))
         scheme = 'http' if is_ip else ('https' if (effective_use_ssl and not getattr(settings, 'DEBUG', False)) else 'http')
         origin = f'{scheme}://{effective_domain}'
-        
+
         if origin not in settings.CSRF_TRUSTED_ORIGINS:
             settings.CSRF_TRUSTED_ORIGINS.append(origin)
         if origin not in settings.CORS_ALLOWED_ORIGINS:
             settings.CORS_ALLOWED_ORIGINS.append(origin)
-            
+
         # 4. Patch SITE_URL and allauth protocol
         settings.SITE_URL = origin
         settings.ACCOUNT_DEFAULT_HTTP_PROTOCOL = scheme
@@ -93,7 +96,9 @@ def patch_runtime_settings():
 
         # Write initial Prometheus target files for docker-labels
         try:
-            from apps.deployments.services.prometheus_targets import write_docker_labels_targets
+            from apps.deployments.services.prometheus_targets import (
+                write_docker_labels_targets,
+            )
             write_docker_labels_targets()
         except Exception as exc:
             logger.debug("[patch] Prometheus target init skipped: %s", exc)
@@ -109,7 +114,7 @@ def is_valid_host(host_str: str) -> bool:
     """
     if not host_str:
         return False
-        
+
     domain = host_str.strip().lower()
 
     from django.conf import settings
@@ -141,23 +146,24 @@ def is_valid_host(host_str: str) -> bool:
             return True
         if not cfg.domain:
             # Chicken-and-egg fix: If the database is completely empty (no domain set),
-            # we must trust the incoming host (which Caddy already allowed) so the user 
+            # we must trust the incoming host (which Caddy already allowed) so the user
             # can access the UI to run the initial setup.
             return True
         if cfg.domain and domain == cfg.domain.strip().lower():
             return True
     except Exception:
         pass
-        
+
     # 2. Managed Servers (Nodes)
     try:
-        from apps.deployments.models_core import ManagedServer
         from django.db.models import Q
+
+        from apps.deployments.models_core import ManagedServer
         if ManagedServer.objects.filter(Q(host=domain) | Q(private_ip=domain)).exists():
             return True
     except Exception:
         pass
-        
+
     # 3. Services (Public Domain)
     try:
         from apps.deployments.models import Service
@@ -165,11 +171,12 @@ def is_valid_host(host_str: str) -> bool:
             return True
     except Exception:
         pass
-        
+
     # 4. Verified Custom Domains
     try:
-        from apps.domains.models import Domain, DomainStatus
         from django.db.models import Q
+
+        from apps.domains.models import Domain, DomainStatus
         routable = Domain.objects.filter(
             domain_name=domain,
             status__in=[DomainStatus.ACTIVE, DomainStatus.DNS_VERIFIED, DomainStatus.SSL_PROVISIONING]
@@ -178,7 +185,7 @@ def is_valid_host(host_str: str) -> bool:
             return True
     except Exception:
         pass
-        
+
     # 5. Addons
     try:
         from apps.deployments.models_addons import Addon
@@ -186,5 +193,5 @@ def is_valid_host(host_str: str) -> bool:
             return True
     except Exception:
         pass
-        
+
     return False

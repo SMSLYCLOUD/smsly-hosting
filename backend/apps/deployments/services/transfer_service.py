@@ -1,26 +1,24 @@
-import logging
-import os
-import json
-import secrets
-import time
-import tempfile
-import requests
-import shlex
-import glob
-import socket
+import contextlib
 import hashlib
 import hmac
+import json
+import logging
+import os
 import re
+import secrets
+import shlex
+import socket
+import tempfile
+import time
 from datetime import timedelta
 
+import requests
 from django.conf import settings
-from django.utils import timezone
-from django.db import transaction
 from django.db.models import Q
+from django.utils import timezone
 
+from ..models import PlatformConfig
 from .backup_service import BackupService, UnknownBackupKeyIdError
-from ..models import Service, PlatformConfig, EnvironmentVariable
-from ..models_storage import Volume
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +75,7 @@ def _scrub_env_for_transfer(path: str) -> str:
     "operator-must-set" so the install UI can prompt the user.
     """
     scrubbed_lines = []
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
+    with open(path, encoding="utf-8", errors="replace") as f:
         for raw_line in f:
             line = raw_line.rstrip("\n")
             stripped = line.lstrip()
@@ -170,6 +168,7 @@ def _redact_transfer_text(text: str) -> str:
 class ServerTransferService:
     def __init__(self, transfer):
         self.transfer = transfer
+        self.ssh = None
         self._uploaded_remote_backup_path = None
 
     def _log(self, message):
@@ -208,7 +207,7 @@ class ServerTransferService:
 
     def _node_api_request(self, action, method='POST', json=None, params=None, timeout=120):
         """Call an incoming REST endpoint on the target node.
-        
+
         Replaces SSH-based operations. Uses HMAC V2 auth.
         The node runs the same Django codebase, so these endpoints
         exist on every backend instance.
@@ -327,17 +326,17 @@ class ServerTransferService:
 
             from .remote_orchestrator import RemoteOrchestrator
             orch = RemoteOrchestrator(server)
-            
+
             payload = {
                 'source_ip': self.transfer.source_server_ip,
                 'target_ip': self.transfer.target_server_ip,
                 'transfer_type': self.transfer.transfer_type,
                 'service_name': self.transfer.service.name if self.transfer.service else None
             }
-            
+
             # RemoteOrchestrator._request handles Token/HMAC auth and auto-auth via SSH
             resp = orch._request("POST", path, payload=payload, timeout=10)
-            
+
             if resp and resp.status_code in (200, 201):
                 self._log("Target dashboard synchronized successfully.")
             else:
@@ -348,7 +347,7 @@ class ServerTransferService:
 
     def execute(self):
         """Run transfer pipeline using REST API calls to the target node.
-        
+
         All operations use the node's Django REST API with HMAC V2
         authentication — no SSH credentials needed.
         """
@@ -493,10 +492,8 @@ class ServerTransferService:
             with os.fdopen(fd, 'w') as f:
                 json.dump(bundle, f)
         except Exception:
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(path)
-            except OSError:
-                pass
             raise
         return path
 
@@ -758,9 +755,9 @@ print("PRE_TRANSFER_ENV_JSON_END")
             return
 
         service_name = _safe_service_name(self.transfer.service.name)
-        safe_backend = shlex.quote(backend_container)
+        shlex.quote(backend_container)
         script_path = f"/tmp/transfer_revert_env_{self.transfer.id}.py"
-        remote_safe_script = shlex.quote(script_path)
+        shlex.quote(script_path)
 
         payload = {
             'service_name': service_name,
@@ -1070,15 +1067,15 @@ def wait_for_database():
 def run_restore():
     wait_for_database()
     User = get_user_model()
-    owner_email = {repr(owner_email)}
-    
+    owner_email = {owner_email!r}
+
     # Precise owner matching: find user by email, fallback to superuser
     target_user = None
     if owner_email:
         target_user = User.objects.filter(email=owner_email).first()
         if target_user:
             print(f"Found matching owner on target: {{owner_email}}")
-            
+
     if not target_user:
         target_user = User.objects.filter(is_superuser=True).first() or User.objects.first()
         if target_user:
@@ -1087,11 +1084,11 @@ def run_restore():
     if not target_user:
         print("ERROR: No suitable user found on target server to own the restored service.", file=sys.stderr)
         sys.exit(1)
-        
+
     try:
         svc = BackupService()
         # Restore and capture result
-        svc._restore_service_from_file({repr(backup_path)}, owner=target_user)
+        svc._restore_service_from_file({backup_path!r}, owner=target_user)
         print("SUCCESS")
     except Exception as e:
         print(f"RESTORE_FAILED: {{str(e)}}", file=sys.stderr)
@@ -1148,8 +1145,8 @@ if __name__ == '__main__':
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,62}", db_name):
             raise RuntimeError("Unsafe POSTGRES_DB value in target .env.")
 
-        from psycopg2 import sql as pg_sql
         from django.db import connection as _django_db_connection
+        from psycopg2 import sql as pg_sql
 
         # Build the SQL with psycopg2.sql.Identifier so the database
         # identifier is quoted by the driver rather than via shell
@@ -1306,7 +1303,7 @@ if os.path.exists(services_dir):
         try:
             parsed = json.loads(bundle)
             key_id = parsed.get('key_id', '')
-            label = parsed.get('source_label', 'migrated-from-unknown')
+            parsed.get('source_label', 'migrated-from-unknown')
         except Exception as exc:
             self._log(f"Could not parse key export bundle: {exc} — skipping import.")
             return
@@ -1317,7 +1314,7 @@ if os.path.exists(services_dir):
         if not key_material:
             self._log("Key export bundle missing key_material — skipping import.")
             return
-        import_script = f"""
+        import_script = """
 import os
 import sys
 import json
@@ -1342,7 +1339,7 @@ def run():
         with open(KEY_EXPORT_PATH) as f:
             bundle = json.load(f)
     except Exception as exc:
-        print(f'ERROR: failed to read key export: {{exc}}', file=sys.stderr)
+        print(f'ERROR: failed to read key export: {exc}', file=sys.stderr)
         sys.exit(1)
     key_id = bundle.get('key_id', '')
     key_material = bundle.get('key_material', '')
@@ -1356,9 +1353,9 @@ def run():
             key_material=key_material,
             label=label,
         )
-        print(f"IMPORTED key_id={{result['key_id']}} fingerprint={{result['fingerprint']}} created={{result['created']}}")
+        print(f"IMPORTED key_id={result['key_id']} fingerprint={result['fingerprint']} created={result['created']}")
     except Exception as exc:
-        print(f'ERROR: failed to import key: {{exc}}', file=sys.stderr)
+        print(f'ERROR: failed to import key: {exc}', file=sys.stderr)
         import traceback
         traceback.print_exc()
         sys.exit(1)
@@ -1627,7 +1624,7 @@ if __name__ == '__main__':
         domain to the remote node via WireGuard mesh instead of the
         local Traefik instance.
         """
-        from services.caddy_manager import generate_caddyfile, apply_caddyfile
+        from services.caddy_manager import apply_caddyfile, generate_caddyfile
         config = PlatformConfig.load()
         content = generate_caddyfile(config)
         cf_token = (getattr(config, "cloudflare_api_token", "") or "").strip()
@@ -1674,9 +1671,7 @@ if __name__ == '__main__':
 
                 # ── Cross-platform migration: remap domain to target platform ──
                 domain_fields = self._remap_service_domain_for_target(target_server)
-                update_fields = [
-                    'server', 'active_target_type', 'active_host_ip', 'active_runtime_id',
-                ] + domain_fields
+                update_fields = ['server', 'active_target_type', 'active_host_ip', 'active_runtime_id', *domain_fields]
 
                 self.transfer.service.save(update_fields=update_fields)
 

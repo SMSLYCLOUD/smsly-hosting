@@ -1,7 +1,9 @@
-from rest_framework import permissions
 import logging
-from .models_safedeploy import DeploymentApproval, MigrationValidation
+
+from rest_framework import permissions
+
 from .models_core import Service
+from .models_safedeploy import DeploymentApproval, MigrationValidation
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +48,7 @@ class CanManagePreviews(permissions.BasePermission):
         if service.owner == user:
             return True
         team = getattr(service.project, 'team', None)
-        if team and team.members.filter(user=user).exists():
-            return True
-        return False
+        return bool(team and team.members.filter(user=user).exists())
 
 
 class CanApproveDeployment(permissions.BasePermission):
@@ -75,7 +75,7 @@ class CanApproveDeployment(permissions.BasePermission):
             else:
                 approval = DeploymentApproval.objects.get(id=approval_id)
         except DeploymentApproval.DoesNotExist:
-            return False if service_pk else True
+            return not service_pk
 
         deployment = approval.deployment
         if deployment is None:
@@ -115,6 +115,4 @@ class CanApproveDeployment(permissions.BasePermission):
         if service.owner == user:
             return True
         team = getattr(service.project, 'team', None)
-        if team and team.members.filter(user=user).exists():
-            return True
-        return False
+        return bool(team and team.members.filter(user=user).exists())

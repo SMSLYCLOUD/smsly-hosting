@@ -1,15 +1,17 @@
+import argparse
 import os
 import sys
+
 import django
-import argparse
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 django.setup()
 
-from apps.deployments.models import Service
-from apps.deployments.models_transfer import ServerTransfer
-from apps.deployments.services.transfer_service import ServerTransferService
+from apps.deployments.models import Service  # noqa: E402
+from apps.deployments.models_transfer import ServerTransfer  # noqa: E402
+from apps.deployments.services.transfer_service import ServerTransferService  # noqa: E402
+
 
 def run_script(service_id, source_ip, target_ip, ssh_key, ssh_password):
     print(f"Starting real server transfer for service {service_id}...")

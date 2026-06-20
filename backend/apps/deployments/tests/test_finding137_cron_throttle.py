@@ -19,7 +19,6 @@ from apps.deployments.models_cron import CronJob
 from apps.deployments.rate_limiting import CronJobCreateRateThrottle
 from apps.deployments.views_cron import CronJobViewSet
 
-
 User = get_user_model()
 
 

@@ -1,10 +1,12 @@
-from rest_framework import viewsets, permissions, status
+from django.conf import settings
+from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from django.conf import settings
+
 from .models import PlatformLicense
-from .serializers import LicenseStatusSerializer, LicenseActivationSerializer
+from .serializers import LicenseActivationSerializer, LicenseStatusSerializer
 from .validator import validate_license
+
 
 class LicenseViewSet(viewsets.ViewSet):
     """

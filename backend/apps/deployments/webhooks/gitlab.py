@@ -1,12 +1,11 @@
 """GitLab webhook handler — push events trigger deployments."""
-import hashlib
 import hmac
 import logging
 
-from django.conf import settings
-from apps.deployments.models import Service, Deployment
+from apps.deployments.models import Deployment, Service
 from apps.deployments.models_audit import WebhookDelivery
 from apps.deployments.tasks_deploy import smart_deploy_task
+from django.conf import settings
 
 logger = logging.getLogger(__name__)
 

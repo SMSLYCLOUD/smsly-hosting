@@ -1,8 +1,11 @@
 import uuid
-from django.db import models
+
 from django.conf import settings
-from .models_core import TimeStampedModel, Service, Deployment
+from django.db import models
 from encrypted_model_fields.fields import EncryptedCharField
+
+from .models_core import Deployment, Service, TimeStampedModel
+
 
 class PreviewEnvironment(TimeStampedModel):
     class Status(models.TextChoices):

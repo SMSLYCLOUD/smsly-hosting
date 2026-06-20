@@ -12,14 +12,13 @@ are mounted via the existing
 and keep their default global throttle (which is appropriate —
 those endpoints are authenticated and less abusable).
 """
-from django.urls import path
-
 from apps.core.views_throttled_auth import (
     ThrottledLoginView,
     ThrottledLogoutView,
     ThrottledPasswordResetView,
     ThrottledRegistrationView,
 )
+from django.urls import path
 
 urlpatterns = [
     path('login/', ThrottledLoginView.as_view(), name='rest_login_throttled'),

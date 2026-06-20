@@ -1,13 +1,14 @@
 """Views Webhooks module — GitHub, GitLab, and Bitbucket webhook receivers."""
 import logging
-from rest_framework import serializers
+
+from django.conf import settings
+from rest_framework import permissions, serializers, status
 from rest_framework.generics import GenericAPIView
 from rest_framework.response import Response
-from rest_framework import status, permissions
-from django.conf import settings
+
+from .webhooks.bitbucket import BitbucketWebhookHandler
 from .webhooks.github import GitHubWebhookHandler, _check_duplicate_delivery
 from .webhooks.gitlab import GitLabWebhookHandler
-from .webhooks.bitbucket import BitbucketWebhookHandler
 
 logger = logging.getLogger(__name__)
 

@@ -21,7 +21,6 @@ from apps.addons.services.db_proxy import DatabaseProxy
 from apps.deployments.models import Service
 from apps.deployments.models_addons import Addon
 
-
 User = get_user_model()
 
 
@@ -62,11 +61,10 @@ class DBProxyLockTests(TestCase):
         with patch.object(
             self.proxy, "_execute_readonly",
             side_effect=RuntimeError("DB went away"),
-        ):
-            with self.assertRaises(RuntimeError):
-                self.proxy.query(
-                    "SELECT 1", addon=self.addon, user=self.user,
-                )
+        ), self.assertRaises(RuntimeError):
+            self.proxy.query(
+                "SELECT 1", addon=self.addon, user=self.user,
+            )
         self.assertIsNone(cache.get(f"db_proxy_lock:{self.addon.id}"))
 
     def test_lock_released_on_ownership_failure(self):

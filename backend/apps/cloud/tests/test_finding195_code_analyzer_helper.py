@@ -9,14 +9,13 @@ both views now use.
 import os
 import tempfile
 
-from django.test import SimpleTestCase
-
 from apps.cloud.services.code_analyzer import (
     MAX_TOTAL_BYTES,
     check_repo_size,
     iter_repo_files,
     walk_repo_with_cap,
 )
+from django.test import SimpleTestCase
 
 
 def _write_files(root, files):

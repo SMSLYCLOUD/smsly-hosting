@@ -1,44 +1,12 @@
 import logging
+
 logger = logging.getLogger(__name__)
-import logging
-import random
-import re
-import shlex
-import shutil
-import tempfile
-import subprocess
-import os
-import json
-import time
-import zipfile
-import secrets
-import threading
-from contextlib import contextmanager
-from urllib.parse import unquote, urlparse
-import docker
-import requests
-from celery import shared_task
-from django.conf import settings
-from django.core.cache import cache
-from django.utils import timezone
-from django.db.models import Sum
-from apps.cloud.models import CloudProvider
-from apps.cloud.services.builder import NixpacksBuilder
-from apps.cloud.services.compute import ComputeService
-from apps.cloud.services.function_provisioner import FunctionProvisioner
-from apps.deployments.ai_router import DEFAULT_AI_ROUTER_API_BASE, DEFAULT_AI_ROUTER_UI_BASE, DEFAULT_BRAID_ALIAS, generate_ai_router_proxy_config, get_ollama_model_name, is_ai_router_service, is_ollama_service
-from apps.deployments.models import Service, Deployment, EnvironmentVariable, PlatformConfig
-from apps.deployments.models_addons import Addon, Backup
-from apps.deployments.models_backup import BackupSchedule, ServiceBackup
-from apps.deployments.models_storage import Volume
-from apps.deployments.models_transfer import ServerTransfer
-from apps.deployments.services.backup_service import BackupService
-from apps.deployments.services.pipeline import PipelineManager, PipelineError
-from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
-from apps.deployments.services.tls_verify import should_verify
-from apps.deployments.services.transfer_service import ServerTransferService
-from apps.deployments.utils import append_log, broadcast_status, build_local_source_bundle, update_stage, is_deployment_local
-from services.addon_provisioner import addon_provisioner
+import logging  # noqa: E402
+
+from celery import shared_task  # noqa: E402
+from django.core.cache import cache  # noqa: E402
+from django.utils import timezone  # noqa: E402
+
 
 def _bounded_error(exc, limit=2000):
     return str(exc).replace("\x00", "")[:limit]
@@ -56,7 +24,6 @@ def check_mesh_health_task():
     """
     from apps.deployments.models_mesh import MeshNetwork
     from apps.deployments.services.wireguard_service import WireGuardService
-    from django.utils import timezone
 
     meshes = MeshNetwork.objects.filter(is_active=True)
     for mesh in meshes:
@@ -100,7 +67,7 @@ def check_mesh_health_task():
                                     or metadata.get("wireguard_endpoint")
                                     or ""
                                 ).lower() == "private" or bool(metadata.get("prefer_private_mesh"))
-                                
+
                                 if server.private_ip and prefer_private:
                                     expected_endpoint = f"{server.private_ip}:{mesh.listen_port}"
                                 else:
@@ -135,7 +102,7 @@ def check_mesh_health_task():
                                         )
                                         peer.endpoint = validated_endpoint
                                         peer.save(update_fields=["endpoint", "updated_at"])
-                                
+
                                 # Trigger recovery task (deploy_mesh_task) with 5 min cooldown rate-limit per peer
                                 heal_lock_key = f"mesh-heal-lock:{peer.id}"
                                 if cache.add(heal_lock_key, "1", timeout=300):
@@ -143,7 +110,9 @@ def check_mesh_health_task():
                                         f"Mesh {mesh.name}: Peer {peer.wg_address} is unreachable but server is ONLINE. "
                                         f"Triggering auto-healing mesh redeployment."
                                     )
-                                    from apps.deployments.tasks_mesh import deploy_mesh_task
+                                    from apps.deployments.tasks_mesh import (
+                                        deploy_mesh_task,
+                                    )
                                     deploy_mesh_task.delay(str(mesh.id))
                     except Exception as he:
                         logger.error(f"Failed during mesh VPN self-healing for peer {peer_result.get('wg_address')}: {he}")
@@ -171,7 +140,6 @@ def deploy_mesh_task(self, mesh_id: str):
     """Deploy WireGuard configs to all peers in a mesh (async)."""
     from apps.deployments.models_mesh import MeshNetwork
     from apps.deployments.services.wireguard_service import WireGuardService
-    from django.utils import timezone
 
     lock_key = f"mesh-deploy:{mesh_id}"
     if not cache.add(lock_key, "1", timeout=960):

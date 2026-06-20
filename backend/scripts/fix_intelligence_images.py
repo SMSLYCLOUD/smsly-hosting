@@ -4,7 +4,7 @@ import os
 
 path = os.path.join(os.path.dirname(__file__), '..', 'apps', 'deployments', 'fixtures', 'templates.json')
 
-with open(path, 'r', encoding='utf-8') as f:
+with open(path, encoding='utf-8') as f:
     data = json.load(f)
 
 # Map of broken template IDs to corrected Docker images
@@ -25,18 +25,18 @@ new_data = []
 
 for t in data:
     tid = t.get('id', '')
-    
+
     if tid in remove_ids:
         print(f"  REMOVED: {tid} (no valid Docker image)")
         removed += 1
         continue
-    
+
     if tid in fixes:
         old = t.get('docker_image', '')
         t['docker_image'] = fixes[tid]
         print(f"  FIXED: {tid}: {old} -> {fixes[tid]}")
         fixed += 1
-    
+
     new_data.append(t)
 
 with open(path, 'w', encoding='utf-8') as f:

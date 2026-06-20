@@ -1,7 +1,8 @@
 import logging
 import re
-from rest_framework.response import Response
+
 from rest_framework import status
+from rest_framework.response import Response
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +16,7 @@ def parse_ls_output(output: str) -> list:
         parts = line.split()
         if not parts:
             continue
-            
+
         # Detect if time-style=long-iso (e.g. 2026-05-24)
         if len(parts) >= 8 and re.match(r'\d{4}-\d{2}-\d{2}', parts[5]):
             date = f"{parts[5]} {parts[6]}"
@@ -26,11 +27,11 @@ def parse_ls_output(output: str) -> list:
             name = " ".join(parts[8:])
         else:
             continue
-            
+
         # Strip symlink target from name (e.g., "link -> target")
         if " -> " in name:
             name = name.split(" -> ", 1)[0]
-            
+
         files.append({
             'permissions': parts[0],
             'user': parts[2],
@@ -60,7 +61,7 @@ def exec_file_list(container, path: str, fallback_to_root: bool = False, user: s
         ]
         exit_code = 1
         output = b""
-        
+
         exec_kwargs = {}
         if user:
             exec_kwargs['user'] = user
@@ -82,7 +83,7 @@ def exec_file_list(container, path: str, fallback_to_root: bool = False, user: s
         if exit_code != 0:
             logger.warning("exec_file_list 400: ls command failed. Code: %s, Output: %s", exit_code, output.decode('utf-8', errors='replace'))
             return Response({'error': 'Failed to list directory', 'details': output.decode('utf-8', errors='replace')}, status=status.HTTP_400_BAD_REQUEST)
-        
+
         files = parse_ls_output(output.decode('utf-8', errors='replace'))
         return Response({'path': path, 'files': files})
     except Exception as e:

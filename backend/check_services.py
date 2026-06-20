@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import os
 import sys
+
 import django
 
 # Add the current directory to Python path
@@ -12,7 +13,7 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 # Setup Django
 django.setup()
 
-from apps.deployments.models import Service
+from apps.deployments.models import Service  # noqa: E402
 
 print('=== Current Service Records ===')
 services = Service.objects.all().order_by('id')

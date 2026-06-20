@@ -9,12 +9,11 @@ Replaces in-memory dictionaries with Redis for production persistence.
 Falls back to in-memory storage if Redis is unavailable.
 """
 
-import json
-import logging
-from typing import Dict, List, Optional
+import json  # noqa: E402
+import logging  # noqa: E402
+
 # pylint: disable=unused-import
-from django.conf import settings
-from django.core.cache import cache
+from django.core.cache import cache  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +34,9 @@ class TunnelStorage:
     DEFAULT_TTL = 86400  # 24 hours
 
     def __init__(self):
-        self._fallback_tunnels: Dict = {}
-        self._fallback_subdomains: Dict = {}
-        self._fallback_logs: Dict = {}
+        self._fallback_tunnels: dict = {}
+        self._fallback_subdomains: dict = {}
+        self._fallback_logs: dict = {}
         self._use_redis = self._check_redis()
 
     def _check_redis(self) -> bool:
@@ -54,14 +53,14 @@ class TunnelStorage:
 
     # ==================== TUNNEL OPERATIONS ====================
 
-    def get_tunnel(self, subdomain: str) -> Optional[Dict]:
+    def get_tunnel(self, subdomain: str) -> dict | None:
         """Get tunnel by subdomain."""
         if self._use_redis:
             data = cache.get(f"{self.TUNNEL_PREFIX}{subdomain}")
             return json.loads(data) if data else None
         return self._fallback_tunnels.get(subdomain)
 
-    def get_tunnel_by_id(self, tunnel_id: str) -> Optional[Dict]:
+    def get_tunnel_by_id(self, tunnel_id: str) -> dict | None:
         """Get tunnel by its ID."""
         # Scan through tunnels (less efficient but works)
         for tunnel in self.list_tunnels():
@@ -69,7 +68,7 @@ class TunnelStorage:
                 return tunnel
         return None
 
-    def set_tunnel(self, subdomain: str, tunnel: Dict, ttl: int = None):
+    def set_tunnel(self, subdomain: str, tunnel: dict, ttl: int | None = None):
         """Store tunnel data."""
         ttl = ttl or self.DEFAULT_TTL
         if self._use_redis:
@@ -85,7 +84,7 @@ class TunnelStorage:
         else:
             self._fallback_tunnels.pop(subdomain, None)
 
-    def list_tunnels(self, user_id: str = None) -> List[Dict]:
+    def list_tunnels(self, user_id: str | None = None) -> list[dict]:
         """List all tunnels, optionally filtered by user."""
         if self._use_redis:
             # Get all tunnel keys (requires django-redis with pattern support)
@@ -116,14 +115,14 @@ class TunnelStorage:
 
     # ==================== SUBDOMAIN OPERATIONS ====================
 
-    def get_subdomain(self, subdomain: str) -> Optional[Dict]:
+    def get_subdomain(self, subdomain: str) -> dict | None:
         """Get reserved subdomain."""
         if self._use_redis:
             data = cache.get(f"{self.SUBDOMAIN_PREFIX}{subdomain}")
             return json.loads(data) if data else None
         return self._fallback_subdomains.get(subdomain)
 
-    def set_subdomain(self, subdomain: str, data: Dict):
+    def set_subdomain(self, subdomain: str, data: dict):
         """Reserve a subdomain (permanent, no TTL)."""
         if self._use_redis:
             cache.set(f"{self.SUBDOMAIN_PREFIX}{subdomain}",
@@ -138,7 +137,7 @@ class TunnelStorage:
         else:
             self._fallback_subdomains.pop(subdomain, None)
 
-    def list_subdomains(self, user_id: str = None) -> List[Dict]:
+    def list_subdomains(self, user_id: str | None = None) -> list[dict]:
         """List reserved subdomains."""
         if self._use_redis:
             try:
@@ -166,7 +165,7 @@ class TunnelStorage:
 
     # ==================== REQUEST LOG OPERATIONS ====================
 
-    def add_request_log(self, tunnel_id: str, log_entry: Dict):
+    def add_request_log(self, tunnel_id: str, log_entry: dict):
         """Add a request log entry."""
         key = f"{self.LOG_PREFIX}{tunnel_id}"
         if self._use_redis:
@@ -186,7 +185,7 @@ class TunnelStorage:
             logs.insert(0, log_entry)
             self._fallback_logs[tunnel_id] = logs[:100]
 
-    def get_request_logs(self, tunnel_id: str, limit: int = 100) -> List[Dict]:
+    def get_request_logs(self, tunnel_id: str, limit: int = 100) -> list[dict]:
         """Get request logs for a tunnel."""
         key = f"{self.LOG_PREFIX}{tunnel_id}"
         if self._use_redis:
@@ -195,7 +194,7 @@ class TunnelStorage:
                 from django_redis import get_redis_connection
                 conn = get_redis_connection("default")
                 logs = conn.lrange(key, 0, limit - 1)
-                return [json.loads(l) for l in logs]
+                return [json.loads(entry) for entry in logs]
             except Exception: # pylint: disable=broad-exception-caught
                 return self._fallback_logs.get(tunnel_id, [])[:limit]
         return self._fallback_logs.get(tunnel_id, [])[:limit]

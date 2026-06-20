@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, asdict
-from typing import Iterable
+from collections.abc import Iterable
+from dataclasses import asdict, dataclass
 
 import yaml
 
 from .models import EnvironmentVariable, Service
-
 
 AI_ROUTER_IMAGE = "ghcr.io/berriai/litellm"
 OLLAMA_IMAGE = "ollama/ollama"
@@ -109,7 +108,7 @@ def _target_from_service(service: Service, selected_ids: set[str]) -> OllamaTarg
     if not model:
         return None
 
-    port = int(service.internal_port or 11434 or 11434)
+    port = int(service.internal_port or 11434)
     alias = f"ollama/{model}"
     required_ram_gb = _required_ram_gb_for_model(model)
     try:
@@ -123,10 +122,7 @@ def _target_from_service(service: Service, selected_ids: set[str]) -> OllamaTarg
     # If the user has never explicitly chosen models for this router,
     # auto-disable targets that are likely to OOM.
     auto_selected = (str(service.id) in selected_ids) if selected_ids else True
-    if selected_ids:
-        selected = auto_selected
-    else:
-        selected = auto_selected and has_enough_ram
+    selected = auto_selected if selected_ids else auto_selected and has_enough_ram
 
     return OllamaTarget(
         service_id=str(service.id),

@@ -1,13 +1,15 @@
-from unittest.mock import patch, MagicMock
-from django.test import TestCase
-from django.contrib.auth.models import User
+from unittest.mock import MagicMock, patch
+
 from django.conf import settings
-from apps.deployments.models import Service, Deployment, PlatformConfig
-from apps.deployments.models_core import ManagedServer
+from django.contrib.auth.models import User
+from django.test import TestCase
+
 from apps.cloud.models import CloudProvider
-from apps.deployments.utils import is_deployment_local
+from apps.deployments.models import Deployment, PlatformConfig, Service
+from apps.deployments.models_core import ManagedServer
 from apps.deployments.services.pipeline import PipelineManager
-from apps.deployments.services.ssh_client import SSHClient, SSHConnectionError
+from apps.deployments.services.ssh_client import SSHClient
+from apps.deployments.utils import is_deployment_local
 
 
 class RemoteHardeningTests(TestCase):
@@ -111,7 +113,7 @@ class RemoteHardeningTests(TestCase):
     @patch('apps.deployments.services.pipeline.NixpacksBuilder.push_image')
     def test_pipeline_push_image_success(self, mock_push):
         mock_push.return_value = "registry.smsly.cloud/smsly/app:tag"
-        
+
         service = Service.objects.create(
             name='svc-git',
             owner=self.user,
@@ -123,7 +125,7 @@ class RemoteHardeningTests(TestCase):
             service=service,
             commit_hash='abc1234'
         )
-        
+
         with patch.object(settings, 'CONTAINER_REGISTRY_URL', 'registry.smsly.cloud'):
             manager = PipelineManager(deployment)
             manager.image_name = "smsly/app:tag"
@@ -134,7 +136,7 @@ class RemoteHardeningTests(TestCase):
     def test_pipeline_push_image_fail_local_allows_fallback(self, mock_push):
         # Push fails, returns the local tag
         mock_push.return_value = "smsly/app:tag"
-        
+
         service = Service.objects.create(
             name='svc-git-local',
             owner=self.user,
@@ -146,7 +148,7 @@ class RemoteHardeningTests(TestCase):
             service=service,
             commit_hash='abc1234'
         )
-        
+
         with patch.object(settings, 'CONTAINER_REGISTRY_URL', 'registry.smsly.cloud'):
             manager = PipelineManager(deployment)
             manager.image_name = "smsly/app:tag"
@@ -158,7 +160,7 @@ class RemoteHardeningTests(TestCase):
     def test_pipeline_push_image_fail_remote_raises_error(self, mock_push):
         # Push fails, returns the local tag
         mock_push.return_value = "smsly/app:tag"
-        
+
         service = Service.objects.create(
             name='svc-git-remote',
             owner=self.user,
@@ -170,7 +172,7 @@ class RemoteHardeningTests(TestCase):
             service=service,
             commit_hash='abc1234'
         )
-        
+
         with patch.object(settings, 'CONTAINER_REGISTRY_URL', 'registry.smsly.cloud'):
             manager = PipelineManager(deployment)
             manager.image_name = "smsly/app:tag"
@@ -183,14 +185,14 @@ class RemoteHardeningTests(TestCase):
     def test_ssh_client_reconnects_if_transport_inactive(self, mock_ssh_class, mock_connect):
         mock_client = MagicMock()
         mock_ssh_class.return_value = mock_client
-        
+
         # Setup transport
         mock_transport = MagicMock()
         mock_client.get_transport.return_value = mock_transport
-        
+
         # First call: transport is active
         mock_transport.is_active.return_value = True
-        
+
         client = SSHClient(ip="1.2.3.4", key_content="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----")
         client.client = mock_client
 
@@ -198,7 +200,7 @@ class RemoteHardeningTests(TestCase):
         def mock_connect_side_effect():
             client.client = mock_client
         mock_connect.side_effect = mock_connect_side_effect
-        
+
         # Mock exec_command behavior
         mock_chan = MagicMock()
         mock_chan.recv_ready.return_value = False
@@ -213,7 +215,7 @@ class RemoteHardeningTests(TestCase):
 
         # Second call: transport becomes inactive
         mock_transport.is_active.return_value = False
-        
+
         client.exec_command("echo hello")
         # should close client and call connect
         mock_client.close.assert_called_once()

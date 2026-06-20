@@ -1,9 +1,13 @@
 """URLs for cloud app."""
-from django.urls import path
-from rest_framework.routers import DefaultRouter
-from apps.cloud.views import CloudProviderViewSet, CloudResourceViewSet, IntelligenceViewSet
+from apps.cloud.views import (
+    CloudProviderViewSet,
+    CloudResourceViewSet,
+    IntelligenceViewSet,
+)
 from apps.cloud.views_code_analysis import CodeAnalysisViewSet
 from apps.deployments.views_analysis import CodeIntelligenceView, DeepScanTaskStatusView
+from django.urls import path
+from rest_framework.routers import DefaultRouter
 
 router = DefaultRouter()
 router.register(r'providers', CloudProviderViewSet, basename='providers')

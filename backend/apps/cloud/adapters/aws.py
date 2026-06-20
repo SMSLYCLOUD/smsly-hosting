@@ -1,9 +1,11 @@
 """Aws module."""
-import boto3
 import json
+from typing import Any
+
+import boto3
 from botocore.exceptions import ClientError, NoCredentialsError
+
 from .base import BaseCloudAdapter
-from typing import Dict, Any, List
 
 
 class AWSAdapter(BaseCloudAdapter):
@@ -41,7 +43,7 @@ class AWSAdapter(BaseCloudAdapter):
 
     # pylint: disable=too-many-positional-arguments,arguments-differ
     def deploy_container(self, service_name: str, image: str,
-                         env_vars: Dict[str, str], cpu: int, memory: int, replicas: int = 1, **kwargs) -> str:
+                         env_vars: dict[str, str], cpu: int, memory: int, replicas: int = 1, **kwargs) -> str:
         """
         Deploys a container to ECS Fargate.
         Steps:
@@ -215,7 +217,7 @@ class AWSAdapter(BaseCloudAdapter):
                         {'Key': 'Name', 'Value': 'SMSLY-VPC'}])
         return vpc_id
 
-    def create_iam_role(self, role_name: str, policy: Dict[str, Any]) -> str:
+    def create_iam_role(self, role_name: str, policy: dict[str, Any]) -> str:
         iam = self.session.client('iam')
         assume_role_policy = {
             "Version": "2012-10-17",
@@ -265,7 +267,7 @@ class AWSAdapter(BaseCloudAdapter):
             raise
 
     def get_metrics(self, resource_id: str, metric_name: str,
-                    start_time: str, end_time: str) -> List[Dict]:
+                    start_time: str, end_time: str) -> list[dict]:
         cw = self.session.client('cloudwatch')
         # Simplified: Fetch CPUUtilization for an ECS Service
         response = cw.get_metric_statistics(
@@ -338,7 +340,7 @@ class AWSAdapter(BaseCloudAdapter):
 
     def _ensure_lambda_role(self, name):
         # Implementation to create execution role if not exists
-        account_id = self._get_account_id()
+        self._get_account_id()
         role_name = f"smsly-lambda-{name}"
         policy = {
             "Version": "2012-10-17",

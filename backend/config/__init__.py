@@ -1,11 +1,12 @@
 """  Init   module."""
+# Django Python 3.14 compatibility patch
+
 from .celery import app as celery_app
 
-# Django Python 3.14 compatibility patch
-import sys
 try:
-    from django.template.context import BaseContext
     import copy
+
+    from django.template.context import BaseContext
 
     def _safe_copy(self):
         duplicate = self.__class__.__new__(self.__class__)

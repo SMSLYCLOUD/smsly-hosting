@@ -22,13 +22,13 @@ def test_scanner():
     # Use the root directory as a test case (where .env and code resides)
     root_dir = os.path.abspath(os.path.join(backend_dir, '..'))
     print(f"Scanning root: {root_dir}")
-    
+
     scanner = RepoScanner(root_dir)
     results = scanner.scan()
-    
+
     print(f"Stack: {results.get('stack')}")
     print(f"Detected Variables: {len(results.get('env_vars_context', {}))} found")
-    
+
     # Check if context was captured
     context = results.get('env_vars_context', {})
     for var, snippets in list(context.items())[:5]:

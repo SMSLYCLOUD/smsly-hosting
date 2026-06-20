@@ -2,17 +2,18 @@
 """Builders module."""
 # pylint: disable=no-member
 """Build manager service."""
-import time
-import logging
-import subprocess
-import shutil
-import os
-from urllib.parse import urlparse, urlunparse
-from pathlib import Path
-from django.conf import settings
-from typing import Union
-from django.utils import timezone
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
+import contextlib  # noqa: E402
+import logging  # noqa: E402
+import os  # noqa: E402
+import shutil  # noqa: E402
+import subprocess  # noqa: E402
+import time  # noqa: E402
+from pathlib import Path  # noqa: E402
+from urllib.parse import urlparse, urlunparse  # noqa: E402
+
+from django.conf import settings  # noqa: E402
+from django.utils import timezone  # noqa: E402
+from tenacity import retry, stop_after_attempt, wait_exponential  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,7 @@ BUILDKIT_CACHE_ERROR_SIGNATURES = [
 ]
 
 
-def is_buildkit_cache_error(exc: Union[Exception, str]) -> bool:
+def is_buildkit_cache_error(exc: Exception | str) -> bool:
     """Check if an exception is caused by BuildKit cache corruption."""
     msg = str(exc).lower()
     return any(sig.lower() in msg for sig in BUILDKIT_CACHE_ERROR_SIGNATURES)
@@ -175,7 +176,7 @@ class BuildManager:
             self._log(f"Command failed with return code {e.returncode}")
             raise e
         except Exception as e:
-            self._log(f"Build failed: {str(e)}")
+            self._log(f"Build failed: {e!s}")
             raise e
         finally:
             # Cleanup
@@ -263,7 +264,7 @@ class BuildManager:
         except subprocess.TimeoutExpired:
             self._log("Security scan timed out after 10 minutes.")
         except Exception as e:
-            self._log(f"Security scan error: {str(e)}")
+            self._log(f"Security scan error: {e!s}")
 
     def _run_command(self, cmd, cwd=None, env=None):
         """Run command and stream output to logs."""
@@ -393,16 +394,14 @@ class BuildManager:
                 env=env,
             )
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 askpass_path.unlink(missing_ok=True)
-            except Exception:
-                pass
 
     def _log(self, message, timestamp=True):
         """Append logs to the deployment atomically and push to WebSocket."""
+        from apps.deployments.models import Deployment
         from django.db.models import Value
         from django.db.models.functions import Concat
-        from apps.deployments.models import Deployment
 
         prefix = f"[{time.strftime('%H:%M:%S')}] " if timestamp else ""
         log_line = f"{prefix}{message}\n"
@@ -418,8 +417,8 @@ class BuildManager:
     def _push_to_websocket(self, log_line):
         """Send a build log line to WebSocket consumers via channel layer."""
         try:
-            from channels.layers import get_channel_layer
             from asgiref.sync import async_to_sync
+            from channels.layers import get_channel_layer
 
             channel_layer = get_channel_layer()
             if channel_layer is None:

@@ -8,10 +8,9 @@ Covers:
      the candidate peer.
   3. vote_request routes correctly when multiple active meshes exist.
 """
-import time
-import hmac as hmac_mod
 import hashlib
-from unittest.mock import patch, MagicMock
+import hmac as hmac_mod
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -19,7 +18,6 @@ from rest_framework.test import APIClient
 
 from apps.deployments.models_mesh import MeshNetwork, WireGuardPeer
 from apps.deployments.models_servers import ManagedServer
-
 
 User = get_user_model()
 

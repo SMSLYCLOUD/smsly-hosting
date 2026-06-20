@@ -8,13 +8,11 @@ can retry, fix the SMTP config, or contact the invitee out-of-band.
 from smtplib import SMTPException
 from unittest.mock import patch
 
+from apps.teams.models import Team, TeamMember
 from django.contrib.auth.models import User
 from django.test import TestCase, override_settings
-from rest_framework.test import APIClient
 from rest_framework import status as http_status
-
-from apps.teams.models import Team, TeamMember
-
+from rest_framework.test import APIClient
 
 TEST_CACHES = {
     "default": {

@@ -9,14 +9,13 @@ un-redacted output of an SSH command. If the
 for both stdout and stderr.
 """
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
 from apps.deployments.models_servers import ManagedServer
-
 
 User = get_user_model()
 

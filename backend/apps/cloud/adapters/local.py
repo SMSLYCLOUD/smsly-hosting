@@ -1,15 +1,16 @@
 """Local module."""
-import docker
+import contextlib
 import logging
-import secrets
-import json
 import os
 import re
+import secrets
 import shlex
-from typing import Dict, Any, List
+from typing import Any
 
+import docker
 from django.conf import settings
 from kubernetes import client, config
+
 from .base import BaseCloudAdapter
 
 logger = logging.getLogger(__name__)
@@ -139,6 +140,7 @@ class LocalAdapter(BaseCloudAdapter):
             self.docker_client = get_docker_client()
         except Exception as e:
             logger.warning(f"Docker client not available: {e}")
+            self.docker_client = None
 
         try:
             try:
@@ -152,10 +154,10 @@ class LocalAdapter(BaseCloudAdapter):
             logger.warning(f"Kubernetes client not available: {e}")
 
     def _get_traefik_labels(self, name: str, host_rule: str, port: str,
-                            is_public: bool = True) -> Dict[str, str]:
+                            is_public: bool = True) -> dict[str, str]:
         """Generate consistent Traefik labels for routing."""
         router_name = name.replace('.', '-').replace('_', '-')
-        
+
         enable_tls = (
             str(os.getenv("TRAEFIK_ENABLE_WEBSECURE", "false")).strip().lower()
             in {"1", "true", "yes", "on"}
@@ -179,9 +181,9 @@ class LocalAdapter(BaseCloudAdapter):
 
     def _apply_router_special_labels(
         self,
-        labels: Dict[str, str],
+        labels: dict[str, str],
         name: str,
-        env: Dict[str, str] | None,
+        env: dict[str, str] | None,
     ) -> None:
         """Attach extra Traefik labels needed by managed routers."""
         env = env or {}
@@ -232,7 +234,7 @@ class LocalAdapter(BaseCloudAdapter):
 
         # pylint: disable=too-many-positional-arguments
     def deploy_container(self, service_name: str, image: str,
-                         env_vars: Dict[str, str], cpu: int, memory: int,
+                         env_vars: dict[str, str], cpu: int, memory: int,
                          replicas: int = 1, vpa_enabled: bool = True, **kwargs) -> str:
         volumes = kwargs.pop('volumes', None)
         healthcheck = kwargs.pop('healthcheck', None)
@@ -249,10 +251,10 @@ class LocalAdapter(BaseCloudAdapter):
 
     # pylint: disable=too-many-positional-arguments, R0917
     def _deploy_docker(self, name: str, image: str,
-                       env: Dict[str, str], volumes: List[Dict] = None,
+                       env: dict[str, str], volumes: list[dict] | None = None,
                        project_id: str = 'default',
-                       healthcheck: Dict = None,
-                       cpu: int = None, memory: int = None,
+                       healthcheck: dict | None = None,
+                       cpu: int | None = None, memory: int | None = None,
                        restart_policy: str = 'unless-stopped',
                        command=None, vpa_enabled: bool = True, **kwargs) -> str:
         """
@@ -264,6 +266,8 @@ class LocalAdapter(BaseCloudAdapter):
         """
         # Ensure shared network exists
         network_name = os.getenv('DOCKER_NETWORK', 'smsly-net')
+        if not self.docker_client:
+            raise RuntimeError("Docker client not available")
         try:
             self.docker_client.networks.get(network_name)
         except docker.errors.NotFound:
@@ -283,10 +287,8 @@ class LocalAdapter(BaseCloudAdapter):
                     'bind': vol['mount_path'], 'mode': 'rw'}
 
         old_container = None
-        try:
+        with contextlib.suppress(docker.errors.NotFound):
             old_container = self.docker_client.containers.get(name)
-        except docker.errors.NotFound:
-            pass
         stage_before_cutover = old_container is not None
 
         # Traefik routing metadata
@@ -431,7 +433,7 @@ class LocalAdapter(BaseCloudAdapter):
 
         container_name = name
         aliases = [name, f"{name}.default.internal"]
-        
+
         # Add extra alias if provided (e.g. for addons)
         alias_name = kwargs.get('alias_name')
         if alias_name and alias_name != name:
@@ -549,10 +551,8 @@ class LocalAdapter(BaseCloudAdapter):
                 default=True,
             )
             if not keep_failed_container:
-                try:
+                with contextlib.suppress(Exception):
                     new_container.remove(force=True)
-                except Exception:
-                    pass
             else:
                 logger.warning(
                     "Preserving failed container %s for debugging (status=%s health=%s).",
@@ -798,20 +798,14 @@ class LocalAdapter(BaseCloudAdapter):
                     exc,
                 )
 
-            try:
+            with contextlib.suppress(Exception):
                 green.stop(timeout=10)
-            except Exception:
-                pass
-            try:
+            with contextlib.suppress(Exception):
                 green.remove(force=True)
-            except Exception:
-                pass
 
             if old_container is not None:
-                try:
+                with contextlib.suppress(Exception):
                     old_container.stop(timeout=10)
-                except Exception:
-                    pass
                 try:
                     old_container.remove(force=True)
                 except Exception as exc:
@@ -835,20 +829,14 @@ class LocalAdapter(BaseCloudAdapter):
                 exc,
             )
             if promoted is not None:
-                try:
+                with contextlib.suppress(Exception):
                     promoted.stop(timeout=5)
-                except Exception:
-                    pass
-                try:
+                with contextlib.suppress(Exception):
                     promoted.remove(force=True)
-                except Exception:
-                    pass
 
             if old_container is not None and backup_name:
-                try:
+                with contextlib.suppress(Exception):
                     old_container.reload()
-                except Exception:
-                    pass
                 try:
                     if getattr(old_container, "name", "") != name:
                         old_container.rename(name)
@@ -937,13 +925,11 @@ class LocalAdapter(BaseCloudAdapter):
         # If the container is still running and health is still in
         # start_period, consider it healthy — the app is up even if
         # Docker hasn't finished its first health probe yet.
-        if status in ("running",) and health in ("starting", "n/a", ""):
-            return True
-        return False
+        return bool(status in ("running",) and health in ("starting", "n/a", ""))
 
     def _deploy_k8s(self, name: str, image: str,
-                    env: Dict[str, str], cpu: int, memory: int,
-                    replicas: int = 1, healthcheck: Dict = None,
+                    env: dict[str, str], cpu: int, memory: int,
+                    replicas: int = 1, healthcheck: dict | None = None,
                     vpa_enabled: bool = True, **kwargs) -> str:
         raise NotImplementedError("Kubernetes deployment is not supported. Use Docker or a lite agent.")
 
@@ -1006,7 +992,7 @@ EOF
              const express = require('express');
              const app = express();
              app.use(express.json());
-             const handler = require('./{handler.split('.')[0]}');
+             const handler = require('./{handler.split('.', maxsplit=1)[0]}');
              app.all('/', async (req, res) => {{
                  const result = await handler.{handler.split('.')[1]}(req.body);
                  res.send(result);
@@ -1036,11 +1022,13 @@ EOF
         raise RuntimeError("No local orchestrator available (Kubernetes deployment is not supported)")
 
     # pylint: disable=too-many-positional-arguments, R0917
-    def _deploy_docker_function(self, name: str, image: str, env: Dict[str, str],
-                                volumes: List[Dict], entrypoint: List[str], code_path: str) -> str:
+    def _deploy_docker_function(self, name: str, image: str, env: dict[str, str],
+                                volumes: list[dict], entrypoint: list[str], code_path: str) -> str:
         """Deploy function as a Docker container with code mount."""
         try:
             network_name = os.getenv('DOCKER_NETWORK', 'smsly-net')
+            if not self.docker_client:
+                raise RuntimeError("Docker client not available")
             try:
                 self.docker_client.networks.get(network_name)
             except docker.errors.NotFound:
@@ -1091,7 +1079,7 @@ EOF
             db_password = secrets.token_urlsafe(24)
             db_user = "smsly_user"
 
-            container = self.docker_client.containers.run(
+            self.docker_client.containers.run(
                 f"{engine}:{version}-alpine",
                 name=f"db-{db_name}",
                 environment={
@@ -1117,12 +1105,12 @@ EOF
     def issue_ssl_cert(self, domain_name: str) -> str:
         return "local-self-signed-cert"
 
-    def create_iam_role(self, role_name: str, policy: Dict[str, Any]) -> str:
+    def create_iam_role(self, role_name: str, policy: dict[str, Any]) -> str:
         return "local-role"
 
     def store_secret(self, secret_name: str, secret_value: str) -> str:
         return f"local-secret://{secret_name}"
 
     def get_metrics(self, resource_id: str, metric_name: str,
-                    start_time: str, end_time: str) -> List[Dict]:
+                    start_time: str, end_time: str) -> list[dict]:
         return []

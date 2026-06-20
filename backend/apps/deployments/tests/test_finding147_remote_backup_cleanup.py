@@ -23,8 +23,7 @@ cleanup helper:
 
 import os
 import tempfile
-from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -32,7 +31,6 @@ from django.test import TestCase
 from apps.deployments.models import Service
 from apps.deployments.models_transfer import ServerTransfer
 from apps.deployments.services import transfer_service
-
 
 User = get_user_model()
 

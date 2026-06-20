@@ -2,10 +2,11 @@
 Graceful Shutdown Handler for SMSLY Hosting.
 Ensures clean shutdown of background tasks and connections.
 """
+import logging
 import signal
 import sys
-import logging
 import threading
+
 from django.core.cache import cache
 from django.db import connection
 

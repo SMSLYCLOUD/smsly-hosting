@@ -2,9 +2,8 @@ from django.contrib.auth import get_user_model
 from django.db.models import Q
 from django.test import TestCase
 
-from apps.deployments.models import Service, Deployment, Project
+from apps.deployments.models import Deployment, Project, Service
 from apps.teams.models import Team, TeamMember
-
 
 User = get_user_model()
 
@@ -65,6 +64,7 @@ class Finding141TeamMemberOwnershipTests(TestCase):
 
     def test_consumer_source_contains_team_membership_check(self):
         import inspect
+
         from apps.deployments.consumers import TerminalConsumer
         source = inspect.getsource(TerminalConsumer._verify_ownership)
         self.assertIn('team__members__user', source)

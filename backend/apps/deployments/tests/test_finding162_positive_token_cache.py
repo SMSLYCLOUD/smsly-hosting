@@ -26,7 +26,6 @@ from rest_framework.authtoken.models import Token
 
 from apps.deployments.consumers import TerminalConsumer
 
-
 User = get_user_model()
 
 

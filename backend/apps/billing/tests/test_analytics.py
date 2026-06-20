@@ -15,7 +15,6 @@ from apps.billing.models import (
 )
 from apps.billing.services.analytics import RevenueAnalytics
 
-
 User = get_user_model()
 
 

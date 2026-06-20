@@ -1,5 +1,7 @@
 from django.test import TestCase
+
 from apps.deployments.services.ecosystem_graph import build_ecosystem_graph
+
 
 class EcosystemStressTests(TestCase):
     def test_11_service_smsly_style_ecosystem(self):

@@ -2,7 +2,8 @@ import json
 import logging
 import re
 import secrets
-from typing import Dict, List, Any
+from typing import Any
+
 from apps.intelligence.providers import _cached_ask
 
 logger = logging.getLogger(__name__)
@@ -29,7 +30,7 @@ class EnvironmentIntelligenceService:
     )
 
     @classmethod
-    def resolve_environment(cls, env_context: Dict[str, List[str]], stack: str = "", service_name: str = "") -> Dict[str, str]:
+    def resolve_environment(cls, env_context: dict[str, list[str]], stack: str = "", service_name: str = "") -> dict[str, str]:
         """
         Takes detected variables + context and returns a dictionary of suggested values.
         """
@@ -102,10 +103,10 @@ class EnvironmentIntelligenceService:
                     continue
                 # Expanded secret detection list: includes SALT, HEADER_VALUE, and specific POLICY tokens
                 is_secret = val == "GENERATE" or any(k in var_upper for k in [
-                    "SECRET", "KEY", "TOKEN", "PASSWORD", "HASH", "SALT", 
+                    "SECRET", "KEY", "TOKEN", "PASSWORD", "HASH", "SALT",
                     "HEADER_VALUE", "SIGNATURE", "AUTH"
                 ])
-                
+
                 if is_secret:
                     if "ENCRYPTION_KEY" in var_upper:
                         # Fernet requires 32 url-safe base64-encoded bytes
@@ -148,7 +149,7 @@ class EnvironmentIntelligenceService:
             return fallback
 
     @classmethod
-    def resolve_ecosystem(cls, services_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def resolve_ecosystem(cls, services_data: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """
         Resolves environment variables for a whole cluster of services at once.
         Ensures cross-service URL consistency.
@@ -161,7 +162,7 @@ class EnvironmentIntelligenceService:
             name = svc.get('name', 'unknown')
             stack = svc.get('stack', 'unknown')
             vars_ctx = svc.get('env_vars_context', {})
-            
+
             committee_brief.append(f"### Service: {name} (Stack: {stack})")
             for var, ctxs in vars_ctx.items():
                 committee_brief.append(f"- {var}: {' | '.join(ctxs[:1])}")
@@ -202,7 +203,7 @@ class EnvironmentIntelligenceService:
                         else:
                             final_env[var] = str(val)
                     svc['env_vars'] = final_env
-            
+
             return services_data
 
         except Exception as e:
@@ -210,21 +211,21 @@ class EnvironmentIntelligenceService:
             return services_data
 
     @classmethod
-    def apply_intelligence_to_service(cls, service, scan_results: Dict[str, Any]):
+    def apply_intelligence_to_service(cls, service, scan_results: dict[str, Any]):
         """
         Applies intelligence to a specific service model instance.
         """
         from apps.deployments.models import EnvironmentVariable
-        
+
         env_context = scan_results.get('env_vars_context', {})
         stack = scan_results.get('stack', '')
         service_name = service.name
-        
+
         suggestions = cls.resolve_environment(env_context, stack, service_name)
-        
+
         # In SMSLY-HOSTING, env vars are stored in a separate table/relation
         # We need to update or create them.
-        
+
         injected = []
         for key, val in suggestions.items():
             if not re.match(r'^[A-Za-z0-9_][A-Za-z0-9_.-]*$', key):
@@ -234,22 +235,22 @@ class EnvironmentIntelligenceService:
                 service=service,
                 key=key,
                 defaults={
-                    'value': val, 
+                    'value': val,
                     'is_secret': any(k in key.upper() for k in ["SECRET", "KEY", "TOKEN"]),
                     'source': 'SYSTEM'
                 }
             )
-            
+
             # If the variable already exists, only update it if NOT locked and (empty or placeholder)
             if not created:
                 if getattr(ev, 'is_locked', False):
                     continue
-                    
+
                 if not ev.value or "<CHANGE_ME" in str(ev.value):
                     ev.value = val
                     ev.save()
                     injected.append(key)
             else:
                 injected.append(key)
-        
+
         return suggestions, injected

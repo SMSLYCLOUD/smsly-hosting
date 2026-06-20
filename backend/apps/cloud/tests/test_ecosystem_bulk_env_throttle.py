@@ -7,16 +7,13 @@ throttle, a user can DOS the platform by triggering thousands
 of ORM writes.  The fix attaches a per-user ``UserRateThrottle``
 (``EcosystemBulkEnvRateThrottle``) capped at 10/hour.
 """
-from unittest.mock import patch
 
+from apps.cloud.models import CloudProvider
+from apps.deployments.models import Service
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
-
-from apps.cloud.models import CloudProvider
-from apps.deployments.models import Service
-
 
 User = get_user_model()
 

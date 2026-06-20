@@ -1,5 +1,5 @@
 """Path safety tests for the volume file_write and service file_upload actions."""
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from django.contrib.auth.models import User
 from rest_framework import status

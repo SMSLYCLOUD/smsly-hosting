@@ -21,11 +21,11 @@ from django.test import TestCase
 from rest_framework.test import APITestCase
 
 from apps.deployments.models import (
-    Deployment, EnvironmentVariable, Service,
+    Deployment,
+    Service,
 )
 from apps.deployments.models_audit import AuditLog
 from apps.deployments.models_core import PlatformConfig
-
 
 User = get_user_model()
 
@@ -63,16 +63,15 @@ class BulkCancelAtomicTests(APITestCase):
             raise RuntimeError("boom")
         AuditLog.save = _fail_save
         try:
-            with self.assertRaises(RuntimeError):
-                with transaction.atomic():
-                    self.dep.status = Deployment.Status.CANCELLED
-                    self.dep.save(update_fields=['status'])
-                    AuditLog(
-                        actor=self.user.get_username(),
-                        action='DEPLOYMENT_BULK_CANCEL',
-                        target='Deployment: multiple',
-                        metadata={'count': 1, 'deployment_ids': [str(self.dep.id)]},
-                    ).save()
+            with self.assertRaises(RuntimeError), transaction.atomic():
+                self.dep.status = Deployment.Status.CANCELLED
+                self.dep.save(update_fields=['status'])
+                AuditLog(
+                    actor=self.user.get_username(),
+                    action='DEPLOYMENT_BULK_CANCEL',
+                    target='Deployment: multiple',
+                    metadata={'count': 1, 'deployment_ids': [str(self.dep.id)]},
+                ).save()
         finally:
             AuditLog.save = original_save
 
@@ -93,7 +92,7 @@ class CancelAtomicTests(APITestCase):
     def test_cancel_uses_transaction(self):
         from django.db import connection
         from django.test.utils import CaptureQueriesContext
-        with CaptureQueriesContext(connection) as ctx:
+        with CaptureQueriesContext(connection):
             resp = self.client.post(self.url, {}, format='json')
         self.assertEqual(resp.status_code, 200)
         self.dep.refresh_from_db()
@@ -155,6 +154,7 @@ class PlatformConfigSaveTests(TestCase):
 
     def test_save_uses_select_for_update(self):
         from unittest.mock import MagicMock
+
         from django.db.models import QuerySet
 
         original_select_for_update = QuerySet.select_for_update

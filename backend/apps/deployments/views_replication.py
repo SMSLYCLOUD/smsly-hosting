@@ -5,8 +5,8 @@ API endpoints for deploying, monitoring, and managing
 Patroni-based PostgreSQL streaming replication.
 """
 
-import logging
 import ipaddress
+import logging
 
 from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
@@ -283,7 +283,7 @@ class ReplicationViewSet(viewsets.ViewSet):
             )
 
         try:
-            mesh = MeshNetwork.objects.get(id=mesh_id)
+            MeshNetwork.objects.get(id=mesh_id)
         except MeshNetwork.DoesNotExist:
             return Response(
                 {"error": "Mesh not found"},

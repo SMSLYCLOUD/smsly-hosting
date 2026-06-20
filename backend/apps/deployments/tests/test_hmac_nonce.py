@@ -1,17 +1,16 @@
 import hashlib
 import hmac
 import time
+from unittest.mock import patch
 
 import pytest
-from unittest.mock import patch
+from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIRequestFactory
-from django.contrib.auth import get_user_model
 
 from apps.deployments.models_servers import ManagedServer
 from apps.deployments.views_servers import _build_remote_headers
 from apps.deployments.views_transfer import _verify_transfer_sync_hmac
-
 
 TEST_SECRET = "nonce-test-secret-1234"
 

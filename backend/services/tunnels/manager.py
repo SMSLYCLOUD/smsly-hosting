@@ -5,10 +5,9 @@ Tunnel Manager - Django Integration
 Provides Django models and views for tunnel management via the dashboard.
 """
 
-from typing import Optional
-from django.db import models
-from django.conf import settings
 from apps.deployments.models import Service
+from django.conf import settings
+from django.db import models
 
 
 class TunnelSession(models.Model):

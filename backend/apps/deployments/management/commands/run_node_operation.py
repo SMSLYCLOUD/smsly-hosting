@@ -16,7 +16,6 @@ Supported operations:
 import json
 import logging
 import os
-import shlex
 import subprocess
 
 from django.core.management.base import BaseCommand, CommandError

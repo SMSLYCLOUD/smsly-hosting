@@ -17,7 +17,6 @@ from apps.deployments.models import Service
 from apps.deployments.models_addons import Addon, Backup
 from apps.deployments.views_addons import _ClosingFileResponse
 
-
 User = get_user_model()
 
 

@@ -3,7 +3,6 @@ import os
 
 from django.test import SimpleTestCase
 
-
 REPO_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'),
 )

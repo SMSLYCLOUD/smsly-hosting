@@ -1,11 +1,12 @@
+import contextlib
 import os
 import tempfile
 
 from django.test import SimpleTestCase
 
 from apps.deployments.services.transfer_service import (
-    ServerTransferService,
     _TRANSFER_SCRUB_KEYS,
+    ServerTransferService,
     _scrub_env_for_transfer,
 )
 
@@ -120,7 +121,7 @@ class FieldEncryptionKeyShipmentWarningTests(SimpleTestCase):
         transfer.source_backup = backup
 
         log_calls = []
-        svc._log = lambda msg: log_calls.append(msg)
+        svc._log = log_calls.append
 
         ssh = MagicMock()
         ssh.upload_file = MagicMock()
@@ -129,10 +130,8 @@ class FieldEncryptionKeyShipmentWarningTests(SimpleTestCase):
         svc.ssh = ssh
 
         with patch.dict(os.environ, {'BACKUP_ENCRYPTION_KEY': ''}, clear=False):
-            try:
+            with contextlib.suppress(Exception):
                 svc._upload()
-            except Exception:
-                pass
 
         joined = "\n".join(log_calls)
         self.assertIn("WARNING", joined)

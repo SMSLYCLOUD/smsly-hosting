@@ -1,9 +1,9 @@
 """Metrics adapter — connects to real Prometheus with fail-closed fallbacks."""
-import time
 import logging
 import re
-from typing import List, Dict, Any
+import time
 from datetime import datetime, timezone
+from typing import Any
 
 import requests
 from decouple import config
@@ -29,7 +29,7 @@ class MetricsAdapter:
     # ------------------------------------------------------------------
 
     def get_cpu_history(self, service_ref,
-                        duration: str = '1h') -> List[Dict[str, Any]]:
+                        duration: str = '1h') -> list[dict[str, Any]]:
         pattern = self._service_pattern(service_ref)
         queries = [
             (
@@ -52,7 +52,7 @@ class MetricsAdapter:
         return self._query_first_non_empty(queries, duration)
 
     def get_memory_history(self, service_ref,
-                           duration: str = '1h') -> List[Dict[str, Any]]:
+                           duration: str = '1h') -> list[dict[str, Any]]:
          pattern = self._service_pattern(service_ref)
          queries = [
              (
@@ -75,7 +75,7 @@ class MetricsAdapter:
          return self._query_first_non_empty(queries, duration)
 
     def get_network_history(self, service_ref,
-                            duration: str = '1h') -> List[Dict[str, Any]]:
+                            duration: str = '1h') -> list[dict[str, Any]]:
         pattern = self._service_pattern(service_ref)
         queries = [
             (
@@ -98,7 +98,7 @@ class MetricsAdapter:
         return self._query_first_non_empty(queries, duration)
 
     def get_disk_history(self, service_ref,
-                          duration: str = '1h') -> List[Dict[str, Any]]:
+                          duration: str = '1h') -> list[dict[str, Any]]:
         pattern = self._service_pattern(service_ref)
         queries = [
             (
@@ -128,7 +128,7 @@ class MetricsAdapter:
         ]
         return self._query_first_non_empty(queries, duration)
 
-    def get_current(self, service_ref) -> Dict[str, Any]:
+    def get_current(self, service_ref) -> dict[str, Any]:
         """
         Return a current snapshot used by the dashboard cards.
         """
@@ -167,7 +167,7 @@ class MetricsAdapter:
     # Addon metrics — query by addon container_name / compose_service
     # ------------------------------------------------------------------
 
-    def get_addon_metrics(self, addon_ref, duration: str = '1h') -> Dict[str, Any]:
+    def get_addon_metrics(self, addon_ref, duration: str = '1h') -> dict[str, Any]:
         """Return the same shape as the service metrics for an addon container."""
         name = getattr(addon_ref, 'name', '') or ''
         compose_service = re.escape(name)
@@ -214,7 +214,7 @@ class MetricsAdapter:
             'source': 'prometheus',
         }
 
-    def _addon_live_fallback(self, addon_ref) -> Dict[str, Any]:
+    def _addon_live_fallback(self, addon_ref) -> dict[str, Any]:
         """Last-resort: sample the live Docker container for an addon."""
         container_id = getattr(addon_ref, 'coolify_uuid', None) or getattr(addon_ref, 'name', None)
         if not container_id:
@@ -289,7 +289,7 @@ class MetricsAdapter:
     # Prometheus Query
     # ------------------------------------------------------------------
 
-    def _query_prometheus(self, query: str, duration: str) -> List[Dict] | None:
+    def _query_prometheus(self, query: str, duration: str) -> list[dict] | None:
         """Query Prometheus range API. Returns list of {timestamp, value} or None."""
         if self._prometheus_ok is False:
             return None  # Skip if we already know it's down
@@ -358,18 +358,18 @@ class MetricsAdapter:
         return ''.join(f'\\\\{c}' if c in special_chars else c for c in text)
 
     @staticmethod
-    def _service_identifiers(service_ref) -> List[str]:
+    def _service_identifiers(service_ref) -> list[str]:
         if isinstance(service_ref, str):
             return [service_ref]
 
-        values: List[str] = []
+        values: list[str] = []
         for attr in ("id", "name", "compose_main_service", "public_domain"):
             raw = getattr(service_ref, attr, None)
             if raw is not None:
                 values.append(str(raw))
         return [value for value in values if value]
 
-    def _query_first_non_empty(self, queries: List[str], duration: str) -> List[Dict[str, Any]]:
+    def _query_first_non_empty(self, queries: list[str], duration: str) -> list[dict[str, Any]]:
         for query in queries:
             data = self._query_prometheus(query, duration)
             if data:
@@ -377,7 +377,7 @@ class MetricsAdapter:
         return []
 
     @staticmethod
-    def _latest_value(series: List[Dict[str, Any]]) -> float:
+    def _latest_value(series: list[dict[str, Any]]) -> float:
         if not series:
             return 0.0
         latest = series[-1] or {}

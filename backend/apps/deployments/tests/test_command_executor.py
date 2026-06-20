@@ -1,6 +1,10 @@
-from django.test import TestCase
+import contextlib
 from unittest.mock import patch
+
+from django.test import TestCase
+
 from apps.deployments.services.safedeploy.command_executor import CommandExecutor
+
 
 class CommandExecutorTest(TestCase):
     @patch('subprocess.run')
@@ -11,10 +15,8 @@ class CommandExecutorTest(TestCase):
         malicious_cmd = "python manage.py check; echo 'pwned'"
 
         # When shell=False and shlex is used, the semi-colon and second command are treated as arguments to python.
-        try:
+        with contextlib.suppress(Exception):
             executor.run(malicious_cmd, cwd="/tmp")
-        except Exception:
-            pass
 
         mock_run.assert_called_once()
         args, kwargs = mock_run.call_args

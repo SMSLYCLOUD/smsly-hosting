@@ -1,7 +1,10 @@
-from django.test import TestCase
 from unittest.mock import patch
+
+from django.test import TestCase
+
 from apps.deployments.services.ecosystem_ai import EcosystemDeploymentSenate
 from apps.deployments.services.ecosystem_graph import build_ecosystem_graph
+
 
 class TestEcosystemAISafe(TestCase):
     @patch('apps.deployments.services.ecosystem_ai._cached_ask')

@@ -1,13 +1,16 @@
 """Tasks module."""
 import logging
-from decimal import Decimal
 from datetime import timedelta
+from decimal import Decimal
+
 from celery import shared_task
-from django.utils import timezone
 from django.db.models import Sum
-from .models import UsageRecord, UserSubscription, Invoice, PricingPlan
-from .models_analytics import DailyRevenue, InfrastructureCost
+from django.utils import timezone
+
 from apps.deployments.models import Deployment, Service
+
+from .models import Invoice, UsageRecord, UserSubscription
+from .models_analytics import DailyRevenue, InfrastructureCost
 from .services.metering import UsageMeter
 
 logger = logging.getLogger(__name__)

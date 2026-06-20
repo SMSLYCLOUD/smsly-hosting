@@ -1,7 +1,8 @@
 """Utility for checking system resources."""
-import psutil
 import logging
 import shutil
+
+import psutil
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,7 @@ def check_requirements(min_ram_gb=None, min_cpu_cores=None, min_disk_gb=None, gp
     # 3. Check Disk Space
     if min_disk_gb:
         # Check current partition where services are likely deployed
-        total, used, free = shutil.disk_usage("/")
+        _total, _used, free = shutil.disk_usage("/")
         free_gb = free / (1024 ** 3)
         if free_gb < min_disk_gb:
             return False, f"Insufficient Disk Space: {free_gb:.1f}GB free, {min_disk_gb}GB required for installation."

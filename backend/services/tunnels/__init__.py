@@ -4,6 +4,6 @@ SMSLY Tunnels Package
 Expose local development servers to public URLs.
 """
 
-from .server import TunnelServer, TunnelConnection
+from .server import TunnelConnection, TunnelServer
 
-__all__ = ['TunnelServer', 'TunnelConnection']
+__all__ = ['TunnelConnection', 'TunnelServer']

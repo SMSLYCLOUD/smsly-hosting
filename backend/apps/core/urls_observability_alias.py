@@ -11,13 +11,13 @@ This module re-exports the same function-based views under the
 flatter ``/api/v1/observability/`` prefix so the frontend does
 not need to be rebuilt. New code should call the canonical path.
 """
-from django.urls import path
 from apps.core.views_observability import (
     grafana_embed_url,
     loki_label_values,
     loki_query,
     prometheus_query,
 )
+from django.urls import path
 
 urlpatterns = [
     path('loki/query/', loki_query, name='observability-loki-query-alias'),

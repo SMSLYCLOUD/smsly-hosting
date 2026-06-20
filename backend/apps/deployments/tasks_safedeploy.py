@@ -1,64 +1,34 @@
+import hashlib
 import logging
-logger = logging.getLogger(__name__)
-import logging
-import random
-import re
-import shlex
+import os
 import shutil
 import tempfile
-import subprocess
-import os
-import json
 import time
-import zipfile
-import secrets
-import threading
-from contextlib import contextmanager
-from urllib.parse import unquote, urlparse
-import docker
-import requests
+
 from celery import shared_task
 from django.conf import settings
-from django.core.cache import cache
 from django.utils import timezone
-from django.db.models import Sum
-from apps.cloud.models import CloudProvider
-from apps.cloud.services.builder import NixpacksBuilder
-from apps.cloud.services.compute import ComputeService
-from apps.cloud.services.function_provisioner import FunctionProvisioner
-from apps.deployments.ai_router import DEFAULT_AI_ROUTER_API_BASE, DEFAULT_AI_ROUTER_UI_BASE, DEFAULT_BRAID_ALIAS, generate_ai_router_proxy_config, get_ollama_model_name, is_ai_router_service, is_ollama_service
-from apps.deployments.models import Service, Deployment, EnvironmentVariable, PlatformConfig
-from apps.deployments.models_addons import Addon, Backup
-from apps.deployments.models_backup import BackupSchedule, ServiceBackup
-from apps.deployments.models_storage import Volume
-from apps.deployments.models_transfer import ServerTransfer
-from apps.deployments.services.backup_service import BackupService
-from apps.deployments.services.pipeline import PipelineManager, PipelineError
-from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
-from apps.deployments.services.tls_verify import should_verify
-from apps.deployments.services.transfer_service import ServerTransferService
-from apps.deployments.utils import append_log, broadcast_status, build_local_source_bundle, update_stage, is_deployment_local
 from services.addon_provisioner import addon_provisioner
-from .tasks_deploy import delete_service_task
-from .tasks_deploy import enqueue_smart_deploy_task
-from .tasks_deploy import delete_service_task
-from .tasks_deploy import enqueue_smart_deploy_task
-from .tasks_deploy import enqueue_smart_deploy_task
-from .tasks_deploy import delete_service_task
-from .tasks_deploy import enqueue_smart_deploy_task
-from .tasks_deploy import delete_service_task
-from .tasks_deploy import enqueue_smart_deploy_task
-from .tasks_deploy import delete_service_task
-from .tasks_deploy import delete_service_task
-from .tasks_deploy import enqueue_smart_deploy_task
-from .tasks_deploy import enqueue_smart_deploy_task
-from .tasks_deploy import delete_service_task
-from .tasks_deploy import enqueue_smart_deploy_task
-from .tasks_deploy import delete_service_task
-from .tasks_deploy import enqueue_smart_deploy_task
-from .tasks_deploy import delete_service_task
-from .tasks_deploy import delete_service_task
-from .tasks_deploy import enqueue_smart_deploy_task
+
+from apps.deployments.models import (
+    Deployment,
+    EnvironmentVariable,
+    Service,
+)
+from apps.deployments.models_addons import Addon
+from apps.deployments.models_safedeploy import (
+    DatabaseClone,
+    DeploymentArtifact,
+    MigrationValidation,
+    PreviewEnvironment,
+)
+from apps.deployments.services.safedeploy.django_adapter import DjangoAdapter
+from apps.deployments.services.safedeploy.postgres_snapshot_manager import (
+    PostgresSnapshotManager,
+)
+
+logger = logging.getLogger(__name__)
+
 
 def _preview_service_name(preview: PreviewEnvironment) -> str:
     return f"preview-{preview.id.hex}"
@@ -88,7 +58,9 @@ def _copy_environment_variables(source: Service, target: Service) -> None:
 
 
 def _upsert_preview_environment_variables(preview: PreviewEnvironment, target: Service) -> None:
-    from apps.deployments.services.safedeploy.branch_preview_manager import BranchPreviewManager
+    from apps.deployments.services.safedeploy.branch_preview_manager import (
+        BranchPreviewManager,
+    )
 
     preview_vars = BranchPreviewManager().inject_preview_environment_variables(preview)
     secret_keys = {'DATABASE_URL', 'POSTGRES_URL', 'REDIS_URL'}
@@ -133,7 +105,6 @@ def _inject_addon_credentials(addon: Addon) -> None:
 
 
 def _sync_preview_addons(preview: PreviewEnvironment, transient_service: Service) -> None:
-    from services.addon_provisioner import addon_provisioner
 
     try:
         db_clone = preview.database_clone
@@ -194,7 +165,7 @@ def _dispatch_preview_deployment(deployment: Deployment, provider_id: str | None
     from apps.deployments.tasks_deploy import enqueue_smart_deploy_task
     return enqueue_smart_deploy_task(str(deployment.id), provider_id, skip_review=True)
 
-def checkout_code(repo_url: str, branch: str, commit_sha: str, target_dir: str, token: str = None) -> str:
+def checkout_code(repo_url: str, branch: str, commit_sha: str, target_dir: str, token: str | None = None) -> str:
     from apps.deployments.services.git_manager import GitManager
     try:
         return GitManager.clone_repo(
@@ -205,7 +176,7 @@ def checkout_code(repo_url: str, branch: str, commit_sha: str, target_dir: str, 
             commit_hash=commit_sha
         )
     except Exception as e:
-        logger.error(f"Git clone failed: {str(e)}")
+        logger.error(f"Git clone failed: {e!s}")
         return None
 
 @shared_task
@@ -295,7 +266,7 @@ def create_database_clone_job(preview_id: str):
 
             preview.status = PreviewEnvironment.Status.DB_CLONE_CREATING
             preview.save()
-            logger.error(f"CLONE_TASK >>> calling create_clone...")
+            logger.error("CLONE_TASK >>> calling create_clone...")
 
             db_manager = PostgresSnapshotManager(admin_db_url=pg_addon.connection_url)
             success = db_manager.create_clone(clone.source_database_name, clone.clone_database_name, allow_production_disruption=False)
@@ -344,7 +315,8 @@ def run_migration_validation_job(preview_id: str):
              from apps.deployments.utils import get_github_oauth_token_for_user
              token = get_github_oauth_token_for_user(preview.service.owner)
              cloned_path = checkout_code(repo_url, preview.branch_name, preview.commit_sha, workspace_dir, token)
-             if not cloned_path: raise Exception("Failed to clone repository")
+             if not cloned_path:
+                 raise Exception("Failed to clone repository")
 
         if not repo_url:
             logger.error(f"Service {preview.service.id} has no repository URL configured")
@@ -598,7 +570,9 @@ def provision_preview_service_job(preview_id: str):
 @shared_task
 def run_preview_health_check_job(preview_id: str):
     try:
-        from apps.deployments.services.safedeploy.health_checks import perform_health_check
+        from apps.deployments.services.safedeploy.health_checks import (
+            perform_health_check,
+        )
         preview = PreviewEnvironment.objects.get(id=preview_id)
         if not preview.preview_url:
             preview.status = PreviewEnvironment.Status.HEALTH_CHECK_FAILED
@@ -650,7 +624,7 @@ def destroy_preview_environment_job(preview_id: str):
         preview.status = PreviewEnvironment.Status.DESTROYED
         preview.save()
         preview.delete()
-        
+
     except PreviewEnvironment.DoesNotExist:
         pass
     except Exception as e:
@@ -666,7 +640,6 @@ def destroy_preview_environment_job(preview_id: str):
 
 @shared_task
 def expire_stale_previews_job():
-    from django.utils import timezone
     from apps.deployments.models_safedeploy import PreviewEnvironment
     now = timezone.now()
     expired = PreviewEnvironment.objects.filter(

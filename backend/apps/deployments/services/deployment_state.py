@@ -1,5 +1,5 @@
 import logging
-from django.utils import timezone
+
 from apps.core.services.audit_service import AuditService
 
 logger = logging.getLogger(__name__)

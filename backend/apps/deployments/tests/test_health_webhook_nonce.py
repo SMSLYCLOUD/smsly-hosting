@@ -11,7 +11,6 @@ from rest_framework.test import APIClient
 from apps.deployments.models_audit import AuditLog
 from apps.deployments.models_core import Service
 
-
 User = get_user_model()
 
 

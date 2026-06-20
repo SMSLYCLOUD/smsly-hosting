@@ -3,7 +3,6 @@
 import ipaddress
 import re
 
-
 _LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
 

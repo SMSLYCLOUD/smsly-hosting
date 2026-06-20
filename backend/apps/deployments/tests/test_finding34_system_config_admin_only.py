@@ -5,7 +5,6 @@ from django.core.cache import cache
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-
 User = get_user_model()
 
 

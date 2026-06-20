@@ -10,10 +10,9 @@ from unittest.mock import MagicMock
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
+from apps.addons.services.db_proxy import DatabaseProxy
 from apps.deployments.models import Service
 from apps.deployments.models_addons import Addon
-from apps.addons.services.db_proxy import DatabaseProxy
-
 
 User = get_user_model()
 

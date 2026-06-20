@@ -6,20 +6,18 @@ builds a cross-repo dependency graph, and produces a deploy plan that
 can be executed with zero manual configuration.
 """
 
+import json
 import logging
 import os
+import subprocess
+import tempfile
 import time
-import json
-from typing import Any, Dict, List, Optional, Tuple, Iterable
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any
 
 import requests
-import tempfile
-import subprocess
-import shutil
-
 from apps.intelligence.providers import _cached_ask
-from apps.intelligence.services.env_intelligence import EnvironmentIntelligenceService
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +81,7 @@ def _github_headers(token: str) -> dict:
     }
 
 
-def fetch_all_repos(token: str) -> List[dict]:
+def fetch_all_repos(token: str) -> list[dict]:
     """Fetch ALL repos visible to *token* (paginated)."""
     headers = _github_headers(token)
     # SEC-ZT-009: Check rate-limit before starting
@@ -95,7 +93,7 @@ def fetch_all_repos(token: str) -> List[dict]:
         )
         return []
 
-    repos: List[dict] = []
+    repos: list[dict] = []
     page = 1
     while True:
         # SEC-ZT-009: Re-check rate-limit every 10 pages
@@ -131,7 +129,7 @@ def fetch_all_repos(token: str) -> List[dict]:
     return repos
 
 
-def fetch_repo_tree(token: str, full_name: str, branch: str = "main") -> List[str]:
+def fetch_repo_tree(token: str, full_name: str, branch: str = "main") -> list[str]:
     """Fetch the top-level file tree for a repo (plus key nested files)."""
     headers = _github_headers(token)
     # Try the default branch first, fall back to master
@@ -151,7 +149,7 @@ def fetch_repo_tree(token: str, full_name: str, branch: str = "main") -> List[st
     return []
 
 
-def fetch_file_content(token: str, full_name: str, path: str) -> Optional[str]:
+def fetch_file_content(token: str, full_name: str, path: str) -> str | None:
     """Download a single file's text content (for env var detection, etc.)."""
     headers = _github_headers(token)
     resp = requests.get(
@@ -266,7 +264,7 @@ def _detect_addons_from_imports(clone_dir: str) -> dict:
 
             full_path = os.path.join(root, fname)
             try:
-                with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
+                with open(full_path, encoding='utf-8', errors='ignore') as f:
                     content = f.read(50_000)  # Cap at 50KB per file
             except OSError:
                 continue
@@ -298,7 +296,7 @@ def _detect_addons_from_imports(clone_dir: str) -> dict:
     }
 
 
-def heuristic_analysis(files: List[str], clone_dir: str = None) -> dict:
+def heuristic_analysis(files: list[str], clone_dir: str | None = None) -> dict:
     """Fast local analysis without AI calls. Optionally scans cloned files for env vars."""
     languages = []
     port = 3000
@@ -384,7 +382,7 @@ _STACK_ENV_DEFAULTS = {
 }
 
 # Rich hints for common env vars
-_ENV_HINTS: Dict[str, dict] = {
+_ENV_HINTS: dict[str, dict] = {
     'SECRET_KEY':          {'hint': 'Random 50+ char string', 'is_secret': True,  'required': True,  'generate': True},
     'NEXTAUTH_SECRET':     {'hint': 'Random encryption key',  'is_secret': True,  'required': True,  'generate': True},
     'JWT_SECRET':          {'hint': 'JWT signing secret',     'is_secret': True,  'required': True,  'generate': True},
@@ -412,14 +410,14 @@ _ENV_HINTS: Dict[str, dict] = {
 }
 
 
-def _detect_env_vars(files: List[str], stack: str, port: int,
-                     clone_dir: str = None) -> list:
+def _detect_env_vars(files: list[str], stack: str, port: int,
+                     clone_dir: str | None = None) -> list:
     """Detect and enrich env vars from stack defaults + .env.example + config patterns."""
     import re as _re
     import secrets
 
     # 1. Start with stack defaults
-    var_keys: List[str] = list(_STACK_ENV_DEFAULTS.get(stack, []))
+    var_keys: list[str] = list(_STACK_ENV_DEFAULTS.get(stack, []))
 
     # 2. Scan .env.example / .env.sample / .env.template from cloned files
     if clone_dir:
@@ -428,7 +426,7 @@ def _detect_env_vars(files: List[str], stack: str, port: int,
         for ef in env_example_files:
             try:
                 full_path = os.path.join(clone_dir, ef)
-                with open(full_path, 'r', errors='replace') as fh:
+                with open(full_path, errors='replace') as fh:
                     for line in fh:
                         line = line.strip()
                         if not line or line.startswith('#'):
@@ -446,7 +444,7 @@ def _detect_env_vars(files: List[str], stack: str, port: int,
         for cf in config_candidates:
             try:
                 full_path = os.path.join(clone_dir, cf)
-                with open(full_path, 'r', errors='replace') as fh:
+                with open(full_path, errors='replace') as fh:
                     content = fh.read()
                 patterns = _re.findall(
                     r"os\.(?:environ\[?['\"]|environ\.get\(['\"]|getenv\(['\"])([A-Z_][A-Z0-9_]*)",
@@ -458,7 +456,7 @@ def _detect_env_vars(files: List[str], stack: str, port: int,
 
     # 4. Deduplicate while preserving order
     seen: set = set()
-    unique_keys: List[str] = []
+    unique_keys: list[str] = []
     for k in var_keys:
         ku = k.upper()
         if ku not in seen:
@@ -469,7 +467,7 @@ def _detect_env_vars(files: List[str], stack: str, port: int,
     result = []
     for key in unique_keys:
         hints = _ENV_HINTS.get(key, {})
-        obj: Dict[str, Any] = {
+        obj: dict[str, Any] = {
             'key': key,
             'hint': hints.get('hint', ''),
             'required': hints.get('required', True),
@@ -508,23 +506,23 @@ def get_ecosystem_prompts() -> dict:
         "analysis_prompt_structure": "### ECOSYSTEM ARCHITECTURAL BRIEF\n{cross_links_header}\n\n### REPOSITORY DETAILS\n{repo_summaries}",
         "synthesis_prompt_structure": """You are the Senate Architect performing a FINAL SYNTHESIS pass.
         We have processed a massive ecosystem in batches. Here is the combined JSON plan of all services and addons.
-        
+
         YOUR JOB:
         1. Resolve any cross-repo dependencies. If Service A needs the URL of Service B, ensure Service A's env vars use {{SERVICE:service-b}}.
         2. Consolidate addons (e.g. ensure only one POSTGRES if they should share).
         3. Ensure 100% env var coverage.
         4. FULL DEPLOY ORDER AUTHORITY: You have complete power to restructure the "deploy_order" and "deploy_sequence" from scratch to ensure a successful deployment (e.g., Auth/Identity -> Core API -> Gateways -> Frontends).
-        
+
         CURRENT COMBINED PLAN:
         ```json
         {combined_plan_json}
         ```
-        
+
         CRITICAL TYPE RULES — violation will crash the system:
         - ALL array fields ("depends_on", "shared_by", service-level "addons", "deploy_sequence") must contain ONLY strings, NEVER objects.
         - "env_vars" values must be strings ONLY, never objects or arrays.
         - Every service in "services" must be a flat object; no arrays within arrays.
-        
+
         Return ONLY valid JSON matching this exact structure:
         {{
           "ecosystem_name": "Synthesized Ecosystem",
@@ -532,10 +530,10 @@ def get_ecosystem_prompts() -> dict:
           "addons": [...]
         }}""",
         "revalidation_prompt_structure": """CRITICAL: Your previous ecosystem plan was rejected due to: {error_message}
-        
+
         REPOSITORY DATA:
         {repositories_json}
-        
+
         REQUIREMENTS:
         1. Return ONLY valid JSON with this exact structure:
         {{
@@ -560,13 +558,13 @@ def get_ecosystem_prompts() -> dict:
           "deploy_sequence": ["addons", "service-1", "service-2"],
           "ai_provider": "auto"
         }}
-        
+
         2. CRITICAL TYPE RULES:
            - ALL array fields ("depends_on", "shared_by", "addons", "deploy_sequence") must contain ONLY strings
-           - "env_vars" must be a dict with string keys and string values ONLY  
+           - "env_vars" must be a dict with string keys and string values ONLY
            - No nested objects in any array fields
            - No unhashable types (dicts, lists) in any string fields
-           
+
         3. Ensure all services have proper names and repo references"""
     }
 
@@ -580,19 +578,19 @@ def _log_ecosystem_prompt():
 
 
 ECOSYSTEM_PROMPT = """You are the Supreme DevOps Architect of the CloudNeuron AI Senate. Your mission is to architect a 100% stable, zero-config, high-performance ecosystem of microservices from multiple repositories.
-    
+
     ### ADVANCED CONNECTIVITY REASONING:
     1. CIRCULAR RESOLUTION: If Service A needs Service B and vice-versa, use internal Docker DNS names (e.g., http://service-b:8000) for internal traffic and public placeholders for client-side traffic.
     2. SHARED SECRET VAULT: Identify variables like JWT_SECRET, AUTH_KEY, or ENCRYPTION_TOKEN. If multiple services use them, assign the SAME {{SHARED_SECRET:name}} placeholder so they can communicate.
     3. CORS & OAUTH: Automatically detect if a backend needs a frontend's URL for `CORS_ALLOWED_ORIGINS` or `OAUTH_CALLBACK_URL`. Use {{SERVICE:frontend-repo}} to link them.
     4. DATABASE CONSOLIDATION: If multiple services need POSTGRES, prefer a single shared instance with unique database names ({{POSTGRES_URL}}/service_name) unless they are strictly isolated.
-    
+
     ### CRITICAL RULES:
-    1. EXHAUSTIVE RESOLUTION: Never leave an environment variable empty. 
+    1. EXHAUSTIVE RESOLUTION: Never leave an environment variable empty.
     2. DETERMINISTIC LINKING: Use {{SERVICE:repo-name}} for service URLs, {{POSTGRES_URL}} for databases, and {{GENERATE}} for unique secrets.
     3. DEPLOY ORDER: Rank services by dependency depth. Infrastructure -> Core APIs -> Background Workers -> Frontends.
     4. STRICT TYPE CONSTRAINTS — ALL array fields must contain ONLY strings, NEVER objects/dicts. Violating this will crash the deployment system.
-    
+
     ### STRICT TYPE RULES — VIOLATIONS WILL CRASH THE SYSTEM:
     - "depends_on" MUST be an array of strings ONLY. NEVER objects. WRONG: [{"name": "svc-a"}] RIGHT: ["svc-a"]
     - "shared_by" MUST be an array of strings ONLY. NEVER objects. WRONG: [{"service": "svc-a"}] RIGHT: ["svc-a"]
@@ -601,7 +599,7 @@ ECOSYSTEM_PROMPT = """You are the Supreme DevOps Architect of the CloudNeuron AI
     - "env_vars" values MUST be strings ONLY. NEVER objects, arrays, or numbers. WRONG: {"KEY": {"value": "v"}} RIGHT: {"KEY": "{{PLACEHOLDER}}"}
     - Each top-level addon entry in the "addons" array must have "type" as a string and "shared_by" as an array of strings.
     - NEVER nest objects inside arrays. Every element of every array must be a primitive (string, number, boolean) or the specific object shape shown below.
-    
+
     Return ONLY valid JSON matching this EXACT structure — every field and type must be followed precisely:
     {
       "ecosystem_name": "string",
@@ -629,27 +627,26 @@ ECOSYSTEM_PROMPT = """You are the Supreme DevOps Architect of the CloudNeuron AI
     """
 
 
-def analyze_ecosystem(repos_data: List[dict], github_token: str = None, ai_provider: str = None, existing_services: list = None) -> dict:
+def analyze_ecosystem(repos_data: list[dict], github_token: str | None = None, ai_provider: str | None = None, existing_services: list | None = None) -> dict:
     """
     Use AI Senate to analyze all repos together in a temporary workspace.
     Clones repos, scans for cross-repo dependencies, and produces a plan.
     """
     import json
-    import re as _re
 
     # 1. Create a temporary workspace for the analysis
     with tempfile.TemporaryDirectory(prefix="cloud-ecosystem-") as workspace_dir:
         logger.info(f"Created ecosystem workspace: {workspace_dir}")
-        
+
         # 2. Clone all repos into the workspace
         for rd in repos_data:
             repo_full = rd.get('repo')
             if not repo_full:
                 continue
-            
+
             repo_name = repo_full.split('/')[-1]
             target_dir = os.path.join(workspace_dir, repo_name)
-            
+
             success = _clone_repo(repo_full, target_dir, github_token)
             if success:
                 rd['clone_dir'] = target_dir
@@ -666,23 +663,24 @@ def analyze_ecosystem(repos_data: List[dict], github_token: str = None, ai_provi
                 scan = scanner.scan()
                 rd['env_vars_context'] = scan.get('env_vars_context', {})
                 rd['stack'] = scan.get('stack', rd.get('stack', 'unknown'))
-                
+
                 # Intelligent Config Extraction (Context Size Optimization)
                 configs_summary = {}
                 priority_files = ['docker-compose.yml', 'docker-compose.yaml', 'Dockerfile', 'package.json', 'requirements.txt', 'pyproject.toml', 'Cargo.toml', 'go.mod']
-                
+
                 raw_configs = scan.get('configs', {})
                 critical_configs = [(k, v) for k, v in raw_configs.items() if any(p in os.path.basename(k) for p in priority_files)]
-                
+
                 # Sort by priority, then limit to top 4 files to prevent token bloat
                 def _sort_key(item):
                     bname = os.path.basename(item[0])
                     for i, pf in enumerate(priority_files):
-                        if pf in bname: return i
+                        if pf in bname:
+                            return i
                     return 99
-                
+
                 critical_configs.sort(key=_sort_key)
-                
+
                 for k, v in critical_configs[:4]:
                     bname = os.path.basename(k)
                     if 'package.json' in bname:
@@ -702,7 +700,7 @@ def analyze_ecosystem(repos_data: List[dict], github_token: str = None, ai_provi
                         configs_summary[k] = '\n'.join(lines)[:800]
                     else:
                         configs_summary[k] = v[:300] + "\n...[truncated]"
-                        
+
                 rd['configs_summary'] = configs_summary
                 rd['structure'] = scan.get('structure', '')
 
@@ -712,10 +710,10 @@ def analyze_ecosystem(repos_data: List[dict], github_token: str = None, ai_provi
             summary = f"\n### REPO: {rd['repo']} (Name: {rd.get('repo_name_short', 'unknown')})\n"
             summary += f"Description: {rd.get('description', 'No description')}\n"
             summary += f"Stack: {rd.get('stack', 'unknown')}\n"
-            
+
             # Detect resource intensity
             is_heavy = False
-            for file_path, content in rd.get('configs_summary', {}).items():
+            for _file_path, content in rd.get('configs_summary', {}).items():
                 if any(lib in content.lower() for lib in ['torch', 'tensorflow', 'nvidia', 'java', 'spring', 'elasticsearch']):
                     is_heavy = True
                     break
@@ -727,7 +725,7 @@ def analyze_ecosystem(repos_data: List[dict], github_token: str = None, ai_provi
                 for var, ctxs in rd['env_vars_context'].items():
                     ctx = ctxs[0] if ctxs else "No context"
                     summary += f"- {var}: {ctx}\n"
-            
+
             if rd.get('configs_summary'):
                 summary += "Critical Config Analysis:\n"
                 for path, snippet in rd['configs_summary'].items():
@@ -747,12 +745,14 @@ def analyze_ecosystem(repos_data: List[dict], github_token: str = None, ai_provi
         repo_names = [rd.get('repo_name_short') for rd in repos_data if rd.get('repo_name_short')]
         for rd in repos_data:
             cd = rd.get('clone_dir')
-            if not cd: continue
-            
+            if not cd:
+                continue
+
             # Look for environment variable overlaps
             current_vars = _safe_set(rd.get('env_vars_context', {}).keys())
             for other_rd in repos_data:
-                if other_rd['repo'] == rd['repo']: continue
+                if other_rd['repo'] == rd['repo']:
+                    continue
                 other_vars = _safe_set(other_rd.get('env_vars_context', {}).keys())
                 common = current_vars.intersection(other_vars)
                 if common:
@@ -760,7 +760,8 @@ def analyze_ecosystem(repos_data: List[dict], github_token: str = None, ai_provi
 
             # Grep for other repo names in this repo's configs/env (Service Discovery)
             for other in repo_names:
-                if other == rd.get('repo_name_short'): continue
+                if other == rd.get('repo_name_short'):
+                    continue
                 for path, content in rd.get('configs_summary', {}).items():
                     if other in content.lower():
                         cross_links.append(f"DEPENDENCY HINT: {rd['repo']} mentions {other} in {path} (Potential URL target)")
@@ -780,13 +781,13 @@ def analyze_ecosystem(repos_data: List[dict], github_token: str = None, ai_provi
         logger.info("=== SENDING INITIAL ANALYSIS PROMPT TO AI ===")
         logger.info(f"Provider: {ai_provider}")
         logger.info(f"Repository count: {len(repos_data)}")
-        
+
         # Log the system prompt
         _log_ecosystem_prompt()
-        
+
         full_prompt = f"### ECOSYSTEM ARCHITECTURAL BRIEF\n{brief_header}\n\n"
         full_prompt += "### REPOSITORY DETAILS\n" + "\n".join(repo_summaries)
-        
+
         logger.info("=== INITIAL ANALYSIS PROMPT ===")
         logger.info(f"Prompt length: {len(full_prompt)} characters")
         logger.info("Prompt preview:")
@@ -795,10 +796,10 @@ def analyze_ecosystem(repos_data: List[dict], github_token: str = None, ai_provi
         logger.info(prompt_preview)
         if len(full_prompt) > 1000:
             logger.info("... [prompt truncated] ...")
-        
+
         response_text, provider = _cached_ask(full_prompt, system_prompt=ECOSYSTEM_PROMPT, provider_id=ai_provider)
         response_text = response_text or ""
-        
+
         logger.info("=== INITIAL AI RESPONSE RECEIVED ===")
         logger.info(f"Response provider: {provider}")
         logger.info(f"Response length: {len(response_text)} characters")
@@ -813,21 +814,21 @@ def analyze_ecosystem(repos_data: List[dict], github_token: str = None, ai_provi
             # Intelligently extract JSON block by finding the outermost braces
             start_idx = response_text.find('{')
             end_idx = response_text.rfind('}')
-            
+
             if start_idx == -1 or end_idx == -1 or start_idx > end_idx:
                 raise ValueError("No JSON found in Senate response")
-                
+
             json_str = response_text[start_idx:end_idx+1]
             plan = json.loads(json_str)
-            
+
             # Validate AI response before processing
             if not _validate_ai_response_structure(response_text):
                 logger.warning("AI response validation failed, attempting revalidation...")
                 raise ValueError("AI response structure validation failed")
-            
+
             # Sanitize the response for safe processing
             plan = _sanitize_ai_response_for_processing(response_text)
-            
+
             if isinstance(plan, dict) and isinstance(plan.get("services"), list):
                 # Ensure each service is a dict with sanitized list fields
                 sanitized_services = []
@@ -837,15 +838,15 @@ def analyze_ecosystem(repos_data: List[dict], github_token: str = None, ai_provi
                     _normalize_service_plan_fields(svc)
                     sanitized_services.append(svc)
                 plan["services"] = sanitized_services
-                
+
                 _apply_plan_repo_defaults(plan["services"], repos_data)
                 _apply_generic_ecosystem_intelligence(plan["services"])
                 plan["addons"] = _rebuild_addons_manifest(plan["services"], plan.get("addons", []))
                 plan["deploy_sequence"] = _build_deploy_sequence(plan["services"])
-            
+
             plan["ai_provider"] = provider
             return plan
-            
+
         except ValueError as e:
             logger.warning(f"AI response validation failed: {e}")
             # Try to revalidate with AI
@@ -856,21 +857,21 @@ def analyze_ecosystem(repos_data: List[dict], github_token: str = None, ai_provi
             return _build_heuristic_plan(repos_data, str(e))
 
 
-def analyze_ecosystem_chunked(repos_data: List[dict], github_token: str = None, ai_provider: str = None, chunk_size: int = 4, existing_services: list = None) -> dict:
+def analyze_ecosystem_chunked(repos_data: list[dict], github_token: str | None = None, ai_provider: str | None = None, chunk_size: int = 4, existing_services: list | None = None) -> dict:
     """
     Analyzes repos in batches of `chunk_size` to prevent token limits.
     After accumulating the partial plans, it runs a final AI synthesis pass
     to fix cross-repo links and consolidate addons.
     """
     import json
-    
+
     global_services = []
     global_addons_map = {}
-    
+
     # Process in chunks
     chunks = [repos_data[i:i + chunk_size] for i in range(0, len(repos_data), chunk_size)]
-    
-    def _analyze_single_chunk(idx: int, chunk: list, token: str = None, provider: str = None):
+
+    def _analyze_single_chunk(idx: int, chunk: list, token: str | None = None, provider: str | None = None):
         """Analyze a single ecosystem chunk."""
         try:
             plan = analyze_ecosystem(chunk, token, provider, existing_services=existing_services)
@@ -903,19 +904,19 @@ def analyze_ecosystem_chunked(repos_data: List[dict], github_token: str = None, 
             from celery import current_task
             if current_task:
                 current_task.update_state(
-                    state='PROGRESS', 
+                    state='PROGRESS',
                     meta={'state': f'Processing batch {i+1} of {len(chunks)}...'}
                 )
         except Exception:
             pass
-        
+
         services = plan.get("services", [])
         if not isinstance(services, list):
             services = []
         for svc in services:
             if isinstance(svc, dict):
                 global_services.append(svc)
-        
+
         for addon in plan.get("addons", []):
             if isinstance(addon, dict):
                 addon_types = _coerce_addons(addon)
@@ -927,32 +928,32 @@ def analyze_ecosystem_chunked(repos_data: List[dict], github_token: str = None, 
                         logger.warning("Unhashable shared_by for addon %r: %s", addon, exc)
                         shared = []
                     global_addons_map.setdefault(atype, set()).update(shared)
-                    
+
     # Rebuild preliminary addons
     global_addons = [{"type": k, "shared_by": list(v)} for k, v in global_addons_map.items()]
-    
+
     # Final AI Synthesis Pass if there was more than one chunk
     if len(chunks) > 1:
         synthesis_prompt = f"""
         You are the Senate Architect performing a FINAL SYNTHESIS pass.
         We have processed a massive ecosystem in batches. Here is the combined JSON plan of all services and addons.
-        
+
         YOUR JOB:
         1. Resolve any cross-repo dependencies. If Service A needs the URL of Service B, ensure Service A's env vars use {{{{SERVICE:service-b}}}}.
         2. Consolidate addons (e.g. ensure only one POSTGRES if they should share).
         3. Ensure 100% env var coverage.
         4. FULL DEPLOY ORDER AUTHORITY: You have complete power to restructure the "deploy_order" and "deploy_sequence" from scratch to ensure a successful deployment (e.g., Auth/Identity -> Core API -> Gateways -> Frontends).
-        
+
         CURRENT COMBINED PLAN:
         ```json
         {json.dumps({"services": global_services, "addons": global_addons}, indent=2)}
         ```
-        
+
         CRITICAL TYPE RULES — violation will crash the system:
         - ALL array fields ("depends_on", "shared_by", service-level "addons", "deploy_sequence") must contain ONLY strings, NEVER objects.
         - "env_vars" values must be strings ONLY, never objects or arrays.
         - Every service in "services" must be a flat object; no arrays within arrays.
-        
+
         Return ONLY valid JSON matching this exact structure:
         {{
           "ecosystem_name": "Synthesized Ecosystem",
@@ -960,7 +961,7 @@ def analyze_ecosystem_chunked(repos_data: List[dict], github_token: str = None, 
           "addons": [...]
         }}
         """
-        
+
         logger.info("=== SYNTHESIS PROMPT SENT TO AI ===")
         logger.info(f"Chunks processed: {len(chunks)}")
         logger.info(f"Global services count: {len(global_services)}")
@@ -970,12 +971,12 @@ def analyze_ecosystem_chunked(repos_data: List[dict], github_token: str = None, 
         logger.info(synthesis_preview)
         if len(synthesis_prompt) > 1000:
             logger.info("... [synthesis prompt truncated] ...")
-        
+
         try:
             from apps.intelligence.providers import _cached_ask
             response_text, provider = _cached_ask(synthesis_prompt, system_prompt=ECOSYSTEM_PROMPT, provider_id=ai_provider)
             response_text = response_text or ""
-            
+
             logger.info("=== SYNTHESIS AI RESPONSE RECEIVED ===")
             logger.info(f"Response provider: {provider}")
             logger.info(f"Response length: {len(response_text)} characters")
@@ -984,7 +985,7 @@ def analyze_ecosystem_chunked(repos_data: List[dict], github_token: str = None, 
             logger.info(synth_preview)
             if len(response_text) > 1000:
                 logger.info("... [synthesis response truncated] ...")
-            
+
             start_idx = response_text.find('{')
             end_idx = response_text.rfind('}')
             if start_idx != -1 and end_idx != -1 and start_idx <= end_idx:
@@ -997,7 +998,7 @@ def analyze_ecosystem_chunked(repos_data: List[dict], github_token: str = None, 
                 if isinstance(raw_addons, list):
                     global_addons = [a for a in raw_addons if isinstance(a, dict)]
         except Exception as e:
-            logger.warning(f"=== SYNTHESIS PASS FAILED ===")
+            logger.warning("=== SYNTHESIS PASS FAILED ===")
             logger.warning(f"Error: {e}")
             logger.info("Synthesis pass failed, using raw merged plan")
 
@@ -1012,7 +1013,7 @@ def analyze_ecosystem_chunked(repos_data: List[dict], github_token: str = None, 
         except Exception as exc:
             logger.warning("Skipping unprocessable service %r: %s", svc.get("repo", "?"), exc)
     global_services = sanitized_services
-    
+
     try:
         _apply_plan_repo_defaults(global_services, repos_data)
         _apply_generic_ecosystem_intelligence(global_services)
@@ -1020,19 +1021,19 @@ def analyze_ecosystem_chunked(repos_data: List[dict], github_token: str = None, 
         logger.warning("TypeError during ecosystem intelligence processing: %s", exc)
     except Exception as exc:
         logger.warning("Unexpected error during ecosystem intelligence processing: %s", exc)
-    
+
     try:
         final_addons = _rebuild_addons_manifest(global_services, global_addons)
     except Exception as exc:
         logger.warning("Addon manifest rebuild failed: %s", exc)
         final_addons = []
-    
+
     try:
         deploy_sequence = _build_deploy_sequence(global_services)
     except Exception as exc:
         logger.warning("Deploy sequence build failed: %s", exc)
         deploy_sequence = ["addons"]
-    
+
     return {
         "ecosystem_name": "SMSLY Auto-Generated Ecosystem",
         "services": global_services,
@@ -1048,12 +1049,12 @@ def _validate_ai_response_structure(response_text: str, expected_structure: str 
     Returns True if structure is valid, False otherwise.
     """
     import json
-    
+
     # Basic text validation
     if not response_text or len(response_text.strip()) < 10:
         logger.warning("AI response is too short or empty")
         return False
-    
+
     # Extract JSON from response
     try:
         start_idx = response_text.find('{')
@@ -1061,23 +1062,23 @@ def _validate_ai_response_structure(response_text: str, expected_structure: str 
         if start_idx == -1 or end_idx == -1 or start_idx > end_idx:
             logger.warning("No valid JSON structure found in AI response")
             return False
-        
+
         json_str = response_text[start_idx:end_idx+1]
         data = json.loads(json_str)
-        
+
         # Validate based on expected structure
         if expected_structure == "ecosystem_plan":
             # Must have services and addons as arrays
             if not isinstance(data.get("services"), list):
                 logger.warning("AI response missing 'services' array")
                 return False
-            
+
             # Validate each service has required string fields
             for i, service in enumerate(data["services"]):
                 if not isinstance(service, dict):
                     logger.warning(f"Service {i} is not a dict")
                     return False
-                
+
                 # Check for unhashable nested structures in critical fields
                 for field in ["env_vars", "addons", "depends_on"]:
                     value = service.get(field)
@@ -1085,10 +1086,10 @@ def _validate_ai_response_structure(response_text: str, expected_structure: str 
                         if not _validate_field_value(field, value):
                             logger.warning(f"Invalid data in service {i} field '{field}': {value}")
                             return False
-        
+
         logger.info("AI response structure validation passed")
         return True
-        
+
     except json.JSONDecodeError as e:
         logger.warning(f"Failed to parse AI response JSON: {e}")
         return False
@@ -1105,14 +1106,14 @@ def _validate_field_value(field_name: str, value: Any, depth: int = 0) -> bool:
     if depth > 10:  # Prevent infinite recursion
         logger.warning(f"Validation depth exceeded for field {field_name}")
         return False
-    
+
     if value is None:
         return True
-    
+
     # Safe atomic types
     if isinstance(value, (str, int, float, bool)):
         return True
-    
+
     # Handle dictionaries - ensure all values are safe
     if isinstance(value, dict):
         for key, val in value.items():
@@ -1126,7 +1127,7 @@ def _validate_field_value(field_name: str, value: Any, depth: int = 0) -> bool:
                 logger.warning(f"Error validating dict key {key} in field {field_name}: {e}")
                 return False
         return True
-    
+
     # Handle lists and tuples - ensure all items are safe
     if isinstance(value, (list, tuple)):
         for i, item in enumerate(value):
@@ -1137,7 +1138,7 @@ def _validate_field_value(field_name: str, value: Any, depth: int = 0) -> bool:
                 logger.warning(f"Error validating list item {i} in field {field_name}: {e}")
                 return False
         return True
-    
+
     # Fallback - if we can't safely convert to string, it's problematic
     try:
         str(value)
@@ -1149,23 +1150,23 @@ def _validate_field_value(field_name: str, value: Any, depth: int = 0) -> bool:
 
 def _sanitize_ai_response_for_processing(response_text: str) -> dict:
     """
-    Sanitize AI response to ensure it's safe for processing by removing 
+    Sanitize AI response to ensure it's safe for processing by removing
     unhashable structures and converting to safe formats.
     """
     import json
-    
+
     try:
         start_idx = response_text.find('{')
         end_idx = response_text.rfind('}')
         if start_idx == -1 or end_idx == -1 or start_idx > end_idx:
             raise ValueError("No JSON found")
-        
+
         json_str = response_text[start_idx:end_idx+1]
         data = json.loads(json_str)
-        
+
         # Deep sanitize the response recursively
         return _deep_sanitize_data(data)
-        
+
     except Exception as e:
         logger.warning(f"Failed to sanitize AI response: {e}")
         return {"services": [], "addons": [], "deploy_sequence": []}
@@ -1178,11 +1179,11 @@ def _deep_sanitize_data(data: Any) -> Any:
     """
     if data is None:
         return None
-    
+
     # Handle atomic types
     if isinstance(data, (str, int, float, bool)):
         return data
-    
+
     # Handle dictionaries - convert all keys and values to strings
     if isinstance(data, dict):
         sanitized_dict = {}
@@ -1193,7 +1194,7 @@ def _deep_sanitize_data(data: Any) -> Any:
             sanitized_value = _deep_sanitize_data(value)
             sanitized_dict[str_key] = sanitized_value
         return sanitized_dict
-    
+
     # Handle lists and tuples - sanitize all items
     if isinstance(data, (list, tuple)):
         sanitized_list = []
@@ -1202,7 +1203,7 @@ def _deep_sanitize_data(data: Any) -> Any:
             if sanitized_item is not None:  # Skip None values
                 sanitized_list.append(sanitized_item)
         return sanitized_list
-    
+
     # Fallback - convert anything else to string
     try:
         return str(data)
@@ -1211,27 +1212,27 @@ def _deep_sanitize_data(data: Any) -> Any:
         return ""
 
 
-def _attempt_ai_revalidation(repos_data: List[dict], ai_provider: str, error_message: str) -> dict:
+def _attempt_ai_revalidation(repos_data: list[dict], ai_provider: str, error_message: str) -> dict:
     """
     Attempt to revalidate and correct AI response when validation fails.
     """
     logger.info("=== ATTEMPTING AI REVALIDATION ===")
     logger.info(f"Error message: {error_message}")
     logger.info(f"Repository data count: {len(repos_data)}")
-    
+
     # Log repository details for debugging
     for i, rd in enumerate(repos_data):
         logger.info(f"Repo {i+1}: {rd.get('repo', 'unknown')} - {rd.get('description', 'No description')}")
-    
+
     import json
-    
+
     try:
         revalidation_prompt = f"""
         CRITICAL: Your previous ecosystem plan was rejected due to: {error_message}
-        
+
         REPOSITORY DATA:
         {json.dumps([{"repo": rd.get("repo"), "description": rd.get("description"), "stack": rd.get("stack")} for rd in repos_data], indent=2)}
-        
+
         REQUIREMENTS:
         1. Return ONLY valid JSON with this exact structure:
         {{
@@ -1249,23 +1250,23 @@ def _attempt_ai_revalidation(repos_data: List[dict], ai_provider: str, error_mes
           ],
           "addons": [
             {{
-              "type": "POSTGRES", 
+              "type": "POSTGRES",
               "shared_by": ["service-1", "service-2"]
             }}
           ],
           "deploy_sequence": ["addons", "service-1", "service-2"],
           "ai_provider": "auto"
         }}
-        
+
         2. CRITICAL TYPE RULES:
            - ALL array fields ("depends_on", "shared_by", "addons", "deploy_sequence") must contain ONLY strings
-           - "env_vars" must be a dict with string keys and string values ONLY  
+           - "env_vars" must be a dict with string keys and string values ONLY
            - No nested objects in any array fields
            - No unhashable types (dicts, lists) in any string fields
-           
+
         3. Ensure all services have proper names and repo references
         """
-        
+
         logger.info("=== REVALIDATION PROMPT SENT TO AI ===")
         logger.info(f"Provider: {ai_provider}")
         logger.info(f"Prompt length: {len(revalidation_prompt)} characters")
@@ -1277,15 +1278,15 @@ def _attempt_ai_revalidation(repos_data: List[dict], ai_provider: str, error_mes
         if preview_end:
             logger.info("... [truncated] ...")
             logger.info(preview_end)
-        
+
         from apps.intelligence.providers import _cached_ask
         response_text, provider = _cached_ask(
-            revalidation_prompt, 
-            system_prompt=ECOSYSTEM_PROMPT, 
+            revalidation_prompt,
+            system_prompt=ECOSYSTEM_PROMPT,
             provider_id=ai_provider
         )
         response_text = response_text or ""
-        
+
         logger.info("=== AI REVALIDATION RESPONSE RECEIVED ===")
         logger.info(f"Response provider: {provider}")
         logger.info(f"Response length: {len(response_text)} characters")
@@ -1295,12 +1296,12 @@ def _attempt_ai_revalidation(repos_data: List[dict], ai_provider: str, error_mes
         logger.info(response_preview)
         if len(response_text) > 1000:
             logger.info("... [response truncated] ...")
-        
+
         # Validate the revalidated response
         logger.info("=== VALIDATING REVALIDATED RESPONSE ===")
         is_valid = _validate_ai_response_structure(response_text)
         logger.info(f"Revalidation validation result: {is_valid}")
-        
+
         if is_valid:
             plan = _sanitize_ai_response_for_processing(response_text)
             logger.info("=== AI REVALIDATION SUCCESSFUL ===")
@@ -1311,27 +1312,27 @@ def _attempt_ai_revalidation(repos_data: List[dict], ai_provider: str, error_mes
             logger.error("=== AI REVALIDATION FAILED ===")
             logger.error("Revalidation response validation failed after AI correction")
             return _build_heuristic_plan(repos_data, "AI response structure validation failed after revalidation")
-            
+
     except Exception as e:
-        logger.error(f"=== AI REVALIDATION PROCESS FAILED ===")
+        logger.error("=== AI REVALIDATION PROCESS FAILED ===")
         logger.error(f"Error type: {type(e).__name__}")
-        logger.error(f"Error message: {str(e)}")
+        logger.error(f"Error message: {e!s}")
         logger.error(f"Error details: {e}")
-        return _build_heuristic_plan(repos_data, f"AI revalidation failed: {str(e)}")
+        return _build_heuristic_plan(repos_data, f"AI revalidation failed: {e!s}")
 
 
-def _build_heuristic_plan(repos_data: List[dict], error_message: str = None) -> dict:
+def _build_heuristic_plan(repos_data: list[dict], error_message: str | None = None) -> dict:
     """
     Build a fallback heuristic-based ecosystem plan when AI fails.
     """
     if error_message:
         logger.warning("Building heuristic plan due to: %s", error_message)
-    
+
     services = []
     for rd in repos_data:
         repo = rd.get('repo', 'unknown')
         stack = rd.get('stack', 'unknown')
-        
+
         # Create a basic service entry
         service = {
             "name": repo.split('/')[-1],
@@ -1346,7 +1347,7 @@ def _build_heuristic_plan(repos_data: List[dict], error_message: str = None) -> 
             "depends_on": [],
             "deploy_order": 50
         }
-        
+
         # Basic addon detection
         if "postgres" in stack.lower() or "database" in stack.lower():
             service["addons"].append("POSTGRES")
@@ -1354,9 +1355,9 @@ def _build_heuristic_plan(repos_data: List[dict], error_message: str = None) -> 
             service["addons"].append("REDIS")
         if "vector" in stack.lower() or "ai" in stack.lower():
             service["addons"].append("QDRANT")
-            
+
         services.append(service)
-    
+
     return {
         "ecosystem_name": "SMSLY Heuristic Ecosystem",
         "services": services,
@@ -1367,7 +1368,7 @@ def _build_heuristic_plan(repos_data: List[dict], error_message: str = None) -> 
     }
 
 
-def _env_plan_map(raw_env: Any) -> Dict[str, str]:
+def _env_plan_map(raw_env: Any) -> dict[str, str]:
     """
     Normalize environment variable payloads to a flat dict.
 
@@ -1376,7 +1377,7 @@ def _env_plan_map(raw_env: Any) -> Dict[str, str]:
     - [{"key": "KEY", "default": "value", "is_secret": true, ...}, ...]
     """
     if isinstance(raw_env, dict):
-        env_map: Dict[str, str] = {}
+        env_map: dict[str, str] = {}
         for key, value in raw_env.items():
             key_text = str(key).strip().upper()
             if not key_text:
@@ -1393,7 +1394,7 @@ def _env_plan_map(raw_env: Any) -> Dict[str, str]:
             env_map[key_text] = "" if value is None else str(value)
         return env_map
 
-    env_map: Dict[str, str] = {}
+    env_map: dict[str, str] = {}
     if not isinstance(raw_env, list):
         return env_map
 
@@ -1445,9 +1446,9 @@ def _is_intelligence_service(service: dict) -> bool:
     return any(ind in name or ind in repo for ind in indicators)
 
 
-def _coerce_depends_on(raw_depends: Any) -> List[str]:
+def _coerce_depends_on(raw_depends: Any) -> list[str]:
     """Normalize depends_on payload to a flat list."""
-    tokens: List[str] = []
+    tokens: list[str] = []
     try:
         _append_tokens(
             tokens,
@@ -1505,7 +1506,7 @@ def _repo_short_name(service: dict) -> str:
     return "service"
 
 
-def _append_tokens(tokens: List[str], raw: Any, preferred_keys: Tuple[str, ...]) -> None:
+def _append_tokens(tokens: list[str], raw: Any, preferred_keys: tuple[str, ...]) -> None:
     """Extract string tokens from flexible AI-generated scalar/list/dict shapes."""
     if raw is None:
         return
@@ -1522,11 +1523,7 @@ def _append_tokens(tokens: List[str], raw: Any, preferred_keys: Tuple[str, ...])
             if isinstance(value, bool):
                 if value:
                     _append_tokens(tokens, key, preferred_keys)
-            elif isinstance(value, (str, int, float)):
-                _append_tokens(tokens, value, preferred_keys)
-            elif isinstance(value, (list, tuple, set)):
-                _append_tokens(tokens, value, preferred_keys)
-            elif isinstance(value, dict):
+            elif isinstance(value, (str, int, float, list, tuple, set, dict)):
                 _append_tokens(tokens, value, preferred_keys)
         return
 
@@ -1545,9 +1542,9 @@ def _append_tokens(tokens: List[str], raw: Any, preferred_keys: Tuple[str, ...])
     tokens.append(text)
 
 
-def _dedupe_preserving_order(values: List[str]) -> List[str]:
+def _dedupe_preserving_order(values: list[str]) -> list[str]:
     seen = set()
-    deduped: List[str] = []
+    deduped: list[str] = []
     for value in values:
         if not isinstance(value, str):
             continue
@@ -1563,9 +1560,9 @@ def _normalize_addon_token(token: str) -> str:
     return normalized if normalized else ""
 
 
-def _coerce_addons(raw_addons: Any) -> List[str]:
+def _coerce_addons(raw_addons: Any) -> list[str]:
     """Normalize addon declarations to a deduped list of addon type strings."""
-    tokens: List[str] = []
+    tokens: list[str] = []
     try:
         _append_tokens(tokens, raw_addons, ("type", "addon", "name", "service", "value"))
     except TypeError as exc:
@@ -1576,7 +1573,7 @@ def _coerce_addons(raw_addons: Any) -> List[str]:
     )
 
 
-def _build_deploy_sequence(services: List[dict]) -> List[str]:
+def _build_deploy_sequence(services: list[dict]) -> list[str]:
     """Build deploy sequence names from ordered, non-skipped services."""
     try:
         ordered = []
@@ -1589,28 +1586,28 @@ def _build_deploy_sequence(services: List[dict]) -> List[str]:
                 except Exception as e:
                     logger.warning("Error processing service for deploy sequence: %s", e)
                     continue
-        
+
         # Sort by order, then by name (both are now strings, so no unhashable issues)
         ordered.sort(key=lambda x: (x[0], x[1]))
-        
+
         return ["addons"] + [name for order, name in ordered]
-        
+
     except Exception as e:
         logger.warning("Deploy sequence build failed: %s", e)
         # Fallback: just use service names in order
         try:
             return ["addons"] + [
-                str(svc.get("name") or _repo_short_name(svc)) 
-                for svc in services 
+                str(svc.get("name") or _repo_short_name(svc))
+                for svc in services
                 if isinstance(svc, dict) and not svc.get("skip")
             ]
         except Exception:
             return ["addons"]
 
 
-def _rebuild_addons_manifest(services: List[dict], existing_addons: Any) -> List[dict]:
+def _rebuild_addons_manifest(services: list[dict], existing_addons: Any) -> list[dict]:
     """Rebuild addon shared_by map from service-level addon declarations."""
-    addon_map: Dict[str, set] = {}
+    addon_map: dict[str, set] = {}
 
     if isinstance(existing_addons, list):
         for addon in existing_addons:
@@ -1660,7 +1657,7 @@ def _rebuild_addons_manifest(services: List[dict], existing_addons: Any) -> List
         return []
 
 
-def _apply_generic_ecosystem_intelligence(services: List[dict]):
+def _apply_generic_ecosystem_intelligence(services: list[dict]):
     """
     Elite Level 5: Zero-Hardcoding Service Discovery.
     Analyzes the 'functional intent' of each service to build a generic mesh.
@@ -1687,13 +1684,13 @@ def _apply_generic_ecosystem_intelligence(services: List[dict]):
             addons.add("POSTGRES")
             addons.add("REDIS")
         elif stack in ["node", "nextjs", "nuxt"]:
-            if any("DATABASE_URL" in k.upper() for k in env_map.keys()):
+            if any("DATABASE_URL" in k.upper() for k in env_map):
                 addons.add("POSTGRES")
 
         svc["addons"] = sorted(addons)
 
         # 2. Dynamic Cross-Linking (Intelligent Mesh)
-        
+
         # Link to Core API
         if core_svc and svc != core_svc:
             # If service has vars that look like they need the Core/Platform URL
@@ -1706,7 +1703,7 @@ def _apply_generic_ecosystem_intelligence(services: List[dict]):
                     # If it's a prefixed var (e.g. MYPROJECT_PLATFORM_API_URL), preserve the key
                     # but wire it to the detected core service
                     env_map[key] = f"{{{{SERVICE:{core_name}}}}}"
-                    
+
                     # Also add implicit dependency
                     try:
                         deps = set(_coerce_depends_on(svc.get("depends_on", []) or []))
@@ -1725,7 +1722,7 @@ def _apply_generic_ecosystem_intelligence(services: List[dict]):
                     if not auth_name:
                         continue
                     env_map[key] = f"{{{{SERVICE:{auth_name}}}}}"
-                    
+
                     try:
                         deps = set(_coerce_depends_on(svc.get("depends_on", []) or []))
                     except TypeError as exc:
@@ -1740,11 +1737,11 @@ def _apply_generic_ecosystem_intelligence(services: List[dict]):
             if any(k in key_u for k in ["JWT_SECRET", "ENCRYPTION_KEY", "APP_SECRET", "GATEWAY_SECRET"]):
                 # Assign a shared secret placeholder so they all get the same value across the cluster
                 env_map[key] = f"{{{{SHARED_SECRET:{key.lower()}}}}}"
-            
+
             # AI Intelligence Inheritance
             if any(k in key_u for k in ["AI_PROVIDER", "LLM_PROVIDER"]):
                 env_map[key] = "auto"
-            
+
             if any(k in key_u for k in ["OPENAI_API_KEY", "GEMINI_API_KEY", "CLAUDE_API_KEY", "GROK_API_KEY", "ANTHROPIC_API_KEY"]):
                  env_map[key] = f"{{{{SHARED_SECRET:{key.lower()}}}}}"
 
@@ -1777,14 +1774,14 @@ def _apply_generic_ecosystem_intelligence(services: List[dict]):
     _ensure_100_percent_env_coverage(deployable)
 
 
-def _ensure_100_percent_env_coverage(services: List[dict]):
+def _ensure_100_percent_env_coverage(services: list[dict]):
     """
     Guarantees that NO environment variable is left empty.
     Forces production-ready values or clear placeholders for every key.
     """
     for svc in services:
         env_map = svc.get("env_vars", {})
-        
+
         # Scan for any null, empty, or missing values
         for key in list(env_map.keys()):
             val = env_map.get(key)
@@ -1796,7 +1793,7 @@ def _ensure_100_percent_env_coverage(services: List[dict]):
                     env_map[key] = "http://localhost" # Safe fallback placeholder
                 else:
                     env_map[key] = f"REPLACE_WITH_PRODUCTION_{key.upper()}"
-        
+
         svc["env_vars"] = env_map
 
     # Final sorting for deploy sequence
@@ -1811,10 +1808,10 @@ def _ensure_100_percent_env_coverage(services: List[dict]):
         service["deploy_order"] = index
 
 
-def _apply_plan_repo_defaults(services: List[dict], repos_data: List[dict]):
+def _apply_plan_repo_defaults(services: list[dict], repos_data: list[dict]):
     """Fill missing service branch values from GitHub repo metadata."""
-    by_full_repo: Dict[str, str] = {}
-    by_repo_name: Dict[str, str | None] = {}
+    by_full_repo: dict[str, str] = {}
+    by_repo_name: dict[str, str | None] = {}
 
     for repo_data in repos_data:
         repo_full = str(repo_data.get("repo") or "").strip().lower()
@@ -1850,7 +1847,7 @@ def _apply_plan_repo_defaults(services: List[dict], repos_data: List[dict]):
         svc["branch"] = fallback_branch or "main"
 
 
-def _build_heuristic_plan(repos_data: List[dict], error: str = "") -> dict:
+def _build_heuristic_plan(repos_data: list[dict], error: str = "") -> dict:
     """Build a basic deploy plan from heuristics when AI fails."""
     services = []
     order = 1
@@ -1903,7 +1900,7 @@ def _build_heuristic_plan(repos_data: List[dict], error: str = "") -> dict:
 # Full Scan Pipeline
 # ──────────────────────────────────────────────────────────────────────────────
 
-def scan_and_analyze(token: str, ai_provider: str = None, selected_repos: list = None, existing_services: list = None) -> dict:
+def scan_and_analyze(token: str, ai_provider: str | None = None, selected_repos: list | None = None, existing_services: list | None = None) -> dict:
     """
     Full pipeline: fetch all repos → analyze each → AI ecosystem plan.
     If selected_repos is provided, only processes those specific repositories.
@@ -1916,7 +1913,7 @@ def scan_and_analyze(token: str, ai_provider: str = None, selected_repos: list =
     except TypeError as exc:
         logger.exception("Ecosystem scan failed with unhashable type error: %s", exc)
         return {
-            "error": f"Scan failed: {str(exc)}. This is usually caused by unexpected AI response data.",
+            "error": f"Scan failed: {exc!s}. This is usually caused by unexpected AI response data.",
             "services": [],
             "addons": [],
             "deploy_sequence": [],
@@ -1925,7 +1922,7 @@ def scan_and_analyze(token: str, ai_provider: str = None, selected_repos: list =
     except Exception as exc:
         logger.exception("Ecosystem scan failed unexpectedly: %s", exc)
         return {
-            "error": f"Scan failed: {str(exc)}",
+            "error": f"Scan failed: {exc!s}",
             "services": [],
             "addons": [],
             "deploy_sequence": [],
@@ -1933,15 +1930,15 @@ def scan_and_analyze(token: str, ai_provider: str = None, selected_repos: list =
         }
 
 
-def _scan_and_analyze_impl(token: str, ai_provider: str = None, selected_repos: list = None, existing_services: list = None) -> dict:
+def _scan_and_analyze_impl(token: str, ai_provider: str | None = None, selected_repos: list | None = None, existing_services: list | None = None) -> dict:
     """Internal implementation of scan_and_analyze."""
     logger.info("=== STARTING ECOSYSTEM SCAN ===")
-    
+
     # 1. Fetch all repos
     logger.info("Step 1: Fetching repositories...")
     all_repos = fetch_all_repos(token)
     logger.info(f"Found {len(all_repos)} repositories")
-    
+
     # Filter by user selection if provided
     if selected_repos is not None:
         logger.info(f"Filtering by selected repos: {selected_repos}")
@@ -2009,15 +2006,15 @@ def _scan_and_analyze_impl(token: str, ai_provider: str = None, selected_repos: 
         logger.info("AI analysis completed successfully")
     except Exception as e:
         logger.error(f"AI ecosystem analysis failed: {e}")
-        return _build_heuristic_plan(repos_data, f"AI analysis failed: {str(e)}")
-    
+        return _build_heuristic_plan(repos_data, f"AI analysis failed: {e!s}")
+
     # 4. AI REVALIDATION: Validate and sanitize AI response before final submission
     logger.info("Step 4: Performing AI response revalidation...")
     try:
         if not _validate_ai_response_structure(json.dumps(plan)):
             logger.warning("AI response validation failed, attempting revalidation...")
             logger.warning(f"Problematic plan structure: {json.dumps(plan, indent=2)[:500]}...")
-            
+
             # If validation fails, try to get a corrected response from AI
             revalidation_prompt = f"""
             CRITICAL: Your previous ecosystem plan was rejected due to invalid data structure.
@@ -2026,10 +2023,10 @@ def _scan_and_analyze_impl(token: str, ai_provider: str = None, selected_repos: 
             - "addons": Array of objects with string fields only
             - "deploy_sequence": Array of strings
             - "ai_provider": String
-            
+
             PREVIOUS PLAN (invalid):
             {json.dumps(plan, indent=2)}
-            
+
             Return ONLY a valid JSON ecosystem plan with the correct structure:
             {{
               "ecosystem_name": "SMSLY Auto-Generated Ecosystem",
@@ -2054,15 +2051,15 @@ def _scan_and_analyze_impl(token: str, ai_provider: str = None, selected_repos: 
               "ai_provider": "auto"
             }}
             """
-            
+
             try:
                 from apps.intelligence.providers import _cached_ask
-                response_text, provider = _cached_ask(
-                    revalidation_prompt, 
-                    system_prompt=ECOSYSTEM_PROMPT, 
+                response_text, _provider = _cached_ask(
+                    revalidation_prompt,
+                    system_prompt=ECOSYSTEM_PROMPT,
                     provider_id=ai_provider
                 )
-                
+
                 logger.info("Revalidation response received, validating...")
                 if _validate_ai_response_structure(response_text):
                     plan = _sanitize_ai_response_for_processing(response_text)
@@ -2072,15 +2069,15 @@ def _scan_and_analyze_impl(token: str, ai_provider: str = None, selected_repos: 
                     plan = _build_heuristic_plan(repos_data, "AI response structure validation failed after revalidation")
             except Exception as e:
                 logger.error(f"AI revalidation failed: {e}")
-                plan = _build_heuristic_plan(repos_data, f"AI revalidation failed: {str(e)}")
-        
+                plan = _build_heuristic_plan(repos_data, f"AI revalidation failed: {e!s}")
+
         else:
             logger.info("AI response validation passed on first attempt")
-            
+
     except Exception as e:
         logger.error(f"AI revalidation process failed: {e}")
-        plan = _build_heuristic_plan(repos_data, f"AI revalidation process failed: {str(e)}")
-    
+        plan = _build_heuristic_plan(repos_data, f"AI revalidation process failed: {e!s}")
+
     # 5. FINAL VALIDATION: Ensure the returned plan is safe for processing
     logger.info("Step 5: Performing final validation...")
     try:
@@ -2094,10 +2091,10 @@ def _scan_and_analyze_impl(token: str, ai_provider: str = None, selected_repos: 
             "deployable_repos": len(repos_data),
             "scan_warning_count": len(scan_warnings),
         }
-        
+
         if scan_warnings:
             final_plan["scan_warnings"] = scan_warnings[:20]
-        
+
         # Safely extract and validate services
         logger.info(f"Processing {len(plan.get('services', []))} services...")
         for i, service in enumerate(plan.get("services", [])):
@@ -2106,7 +2103,7 @@ def _scan_and_analyze_impl(token: str, ai_provider: str = None, selected_repos: 
                     # Check if already deployed
                     service_name = str(service.get("name", f"service-{i}")).lower()
                     service_repo = str(service.get("repo", "")).lower()
-                    
+
                     is_existing = False
                     if existing_services:
                         for s in existing_services:
@@ -2135,7 +2132,7 @@ def _scan_and_analyze_impl(token: str, ai_provider: str = None, selected_repos: 
                     logger.warning(f"Error processing service {i}: {e}")
                     logger.warning(f"Problematic service data: {service}")
                     continue
-        
+
         # Safely extract and validate addons
         logger.info(f"Processing {len(plan.get('addons', []))} addons...")
         for i, addon in enumerate(plan.get("addons", [])):
@@ -2151,7 +2148,7 @@ def _scan_and_analyze_impl(token: str, ai_provider: str = None, selected_repos: 
                     logger.warning(f"Error processing addon {i}: {e}")
                     logger.warning(f"Problematic addon data: {addon}")
                     continue
-        
+
         # Build deploy sequence safely
         logger.info("Building deploy sequence...")
         try:
@@ -2162,7 +2159,7 @@ def _scan_and_analyze_impl(token: str, ai_provider: str = None, selected_repos: 
             # Fallback: just use service names in order
             try:
                 fallback_sequence = ["addons"] + [
-                    str(svc.get("name", f"service-{i}")) 
+                    str(svc.get("name", f"service-{i}"))
                     for i, svc in enumerate(final_plan["services"])
                 ]
                 final_plan["deploy_sequence"] = fallback_sequence
@@ -2170,14 +2167,14 @@ def _scan_and_analyze_impl(token: str, ai_provider: str = None, selected_repos: 
             except Exception:
                 final_plan["deploy_sequence"] = ["addons"]
                 logger.warning("Using minimal deploy sequence")
-        
+
         logger.info("=== ECOSYSTEM SCAN COMPLETED SUCCESSFULLY ===")
         return final_plan
-        
+
     except Exception as e:
         logger.error(f"Final validation failed, returning safe fallback: {e}")
-        logger.error(f"Error details: {type(e).__name__}: {str(e)}")
-        return _build_heuristic_plan(repos_data, f"Final validation failed: {str(e)}")
+        logger.error(f"Error details: {type(e).__name__}: {e!s}")
+        return _build_heuristic_plan(repos_data, f"Final validation failed: {e!s}")
 
 
 def sync_ecosystem_envs(project_id: str) -> dict:
@@ -2185,14 +2182,15 @@ def sync_ecosystem_envs(project_id: str) -> dict:
     Exhaustive sync of all environment variables for a project ecosystem.
     Uses AI Senate to re-analyze every service in the project and push fresh linking/secrets.
     """
-    from apps.deployments.models import Service, Project, EnvironmentVariable
-    from django.db import transaction
     import secrets
+
+    from apps.deployments.models import EnvironmentVariable, Project, Service
+    from django.db import transaction
 
     try:
         project = Project.objects.get(id=project_id)
         services = Service.objects.filter(project=project, status='ACTIVE')
-        
+
         if not services.exists():
             return {"status": "error", "message": "No active services found in this project to sync."}
 
@@ -2210,7 +2208,7 @@ def sync_ecosystem_envs(project_id: str) -> dict:
         # 2. Trigger AI Ecosystem Analysis
         logger.info("Triggering AI Ecosystem Analysis for project %s (%d services)", project.name, len(services))
         plan = analyze_ecosystem(repos_data)
-        
+
         if not plan or "services" not in plan:
             return {"status": "error", "message": "AI Senate failed to produce a valid ecosystem plan."}
 
@@ -2219,7 +2217,8 @@ def sync_ecosystem_envs(project_id: str) -> dict:
             for svc_plan in plan["services"]:
                 svc_name = svc_plan.get("name")
                 service = next((s for s in services if s.name == svc_name), None)
-                if not service: continue
+                if not service:
+                    continue
 
                 plan_envs = svc_plan.get("env_vars", {})
                 for key, val in plan_envs.items():
@@ -2230,7 +2229,7 @@ def sync_ecosystem_envs(project_id: str) -> dict:
                     elif str(val).startswith("{{SERVICE:"):
                         # Keep placeholder for runtime resolution or resolve now if possible
                         target_repo = val.replace("{{SERVICE:", "").replace("}}", "")
-                        target_svc = next((s for s in services if s.name == target_repo or s.repository_url and target_repo in s.repository_url), None)
+                        target_svc = next((s for s in services if s.name == target_repo or (s.repository_url and target_repo in s.repository_url)), None)
                         if target_svc:
                             final_val = f"http://{target_svc.name}:{target_svc.internal_port}"
 
@@ -2246,7 +2245,7 @@ def sync_ecosystem_envs(project_id: str) -> dict:
                     )
 
         return {
-            "status": "success", 
+            "status": "success",
             "message": f"Ecosystem sync complete for {len(services)} services. AI Provider: {plan.get('ai_provider', 'unknown')}",
             "plan": plan
         }
@@ -2256,7 +2255,7 @@ def sync_ecosystem_envs(project_id: str) -> dict:
         return {"status": "error", "message": str(e)}
 
 
-def _sanitize_git_output(text: str, token: str = None) -> str:
+def _sanitize_git_output(text: str, token: str | None = None) -> str:
     """Remove credentials from git output before logging."""
     sanitized = text or ""
     if token:
@@ -2265,14 +2264,14 @@ def _sanitize_git_output(text: str, token: str = None) -> str:
     return sanitized[:1200]
 
 
-def _clone_repo(repo_full: str, target_dir: str, token: str = None) -> bool:
+def _clone_repo(repo_full: str, target_dir: str, token: str | None = None) -> bool:
     """Clone a repository into a target directory using Git."""
     try:
         # Construct clone URL with token if provided
         clone_url = f"https://github.com/{repo_full}.git"
         if token:
             clone_url = f"https://x-access-token:{token}@github.com/{repo_full}.git"
-        
+
         # Run git clone --depth 1 for speed
         result = subprocess.run(
             ["git", "clone", "--depth", "1", clone_url, target_dir],
@@ -2280,7 +2279,7 @@ def _clone_repo(repo_full: str, target_dir: str, token: str = None) -> bool:
             text=True,
             timeout=60
         )
-        
+
         if result.returncode == 0:
             return True
 

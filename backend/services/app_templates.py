@@ -9,8 +9,7 @@ Each template defines the exact Docker image, ports, environment variables,
 and health checks needed for deployment.
 """
 
-from typing import Dict, List, Optional
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field  # noqa: E402
 
 
 @dataclass
@@ -22,22 +21,22 @@ class AppTemplate:
     category: str
     docker_image: str
     default_port: int = 8080
-    env_vars: Dict[str, str] = field(default_factory=dict)
-    volumes: List[str] = field(default_factory=list)
-    health_check: Optional[str] = None
-    docs_url: Optional[str] = None
-    required_addons: List[str] = field(default_factory=list)  # e.g., ['POSTGRES', 'REDIS']
-    logo_url: Optional[str] = None
-    website_url: Optional[str] = None
-    source_url: Optional[str] = None
-    docker_url: Optional[str] = None
-    tags: List[str] = field(default_factory=list)
-    dashboard_port: Optional[int] = None
+    env_vars: dict[str, str] = field(default_factory=dict)
+    volumes: list[str] = field(default_factory=list)
+    health_check: str | None = None
+    docs_url: str | None = None
+    required_addons: list[str] = field(default_factory=list)  # e.g., ['POSTGRES', 'REDIS']
+    logo_url: str | None = None
+    website_url: str | None = None
+    source_url: str | None = None
+    docker_url: str | None = None
+    tags: list[str] = field(default_factory=list)
+    dashboard_port: int | None = None
     supports_dashboard: bool = False
     supports_public_url: bool = True
     supports_private_url: bool = True
     requires_persistence: bool = False
-    post_deploy_notes: Optional[str] = None
+    post_deploy_notes: str | None = None
 
 
 # ============================================================================
@@ -45,7 +44,7 @@ class AppTemplate:
 # All Docker images are official or verified open-source images
 # ============================================================================
 
-APP_TEMPLATES: Dict[str, AppTemplate] = {
+APP_TEMPLATES: dict[str, AppTemplate] = {
 
     # ===== SMSLY ECOSYSTEM =====
     'smsly-platform-api': AppTemplate(
@@ -682,7 +681,7 @@ def get_template(template_id: str) -> AppTemplate:
     return APP_TEMPLATES.get(template_id)
 
 
-def list_templates(category: str = None) -> list:
+def list_templates(category: str | None = None) -> list:
     """List all templates, optionally filtered by category."""
     templates = list(APP_TEMPLATES.values())
     if category:
@@ -691,7 +690,7 @@ def list_templates(category: str = None) -> list:
 
 
 def get_docker_run_command(
-        template_id: str, name: str = None, domain: str = None) -> str:
+        template_id: str, name: str | None = None, domain: str | None = None) -> str:
     """Generate docker run command for a template."""
     import secrets
 

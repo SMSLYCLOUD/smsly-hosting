@@ -9,13 +9,13 @@ propagate secrets at deploy time.
 
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any
 from urllib.parse import urlparse, urlunparse
 
 logger = logging.getLogger(__name__)
 
 
-def build_ecosystem_graph(service) -> Dict[str, Any]:
+def build_ecosystem_graph(service) -> dict[str, Any]:
     """
     Build a live graph of all services in the same ecosystem.
 
@@ -50,7 +50,7 @@ def build_ecosystem_graph(service) -> Dict[str, Any]:
         .prefetch_related('addons', 'env_vars')
     )
 
-    graph: Dict[str, Any] = {
+    graph: dict[str, Any] = {
         'deployed': {},
         'shared_addons': {},
     }
@@ -91,13 +91,12 @@ def build_ecosystem_graph(service) -> Dict[str, Any]:
     return graph
 
 
-def get_sibling_env_value(service, sibling_name: str, key: str) -> Optional[str]:
+def get_sibling_env_value(service, sibling_name: str, key: str) -> str | None:
     """
     Retrieve an environment variable from a deployed sibling service.
     Used to propagate shared secrets (e.g., INTERNAL_API_SECRET).
     """
-    from apps.deployments.models import Service
-    from apps.deployments.models import EnvironmentVariable
+    from apps.deployments.models import EnvironmentVariable, Service
 
     try:
         sib = Service.objects.get(name=sibling_name, owner=service.owner)
@@ -107,7 +106,7 @@ def get_sibling_env_value(service, sibling_name: str, key: str) -> Optional[str]
         return None
 
 
-def find_sibling_by_pattern(graph: dict, pattern: str) -> Optional[dict]:
+def find_sibling_by_pattern(graph: dict, pattern: str) -> dict | None:
     """
     Find a deployed sibling whose name matches a pattern.
     E.g., pattern='backend' matches 'smsly-backend'.
@@ -132,8 +131,8 @@ def resolve_service_url(sib_info: dict, prefer_public: bool = True) -> str:
 
 
 def rewrite_database_url(base_url: str, db_name: str,
-                         db_user: Optional[str] = None,
-                         db_password: Optional[str] = None) -> str:
+                         db_user: str | None = None,
+                         db_password: str | None = None) -> str:
     """
     Rewrite a DATABASE_URL to target a specific database on the same server.
     E.g., postgres://postgres:pass@pgcat:5432/smsly_backend
@@ -148,10 +147,7 @@ def rewrite_database_url(base_url: str, db_name: str,
         port = parsed.port or 5432
         user = db_user or parsed.username or 'postgres'
         password = db_password or parsed.password or ''
-        if password:
-            userinfo = f"{user}:{password}"
-        else:
-            userinfo = user
+        userinfo = f"{user}:{password}" if password else user
         new_netloc = f"{userinfo}@{netloc}:{port}"
         return urlunparse((
             parsed.scheme or 'postgresql',
@@ -170,7 +166,7 @@ def next_available_redis_db(graph: dict, current_service_name: str) -> int:
     Scans all deployed siblings' REDIS_URL for their /N suffix.
     """
     used_dbs = set()
-    for name, info in graph.get('deployed', {}).items():
+    for _name, info in graph.get('deployed', {}).items():
         redis_url = info.get('addons', {}).get('REDIS', '')
         if redis_url:
             try:

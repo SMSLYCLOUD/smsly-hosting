@@ -1,4 +1,3 @@
-import re
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
@@ -6,7 +5,6 @@ from django.test import TestCase
 
 from apps.deployments.models import ManagedServer
 from apps.deployments.signals import _MANAGED_SERVER_HOST_RE
-
 
 User = get_user_model()
 

@@ -2,9 +2,8 @@
 
 import logging
 
-from celery import shared_task
-
 from apps.deployments.models import PlatformConfig
+from celery import shared_task
 
 from .models import Domain, DomainStatus
 from .verification import verify_custom_domain_dns
@@ -88,7 +87,7 @@ def verify_dns_and_provision_ssl_task(domain_id):
 
 
 def _trigger_caddy_reload():
-    from services.caddy_manager import generate_caddyfile, apply_caddyfile
+    from services.caddy_manager import apply_caddyfile, generate_caddyfile
 
     config = PlatformConfig.load()
     content = generate_caddyfile(config)

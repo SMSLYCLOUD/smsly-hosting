@@ -16,8 +16,9 @@ import requests
 from celery import shared_task
 from django.core.cache import cache
 from django.utils import timezone
-from apps.deployments.utils import log_event
+
 from apps.deployments.services.tls_verify import should_verify
+from apps.deployments.utils import log_event
 
 logger = logging.getLogger(__name__)
 
@@ -283,7 +284,7 @@ def _build_targets(service, active_deployment):
     container_id = (active_deployment.container_id or "").strip()
     if container_id:
         direct_headers = {"Host": public_domain} if public_domain else {}
-        verify_container = (
+        (
             _server_verify_tls(service.server) if service.server else True
         )
 
@@ -329,7 +330,7 @@ def monitor_health_task():
 
     Uses per-service interval gating to avoid over-checking.
     """
-    from apps.deployments.models import Service, Deployment
+    from apps.deployments.models import Deployment, Service
 
     services = Service.objects.exclude(health_check_path="")
     checked = 0

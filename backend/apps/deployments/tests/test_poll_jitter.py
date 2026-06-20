@@ -1,10 +1,12 @@
-import pytest
-from unittest.mock import patch, MagicMock
-from django.test import TestCase
-from django.contrib.auth import get_user_model
+import contextlib
+from unittest.mock import MagicMock, patch
 
-from apps.deployments.models import Deployment, Service
+import pytest
+from django.contrib.auth import get_user_model
+from django.test import TestCase
+
 from apps.deployments import tasks
+from apps.deployments.models import Deployment, Service
 
 
 def _make_deployment(user):
@@ -46,14 +48,12 @@ class PollJitterTests(TestCase):
             raise StopIteration("stop after first sleep")
 
         with patch.object(tasks.time, "sleep", side_effect=fake_sleep):
-            try:
+            with contextlib.suppress(StopIteration):
                 tasks._poll_remote_deployment(
                     self.deployment,
                     self.orchestrator,
                     "remote-dep-id-1",
                 )
-            except StopIteration:
-                pass
 
         self.assertTrue(len(sleep_values) >= 1,
                         f"Expected at least 1 sleep, got {len(sleep_values)}")
@@ -69,17 +69,14 @@ class PollJitterTests(TestCase):
             sleep_values.append(value)
             if len(sleep_values) >= max_iterations:
                 raise StopIteration("stop after max_iterations sleeps")
-            return None
 
         with patch.object(tasks.time, "sleep", side_effect=fake_sleep):
-            try:
+            with contextlib.suppress(StopIteration):
                 tasks._poll_remote_deployment(
                     self.deployment,
                     self.orchestrator,
                     "remote-dep-id-2",
                 )
-            except StopIteration:
-                pass
 
         self.assertGreaterEqual(len(sleep_values), 2,
                                 f"Expected at least 2 sleeps, got {len(sleep_values)}")

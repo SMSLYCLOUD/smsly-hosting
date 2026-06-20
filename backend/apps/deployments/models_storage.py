@@ -1,6 +1,7 @@
 """Models Storage module."""
 import re
 import uuid
+
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
@@ -36,7 +37,7 @@ class Volume(models.Model):
         """
         super().clean()
         # Avoid circular import
-        from .views_storage import _validate_volume_name, _validate_volume_mount_path
+        from .views_storage import _validate_volume_mount_path, _validate_volume_name
         try:
             _validate_volume_name(self.name)
         except Exception as exc:

@@ -7,13 +7,15 @@ Validates:
   - Connection URL injection into service env vars
   - Addon deprovisioning
 """
-from unittest.mock import patch, MagicMock
-from django.test import TestCase
+from unittest.mock import patch
+
 from django.contrib.auth.models import User
-from rest_framework.test import APITestCase
+from django.test import TestCase
 from rest_framework import status as http_status
-from apps.deployments.models import Service, EnvironmentVariable
+from rest_framework.test import APITestCase
+
 from apps.cloud.models import CloudProvider
+from apps.deployments.models import EnvironmentVariable, Service
 
 
 class AddonProvisioningModelTests(TestCase):

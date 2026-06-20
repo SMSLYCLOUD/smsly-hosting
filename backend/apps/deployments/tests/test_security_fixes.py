@@ -22,11 +22,11 @@ defends against, so future regressions can be traced back.
 import hashlib
 import hmac
 import time
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
-from django.test import TestCase, override_settings
+from django.test import TestCase
 from rest_framework.test import APIClient
 
 try:
@@ -99,7 +99,7 @@ class OAuthStateCSRFTests(TestCase):
 
     def test_state_is_single_use(self):
         from django.core.cache import cache
-        cache.set(f"github_oauth_state:oncenb", str(self.user.id), timeout=600)
+        cache.set("github_oauth_state:oncenb", str(self.user.id), timeout=600)
         # First attempt is forbidden (no real GitHub to talk to) but
         # the important thing is the state is consumed. We assert
         # the state is gone after a single call regardless of the
@@ -114,7 +114,7 @@ class OAuthStateCSRFTests(TestCase):
     def test_state_must_match_user(self):
         from django.core.cache import cache
         other = User.objects.create_user(username="other", password="p")
-        cache.set(f"github_oauth_state:their", str(other.id), timeout=600)
+        cache.set("github_oauth_state:their", str(other.id), timeout=600)
         # Even with the right code path, the state belongs to `other`
         # not the requester.
         self.client.force_authenticate(user=self.user)

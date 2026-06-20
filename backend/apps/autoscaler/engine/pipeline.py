@@ -40,6 +40,7 @@ def analyze_and_apply(service, *, now=None, min_interval_seconds: int = 0) -> Sc
     that qualify for both.
     """
     from django.core.cache import cache as django_cache
+
     from apps.deployments.models_core import Service
 
     now = now or timezone.now()

@@ -5,11 +5,10 @@ Tests for environment variable shortcodes (services.env_resolver).
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from services.env_resolver import resolve_shortcodes
 
 from apps.deployments.models import Region, Service
 from apps.deployments.models_addons import Addon
-from services.env_resolver import resolve_shortcodes
-
 
 User = get_user_model()
 

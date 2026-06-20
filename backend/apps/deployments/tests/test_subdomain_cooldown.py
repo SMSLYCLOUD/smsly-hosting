@@ -10,16 +10,13 @@ Covers:
      cooldown.
 """
 from datetime import timedelta
-from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
-from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.deployments.models_tunnels import ReservedSubdomain
-
 
 User = get_user_model()
 

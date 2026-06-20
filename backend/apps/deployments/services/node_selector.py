@@ -1,6 +1,8 @@
-from django.conf import settings
-from apps.deployments.models import ManagedServer
 import logging
+
+from django.conf import settings
+
+from apps.deployments.models import ManagedServer
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +21,6 @@ def select_eligible_node(user) -> ManagedServer:
     servers = ManagedServer.objects.filter(owner=user)
     allow_control_plane = getattr(settings, 'CLOUDNEURON_ALLOW_CONTROL_PLANE_WORKLOADS', False)
 
-    eligible = []
     remote_nodes = []
     master_node = None
 

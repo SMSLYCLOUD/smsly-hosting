@@ -15,7 +15,6 @@ from rest_framework.test import APIClient
 
 from apps.deployments.views_subdomains import RESERVED_LABELS
 
-
 User = get_user_model()
 
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 import os
 import sys
+
 import django
-import json
 
 # Add the current directory to Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -19,8 +19,8 @@ print("=== Custom Domain System Status Report ===\n")
 print("1. Database Records Check")
 print("-" * 40)
 
-from apps.domains.models import Domain, DomainStatus
-from apps.deployments.models import Service
+from apps.deployments.models import Service  # noqa: E402
+from apps.domains.models import Domain, DomainStatus  # noqa: E402
 
 # Check Domain records
 domains = Domain.objects.all()
@@ -53,7 +53,7 @@ if services.exists():
         print(f"    Status: {service.status}")
         print(f"    Public Domain: {service.public_domain}")
         print(f"    Owner: {service.owner.username if service.owner else 'None'}")
-        
+
         # Check if service has custom_domains field (old system)
         if hasattr(service, 'custom_domains'):
             custom_domains = getattr(service, 'custom_domains', None)
@@ -67,7 +67,7 @@ else:
 print("2. Platform Configuration")
 print("-" * 40)
 
-from apps.deployments.models import PlatformConfig
+from apps.deployments.models import PlatformConfig  # noqa: E402
 
 try:
     config = PlatformConfig.load()
@@ -85,7 +85,7 @@ print()
 print("3. DNS Verification Test")
 print("-" * 40)
 
-from apps.domains.verification import verify_custom_domain_dns
+from apps.domains.verification import verify_custom_domain_dns  # noqa: E402
 
 # Test with existing domains
 if domains.exists():
@@ -98,7 +98,7 @@ if domains.exists():
         print(f"  Matched by: {result.matched_by}")
         print(f"  Error: {result.error}")
         print()
-        
+
         # Check if domain should be updated
         if result.verified and domain.status != DomainStatus.DNS_VERIFIED:
             print(f"  -> DNS VERIFIED but status is {domain.status} - needs update")
@@ -126,12 +126,12 @@ print("4. Celery Task Configuration")
 print("-" * 40)
 
 try:
-    from config.celery import app
     from apps.domains.tasks import verify_dns_and_provision_ssl_task
-    
+    from config.celery import app
+
     print(f"Domain Task Name: {verify_dns_and_provision_ssl_task.name}")
     print(f"Task Registered: {verify_dns_and_provision_ssl_task in app.tasks}")
-    
+
     # Check if task is in beat schedule
     beat_schedule = app.conf.beat_schedule
     ssl_tasks = {k: v for k, v in beat_schedule.items() if 'ssl' in k.lower() or 'domain' in k.lower()}
@@ -141,7 +141,7 @@ try:
             print(f"  {name}: {config}")
     else:
         print("No SSL/Domain tasks found in beat schedule")
-        
+
 except Exception as e:
     print(f"Error checking Celery tasks: {e}")
 
@@ -154,32 +154,32 @@ print("-" * 40)
 if domains.exists():
     domain = domains.first()
     print(f"Testing task execution for domain: {domain.domain_name}")
-    
+
     try:
         # Test synchronous task execution
         from apps.domains.tasks import verify_dns_and_provision_ssl_task
-        
+
         # Get current status
         old_status = domain.status
         old_verified = domain.verified
         print(f"  Initial status: {old_status}")
         print(f"  Initial verified: {old_verified}")
-        
+
         # Execute task
         result = verify_dns_and_provision_ssl_task(domain.id)
         print(f"  Task result: {result}")
-        
+
         # Check updated status
         domain.refresh_from_db()
         print(f"  New status: {domain.status}")
         print(f"  New verified: {domain.verified}")
         print(f"  Last error: {domain.last_error}")
-        
+
         if domain.status != old_status:
             print(f"  -> Status changed from {old_status} to {domain.status}")
         else:
-            print(f"  -> Status unchanged - task may not have run properly")
-            
+            print("  -> Status unchanged - task may not have run properly")
+
     except Exception as e:
         print(f"Error executing domain task: {e}")
 else:
@@ -205,10 +205,10 @@ if not getattr(config, 'domain', ''):
 
 try:
     from config.celery import app
-    if not any('domain' in task_name for task_name in app.tasks.keys()):
+    if not any('domain' in task_name for task_name in app.tasks):
         issues.append("Domain tasks not properly registered")
-except:
-    issues.append("Celery configuration issue")
+except Exception as e:
+    issues.append(f"Celery configuration issue: {e}")
 
 if issues:
     print("Issues found:")

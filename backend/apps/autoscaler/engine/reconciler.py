@@ -12,7 +12,6 @@ semantics) and additionally updates ``last_scale_at`` for cooldown.
 """
 import logging
 import threading
-from typing import Optional
 
 from django.db import transaction
 from django.utils import timezone
@@ -42,7 +41,7 @@ class ScaleResult:
     """Returned to callers so they can log/aggregate."""
 
     def __init__(self, recommendation: Recommendation, applied: bool,
-                 spawned: int = 0, destroyed: int = 0, error: Optional[str] = None):
+                 spawned: int = 0, destroyed: int = 0, error: str | None = None):
         self.recommendation = recommendation
         self.applied = applied
         self.spawned = spawned
@@ -84,10 +83,10 @@ class Reconciler:
 
     # ── Scale up ─────────────────────────────────────────────────────────────
     def _scale_up(self, rec: Recommendation) -> ScaleResult:
-        from apps.deployments.models_replica import ServiceReplica
         from apps.deployments.models_core import ManagedServer
-        from apps.deployments.services.spawning_service import SpawningService
+        from apps.deployments.models_replica import ServiceReplica
         from apps.deployments.services.node_scorer import NodeScorer
+        from apps.deployments.services.spawning_service import SpawningService
 
         spawned = 0
         try:
@@ -120,7 +119,7 @@ class Reconciler:
                 return ScaleResult(rec, applied=True, spawned=spawned)
 
             # Priority 2: remote nodes
-            still_remaining = remaining - spawned
+            remaining - spawned
             candidates = ManagedServer.objects.filter(
                 status=ManagedServer.Status.ONLINE,
                 allow_user_workloads=True,

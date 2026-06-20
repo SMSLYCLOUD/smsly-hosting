@@ -1,9 +1,11 @@
 import uuid
 from urllib.parse import urlparse
+
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
-from django.conf import settings
 from encrypted_model_fields.fields import EncryptedCharField
+
 from .models_core import Service
 
 
@@ -22,9 +24,7 @@ def _is_internal_http_host(host: str) -> bool:
         return True
     if host.startswith('smsly-') or host in ('minio', 'registry'):
         return True
-    if host.endswith('.internal'):
-        return True
-    return False
+    return bool(host.endswith('.internal'))
 
 
 def validate_endpoint_url(url: str) -> None:

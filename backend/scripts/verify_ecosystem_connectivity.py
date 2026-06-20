@@ -1,7 +1,6 @@
+
 import requests
-import json
-import os
-import sys
+
 
 def verify_handshake():
     print("🔬 Starting Ecosystem Connectivity Handshake...")
@@ -13,7 +12,7 @@ def verify_handshake():
         resp = requests.get(f"{GATEWAY_URL}/health", timeout=5)
         print(f"✅ Gateway: {GATEWAY_URL} -> {resp.status_code}")
     except Exception as e:
-        print(f"❌ Gateway UNREACHABLE: {str(e)}")
+        print(f"❌ Gateway UNREACHABLE: {e!s}")
 
     # 2. Probe the Identity Service (The Auth Heart)
     IDENTITY_URL = "http://localhost:8001" # Internal mapping test
@@ -21,7 +20,7 @@ def verify_handshake():
         # Simulate a token validation request
         resp = requests.get(f"{IDENTITY_URL}/.well-known/openid-configuration", timeout=5)
         print(f"✅ Identity Service: {IDENTITY_URL} -> {resp.status_code}")
-    except Exception as e:
+    except Exception:
         print(f"⚠️ Identity Service unreachable at {IDENTITY_URL} (This is expected if only internal DNS is mapped)")
 
     # 3. Verify Cross-Service Secret Parity (Mock Check)
@@ -39,7 +38,7 @@ def verify_handshake():
         if resp.status_code in [200, 401]: # 401 is actually a success for connectivity (Gateway reached Identity)
             print("💎 MESH CONNECTIVITY VERIFIED: Gateway <-> Identity <-> Backend")
     except Exception as e:
-        print(f"❌ Handshake Failed: {str(e)}")
+        print(f"❌ Handshake Failed: {e!s}")
 
 if __name__ == "__main__":
     verify_handshake()

@@ -1,7 +1,8 @@
 """Models module."""
+import uuid
+
 from django.db import models
 from encrypted_model_fields.fields import EncryptedCharField
-import uuid
 
 
 class CloudProvider(models.Model):

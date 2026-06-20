@@ -1,10 +1,9 @@
-import uuid
-import pytest
 from unittest.mock import MagicMock, patch
 
-from rest_framework.test import APIClient
-from django.urls import reverse
+import pytest
 from django.contrib.auth import get_user_model
+from django.urls import reverse
+from rest_framework.test import APIClient
 
 from apps.deployments.models_mesh import MeshNetwork, WireGuardPeer
 from apps.deployments.services.replication_service import ReplicationService

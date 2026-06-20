@@ -11,9 +11,8 @@ Each pattern has:
 Called by the pipeline health-check stage and the AI diagnosis task.
 """
 
-import re
 import logging
-from typing import Optional
+import re
 
 from apps.deployments.models import EnvironmentVariable
 
@@ -284,7 +283,6 @@ def diagnose_runtime_logs(
         return []
 
     results = []
-    applied_envs = {}
 
     for pattern in ERROR_PATTERNS:
         match = pattern['regex'].search(logs)
@@ -340,7 +338,7 @@ def _apply_fix(
     logs: str,
     service,
     deployment,
-) -> Optional[str]:
+) -> str | None:
     """Apply an auto-fix based on the pattern match."""
     import secrets
 

@@ -1,5 +1,6 @@
 from django.db import models
 
+
 class DailyRevenue(models.Model):
     """Pre-aggregated daily revenue snapshot."""
     date = models.DateField(unique=True)

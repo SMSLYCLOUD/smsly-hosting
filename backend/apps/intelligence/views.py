@@ -5,33 +5,40 @@ import os
 import time
 import uuid
 from datetime import date
-from drf_spectacular.types import OpenApiTypes
-from drf_spectacular.utils import extend_schema
+
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import DatabaseError
 from django.db.models import Sum
-from django.http import StreamingHttpResponse, JsonResponse
-from rest_framework.decorators import api_view, permission_classes, authentication_classes, throttle_classes
-from rest_framework.permissions import IsAuthenticated, IsAdminUser
-from rest_framework.response import Response
+from django.http import JsonResponse, StreamingHttpResponse
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema
 from rest_framework import status
-
-from .providers import (
-    get_available_providers,
-    get_configured_providers,
-    ask_with_fallback,
-    _cached_ask,
-    _sync_db_to_env,
-    _sanitize_api_key,
-    PROVIDERS,
-    SENATE_COMMITTEE_COST_MULTIPLIER,
+from rest_framework.decorators import (
+    api_view,
+    authentication_classes,
+    permission_classes,
+    throttle_classes,
 )
+from rest_framework.permissions import IsAdminUser, IsAuthenticated
+from rest_framework.response import Response
+
+from apps.core.auth import APIKeyAuthentication, CsrfExemptSessionAuthentication
+from apps.deployments.models_audit import AuditLog
+from apps.deployments.rate_limiting import AIAnalysisRateThrottle, AIChatRateThrottle
+
 from .analyzer import LogAnalyzer
 from .cost import CostAdvisor
 from .models import LLMUsage, UserAICap
-from apps.deployments.models_audit import AuditLog
-from apps.core.auth import APIKeyAuthentication, CsrfExemptSessionAuthentication
-from apps.deployments.rate_limiting import AIChatRateThrottle, AIAnalysisRateThrottle
+from .providers import (
+    PROVIDERS,
+    SENATE_COMMITTEE_COST_MULTIPLIER,
+    _cached_ask,
+    _sanitize_api_key,
+    _sync_db_to_env,
+    ask_with_fallback,
+    get_available_providers,
+    get_configured_providers,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +47,7 @@ def _json_safe(value, fallback):
     """Coerce arbitrary values to JSON-safe structures."""
     try:
         return json.loads(json.dumps(value, default=str))
-    except Exception:  # noqa: BLE001
+    except Exception:
         return fallback
 
 
@@ -189,14 +196,14 @@ def ai_providers_status(request):
                 else:
                     # Fallback: expose public attributes only.
                     providers.append({k: v for k, v in vars(p).items() if not k.startswith("_") and not callable(v)})
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.exception("Failed to fetch AI provider statuses: %s", exc)
             providers = []
             degraded_reason = "provider_status_unavailable"
 
         try:
             configured = get_configured_providers()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.exception("Failed to resolve configured AI providers: %s", exc)
             configured = []
             degraded_reason = degraded_reason or "configured_provider_lookup_failed"
@@ -226,7 +233,7 @@ def ai_providers_status(request):
             payload["degraded"] = True
             payload["degraded_reason"] = degraded_reason
         return Response(payload)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.exception("ai_providers_status unhandled error: %s", exc)
         return Response(
             {
@@ -555,7 +562,7 @@ def ai_analyze_logs(request):
     Returns: { "diagnosis": "...", "issues": [...], "recommendations": [...], "provider": "..." }
     """
     logs = request.data.get("logs", "")
-    context = request.data.get("context", "deployment")
+    request.data.get("context", "deployment")
     analyzer = LogAnalyzer()
 
     issues = analyzer.analyze_logs(logs)
@@ -616,7 +623,7 @@ def ai_intelligence_report(request):
             .order_by("-created_at")
             .first()
         )
-    except (DatabaseError, Exception):  # noqa: BLE001
+    except (DatabaseError, Exception):
         # Keep the dashboard stable even when audit storage is unavailable.
         return Response({
             "available": False,
@@ -668,7 +675,7 @@ def ai_anomaly_history(request):
             .filter(actor__in=["AI_REMEDIATOR", "AI_REVIEWER"])
             .order_by("-created_at")[:50]
         )
-    except (DatabaseError, Exception):  # noqa: BLE001
+    except (DatabaseError, Exception):
         return Response({"anomalies": [], "available": False})
 
     data = []
@@ -698,7 +705,8 @@ def jules_fix_history(request, service_id: str):
     """
     try:
         from django.db.models import Q
-        from apps.deployments.models_core import Service, Deployment
+
+        from apps.deployments.models_core import Deployment, Service
 
         # SECURITY: scope to services the caller can access (owner or
         # team member). Without this, any authenticated user could
@@ -726,8 +734,8 @@ def jules_fix_history(request, service_id: str):
                 "status": d.status,
                 "created_at": d.created_at.isoformat() if d.created_at else None,
                 "jules_events": jules_lines[-10:],  # last 10 jules-related log lines
-                "fix_applied": any("PR created" in l for l in jules_lines),
-                "fix_failed": any("Jules auto-fix failed" in l or "Jules fix request failed" in l for l in jules_lines),
+                "fix_applied": any("PR created" in line for line in jules_lines),
+                "fix_failed": any("Jules auto-fix failed" in line or "Jules fix request failed" in line for line in jules_lines),
             })
 
         return Response({"service_id": str(service.id), "entries": entries})

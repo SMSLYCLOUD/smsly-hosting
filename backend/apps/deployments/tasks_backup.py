@@ -1,50 +1,21 @@
 import logging
-logger = logging.getLogger(__name__)
-import random
-import re
-import shlex
-import shutil
-import tempfile
-import subprocess
-import os
-import json
-import time
-import zipfile
-import secrets
-import threading
-from contextlib import contextmanager
-from urllib.parse import unquote, urlparse
-import docker
-import requests
-from celery import shared_task
-from django.conf import settings
-from django.core.cache import cache
-from django.utils import timezone
-from django.db.models import Sum
-from apps.cloud.models import CloudProvider
-from apps.cloud.services.builder import NixpacksBuilder
-from apps.cloud.services.compute import ComputeService
-from apps.cloud.services.function_provisioner import FunctionProvisioner
-from apps.deployments.ai_router import DEFAULT_AI_ROUTER_API_BASE, DEFAULT_AI_ROUTER_UI_BASE, DEFAULT_BRAID_ALIAS, generate_ai_router_proxy_config, get_ollama_model_name, is_ai_router_service, is_ollama_service
-from apps.deployments.models import Service, Deployment, EnvironmentVariable, PlatformConfig
-from apps.deployments.models_addons import Addon, Backup
-from apps.deployments.models_backup import BackupSchedule, ServiceBackup
-from apps.deployments.models_storage import Volume
-from apps.deployments.models_transfer import ServerTransfer
-from apps.deployments.services.backup_service import BackupService
-from apps.deployments.services.pipeline import PipelineManager, PipelineError
-from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
-from apps.deployments.services.tls_verify import should_verify
-from apps.deployments.services.transfer_service import ServerTransferService
-from apps.deployments.utils import append_log, broadcast_status, build_local_source_bundle, update_stage, is_deployment_local
-from services.addon_provisioner import addon_provisioner
 
+logger = logging.getLogger(__name__)
+import os  # noqa: E402
+
+from celery import shared_task  # noqa: E402
+from django.utils import timezone  # noqa: E402
+
+from apps.deployments.models_backup import BackupSchedule  # noqa: E402
+from apps.deployments.services.backup_service import BackupService  # noqa: E402
+from apps.deployments.utils import log_event  # noqa: E402
 
 
 @shared_task(bind=True, soft_time_limit=3600, time_limit=3900, max_retries=3, default_retry_delay=300)
 def create_service_backup_task(self, service_id, backup_type='MANUAL', backup_id=None, schedule_id=None):
-    from .services.backup_service import BackupService
     from apps.deployments.utils import log_event
+
+    from .services.backup_service import BackupService
     log_event(
         action='BACKUP_CREATE',
         target=f'Service: {service_id}',
@@ -151,8 +122,8 @@ def purge_user_backups_task(self, user_id, actor: str = 'system', force: bool = 
       3. Deletes the ``ServiceBackup`` and ``ServerBackup`` rows.
       4. Emits an ``AuditLog`` entry recording the count of artifacts purged.
     """
-    from apps.deployments.services.backup_service import purge_user_backups
     from apps.deployments.models_audit import AuditLog
+    from apps.deployments.services.backup_service import purge_user_backups
 
     try:
         counters = purge_user_backups(user_id)
@@ -188,8 +159,9 @@ def purge_user_backups_task(self, user_id, actor: str = 'system', force: bool = 
 @shared_task
 def cleanup_old_backups_task():
     """Delete backups older than retention_days per schedule."""
-    from .models_backup import BackupSchedule, ServiceBackup, ServerBackup
     from datetime import timedelta
+
+    from .models_backup import BackupSchedule, ServerBackup, ServiceBackup
 
     schedules = BackupSchedule.objects.filter(enabled=True)
     cleaned = 0
@@ -221,9 +193,11 @@ def cleanup_old_backups_task():
 @shared_task
 def run_scheduled_backups_task():
     """Execute all due BackupSchedule entries."""
-    from .models_backup import BackupSchedule
-    import croniter
     from datetime import datetime
+
+    import croniter
+
+    from .models_backup import BackupSchedule
 
     now = timezone.now()
     schedules = BackupSchedule.objects.filter(enabled=True)

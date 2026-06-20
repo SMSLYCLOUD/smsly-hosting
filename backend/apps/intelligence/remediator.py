@@ -1,14 +1,19 @@
 """Remediator module."""
-from typing import Dict, Optional
 import logging
 import subprocess
 from datetime import timedelta
+
 from django.core.cache import cache
 from django.db import transaction
 from django.utils import timezone
-from apps.deployments.models import Service, Deployment
+
+from apps.deployments.models import Deployment, Service
 from apps.deployments.models_audit import AuditLog
-from apps.deployments.tasks_deploy import enqueue_smart_deploy_task, _resolve_provider_for_service
+from apps.deployments.tasks_deploy import (
+    _resolve_provider_for_service,
+    enqueue_smart_deploy_task,
+)
+
 from .providers import _cached_ask
 
 logger = logging.getLogger(__name__)
@@ -94,7 +99,7 @@ class RemediationEngine:
         },
     }
 
-    def suggest_fix(self, issue_type: str) -> Optional[Dict]:
+    def suggest_fix(self, issue_type: str) -> dict | None:
         """Return the recommended fix for a given issue type."""
         return self.RECOMMENDATIONS.get(issue_type)
 

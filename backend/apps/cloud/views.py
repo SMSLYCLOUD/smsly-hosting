@@ -1,15 +1,20 @@
 """Views module."""
+import logging
 import re
 from decimal import Decimal
-import logging
 
 from django.core.cache import cache
 from django.utils import timezone
-from rest_framework import serializers, viewsets, permissions, status
+from rest_framework import permissions, serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
+
 from .models import CloudProvider, CloudResource
-from .serializers import CloudProviderSerializer, CloudProviderCreateSerializer, CloudResourceSerializer
+from .serializers import (
+    CloudProviderCreateSerializer,
+    CloudProviderSerializer,
+    CloudResourceSerializer,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +68,7 @@ class CloudProviderViewSet(viewsets.ModelViewSet):
                 {'error': str(exc)},
                 status=status.HTTP_501_NOT_IMPLEMENTED,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             return Response(
                 {'error': f'Sync failed: {exc}'},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -317,13 +322,13 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         context = "User is asking about cloud infrastructure."
 
         try:
-            from apps.intelligence.providers import ask_with_fallback, SYSTEM_PROMPT
+            from apps.intelligence.providers import SYSTEM_PROMPT, ask_with_fallback
             response, provider_name = ask_with_fallback(
                 prompt=f"{context}\nUser: {message}",
                 system_prompt=SYSTEM_PROMPT
             )
             return Response({'response': response, 'provider': provider_name})
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             # Fail-open: keep assistant UI functional even if provider
             # discovery or upstream AI APIs are temporarily unavailable.
             logger.exception("Cloud intelligence chat degraded: %s", exc)
@@ -342,7 +347,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         try:
             from apps.intelligence.providers import get_available_providers
             return Response(get_available_providers())
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.exception("Cloud intelligence providers degraded: %s", exc)
             return Response([])
 
@@ -575,7 +580,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
                     'acknowledged': acknowledged,
                 },
             ).save()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("Failed to write IAC audit log: %s", exc)
 
         warning = (
@@ -603,9 +608,9 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         """
         try:
             from services.ecosystem import get_ecosystem_prompts
-            
+
             prompts = get_ecosystem_prompts()
-            
+
             # Add current timestamp and context
             response_data = {
                 'timestamp': timezone.now().isoformat(),
@@ -629,12 +634,12 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
                     ]
                 }
             }
-            
+
             return Response(response_data)
-            
+
         except Exception as e:
             return Response(
-                {'error': f'Failed to retrieve prompts: {str(e)}'},
+                {'error': f'Failed to retrieve prompts: {e!s}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
@@ -643,8 +648,8 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         """
         Scan all accessible GitHub repositories and generate a zero-click deploy plan.
         """
-        from apps.deployments.tasks_ecosystem import ecosystem_scan_task
         from apps.deployments.models_ecosystem import EcosystemPlan
+        from apps.deployments.tasks_ecosystem import ecosystem_scan_task
 
         ai_provider = request.data.get('ai_provider')
         selected_repos = request.data.get('selected_repos')
@@ -687,7 +692,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        from apps.deployments.models import Service, EnvironmentVariable
+        from apps.deployments.models import EnvironmentVariable, Service
 
         services = Service.objects.filter(id__in=service_ids, owner=request.user)
         if not services.exists():
@@ -724,8 +729,8 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         """
         Deploy a previously generated ecosystem plan.
         """
-        from apps.deployments.tasks_ecosystem import ecosystem_deploy_task
         from apps.deployments.models_ecosystem import EcosystemPlan
+        from apps.deployments.tasks_ecosystem import ecosystem_deploy_task
 
         plan_id = request.data.get('plan_id')
         plan = request.data.get('plan')
@@ -775,6 +780,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             return Response({'error': 'task_id required'}, status=status.HTTP_400_BAD_REQUEST)
 
         import json
+
         from celery.result import AsyncResult
         result = AsyncResult(task_id)
 
@@ -878,14 +884,14 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         Returns stack, languages, port, build strategy, addons, suggested env vars.
         """
         import tempfile
-        import os
-        from services.ecosystem import heuristic_analysis
-        from apps.deployments.services.git_manager import GitManager
+
         from apps.cloud.services.code_analyzer import (
             MAX_TOTAL_BYTES,
             iter_repo_files,
             walk_repo_with_cap,
         )
+        from apps.deployments.services.git_manager import GitManager
+        from services.ecosystem import heuristic_analysis
 
         MAX_FILES = 500
 

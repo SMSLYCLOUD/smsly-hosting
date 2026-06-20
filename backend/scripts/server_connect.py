@@ -1,18 +1,18 @@
+import argparse
 import os
 import sys
-import django
-import json
 import time
-import argparse
+
+import django
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 django.setup()
 
-from django.contrib.auth import get_user_model
-from apps.deployments.models_servers import ManagedServer
-from rest_framework.test import APIRequestFactory
-from apps.deployments.views_servers import ManagedServerViewSet
+from apps.deployments.models_servers import ManagedServer  # noqa: E402
+from apps.deployments.views_servers import ManagedServerViewSet  # noqa: E402
+from django.contrib.auth import get_user_model  # noqa: E402
+from rest_framework.test import APIRequestFactory  # noqa: E402
 
 User = get_user_model()
 

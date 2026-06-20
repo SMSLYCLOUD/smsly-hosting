@@ -1,13 +1,14 @@
-import uuid
 import base64
 import shlex
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+
 from apps.deployments.models_mesh import MeshNetwork, WireGuardPeer
-from apps.deployments.services.wireguard_service import WireGuardService
 from apps.deployments.models_servers import ManagedServer
-import docker
+from apps.deployments.services.wireguard_service import WireGuardService
+
 
 class MeshNetworkTest(TestCase):
     def test_next_available_ip(self):
@@ -146,7 +147,7 @@ class MeshNetworkTest(TestCase):
         from apps.deployments.services.provisioner import _get_master_mesh_ip
         User = get_user_model()
         user = User.objects.create_user(username="mesh-owner-fallback", password="test")
-        
+
         primary = ManagedServer.objects.create(
             name="primary",
             host="198.51.100.1",

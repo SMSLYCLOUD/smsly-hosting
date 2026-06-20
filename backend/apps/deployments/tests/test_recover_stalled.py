@@ -37,7 +37,7 @@ class RecoverStalledTests(TestCase):
     @patch("celery.result.AsyncResult")
     @patch("apps.deployments.tasks.enqueue_smart_deploy_task")
     def test_started_task_is_skipped(self, enqueue_mock, async_result_mock):
-        deployment = Deployment.objects.create(
+        Deployment.objects.create(
             service=self.service,
             status=Deployment.Status.QUEUED,
             commit_hash="abc1234",

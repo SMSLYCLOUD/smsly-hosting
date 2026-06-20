@@ -1,15 +1,16 @@
 import logging
-from typing import Dict, Any, List
+
 from django.db import transaction
-from apps.deployments.models import Service, EnvironmentVariable, Deployment
-from apps.deployments.services.ecosystem_env import EcosystemEnvResolver, is_weak_value
+
+from apps.deployments.models import EnvironmentVariable, Service
+from apps.deployments.services.ecosystem_env import EcosystemEnvResolver
 from apps.deployments.services.ecosystem_graph import build_ecosystem_graph
 
 logger = logging.getLogger(__name__)
 
 def bulk_persist_and_verify_ecosystem_env(
     manifest_content: str,
-    created_services: Dict[str, Service]
+    created_services: dict[str, Service]
 ) -> tuple[bool, str]:
     try:
         graph = build_ecosystem_graph(manifest_content)

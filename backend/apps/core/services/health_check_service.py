@@ -1,11 +1,12 @@
-import time
+import logging
 import os
 import shutil
-import logging
-from django.db import connection, connections
-from django.core.cache import cache
-from django.conf import settings
+import time
+
 from celery import current_app
+from django.conf import settings
+from django.core.cache import cache
+from django.db import connections
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +102,7 @@ class HealthCheckService:
     def check_disk(cls):
         try:
             path = "/"
-            total, used, free = shutil.disk_usage(path)
+            total, _used, free = shutil.disk_usage(path)
             free_percent = int((free / total) * 100)
             if free_percent < 5:
                  return {"ok": False, "error": "Disk space critically low (<5%)", "free_percent": free_percent}

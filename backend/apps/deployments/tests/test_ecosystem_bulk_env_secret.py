@@ -5,8 +5,7 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from apps.cloud.models import CloudProvider
-from apps.deployments.models import Service, EnvironmentVariable
-
+from apps.deployments.models import EnvironmentVariable, Service
 
 User = get_user_model()
 

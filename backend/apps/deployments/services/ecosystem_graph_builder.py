@@ -1,9 +1,10 @@
 """EcosystemGraphBuilder — builds a topology graph of the SMSLY platform infrastructure."""
-import socket
 import logging
-from typing import Dict, List, Any, Optional
-from urllib.request import Request, urlopen
+import socket
+from typing import Any
 from urllib.error import URLError
+from urllib.request import Request, urlopen
+
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
@@ -14,7 +15,7 @@ def _check_tcp(host: str, port: int, timeout: float = 1.0) -> bool:
     try:
         with socket.create_connection((host, port), timeout=timeout):
             return True
-    except (OSError, socket.timeout):
+    except (TimeoutError, OSError):
         return False
 
 
@@ -55,7 +56,7 @@ class EcosystemGraphBuilder:
     """Builds a topology graph of the entire SMSLY platform infrastructure."""
 
     # Default service definitions — overridden at runtime with live health checks
-    NODE_DEFINITIONS: List[Dict[str, Any]] = [
+    NODE_DEFINITIONS: list[dict[str, Any]] = [
         {
             "id": "internet",
             "type": "external",
@@ -186,7 +187,7 @@ class EcosystemGraphBuilder:
         },
     ]
 
-    EDGE_DEFINITIONS: List[Dict[str, Any]] = [
+    EDGE_DEFINITIONS: list[dict[str, Any]] = [
         {"source": "internet", "target": "caddy", "type": "PROXY_CHAIN", "label": "HTTP/HTTPS", "animated": True},
         {"source": "caddy", "target": "backend", "type": "PROXY_CHAIN", "label": "/api /ws /admin /health"},
         {"source": "caddy", "target": "frontend", "type": "PROXY_CHAIN", "label": "/ (catch-all)"},
@@ -210,15 +211,15 @@ class EcosystemGraphBuilder:
         {"source": "frps", "target": "caddy", "type": "TUNNEL", "label": "Tunnel vhost"},
     ]
 
-    def build(self) -> Dict[str, Any]:
+    def build(self) -> dict[str, Any]:
         """Return {nodes: [...], edges: [...]} representing the platform ecosystem."""
         nodes = self._build_nodes()
         edges = [dict(e) for e in self.EDGE_DEFINITIONS]
         return {"nodes": nodes, "edges": edges}
 
-    def _build_nodes(self) -> List[Dict[str, Any]]:
+    def _build_nodes(self) -> list[dict[str, Any]]:
         """Build node list with live health status from TCP probes."""
-        nodes: List[Dict[str, Any]] = []
+        nodes: list[dict[str, Any]] = []
         for defn in self.NODE_DEFINITIONS:
             status = self._check_health(defn)
             node = {
@@ -232,7 +233,7 @@ class EcosystemGraphBuilder:
             nodes.append(node)
         return nodes
 
-    def _check_health(self, defn: Dict[str, Any]) -> str:
+    def _check_health(self, defn: dict[str, Any]) -> str:
         """Probe a service and return 'healthy', 'degraded', or 'down'."""
         check = defn.get("health_check")
         if not check:

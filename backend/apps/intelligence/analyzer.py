@@ -1,7 +1,6 @@
 """Analyzer module."""
-import re
 import logging
-from typing import List, Dict
+import re
 
 from .providers import _cached_ask
 
@@ -86,7 +85,7 @@ class LogAnalyzer:
         ],
     }
 
-    def analyze_logs(self, logs: str) -> List[Dict[str, str]]:
+    def analyze_logs(self, logs: str) -> list[dict[str, str]]:
         """
         Scans logs against known failure patterns.
         Returns a list of detected issues.
@@ -127,7 +126,7 @@ class LogAnalyzer:
 
         return "No obvious issues detected."
 
-    def _format_known_issues(self, issues: List[Dict[str, str]]) -> str:
+    def _format_known_issues(self, issues: list[dict[str, str]]) -> str:
         descriptions = []
         for issue in issues:
             t = issue['type']

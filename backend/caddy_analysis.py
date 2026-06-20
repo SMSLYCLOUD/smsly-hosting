@@ -95,7 +95,7 @@ try:
             
             # Check if domain is our test domain
             if 'working-test.example.com' in block['domain']:
-                print(f"    -> This is our test domain block!")
+                print("    -> This is our test domain block!")
                 print(f"    -> TLS: {tls_configured}, On-demand: {on_demand_tls}")
     
     print()
@@ -166,9 +166,9 @@ try:
         
         # Check if test domain is in expected Caddyfile
         if test_domain in expected_caddyfile:
-            print(f"✓ Test domain should be in generated Caddyfile")
+            print("✓ Test domain should be in generated Caddyfile")
         else:
-            print(f"✗ Test domain should NOT be in generated Caddyfile")
+            print("✗ Test domain should NOT be in generated Caddyfile")
             
     except Exception as e:
         print(f"Error generating expected Caddyfile: {e}")
@@ -197,5 +197,8 @@ try:
             
     except Exception as e:
         print(f"Error checking service domain blocks: {e}")
+
+except Exception as e:
+    print(f"Error: {e}")
 
 print("\n=== End Caddy Analysis ===")

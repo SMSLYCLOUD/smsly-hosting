@@ -1,4 +1,5 @@
-from typing import Dict, Any, List, Optional
+from typing import Any
+
 from .base import BaseCloudAdapter
 
 try:
@@ -13,7 +14,7 @@ except ImportError:
     service_account = None
 
 class GCPAdapter(BaseCloudAdapter):
-    def __init__(self, service_account_json: Dict,
+    def __init__(self, service_account_json: dict,
                  project_id: str, region: str = 'us-central1'):
         if not HAS_GCP_SDK:
             raise RuntimeError("GCP SDK not installed. Please install 'google-cloud-run google-auth'")
@@ -36,7 +37,7 @@ class GCPAdapter(BaseCloudAdapter):
         return True
 
     def deploy_container(self, service_name: str, image: str,
-                         env_vars: Dict[str, str], cpu: int, memory: int, replicas: int = 1, **kwargs) -> str:
+                         env_vars: dict[str, str], cpu: int, memory: int, replicas: int = 1, **kwargs) -> str:
         """
         Deploys a container to Google Cloud Run.
         """
@@ -109,7 +110,7 @@ class GCPAdapter(BaseCloudAdapter):
     def create_vpc(self, cidr_block: str) -> str:
         return f"projects/{self.project_id}/global/networks/smsly-vpc"
 
-    def create_iam_role(self, role_name: str, policy: Dict[str, Any]) -> str:
+    def create_iam_role(self, role_name: str, policy: dict[str, Any]) -> str:
         return f"projects/{self.project_id}/roles/{role_name}"
 
     def store_secret(self, secret_name: str, secret_value: str) -> str:
@@ -120,13 +121,13 @@ class GCPAdapter(BaseCloudAdapter):
             client.create_secret(parent=parent, secret_id=secret_name, secret={'replication': {'automatic': {}}})
         except Exception:
             pass  # Secret already exists
-        
+
         payload = secret_value.encode("UTF-8")
         client.add_secret_version(parent=f"{parent}/secrets/{secret_name}", payload={'data': payload})
         return f"projects/{self.project_id}/secrets/{secret_name}"
 
     def get_metrics(self, resource_id: str, metric_name: str,
-                    start_time: str, end_time: str) -> List[Dict]:
+                    start_time: str, end_time: str) -> list[dict]:
         return []
 
     def create_waf_policy(self, name: str, scope: str = 'REGIONAL') -> str:

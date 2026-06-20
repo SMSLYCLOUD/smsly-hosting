@@ -7,7 +7,6 @@ Usage:
 This SSHes into each online lite agent, updates the .env with the new master's
 connection info, and restarts the agent's backend to pick up the new DB URL.
 """
-import argparse
 import logging
 import os
 import time
@@ -46,7 +45,6 @@ class Command(BaseCommand):
                 master_mesh_ip = meta.get('master_mesh_ip', master_ip)
 
         from apps.deployments.models_servers import ManagedServer
-        from apps.deployments.services.ssh_client import SSHClient
 
         agents = ManagedServer.objects.filter(
             is_lite_agent=True,
@@ -128,7 +126,7 @@ class Command(BaseCommand):
             "DB_USER=$(grep -m1 '^MASTER_DB_USER=' .env | cut -d= -f2-) && "
             "DB_PASS=$(grep -m1 '^MASTER_DB_PASSWORD=' .env | cut -d= -f2-) && "
             "DB_NAME=$(grep -m1 '^POSTGRES_DB=' .env 2>/dev/null || echo 'smsly_hosting') && "
-            f"NEW_URL=\"postgresql://${DB_USER}:${DB_PASS}@{master_mesh_ip}:5432/${DB_NAME}\" && "
+            f"NEW_URL=\"postgresql://${{DB_USER}}:${{DB_PASS}}@{master_mesh_ip}:5432/${{DB_NAME}}\" && "  # noqa: F821 (DB_USER/DB_PASS/DB_NAME are shell vars set earlier)
             "grep -q '^DATABASE_URL=' .env && "
             "sed -i \"s|^DATABASE_URL=.*|DATABASE_URL=${NEW_URL}|\" .env || "
             "echo \"DATABASE_URL=${NEW_URL}\" >> .env"

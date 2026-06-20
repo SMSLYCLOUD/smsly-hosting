@@ -1,10 +1,10 @@
 """Auto-scaling API: analyze services and manage replicas."""
 from django.shortcuts import get_object_or_404
-from rest_framework import viewsets, permissions, serializers
+from rest_framework import permissions, serializers, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
-from apps.deployments.models_core import Service, ManagedServer
+from apps.deployments.models_core import ManagedServer, Service
 from apps.deployments.models_replica import ServiceReplica
 from apps.deployments.services.node_scorer import NodeScorer
 from apps.deployments.services.spawning_service import SpawningService

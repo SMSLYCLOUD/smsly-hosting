@@ -11,7 +11,6 @@ import re
 
 from django.test import SimpleTestCase
 
-
 SKIP_PATTERNS = re.compile(
     r'(SECRET|PRIVATE|TOKEN|PASSWORD|API[_-]?KEY|DSN|CREDENTIAL)',
     re.IGNORECASE,

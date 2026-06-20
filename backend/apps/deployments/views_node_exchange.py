@@ -173,6 +173,7 @@ def node_token_exchange_via_gateway(request):
     import hashlib
     import hmac
     import time
+
     from django.conf import settings
 
     signature = request.headers.get("X-Gateway-Signature-V2", "")

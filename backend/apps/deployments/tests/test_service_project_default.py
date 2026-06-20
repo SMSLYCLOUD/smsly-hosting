@@ -12,7 +12,6 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from apps.deployments.models import Project, Service
-from apps.deployments.models_project import Project as ProjectReexport
 
 
 class ServiceProjectDefaultSignalTests(TestCase):

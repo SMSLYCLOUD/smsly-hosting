@@ -5,7 +5,11 @@ import os
 from unittest import TestCase
 from unittest.mock import patch
 
-from apps.intelligence.providers import AIProvider, ask_with_fallback, get_configured_providers
+from apps.intelligence.providers import (
+    AIProvider,
+    ask_with_fallback,
+    get_configured_providers,
+)
 
 
 class _WorkingProvider(AIProvider):

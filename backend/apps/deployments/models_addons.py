@@ -1,7 +1,9 @@
 """Models Addons module."""
 import uuid
-from encrypted_model_fields.fields import EncryptedCharField
+
 from django.db import models
+from encrypted_model_fields.fields import EncryptedCharField
+
 from .models_core import Service, TimeStampedModel
 
 
@@ -166,44 +168,64 @@ class Addon(TimeStampedModel):
 
         elif self.addon_type == self.Type.POSTGRES:
             result['POSTGRES_URL'] = self.connection_url
-            if parsed.username: result['POSTGRES_USER'] = parsed.username
-            if parsed.password: result['POSTGRES_PASSWORD'] = parsed.password
-            if parsed.path and parsed.path != '/': result['POSTGRES_DB'] = parsed.path.lstrip('/')
-            if parsed.hostname: result['POSTGRES_HOST'] = parsed.hostname
-            if parsed.port: result['POSTGRES_PORT'] = str(parsed.port)
+            if parsed.username:
+                result['POSTGRES_USER'] = parsed.username
+            if parsed.password:
+                result['POSTGRES_PASSWORD'] = parsed.password
+            if parsed.path and parsed.path != '/':
+                result['POSTGRES_DB'] = parsed.path.lstrip('/')
+            if parsed.hostname:
+                result['POSTGRES_HOST'] = parsed.hostname
+            if parsed.port:
+                result['POSTGRES_PORT'] = str(parsed.port)
 
         elif self.addon_type == self.Type.MYSQL:
             result['MYSQL_URL'] = self.connection_url
-            if parsed.username: result['MYSQL_USER'] = parsed.username
-            if parsed.password: result['MYSQL_PASSWORD'] = parsed.password
-            if parsed.path and parsed.path != '/': result['MYSQL_DATABASE'] = parsed.path.lstrip('/')
-            if parsed.hostname: result['MYSQL_HOST'] = parsed.hostname
-            if parsed.port: result['MYSQL_PORT'] = str(parsed.port)
+            if parsed.username:
+                result['MYSQL_USER'] = parsed.username
+            if parsed.password:
+                result['MYSQL_PASSWORD'] = parsed.password
+            if parsed.path and parsed.path != '/':
+                result['MYSQL_DATABASE'] = parsed.path.lstrip('/')
+            if parsed.hostname:
+                result['MYSQL_HOST'] = parsed.hostname
+            if parsed.port:
+                result['MYSQL_PORT'] = str(parsed.port)
 
         elif self.addon_type == self.Type.REDIS:
             result['REDIS_URL'] = self.connection_url
-            if parsed.password: result['REDIS_PASSWORD'] = parsed.password
-            if parsed.hostname: result['REDIS_HOST'] = parsed.hostname
-            if parsed.port: result['REDIS_PORT'] = str(parsed.port)
+            if parsed.password:
+                result['REDIS_PASSWORD'] = parsed.password
+            if parsed.hostname:
+                result['REDIS_HOST'] = parsed.hostname
+            if parsed.port:
+                result['REDIS_PORT'] = str(parsed.port)
 
         elif self.addon_type == self.Type.MONGODB:
             result['MONGODB_URI'] = self.connection_url
-            if parsed.username: result['MONGO_INITDB_ROOT_USERNAME'] = parsed.username
-            if parsed.password: result['MONGO_INITDB_ROOT_PASSWORD'] = parsed.password
+            if parsed.username:
+                result['MONGO_INITDB_ROOT_USERNAME'] = parsed.username
+            if parsed.password:
+                result['MONGO_INITDB_ROOT_PASSWORD'] = parsed.password
 
         elif self.addon_type == self.Type.RABBITMQ:
             result['RABBITMQ_URL'] = self.connection_url
-            if parsed.username: result['RABBITMQ_DEFAULT_USER'] = parsed.username
-            if parsed.password: result['RABBITMQ_DEFAULT_PASS'] = parsed.password
+            if parsed.username:
+                result['RABBITMQ_DEFAULT_USER'] = parsed.username
+            if parsed.password:
+                result['RABBITMQ_DEFAULT_PASS'] = parsed.password
 
         elif self.addon_type == self.Type.ELASTICSEARCH:
             result['ELASTICSEARCH_URL'] = self.connection_url
-            if parsed.password: result['ELASTIC_PASSWORD'] = parsed.password
+            if parsed.password:
+                result['ELASTIC_PASSWORD'] = parsed.password
 
         elif self.addon_type == self.Type.QDRANT:
             result['QDRANT_URL'] = self.connection_url
-            if parsed.hostname: result['QDRANT_HOST'] = parsed.hostname
-            if parsed.port: result['QDRANT_PORT'] = str(parsed.port)
+            if parsed.hostname:
+                result['QDRANT_HOST'] = parsed.hostname
+            if parsed.port:
+                result['QDRANT_PORT'] = str(parsed.port)
 
         return result
 
@@ -222,15 +244,15 @@ class Backup(TimeStampedModel):
         Addon,
         on_delete=models.CASCADE,
         related_name='backups')
-    
+
     file_path = models.CharField(max_length=512, blank=True)
     size_bytes = models.BigIntegerField(default=0)
-    
+
     status = models.CharField(
         max_length=20,
         choices=Status.choices,
         default=Status.PENDING)
-    
+
     completed_at = models.DateTimeField(null=True, blank=True)
     error_message = models.TextField(blank=True)
 

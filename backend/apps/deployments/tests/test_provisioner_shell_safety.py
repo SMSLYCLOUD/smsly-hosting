@@ -11,7 +11,6 @@ Covers:
      and never invokes ``subprocess.run(..., shell=True)``.
 """
 import inspect
-import shlex
 
 from django.test import SimpleTestCase
 
@@ -28,8 +27,9 @@ class ProvisionerShellSafetyTests(SimpleTestCase):
         """Each subprocess.run in _harden_master_firewall uses a list
         with the validated IP as one element, never as part of a string
         that goes through a shell."""
-        import apps.deployments.services.provisioner as p
         import ast
+
+        import apps.deployments.services.provisioner as p
         tree = ast.parse(inspect.getsource(p._harden_master_firewall))
         for node in ast.walk(tree):
             if isinstance(node, ast.Call):

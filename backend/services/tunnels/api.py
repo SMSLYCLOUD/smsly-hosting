@@ -12,18 +12,21 @@ Django REST API endpoints for tunnel management:
 - Team sharing
 """
 
-import uuid
-import re
-from datetime import timedelta
-from rest_framework import status, permissions
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.response import Response
-from django.conf import settings
-from django.utils import timezone
+import re  # noqa: E402
+import uuid  # noqa: E402
+from datetime import timedelta  # noqa: E402
+
+from django.conf import settings  # noqa: E402
+from django.utils import timezone  # noqa: E402
+from rest_framework import permissions, status  # noqa: E402
+from rest_framework.decorators import api_view, permission_classes  # noqa: E402
+from rest_framework.response import Response  # noqa: E402
+
+from .rate_limit import rate_limit  # noqa: E402
 
 # Redis-backed storage (with in-memory fallback)
-from .storage import tunnel_storage
-from .rate_limit import rate_limit
+from .storage import tunnel_storage  # noqa: E402
+
 
 def get_tunnel_base_domain() -> str:
     """Resolve the active tunnel base domain from Django settings."""
@@ -263,7 +266,7 @@ def replay_request(request, tunnel_id, request_id):
                         status=status.HTTP_403_FORBIDDEN)
 
     logs = tunnel_storage.get_request_logs(tunnel_id)
-    log_entry = next((l for l in logs if l['request_id'] == request_id), None)
+    log_entry = next((entry for entry in logs if entry['request_id'] == request_id), None)
 
     if not log_entry:
         return Response({'error': 'Request not found'},

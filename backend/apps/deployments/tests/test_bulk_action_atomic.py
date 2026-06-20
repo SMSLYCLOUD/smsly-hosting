@@ -20,7 +20,6 @@ from rest_framework.test import APIClient
 
 from apps.deployments.models import Service
 
-
 User = get_user_model()
 
 
@@ -41,6 +40,7 @@ class BulkActionAtomicTests(TestCase):
 
     def test_deploy_uses_select_for_update(self):
         from unittest.mock import MagicMock
+
         from django.db.models import QuerySet
 
         original_select_for_update = QuerySet.select_for_update
@@ -66,6 +66,7 @@ class BulkActionAtomicTests(TestCase):
 
     def test_cancel_updates_status(self):
         from unittest.mock import MagicMock
+
         from django.db.models import QuerySet
 
         from apps.deployments.models import Deployment

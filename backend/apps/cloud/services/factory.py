@@ -1,11 +1,12 @@
 """Factory module."""
 import json
-from ..models import CloudProvider
+
 from ..adapters.aws import AWSAdapter
 from ..adapters.azure import AzureAdapter
+from ..adapters.base import BaseCloudAdapter
 from ..adapters.gcp import GCPAdapter
 from ..adapters.local import LocalAdapter
-from ..adapters.base import BaseCloudAdapter
+from ..models import CloudProvider
 
 
 def get_cloud_adapter(provider: CloudProvider) -> BaseCloudAdapter:

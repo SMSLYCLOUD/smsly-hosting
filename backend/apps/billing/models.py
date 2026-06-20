@@ -1,7 +1,9 @@
 """Models module."""
 import uuid
-from django.db import models
+
 from django.conf import settings
+from django.db import models
+
 from apps.deployments.models import Service
 
 
@@ -216,4 +218,3 @@ class Invoice(models.Model):
 
     def __str__(self):
         return f"Invoice {self.id} for {self.user.username}"
-from .models_analytics import DailyRevenue, InfrastructureCost

@@ -7,12 +7,13 @@ Rate limiting utilities for SMSLY API endpoints.
 Uses Django's cache framework for distributed rate limiting.
 """
 
-import time
-import logging
-from functools import wraps
-from django.core.cache import cache
-from rest_framework.response import Response
-from rest_framework import status
+import logging  # noqa: E402
+import time  # noqa: E402
+from functools import wraps  # noqa: E402
+
+from django.core.cache import cache  # noqa: E402
+from rest_framework import status  # noqa: E402
+from rest_framework.response import Response  # noqa: E402
 
 logger = logging.getLogger(__name__)
 

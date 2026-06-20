@@ -1,10 +1,11 @@
 """Health check endpoints for SMSLY Hosting — production hardened."""
 import time
-from django.http import JsonResponse
-from django.db import connection
-from django.core.cache import cache
-from django.conf import settings
+
 from apps.core.circuit_breaker import database_breaker, redis_breaker
+from django.conf import settings
+from django.core.cache import cache
+from django.db import connection
+from django.http import JsonResponse
 
 # Track process start time for uptime calculation
 _PROCESS_START = time.monotonic()

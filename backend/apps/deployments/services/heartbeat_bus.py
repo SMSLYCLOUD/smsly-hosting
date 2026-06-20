@@ -21,7 +21,6 @@ and return ``None``.
 import json
 import logging
 import time
-from typing import Optional
 
 from django.conf import settings
 
@@ -33,7 +32,7 @@ _KEY_PREFIX = 'cluster_heartbeat:'
 _SNAPSHOT_TTL_SECONDS = 60
 
 
-def _redis_url() -> Optional[str]:
+def _redis_url() -> str | None:
     """Resolve the Redis URL for the heartbeat bus.
 
     Prefers an explicit ``settings.REDIS_URL`` (as recommended in
@@ -61,7 +60,7 @@ def _get_redis():
     try:
         import redis
         return redis.from_url(url, decode_responses=True)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("heartbeat_bus: redis unavailable: %s", exc)
         return None
 
@@ -142,7 +141,10 @@ def _persist_one_heartbeat(snapshot):
     snapshot. The hot publish path is unaffected; this is a
     best-effort audit drain.
     """
-    from apps.deployments.models_election import ClusterState, HeartbeatLog  # noqa: WPS433
+    from apps.deployments.models_election import (
+        ClusterState,
+        HeartbeatLog,
+    )
 
     wg_address = snapshot.get('wg_address') or ''
     if not wg_address:
@@ -152,7 +154,7 @@ def _persist_one_heartbeat(snapshot):
         server = ManagedServer.objects.filter(
             wg_address=wg_address,
         ).first()
-    except Exception:  # noqa: BLE001
+    except Exception:
         server = None
     # Resolve or create a default cluster so the audit row has a
     # valid FK target. The bus does not carry cluster context
@@ -165,7 +167,7 @@ def _persist_one_heartbeat(snapshot):
             mesh=None,
             defaults={'state': 'STABLE', 'term': 0},
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("heartbeat_bus: cluster resolve failed: %s", exc)
         return False
     try:
@@ -179,7 +181,7 @@ def _persist_one_heartbeat(snapshot):
             error_message=f"bus:{snapshot.get('status', '')}",
         )
         return True
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("heartbeat_bus: persist failed: %s", exc)
         return False
 

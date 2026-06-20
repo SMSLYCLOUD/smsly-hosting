@@ -1,7 +1,10 @@
-from django.db import models
-from django.conf import settings
 import uuid
+
+from django.conf import settings
+from django.db import models
+
 from apps.deployments.models import Service
+
 
 class NotificationPreference(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)

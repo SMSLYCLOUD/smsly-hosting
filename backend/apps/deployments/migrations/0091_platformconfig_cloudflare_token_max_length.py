@@ -3,8 +3,8 @@
 # (the previous schema also used EncryptedCharField; this migration
 # documents the change in length and re-asserts the encrypted type).
 
-from django.db import migrations
 import encrypted_model_fields.fields
+from django.db import migrations
 
 
 class Migration(migrations.Migration):

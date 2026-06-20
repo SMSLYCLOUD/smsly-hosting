@@ -1,12 +1,13 @@
+from datetime import timedelta
+
+from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.utils import timezone
-from datetime import timedelta
-from unittest.mock import patch
-from apps.deployments.models import Service, Project
+
+from apps.deployments.models import Project, Service
 from apps.deployments.models_metrics import ServiceMetric
 from apps.deployments.models_replica import ServiceReplica
 from apps.deployments.services.autoscaler import _evaluate_scaling
-from django.contrib.auth import get_user_model
 
 User = get_user_model()
 

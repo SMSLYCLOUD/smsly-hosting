@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import stripe
+from apps.billing.models import BillingAccount
 from django.conf import settings
 from django.utils import timezone
-
-from apps.billing.models import BillingAccount
 
 logger = logging.getLogger(__name__)
 
@@ -21,9 +20,9 @@ class StripeInvoice:
     status: str
     amount_paid: int
     currency: str
-    hosted_invoice_url: Optional[str] = None
-    invoice_pdf: Optional[str] = None
-    created: Optional[int] = None
+    hosted_invoice_url: str | None = None
+    invoice_pdf: str | None = None
+    created: int | None = None
 
 
 class StripeService:
@@ -115,12 +114,12 @@ class StripeService:
         return session.url
 
     @staticmethod
-    def list_invoices(*, user, limit: int = 10) -> List[Dict[str, Any]]:
+    def list_invoices(*, user, limit: int = 10) -> list[dict[str, Any]]:
         StripeService._configure_stripe()
         account = StripeService.ensure_customer(user)
 
         invoices = stripe.Invoice.list(customer=account.stripe_customer_id, limit=limit)
-        out: List[Dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         for inv in invoices.data or []:
             out.append(
                 {

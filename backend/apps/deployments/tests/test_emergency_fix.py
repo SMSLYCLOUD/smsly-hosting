@@ -1,11 +1,10 @@
-from django.urls import reverse
+from unittest.mock import patch
+
+from django.contrib.auth import get_user_model
 from rest_framework import status
 from rest_framework.test import APITestCase
-from apps.deployments.models import Deployment, Service, ManagedServer
-from django.contrib.auth import get_user_model
-import uuid
-import json
-from unittest.mock import patch
+
+from apps.deployments.models import Deployment, Service
 
 User = get_user_model()
 

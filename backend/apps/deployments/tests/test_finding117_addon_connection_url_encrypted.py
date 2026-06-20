@@ -6,7 +6,6 @@ from encrypted_model_fields.fields import EncryptedCharField
 from apps.deployments.models import Service
 from apps.deployments.models_addons import Addon
 
-
 User = get_user_model()
 
 

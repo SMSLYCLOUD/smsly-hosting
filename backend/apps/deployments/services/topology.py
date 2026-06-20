@@ -1,6 +1,7 @@
 """Topology module."""
 import re
-from ..models import Service, EnvironmentVariable
+
+from ..models import Service
 from ..models_addons import Addon
 
 

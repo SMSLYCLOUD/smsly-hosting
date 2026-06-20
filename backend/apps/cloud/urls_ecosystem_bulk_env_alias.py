@@ -8,8 +8,8 @@ mounted at ``/api/v1/cloud/ecosystem/bulk-env/`` and the same
 URLs. This alias keeps the existing frontend working without a
 rebuild.
 """
-from django.urls import path
 from apps.cloud.views import IntelligenceViewSet
+from django.urls import path
 
 urlpatterns = [
     path('', IntelligenceViewSet.as_view({'post': 'ecosystem_bulk_env'}),

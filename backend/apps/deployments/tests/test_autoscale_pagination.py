@@ -12,7 +12,6 @@ from apps.deployments.tasks_autoscale import (
     analyze_all_services_task,
 )
 
-
 User = get_user_model()
 
 

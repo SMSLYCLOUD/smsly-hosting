@@ -26,20 +26,23 @@ class TierGatesAuditTests(SimpleTestCase):
         deployments_views._TIER_GATES_LOGGED = False
 
     def test_returns_false_when_flag_unset(self):
-        from apps.deployments import views as deployments_views
         from django.conf import settings
+
+        from apps.deployments import views as deployments_views
         with patch.object(settings, "SMSLY_DISABLE_TIER_GATES", False, create=True):
             self.assertFalse(deployments_views._check_tier_gates_disabled())
 
     def test_returns_true_when_flag_set(self):
-        from apps.deployments import views as deployments_views
         from django.conf import settings
+
+        from apps.deployments import views as deployments_views
         with patch.object(settings, "SMSLY_DISABLE_TIER_GATES", True, create=True):
             self.assertTrue(deployments_views._check_tier_gates_disabled())
 
     def test_falls_back_to_env_var(self):
-        from apps.deployments import views as deployments_views
         from django.conf import settings
+
+        from apps.deployments import views as deployments_views
         with patch.object(settings, "SMSLY_DISABLE_TIER_GATES", False, create=True):
             with patch.dict(os.environ, {"SMSLY_DISABLE_TIER_GATES": "true"}):
                 self.assertTrue(deployments_views._check_tier_gates_disabled())
@@ -51,8 +54,9 @@ class TierGatesAuditLogTests(TestCase):
         deployments_views._TIER_GATES_LOGGED = False
 
     def test_first_consult_writes_audit_log(self):
-        from apps.deployments import views as deployments_views
         from django.conf import settings
+
+        from apps.deployments import views as deployments_views
         with patch.object(settings, "SMSLY_DISABLE_TIER_GATES", True, create=True):
             deployments_views._check_tier_gates_disabled()
         log = AuditLog.objects.filter(action="TIER_GATES_DISABLED").first()
@@ -60,8 +64,9 @@ class TierGatesAuditLogTests(TestCase):
         self.assertEqual(log.metadata.get("env_var"), "SMSLY_DISABLE_TIER_GATES")
 
     def test_second_consult_does_not_write_audit_log(self):
-        from apps.deployments import views as deployments_views
         from django.conf import settings
+
+        from apps.deployments import views as deployments_views
         with patch.object(settings, "SMSLY_DISABLE_TIER_GATES", True, create=True):
             deployments_views._check_tier_gates_disabled()
             deployments_views._check_tier_gates_disabled()

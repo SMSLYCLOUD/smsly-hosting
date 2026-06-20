@@ -1,6 +1,7 @@
 """Bitbucket repo views — repository, branch, and commit listing."""
 from __future__ import annotations
 
+import contextlib
 import logging
 from datetime import timedelta
 
@@ -76,10 +77,8 @@ def _refresh_bitbucket_token(token_obj):
         token_obj.token = new_token
         token_obj.token_secret = data.get("refresh_token", refresh_token)
         if "expires_in" in data:
-            try:
+            with contextlib.suppress(ValueError, TypeError):
                 token_obj.expires_at = timezone.now() + timedelta(seconds=int(data["expires_in"]))
-            except (ValueError, TypeError):
-                pass
         token_obj.save()
         logger.info("Bitbucket token refreshed successfully")
         return True

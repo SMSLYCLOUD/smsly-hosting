@@ -460,7 +460,7 @@ class LocalAdapterHealthcheckCommandTests(SimpleTestCase):
         labels = docker_client.containers.create.call_args.kwargs["labels"]
         # Ensure Traefik is completely disabled and all Traefik labels are removed
         self.assertEqual(labels.get("traefik.enable"), "false")
-        for k in labels.keys():
+        for k in labels:
             if k.startswith("traefik.") and k != "traefik.enable":
                 self.fail(f"Found unexpected Traefik label: {k}")
 
@@ -520,6 +520,6 @@ class LocalAdapterHealthcheckCommandTests(SimpleTestCase):
         labels = docker_client.containers.create.call_args.kwargs["labels"]
         # Ensure Traefik is completely disabled and all Traefik labels are removed
         self.assertEqual(labels.get("traefik.enable"), "false")
-        for k in labels.keys():
+        for k in labels:
             if k.startswith("traefik.") and k != "traefik.enable":
                 self.fail(f"Found unexpected Traefik label: {k}")

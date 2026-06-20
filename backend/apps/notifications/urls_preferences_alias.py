@@ -8,8 +8,9 @@ are mounted at ``/api/v1/notifications/preferences/`` and
 ``/api/v1/notifications/preferences/<id>/``. This alias keeps
 the existing frontend working without a rebuild.
 """
-from django.urls import path, include
+from django.urls import include, path
 from rest_framework.routers import DefaultRouter
+
 from apps.notifications.views import NotificationPreferenceViewSet
 
 router = DefaultRouter()

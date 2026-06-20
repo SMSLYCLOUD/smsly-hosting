@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 from django.test import SimpleTestCase, override_settings
 
-from apps.notifications.webhooks import _post_notification, _get_request_timeout
+from apps.notifications.webhooks import _get_request_timeout, _post_notification
 
 
 class NotificationWebhookTimeoutConfigTests(SimpleTestCase):

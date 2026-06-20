@@ -33,7 +33,6 @@ from apps.deployments.models import Service
 from apps.deployments.models_transfer import ServerTransfer
 from apps.deployments.services import transfer_service
 
-
 User = get_user_model()
 
 

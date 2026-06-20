@@ -6,8 +6,9 @@ expose local servers. Tunnels register via the API, and the dashboard
 displays active connections with request inspection.
 """
 import uuid
-from django.db import models
+
 from django.conf import settings
+from django.db import models
 
 
 class Tunnel(models.Model):

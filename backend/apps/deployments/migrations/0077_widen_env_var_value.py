@@ -1,11 +1,12 @@
 import encrypted_model_fields.fields
 from django.db import migrations
 
+
 def check_corrupt_env_vars(apps, schema_editor):
     EnvironmentVariable = apps.get_model('deployments', 'EnvironmentVariable')
     import logging
     logger = logging.getLogger(__name__)
-    
+
     from django.db import connection
     with connection.cursor() as cursor:
         cursor.execute(

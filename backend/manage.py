@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 """Manage module."""
 """Django's command-line utility for administrative tasks."""
-import os
-import sys
+import os  # noqa: E402
+import sys  # noqa: E402
 
 
 def main():

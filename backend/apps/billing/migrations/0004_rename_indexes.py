@@ -3,7 +3,7 @@
 # names or without indexes). This migration updates Django's internal state only,
 # without touching the database.
 
-from django.db import migrations, models
+from django.db import migrations
 
 
 class Migration(migrations.Migration):

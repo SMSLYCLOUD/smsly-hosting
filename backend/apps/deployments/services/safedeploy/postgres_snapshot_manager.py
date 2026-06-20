@@ -1,8 +1,7 @@
-from typing import Optional
-import subprocess
 import logging
 import os
 import re
+import subprocess
 from types import SimpleNamespace
 from urllib.parse import urlparse, urlunparse
 
@@ -31,7 +30,7 @@ def _mask_url_password(url: str) -> str:
     return url
 
 class PostgresSnapshotManager:
-    def __init__(self, admin_db_url: Optional[str] = None):
+    def __init__(self, admin_db_url: str | None = None):
         url = admin_db_url or os.environ.get('DIRECT_DATABASE_URL') or os.environ.get('DATABASE_URL')
         if not url:
             raise ValueError("DATABASE_URL or DIRECT_DATABASE_URL must be set to use PostgresSnapshotManager")
@@ -114,7 +113,7 @@ class PostgresSnapshotManager:
         having to re-wrap the exception.
         """
         masked = _mask_url_password(db_url)
-        logger.debug(f"psql %s: %s", masked, sql[:300])
+        logger.debug("psql %s: %s", masked, sql[:300])
         try:
             result = subprocess.run(
                 ['psql', '-d', db_url, '-v', 'ON_ERROR_STOP=1', '-c', sql],
@@ -164,7 +163,7 @@ class PostgresSnapshotManager:
         re-wrap ``CalledProcessError``.
         """
         masked = _mask_url_password(db_url)
-        logger.debug(f"psql %s: %s vars=%s", masked, sql[:300], list(variables.keys()))
+        logger.debug("psql %s: %s vars=%s", masked, sql[:300], list(variables.keys()))
         cmd = ['psql', '-d', db_url, '-v', 'ON_ERROR_STOP=1']
         for name, value in variables.items():
             cmd += ['-v', f'{name}={value}']
@@ -259,12 +258,12 @@ class PostgresSnapshotManager:
                     logger.error("terminate rc=%s stderr=%s",
                                  term_res.returncode, term_res.stderr[:200] if term_res.stderr else '')
                 if term_res.returncode != 0:
-                    logger.warning(f"pg_terminate_backend non-zero exit: %s",
+                    logger.warning("pg_terminate_backend non-zero exit: %s",
                                    term_res.stderr.strip())
                 else:
                     terminated = term_res.stdout.strip()
                     if terminated:
-                        logger.info(f"Terminated %s backends on %s",
+                        logger.info("Terminated %s backends on %s",
                                     terminated, source_db_name)
 
             from psycopg2 import sql as pg_sql
@@ -277,7 +276,7 @@ class PostgresSnapshotManager:
                 logger.error("drop rc=%s stderr=%s",
                              drop_res.returncode, drop_res.stderr[:200] if drop_res.stderr else '')
             if drop_res.returncode != 0:
-                logger.warning(f"DROP IF EXISTS stderr: %s", drop_res.stderr.strip())
+                logger.warning("DROP IF EXISTS stderr: %s", drop_res.stderr.strip())
 
             create_query = pg_sql.SQL(
                 "CREATE DATABASE {} WITH TEMPLATE {};"
@@ -290,7 +289,7 @@ class PostgresSnapshotManager:
                 self._run_psql(maintenance_url, create_sql, check=True)
                 if settings.DEBUG:
                     logger.error("TEMPLATE success")
-                logger.info(f"Cloned %s → %s via TEMPLATE", source_db_name, clone_db_name)
+                logger.info("Cloned %s → %s via TEMPLATE", source_db_name, clone_db_name)
                 return True
             except subprocess.CalledProcessError as e:
                 stderr_msg = e.stderr.strip() if e.stderr else '(empty)'
@@ -299,9 +298,9 @@ class PostgresSnapshotManager:
                     logger.error("TEMPLATE FAILED: stderr=%s stdout=%s",
                                  stderr_msg[:300], stdout_msg[:300])
                 logger.warning(
-                    f"CREATE DATABASE WITH TEMPLATE failed.\n"
-                    f"  stderr: %s\n"
-                    f"  stdout: %s",
+                    "CREATE DATABASE WITH TEMPLATE failed.\n"
+                    "  stderr: %s\n"
+                    "  stdout: %s",
                     stderr_msg, stdout_msg
                 )
 
@@ -314,7 +313,7 @@ class PostgresSnapshotManager:
         except Exception as e:
             if settings.DEBUG:
                 logger.error("UNEXPECTED EXCEPTION: %s", str(e), exc_info=True)
-            logger.error(f"create_clone unexpected error: %s", str(e), exc_info=True)
+            logger.error("create_clone unexpected error: %s", str(e), exc_info=True)
             return False
 
     def _clone_via_dump(self, source_db_name: str, clone_db_name: str,
@@ -333,9 +332,9 @@ class PostgresSnapshotManager:
             except subprocess.CalledProcessError as e:
                 stderr_msg = e.stderr.strip() if e.stderr else '(empty)'
                 logger.error(
-                    f"Fallback CREATE DATABASE also failed "
-                    f"(user likely lacks CREATEDB privilege).\n"
-                    f"  stderr: %s", stderr_msg
+                    "Fallback CREATE DATABASE also failed "
+                    "(user likely lacks CREATEDB privilege).\n"
+                    "  stderr: %s", stderr_msg
                 )
                 return False
 
@@ -354,16 +353,16 @@ class PostgresSnapshotManager:
             if dump_proc.stdout:
                 dump_proc.stdout.close()
 
-            restore_stdout, restore_stderr = restore_proc.communicate(timeout=600)
+            _restore_stdout, restore_stderr = restore_proc.communicate(timeout=600)
             dump_proc.wait(timeout=60)
 
             if restore_proc.returncode == 0:
-                logger.info(f"pg_dump fallback succeeded for %s", clone_db_name)
+                logger.info("pg_dump fallback succeeded for %s", clone_db_name)
                 return True
             else:
                 logger.error(
-                    f"pg_dump fallback failed.\n"
-                    f"  restore stderr: %s",
+                    "pg_dump fallback failed.\n"
+                    "  restore stderr: %s",
                     restore_stderr.strip() if restore_stderr else '(empty)'
                 )
                 # Clean up the empty clone we created
@@ -374,7 +373,7 @@ class PostgresSnapshotManager:
                 self._run_psql(maintenance_url, clean_sql, check=False)
                 return False
         except Exception as e:
-            logger.error(f"pg_dump fallback unexpected error: %s",
+            logger.error("pg_dump fallback unexpected error: %s",
                          str(e), exc_info=True)
             return False
 
@@ -382,8 +381,8 @@ class PostgresSnapshotManager:
         _validate_db_name(clone_db_name)
         if 'prod' in clone_db_name.lower() or 'main' in clone_db_name.lower():
             logger.error(
-                f"SECURITY BLOCK: Attempted to drop protected database "
-                f"name '%s'", clone_db_name
+                "SECURITY BLOCK: Attempted to drop protected database "
+                "name '%s'", clone_db_name
             )
             return False
         try:
@@ -406,10 +405,10 @@ class PostgresSnapshotManager:
             self._run_psql(maintenance_url, drop_sql, check=True)
             return True
         except subprocess.CalledProcessError as e:
-            logger.error(f"destroy_clone failed: stderr=%s", e.stderr.strip())
+            logger.error("destroy_clone failed: stderr=%s", e.stderr.strip())
             return False
         except Exception as e:
-            logger.error(f"destroy_clone error: %s", str(e), exc_info=True)
+            logger.error("destroy_clone error: %s", str(e), exc_info=True)
             return False
 
     def get_clone_url(self, clone_db_name: str) -> str:

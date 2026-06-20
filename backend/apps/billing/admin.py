@@ -1,5 +1,15 @@
 from django.contrib import admin
-from .models import BillingAccount, BillingPayment, UsageRecord, PricingPlan, ResourcePrice, UserSubscription, Invoice
+
+from .models import (
+    BillingAccount,
+    BillingPayment,
+    Invoice,
+    PricingPlan,
+    ResourcePrice,
+    UsageRecord,
+    UserSubscription,
+)
+
 
 @admin.register(PricingPlan)
 class PricingPlanAdmin(admin.ModelAdmin):

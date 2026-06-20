@@ -6,8 +6,8 @@ widget. The canonical route is at
 ``/api/v1/core/system/resources/``. This alias keeps the
 existing frontend working without requiring a rebuild.
 """
-from django.urls import path
 from apps.core.views import SystemResourcesView
+from django.urls import path
 
 urlpatterns = [
     path('', SystemResourcesView.as_view(), name='system-resources-alias'),

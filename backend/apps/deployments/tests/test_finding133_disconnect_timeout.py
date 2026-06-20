@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import inspect
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -49,10 +50,8 @@ class Finding133DisconnectTimeoutTests(TestCase):
 
         async def _run():
             with patch.object(consumer, '_close_exec_socket', close_mock):
-                try:
+                with contextlib.suppress(RuntimeError):
                     await consumer.disconnect(code=1000)
-                except RuntimeError:
-                    pass
 
         asyncio.run(_run())
         close_mock.assert_awaited()

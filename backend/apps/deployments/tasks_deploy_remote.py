@@ -1,53 +1,30 @@
 import logging
+
 logger = logging.getLogger(__name__)
-import logging
-import random
-import re
-import shlex
-import shutil
-import tempfile
-import subprocess
-import os
-import json
-import time
-import zipfile
-import secrets
-import threading
-from contextlib import contextmanager
-from urllib.parse import unquote, urlparse
-import docker
-import requests
-from celery import shared_task
-from django.conf import settings
-from django.core.cache import cache
-from django.utils import timezone
-from django.db.models import Sum
-from apps.cloud.models import CloudProvider
-from apps.cloud.services.builder import NixpacksBuilder
-from apps.cloud.services.compute import ComputeService
-from apps.cloud.services.function_provisioner import FunctionProvisioner
-from apps.deployments.ai_router import DEFAULT_AI_ROUTER_API_BASE, DEFAULT_AI_ROUTER_UI_BASE, DEFAULT_BRAID_ALIAS, generate_ai_router_proxy_config, get_ollama_model_name, is_ai_router_service, is_ollama_service
-from apps.deployments.models import Service, Deployment, EnvironmentVariable, PlatformConfig
-from apps.deployments.models_addons import Addon, Backup
-from apps.deployments.models_backup import BackupSchedule, ServiceBackup
-from apps.deployments.models_storage import Volume
-from apps.deployments.models_transfer import ServerTransfer
-from apps.deployments.services.backup_service import BackupService
-from apps.deployments.services.pipeline import PipelineManager, PipelineError
-from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
-from apps.deployments.services.tls_verify import should_verify
-from apps.deployments.services.transfer_service import ServerTransferService
-from apps.deployments.utils import append_log, broadcast_status, build_local_source_bundle, update_stage, is_deployment_local
-from services.addon_provisioner import addon_provisioner
+import logging  # noqa: E402
+import random  # noqa: E402
+import time  # noqa: E402
 
+import requests  # noqa: E402
+from celery import shared_task  # noqa: E402
+from django.utils import timezone  # noqa: E402
 
-from .tasks_caddy import _regenerate_caddyfile
-from .tasks_deploy import enqueue_smart_deploy_task
-from .tasks_deploy import _handle_failure
+from apps.deployments.models import (  # noqa: E402
+    Deployment,
+)
+from apps.deployments.services.remote_orchestrator import RemoteOrchestrator  # noqa: E402
+from apps.deployments.utils import (  # noqa: E402
+    append_log,
+    broadcast_status,
+    update_stage,
+)
+
+from .tasks_caddy import _regenerate_caddyfile  # noqa: E402
+from .tasks_deploy import _handle_failure, enqueue_smart_deploy_task  # noqa: E402
+
 
 def _handle_remote_deployment_legacy(deployment, server):
     """Delegate deployment to a remote server and poll for status."""
-    from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
     from apps.deployments.services.server_guard import ServerGuard
 
     service = deployment.service
@@ -96,7 +73,7 @@ def _handle_remote_deployment_legacy(deployment, server):
 
     # 3. Polling Loop
     max_retries = 90  # 15 minutes (10s intervals)
-    for i in range(max_retries):
+    for _i in range(max_retries):
         time.sleep(10)
         remote_status = orchestrator.poll_deployment(remote_dep_id)
         if not remote_status:
@@ -142,8 +119,9 @@ def _stop_local_service_container(service_name: str):
     Used during remote delegation to prevent 'ghost' containers.
     """
     try:
-        from apps.cloud.docker_client import get_docker_client
         import docker
+
+        from apps.cloud.docker_client import get_docker_client
         client = get_docker_client()
         try:
             container = client.containers.get(service_name)
@@ -172,7 +150,6 @@ def _handle_remote_deployment(deployment, server, skip_review=False, image_name=
     it is forwarded to the remote so that node can skip its own build phase
     and go straight to pull + run (build-agent optimization).
     """
-    from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
     from apps.deployments.services.server_guard import ServerGuard
 
     service = deployment.service
@@ -253,7 +230,6 @@ def _handle_remote_deployment(deployment, server, skip_review=False, image_name=
 
 def _resume_remote_deployment(deployment, server):
     """Approve/resume an existing remote deployment and keep polling it."""
-    from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
     from apps.deployments.services.server_guard import ServerGuard
 
     service = deployment.service
@@ -485,7 +461,7 @@ def _poll_remote_deployment(
             Deployment.Status.MIGRATION_FAILED,
         ):
             error_detail = remote_status.get("error") or f"Remote deployment failed with status: {status}."
-            append_log(deployment, f"[Self-Heal] Remote failure detected — triggering self-healing...\n")
+            append_log(deployment, "[Self-Heal] Remote failure detected — triggering self-healing...\n")
             try:
                 self_heal_remote_deployment.delay(
                     deployment_id=str(deployment.id),
@@ -628,8 +604,8 @@ def self_heal_remote_deployment(self, deployment_id: str, server_id: str):
 
     try:
         from apps.deployments.services.self_healing_orchestrator import (
-            SelfHealingOrchestrator,
             RecoveryAction,
+            SelfHealingOrchestrator,
         )
 
         orchestrator = SelfHealingOrchestrator(server)

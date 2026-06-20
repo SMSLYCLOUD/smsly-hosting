@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List, Optional
+from typing import Any
+
 
 class FrameworkAdapter(ABC):
     """
@@ -38,15 +39,15 @@ class FrameworkAdapter(ABC):
         pass
 
     @abstractmethod
-    def get_health_check_config(self) -> Dict[str, Any]:
+    def get_health_check_config(self) -> dict[str, Any]:
         pass
 
     @abstractmethod
-    def inspect_migration_files(self, project_path: str) -> List[Dict[str, Any]]:
+    def inspect_migration_files(self, project_path: str) -> list[dict[str, Any]]:
         pass
 
     @abstractmethod
-    def classify_migration_risk(self, operations: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def classify_migration_risk(self, operations: list[dict[str, Any]]) -> dict[str, Any]:
         pass
 
 class DatabaseSnapshotManager(ABC):

@@ -1,9 +1,11 @@
-import json
 import base64
 import datetime
-from cryptography.hazmat.primitives import serialization, hashes
-from cryptography.hazmat.primitives.asymmetric import padding
+import json
 import os
+
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding
+
 
 def validate_stub(license_key, instance_id):
     """

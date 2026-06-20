@@ -1,11 +1,16 @@
 import logging
 import re
+
 from django.conf import settings
 from django.db import models, transaction
 from django.utils import timezone
+
 from apps.deployments.models_core import Deployment
-from apps.deployments.models_safedeploy import DeploymentApproval, MigrationValidation, DeploymentArtifact
-from .postgres_snapshot_manager import PostgresSnapshotManager
+from apps.deployments.models_safedeploy import (
+    DeploymentApproval,
+    DeploymentArtifact,
+    MigrationValidation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -128,8 +133,12 @@ class ProductionDeploymentPipeline:
         deployment.status = Deployment.Status.MIGRATION_RUNNING
         deployment.save()
         try:
-            from apps.deployments.services.safedeploy.django_adapter import DjangoAdapter
-            import tempfile, shutil
+            import shutil
+            import tempfile
+
+            from apps.deployments.services.safedeploy.django_adapter import (
+                DjangoAdapter,
+            )
             adapter = DjangoAdapter()
             workspace_dir = tempfile.mkdtemp(prefix=f"prod_deploy_{deployment.id}_")
             repo_url = deployment.service.repository_url
@@ -223,8 +232,10 @@ class ProductionDeploymentPipeline:
         """
         if not pre_migration_state:
             return False
+        import shutil
+        import tempfile
+
         from apps.deployments.services.safedeploy.django_adapter import DjangoAdapter
-        import tempfile, shutil
         adapter = DjangoAdapter()
         workspace_dir = tempfile.mkdtemp(prefix=f"prod_rollback_{deployment.id}_")
         cloned_path = workspace_dir
@@ -308,8 +319,10 @@ class ProductionDeploymentPipeline:
         svc = deployment.service
         if not svc:
             return
+        import shutil
+        import tempfile
+
         from apps.deployments.services.safedeploy.django_adapter import DjangoAdapter
-        import tempfile, shutil
         adapter = DjangoAdapter()
         workspace_dir = tempfile.mkdtemp(prefix=f"prod_tests_{deployment.id}_")
         cloned_path = workspace_dir
@@ -398,7 +411,9 @@ class ProductionDeploymentPipeline:
             health_path = f"/{health_path}"
         full_url = f"{public_url.rstrip('/')}{health_path}"
         try:
-            from apps.deployments.services.safedeploy.health_checks import perform_health_check
+            from apps.deployments.services.safedeploy.health_checks import (
+                perform_health_check,
+            )
             ok, _ = perform_health_check(full_url)
         except Exception as e:
             logger.error(f"Health check raised for deployment {deployment.id}: {e}")

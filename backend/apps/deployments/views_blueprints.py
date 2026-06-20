@@ -1,9 +1,10 @@
 """Views Blueprints module."""
-from rest_framework import serializers, viewsets, permissions, status
+from rest_framework import permissions, serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from apps.deployments.services.blueprint_manager import BlueprintManager
+
 from apps.cloud.models import CloudProvider
+from apps.deployments.services.blueprint_manager import BlueprintManager
 
 
 class BlueprintPayloadSerializer(serializers.Serializer):

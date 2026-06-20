@@ -7,15 +7,15 @@ Expose local development servers to public URLs via WebSocket tunnels.
 Similar to ngrok, but integrated with SMSLY Hosting.
 """
 
-import asyncio
-import json
-import uuid
-import logging
-from typing import Dict, Optional
-from dataclasses import dataclass, field
-from datetime import datetime
-from aiohttp import web, WSMsgType
-from django.conf import settings
+import asyncio  # noqa: E402
+import json  # noqa: E402
+import logging  # noqa: E402
+import uuid  # noqa: E402
+from dataclasses import dataclass, field  # noqa: E402
+from datetime import datetime  # noqa: E402
+
+from aiohttp import WSMsgType, web  # noqa: E402
+from django.conf import settings  # noqa: E402
 
 logger = logging.getLogger('smsly.tunnels')
 
@@ -31,11 +31,11 @@ class TunnelConnection:  # pylint: disable=too-many-instance-attributes
     tunnel_id: str
     subdomain: str
     websocket: web.WebSocketResponse
-    user_id: Optional[str] = None
+    user_id: str | None = None
     created_at: datetime = field(default_factory=datetime.utcnow)
     request_count: int = 0
 
-    def public_url(self, base_domain: Optional[str] = None) -> str:
+    def public_url(self, base_domain: str | None = None) -> str:
         """Get public URL."""
         base_domain = base_domain or get_tunnel_base_domain()
         return f"https://{self.subdomain}.{base_domain}"
@@ -48,11 +48,11 @@ class RequestLog:  # pylint: disable=too-many-instance-attributes
     tunnel_id: str
     method: str
     path: str
-    headers: Dict[str, str]
+    headers: dict[str, str]
     body: bytes
     timestamp: datetime
-    response_status: Optional[int] = None
-    response_time_ms: Optional[int] = None
+    response_status: int | None = None
+    response_time_ms: int | None = None
 
 
 class TunnelServer:  # pylint: disable=too-many-instance-attributes
@@ -62,13 +62,13 @@ class TunnelServer:  # pylint: disable=too-many-instance-attributes
     Routes incoming HTTP requests to connected tunnel clients.
     """
 
-    def __init__(self, base_domain: Optional[str] = None):
+    def __init__(self, base_domain: str | None = None):
         self.base_domain = base_domain or get_tunnel_base_domain()
-        self.tunnels: Dict[str, TunnelConnection] = {}  # subdomain -> tunnel
-        self.request_logs: Dict[str, list] = {}  # tunnel_id -> [RequestLog]
+        self.tunnels: dict[str, TunnelConnection] = {}  # subdomain -> tunnel
+        self.request_logs: dict[str, list] = {}  # tunnel_id -> [RequestLog]
         # tunnel_id -> request_id -> Future[dict]
         # Only the WS handler reads from the socket and resolves these futures.
-        self.pending_responses: Dict[str, Dict[str, asyncio.Future]] = {}
+        self.pending_responses: dict[str, dict[str, asyncio.Future]] = {}
         self.app = web.Application()
         self._setup_routes()
 
@@ -286,7 +286,7 @@ class TunnelServer:  # pylint: disable=too-many-instance-attributes
         request_id = request.match_info['request_id']
 
         logs = self.request_logs.get(tunnel_id, [])
-        log_entry = next((l for l in logs if l.request_id == request_id), None)
+        log_entry = next((entry for entry in logs if entry.request_id == request_id), None)
 
         if not log_entry:
             return web.Response(status=404, text="Request not found")

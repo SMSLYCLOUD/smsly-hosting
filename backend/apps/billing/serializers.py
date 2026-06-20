@@ -1,5 +1,7 @@
 from rest_framework import serializers
-from .models import PricingPlan, ResourcePrice, UserSubscription, Invoice, UsageRecord
+
+from .models import Invoice, PricingPlan, ResourcePrice, UsageRecord, UserSubscription
+
 
 class PricingPlanSerializer(serializers.ModelSerializer):
     class Meta:

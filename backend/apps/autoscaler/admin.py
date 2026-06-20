@@ -1,5 +1,7 @@
 from django.contrib import admin
+
 from .models import AutoscalerConfig
+
 
 @admin.register(AutoscalerConfig)
 class AutoscalerConfigAdmin(admin.ModelAdmin):

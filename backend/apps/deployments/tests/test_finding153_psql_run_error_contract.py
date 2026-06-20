@@ -20,10 +20,9 @@ These tests verify:
     non-empty ``error`` field.
 """
 
+import subprocess
 from types import SimpleNamespace
 from unittest.mock import patch
-
-import subprocess
 
 from django.test import SimpleTestCase
 

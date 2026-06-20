@@ -1,5 +1,4 @@
 import django.test
-from rest_framework import serializers
 
 from apps.deployments.views_replication import ReplicationDeploySerializer
 

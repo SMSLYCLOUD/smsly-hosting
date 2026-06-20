@@ -1,12 +1,10 @@
 # pylint: disable=invalid-name
 """Tests for the encrypted Cloudflare API token storage on PlatformConfig."""
 
-import re
 
 from django.test import TestCase
 
 from apps.deployments.models import PlatformConfig
-
 
 VALID_TOKEN = "A" * 40  # exactly 40 chars, alphanumeric
 

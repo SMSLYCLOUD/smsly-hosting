@@ -1,8 +1,11 @@
-import os
 import ast
-from typing import Dict, Any, List
-from .command_executor import CommandExecutor
+import os
+from typing import Any
+
 from apps.deployments.models_safedeploy import MigrationValidation
+
+from .command_executor import CommandExecutor
+
 
 class DjangoAdapter:
     def __init__(self):
@@ -25,7 +28,7 @@ class DjangoAdapter:
     def run_migrate(self, cwd: str, env: dict) -> tuple[int, str, str]:
         return self.executor.run("python manage.py migrate --noinput", cwd, env)
 
-    def inspect_migration_files(self, project_path: str) -> List[Dict[str, Any]]:
+    def inspect_migration_files(self, project_path: str) -> list[dict[str, Any]]:
         operations = []
         if not os.path.exists(project_path):
             return operations
@@ -38,7 +41,7 @@ class DjangoAdapter:
                     continue
                 filepath = os.path.join(root, file)
                 try:
-                    with open(filepath, 'r') as f:
+                    with open(filepath) as f:
                         source = f.read()
                     tree = ast.parse(source, filename=filepath)
                     operations.extend(self._extract_operations_from_ast(tree, filepath))
@@ -46,7 +49,7 @@ class DjangoAdapter:
                     pass
         return operations
 
-    def _extract_operations_from_ast(self, tree: ast.AST, filepath: str) -> List[Dict[str, Any]]:
+    def _extract_operations_from_ast(self, tree: ast.AST, filepath: str) -> list[dict[str, Any]]:
         op_names = {
             'DeleteModel', 'RemoveField', 'RunPython', 'RunSQL',
             'AlterField', 'AddField', 'RenameField', 'RenameModel',
@@ -67,12 +70,10 @@ class DjangoAdapter:
     def _runpython_has_no_reverse(call_node: ast.Call) -> bool:
         for kw in call_node.keywords:
             if kw.arg == 'reverse_code':
-                if isinstance(kw.value, ast.Constant) and kw.value.value is None:
-                    return True
-                return False
+                return bool(isinstance(kw.value, ast.Constant) and kw.value.value is None)
         return True
 
-    def classify_migration_risk(self, operations: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def classify_migration_risk(self, operations: list[dict[str, Any]]) -> dict[str, Any]:
         score_map = {
             'DeleteModel': 100, 'RunSQL': 100,
             'RemoveField': 50, 'RunPython': 50,

@@ -1,7 +1,8 @@
 # ServiceReplica model for auto-scaling
 
-from django.db import migrations, models
 import uuid
+
+from django.db import migrations, models
 
 
 class Migration(migrations.Migration):

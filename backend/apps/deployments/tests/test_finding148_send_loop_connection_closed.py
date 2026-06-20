@@ -1,5 +1,4 @@
 import asyncio
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from django.test import TestCase

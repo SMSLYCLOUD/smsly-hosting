@@ -1,15 +1,16 @@
-import os
-import json
 import base64
-import logging
 import hashlib
+import json
+import logging
+import os
 import uuid
+from datetime import timedelta
+
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding
 from django.conf import settings
 from django.utils import timezone
-from datetime import timedelta
-from cryptography.hazmat.primitives import serialization, hashes
-from cryptography.hazmat.primitives.asymmetric import padding
-from cryptography.exceptions import InvalidSignature
 
 from .models import PlatformLicense, PlatformTier
 
@@ -25,7 +26,7 @@ def get_instance_id():
 
     if os.path.exists(id_file):
         try:
-            with open(id_file, 'r') as f:
+            with open(id_file) as f:
                 return f.read().strip()
         except Exception:
             pass
@@ -35,7 +36,7 @@ def get_instance_id():
     for path in ['/etc/machine-id', '/var/lib/dbus/machine-id']:
         if os.path.exists(path):
             try:
-                with open(path, 'r') as f:
+                with open(path) as f:
                     machine_id = f.read().strip()
                 break
             except Exception:

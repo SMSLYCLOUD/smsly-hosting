@@ -22,7 +22,6 @@ from apps.deployments.views_tunnels import (
     DENIED_TUNNEL_PORTS,
 )
 
-
 User = get_user_model()
 
 

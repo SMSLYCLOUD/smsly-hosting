@@ -1,50 +1,23 @@
 import logging
+
 logger = logging.getLogger(__name__)
 REMOTE_UPDATE_LOG_LIMIT = 300_000
 
-import logging
-import random
-import re
-import shlex
-import shutil
-import tempfile
-import subprocess
-import os
-import json
-import time
-import zipfile
-import secrets
-import threading
-from contextlib import contextmanager
-from urllib.parse import unquote, urlparse
-import docker
-import requests
-from celery import shared_task
-from django.conf import settings
-from django.core.cache import cache
-from django.utils import timezone
-from django.db.models import Sum
-from apps.cloud.models import CloudProvider
-from apps.cloud.services.builder import NixpacksBuilder
-from apps.cloud.services.compute import ComputeService
-from apps.cloud.services.function_provisioner import FunctionProvisioner
-from apps.deployments.ai_router import DEFAULT_AI_ROUTER_API_BASE, DEFAULT_AI_ROUTER_UI_BASE, DEFAULT_BRAID_ALIAS, generate_ai_router_proxy_config, get_ollama_model_name, is_ai_router_service, is_ollama_service
-from apps.deployments.models import Service, Deployment, EnvironmentVariable, PlatformConfig
-from apps.deployments.models_addons import Addon, Backup
-from apps.deployments.models_backup import BackupSchedule, ServiceBackup
-from apps.deployments.models_storage import Volume
-from apps.deployments.models_transfer import ServerTransfer
-from apps.deployments.services.backup_service import BackupService
-from apps.deployments.services.pipeline import PipelineManager, PipelineError
-from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
-from apps.deployments.services.tls_verify import should_verify
-from apps.deployments.services.transfer_service import ServerTransferService
-from apps.deployments.utils import append_log, broadcast_status, build_local_source_bundle, update_stage, is_deployment_local
-from services.addon_provisioner import addon_provisioner
+import logging  # noqa: E402
+import os  # noqa: E402
+import re  # noqa: E402
+import shlex  # noqa: E402
 
+from celery import shared_task  # noqa: E402
+from django.core.cache import cache  # noqa: E402
+from django.utils import timezone  # noqa: E402
 
-from .tasks_utils import _env_bool
-from .tasks_utils import _env_bool
+from apps.deployments.models import (  # noqa: E402
+    PlatformConfig,
+)
+
+from .tasks_utils import _env_bool  # noqa: E402
+
 
 @shared_task(name="apps.deployments.tasks.update_remote_server_task")
 def update_remote_server_task(server_id: str):
@@ -52,6 +25,7 @@ def update_remote_server_task(server_id: str):
     SSH into a connected server and run the resilient installer update flow.
     """
     from apps.deployments.models import ManagedServer
+
     from .tasks_maintenance import ThrottledLogAppender
 
     try:
@@ -137,19 +111,21 @@ def update_remote_server_task(server_id: str):
         quoted_path = shlex.quote(hosting_path)
         quoted_branch = shlex.quote(branch)
         git_steps = (
-            "cd {quoted_path} && "
+            f"cd {quoted_path} && "
             "if [ \"$(id -u)\" -eq 0 ]; then SUDO=''; else SUDO='sudo -n'; fi; "
             "git config --global --add safe.directory \"$PWD\" 2>/dev/null || true; "
             "if [ -n \"$(git status --porcelain 2>/dev/null)\" ]; then "
             "git stash push --include-untracked -m \"remote-update-$(date +%s)\" >/dev/null 2>&1 || true; "
             "fi; "
-            "git fetch origin {quoted_branch} >/dev/null 2>&1 && "
-            "git checkout -B {quoted_branch} origin/{quoted_branch} >/dev/null 2>&1 && "
-            "git branch --set-upstream-to=origin/{quoted_branch} {quoted_branch} >/dev/null 2>&1 || true"
-        ).format(quoted_path=quoted_path, quoted_branch=quoted_branch)
+            f"git fetch origin {quoted_branch} >/dev/null 2>&1 && "
+            f"git checkout -B {quoted_branch} origin/{quoted_branch} >/dev/null 2>&1 && "
+            f"git branch --set-upstream-to=origin/{quoted_branch} {quoted_branch} >/dev/null 2>&1 || true"
+        )
 
         if is_lite:
-            from apps.deployments.services.provisioner import build_agent_lite_install_env
+            from apps.deployments.services.provisioner import (
+                build_agent_lite_install_env,
+            )
 
             lite_env, lite_messages = build_agent_lite_install_env(
                 server,
@@ -341,11 +317,11 @@ def update_remote_server_task(server_id: str):
         return True
 
     except Exception as e:
-        error_msg = f"Update Task failed for {server.host}: {str(e)}"
+        error_msg = f"Update Task failed for {server.host}: {e!s}"
         logger.error(error_msg)
         server.provision_status = ManagedServer.ProvisionStatus.FAILED
         server.save(update_fields=["provision_status", "updated_at"])
-        _append_remote_update_log(server, f"\nFATAL ERROR: {str(e)}\n")
+        _append_remote_update_log(server, f"\nFATAL ERROR: {e!s}\n")
 
         # Dispatch notification to server owner when update fails
         try:
@@ -354,7 +330,7 @@ def update_remote_server_task(server_id: str):
                 event_type='server_update_failed',
                 user_id=server.owner.id,
                 title=f"❌ Server Update Failed: {server.name}",
-                message=f"The update process for server '{server.name}' ({server.host}) failed.\nReason: {str(e)}",
+                message=f"The update process for server '{server.name}' ({server.host}) failed.\nReason: {e!s}",
                 metadata={'server_id': str(server.id), 'server_name': server.name, 'host': server.host, 'error': str(e)},
             )
         except Exception as notify_exc:

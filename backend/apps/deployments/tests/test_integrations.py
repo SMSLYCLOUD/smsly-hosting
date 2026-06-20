@@ -2,9 +2,9 @@
 """Integration API tests (GitHub connect bootstrap flow and OAuth url generation)."""
 
 from django.contrib.auth import get_user_model
+from django.contrib.sites.models import Site
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
-from django.contrib.sites.models import Site
 
 try:
     from allauth.socialaccount.models import SocialApp
@@ -95,7 +95,7 @@ class GitHubOAuthUrlTests(TestCase):
     def test_github_oauth_url_uses_platform_config_dynamically(self):
         if SocialApp is None:
             self.skipTest("allauth not installed/available")
-        
+
         # Create a PlatformConfig in the database with a custom domain
         from apps.deployments.models_core import PlatformConfig
         PlatformConfig.objects.create(
@@ -103,7 +103,7 @@ class GitHubOAuthUrlTests(TestCase):
             domain="my-custom-domain.com",
             use_ssl=True
         )
-        
+
         # Even if SITE_URL is set to an IP address, it should prioritize the DB domain and force HTTPS
         with override_settings(DEBUG=False, SITE_URL="http://209.159.152.123"):
             resp = self.client.get("/api/v1/integrations/github/oauth-url/")

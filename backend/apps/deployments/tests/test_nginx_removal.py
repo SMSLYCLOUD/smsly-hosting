@@ -2,8 +2,8 @@
 """Tests to verify nginx has been fully removed from the platform routing chain."""
 
 import os
-from django.test import TestCase
 
+from django.test import TestCase
 
 REPO_ROOT = os.path.join(
     os.path.dirname(__file__), '..', '..', '..', '..'
@@ -17,7 +17,7 @@ class NginxRemovalFromComposeTests(TestCase):
         path = os.path.join(REPO_ROOT, relative_path)
         if not os.path.exists(path):
             return None
-        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+        with open(path, encoding='utf-8', errors='ignore') as f:
             return f.read()
 
     def test_prod_compose_no_nginx_service(self):
@@ -65,7 +65,7 @@ class NginxRemovalFromScriptsTests(TestCase):
         path = os.path.join(REPO_ROOT, relative_path)
         if not os.path.exists(path):
             return None
-        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+        with open(path, encoding='utf-8', errors='ignore') as f:
             return f.read()
 
     def test_deploy_script_no_nginx(self):
@@ -95,7 +95,7 @@ class NginxRemovalFromBackendTests(TestCase):
         path = os.path.join(REPO_ROOT, relative_path)
         if not os.path.exists(path):
             return None
-        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+        with open(path, encoding='utf-8', errors='ignore') as f:
             return f.read()
 
     def test_settings_no_nginx_in_allowed_hosts(self):
@@ -121,7 +121,7 @@ class NginxRemovalFromCITests(TestCase):
         path = os.path.join(REPO_ROOT, relative_path)
         if not os.path.exists(path):
             return None
-        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+        with open(path, encoding='utf-8', errors='ignore') as f:
             return f.read()
 
     def test_ci_no_nginx_health_check(self):
@@ -138,7 +138,7 @@ class NginxRemovalFromHelmTests(TestCase):
         path = os.path.join(REPO_ROOT, 'charts', 'smsly-hosting', 'values.yaml')
         if not os.path.exists(path):
             self.skipTest("values.yaml not found")
-        with open(path, 'r') as f:
+        with open(path) as f:
             content = f.read()
         # nginx.enabled should be false
         self.assertRegex(content, r'nginx:\s*\n\s*enabled:\s*false')
@@ -151,7 +151,7 @@ class NginxRemovalFromMonitoringTests(TestCase):
         path = os.path.join(REPO_ROOT, 'infrastructure', 'monitoring', 'prometheus.yml')
         if not os.path.exists(path):
             self.skipTest("prometheus.yml not found")
-        with open(path, 'r') as f:
+        with open(path) as f:
             content = f.read()
         self.assertNotIn("job_name: 'nginx'", content)
 
@@ -196,7 +196,7 @@ class RouteFallbackReplacementTests(TestCase):
         path = os.path.join(REPO_ROOT, 'infrastructure', 'route-fallback', 'Caddyfile')
         if not os.path.exists(path):
             self.skipTest("route-fallback Caddyfile not found")
-        with open(path, 'r') as f:
+        with open(path) as f:
             content = f.read()
         # Should proxy recheck to backend
         self.assertIn('reverse_proxy backend:8000', content)

@@ -1,59 +1,82 @@
 import logging
+
 logger = logging.getLogger(__name__)
-import logging
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
-import random
-import re
-import shlex
-import shutil
-import tempfile
-import subprocess
-import os
-import json
-import time
-import zipfile
-import secrets
-import threading
-from contextlib import contextmanager
-from urllib.parse import unquote, urlparse
-import docker
-import requests
-from celery import shared_task
-from django.conf import settings
-from django.core.cache import cache
-from django.utils import timezone
-from django.db.models import Sum
-from apps.cloud.models import CloudProvider
-from apps.cloud.services.builder import NixpacksBuilder
-from apps.cloud.services.compute import ComputeService
-from apps.cloud.services.function_provisioner import FunctionProvisioner
-from apps.deployments.ai_router import DEFAULT_AI_ROUTER_API_BASE, DEFAULT_AI_ROUTER_UI_BASE, DEFAULT_BRAID_ALIAS, generate_ai_router_proxy_config, get_ollama_model_name, is_ai_router_service, is_ollama_service
-from apps.deployments.models import Service, Deployment, EnvironmentVariable, PlatformConfig
-from apps.deployments.models_addons import Addon, Backup
-from apps.deployments.models_backup import BackupSchedule, ServiceBackup
-from apps.deployments.models_storage import Volume
-from apps.deployments.models_transfer import ServerTransfer
-from apps.deployments.services.backup_service import BackupService
-from apps.deployments.services.pipeline import PipelineManager, PipelineError
-from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
-from apps.deployments.services.tls_verify import should_verify
-from apps.deployments.services.transfer_service import ServerTransferService
-from apps.deployments.utils import append_log, broadcast_status, build_local_source_bundle, update_stage, is_deployment_local
-from services.addon_provisioner import addon_provisioner
-from .tasks_deploy import smart_deploy_task
-from .tasks_deploy import smart_deploy_task
-from .tasks_deploy import smart_deploy_task
-from .tasks_deploy import smart_deploy_task
-from .tasks_deploy import smart_deploy_task
-from .tasks_deploy import smart_deploy_task
-from .tasks_deploy import smart_deploy_task
-from .tasks_deploy import smart_deploy_task
+import os  # noqa: E402
+import re  # noqa: E402
+import secrets  # noqa: E402
+import string  # noqa: E402
+from collections import defaultdict  # noqa: E402
+from collections.abc import Iterable  # noqa: E402
+from typing import Any  # noqa: E402
+from urllib.parse import urlparse, urlunparse  # noqa: E402
+
+from celery import shared_task  # noqa: E402
+from celery.exceptions import SoftTimeLimitExceeded  # noqa: E402
+from django.conf import settings  # noqa: E402
+from django.utils import timezone  # noqa: E402
+from services.addon_provisioner import addon_provisioner  # noqa: E402
+
+from apps.cloud.models import CloudProvider  # noqa: E402
+from apps.deployments.models import (  # noqa: E402
+    Deployment,
+    EnvironmentVariable,
+    Service,
+)
+from apps.deployments.models_addons import Addon  # noqa: E402
 
 # Module-level constants (ecosystem scanning thresholds)
 _MIN_FREE_MEMORY_MB = 256
 _WAVE_RECHECK_SECONDS = 300
 _MAX_WAVE_RECHECKS = 10
 _MAX_WAVE_SIZE = 5
+_DEFAULT_WAVE_SIZE = 3
+_VALID_PORT_RANGE = (1, 65535)
+
+_ADDON_ENV_ALIASES = {
+    "POSTGRES": ("POSTGRESQL_URL", "PG_URL", "POSTGRES_URL"),
+    "REDIS": ("REDIS_URL", "REDIS_URI"),
+    "MONGO": ("MONGO_URL", "MONGODB_URL"),
+    "MYSQL": ("MYSQL_URL", "MARIADB_URL"),
+    "RABBITMQ": ("RABBITMQ_URL", "AMQP_URL"),
+    "MEILISEARCH": ("MEILI_URL", "MEILISEARCH_URL"),
+}
+
+_PLAN_REQUIRED_KEYS = frozenset({"services"})
+_PLAN_OPTIONAL_KEYS = frozenset({"wave_size", "manifest", "name", "description"})
+
+_SERVICE_REQUIRED_KEYS = frozenset({"name"})
+_SERVICE_OPTIONAL_KEYS = frozenset({"build", "port", "depends_on", "skip", "env", "repo", "branch", "image"})
+_SERVICE_VALID_BUILDS = frozenset({"nixpacks", "dockerfile", "image", "static"})
+
+_SMSLY_CORE_HINTS = frozenset({
+    "smsly-core",
+    "smsly-core-api",
+    "smsly-platform-api",
+    "smsly-platform",
+    "smsly-core-platform",
+})
+
+_EXTERNAL_SECRETS = frozenset({
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "NPM_TOKEN",
+    "PYPI_TOKEN",
+    "DOCKER_TOKEN",
+    "STRIPE_SECRET_KEY",
+    "STRIPE_WEBHOOK_SECRET",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+})
+
+_SECRET_HINTS = (
+    "SECRET",
+    "TOKEN",
+    "PASSWORD",
+    "PASSWD",
+    "API_KEY",
+    "PRIVATE_KEY",
+    "CREDENTIAL",
+)
 
 def _canonical_repo_ref(raw: Any) -> str:
     """Normalize repo references to owner/name when possible."""
@@ -100,7 +123,7 @@ def _coerce_addon_type(raw: Any) -> str:
     return str(raw or "").strip().upper()
 
 
-def _addon_env_key_map() -> Dict[str, str]:
+def _addon_env_key_map() -> dict[str, str]:
     """Return addon type to primary connection env key mapping."""
     try:
         from services.addon_provisioner import AddonProvisioner
@@ -118,7 +141,7 @@ def _addon_env_key_map() -> Dict[str, str]:
         }
 
 
-def _addon_env_keys(addon_type: str) -> Tuple[str, ...]:
+def _addon_env_keys(addon_type: str) -> tuple[str, ...]:
     """Return accepted env keys for an addon type."""
     addon_type = str(addon_type or "").strip().upper()
     primary = _addon_env_key_map().get(addon_type, f"{addon_type}_URL")
@@ -141,9 +164,7 @@ def _addon_type_from_placeholder(token: str) -> str:
             return addon_type
 
     candidate = ""
-    if token.endswith("_URL"):
-        candidate = token[:-4]
-    elif token.endswith("_URI"):
+    if token.endswith("_URL") or token.endswith("_URI"):
         candidate = token[:-4]
 
     if candidate in addon_map:
@@ -152,9 +173,9 @@ def _addon_type_from_placeholder(token: str) -> str:
     return ""
 
 
-def _placeholder_addon_types(raw_env: Any) -> Set[str]:
+def _placeholder_addon_types(raw_env: Any) -> set[str]:
     """Extract addon types referenced by env placeholders (including embedded)."""
-    addon_types: Set[str] = set()
+    addon_types: set[str] = set()
     for value in _normalize_env_vars(raw_env).values():
         value_text = str(value or "").strip()
         # Find all {{...}} tokens in the value, not just full-string ones
@@ -170,9 +191,9 @@ def _placeholder_addon_types(raw_env: Any) -> Set[str]:
     return addon_types
 
 
-def _service_placeholder_refs(raw_env: Any) -> List[str]:
+def _service_placeholder_refs(raw_env: Any) -> list[str]:
     """Extract service references from {{SERVICE:name}} env placeholders."""
-    refs: List[str] = []
+    refs: list[str] = []
     for value in _normalize_env_vars(raw_env).values():
         value_text = str(value or "")
         for match in re.finditer(r"\{\{\s*SERVICE\s*:\s*(.+?)\s*\}\}", value_text, re.IGNORECASE):
@@ -182,16 +203,16 @@ def _service_placeholder_refs(raw_env: Any) -> List[str]:
     return refs
 
 
-def _plan_addon_types(plan_addons: Any) -> Set[str]:
+def _plan_addon_types(plan_addons: Any) -> set[str]:
     """Collect addon types declared at the top level."""
     if not isinstance(plan_addons, list):
         return set()
     return {addon for addon in (_coerce_addon_type(item) for item in plan_addons) if addon}
 
 
-def _service_plan_addon_types(svc_plan: Dict[str, Any], plan_addons: Any = None) -> Set[str]:
+def _service_plan_addon_types(svc_plan: dict[str, Any], plan_addons: Any = None) -> set[str]:
     """Return all addon types intended for a service."""
-    addon_types: Set[str] = set()
+    addon_types: set[str] = set()
     raw_service_addons = svc_plan.get("addons", [])
     if isinstance(raw_service_addons, list):
         addon_types.update(
@@ -240,9 +261,9 @@ def _service_plan_addon_types(svc_plan: Dict[str, Any], plan_addons: Any = None)
 
 
 def _inject_addon_env_defaults(
-    resolved_env: Dict[str, str],
-    addon_types: Set[str],
-    provisioned_addon_urls: Dict[str, str],
+    resolved_env: dict[str, str],
+    addon_types: set[str],
+    provisioned_addon_urls: dict[str, str],
 ) -> None:
     """Populate standard addon URL env vars when a service requests an addon."""
     for addon_type in sorted(addon_types):
@@ -341,10 +362,10 @@ def _validate_plan_structure(plan: dict) -> list[str]:
     return errors
 
 
-def _alias_ambiguity_report(dependencies: Dict[str, Set[str]], entries_by_key: Dict) -> list[str]:
+def _alias_ambiguity_report(dependencies: dict[str, set[str]], entries_by_key: dict) -> list[str]:
     """Report ambiguous dependency aliases for user visibility."""
     warnings_list: list[str] = []
-    alias_owner: Dict[str, str | None] = {}
+    alias_owner: dict[str, str | None] = {}
 
     for key, entry in entries_by_key.items():
         repo = str(entry["repo"]).strip().lower()
@@ -442,7 +463,7 @@ def _repo_slug_from_url(url: str) -> str:
     return _slugify_name(tail)
 
 
-def _select_shared_addon_anchor(services: List[Any]):
+def _select_shared_addon_anchor(services: list[Any]):
     """
     Choose the best service to host shared ecosystem addons.
 
@@ -460,7 +481,7 @@ def _select_shared_addon_anchor(services: List[Any]):
     return services[0]
 
 
-def _normalize_env_vars(raw_env: Any) -> Dict[str, str]:
+def _normalize_env_vars(raw_env: Any) -> dict[str, str]:
     """
     Accept flexible env var formats from AI/heuristics and normalize to dict.
 
@@ -468,7 +489,7 @@ def _normalize_env_vars(raw_env: Any) -> Dict[str, str]:
     - {"KEY": "value"}
     - [{"key": "KEY", "default": "value", "is_secret": true, ...}, ...]
     """
-    normalized: Dict[str, str] = {}
+    normalized: dict[str, str] = {}
 
     if isinstance(raw_env, dict):
         for key, value in raw_env.items():
@@ -504,10 +525,10 @@ def _normalize_env_vars(raw_env: Any) -> Dict[str, str]:
     return normalized
 
 
-def _stack_runtime_defaults(stack: str, port: int) -> Dict[str, str]:
+def _stack_runtime_defaults(stack: str, port: int) -> dict[str, str]:
     """Inject safe runtime defaults per stack."""
     stack_l = str(stack or "").strip().lower()
-    defaults: Dict[str, str] = {"PORT": str(max(1, int(port or 3000)))}
+    defaults: dict[str, str] = {"PORT": str(max(1, int(port or 3000)))}
 
     if stack_l in {"node", "nextjs", "nuxt"}:
         defaults["NODE_ENV"] = "production"
@@ -520,8 +541,8 @@ def _stack_runtime_defaults(stack: str, port: int) -> Dict[str, str]:
 
 def _service_placeholder_target(
     ref_name: str,
-    created_services: Dict[str, Any],
-) -> Tuple[str, int]:
+    created_services: dict[str, Any],
+) -> tuple[str, int]:
     """Return the internal host and port for a service placeholder."""
     ref_service = (
         created_services.get(ref_name)
@@ -545,7 +566,7 @@ def _service_placeholder_target(
 
 def _service_placeholder_url(
     ref_name: str,
-    created_services: Dict[str, Any],
+    created_services: dict[str, Any],
     *,
     as_authority: bool = False,
 ) -> str:
@@ -580,10 +601,10 @@ def _rewrite_url_path(base_url: str, suffix: str) -> str:
 def _resolve_single_placeholder(
     token: str,
     key: str,
-    created_services: Dict[str, Any],
-    shared_addons: Dict[str, str],
-    shared_secrets: Dict[str, str],
-) -> Optional[str]:
+    created_services: dict[str, Any],
+    shared_addons: dict[str, str],
+    shared_secrets: dict[str, str],
+) -> str | None:
     """Resolve a single {{...}} token to a concrete value.
 
     Returns the resolved value, or None if the token is not recognised
@@ -633,11 +654,11 @@ def _resolve_single_placeholder(
 
 
 def _resolve_env_placeholders(
-    env_vars: Dict[str, str],
-    created_services: Dict[str, Any],
-    shared_addons: Dict[str, str] = None,
-    shared_secrets: Dict[str, str] = None,
-) -> Dict[str, str]:
+    env_vars: dict[str, str],
+    created_services: dict[str, Any],
+    shared_addons: dict[str, str] | None = None,
+    shared_secrets: dict[str, str] | None = None,
+) -> dict[str, str]:
     """Resolve known placeholders into concrete values.
 
     Handles both full-string placeholders (e.g. "{{POSTGRES_URL}}") and
@@ -645,7 +666,7 @@ def _resolve_env_placeholders(
     "wss://{{SERVICE:smsly-security-gateway}}").  Multiple placeholders in a
     single value are all resolved.
     """
-    resolved: Dict[str, str] = {}
+    resolved: dict[str, str] = {}
     shared_addons = shared_addons or {}
     shared_secrets = shared_secrets if shared_secrets is not None else {}
 
@@ -703,7 +724,7 @@ def _resolve_env_placeholders(
     return resolved
 
 
-def _validate_resolved_env(resolved_env: Dict[str, str]) -> None:
+def _validate_resolved_env(resolved_env: dict[str, str]) -> None:
     """Ensure no unresolved placeholders remain in resolved env vars."""
     unresolved_keys = []
     for key, value in resolved_env.items():
@@ -716,7 +737,7 @@ def _validate_resolved_env(resolved_env: Dict[str, str]) -> None:
         )
 
 
-def _validate_required_env(resolved_env: Dict[str, str], addon_types: Set[str] = None) -> None:
+def _validate_required_env(resolved_env: dict[str, str], addon_types: set[str] | None = None) -> None:
     """Validate env required by requested addons without forcing every stack to use every addon."""
     missing = []
     for addon_type in sorted(addon_types or set()):
@@ -727,7 +748,7 @@ def _validate_required_env(resolved_env: Dict[str, str], addon_types: Set[str] =
         raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
 
 
-def _runtime_watch_defaults(user) -> Dict[str, str]:
+def _runtime_watch_defaults(user) -> dict[str, str]:
     """Default zero-click runtime monitoring configuration."""
     defaults = {
         "JULES_RUNTIME_WATCH": "true",
@@ -770,7 +791,7 @@ def _normalize_buildpack(raw: Any) -> str:
     return "DOCKER"
 
 
-def _normalize_deploy_mode(svc_plan: Dict[str, Any]) -> Tuple[str, str, str]:
+def _normalize_deploy_mode(svc_plan: dict[str, Any]) -> tuple[str, str, str]:
     """
     Resolve deploy mode and compose hints from plan.
 
@@ -794,7 +815,7 @@ def _normalize_deploy_mode(svc_plan: Dict[str, Any]) -> Tuple[str, str, str]:
     return "SINGLE", "", ""
 
 
-def _extract_dependencies(raw_depends: Any) -> List[str]:
+def _extract_dependencies(raw_depends: Any) -> list[str]:
     """Normalize depends_on values to a flat list of tokens."""
     if isinstance(raw_depends, str):
         text = raw_depends.strip()
@@ -815,17 +836,17 @@ def _extract_dependencies(raw_depends: Any) -> List[str]:
     return []
 
 
-def _chunked(items: List[str], size: int) -> Iterable[List[str]]:
+def _chunked(items: list[str], size: int) -> Iterable[list[str]]:
     """Yield fixed-size chunks."""
     for idx in range(0, len(items), size):
         yield items[idx:idx + size]
 
 
 def _build_dependency_waves(
-    entries_by_key: Dict[str, Dict[str, Any]],
-    dependencies: Dict[str, Set[str]],
+    entries_by_key: dict[str, dict[str, Any]],
+    dependencies: dict[str, set[str]],
     wave_size: int,
-) -> Tuple[List[List[str]], List[str]]:
+) -> tuple[list[list[str]], list[str]]:
     """
     Build deployment waves from dependency graph.
 
@@ -833,8 +854,8 @@ def _build_dependency_waves(
     - waves: list of canonical repo keys grouped for parallel deploy
     - cyclic_or_unresolved: keys that could not be topologically sorted
     """
-    dependents: Dict[str, Set[str]] = defaultdict(set)
-    indegree: Dict[str, int] = {}
+    dependents: dict[str, set[str]] = defaultdict(set)
+    indegree: dict[str, int] = {}
 
     for key in entries_by_key:
         try:
@@ -850,7 +871,7 @@ def _build_dependency_waves(
                     except Exception:
                         logger.warning(f"Cannot convert dependency {dep} to string for service {key}")
                         continue
-            
+
             deps = set(safe_deps)
             dependencies[key] = deps
             indegree[key] = len(deps)
@@ -869,8 +890,8 @@ def _build_dependency_waves(
         [key for key, degree in indegree.items() if degree == 0],
         key=_entry_order,
     )
-    processed: Set[str] = set()
-    waves: List[List[str]] = []
+    processed: set[str] = set()
+    waves: list[list[str]] = []
 
     while ready:
         layer = ready
@@ -903,10 +924,10 @@ def _build_dependency_waves(
 
 
 def _resolve_dependency_map(
-    entries_by_key: Dict[str, Dict[str, Any]],
-) -> Dict[str, Set[str]]:
+    entries_by_key: dict[str, dict[str, Any]],
+) -> dict[str, set[str]]:
     """Resolve depends_on aliases to canonical repo keys."""
-    alias_owner: Dict[str, str | None] = {}
+    alias_owner: dict[str, str | None] = {}
 
     for key, entry in entries_by_key.items():
         repo = str(entry["repo"]).strip().lower()
@@ -931,9 +952,9 @@ def _resolve_dependency_map(
         if owner is not None
     }
 
-    resolved: Dict[str, Set[str]] = {}
+    resolved: dict[str, set[str]] = {}
     for key, entry in entries_by_key.items():
-        deps: Set[str] = set()
+        deps: set[str] = set()
         raw_tokens = [
             *_extract_dependencies(entry.get("depends_on", [])),
             *_service_placeholder_refs(entry.get("plan", {}).get("env_vars", {})),
@@ -951,9 +972,8 @@ def _resolve_dependency_map(
     return resolved
 
 
-def _queue_wave(app, deployment_ids: List[str], provider_id: str, wave_index: int) -> int:
+def _queue_wave(app, deployment_ids: list[str], provider_id: str, wave_index: int) -> int:
     """Queue all QUEUED deployments in this wave."""
-    from apps.deployments.models import Deployment
 
     queued = 0
     for deployment_id in deployment_ids:
@@ -980,15 +1000,14 @@ def _queue_wave(app, deployment_ids: List[str], provider_id: str, wave_index: in
 
 
 def _cancel_dependent_deployments(
-    waves: List[List[str]],
+    waves: list[list[str]],
     from_wave_index: int,
-    failed_deployment_ids: List[str],
-    dependencies: Dict[str, Set[str]],
-    deployment_by_repo_key: Dict[str, str],
+    failed_deployment_ids: list[str],
+    dependencies: dict[str, set[str]],
+    deployment_by_repo_key: dict[str, str],
     reason: str,
 ) -> int:
     """Cancel queued deployments in unreleased waves that depend on failed deployments."""
-    from apps.deployments.models import Deployment
 
     # Reverse the mapping to find the repo_key from deployment_id
     repo_key_by_deployment = {v: k for k, v in deployment_by_repo_key.items()}
@@ -1004,13 +1023,13 @@ def _cancel_dependent_deployments(
         return 0
 
     # Build dependents map: parent -> set of children
-    dependents: Dict[str, Set[str]] = defaultdict(set)
+    dependents: dict[str, set[str]] = defaultdict(set)
     for key, deps in dependencies.items():
         for dep in deps:
             dependents[dep].add(key)
 
     # Transitively find all nodes that depend on a failed node
-    to_cancel_keys: Set[str] = set()
+    to_cancel_keys: set[str] = set()
     stack = list(failed_keys)
     while stack:
         node = stack.pop()
@@ -1044,7 +1063,7 @@ def _cancel_dependent_deployments(
     return cancelled
 
 
-def _apply_service_profile(service, svc_plan: Dict[str, Any], provider, port: int, server=None):
+def _apply_service_profile(service, svc_plan: dict[str, Any], provider, port: int, server=None):
     """Apply ecosystem plan profile to a service with production defaults.
 
     Important: user-customisable fields (health_check_path, internal_port,
@@ -1098,7 +1117,7 @@ def _apply_service_profile(service, svc_plan: Dict[str, Any], provider, port: in
                 server = ManagedServer.get_primary()
             else:
                 server = ManagedServer.objects.filter(id=server_id, owner=service.owner).first()
-            
+
             if server:
                 service.server = server
         except Exception:
@@ -1108,7 +1127,7 @@ def _apply_service_profile(service, svc_plan: Dict[str, Any], provider, port: in
 
 
 @shared_task(bind=True, queue='deploy', soft_time_limit=1800, time_limit=2100)
-def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provider: str = None, selected_repos: list = None, plan_id: str = None) -> dict:
+def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provider: str | None = None, selected_repos: list | None = None, plan_id: str | None = None) -> dict:
     """
     Scan all of a user's GitHub repos and return a deploy plan.
     This is async because fetching and AI analysis can take 30-60s.
@@ -1116,8 +1135,9 @@ def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provi
     scan_window_days is currently reserved for future repo recency filtering.
     """
     from django.contrib.auth import get_user_model
-    from apps.deployments.views_github import _get_github_token
     from services.ecosystem import scan_and_analyze
+
+    from apps.deployments.views_github import _get_github_token
 
     user_model = get_user_model()
     try:
@@ -1166,22 +1186,21 @@ def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provi
         }
     except Exception as exc:
         logger.exception("Ecosystem scan failed unexpectedly for user %s: %s", user_id, exc)
-        return {"error": f"Scan failed: {str(exc)}"}
+        return {"error": f"Scan failed: {exc!s}"}
 
 
 @shared_task(bind=True, queue='fast', soft_time_limit=120, time_limit=180)
 def ecosystem_release_wave_task(
     self,
     provider_id: str,
-    waves: List[List[str]],
+    waves: list[list[str]],
     wave_index: int = 1,
     recheck_count: int = 0,
     max_rechecks: int = _MAX_WAVE_RECHECKS,
-    dependencies: Dict[str, Set[str]] = None,
-    deployment_by_repo_key: Dict[str, str] = None,
+    dependencies: dict[str, set[str]] | None = None,
+    deployment_by_repo_key: dict[str, str] | None = None,
 ) -> dict:
     """Release next wave, continuing successful branches and cancelling failed branches."""
-    from apps.deployments.models import Deployment
 
     if not waves or wave_index >= len(waves):
         return {"status": "completed", "waves": len(waves or [])}
@@ -1323,7 +1342,7 @@ def ecosystem_release_wave_task(
 
 
 @shared_task(bind=True, queue='deploy', soft_time_limit=1800, time_limit=2100)
-def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -> dict:
+def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = None) -> dict:
     """
     Deploy all services in the plan using dependency-aware waves.
 
@@ -1335,8 +1354,6 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
     smart_deploy_task with skip_review=True as each wave becomes eligible.
     """
     from django.contrib.auth import get_user_model
-    from apps.deployments.models import Service, Deployment, EnvironmentVariable
-    from apps.cloud.models import CloudProvider
 
     user_model = get_user_model()
     try:
@@ -1381,9 +1398,11 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
     # 1. Parse and validate manifest if provided, bulk verify env before continuing
     manifest_content = plan.get("manifest")
     if manifest_content:
-        from apps.deployments.services.ecosystem_persist import bulk_persist_and_verify_ecosystem_env
-        from apps.deployments.services.ecosystem_graph import build_ecosystem_graph
         from apps.deployments.services.ecosystem_env import EcosystemEnvResolver
+        from apps.deployments.services.ecosystem_graph import build_ecosystem_graph
+        from apps.deployments.services.ecosystem_persist import (
+            bulk_persist_and_verify_ecosystem_env,
+        )
         try:
             graph = build_ecosystem_graph(manifest_content)
             resolver = EcosystemEnvResolver(graph)
@@ -1393,7 +1412,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
         except Exception as e:
             return {"error": f"Invalid manifest: {e}"}
 
-    entries_by_key: Dict[str, Dict[str, Any]] = {}
+    entries_by_key: dict[str, dict[str, Any]] = {}
     for svc_plan in services_plan:
         if not isinstance(svc_plan, dict):
             continue
@@ -1439,14 +1458,13 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
 
     ordered_keys = [key for wave in waves_repo_keys for key in wave]
     results = []
-    created_services: Dict[str, Any] = {}
-    shared_secrets: Dict[str, str] = {}
-    deployment_by_repo_key: Dict[str, str] = {}
+    created_services: dict[str, Any] = {}
+    shared_secrets: dict[str, str] = {}
+    deployment_by_repo_key: dict[str, str] = {}
 
     # Bug 4 Fix: Provision required addons synchronously before wave 1.
-    from apps.deployments.models_addons import Addon
-    from services.addon_provisioner import addon_provisioner
     from apps.deployments.models import Service
+    from apps.deployments.models_addons import Addon
 
     # Collect all needed addons across all services.
     required_addons = _plan_addon_types(plan.get("addons", []))
@@ -1454,10 +1472,10 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
         if isinstance(svc_plan, dict) and not svc_plan.get("skip"):
             required_addons.update(_service_plan_addon_types(svc_plan, plan.get("addons", [])))
 
-    created_service_records: List[Any] = []
+    created_service_records: list[Any] = []
 
     # Provision all required addons BEFORE service creation so env vars get real URLs.
-    provisioned_addon_urls: Dict[str, str] = {}
+    provisioned_addon_urls: dict[str, str] = {}
     addon_anchor_service = _select_shared_addon_anchor(created_service_records)
 
     if not addon_anchor_service and required_addons:
@@ -1534,7 +1552,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
 
             try:
                 logger.info("Provisioning shared addon %s for ecosystem", addon_type)
-                cid, url = addon_provisioner.provision(existing_addon)
+                _cid, url = addon_provisioner.provision(existing_addon)
                 existing_addon.connection_url = url
                 existing_addon.status = Addon.Status.ACTIVE
                 existing_addon.save(update_fields=['connection_url', 'status', 'updated_at'])
@@ -1670,7 +1688,9 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
             # -----------------------------------------------------------------
             if getattr(settings, "SENATE_ENABLED", True):
                 try:
-                    from apps.intelligence.services.env_intelligence import EnvironmentIntelligenceService
+                    from apps.intelligence.services.env_intelligence import (
+                        EnvironmentIntelligenceService,
+                    )
 
                     senate_suggestions = EnvironmentIntelligenceService.resolve_environment(
                         {},  # No detailed context; the service will generate defaults.
@@ -1744,7 +1764,9 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
 
     # Bulk persist env if using a manifest
     if manifest_content:
-        from apps.deployments.services.ecosystem_persist import bulk_persist_and_verify_ecosystem_env
+        from apps.deployments.services.ecosystem_persist import (
+            bulk_persist_and_verify_ecosystem_env,
+        )
         success, msg = bulk_persist_and_verify_ecosystem_env(manifest_content, created_services)
         if not success:
             logger.error(f"Bulk persistence failed: {msg}")
@@ -1756,7 +1778,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
                 )
             return {"error": f"Env validation failed: {msg}"}
 
-    waves: List[List[str]] = []
+    waves: list[list[str]] = []
     for wave in waves_repo_keys:
         deployment_ids = [
             deployment_by_repo_key[repo_key]
@@ -1863,8 +1885,6 @@ def _rollback_ecosystem_deploy(
     Removes services, deployments, addons, and env vars created during
     the failed ecosystem deployment attempt.
     """
-    from apps.deployments.models import Service, Deployment
-    from apps.deployments.models_addons import Addon
 
     logger.warning("Rolling back ecosystem deploy: %d services, %d deployments, %d addons",
                    len(service_ids), len(deployment_ids), len(addon_ids))

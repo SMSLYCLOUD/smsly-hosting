@@ -4,7 +4,6 @@ from django.test import TestCase
 from apps.deployments.models_servers import ManagedServer
 from apps.deployments.views_servers import _build_remote_headers
 
-
 User = get_user_model()
 
 

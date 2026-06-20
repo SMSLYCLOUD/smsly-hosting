@@ -13,8 +13,7 @@ import json
 import logging
 import os
 import socket
-from dataclasses import dataclass, field, asdict
-from typing import Optional
+from dataclasses import asdict, dataclass
 
 import requests
 from django.conf import settings
@@ -31,9 +30,9 @@ METRICS_TIMEOUT = 12
 @dataclass
 class MetricsSnapshot:
     """Canonical metrics view of a service. ``None`` = unknown / not measured."""
-    cpu_percent: Optional[float] = None
-    memory_mb: Optional[float] = None
-    memory_trend_mb_per_min: Optional[float] = None
+    cpu_percent: float | None = None
+    memory_mb: float | None = None
+    memory_trend_mb_per_min: float | None = None
     error_count_1h: int = 0
     oom_detected: bool = False
     crash_loop: bool = False
@@ -124,8 +123,9 @@ class MetricsCollector:
 
     # ── DB-stored ServiceMetric (used by collect_metrics_task) ──────────────
     def _from_service_metrics(self) -> MetricsSnapshot:
-        from apps.deployments.models_metrics import ServiceMetric
         from datetime import timedelta
+
+        from apps.deployments.models_metrics import ServiceMetric
         now = timezone.now()
         recent = ServiceMetric.objects.filter(
             service=self.service,

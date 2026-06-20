@@ -1,13 +1,18 @@
 import logging
 import re
-from urllib.parse import urlparse
-from rest_framework import serializers
-from .models import Service, Deployment, EnvironmentVariable, Region
-from .models_audit import AuditLog
-from .models_backup import ServiceBackup, ServerBackup, BackupSchedule
-from .models_safedeploy import PreviewEnvironment, DatabaseClone, MigrationValidation, DeploymentApproval, DeploymentArtifact
-from .serializers_transfer import ServerTransferSerializer, ServerTransferCreateSerializer
 
+from rest_framework import serializers
+
+from .models import Deployment, EnvironmentVariable, Region, Service
+from .models_audit import AuditLog
+from .models_backup import BackupSchedule, ServerBackup, ServiceBackup
+from .models_safedeploy import (
+    DatabaseClone,
+    DeploymentApproval,
+    DeploymentArtifact,
+    MigrationValidation,
+    PreviewEnvironment,
+)
 
 # SECURITY: docker_image strings flow into ``docker pull`` on the
 # controller and remote nodes. We restrict the scheme/host to the
@@ -207,9 +212,8 @@ class ServiceSerializer(serializers.ModelSerializer):
             .first()
             or obj.deployments.order_by('-created_at').first()
         )
-        if not server:
-            if latest_deploy and latest_deploy.target_server:
-                server = latest_deploy.target_server
+        if not server and latest_deploy and latest_deploy.target_server:
+            server = latest_deploy.target_server
 
         active_target_type = obj.active_target_type
         active_host = obj.active_host_ip
@@ -250,10 +254,7 @@ class ServiceSerializer(serializers.ModelSerializer):
 
             srv_name = server.name if server else "Unknown Server"
             srv_id = str(server.id) if server else "unknown"
-            if server and server.is_primary and target_type_label == "Local":
-                srv_name = "Local Server"
-                srv_id = "local"
-            elif not server and target_type_label == "Local":
+            if (server and server.is_primary and target_type_label == "Local") or (not server and target_type_label == "Local"):
                 srv_name = "Local Server"
                 srv_id = "local"
 
@@ -317,24 +318,24 @@ class ServiceSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         env_vars_data = validated_data.pop('env_vars', [])
         regions_data = validated_data.pop('regions', [])
-        
+
         service = Service.objects.create(**validated_data)
-        
+
         for env in env_vars_data:
             EnvironmentVariable.objects.create(service=service, **env)
-            
+
         if regions_data:
             service.regions.set(regions_data)
-            
+
         return service
 
     def update(self, instance, validated_data):
         regions_data = validated_data.pop('regions', None)
         instance = super().update(instance, validated_data)
-        
+
         if regions_data is not None:
             instance.regions.set(regions_data)
-            
+
         return instance
 
     def get_domain_instances(self, obj):
@@ -446,8 +447,9 @@ class BackupScheduleSerializer(serializers.ModelSerializer):
         }
 
     def validate_s3_endpoint(self, value):
-        from .models_backup import validate_endpoint_url
         from django.core.exceptions import ValidationError as DjangoValidationError
+
+        from .models_backup import validate_endpoint_url
         try:
             validate_endpoint_url(value)
         except DjangoValidationError as exc:
@@ -520,7 +522,7 @@ class PreviewEnvironmentSerializer(serializers.ModelSerializer):
     database_clone = DatabaseCloneSerializer(read_only=True)
     migration_validation = MigrationValidationSerializer(read_only=True)
     artifacts = DeploymentArtifactSerializer(many=True, read_only=True)
-    
+
     class Meta:
         model = PreviewEnvironment
         fields = '__all__'

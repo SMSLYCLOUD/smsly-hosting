@@ -1,10 +1,13 @@
 """Billing utilities."""
+import contextlib
 from datetime import timedelta
+
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
-from django.conf import settings
-from apps.billing.services.stripe import StripeService
+
 from apps.billing.models import BillingAccount
+from apps.billing.services.stripe import StripeService
 
 
 @transaction.atomic
@@ -58,10 +61,8 @@ def _activate_paid_plan(*, user, plan: str):
         license.save()
 
         # Trigger validation to sync features if connected
-        try:
+        with contextlib.suppress(Exception):
             validate_license(license)
-        except Exception:
-            pass
 
     except Exception as e:
         # Don't fail the transaction just because licensing failed (it can be retried)

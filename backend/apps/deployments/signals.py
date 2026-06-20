@@ -3,20 +3,26 @@ import logging
 import os
 import re
 import secrets
-from channels.layers import get_channel_layer
-from asgiref.sync import async_to_sync
 
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 from django.core.exceptions import ValidationError
-from django.db.models.signals import post_save, post_delete, pre_delete, pre_save
+from django.db.models.signals import post_delete, post_save, pre_delete, pre_save
 from django.dispatch import receiver
-from .models import Service, Deployment, EnvironmentVariable, PlatformConfig, ManagedServer
+from services.caddy_manager import apply_caddyfile, generate_caddyfile
+
+from .models import (
+    Deployment,
+    EnvironmentVariable,
+    ManagedServer,
+    PlatformConfig,
+    Service,
+)
 from .models_addons import Addon
-from .models_audit import AuditLog
-from .models_storage import Volume
-from .models_cron import CronJob
 from .models_backup import BackupSchedule
+from .models_cron import CronJob
+from .models_storage import Volume
 from .utils import log_event
-from services.caddy_manager import generate_caddyfile, apply_caddyfile
 
 
 @receiver(post_save, sender=Service)
@@ -88,7 +94,7 @@ def sync_service_status_on_deployment_change(sender, instance, created, **kwargs
 
     # Get the latest deployment for this service
     latest_deployment = service.deployments.order_by('-created_at').first()
-    
+
     # Determine service status based on latest deployment
     if latest_deployment:
         if latest_deployment.status == Deployment.Status.ACTIVE:
@@ -107,13 +113,13 @@ def sync_service_status_on_deployment_change(sender, instance, created, **kwargs
             new_status = service.status  # Keep current status
     else:
         new_status = Service.Status.ACTIVE  # Service remains active without deployments
-    
+
     # Update service status if it changed
     if service.status != new_status:
         old_status = service.status
         service.status = new_status
         service.save(update_fields=['status'])
-        
+
         # Broadcast the status change via WebSocket
         channel_layer = get_channel_layer()
         if channel_layer:
@@ -143,7 +149,7 @@ def sync_service_status_on_deployment_change(sender, instance, created, **kwargs
                 logging.getLogger(__name__).warning(
                     "Failed to broadcast service status update for %s: %s", service.id, e
                 )
-        
+
         # Log the status change
         log_event(
             actor=service.owner.get_username() if service.owner else 'system',
@@ -181,7 +187,7 @@ def broadcast_service_status_change(sender, instance, created, **kwargs):
 
     # Get the latest deployment for this service
     latest_deployment = instance.deployments.order_by('-created_at').first()
-    
+
     # Broadcast the status change to owner + team members.
     channel_layer = get_channel_layer()
     if channel_layer:
@@ -324,7 +330,7 @@ def sync_infrastructure_on_config_change(sender, instance, **kwargs):
             try:
                 _updated = False
                 _lines = []
-                with open(_env_path, "r", encoding="utf-8") as _fh:
+                with open(_env_path, encoding="utf-8") as _fh:
                     for _line in _fh:
                         _matched = False
                         for _key, _val in _env_sync_map.items():
@@ -340,7 +346,7 @@ def sync_infrastructure_on_config_change(sender, instance, **kwargs):
                         if not _matched:
                             _lines.append(_line)
                 for _key, _val in _env_sync_map.items():
-                    if _val is not None and not any(l.startswith(_key) for l in _lines):
+                    if _val is not None and not any(line.startswith(_key) for line in _lines):
                         _lines.append(f"{_key}{_val}\n")
                         _updated = True
                 if _updated:
@@ -429,9 +435,7 @@ def sync_preview_status_on_deployment_change(sender, instance, created, **kwargs
         new_status = None
         error_msg = ""
 
-        if instance.status == Deployment.Status.QUEUED:
-            new_status = PreviewEnvironment.Status.BUILDING
-        elif instance.status == Deployment.Status.BUILDING:
+        if instance.status in (Deployment.Status.QUEUED, Deployment.Status.BUILDING):
             new_status = PreviewEnvironment.Status.BUILDING
         elif instance.status == Deployment.Status.BUILD_FAILED:
             new_status = PreviewEnvironment.Status.BUILD_FAILED
@@ -453,7 +457,7 @@ def sync_preview_status_on_deployment_change(sender, instance, created, **kwargs
                 "Synced PreviewEnvironment %s status from %s to %s via deployment %s",
                 preview.id, old_status, new_status, instance.id
             )
-            
+
             # If the preview transitioned to READY, ensure Caddy is updated
             if new_status == PreviewEnvironment.Status.READY:
                 try:
@@ -570,9 +574,7 @@ def _is_private_or_internal_ip(host: str) -> bool:
         return False
     if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
         return True
-    if any(ip in net for net in _RFC1918_RANGES):
-        return True
-    return False
+    return bool(any(ip in net for net in _RFC1918_RANGES))
 
 
 @receiver(pre_save, sender=ManagedServer)

@@ -1,13 +1,13 @@
+from unittest.mock import patch
+
 import pytest
-from django.test import TestCase
-import os
-
-
-from unittest.mock import patch, MagicMock
-from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
-from apps.deployments.models import ManagedServer
-from django.contrib.auth import get_user_model
 import requests
+from django.contrib.auth import get_user_model
+from django.test import TestCase
+
+from apps.deployments.models import ManagedServer
+from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+
 
 @pytest.mark.django_db(transaction=True)
 class TestRemoteOrchestratorErrors2(TestCase):

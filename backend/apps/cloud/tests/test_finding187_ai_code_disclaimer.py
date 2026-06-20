@@ -11,9 +11,8 @@ identifiers.
 """
 from unittest.mock import patch
 
-from django.test import SimpleTestCase
-
 from apps.cloud import views_code_analysis as vca
+from django.test import SimpleTestCase
 
 
 class AICodeDisclaimerConstantTests(SimpleTestCase):

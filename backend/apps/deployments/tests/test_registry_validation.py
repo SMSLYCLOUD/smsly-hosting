@@ -9,7 +9,6 @@ Covers:
      platform's configured CONTAINER_REGISTRY_URL.
   3. self_healing_orchestrator no longer hard-codes 10.100.0.1:5000.
 """
-from unittest.mock import patch
 
 from django.test import TestCase, override_settings
 

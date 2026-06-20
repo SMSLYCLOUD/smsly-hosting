@@ -1,7 +1,7 @@
 """Add gateway_secret field to ManagedServer for HMAC V2 auth fallback."""
 
-from django.db import migrations
 import encrypted_model_fields.fields
+from django.db import migrations
 
 
 class Migration(migrations.Migration):

@@ -1,19 +1,21 @@
-import unittest
-import os
-import tempfile
-import tarfile
+import contextlib
 import json
-from django.test import TestCase
+import os
+import tarfile
+import tempfile
+import unittest
 from unittest.mock import patch
-from rest_framework.test import APIClient
-from django.urls import reverse
-from django.contrib.auth import get_user_model
-from rest_framework.authtoken.models import Token
+
 from cryptography.fernet import Fernet
-from apps.deployments.models import Service, Project, EnvironmentVariable
-from apps.deployments.models_backup import ServiceBackup, ServerBackup, BackupSchedule
+from django.contrib.auth import get_user_model
+from django.test import TestCase
+from django.urls import reverse
+from rest_framework.authtoken.models import Token
+from rest_framework.test import APIClient
+
+from apps.deployments.models import EnvironmentVariable, Project, Service
+from apps.deployments.models_backup import BackupSchedule, ServerBackup, ServiceBackup
 from apps.deployments.services.backup_service import BackupService
-import uuid
 
 User = get_user_model()
 
@@ -65,7 +67,7 @@ class BackupRestoreTest(TestCase):
 
     def test_server_backup_download_supports_byte_ranges(self):
         admin_user = User.objects.create_superuser("download-admin", "download@test.com", "pwd")
-        token = Token.objects.create(user=admin_user)
+        Token.objects.create(user=admin_user)
         payload = b"0123456789" * 1024
         backup_file = tempfile.NamedTemporaryFile(delete=False, suffix=".tar.gz")
         backup_file.write(payload)
@@ -166,8 +168,6 @@ class BackupRestoreTest(TestCase):
                 if path and os.path.exists(path):
                     os.remove(path)
             if os.path.exists(backup_dir):
-                try:
+                with contextlib.suppress(OSError):
                     os.remove(os.path.join(backup_dir, "metadata.json"))
-                except OSError:
-                    pass
                 os.rmdir(backup_dir)

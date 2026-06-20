@@ -1,11 +1,11 @@
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
+from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
-from django.contrib.auth import get_user_model
 
 from apps.deployments.models_servers import ManagedServer
-
 
 try:
     from apps.deployments.views_servers import _is_command_allowed
@@ -68,75 +68,75 @@ class RunCommandAllowlistTests(TestCase):
 
     def test_docker_ps_is_allowed(self):
         _assert_helper_or_endpoint(
-            "docker ps", True, lambda c: self._post(c)
+            "docker ps", True, self._post
         )
 
     def test_docker_ps_a_is_allowed(self):
         _assert_helper_or_endpoint(
-            "docker ps -a", True, lambda c: self._post(c)
+            "docker ps -a", True, self._post
         )
 
     def test_docker_logs_is_allowed(self):
         _assert_helper_or_endpoint(
-            "docker logs my-container", True, lambda c: self._post(c)
+            "docker logs my-container", True, self._post
         )
 
     def test_docker_inspect_is_allowed(self):
         _assert_helper_or_endpoint(
-            "docker inspect my-container", True, lambda c: self._post(c)
+            "docker inspect my-container", True, self._post
         )
 
     def test_docker_exec_is_rejected(self):
         _assert_helper_or_endpoint(
-            "docker exec my-container bash", False, lambda c: self._post(c)
+            "docker exec my-container bash", False, self._post
         )
 
     def test_docker_run_is_rejected(self):
         _assert_helper_or_endpoint(
-            "docker run alpine echo hi", False, lambda c: self._post(c)
+            "docker run alpine echo hi", False, self._post
         )
 
     def test_docker_rm_command_substitution_is_rejected(self):
         _assert_helper_or_endpoint(
-            "docker rm -f $(docker ps -aq)", False, lambda c: self._post(c)
+            "docker rm -f $(docker ps -aq)", False, self._post
         )
 
     def test_docker_system_prune_is_rejected(self):
         _assert_helper_or_endpoint(
-            "docker system prune", False, lambda c: self._post(c)
+            "docker system prune", False, self._post
         )
 
     def test_docker_compose_down_is_rejected(self):
         _assert_helper_or_endpoint(
-            "docker compose down", False, lambda c: self._post(c)
+            "docker compose down", False, self._post
         )
 
     def test_docker_compose_up_is_rejected(self):
         _assert_helper_or_endpoint(
-            "docker compose up -d", False, lambda c: self._post(c)
+            "docker compose up -d", False, self._post
         )
 
     def test_df_is_allowed(self):
         _assert_helper_or_endpoint(
-            "df -h", True, lambda c: self._post(c)
+            "df -h", True, self._post
         )
 
     def test_free_is_allowed(self):
         _assert_helper_or_endpoint(
-            "free -m", True, lambda c: self._post(c)
+            "free -m", True, self._post
         )
 
     def test_cat_env_without_grep_is_rejected(self):
         _assert_helper_or_endpoint(
-            "cat /opt/smsly-hosting/.env", False, lambda c: self._post(c)
+            "cat /opt/smsly-hosting/.env", False, self._post
         )
 
     def test_cat_passwd_is_rejected(self):
         _assert_helper_or_endpoint(
-            "cat /etc/passwd", False, lambda c: self._post(c)
+            "cat /etc/passwd", False, self._post
         )
 
     def test_rm_rf_root_is_rejected(self):
         _assert_helper_or_endpoint(
-            "rm -rf /", False, lambda c: self._post(c)
+            "rm -rf /", False, self._post
         )

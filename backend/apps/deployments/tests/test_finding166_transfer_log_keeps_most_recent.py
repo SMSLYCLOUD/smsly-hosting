@@ -11,10 +11,9 @@ from django.test import TestCase, override_settings
 
 from apps.deployments.models_transfer import ServerTransfer
 from apps.deployments.services.transfer_service import (
-    ServerTransferService,
     TRANSFER_LOG_LIMIT,
+    ServerTransferService,
 )
-
 
 User = get_user_model()
 

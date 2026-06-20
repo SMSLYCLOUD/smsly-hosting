@@ -6,7 +6,6 @@ from django.dispatch import receiver
 
 from .models import Team, TeamMember
 
-
 logger = logging.getLogger(__name__)
 
 

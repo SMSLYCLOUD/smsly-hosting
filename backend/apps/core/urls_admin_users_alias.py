@@ -7,9 +7,9 @@ The frontend ``coreApi.adminGetUsers / adminUpdateUser``
 core app). This alias keeps the existing frontend working
 without a rebuild.
 """
-from django.urls import path, include
-from rest_framework.routers import DefaultRouter
 from apps.core.views import AdminUserViewSet
+from django.urls import include, path
+from rest_framework.routers import DefaultRouter
 
 router = DefaultRouter()
 router.register(r'', AdminUserViewSet, basename='admin-users-alias')

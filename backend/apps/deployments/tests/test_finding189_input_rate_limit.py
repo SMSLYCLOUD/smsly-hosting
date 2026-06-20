@@ -20,7 +20,6 @@ from django.test import TestCase
 
 from apps.deployments.consumers import TerminalConsumer
 
-
 User = get_user_model()
 
 

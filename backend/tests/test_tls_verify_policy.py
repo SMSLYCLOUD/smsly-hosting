@@ -16,9 +16,8 @@ import logging
 import os
 from unittest import mock
 
-from django.test import SimpleTestCase, override_settings
-
 from apps.deployments.services import tls_verify
+from django.test import SimpleTestCase, override_settings
 
 
 class ShouldVerifyTests(SimpleTestCase):
@@ -165,12 +164,12 @@ class NoBareVerifyFalseCallSitesTests(SimpleTestCase):
     def test_no_bare_verify_false_in_call_sites(self):
         import inspect
 
+        import apps.deployments.tasks as tasks_module
+        from apps.deployments.management.commands import diagnose_nodes
         from apps.deployments.services import (
             health_monitor,
             remote_orchestrator,
         )
-        from apps.deployments.management.commands import diagnose_nodes
-        import apps.deployments.tasks as tasks_module
 
         modules = {
             "health_monitor.py": health_monitor,

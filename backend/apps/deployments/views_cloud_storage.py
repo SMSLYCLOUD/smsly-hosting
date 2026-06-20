@@ -1,7 +1,7 @@
 """Cloud storage destinations API — create, list, update, delete, test connection."""
-from django.db import models
 from django.core.exceptions import PermissionDenied
-from rest_framework import viewsets, permissions, status, serializers
+from django.db import models
+from rest_framework import permissions, serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle

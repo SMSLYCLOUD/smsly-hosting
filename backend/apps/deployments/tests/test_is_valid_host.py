@@ -1,8 +1,11 @@
-from django.test import TestCase
 import os
 from unittest import mock
-from apps.deployments.patching import is_valid_host
+
+from django.test import TestCase
+
 from apps.deployments.models import PlatformConfig
+from apps.deployments.patching import is_valid_host
+
 
 class IsValidHostTests(TestCase):
     def setUp(self):
@@ -17,7 +20,7 @@ class IsValidHostTests(TestCase):
         # Loopback
         self.assertTrue(is_valid_host("127.0.0.1"))
         self.assertTrue(is_valid_host("::1"))
-        
+
         # Private IPs (RFC 1918 / mesh range)
         self.assertTrue(is_valid_host("10.100.0.1"))
         self.assertTrue(is_valid_host("10.100.0.5"))
@@ -27,7 +30,7 @@ class IsValidHostTests(TestCase):
     def test_node_host_from_env_is_valid(self):
         with mock.patch.dict(os.environ, {"SMSLY_NODE_HOST": "69.164.244.51"}):
             self.assertTrue(is_valid_host("69.164.244.51"))
-            
+
         with mock.patch.dict(os.environ, {"SMSLY_NODE_HOST": "209.159.152.123"}):
             self.assertTrue(is_valid_host("209.159.152.123"))
 

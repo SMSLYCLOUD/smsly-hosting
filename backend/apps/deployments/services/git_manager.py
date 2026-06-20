@@ -1,11 +1,13 @@
 """Git module."""
+import contextlib
+import logging
 import os
 import shutil
-import logging
-import uuid
 import stat
-import git
+import uuid
 from urllib.parse import urlparse, urlunparse
+
+import git
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +19,7 @@ class GitManager:
 
     @staticmethod
     def clone_repo(repo_url: str, branch: str = 'main',
-                   destination: str = '/tmp/builds', token: str = None, commit_hash: str = None) -> str:
+                   destination: str = '/tmp/builds', token: str | None = None, commit_hash: str | None = None) -> str:
         """
         Clones a repository to a destination.
         Returns the path to the cloned directory.
@@ -152,7 +154,5 @@ class GitManager:
         finally:
             # Cleanup askpass script
             if askpass_path and os.path.exists(askpass_path):
-                try:
+                with contextlib.suppress(Exception):
                     os.remove(askpass_path)
-                except Exception:
-                    pass

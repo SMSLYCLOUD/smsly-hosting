@@ -1,12 +1,13 @@
 """AI Engine service."""
 # pylint:
 # disable=line-too-long,broad-exception-caught,logging-fstring-interpolation,too-few-public-methods,wrong-import-order
-from typing import Any, List, Dict
-import os
 import logging
+import os
 import statistics
-from langchain_google_genai import ChatGoogleGenerativeAI
+from typing import Any
+
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -20,7 +21,7 @@ class StackAnalysis(BaseModel):
         description="The detected tech stack (e.g., 'django', 'nextjs', 'node')")
     recommended_port: int = Field(
         description="The internal port the app likely listens on")
-    required_addons: List[str] = Field(
+    required_addons: list[str] = Field(
         description="List of addons needed (e.g., ['POSTGRES', 'REDIS'])")
     build_strategy: str = Field(
         description="Recommended build strategy (e.g., 'dockerfile', 'buildpacks')")
@@ -45,7 +46,7 @@ class DevOpsAgent:
                 "GEMINI_API_KEY not found. Running in Simulation Mode.")
 
     def analyze_repo(self, repo_url: str,
-                     file_list: List[str]) -> StackAnalysis:
+                     file_list: list[str]) -> StackAnalysis:
         """
         Analyzes a repository structure to determine stack and requirements.
         """
@@ -87,7 +88,7 @@ class DevOpsAgent:
             logger.error(f"AI Diagnosis Failed: {e}")
             return "AI Analysis failed. Please check logs manually."
 
-    def detect_anomalies(self, metrics: List[float], metric_name: str) -> Dict[str, Any]:
+    def detect_anomalies(self, metrics: list[float], metric_name: str) -> dict[str, Any]:
         """
         Detects anomalies in a time-series of metrics using Statistical Z-Score.
         This provides a 'Custom ML' baseline without needing heavy deps like scikit-learn.

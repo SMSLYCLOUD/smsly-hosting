@@ -1,5 +1,6 @@
+
 from django.db import models
-import json
+
 
 class PlatformTier(models.TextChoices):
     COMMUNITY = 'community', 'Community'

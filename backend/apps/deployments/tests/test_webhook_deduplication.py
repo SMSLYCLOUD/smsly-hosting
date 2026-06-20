@@ -7,8 +7,8 @@ Behavior contract:
   * Same delivery_id -> second request is short-circuited with 200.
   * delivery_id in ``failed`` state -> reprocessed (status reset).
 """
-import hmac
 import hashlib
+import hmac
 from unittest.mock import patch
 
 from django.conf import settings

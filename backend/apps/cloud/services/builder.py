@@ -1,11 +1,10 @@
 """Builder module."""
-import subprocess
-import shutil
-import os
-import logging
-import docker
 import json
-from typing import Optional, Dict, Any, Tuple
+import logging
+import os
+import shutil
+import subprocess
+from typing import Any
 
 from django.conf import settings
 
@@ -55,7 +54,7 @@ def _is_buildx_default_broken(stderr: str) -> bool:
     return any(marker in needle for marker in _BUILDX_DEFAULT_BROKEN_MARKERS)
 
 
-def _ensure_buildx_fallback(fallback_name: str = 'smsly-fallback') -> Tuple[bool, str]:
+def _ensure_buildx_fallback(fallback_name: str = 'smsly-fallback') -> tuple[bool, str]:
     """Create the docker-container fallback builder if it
     doesn't already exist.
 
@@ -120,9 +119,9 @@ class NixpacksBuilder:
     def build_image(
         source_dir: str,
         image_name: str,
-        env_vars: Optional[dict] = None,
-        cache_dir: Optional[str] = None,
-        start_cmd: Optional[str] = None,
+        env_vars: dict | None = None,
+        cache_dir: str | None = None,
+        start_cmd: str | None = None,
         allow_missing_start: bool = False,
     ) -> dict:
         """
@@ -161,7 +160,7 @@ class NixpacksBuilder:
             # "type=docker" loads image into local daemon so push_image() can find it.
             "--docker-output", "type=docker",
             # Use base name as cache key
-            "--cache-key", image_name.split(":")[0],
+            "--cache-key", image_name.split(":", maxsplit=1)[0],
         ]
 
         # Add inline cache for Docker layer caching
@@ -192,8 +191,7 @@ class NixpacksBuilder:
             process = subprocess.run(
                 command,
                 check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
                 text=True,
                 env={**os.environ, "NIXPACKS_CACHE_DIR": effective_cache_dir}
             )
@@ -234,8 +232,7 @@ class NixpacksBuilder:
                         retry = subprocess.run(
                             command,
                             check=True,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE,
+                            capture_output=True,
                             text=True,
                             env={
                                 **os.environ,
@@ -275,7 +272,7 @@ class NixpacksBuilder:
             raise RuntimeError(f"Nixpacks build failed:\n{error_detail or e.stderr}") from e
 
     @staticmethod
-    def push_image(image_name: str, registry_url: str) -> tuple[str, Optional[str]]:
+    def push_image(image_name: str, registry_url: str) -> tuple[str, str | None]:
         """
         Tags and pushes the image to the internal or external registry.
 
@@ -357,7 +354,7 @@ class NixpacksBuilder:
             return image_name, str(e)  # fallback to local
 
     @staticmethod
-    def scan_image(image_name: str) -> Dict[str, Any]:
+    def scan_image(image_name: str) -> dict[str, Any]:
         """
         Scans the image using Trivy.
         Returns a report dictionary.

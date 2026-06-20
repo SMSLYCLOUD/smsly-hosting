@@ -1,14 +1,16 @@
 """Blueprint Manager module."""
 import json
+import logging
 import os
 import re
-import logging
+
 from django.conf import settings
-from apps.deployments.models import Service, Deployment, EnvironmentVariable
-from apps.deployments.models_addons import Addon
-from apps.deployments.tasks_deploy import smart_deploy_task
-from apps.deployments.tasks_addons import provision_addon_task
+
 from apps.cloud.models import CloudProvider
+from apps.deployments.models import Deployment, EnvironmentVariable, Service
+from apps.deployments.models_addons import Addon
+from apps.deployments.tasks_addons import provision_addon_task
+from apps.deployments.tasks_deploy import smart_deploy_task
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +25,7 @@ class BlueprintManager:
         if not re.match(r'^[a-zA-Z0-9_-]+$', name):
             raise ValueError(f"Invalid blueprint name: {name}")
         path = os.path.join(settings.BASE_DIR, 'blueprints', f'{name}.json')
-        with open(path, 'r') as f:
+        with open(path) as f:
             return json.load(f)
 
     def deploy(self, blueprint_name: str):

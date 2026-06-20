@@ -1,6 +1,7 @@
+
 from django.test import TestCase
+
 from apps.deployments.views_servers import _is_command_allowed
-from unittest.mock import patch, MagicMock
 
 
 class RunCommandSafetyTests(TestCase):

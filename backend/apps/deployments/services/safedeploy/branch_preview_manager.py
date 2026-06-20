@@ -1,8 +1,11 @@
 import re
-from typing import Optional
-from django.utils import timezone
-from apps.deployments.models_core import Service, EnvironmentVariable
-from apps.deployments.models_safedeploy import PreviewEnvironment, DatabaseClone, MigrationValidation
+
+from apps.deployments.models_core import Service
+from apps.deployments.models_safedeploy import (
+    DatabaseClone,
+    MigrationValidation,
+    PreviewEnvironment,
+)
 
 BRANCH_NAME_RE = re.compile(r'^[a-zA-Z0-9_./-]{1,200}$')
 COMMIT_SHA_RE = re.compile(r'^[a-f0-9]{7,40}$')

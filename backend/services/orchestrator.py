@@ -1,19 +1,19 @@
 # pylint: disable=too-few-public-methods,wrong-import-order
 """Orchestrator module - production hardened."""
 # pylint: disable=no-member
-import signal
 import logging
+import signal
 import threading
 from datetime import timedelta
 
-from django.utils import timezone
+from apps.deployments.models import Deployment
+from apps.deployments.tasks_ai import analyze_failure_task
+from apps.deployments.tasks_alerts import alert_user_task
 from django.conf import settings
+from django.utils import timezone
 
 from .builders import BuildManager
 from .clusters import ClusterManager
-from apps.deployments.models import Deployment
-from apps.deployments.tasks_alerts import alert_user_task
-from apps.deployments.tasks_ai import analyze_failure_task
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +129,7 @@ class Orchestrator:
         except Exception as e:
             self.deployment.status = Deployment.Status.FAILED
             self.deployment.finished_at = timezone.now()
-            self.deployment.build_logs += f"\n\n[ERROR] {str(e)}"
+            self.deployment.build_logs += f"\n\n[ERROR] {e!s}"
             self.deployment.save()
 
             logger.error(

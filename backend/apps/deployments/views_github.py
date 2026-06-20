@@ -88,8 +88,9 @@ def _refresh_github_token(token_obj):
             return False
 
         # Update stored token
-        from django.utils import timezone
         from datetime import timedelta
+
+        from django.utils import timezone
         token_obj.token = data["access_token"]
         if data.get("refresh_token"):
             token_obj.token_secret = data["refresh_token"]
@@ -183,7 +184,7 @@ def github_repos(request):
         for r in items:
             if not isinstance(r, dict):
                 continue
-            
+
             repo_data = {
                 "full_name": r["full_name"],
                 "name": r["name"],
@@ -211,10 +212,10 @@ def github_repos(request):
         clusters = _cluster_repos(repos)
 
         return Response({
-            "repos": repos, 
+            "repos": repos,
             "categories": categories,
             "clusters": clusters,
-            "page": page, 
+            "page": page,
             "per_page": per_page
         })
 
@@ -248,7 +249,7 @@ def _categorize_repo(repo: dict) -> str:
     fe_keywords = {"frontend", "ui", "ux", "dashboard", "portal", "nextjs", "react", "vue", "svelte", "tailwind", "css", "html", "website"}
     if any(k in name or k in desc for k in fe_keywords) or lang in {"typescript", "javascript", "css", "html"}:
         # Sub-check: if it has "backend" or "api" it might be fullstack, but let's prioritize Frontend if lang is TS/JS
-        if not any(bk in name for bk in {"backend", "api", "core", "server"}):
+        if not any(bk in name for bk in ("backend", "api", "core", "server")):
             return "Frontend"
 
     # 3. Infrastructure / DevOps
@@ -273,7 +274,7 @@ def _cluster_repos(repos: list[dict]) -> list[dict]:
     """Detect groups of repositories with common prefixes."""
     if not repos:
         return []
-    
+
     prefixes = {}
     for repo in repos:
         name = repo["name"]
@@ -337,7 +338,7 @@ def github_commits(request):
 
     repo = request.query_params.get("repo")
     branch = request.query_params.get("branch")
-    
+
     if not repo or not branch:
         return Response({"error": "repo and branch parameters are required"}, status=status.HTTP_400_BAD_REQUEST)
 

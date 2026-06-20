@@ -1,10 +1,9 @@
 """Tests for ecosystem planning helpers."""
 
 from django.test import SimpleTestCase
-
 from services.ecosystem import (
-    _apply_plan_repo_defaults,
     _apply_generic_ecosystem_intelligence,
+    _apply_plan_repo_defaults,
     _build_heuristic_plan,
     _coerce_addons,
     _coerce_depends_on,
@@ -80,7 +79,7 @@ class EcosystemPlanningHelpersTests(SimpleTestCase):
         # Verify Core specialized addons (Django defaults)
         self.assertIn("POSTGRES", core["addons"])
         self.assertIn("REDIS", core["addons"])
-        
+
         # Verify dependency wiring
         self.assertIn("platform-api", worker["depends_on"])
         self.assertEqual(

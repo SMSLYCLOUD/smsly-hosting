@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import re
 import secrets
-from typing import Optional
 from urllib.parse import quote, urlencode
 
 import requests as http_requests
@@ -190,8 +189,8 @@ def _get_github_oauth_callback_url(request) -> str:
 
 def _is_ip_or_localhost(url_str: str) -> bool:
     """Return True if the URL contains a raw IP address or localhost."""
-    from urllib.parse import urlparse
     import ipaddress
+    from urllib.parse import urlparse
     try:
         hostname = urlparse(url_str).hostname
         if not hostname:
@@ -289,7 +288,7 @@ class GitHubCallbackSerializer(serializers.Serializer):
     code = serializers.CharField(required=True, help_text="GitHub authorization code")
 
 
-def _verify_oauth_state(request, provider: str) -> Optional[Response]:
+def _verify_oauth_state(request, provider: str) -> Response | None:
     """
     Verify the ``state`` parameter on an OAuth callback.
 
@@ -458,8 +457,9 @@ def github_oauth_callback(request):
         )
 
         # Upsert the token — include expires_at if GitHub provides it
-        from django.utils import timezone
         from datetime import timedelta
+
+        from django.utils import timezone
 
         token_defaults = {
             "token": access_token,
@@ -671,7 +671,7 @@ def gitlab_oauth_callback(request):
                 },
                 status=status.HTTP_409_CONFLICT,
             )
-        account, created = SocialAccount.objects.update_or_create(
+        account, _created = SocialAccount.objects.update_or_create(
             provider="gitlab",
             uid=gitlab_uid,
             defaults={"user": request.user, "extra_data": profile},
@@ -680,12 +680,14 @@ def gitlab_oauth_callback(request):
         token_defaults = {"token": access_token, "token_secret": token_data.get("refresh_token", ""), "app": app}
         expires_in = token_data.get("expires_in")
         if expires_in:
-            from django.utils import timezone
             from datetime import timedelta
+
+            from django.utils import timezone
             token_defaults["expires_at"] = timezone.now() + timedelta(seconds=int(expires_in))
         else:
-            from django.utils import timezone
             from datetime import timedelta
+
+            from django.utils import timezone
             token_defaults["expires_at"] = timezone.now() + timedelta(days=365)
 
         SocialToken.objects.update_or_create(account=account, defaults=token_defaults)
@@ -863,7 +865,7 @@ def bitbucket_oauth_callback(request):
                 },
                 status=status.HTTP_409_CONFLICT,
             )
-        account, created = SocialAccount.objects.update_or_create(
+        account, _created = SocialAccount.objects.update_or_create(
             provider="bitbucket_oauth2",
             uid=bb_uid,
             defaults={"user": request.user, "extra_data": profile},

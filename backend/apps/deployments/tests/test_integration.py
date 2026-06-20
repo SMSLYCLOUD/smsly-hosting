@@ -4,13 +4,15 @@ Integration tests for SMSLY Hosting deployment pipeline.
 Tests the complete flow from service creation to deployment.
 """
 import uuid
-from unittest.mock import patch, MagicMock
-from django.test import TestCase, override_settings
+from unittest.mock import patch
+
 from django.contrib.auth.models import User
-from rest_framework.test import APITestCase
+from django.test import TestCase, override_settings
 from rest_framework import status as http_status
-from apps.deployments.models import Service, Deployment
+from rest_framework.test import APITestCase
+
 from apps.cloud.models import CloudProvider
+from apps.deployments.models import Deployment, Service
 
 
 class DeploymentPipelineTests(APITestCase):

@@ -1,4 +1,5 @@
 import logging
+
 logger = logging.getLogger(__name__)
 SHARED_OLLAMA_RAM_FRACTION = 0.25  # 25% of total host RAM
 SHARED_OLLAMA_MIN_RAM_MB = 2048    # 2 GB — minimum viable for any LLM
@@ -8,51 +9,21 @@ SHARED_OLLAMA_MAX_CPU_CORES = 4.0
 SHARED_OLLAMA_NAME_PREFIX = "ollama-cpp-shared"
 SHARED_OLLAMA_PORT = 11434
 
-import logging
-import random
-import re
-import shlex
-import shutil
-import tempfile
-import subprocess
-import os
-import json
-import time
-import zipfile
-import secrets
-import threading
-from contextlib import contextmanager
-from urllib.parse import unquote, urlparse
-import docker
-import requests
-from celery import shared_task
-from django.conf import settings
-from django.core.cache import cache
-from django.utils import timezone
-from django.db.models import Sum
-from apps.cloud.models import CloudProvider
-from apps.cloud.services.builder import NixpacksBuilder
-from apps.cloud.services.compute import ComputeService
-from apps.cloud.services.function_provisioner import FunctionProvisioner
-from apps.deployments.ai_router import DEFAULT_AI_ROUTER_API_BASE, DEFAULT_AI_ROUTER_UI_BASE, DEFAULT_BRAID_ALIAS, generate_ai_router_proxy_config, get_ollama_model_name, is_ai_router_service, is_ollama_service
-from apps.deployments.models import Service, Deployment, EnvironmentVariable, PlatformConfig
-from apps.deployments.models_addons import Addon, Backup
-from apps.deployments.models_backup import BackupSchedule, ServiceBackup
-from apps.deployments.models_storage import Volume
-from apps.deployments.models_transfer import ServerTransfer
-from apps.deployments.services.backup_service import BackupService
-from apps.deployments.services.pipeline import PipelineManager, PipelineError
-from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
-from apps.deployments.services.tls_verify import should_verify
-from apps.deployments.services.transfer_service import ServerTransferService
-from apps.deployments.utils import append_log, broadcast_status, build_local_source_bundle, update_stage, is_deployment_local
-from services.addon_provisioner import addon_provisioner
+import logging  # noqa: E402
+import shlex  # noqa: E402
+import subprocess  # noqa: E402
 
+from apps.deployments.models import (  # noqa: E402
+    Deployment,
+    EnvironmentVariable,
+    Service,
+)
+from apps.deployments.utils import (  # noqa: E402
+    append_log,
+)
 
-from .tasks_deploy import delete_service_task
-from .tasks_deploy import smart_deploy_task
-from .tasks_deploy import smart_deploy_task
-from .tasks_deploy import delete_service_task
+from .tasks_deploy import delete_service_task, smart_deploy_task  # noqa: E402
+
 
 def _escalate_to_ai(deployment, service, container_logs):
     """
@@ -171,7 +142,7 @@ def _ensure_shared_ollama_cpp(service, provider) -> str | None:
     Returns the shared service ID (str) or None if creation fails.
     Only one shared Ollama CPP is maintained per project to save VPS resources.
     """
-    from apps.deployments.models import Service, Deployment
+    from apps.deployments.models import Service
 
     project = getattr(service, 'project', None)
     owner = getattr(service, 'owner', None)
@@ -265,7 +236,6 @@ def _pull_ollama_models_into_shared(shared_ollama_id: str, models: list):
     Pull Ollama models into the shared Ollama CPP container.
     Runs as a fire-and-forget background subprocess.
     """
-    import shlex
     try:
         shared = Service.objects.get(id=shared_ollama_id)
         container_name = shared.name

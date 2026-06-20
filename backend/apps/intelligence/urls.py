@@ -1,15 +1,16 @@
 """URL configuration for AI intelligence app."""
 from django.urls import path
+
 from .views import (
-    ai_providers_status,
-    ai_providers_update,
-    ai_test_prompt,
     ai_analyze_logs,
-    ai_cost_estimate,
-    ai_intelligence_report,
     ai_anomaly_history,
     ai_chat_completions,
     ai_chat_stream,
+    ai_cost_estimate,
+    ai_intelligence_report,
+    ai_providers_status,
+    ai_providers_update,
+    ai_test_prompt,
     jules_fix_history,
 )
 

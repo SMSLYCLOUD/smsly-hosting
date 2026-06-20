@@ -1,5 +1,6 @@
 """Platform self-update tracking model."""
 import uuid
+
 from django.db import models
 
 
@@ -46,11 +47,11 @@ class PlatformUpdate(models.Model):
     node_statuses = models.JSONField(
         default=dict, blank=True,
         help_text="Tracks update status per Lite Agent node {node_id: status}")
-    
+
     addon_compatibility_results = models.JSONField(
         default=dict, blank=True,
         help_text="Results of pre-update addon compatibility checks")
-    
+
     fleet_progress = models.JSONField(
         default=dict, blank=True,
         help_text="Step-by-step progress per node")

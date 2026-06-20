@@ -21,7 +21,6 @@ from django.test import TestCase
 from apps.deployments.models import Service
 from apps.deployments.models_safedeploy import PreviewEnvironment
 
-
 User = get_user_model()
 
 
@@ -48,13 +47,12 @@ class Finding87PreviewUniqueIndexTests(TestCase):
             branch_name='feature/x',
             commit_sha='a' * 7,
         )
-        with self.assertRaises(IntegrityError):
-            with transaction.atomic():
-                PreviewEnvironment.objects.create(
-                    service=self.service,
-                    branch_name='feature/x',
-                    commit_sha='a' * 7,
-                )
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            PreviewEnvironment.objects.create(
+                service=self.service,
+                branch_name='feature/x',
+                commit_sha='a' * 7,
+            )
 
     def test_different_branch_or_commit_is_allowed(self):
         """Rows that differ by branch OR commit may coexist."""

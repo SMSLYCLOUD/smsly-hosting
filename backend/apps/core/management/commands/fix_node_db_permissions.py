@@ -13,9 +13,8 @@ Usage:
     python manage.py fix_node_db_permissions
 """
 import os
-import re
+
 from django.core.management.base import BaseCommand
-from django.conf import settings
 
 
 def _parse_db_user(url):
@@ -87,13 +86,13 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         self.stdout.write("Fixing node agent database permissions...")
 
-        import psycopg2
-        from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
-        from psycopg2 import sql as pg_sql
         from urllib.parse import urlparse
 
+        import psycopg2
+        from psycopg2 import sql as pg_sql
+        from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+
         conn = None
-        admin_conn = None
         connected_as_admin = False
         errors = []
         candidates = []
@@ -146,7 +145,6 @@ class Command(BaseCommand):
                 conn = psycopg2.connect(url, connect_timeout=timeout)
                 conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
                 if is_admin:
-                    admin_conn = conn
                     connected_as_admin = True
                     self.stdout.write(
                         f"Connected via {label} as admin ({parsed.hostname}:{parsed.port})"

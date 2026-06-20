@@ -61,10 +61,7 @@ class RateLimitMiddleware:
         key = f"ratelimit:{ip}:{int(time.time() // self.window)}"
         try:
             # Initialize key atomically if missing; otherwise increment.
-            if cache.add(key, 1, timeout=self.window):
-                count = 1
-            else:
-                count = cache.incr(key, 1)
+            count = 1 if cache.add(key, 1, timeout=self.window) else cache.incr(key, 1)
         except Exception:
             action = "denying" if self.fail_closed else "allowing"
             logger.exception(

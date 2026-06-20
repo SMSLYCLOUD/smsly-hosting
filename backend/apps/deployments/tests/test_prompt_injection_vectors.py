@@ -22,7 +22,6 @@ from django.test import TestCase
 from apps.deployments.models import Deployment, Service
 from apps.deployments.tasks_ai import _sanitize_for_llm, analyze_failure_task
 
-
 User = get_user_model()
 
 

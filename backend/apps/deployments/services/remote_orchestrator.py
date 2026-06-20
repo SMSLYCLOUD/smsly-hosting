@@ -1,27 +1,27 @@
-import logging
-import os
-import secrets
-import time
-import uuid
 import hashlib
 import hmac as hmac_mod
-import json
-import requests
-import re
 import ipaddress
+import json
+import logging
+import os
+import re
+import secrets
 import shlex
-from typing import Optional
+import time
+import uuid
 from urllib.parse import urlencode, urlparse
-from django.conf import settings
+
+import requests
+
+from apps.deployments.models import (
+    EnvironmentVariable,
+    ManagedServer,
+    PlatformConfig,
+    Service,
+)
+
 from .ssh_client import SSHClient
 from .tls_verify import should_verify
-from apps.deployments.models import (
-    Service,
-    Deployment,
-    ManagedServer,
-    EnvironmentVariable,
-    PlatformConfig,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +151,7 @@ class RemoteOrchestrator:
             "latency_ms": 0,
             "base_url": "",
         }
-        
+
         # 1. Network Check. Try every candidate URL before declaring the node
         # unreachable; mesh routes can be stale while the public node endpoint
         # is still healthy.
@@ -193,7 +193,7 @@ class RemoteOrchestrator:
             results["auth"] = True
         else:
             results["error"] = self.describe_last_error() or f"API returned {resp.status_code if resp else 'no response'}"
-            
+
         return results
 
     def preflight_check_or_heal(self) -> dict:
@@ -375,23 +375,23 @@ class RemoteOrchestrator:
         try:
             ssh.connect()
             hosting_path = ssh.find_hosting_path()
-            
+
             # 1. Get/Create API Token
             output = ssh.run_diagnose_nodes_fix(hosting_path)
             # Match both smsly_ tokens and standard DRF tokens
             token_match = re.search(r"TOKEN:\s+([a-zA-Z0-9_]+)", output)
             new_token = token_match.group(1) if token_match else None
-            
+
             if not new_token:
                 logger.info("diagnose_nodes --fix did not produce a token; trying drf_create_token fallback for %s", self.server.host)
                 new_token = ssh.create_api_token(hosting_path)
-            
+
             updated = False
             if new_token and self.server.api_token != new_token:
                 self.server.api_token = new_token
                 updated = True
                 logger.info("Successfully retrieved API token via SSH for %s", self.server.host)
-            
+
             # 2. Get Gateway Secret
             new_secret = ssh.get_gateway_secret(hosting_path)
             if new_secret and self.server.gateway_secret != new_secret:
@@ -402,12 +402,12 @@ class RemoteOrchestrator:
             if updated:
                 self.server.save()
                 return True
-                
+
         except Exception as e:
             logger.error("SSH auto-authentication failed for %s: %s", self.server.host, e)
         finally:
             ssh.close()
-            
+
         return False
 
     def _exchange_gateway_secret_for_token(self, base_url: str) -> bool:
@@ -682,7 +682,7 @@ class RemoteOrchestrator:
             try:
                 with sock_module.create_connection((host, port), timeout=probe_timeout):
                     reachable.append(url)
-            except (OSError, sock_module.timeout):
+            except (TimeoutError, OSError):
                 logger.debug("Pre-filter skipped unreachable %s", url)
         if not reachable and urls:
             logger.warning("All %d candidate URLs unreachable: %s", len(urls), urls[:3])
@@ -718,19 +718,19 @@ class RemoteOrchestrator:
         last_response = None
         modes = self._auth_modes()
         base_urls = self._filter_reachable(self._candidate_base_urls())
-        
+
         if retry_auth and (not modes or modes == ["none"]):
             # If no auth modes, try auto-auth first
             if self.auto_authenticate():
                 modes = self._auth_modes()
             if not modes or modes == ["none"]:
                 self._set_last_error(
-                    (
+
                         "Remote API credentials are missing for this managed server. "
                         "The controller has no api_token or gateway_secret and could not "
                         "repair them over SSH. Reconnect or retry provisioning the node so "
                         "a node token and gateway secret are stored before deploying."
-                    )
+
                 )
                 logger.error(self.last_error)
                 return None
@@ -818,16 +818,15 @@ class RemoteOrchestrator:
                         and mode == "token"
                         and status in auth_retry_statuses
                         and str(self.server.gateway_secret or "").strip()
-                    ):
-                        if self._try_gateway_token_exchange([base_url]):
-                            return self._request(
-                                method_upper,
-                                path,
-                                payload=payload,
-                                params=params,
-                                timeout=timeout,
-                                retry_auth=False,
-                            )
+                    ) and self._try_gateway_token_exchange([base_url]):
+                        return self._request(
+                            method_upper,
+                            path,
+                            payload=payload,
+                            params=params,
+                            timeout=timeout,
+                            retry_auth=False,
+                        )
 
                     if has_more_modes and status in auth_retry_statuses:
                         self._set_last_error(
@@ -1022,7 +1021,7 @@ class RemoteOrchestrator:
             logger.error(self.last_error)
             return None
 
-    def _search_remote_service(self, service: Service, path: str) -> Optional[str]:
+    def _search_remote_service(self, service: Service, path: str) -> str | None:
         resp = self._request("GET", path, params={"search": service.name}, timeout=15)
         if resp is None:
             logger.error(
@@ -1064,7 +1063,7 @@ class RemoteOrchestrator:
 
         return ""
 
-    def sync_service(self, service: Service) -> Optional[str]:
+    def sync_service(self, service: Service) -> str | None:
         """
         Ensure the service exists on the remote server.
         Returns the remote service ID (UUID string) on success.
@@ -1103,7 +1102,7 @@ class RemoteOrchestrator:
                     )
                     return None
                 remote_id = data["id"]
-                
+
                 # Sync environment variables
                 self.sync_env_vars(service, remote_id)
                 return remote_id
@@ -1114,7 +1113,7 @@ class RemoteOrchestrator:
         except Exception as e:
             self._set_last_error(f"Error creating service on remote: {e}")
             logger.error(self.last_error)
-            
+
         return None
 
     def _service_sync_payload(self, service: Service) -> dict:
@@ -1280,7 +1279,6 @@ class RemoteOrchestrator:
         This enables the build-agent optimization where the master handles
         all builds and the remote node only runs containers.
         """
-        from apps.deployments.models import PlatformConfig
         path = f"/api/v1/services/{remote_service_id}/deploy/"
         config = PlatformConfig.load()
         ref = deployment.commit_hash or "HEAD"
@@ -1300,14 +1298,14 @@ class RemoteOrchestrator:
             if any(marker in image_name for marker in internal_registry_markers):
                 from apps.deployments.services.provisioner import _get_master_mesh_ip
                 master_ip = _get_master_mesh_ip() or os.environ.get("PUBLIC_IP") or "127.0.0.1"
-                
+
                 for marker in internal_registry_markers:
                     image_name = image_name.replace(marker, f"{master_ip}:5000")
-                
+
                 logger.info(f"Rewrote registry image for remote node: {image_name} (via {master_ip})")
-            
+
             payload["image_name"] = image_name
-        
+
         try:
             resp = self._request("POST", path, payload=payload, timeout=60)
             if resp and resp.status_code in (201, 200, 202):
@@ -1327,7 +1325,7 @@ class RemoteOrchestrator:
         except Exception as e:
             self._set_last_error(f"Error triggering remote deploy: {e}")
             logger.error(self.last_error)
-            
+
         return None
 
     def approve_deployment(self, remote_deployment_id: str, payload: dict | None = None) -> bool:
@@ -1350,7 +1348,7 @@ class RemoteOrchestrator:
     def poll_deployment(self, remote_deployment_id: str) -> dict:
         """Fetch the current status and logs of a remote deployment."""
         path = f"/api/v1/deployments/{remote_deployment_id}/"
-        
+
         try:
             resp = self._request("GET", path, timeout=10)
             if resp and resp.status_code == 200:
@@ -1360,7 +1358,7 @@ class RemoteOrchestrator:
                 self._set_last_error("Failed to poll remote deployment.", response=resp)
         except Exception as exc:
             self._set_last_error(f"Error polling remote deployment: {exc}")
-            
+
         return {}
 
     def delete_service(
@@ -1373,7 +1371,7 @@ class RemoteOrchestrator:
         """Tell the remote server to delete the given service."""
         path = f"/api/v1/services/{remote_service_id}/"
         params = {"force": "true"} if force else None
-        
+
         try:
             resp = self._request("DELETE", path, params=params, timeout=20)
             # 202 Accepted, 204 No Content, 200 OK, or 404 Not Found (already gone)

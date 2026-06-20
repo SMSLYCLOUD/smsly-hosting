@@ -3,7 +3,6 @@ import re
 
 from django.test import SimpleTestCase
 
-
 CLOUD_VIEWS = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     "..", "views.py",
@@ -16,7 +15,7 @@ CLOUD_CODE_ANALYSIS = os.path.normpath(os.path.join(
 
 class OsWalkFollowlinksSourceTests(SimpleTestCase):
     def test_cloud_views_analyze_repo_uses_followlinks_false(self):
-        with open(CLOUD_VIEWS, "r", encoding="utf-8") as fh:
+        with open(CLOUD_VIEWS, encoding="utf-8") as fh:
             content = fh.read()
         match = re.search(
             r"def analyze_repo.*?os\.walk\(([^)]+)\)",
@@ -27,7 +26,7 @@ class OsWalkFollowlinksSourceTests(SimpleTestCase):
         self.assertIn("followlinks=False", match.group(1))
 
     def test_code_analysis_analyze_codebase_uses_followlinks_false(self):
-        with open(CLOUD_CODE_ANALYSIS, "r", encoding="utf-8") as fh:
+        with open(CLOUD_CODE_ANALYSIS, encoding="utf-8") as fh:
             content = fh.read()
         match = re.search(
             r"os\.walk\(([^)]+)\)",

@@ -1,10 +1,10 @@
-import unittest
-from django.test import TestCase, Client, override_settings
-from apps.deployments.models import Service, PlatformConfig
-from apps.domains.models import Domain, DomainStatus
-from apps.cloud.models import CloudProvider
-from django.contrib.auth import get_user_model
 from unittest.mock import patch
+
+from apps.cloud.models import CloudProvider
+from apps.deployments.models import Service
+from apps.domains.models import Domain, DomainStatus
+from django.contrib.auth import get_user_model
+from django.test import Client, TestCase, override_settings
 
 User = get_user_model()
 

@@ -4,14 +4,15 @@ Views for Project CRUD and nested service management.
 
 import logging
 
-from rest_framework import viewsets, permissions, status, serializers as drf_serializers
-from rest_framework.decorators import action
-from rest_framework.response import Response
 from django.db import transaction
 from django.db.models import Q
+from rest_framework import permissions, status, viewsets
+from rest_framework import serializers as drf_serializers
+from rest_framework.decorators import action
+from rest_framework.response import Response
 
-from .models_project import Project
 from .models import Service
+from .models_project import Project
 from .serializers import ServiceSerializer
 
 logger = logging.getLogger(__name__)
@@ -225,13 +226,13 @@ class ProjectViewSet(viewsets.ModelViewSet):
     def sync_envs(self, request, pk=None):
         """
         POST /api/v1/projects/{id}/sync-envs/
-        
+
         Hardens and synchronizes environment variables across all services in the ecosystem.
         Deterministic linking of Intelligence, Security, and Core services.
         """
         project = self.get_object()
         from services.ecosystem import sync_ecosystem_envs
-        
+
         try:
             logger.info("Triggering instant ecosystem sync for project %s (%s)", project.name, project.id)
             result = sync_ecosystem_envs(str(project.id))
@@ -239,6 +240,6 @@ class ProjectViewSet(viewsets.ModelViewSet):
         except Exception as e:
             logger.exception("Ecosystem sync failed for project %s", project.id)
             return Response(
-                {"error": f"Sync failed: {str(e)}"},
+                {"error": f"Sync failed: {e!s}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )

@@ -33,7 +33,6 @@ from apps.autoscaler.engine.container_metrics import (
 )
 from apps.autoscaler.models import AutoscalerConfig
 
-
 logger = logging.getLogger(__name__)
 
 # ── Config constants ────────────────────────────────────────────────────────

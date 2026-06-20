@@ -7,19 +7,18 @@ check explicitly. The previous ``_user_owns_or_member`` only
 verified that the user had *some* role on the team, which let
 VIEWERs trigger expensive builds.
 """
-from unittest.mock import patch
 import uuid
+from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.test import TestCase, override_settings
-from rest_framework.test import APIClient
 from rest_framework import status as http_status
+from rest_framework.test import APIClient
 
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import Project, Service
 from apps.deployments.models_safedeploy import PreviewEnvironment
 from apps.teams.models import Team, TeamMember
-
 
 TEST_CACHES = {
     "default": {

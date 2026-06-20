@@ -14,10 +14,8 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from typing import Any
 
-from rest_framework import status
 from rest_framework.exceptions import (
     APIException,
     AuthenticationFailed,
@@ -25,7 +23,6 @@ from rest_framework.exceptions import (
     PermissionDenied,
     ValidationError,
 )
-from rest_framework.response import Response
 from rest_framework.views import exception_handler as drf_exception_handler
 
 logger = logging.getLogger("smsly.api.errors")

@@ -1,15 +1,12 @@
 import logging
-import docker
-import time
-from typing import Set, Dict, Any
+from typing import Any
 
-from django.db import transaction
+import docker
 from django.utils import timezone
-from apps.deployments.models_core import Service, Deployment
-from apps.deployments.models_addons import Addon
-from apps.deployments.models_storage import Volume
-from apps.deployments.models_tunnels import Tunnel
+
 from apps.cloud.docker_client import get_docker_client
+from apps.deployments.models_addons import Addon
+from apps.deployments.models_core import Deployment, Service
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +51,8 @@ class DeletionOrchestrator:
                 self._cleanup_tunnels(service)
             except Exception as e:
                 logger.warning(f"Tunnel cleanup failed for {service.id}: {e}")
-                if not force: success = False
+                if not force:
+                    success = False
 
             # 5. Cancel Celery tasks related to this service
             try:
@@ -108,7 +106,7 @@ class DeletionOrchestrator:
 
     # -- Internal Discovery Methods --
 
-    def _find_service_containers(self, service: Service) -> Set[Any]:
+    def _find_service_containers(self, service: Service) -> set[Any]:
         containers = set()
         if not self.docker_client:
             return containers
@@ -163,7 +161,7 @@ class DeletionOrchestrator:
 
         return containers
 
-    def _find_addon_containers(self, addon: Addon) -> Set[Any]:
+    def _find_addon_containers(self, addon: Addon) -> set[Any]:
         containers = set()
         if not self.docker_client:
             return containers
@@ -178,7 +176,7 @@ class DeletionOrchestrator:
                     continue
 
                 # 2. Check legacy name pattern (container name starts with smsly-addon-)
-                addon_prefix = f"smsly-addon-"
+                addon_prefix = "smsly-addon-"
                 if c.name.lower().startswith(addon_prefix) and str(addon.id)[:8] in c.name:
                     containers.add(c)
                     continue
@@ -193,7 +191,7 @@ class DeletionOrchestrator:
 
         return containers
 
-    def _find_service_volumes(self, service: Service) -> Set[Any]:
+    def _find_service_volumes(self, service: Service) -> set[Any]:
         volumes = set()
         if not self.docker_client:
             return volumes
@@ -204,15 +202,13 @@ class DeletionOrchestrator:
             all_vols = self.docker_client.volumes.list()
             for v in all_vols:
                 labels = v.attrs.get('Labels') or {}
-                if labels.get('smsly.service_id') == str(service.id):
-                    volumes.add(v)
-                elif labels.get('com.docker.compose.project') == slug_lower:
+                if labels.get('smsly.service_id') == str(service.id) or labels.get('com.docker.compose.project') == slug_lower:
                     volumes.add(v)
         except Exception as e:
             logger.warning(f"Failed to list volumes for service {service.id}: {e}")
         return volumes
 
-    def _find_addon_volumes(self, addon: Addon) -> Set[Any]:
+    def _find_addon_volumes(self, addon: Addon) -> set[Any]:
         volumes = set()
         if not self.docker_client:
             return volumes
@@ -221,9 +217,7 @@ class DeletionOrchestrator:
             expected_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}-data"
             for v in all_vols:
                 labels = v.attrs.get('Labels') or {}
-                if labels.get('smsly.addon_id') == str(addon.id):
-                    volumes.add(v)
-                elif v.name == expected_name:
+                if labels.get('smsly.addon_id') == str(addon.id) or v.name == expected_name:
                     volumes.add(v)
         except Exception as e:
             logger.warning(f"Failed to list volumes for addon {addon.id}: {e}")

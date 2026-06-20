@@ -9,11 +9,7 @@ used by the container-level autoscaler dashboard (which scales
 ``Service`` rows) and have been moved here so they can be shared
 between the per-service pipeline and the per-container dashboard.
 """
-import json
 import logging
-import os
-import socket
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +25,8 @@ def init_k8s() -> bool:
     if _k8s_clients.get('available') is not None:
         return _k8s_clients['available']
     try:
-        from kubernetes import client as k8s_client, config as k8s_config
+        from kubernetes import client as k8s_client
+        from kubernetes import config as k8s_config
         try:
             k8s_config.load_incluster_config()
         except BaseException:
@@ -56,7 +53,7 @@ def collect_container_stats() -> dict:
     return docker_stats_legacy()
 
 
-def _k8s_container_stats() -> Optional[dict]:
+def _k8s_container_stats() -> dict | None:
     try:
         from kubernetes import client as k8s_client
         metrics_api = k8s_client.CustomObjectsApi()

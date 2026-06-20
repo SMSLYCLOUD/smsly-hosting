@@ -20,7 +20,6 @@ from unittest import mock
 from django.core.exceptions import ImproperlyConfigured
 from django.test import SimpleTestCase
 
-
 REPO_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")
 )
@@ -196,7 +195,7 @@ class DockerfileComposeAlignmentTests(SimpleTestCase):
     """
 
     def _read_compose(self):
-        with open(COMPOSE_PATH, "r", encoding="utf-8") as fh:
+        with open(COMPOSE_PATH, encoding="utf-8") as fh:
             return fh.read()
 
     def test_docker_compose_redis_requires_password(self):

@@ -33,20 +33,23 @@ The wire-up in ``config/urls.py``:
 
 replaces the corresponding ``dj_rest_auth`` URLs.
 """
-from dj_rest_auth.views import (
-    LoginView as _BaseLoginView,
-    LogoutView as _BaseLogoutView,
-    PasswordResetView as _BasePasswordResetView,
-)
-from dj_rest_auth.registration.views import (
-    RegisterView as _BaseRegistrationView,
-)
-
 from apps.core.auth_cookies import delete_auth_cookie, set_auth_cookie
 from apps.deployments.rate_limiting import (
     LoginRateThrottle,
     PasswordResetRateThrottle,
     RegistrationRateThrottle,
+)
+from dj_rest_auth.registration.views import (
+    RegisterView as _BaseRegistrationView,
+)
+from dj_rest_auth.views import (
+    LoginView as _BaseLoginView,
+)
+from dj_rest_auth.views import (
+    LogoutView as _BaseLogoutView,
+)
+from dj_rest_auth.views import (
+    PasswordResetView as _BasePasswordResetView,
 )
 
 
@@ -73,7 +76,7 @@ class ThrottledLoginView(_BaseLoginView):
         if response.status_code == 200 and getattr(self, "token", None):
             try:
                 set_auth_cookie(response, self.token.key)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 # Never let a cookie helper crash the login response.
                 # Worst case the user can re-authenticate or the frontend
                 # falls back to the body-returned token via the legacy
@@ -96,7 +99,7 @@ class ThrottledLogoutView(_BaseLogoutView):
         response = super().finalize_response(request, response, *args, **kwargs)
         try:
             delete_auth_cookie(response)
-        except Exception:  # noqa: BLE001
+        except Exception:
             # If the cookie helper raises, the server-side token has
             # already been deleted and the frontend can still clear its
             # own state on the next page load.

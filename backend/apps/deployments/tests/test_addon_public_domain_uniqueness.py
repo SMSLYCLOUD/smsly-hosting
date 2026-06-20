@@ -39,14 +39,13 @@ class AddonPublicDomainUniquenessTests(TestCase):
             addon_type=Addon.Type.POSTGRES,
             public_domain="dup.example.com",
         )
-        with self.assertRaises(IntegrityError):
-            with transaction.atomic():
-                Addon.objects.create(
-                    service=self.service_a,
-                    name="addon-a2",
-                    addon_type=Addon.Type.POSTGRES,
-                    public_domain="dup.example.com",
-                )
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Addon.objects.create(
+                service=self.service_a,
+                name="addon-a2",
+                addon_type=Addon.Type.POSTGRES,
+                public_domain="dup.example.com",
+            )
 
     def test_addons_for_different_services_can_share_public_domain_via_constraint(self):
         """The per-service UniqueConstraint allows two addons on
@@ -64,14 +63,13 @@ class AddonPublicDomainUniquenessTests(TestCase):
             addon_type=Addon.Type.POSTGRES,
             public_domain="shared.example.com",
         )
-        with self.assertRaises(IntegrityError):
-            with transaction.atomic():
-                Addon.objects.create(
-                    service=self.service_a,
-                    name="addon-a2",
-                    addon_type=Addon.Type.POSTGRES,
-                    public_domain="shared.example.com",
-                )
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Addon.objects.create(
+                service=self.service_a,
+                name="addon-a2",
+                addon_type=Addon.Type.POSTGRES,
+                public_domain="shared.example.com",
+            )
 
     def test_null_public_domain_still_allowed(self):
         Addon.objects.create(

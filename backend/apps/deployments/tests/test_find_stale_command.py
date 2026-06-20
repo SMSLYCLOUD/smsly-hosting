@@ -1,9 +1,9 @@
 import io
-from django.test import TestCase
+from unittest.mock import MagicMock, patch
+
 from django.core.management import call_command
-from apps.deployments.models_core import Service
-from apps.deployments.models_addons import Addon
-from unittest.mock import patch, MagicMock
+from django.test import TestCase
+
 
 class TestFindStaleCommand(TestCase):
     @patch('apps.deployments.management.commands.find_stale_runtime_resources.docker.from_env')

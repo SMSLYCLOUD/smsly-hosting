@@ -1,7 +1,7 @@
 """Slow query monitoring — queries pg_stat_statements for query performance data."""
 import logging
+
 from django.db import connection
-from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ def fetch_slow_queries(min_duration_ms: float = 100, limit: int = 50) -> list:
             columns = [col[0] for col in cursor.description]
             results = []
             for row in cursor.fetchall():
-                entry = dict(zip(columns, row))
+                entry = dict(zip(columns, row, strict=False))
                 entry['query'] = (entry['query'] or '')[:2000]  # truncate for display
                 entry['queryid'] = str(entry['queryid'])
                 results.append(entry)

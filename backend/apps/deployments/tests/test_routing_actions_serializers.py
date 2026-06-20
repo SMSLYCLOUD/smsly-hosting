@@ -1,9 +1,14 @@
-from django.test import TestCase
-from django.contrib.auth import get_user_model
-from rest_framework.test import APIClient
 from unittest.mock import patch
 
-from apps.deployments.models_core import Service, Deployment, CloudProvider, ManagedServer
+from django.contrib.auth import get_user_model
+from django.test import TestCase
+from rest_framework.test import APIClient
+
+from apps.deployments.models_core import (
+    Deployment,
+    ManagedServer,
+    Service,
+)
 from apps.deployments.utils_target import resolve_active_execution_target
 
 User = get_user_model()

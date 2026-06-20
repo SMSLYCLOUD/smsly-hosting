@@ -1,6 +1,7 @@
 import pytest
-from django.core.exceptions import ValidationError
 from apps.core.validators import validate_ssrf
+from django.core.exceptions import ValidationError
+
 
 def test_ssrf_valid_paths():
     validate_ssrf('/health')

@@ -5,8 +5,8 @@ Tests that rollback/bulk-cancel operations write AuditLog entries.
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
-from rest_framework.test import APITestCase
 from rest_framework import status as http_status
+from rest_framework.test import APITestCase
 
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import Deployment, Service

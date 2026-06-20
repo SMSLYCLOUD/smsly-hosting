@@ -1,29 +1,30 @@
 """GitHub Webhooks setup service."""
 import logging
+from urllib.parse import urlparse
+
 import requests
 from django.conf import settings
-from urllib.parse import urlparse
-from apps.deployments.views_github import _get_github_token
+
 from apps.deployments.utils_error_handling import (
-    ExternalServiceError, 
-    ValidationError, 
+    ExternalServiceError,
+    ValidationError,
     log_error,
-    create_error_response
 )
+from apps.deployments.views_github import _get_github_token
 
 logger = logging.getLogger(__name__)
 
 def setup_github_webhook(user, repo_url: str):
     """
     Sets up a GitHub webhook for the given repository if it doesn't already exist.
-    
+
     Args:
         user: The user object
         repo_url: The GitHub repository URL
-        
+
     Returns:
         bool: True if successful, False if failed
-        
+
     Raises:
         ValidationError: If repo_url is invalid
         ExternalServiceError: If GitHub API fails
@@ -91,7 +92,7 @@ def setup_github_webhook(user, repo_url: str):
             headers=headers,
             timeout=10
         )
-        
+
         if resp.status_code == 403:
             error_text = resp.text if resp else ''
             if 'rate limit' in error_text.lower() or 'api rate limit exceeded' in error_text.lower():
@@ -126,7 +127,7 @@ def setup_github_webhook(user, repo_url: str):
                     status_code=403,
                     user_message="Access denied to GitHub repository. Please check permissions."
                 )
-        
+
         resp.raise_for_status()
         hooks = resp.json()
 
@@ -155,7 +156,7 @@ def setup_github_webhook(user, repo_url: str):
             json=payload,
             timeout=10
         )
-        
+
         # Handle specific 403 errors
         if create_resp.status_code == 403:
             error_text = create_resp.text if create_resp else ''
@@ -191,7 +192,7 @@ def setup_github_webhook(user, repo_url: str):
                     status_code=403,
                     user_message="Access denied to GitHub repository. Please check permissions."
                 )
-        
+
         create_resp.raise_for_status()
         logger.info(f"Successfully created GitHub webhook for {full_name}")
         return True
@@ -199,7 +200,7 @@ def setup_github_webhook(user, repo_url: str):
     except requests.exceptions.HTTPError as exc:
         status_code = exc.response.status_code if exc.response is not None else 502
         error_text = exc.response.text if exc.response else ''
-        
+
         # Handle specific 403 errors
         if status_code == 403:
             if 'rate limit' in error_text.lower() or 'api rate limit exceeded' in error_text.lower():
@@ -234,9 +235,9 @@ def setup_github_webhook(user, repo_url: str):
                     status_code=status_code,
                     user_message="Access denied to GitHub repository. Please check permissions."
                 )
-        
+
         raise ExternalServiceError(
-            message=f"Failed to setup GitHub webhook",
+            message="Failed to setup GitHub webhook",
             service_name="GitHub",
             service_error=error_text,
             status_code=status_code,
@@ -244,7 +245,7 @@ def setup_github_webhook(user, repo_url: str):
         )
     except requests.exceptions.RequestException as exc:
         raise ExternalServiceError(
-            message=f"Network error setting up GitHub webhook",
+            message="Network error setting up GitHub webhook",
             service_name="GitHub",
             service_error=str(exc),
             user_message="Network error occurred while setting up webhook. Please check your connection."

@@ -1,5 +1,7 @@
 from rest_framework import serializers
+
 from .models import Team, TeamMember
+
 
 class TeamSerializer(serializers.ModelSerializer):
     members_count = serializers.IntegerField(source='members.count', read_only=True)

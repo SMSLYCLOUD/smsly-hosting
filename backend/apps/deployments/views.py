@@ -6,30 +6,54 @@
 # pylint: disable=invalid-name
 # pylint: disable=too-many-lines
 """Views module."""
+import contextlib
+import hmac
+import logging
 import os
 import posixpath
-import hmac
 import re
-from rest_framework import viewsets, permissions, status, parsers, serializers, authentication
-from rest_framework.exceptions import PermissionDenied
-from rest_framework.generics import GenericAPIView
-from rest_framework.decorators import action
-from rest_framework.response import Response
-from rest_framework.authtoken.models import Token
-from django.utils import timezone
-from django.http import FileResponse, HttpResponse, StreamingHttpResponse
-from django.db.models import Prefetch
+import threading
+import uuid
+
+from celery.result import AsyncResult
 from django.conf import settings
+from django.core import signing
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
-from django.db import DataError, IntegrityError, transaction, models
-from django.db.models import Q, Count, Avg, F, ExpressionWrapper, DurationField
+from django.db import DataError, IntegrityError, models, transaction
+from django.db.models import (
+    Avg,
+    DurationField,
+    ExpressionWrapper,
+    F,
+    Q,
+)
+from django.http import FileResponse, HttpResponse, StreamingHttpResponse
+from django.utils import timezone
 from django.utils.http import content_disposition_header
-from django.core import signing
-from apps.deployments.services.github_webhooks import setup_github_webhook
-from apps.deployments.services.gitlab_webhooks import setup_gitlab_webhook
-from apps.deployments.services.bitbucket_webhooks import setup_bitbucket_webhook
-import threading
+from rest_framework import (
+    authentication,
+    parsers,
+    permissions,
+    serializers,
+    status,
+    viewsets,
+)
+from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
+from rest_framework.generics import GenericAPIView
+from rest_framework.response import Response
+
+from apps.cloud.docker_client import get_docker_client
+from apps.cloud.models import CloudProvider
+from apps.deployments.utils import resolve_running_container
+from apps.deployments.utils_file_browser import exec_file_list
+from apps.teams.permissions import (
+    assert_can_delete,
+    assert_can_write,
+    get_team_q_filter,
+)
+
 from .ai_router import (
     DEFAULT_AI_ROUTER_API_BASE,
     DEFAULT_AI_ROUTER_UI_BASE,
@@ -38,37 +62,33 @@ from .ai_router import (
     persist_ai_router_config,
     serialize_ai_router_config,
 )
-from .models import Service, Deployment, EnvironmentVariable, PlatformConfig
-from apps.deployments.utils_file_browser import exec_file_list
-from .serializers import (
-    ServiceSerializer, DeploymentSerializer,
-    DeploymentTriggerSerializer, EnvVarSerializer,
-    DeploymentTimelineSerializer, InstantRollbackSerializer,
-    AuditLogSerializer, DeploymentApproveSerializer,
-    ServiceBackupSerializer, ServerBackupSerializer, BackupScheduleSerializer
-)
-from .models_audit import AuditLog
-from .models_backup import ServiceBackup, ServerBackup, BackupSchedule
-from .tasks import (
-    smart_deploy_task,
-    resume_deploy_task,
-    create_service_backup_task,
-    create_server_backup_task,
-    restore_service_backup_task,
-    enqueue_smart_deploy_task,
-)
-from .rate_limiting import BurstRateThrottle, DeploymentRateThrottle
 from .domain_utils import normalize_domain
+from .models import Deployment, EnvironmentVariable, PlatformConfig, Service
+from .models_audit import AuditLog
+from .models_backup import BackupSchedule, ServerBackup, ServiceBackup
+from .rate_limiting import BurstRateThrottle, DeploymentRateThrottle
+from .serializers import (
+    BackupScheduleSerializer,
+    DeploymentApproveSerializer,
+    DeploymentSerializer,
+    DeploymentTimelineSerializer,
+    DeploymentTriggerSerializer,
+    EnvVarSerializer,
+    InstantRollbackSerializer,
+    ServerBackupSerializer,
+    ServiceBackupSerializer,
+    ServiceSerializer,
+)
 from .services.server_guard import ServerGuard
-from apps.cloud.models import CloudProvider
-import uuid
-import logging
-import re
-from celery.result import AsyncResult
-from apps.cloud.docker_client import get_docker_client
+from .tasks import (
+    create_server_backup_task,
+    create_service_backup_task,
+    enqueue_smart_deploy_task,
+    restore_service_backup_task,
+    resume_deploy_task,
+    smart_deploy_task,
+)
 from .utils import validate_and_sanitize_path
-from apps.deployments.utils import resolve_running_container
-from apps.teams.permissions import get_team_q_filter, assert_can_write, assert_can_delete, user_can_read
 
 
 class ZeroTrustHMACAuthentication(authentication.BaseAuthentication):
@@ -88,6 +108,7 @@ class ZeroTrustHMACAuthentication(authentication.BaseAuthentication):
         import hashlib
         import hmac
         import time
+
         from django.contrib.auth import get_user_model
         User = get_user_model()
 
@@ -233,17 +254,13 @@ class CleanupFileResponse(FileResponse):
     def close(self):
         super().close()
         if self._file_path and os.path.exists(self._file_path):
-            try:
+            with contextlib.suppress(OSError):
                 os.remove(self._file_path)
-            except OSError:
-                pass
         if self._file_path:
             parent = os.path.dirname(os.path.abspath(self._file_path))
             if parent and os.path.basename(parent).startswith('smsly-decrypted-'):
-                try:
+                with contextlib.suppress(OSError):
                     os.rmdir(parent)
-                except OSError:
-                    pass
 
 
 _BACKUP_DOWNLOAD_BLOCK_SIZE = 1024 * 1024
@@ -273,6 +290,7 @@ def _verify_signed_download(signed_value: str, expected_pk: str, max_age: int = 
 def _generate_signed_download_url(request, obj_pk: str, url_name: str, path_params: dict | None = None) -> str:
     """Generate a signed download URL valid for 5 minutes."""
     import time
+
     from django.urls import reverse
     payload = {'pk': str(obj_pk), 'ts': int(time.time())}
     signed = signing.TimestampSigner().sign_object(payload)
@@ -320,17 +338,13 @@ def _file_iterator(file_path: str, start: int = 0, end: int | None = None, clean
                 yield chunk
     finally:
         if cleanup_path and os.path.exists(cleanup_path):
-            try:
+            with contextlib.suppress(OSError):
                 os.remove(cleanup_path)
-            except OSError:
-                pass
         if cleanup_path:
             parent = os.path.dirname(os.path.abspath(cleanup_path))
             if parent and os.path.basename(parent).startswith('smsly-decrypted-'):
-                try:
+                with contextlib.suppress(OSError):
                     os.rmdir(parent)
-                except OSError:
-                    pass
 
 
 def _open_backup_download_response(request, file_path: str, filename: str, cleanup_path: str | None = None):
@@ -402,9 +416,7 @@ class CaddySecretOrAdminPermission(permissions.BasePermission):
         ):
             return True
         # No secret configured — allow through with domain + rate limit protections only
-        if not expected:
-            return True
-        return False
+        return bool(not expected)
 
     @staticmethod
     def _get_expected_secret():
@@ -435,8 +447,9 @@ def _cancel_stale_in_progress_deployments(service):
     This prevents zombie QUEUED rows from permanently blocking new deploys.
     """
     from datetime import timedelta
+
     from django.utils import timezone
-    
+
     stale_threshold = timezone.now() - timedelta(minutes=15)
     service.deployments.filter(
         status=Deployment.Status.BUILDING,
@@ -752,12 +765,12 @@ class ServiceViewSet(viewsets.ModelViewSet):
         authenticator = getattr(self.request, 'successful_authenticator', None)
         authenticator_name = authenticator.__class__.__name__ if authenticator else ''
         is_hmac_remote_sync = authenticator_name == 'RemoteSyncHMACAuthentication'
-        
+
         # The token could be named 'node:Node-IP' or 'Primary-admin' (from installer).
         # Since the token is a secure APIToken (hasattr prefix), and it's sending
         # the X-SMSLY-Remote-Sync header, we can trust it.
         is_api_token = hasattr(token, 'prefix')
-        
+
         has_header = self.request.headers.get('X-SMSLY-Remote-Sync') == '1'
         return has_header and (is_api_token or is_hmac_remote_sync)
 
@@ -767,7 +780,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
             assert_can_write(self.request.user, project, action='create service in')
         from .models_core import ManagedServer
         server = serializer.validated_data.get('server')
-        
+
         # Seamless: If no server is assigned, default to the primary (local)
         # controller so user workloads land on the local server by default.
         if not server:
@@ -784,7 +797,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         if server:
             ServerGuard.assert_user_workload_allowed(server)
 
-        deploy_type = serializer.validated_data.get('deploy_type', 'GIT')
+        serializer.validated_data.get('deploy_type', 'GIT')
 
         service = serializer.save(owner=self.request.user, server=server)
 
@@ -803,9 +816,9 @@ class ServiceViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         assert_can_write(self.request.user, serializer.instance)
         from .models_core import ManagedServer
-        
+
         old_repo_url = serializer.instance.repository_url if serializer.instance else None
-        
+
         if 'server' in serializer.validated_data:
             server = serializer.validated_data.get('server')
             if not server:
@@ -900,8 +913,8 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
     def perform_destroy(self, instance, force=False):
         """Set status to pending and queue async deletion."""
-        from .tasks import delete_service_task
         from .models_core import Service
+        from .tasks import delete_service_task
 
         instance.status = Service.Status.DELETION_PENDING
         instance.save(update_fields=['status'])
@@ -987,7 +1000,9 @@ class ServiceViewSet(viewsets.ModelViewSet):
             active_server = target["server_obj"]
 
             if target["target_type"] in ("remote", "lite_agent") and active_server:
-                from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+                from apps.deployments.services.remote_orchestrator import (
+                    RemoteOrchestrator,
+                )
                 orchestrator = RemoteOrchestrator(active_server)
                 remote_id = orchestrator._search_remote_service(service, "/api/v1/services/")
                 if remote_id:
@@ -1055,7 +1070,9 @@ class ServiceViewSet(viewsets.ModelViewSet):
         # ── Fast restart path: just docker restart the container ──
         if not force_rebuild:
             try:
-                from apps.deployments.utils_target import resolve_active_execution_target
+                from apps.deployments.utils_target import (
+                    resolve_active_execution_target,
+                )
                 target = resolve_active_execution_target(service)
                 active_server = target.get("server_obj")
                 target_type = target.get("target_type")
@@ -1069,7 +1086,9 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
             if target_type in ("remote", "lite_agent") and active_server:
                 try:
-                    from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+                    from apps.deployments.services.remote_orchestrator import (
+                        RemoteOrchestrator,
+                    )
                     orchestrator = RemoteOrchestrator(active_server)
                     remote_id = orchestrator._search_remote_service(service, "/api/v1/services/")
                     if not remote_id:
@@ -1217,8 +1236,9 @@ class ServiceViewSet(viewsets.ModelViewSet):
         service = self.get_object()
 
         try:
-            from apps.cloud.docker_client import get_docker_client
             import docker as docker_lib
+
+            from apps.cloud.docker_client import get_docker_client
 
             client = get_docker_client()
             container = None
@@ -1372,7 +1392,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
         try:
             enqueue_smart_deploy_task(
-                deployment_id=str(deployment.id), 
+                deployment_id=str(deployment.id),
                 provider_id=str(provider.id),
                 skip_review=skip_review
             )
@@ -1554,7 +1574,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         except (IntegrityError, ValidationError) as exc:
             logger.error("create_preview failed for service=%s branch=%s: %s", parent.id, branch, exc)
             return Response(
-                {'error': f'Failed to create preview: {str(exc)}'},
+                {'error': f'Failed to create preview: {exc!s}'},
                 status=status.HTTP_400_BAD_REQUEST)
 
         return Response({
@@ -1656,9 +1676,6 @@ class ServiceViewSet(viewsets.ModelViewSet):
         2. If not, auto-create it (same repo_url, branch, buildpack, env vars)
         3. Trigger deploy on the remote server
         """
-        import ipaddress
-        from urllib.parse import urlparse
-        import requests as req_lib
         from .models_servers import ManagedServer
 
         service = self.get_object()
@@ -1667,8 +1684,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         include_local = request.data.get('include_local', True)
 
         from .models_core import PlatformConfig
-        p_config = PlatformConfig.objects.first()
-        local_node_id = p_config.server_ip if p_config else "Controller"
+        PlatformConfig.objects.first()
 
         # F3: validate & cap server_ids
         if not isinstance(server_ids, list):
@@ -2170,8 +2186,8 @@ class ServiceViewSet(viewsets.ModelViewSet):
             reveal_secrets = (
                 request.user.is_superuser
                 or var.service.owner_id == request.user.id
-                or getattr(request, 'auth', None)
-                and hasattr(request.auth, 'prefix')  # APIToken
+                or (getattr(request, 'auth', None)
+                and hasattr(request.auth, 'prefix'))  # APIToken
             )
             return Response(
                 EnvVarSerializer(
@@ -2495,7 +2511,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         query = Q(host=domain)
         if is_ip:
             query |= Q(private_ip=domain)
-        
+
         if ManagedServer.objects.filter(query).exists():
             return Response(status=status.HTTP_200_OK)
 
@@ -2602,11 +2618,14 @@ class ServiceViewSet(viewsets.ModelViewSet):
                         Deployment.objects.filter(service=svc, status__in=[Deployment.Status.QUEUED, Deployment.Status.BUILDING]).update(status=Deployment.Status.CANCELLED)
                     elif action == 'senate':
                         # Trigger AI Senate env enrichment (re‑use existing logic)
-                        from apps.intelligence.services.env_intelligence import EnvironmentIntelligenceService
+                        from apps.intelligence.services.env_intelligence import (
+                            EnvironmentIntelligenceService,
+                        )
                         env_context = {}  # placeholder – real implementation would gather context
                         suggestions = EnvironmentIntelligenceService.resolve_environment(env_context, svc.stack or '', svc.name)
-                        from apps.deployments.models import EnvironmentVariable
                         import re
+
+                        from apps.deployments.models import EnvironmentVariable
                         for k, v in suggestions.items():
                             if not re.match(r'^[A-Za-z0-9_][A-Za-z0-9_.-]*$', k):
                                 logger.warning("Skipping invalid env var key from Senate: %s", k)
@@ -2655,7 +2674,8 @@ class ServiceViewSet(viewsets.ModelViewSet):
     def _sync_caddy(self):
         """Regenerate Caddyfile with all custom domains and trigger reload."""
         try:
-            from services.caddy_manager import generate_caddyfile, apply_caddyfile
+            from services.caddy_manager import apply_caddyfile, generate_caddyfile
+
             from .models import PlatformConfig
             from .utils import log_event
             config = PlatformConfig.load()
@@ -3049,10 +3069,8 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
         # Symlink resolution for Docker containers
         if path is not None:
-            try:
+            with contextlib.suppress(Exception):
                 path = validate_and_sanitize_path(path, skip_system_check=True, container=container)
-            except Exception:
-                pass
 
         return local_action(container, path) if path is not None else local_action(container)
 
@@ -3197,7 +3215,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
     def _local_file_download(self, container, path: str):
         try:
-            bits, stat = container.get_archive(path)
+            bits, _stat = container.get_archive(path)
             response = StreamingHttpResponse(bits, content_type='application/x-tar')
             filename = os.path.basename(path) + ".tar"
             response['Content-Disposition'] = f'attachment; filename="{filename}"'
@@ -3380,8 +3398,8 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
     def _local_file_write(self, container, path: str, content: str):
         try:
-            import tarfile
             import io
+            import tarfile
             import time
 
             tar_stream = io.BytesIO()
@@ -3482,8 +3500,8 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
     def _local_file_upload(self, container, path: str, file_bytes: bytes):
         try:
-            import tarfile
             import io
+            import tarfile
             import time
 
             base_name = posixpath.basename(path)
@@ -3563,13 +3581,13 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             )
         if self.request.user.is_superuser:
             return base_qs.all()
-        
+
         project_id = self.request.query_params.get('project_id')
         if project_id:
             base_qs = base_qs.filter(service__project_id=project_id)
 
         return base_qs.filter(
-            Q(service__owner=self.request.user) | 
+            Q(service__owner=self.request.user) |
             Q(service__project__team__members__user=self.request.user)
         ).distinct()
 
@@ -3651,50 +3669,6 @@ class DeploymentViewSet(viewsets.ModelViewSet):
 
         return Response(payload, status=status.HTTP_201_CREATED)
 
-    @action(detail=True, methods=['post'])
-    def approve(self, request, pk=None):
-        """Approve a deployment that is waiting in REVIEW state."""
-        deployment = self.get_object()
-        if deployment.status != Deployment.Status.REVIEW:
-            return Response({"error": "Deployment is not in REVIEW state"}, status=400)
-
-        serializer = DeploymentApproveSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        # Apply overrides if any
-        service = deployment.service
-        overrides = serializer.validated_data
-        if 'cpu_cores' in overrides:
-            service.cpu_cores = overrides['cpu_cores']
-        if 'memory_mb' in overrides:
-            service.memory_mb = overrides['memory_mb']
-        
-        env_overrides = overrides.get('env_overrides', {})
-        if env_overrides:
-            from .models import EnvironmentVariable
-            for k, v in env_overrides.items():
-                EnvironmentVariable.objects.update_or_create(
-                    service=service, key=k, defaults={'value': v, 'source': 'USER'}
-                )
-        
-        service.save()
-
-        # Resume the deployment
-        provider = _resolve_provider_for_service(service)
-        provider_id = str(provider.id) if provider else None
-        if not provider_id:
-            return Response({"error": "No cloud provider configured for this service."}, status=400)
-        resume_deploy_task.delay(deployment_id=str(deployment.id), provider_id=provider_id)
-        
-        AuditLog(
-            actor=request.user.get_username(),
-            action='DEPLOYMENT_APPROVE',
-            target=f'Deployment: {deployment.id}',
-            metadata={'service_id': str(service.id), 'overrides': list(env_overrides.keys())},
-        ).save()
-
-        return Response({"message": "Deployment approved and resumed"})
-
 
 
 
@@ -3716,7 +3690,6 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         Non-admins still get their own failed containers removed and
         dangling-image cleanup.
         """
-        from rest_framework.exceptions import PermissionDenied
         is_admin = bool(request.user and request.user.is_authenticated and request.user.is_staff)
 
         # ── 1. DB: Select deployments to prune ──
@@ -3744,7 +3717,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             # Remove specific failed containers
             if not failed_deploys and not failed_addons:
                 logger.info("No failed deployments or addons found to prune from Docker.")
-            
+
             for dep in failed_deploys:
                 if dep.container_id:
                     try:
@@ -3794,23 +3767,19 @@ class DeploymentViewSet(viewsets.ModelViewSet):
                     for f in files:
                         f_path = os.path.join(root, f)
                         if os.stat(f_path).st_mtime < now - 3600:
-                            try:
+                            with contextlib.suppress(OSError):
                                 os.remove(f_path)
-                            except OSError:
-                                pass
                     for d in dirs:
                         d_path = os.path.join(root, d)
                         if os.stat(d_path).st_mtime < now - 3600:
-                            try:
+                            with contextlib.suppress(OSError):
                                 shutil.rmtree(d_path)
-                            except OSError:
-                                pass
         except Exception as exc:
             logger.warning("Docker/Temp prune failed during deployment cleanup: %s", exc)
 
         # ── 3. DB: Delete records ──
         count = base_qs.delete()[0]
-        addon_count = addon_qs.delete()[0]
+        addon_qs.delete()[0]
 
         # ── 4. DB: Cancel stuck QUEUED deployments ──
         stale_threshold = timezone.now() - timezone.timedelta(minutes=30)
@@ -3890,7 +3859,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
                 )
 
                 smart_deploy_task.delay(
-                    deployment_id=str(deployment.id), 
+                    deployment_id=str(deployment.id),
                     provider_id=str(provider.id),
                     skip_review=skip_review
                 )
@@ -3949,7 +3918,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
                     except Exception as e:
                         logger.warning(f"Failed to cleanup container {c_id}: {e}")
                 if cleaned_any:
-                    deployment.build_logs += f"\n🧹 Cleaned up container resources."
+                    deployment.build_logs += "\n🧹 Cleaned up container resources."
         except Exception as e:
             logger.warning(f"Docker client error during cancel cleanup: {e}")
 
@@ -4163,7 +4132,9 @@ class DeploymentViewSet(viewsets.ModelViewSet):
                     'message': 'No remote deployment ID found. The deployment may not have successfully synced to the remote node.',
                 })
             try:
-                from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+                from apps.deployments.services.remote_orchestrator import (
+                    RemoteOrchestrator,
+                )
                 orchestrator = RemoteOrchestrator(active_server)
                 resp = orchestrator._request(
                     method='GET',
@@ -4176,7 +4147,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
                     # Re-map ID back to local deployment ID for frontend consistency
                     data['id'] = str(deployment.id)
                     return Response(data)
-                
+
                 return Response({
                     'id': str(deployment.id),
                     'runtime_logs': '',
@@ -4187,7 +4158,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
                 return Response({
                     'id': str(deployment.id),
                     'runtime_logs': '',
-                    'message': f"Remote proxy error: {str(e)}",
+                    'message': f"Remote proxy error: {e!s}",
                 })
 
         try:
@@ -4235,7 +4206,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             return Response({
                 'id': str(deployment.id),
                 'runtime_logs': '',
-                'message': f'Could not fetch runtime logs: {str(e)}',
+                'message': f'Could not fetch runtime logs: {e!s}',
             })
 
     @action(detail=True, methods=['post'])
@@ -4354,59 +4325,13 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Service not found'},
                             status=status.HTTP_404_NOT_FOUND)
 
-class PlatformResourcesView(GenericAPIView):
-    permission_classes = [permissions.IsAuthenticated]
 
-    def get(self, request):
-        import socket
-        import shutil
-        import psutil
-        from apps.deployments.models import ManagedServer, Service
-        vm = psutil.virtual_memory()
-        disk = shutil.disk_usage("/")
-        load = os.getloadavg() if hasattr(os, "getloadavg") else (0.0, 0.0, 0.0)
-        services = Service.objects.all()
-        if not request.user.is_superuser:
-            services = services.filter(owner=request.user)
-        running = services.filter(deployments__status=Deployment.Status.ACTIVE).distinct().count()
-        failed = services.filter(deployments__status=Deployment.Status.FAILED).distinct().count()
-        servers = ManagedServer.objects.all()
-        if not request.user.is_superuser:
-            servers = servers.filter(owner=request.user)
-        nodes = [{
-            "id": str(s.id),
-            "name": s.name,
-            "provider": "managed",
-            "region": "unknown",
-            "status": "healthy" if vm.percent < 80 else "warning",
-            "public_ip": s.host,
-            "cpu": {"cores": psutil.cpu_count() or 0, "load_average": [round(load[0], 2), round(load[1], 2), round(load[2], 2)]},
-            "memory": {"total_mb": round(vm.total / (1024 ** 2), 2), "used_mb": round(vm.used / (1024 ** 2), 2), "free_mb": round(vm.available / (1024 ** 2), 2), "usage_percent": round(vm.percent, 2)},
-            "disk": {"total_gb": round(disk.total / (1024 ** 3), 2), "used_gb": round(disk.used / (1024 ** 3), 2), "free_gb": round(disk.free / (1024 ** 3), 2), "usage_percent": round((disk.used / max(1, disk.total)) * 100, 2)},
-            "containers": {"running": running, "failed": failed, "building": services.filter(deployments__status__in=[Deployment.Status.BUILDING, Deployment.Status.DEPLOYING]).distinct().count()},
-            "uptime_seconds": int(timezone.now().timestamp() - psutil.boot_time()),
-            "warnings": ["High memory pressure"] if vm.percent >= 85 else [],
-        } for s in servers] or [{
-            "id": "local-node",
-            "name": socket.gethostname(),
-            "provider": "local",
-            "region": "unknown",
-            "status": "healthy" if vm.percent < 80 else "warning",
-            "cpu": {"cores": psutil.cpu_count() or 0, "load_average": [round(load[0], 2), round(load[1], 2), round(load[2], 2)]},
-            "memory": {"total_mb": round(vm.total / (1024 ** 2), 2), "used_mb": round(vm.used / (1024 ** 2), 2), "free_mb": round(vm.available / (1024 ** 2), 2), "usage_percent": round(vm.percent, 2)},
-            "disk": {"total_gb": round(disk.total / (1024 ** 3), 2), "used_gb": round(disk.used / (1024 ** 3), 2), "free_gb": round(disk.free / (1024 ** 3), 2), "usage_percent": round((disk.used / max(1, disk.total)) * 100, 2)},
-            "containers": {"running": running, "failed": failed, "building": services.filter(deployments__status__in=[Deployment.Status.BUILDING, Deployment.Status.DEPLOYING]).distinct().count()},
-            "uptime_seconds": int(timezone.now().timestamp() - psutil.boot_time()),
-            "warnings": [],
-        }]
-        return Response({"nodes": nodes, "summary": {"total_nodes": len(nodes), "healthy_nodes": sum(1 for n in nodes if n["status"] == "healthy"), "critical_nodes": 0, "total_ram_mb": sum(n["memory"]["total_mb"] for n in nodes), "used_ram_mb": sum(n["memory"]["used_mb"] for n in nodes), "total_disk_gb": sum(n["disk"]["total_gb"] for n in nodes), "used_disk_gb": sum(n["disk"]["used_gb"] for n in nodes)}})
-
-
-
-from .views_audit import AuditLogViewSet  # noqa: F401  (re-export for backwards compat — see views_audit.py)
-
-
-from .views_auth import SessionTokenView  # noqa: F401  (re-export for backwards compat — see views_auth.py)
+from .views_audit import (  # noqa: E402
+    AuditLogViewSet,  # noqa: F401  (re-export for backwards compat — see views_audit.py)
+)
+from .views_auth import (  # noqa: E402
+    SessionTokenView,  # noqa: F401  (re-export for backwards compat — see views_auth.py)
+)
 
 
 class SystemConfigView(GenericAPIView):
@@ -4780,7 +4705,7 @@ class DomainConfigView(GenericAPIView):
 
             # Generate and apply Caddyfile
             try:
-                from services.caddy_manager import generate_caddyfile, apply_caddyfile
+                from services.caddy_manager import apply_caddyfile, generate_caddyfile
                 caddyfile_content = generate_caddyfile(config)
                 cf_token = (config.cloudflare_api_token or "").strip()
                 result = apply_caddyfile(
@@ -4875,8 +4800,7 @@ def _redact_caddyfile_preview(text: str) -> str:
         if in_secret_block:
             redacted_lines.append('***REDACTED***')
             in_secret_block += stripped.count("{") - stripped.count("}")
-            if in_secret_block < 0:
-                in_secret_block = 0
+            in_secret_block = max(in_secret_block, 0)
             continue
         if env_var_re.search(stripped):
             redacted_lines.append('***REDACTED***')
@@ -4995,7 +4919,9 @@ class RouteRecheckView(GenericAPIView):
         )
 
 
-from .views_route_status import RouteStatusView  # noqa: F401  (re-export for backwards compat — see views_route_status.py)
+from .views_route_status import (  # noqa: E402
+    RouteStatusView,  # noqa: F401  (re-export for backwards compat — see views_route_status.py)
+)
 
 
 class ServiceBackupViewSet(viewsets.ModelViewSet):
@@ -5079,7 +5005,7 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
             return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except BackupKeyCollisionError as exc:
             return Response({'error': str(exc)}, status=status.HTTP_409_CONFLICT)
-        try:
+        with contextlib.suppress(Exception):
             AuditLog(
                 actor=request.user.get_username(),
                 action='BACKUP_KEY_IMPORTED' if result.get('source') == 'IMPORTED' else 'BACKUP_KEY_REIMPORTED',
@@ -5090,8 +5016,6 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
                     'created': result.get('created', False),
                 },
             ).save()
-        except Exception:
-            pass
         return Response(result, status=status.HTTP_201_CREATED if result.get('created') else status.HTTP_200_OK)
 
     @action(detail=True, methods=['get'], url_path='header')
@@ -5282,7 +5206,7 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
             return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except BackupKeyCollisionError as exc:
             return Response({'error': str(exc)}, status=status.HTTP_409_CONFLICT)
-        try:
+        with contextlib.suppress(Exception):
             AuditLog(
                 actor=request.user.get_username(),
                 action='BACKUP_KEY_IMPORTED' if result.get('source') == 'IMPORTED' else 'BACKUP_KEY_REIMPORTED',
@@ -5293,8 +5217,6 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
                     'created': result.get('created', False),
                 },
             ).save()
-        except Exception:
-            pass
         return Response(result, status=status.HTTP_201_CREATED if result.get('created') else status.HTTP_200_OK)
 
     @action(detail=True, methods=['get'], url_path='header')
@@ -5412,6 +5334,7 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
             return Response({'error': 'File must be a .tar.gz or .tgz archive.'}, status=status.HTTP_400_BAD_REQUEST)
 
         import uuid as _uuid
+
         from apps.deployments.services.backup_service import BackupService
 
         # Save uploaded file to shared backup volume
@@ -5429,10 +5352,8 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
         try:
             dest_path = svc._maybe_encrypt(dest_path)
         except Exception as exc:
-            try:
+            with contextlib.suppress(OSError):
                 os.remove(dest_path)
-            except OSError:
-                pass
             return Response(
                 {'error': f'Failed to encrypt uploaded backup: {exc}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -5523,16 +5444,17 @@ class BackupScheduleViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         self._validate_schedule_access(serializer)
         serializer.save()
-from .views_transfer import ServerTransferViewSet
 
 
 class PlatformResourcesView(GenericAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        import socket
         import shutil
+        import socket
+
         import psutil
+
         from apps.deployments.models import ManagedServer, Service
         vm = psutil.virtual_memory()
         disk = shutil.disk_usage("/")

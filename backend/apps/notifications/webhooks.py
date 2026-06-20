@@ -67,7 +67,7 @@ def _validate_notification_url(url: str) -> str:
         infos = socket.getaddrinfo(host, None)
     except socket.gaierror as exc:
         raise ValueError(f"Cannot resolve notification URL host: {exc}")
-    for family, _type, _proto, _canon, sockaddr in infos:
+    for _family, _type, _proto, _canon, sockaddr in infos:
         ip_str = sockaddr[0]
         try:
             ip = ipaddress.ip_address(ip_str)
@@ -105,7 +105,7 @@ def _log_notification(provider: str, user, url: str) -> None:
             username,
             (parsed.hostname or '').lower(),
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("Failed to write notification audit log: %s", exc)
 
 
@@ -115,7 +115,7 @@ def _post_notification(url: str, payload: dict, user=None, provider: str = '') -
     validation or transport error so callers can fail open.
     """
     try:
-        host = _validate_notification_url(url)
+        _validate_notification_url(url)
     except ValueError as exc:
         logger.warning(
             "Rejected notification URL host=%s reason=%s",
@@ -153,12 +153,12 @@ def _post_notification(url: str, payload: dict, user=None, provider: str = '') -
     except requests.RequestException as exc:
         logger.error("Failed to send %s notification: %s", provider or 'notification', exc)
         return False
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.error("Unexpected error sending %s notification: %s", provider or 'notification', exc)
         return False
 
 
-def send_slack_notification(message: str, webhook_url: str = None, user=None):
+def send_slack_notification(message: str, webhook_url: str | None = None, user=None):
     """Send a notification to a Slack webhook."""
     url = webhook_url or getattr(settings, 'SLACK_WEBHOOK_URL', None)
     if not url:
@@ -178,7 +178,7 @@ def send_slack_notification(message: str, webhook_url: str = None, user=None):
     )
 
 
-def send_discord_notification(message: str, webhook_url: str = None, user=None):
+def send_discord_notification(message: str, webhook_url: str | None = None, user=None):
     """Send a notification to a Discord webhook."""
     url = webhook_url or getattr(settings, 'DISCORD_WEBHOOK_URL', None)
     if not url:

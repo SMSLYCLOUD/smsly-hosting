@@ -10,13 +10,15 @@ Provides endpoints for the TunnelDashboard frontend component:
   - POST /api/v1/tunnels/{id}/share/   → share tunnel with user
   - POST /api/v1/tunnels/register/     → register a new tunnel (CLI)
 """
+import logging
 import uuid
+
 from django.conf import settings
-from rest_framework import viewsets, serializers, status, permissions
+from rest_framework import permissions, serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
+
 from .models_tunnels import Tunnel, TunnelRequest
-import logging
 
 logger = logging.getLogger(__name__)
 

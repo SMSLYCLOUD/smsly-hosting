@@ -6,7 +6,7 @@ from django.test import TestCase
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from apps.deployments.models import Service, Region
+from apps.deployments.models import Region, Service
 from apps.deployments.services.graph_builder import GraphBuilder
 
 
@@ -22,7 +22,7 @@ class ExistingGraphBuilderTests(TestCase):
         self.region = Region.objects.create(name='Test Region', slug='test-region')
 
     def test_graph_builder_returns_nodes_and_edges(self):
-        service = Service.objects.create(
+        Service.objects.create(
             name='test-service',
             owner=self.user,
             primary_region=self.region,
@@ -113,7 +113,9 @@ class TopologyViewImportsTests(TestCase):
         self.assertTrue(hasattr(TopologyViewSet, 'list'))
 
     def test_ecosystem_graph_builder_importable(self):
-        from apps.deployments.services.ecosystem_graph_builder import EcosystemGraphBuilder
+        from apps.deployments.services.ecosystem_graph_builder import (
+            EcosystemGraphBuilder,
+        )
         builder = EcosystemGraphBuilder()
         self.assertIsNotNone(builder)
 
@@ -141,7 +143,7 @@ class TopologyTypesTests(TestCase):
         )
         if not os.path.exists(types_path):
             self.skipTest("topology.ts not found")
-        with open(types_path, 'r') as f:
+        with open(types_path) as f:
             content = f.read()
         self.assertIn('EcosystemNode', content)
         self.assertIn('EcosystemEdge', content)

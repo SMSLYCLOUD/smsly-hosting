@@ -14,7 +14,6 @@ from rest_framework.test import APITestCase
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import Service
 
-
 User = get_user_model()
 
 

@@ -7,8 +7,8 @@ the same ``IntelligenceViewSet.cached_scan_result`` action handles
 both URLs. This alias keeps the existing frontend working
 without a rebuild.
 """
-from django.urls import path
 from apps.cloud.views import IntelligenceViewSet
+from django.urls import path
 
 urlpatterns = [
     path('', IntelligenceViewSet.as_view({'get': 'cached_scan_result'}),

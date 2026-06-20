@@ -26,7 +26,6 @@ from apps.deployments.views_attestation import (
     attestation_verify,
 )
 
-
 User = get_user_model()
 
 

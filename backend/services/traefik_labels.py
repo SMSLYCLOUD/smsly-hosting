@@ -6,17 +6,16 @@ Traefik Label Helpers for SMSLY Hosting.
 Generates Docker container labels for Traefik routing configuration.
 Enables automatic service discovery, SSL termination, and custom domains.
 """
-from typing import Dict, Optional
 
 
 def generate_traefik_labels(
     service_name: str,
-    domain: Optional[str] = None,
+    domain: str | None = None,
     internal_port: int = 8000,
     enable_tls: bool = True,
     rate_limit_avg: int = 100,
     rate_limit_burst: int = 200,
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """
     Generate Traefik labels for a deployed service container.
 
@@ -90,7 +89,7 @@ def generate_preview_labels(
     parent_service_name: str,
     pr_number: int,
     internal_port: int = 8000,
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """
     Generate Traefik labels for a PR preview environment.
 
@@ -110,7 +109,7 @@ def generate_preview_labels(
     )
 
 
-def labels_to_docker_args(labels: Dict[str, str]) -> str:
+def labels_to_docker_args(labels: dict[str, str]) -> str:
     """
     Convert labels dict to docker run --label arguments.
 
@@ -120,7 +119,7 @@ def labels_to_docker_args(labels: Dict[str, str]) -> str:
     return " ".join([f'--label "{k}={v}"' for k, v in labels.items()])
 
 
-def labels_to_compose_dict(labels: Dict[str, str]) -> list:
+def labels_to_compose_dict(labels: dict[str, str]) -> list:
     """
     Convert labels dict to docker-compose labels format.
 
