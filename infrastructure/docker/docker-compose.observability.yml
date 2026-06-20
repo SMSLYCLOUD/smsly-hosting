@@ -43,10 +43,16 @@ services:
     networks:
       - smsly-net
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:9080/ready || exit 1"]
+      # Promtail's HTTP server only exposes /metrics and /ready. /metrics is
+      # the safer choice — it always returns 200 once the server is up,
+      # regardless of whether any Loki targets have been scraped yet.
+      # start_period gives the docker_sd_configs first scrape (5s refresh
+      # interval) time to populate before the first probe runs.
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9080/metrics || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      retries: 5
+      start_period: 60s
     labels:
       - managed_by=smsly-hosting
     deploy:
@@ -188,6 +194,14 @@ services:
     command: python3 -u /app/exporter.py
     environment:
       - NODE_NAME=local
+      # 60s refresh gives the socket-proxy enough headroom to answer
+      # /containers/json and per-container stats calls without the
+      # cycle bumping into the refresh interval and tripping the
+      # healthcheck into "unhealthy".
+      - REFRESH_INTERVAL=60
+      - STATS_TIMEOUT=50
+      - MAX_WORKERS=8
+      - DOCKER_SOCK=/var/run/docker.sock
     volumes:
       - ../monitoring/docker-labels-exporter.py:/app/exporter.py:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -196,10 +210,13 @@ services:
     networks:
       - smsly-net
     healthcheck:
+      # The exporter exposes /health only after the first background cycle
+      # has populated the cache. start_period gives it room to do that.
       test: ["CMD-SHELL", "wget -q --spider http://localhost:9234/health || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      retries: 5
+      start_period: 90s
     deploy:
       resources:
         limits:
