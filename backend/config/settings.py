@@ -661,7 +661,7 @@ ACCOUNT_LOGOUT_REDIRECT_URL = '/login'
 # (GitHub→our callback). 'Strict' triggers allauth to do a self-redirect, making
 # the final callback same-site so the browser sends the session cookie.
 SESSION_COOKIE_SAMESITE = 'Strict'
-SESSION_COOKIE_SECURE = not DEBUG and not IS_TESTING
+SESSION_COOKIE_SECURE = not DEBUG and not IS_TESTING and config('USE_SSL', default='False', cast=bool)
 SESSION_COOKIE_HTTPONLY = True
 CSRF_COOKIE_SECURE = not DEBUG and not IS_TESTING
 

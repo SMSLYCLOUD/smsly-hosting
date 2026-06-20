@@ -65,7 +65,7 @@ def set_auth_cookie(response: HttpResponse, token: str) -> None:
             The Set-Cookie header is added in-place.
         token: The opaque auth token to embed in the cookie.
     """
-    is_secure = not getattr(settings, "DEBUG", False)
+    is_secure = not getattr(settings, "DEBUG", False) and getattr(settings, "USE_SSL", False)
     name = cookie_name()
     # The __Host- prefix requires Secure=True, path=/, and no Domain. Plain
     # cookies do not need Secure, but we still set it when serving over HTTPS
