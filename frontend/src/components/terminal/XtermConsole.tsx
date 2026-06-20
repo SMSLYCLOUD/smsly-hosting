@@ -61,12 +61,59 @@ export default function XtermConsole({ wsUrl, wsToken }: XtermConsoleProps) {
     const connectWebSocket = () => {
       if (disposed) return;
       const protocols = wsToken ? ['token', wsToken] : undefined;
+
+      // Validate the URL BEFORE handing it to the browser so we can show a
+      // useful diagnostic. `new WebSocket()` throws SyntaxError for any
+      // malformed URL but the error object carries no detail, so we
+      // pre-flight with the URL constructor.
+      if (!wsUrl) {
+        terminal.writeln(
+          '\x1b[31mConsole unavailable: missing WebSocket URL.\x1b[0m',
+        );
+        return;
+      }
+      let parsed: URL;
       try {
-        socket = new WebSocket(wsUrl, protocols);
-      } catch {
+        parsed = new URL(wsUrl);
+      } catch (parseErr) {
         terminal.writeln(
           '\x1b[31mConsole unavailable: invalid WebSocket URL.\x1b[0m',
         );
+        terminal.writeln(
+          `\x1b[31m[reason] URL parse failed: ${(parseErr as Error).message}\x1b[0m`,
+        );
+        console.error('[terminal] invalid wsUrl', { wsUrl, parseErr });
+        return;
+      }
+      if (parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:') {
+        terminal.writeln(
+          '\x1b[31mConsole unavailable: invalid WebSocket URL.\x1b[0m',
+        );
+        terminal.writeln(
+          `\x1b[31m[reason] expected ws:// or wss:// scheme, got ${parsed.protocol}\x1b[0m`,
+        );
+        return;
+      }
+      if (!parsed.host) {
+        terminal.writeln(
+          '\x1b[31mConsole unavailable: invalid WebSocket URL.\x1b[0m',
+        );
+        terminal.writeln(
+          '\x1b[31m[reason] URL has no host (window.location.host empty?)\x1b[0m',
+        );
+        return;
+      }
+
+      try {
+        socket = new WebSocket(wsUrl, protocols);
+      } catch (err) {
+        terminal.writeln(
+          '\x1b[31mConsole unavailable: invalid WebSocket URL.\x1b[0m',
+        );
+        terminal.writeln(
+          `\x1b[31m[reason] ${(err as Error).message}\x1b[0m`,
+        );
+        console.error('[terminal] WebSocket construct threw', { wsUrl, err });
         return;
       }
 
