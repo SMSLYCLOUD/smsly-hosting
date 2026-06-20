@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from apps.deployments.models import PlatformConfig, Project, ServerTransfer, Service
 from apps.deployments.services.transfer_service import ServerTransferService

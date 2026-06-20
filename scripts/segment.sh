@@ -184,4 +184,5 @@ wait_for_container_ready() {
     local timeout_seconds="${2:-180}"
     local elapsed=0
     local state=""
+}
 
