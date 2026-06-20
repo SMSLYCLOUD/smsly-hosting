@@ -29,7 +29,7 @@ class LokiQueryResolutionTests(TestCase):
             deploy_mode='COMPOSE',
         )
 
-        self.client.login(username='testuser', password='password123')
+        self.client.force_login(self.user)
 
     @patch('apps.core.views_observability.requests.get')
     def test_loki_query_resolves_uuid_with_operators(self, mock_get):
@@ -42,6 +42,10 @@ class LokiQueryResolutionTests(TestCase):
                 'result': []
             }
         }
+
+        from rest_framework.test import APIClient
+        client = APIClient()
+        client.force_authenticate(user=self.user)
 
         url = reverse('observability-loki-query')
 
@@ -60,7 +64,7 @@ class LokiQueryResolutionTests(TestCase):
 
         for svc, op, expected_substring in test_cases:
             query_param = f'{{compose_service{op}"{svc.id}"}}'
-            response = self.client.get(url, {'query': query_param})
+            response = client.get(url, {'query': query_param})
             self.assertEqual(response.status_code, status.HTTP_200_OK)
 
             # Verify the resolved query sent to Loki

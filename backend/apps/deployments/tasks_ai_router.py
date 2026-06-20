@@ -22,8 +22,6 @@ from apps.deployments.utils import (  # noqa: E402
     append_log,
 )
 
-from .tasks_deploy import delete_service_task, smart_deploy_task  # noqa: E402
-
 
 def _escalate_to_ai(deployment, service, container_logs):
     """
@@ -209,6 +207,7 @@ def _ensure_shared_ollama_cpp(service, provider) -> str | None:
         )
 
         # Trigger deployment
+        from .tasks_deploy import smart_deploy_task  # noqa: E402
         deployment = Deployment.objects.create(
             service=shared,
             status='QUEUED',
@@ -312,6 +311,7 @@ def _cleanup_shared_ollama_if_unused(project):
             # Mark for deletion
             shared.status = 'DELETION_PENDING'
             shared.save(update_fields=['status'])
+            from .tasks_deploy import delete_service_task  # noqa: E402
             delete_service_task.delay(str(shared.id), force=True)
     except Exception as exc:
         logger.warning("Shared Ollama cleanup check failed: %s", exc)

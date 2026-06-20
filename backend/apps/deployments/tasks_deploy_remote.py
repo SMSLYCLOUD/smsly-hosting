@@ -20,12 +20,12 @@ from apps.deployments.utils import (  # noqa: E402
 )
 
 from .tasks_caddy import _regenerate_caddyfile  # noqa: E402
-from .tasks_deploy import _handle_failure, enqueue_smart_deploy_task  # noqa: E402
 
 
 def _handle_remote_deployment_legacy(deployment, server):
     """Delegate deployment to a remote server and poll for status."""
     from apps.deployments.services.server_guard import ServerGuard
+    from .tasks_deploy import _handle_failure  # noqa: E402
 
     service = deployment.service
     guard = ServerGuard.check_user_workload_allowed(server)
@@ -632,6 +632,7 @@ def self_heal_remote_deployment(self, deployment_id: str, server_id: str):
                 try:
                     provider = deployment.service.provider
                     if provider:
+                        from .tasks_deploy import enqueue_smart_deploy_task  # noqa: E402
                         enqueue_smart_deploy_task(
                             deployment_id=str(deployment.id),
                             provider_id=str(provider.id),
