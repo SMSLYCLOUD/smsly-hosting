@@ -36,7 +36,7 @@ def provision_addon_task(self, addon_id: str):
             try:
                 from services.caddy_manager import apply_caddyfile, generate_caddyfile
 
-                from .models import PlatformConfig
+                from .models import PlatformConfig  # type: ignore[attr-defined]  # models re-exports from submodules
                 cfg = PlatformConfig.load()
                 caddy_content = generate_caddyfile(cfg)
                 apply_caddyfile(caddy_content)

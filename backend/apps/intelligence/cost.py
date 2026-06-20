@@ -66,5 +66,5 @@ class CostAdvisor:
         )
         if not estimates:
             return "No estimates available."
-        cheapest = min(estimates, key=estimates.get)
+        cheapest = min(estimates, key=lambda k: estimates[k])  # type: ignore[arg-type]
         return f"Cheapest option: {cheapest} at ${estimates[cheapest]}/mo"

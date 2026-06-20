@@ -43,7 +43,8 @@ class AWSAdapter(BaseCloudAdapter):
 
     # pylint: disable=too-many-positional-arguments,arguments-differ
     def deploy_container(self, service_name: str, image: str,
-                         env_vars: dict[str, str], cpu: int, memory: int, replicas: int = 1, **kwargs) -> str:
+                         env_vars: dict[str, str], cpu: int, memory: int, replicas: int = 1,
+                         vpa_enabled: bool = True, **kwargs) -> str:
         """
         Deploys a container to ECS Fargate.
         Steps:
@@ -149,7 +150,7 @@ class AWSAdapter(BaseCloudAdapter):
         return task_def_arn
 
     def deploy_function(self, function_name: str,
-                        code_zip: bytes, handler: str, runtime: str) -> str:
+                        code_zip: str, handler: str, runtime: str) -> str:
         """
         Deploys a Lambda function.
         """

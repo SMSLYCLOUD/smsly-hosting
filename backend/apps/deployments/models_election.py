@@ -21,57 +21,57 @@ class ClusterState(models.Model):
         ELECTION = "ELECTION", "Election in progress"
         SPLIT_BRAIN = "SPLIT_BRAIN", "Split brain detected"
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    mesh = models.OneToOneField(
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)  # type: ignore[var-annotated]
+    mesh = models.OneToOneField(  # type: ignore[var-annotated]
         "deployments.MeshNetwork",
         on_delete=models.CASCADE,
         related_name="cluster_state",
         null=True, blank=True,
         help_text="Associated mesh network (null = standalone cluster)",
     )
-    leader = models.ForeignKey(
+    leader = models.ForeignKey(  # type: ignore[var-annotated]
         "deployments.ManagedServer",
         on_delete=models.SET_NULL,
         null=True, blank=True,
         related_name="led_clusters",
         help_text="Current cluster leader",
     )
-    leader_wg_address = models.GenericIPAddressField(
+    leader_wg_address = models.GenericIPAddressField(  # type: ignore[var-annotated]
         protocol="IPv4", null=True, blank=True,
         help_text="Leader's WireGuard IP (for fast lookup)",
     )
 
     # Election state
-    term = models.IntegerField(
+    term = models.IntegerField(  # type: ignore[var-annotated]
         default=0,
         help_text="Current election term (monotonically increasing)",
     )
-    state = models.CharField(
+    state = models.CharField(  # type: ignore[var-annotated]
         max_length=20,
         choices=ElectionState.choices,
         default=ElectionState.STABLE,
     )
-    last_heartbeat = models.DateTimeField(
+    last_heartbeat = models.DateTimeField(  # type: ignore[var-annotated]
         null=True, blank=True,
         help_text="Last heartbeat received from the leader",
     )
 
     # Configuration
-    heartbeat_interval_ms = models.IntegerField(
+    heartbeat_interval_ms = models.IntegerField(  # type: ignore[var-annotated]
         default=5000,
         help_text="How often the leader sends heartbeats (ms)",
     )
-    election_timeout_ms = models.IntegerField(
+    election_timeout_ms = models.IntegerField(  # type: ignore[var-annotated]
         default=15000,
         help_text="How long followers wait before starting election (ms)",
     )
-    min_quorum = models.IntegerField(
+    min_quorum = models.IntegerField(  # type: ignore[var-annotated]
         default=2,
         help_text="Minimum servers needed to form quorum",
     )
 
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
+    updated_at = models.DateTimeField(auto_now=True)  # type: ignore[var-annotated]
 
     class Meta:
         verbose_name = "Cluster State"
@@ -87,35 +87,35 @@ class HeartbeatLog(models.Model):
     Log of heartbeat checks between servers.
     Used for monitoring and debugging election issues.
     """
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    cluster = models.ForeignKey(
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)  # type: ignore[var-annotated]
+    cluster = models.ForeignKey(  # type: ignore[var-annotated]
         ClusterState, on_delete=models.CASCADE,
         related_name="heartbeats",
     )
-    source_server = models.ForeignKey(
+    source_server = models.ForeignKey(  # type: ignore[var-annotated]
         "deployments.ManagedServer",
         on_delete=models.CASCADE,
         related_name="sent_heartbeats",
         null=True, blank=True,
         help_text="Server that sent the heartbeat (null = local)",
     )
-    target_server = models.ForeignKey(
+    target_server = models.ForeignKey(  # type: ignore[var-annotated]
         "deployments.ManagedServer",
         on_delete=models.CASCADE,
         related_name="received_heartbeats",
         null=True, blank=True,
         help_text="Server that received the heartbeat (null = local)",
     )
-    term = models.IntegerField(
+    term = models.IntegerField(  # type: ignore[var-annotated]
         help_text="Election term when heartbeat was sent",
     )
-    latency_ms = models.FloatField(
+    latency_ms = models.FloatField(  # type: ignore[var-annotated]
         null=True, blank=True,
         help_text="Round-trip latency in milliseconds",
     )
-    success = models.BooleanField(default=True)
-    error_message = models.TextField(blank=True, default="")
-    timestamp = models.DateTimeField(auto_now_add=True)
+    success = models.BooleanField(default=True)  # type: ignore[var-annotated]
+    error_message = models.TextField(blank=True, default="")  # type: ignore[var-annotated]
+    timestamp = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
 
     class Meta:
         ordering = ["-timestamp"]
@@ -136,31 +136,31 @@ class ElectionVote(models.Model):
     """
     Track votes during leader election.
     """
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    cluster = models.ForeignKey(
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)  # type: ignore[var-annotated]
+    cluster = models.ForeignKey(  # type: ignore[var-annotated]
         ClusterState, on_delete=models.CASCADE,
         related_name="votes",
     )
-    term = models.IntegerField()
-    voter_server = models.ForeignKey(
+    term = models.IntegerField()  # type: ignore[var-annotated]
+    voter_server = models.ForeignKey(  # type: ignore[var-annotated]
         "deployments.ManagedServer",
         on_delete=models.CASCADE,
         related_name="cast_votes",
         null=True, blank=True,
         help_text="Server that cast the vote (null = local)",
     )
-    candidate_server = models.ForeignKey(
+    candidate_server = models.ForeignKey(  # type: ignore[var-annotated]
         "deployments.ManagedServer",
         on_delete=models.CASCADE,
         related_name="received_votes",
         null=True, blank=True,
         help_text="Server that was voted for (null = local)",
     )
-    candidate_is_local = models.BooleanField(
+    candidate_is_local = models.BooleanField(  # type: ignore[var-annotated]
         default=False,
         help_text="True if voted for the local server",
     )
-    voted_at = models.DateTimeField(auto_now_add=True)
+    voted_at = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
 
     class Meta:
         ordering = ["-voted_at"]

@@ -6,8 +6,8 @@ class AutoscalerConfig(models.Model):
     Persistent store for autoscaler configuration.
     Only a single row (pk=1) is expected.
     """
-    data = models.JSONField(default=dict)
-    updated_at = models.DateTimeField(auto_now=True)
+    data = models.JSONField(default=dict)  # type: ignore[var-annotated]
+    updated_at = models.DateTimeField(auto_now=True)  # type: ignore[var-annotated]
 
     class Meta:
         verbose_name = "Autoscaler Config"

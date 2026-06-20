@@ -267,7 +267,7 @@ _BACKUP_DOWNLOAD_BLOCK_SIZE = 1024 * 1024
 _BACKUP_DOWNLOAD_CONTENT_TYPE = "application/gzip"
 
 
-def _backup_download_headers(response, file_size: int, filename: str):
+def _backup_download_headers(response, file_size: int | None, filename: str):
     response['Content-Type'] = _BACKUP_DOWNLOAD_CONTENT_TYPE
     response['Accept-Ranges'] = 'bytes'
     response['X-Accel-Buffering'] = 'no'
@@ -350,6 +350,8 @@ def _file_iterator(file_path: str, start: int = 0, end: int | None = None, clean
 def _open_backup_download_response(request, file_path: str, filename: str, cleanup_path: str | None = None):
     file_size = os.path.getsize(file_path)
     range_header = request.headers.get('Range') or request.META.get('HTTP_RANGE')
+    from django.http import HttpResponseBase
+    response: HttpResponseBase
     if range_header:
         try:
             start, end = _parse_single_range(range_header, file_size)

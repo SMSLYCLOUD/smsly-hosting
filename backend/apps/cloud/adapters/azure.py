@@ -22,12 +22,17 @@ try:
     HAS_AZURE_SDK = True
 except ImportError:
     HAS_AZURE_SDK = False
-    ResourceManagementClient = None
-    ContainerAppsAPIClient = None
-    ContainerApp = Template = Container = EnvironmentVar = None
-    Configuration = Ingress = TrafficWeight = None
-    ClientSecretCredential = None
-    BlobServiceClient = None
+    ResourceManagementClient: Any = None
+    ContainerAppsAPIClient: Any = None
+    ContainerApp: Any = None
+    Template: Any = None
+    Container: Any = None
+    EnvironmentVar: Any = None
+    Configuration: Any = None
+    Ingress: Any = None
+    TrafficWeight: Any = None
+    ClientSecretCredential: Any = None
+    BlobServiceClient: Any = None
 
 class AzureAdapter(BaseCloudAdapter):
     def __init__(self, tenant_id: str, client_id: str,
@@ -63,7 +68,8 @@ class AzureAdapter(BaseCloudAdapter):
         return True
 
     def deploy_container(self, service_name: str, image: str,
-                         env_vars: dict[str, str], cpu: int, memory: int, replicas: int = 1, **kwargs) -> str:
+                         env_vars: dict[str, str], cpu: int, memory: int, replicas: int = 1,
+                         vpa_enabled: bool = True, **kwargs) -> str:
         """
         Deploys a container to Azure Container Apps.
         """

@@ -14,25 +14,25 @@ class AuditLog(models.Model):
     Ensures that deployment history cannot be tampered with.
     Independent implementation (no external blockchain dependency).
     """
-    id = models.BigAutoField(primary_key=True)
-    timestamp = models.DateTimeField(default=timezone.now, editable=False)
+    id = models.BigAutoField(primary_key=True)  # type: ignore[var-annotated]
+    timestamp = models.DateTimeField(default=timezone.now, editable=False)  # type: ignore[var-annotated]
 
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
-    project = models.ForeignKey('deployments.Project', on_delete=models.SET_NULL, null=True, blank=True)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)  # type: ignore[var-annotated]
+    project = models.ForeignKey('deployments.Project', on_delete=models.SET_NULL, null=True, blank=True)  # type: ignore[var-annotated]
 
-    actor = models.CharField(
+    actor = models.CharField(  # type: ignore[var-annotated]
         max_length=255,
         default='system')  # User or System
     # e.g. "DEPLOY_TRIGGER", "SCALE_UP"
-    action = models.CharField(max_length=255, default='unknown')
-    target = models.CharField(max_length=255,
+    action = models.CharField(max_length=255, default='unknown')  # type: ignore[var-annotated]
+    target = models.CharField(max_length=255,  # type: ignore[var-annotated]
                               default='none')  # e.g. "Service: my-app"
-    metadata = models.JSONField(default=dict)
+    metadata = models.JSONField(default=dict)  # type: ignore[var-annotated]
 
     # Cryptographic Links
-    previous_hash = models.CharField(
+    previous_hash = models.CharField(  # type: ignore[var-annotated]
         max_length=64, editable=False, default='0' * 64)
-    hash = models.CharField(
+    hash = models.CharField(  # type: ignore[var-annotated]
         max_length=64,
         editable=False,
         unique=True,
@@ -107,20 +107,20 @@ class WebhookDelivery(models.Model):
         ('ignored', 'Ignored'),
     ]
 
-    delivery_id = models.CharField(
+    delivery_id = models.CharField(  # type: ignore[var-annotated]
         max_length=128, primary_key=True,
         help_text="Provider-supplied unique delivery identifier (e.g. X-GitHub-Delivery)."
     )
-    provider = models.CharField(
+    provider = models.CharField(  # type: ignore[var-annotated]
         max_length=32, default='github',
         help_text="Webhook provider that produced this delivery."
     )
-    event_type = models.CharField(
+    event_type = models.CharField(  # type: ignore[var-annotated]
         max_length=64, blank=True, default='',
         help_text="Event type from the provider (push, pull_request, etc.)."
     )
-    received_at = models.DateTimeField(default=timezone.now)
-    status = models.CharField(
+    received_at = models.DateTimeField(default=timezone.now)  # type: ignore[var-annotated]
+    status = models.CharField(  # type: ignore[var-annotated]
         max_length=16, choices=STATUS_CHOICES, default='processed')
 
     class Meta:

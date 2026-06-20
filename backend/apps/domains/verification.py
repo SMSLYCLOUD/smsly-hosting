@@ -84,7 +84,7 @@ def resolve_host_ips(hostname: str, timeout: float = DEFAULT_RESOLVER_TIMEOUT) -
     try:
         for row in socket.getaddrinfo(host, 443):
             if row and len(row) >= 5 and row[4]:
-                address = _clean_ip(row[4][0])
+                address = _clean_ip(str(row[4][0]))
                 if address:
                     ips.add(address)
     except socket.gaierror:

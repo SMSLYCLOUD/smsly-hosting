@@ -14,27 +14,27 @@ class EcosystemPlan(models.Model):
         COMPLETED = 'completed', 'Completed'
         FAILED = 'failed', 'Failed'
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='ecosystem_plans')
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)  # type: ignore[var-annotated]
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='ecosystem_plans')  # type: ignore[var-annotated]
 
     # Task IDs for resume
-    scan_task_id = models.CharField(max_length=255, blank=True, null=True)
-    deploy_task_id = models.CharField(max_length=255, blank=True, null=True)
+    scan_task_id = models.CharField(max_length=255, blank=True, null=True)  # type: ignore[var-annotated]
+    deploy_task_id = models.CharField(max_length=255, blank=True, null=True)  # type: ignore[var-annotated]
 
     # Plan data
-    status = models.CharField(max_length=20, choices=Status.choices, default=Status.SCANNING)
-    selected_repos = models.JSONField(default=list, blank=True)
-    ai_provider = models.CharField(max_length=50, blank=True, null=True)
-    plan = models.JSONField(null=True, blank=True)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.SCANNING)  # type: ignore[var-annotated]
+    selected_repos = models.JSONField(default=list, blank=True)  # type: ignore[var-annotated]
+    ai_provider = models.CharField(max_length=50, blank=True, null=True)  # type: ignore[var-annotated]
+    plan = models.JSONField(null=True, blank=True)  # type: ignore[var-annotated]
 
     # Results
-    services_created = models.JSONField(default=list, blank=True)
-    error_message = models.TextField(blank=True, null=True)
+    services_created = models.JSONField(default=list, blank=True)  # type: ignore[var-annotated]
+    error_message = models.TextField(blank=True, null=True)  # type: ignore[var-annotated]
 
     # Timestamps
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    completed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
+    updated_at = models.DateTimeField(auto_now=True)  # type: ignore[var-annotated]
+    completed_at = models.DateTimeField(null=True, blank=True)  # type: ignore[var-annotated]
 
     class Meta:
         ordering = ['-created_at']

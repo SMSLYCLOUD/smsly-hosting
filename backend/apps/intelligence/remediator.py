@@ -2,6 +2,7 @@
 import logging
 import subprocess
 from datetime import timedelta
+from typing import Any
 
 from django.core.cache import cache
 from django.db import transaction
@@ -35,7 +36,7 @@ class RemediationEngine:
         Deployment.Status.HEALTH_CHECK,
     )
 
-    RECOMMENDATIONS = {
+    RECOMMENDATIONS: dict[str, dict[str, Any]] = {
         'OOM_KILLED': {
             'action': 'SCALE_UP',
             'resource': 'MEMORY',
@@ -101,7 +102,8 @@ class RemediationEngine:
 
     def suggest_fix(self, issue_type: str) -> dict | None:
         """Return the recommended fix for a given issue type."""
-        return self.RECOMMENDATIONS.get(issue_type)
+        rec: dict | None = self.RECOMMENDATIONS.get(issue_type)
+        return rec
 
     def apply_fix(self, issue_type: str, service_id: str, explicit_admin: bool = False) -> bool:
         # pylint: disable=inconsistent-return-statements

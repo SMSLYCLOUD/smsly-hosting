@@ -52,24 +52,24 @@ class CloudStorageDestination(models.Model):
         },
     }
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4)
-    name = models.CharField(max_length=200)
-    provider = models.CharField(
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4)  # type: ignore[var-annotated]
+    name = models.CharField(max_length=200)  # type: ignore[var-annotated]
+    provider = models.CharField(  # type: ignore[var-annotated]
         max_length=30,
         choices=[(k, v['name']) for k, v in TEMPLATES.items()],
         default='s3',
     )
-    bucket = models.CharField(max_length=255)
-    region = models.CharField(max_length=100, default='us-east-1')
-    endpoint = models.CharField(
+    bucket = models.CharField(max_length=255)  # type: ignore[var-annotated]
+    region = models.CharField(max_length=100, default='us-east-1')  # type: ignore[var-annotated]
+    endpoint = models.CharField(  # type: ignore[var-annotated]
         max_length=500, blank=True, default='',
         help_text='Custom endpoint for R2/MinIO/B2. Leave blank for AWS S3.',
     )
     access_key = EncryptedCharField(max_length=255, blank=False)
     secret_key = EncryptedCharField(max_length=255, blank=False)
-    is_active = models.BooleanField(default=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    service = models.ForeignKey(
+    is_active = models.BooleanField(default=True)  # type: ignore[var-annotated]
+    created_at = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
+    service = models.ForeignKey(  # type: ignore[var-annotated]
         'deployments.Service', on_delete=models.CASCADE, null=True, blank=True,
         related_name='cloud_destinations',
         help_text='NULL = platform-wide; set = per-service only',

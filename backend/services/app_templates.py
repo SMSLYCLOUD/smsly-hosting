@@ -678,7 +678,7 @@ APP_TEMPLATES: dict[str, AppTemplate] = {
 
 def get_template(template_id: str) -> AppTemplate:
     """Get app template by ID."""
-    return APP_TEMPLATES.get(template_id)
+    return APP_TEMPLATES.get(template_id)  # type: ignore[return-value]
 
 
 def list_templates(category: str | None = None) -> list:
@@ -696,7 +696,7 @@ def get_docker_run_command(
 
     template = get_template(template_id)
     if not template:
-        return None
+        return ""
 
     name = name or f"{template_id}-{secrets.token_hex(4)}"
 

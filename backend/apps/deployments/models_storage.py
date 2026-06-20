@@ -11,22 +11,22 @@ class Volume(models.Model):
     # Aligned with name validator in views_storage.py
     _VOLUME_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,62}$")
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)  # type: ignore[var-annotated]
     # Use string reference to avoid circular import
-    service = models.ForeignKey(
+    service = models.ForeignKey(  # type: ignore[var-annotated]
         'deployments.Service',
         on_delete=models.CASCADE,
         related_name='volumes')
 
-    name = models.CharField(max_length=255)
-    mount_path = models.CharField(max_length=255,
+    name = models.CharField(max_length=255)  # type: ignore[var-annotated]
+    mount_path = models.CharField(max_length=255,  # type: ignore[var-annotated]
                                   help_text="Path inside container e.g. /data")
-    size_gb = models.IntegerField(
+    size_gb = models.IntegerField(  # type: ignore[var-annotated]
         default=1,
         validators=[MinValueValidator(1), MaxValueValidator(1000)],
     )
 
-    created_at = models.DateTimeField(auto_now_add=True)
+    created_at = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
 
     def clean(self):
         """Defence-in-depth: a model-level validator catches direct DB
@@ -53,7 +53,7 @@ class Volume(models.Model):
     class Meta:
         constraints = [
             models.CheckConstraint(
-                check=models.Q(size_gb__gte=1) & models.Q(size_gb__lte=1000),
+                check=models.Q(size_gb__gte=1) & models.Q(size_gb__lte=1000),  # type: ignore[var-annotated]
                 name="volume_size_gb_range",
             ),
         ]

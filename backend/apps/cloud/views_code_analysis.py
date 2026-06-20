@@ -415,7 +415,7 @@ def analyze_codebase(repo_path: str) -> dict:
 
     # Build file list for tech stack detection
     file_list = [n['data'] for n in nodes if n['type'] == 'file']
-    tech_stack = _detect_tech_stack(file_list)
+    tech_stack = _detect_tech_stack(file_list)  # type: ignore[arg-type]
 
     return {
         'nodes': nodes,

@@ -1428,7 +1428,7 @@ def delete_service_task(self, service_id: str, force: bool = False):
         success = orchestrator.delete_service_resources(service, force=force)
 
         # 2b. Clean up addon runtime resources before DB cascade
-        for addon in service.addons.all():
+        for addon in Addon.objects.filter(service=service):
             server = getattr(addon.service, 'server', None)
             if (server and not server.is_primary
                     and not getattr(server, 'is_lite_agent', False)):
@@ -1458,7 +1458,7 @@ def delete_service_task(self, service_id: str, force: bool = False):
     if success:
         # Capture project reference and owner before deleting the service.
         service_project = getattr(service, 'project', None)
-        service_owner_id = service.owner_id
+        service_owner_id = getattr(service, 'owner_id', None)
 
         # GDPR right-to-erasure: delete all backup tarballs and DB rows
         # owned by this service's user BEFORE the CASCADE fires. The

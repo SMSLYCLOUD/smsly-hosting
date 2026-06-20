@@ -22,6 +22,7 @@ defends against, so future regressions can be traced back.
 import hashlib
 import hmac
 import time
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
@@ -32,11 +33,11 @@ from rest_framework.test import APIClient
 try:
     from allauth.socialaccount.models import SocialApp
 except ImportError:
-    SocialApp = None
+    SocialApp: Any = None
 try:
     from django.contrib.sites.models import Site
 except ImportError:
-    Site = None
+    Site: Any = None
 
 User = get_user_model()
 

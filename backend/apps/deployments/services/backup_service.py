@@ -2323,17 +2323,20 @@ def purge_user_backups(user_id) -> dict:
         for sched in BackupSchedule.objects.filter(
             service__owner_id=user_id,
             storage_backend='s3',
+            service__isnull=False,
         )
+        if sched.service_id is not None
     }
 
     for backup in service_backups:
+        backup_service_id = getattr(backup, 'service_id', None)
         if backup.file_path and os.path.exists(backup.file_path):
             try:
                 os.remove(backup.file_path)
                 counters['service_backup_files_deleted'] += 1
                 logger.info(
                     "GDPR: deleted backup file %s for service %s",
-                    backup.file_path, backup.service_id,
+                    backup.file_path, backup_service_id,
                 )
             except OSError as exc:
                 counters['errors'] += 1
@@ -2342,7 +2345,7 @@ def purge_user_backups(user_id) -> dict:
                     backup.file_path, exc,
                 )
 
-        sched = schedules.get(backup.service_id)
+        sched = schedules.get(backup_service_id) if backup_service_id else None
         if (sched and sched.s3_bucket and sched.s3_access_key
                 and backup.file_path):
             service_name = getattr(backup.service, 'name', 'service')
@@ -2374,7 +2377,7 @@ def purge_user_backups(user_id) -> dict:
         )
     ]
     for backup in server_backups:
-        if backup.file_path and os.path.exists(backup.file_path):
+        if getattr(backup, 'file_path', None) and os.path.exists(backup.file_path):
             try:
                 os.remove(backup.file_path)
                 counters['server_backup_files_deleted'] += 1

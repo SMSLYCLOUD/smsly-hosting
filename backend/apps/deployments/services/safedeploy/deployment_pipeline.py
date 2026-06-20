@@ -51,7 +51,7 @@ class ProductionDeploymentPipeline:
                 logger.error(f"Blocking deployment {deployment.id}: Migration validation did not pass (Status: {validation.status})")
                 deployment.status = Deployment.Status.FAILED
                 deployment.save()
-                return
+                return deployment
 
             needs_manual_approval = (
                 validation.auto_deploy_policy == MigrationValidation.AutoDeployPolicy.NEVER
@@ -65,12 +65,12 @@ class ProductionDeploymentPipeline:
                 if not approval:
                     deployment.status = Deployment.Status.AWAITING_APPROVAL
                     deployment.save()
-                    return
+                    return deployment
 
         if validation and validation.requires_backup:
             self._run_backup_phase(deployment)
             if deployment.status == Deployment.Status.BACKUP_FAILED:
-                return
+                return deployment
 
         self._run_migration_phase(deployment)
         if deployment.status in (
@@ -78,14 +78,14 @@ class ProductionDeploymentPipeline:
             Deployment.Status.ROLLED_BACK,
             Deployment.Status.FAILED,
         ):
-            return
+            return deployment
 
         self._run_tests_phase(deployment)
         if deployment.status in (
             Deployment.Status.FAILED,
             Deployment.Status.ROLLED_BACK,
         ):
-            return
+            return deployment
 
         deployment.status = Deployment.Status.DEPLOYING
         deployment.save()
@@ -97,12 +97,12 @@ class ProductionDeploymentPipeline:
             Deployment.Status.MIGRATION_FAILED,
             Deployment.Status.ROLLED_BACK,
         ):
-            return
+            return deployment
 
         self._run_health_check_phase(deployment)
         deployment.refresh_from_db()
         if deployment.status == Deployment.Status.HEALTH_CHECK_FAILED:
-            return
+            return deployment
 
         deployment.status = Deployment.Status.ACTIVE
         deployment.save()
@@ -142,7 +142,7 @@ class ProductionDeploymentPipeline:
             adapter = DjangoAdapter()
             workspace_dir = tempfile.mkdtemp(prefix=f"prod_deploy_{deployment.id}_")
             repo_url = deployment.service.repository_url
-            cloned_path = workspace_dir
+            cloned_path: str | None = workspace_dir
             if repo_url:
                 try:
                     from apps.deployments.services.git_manager import GitManager
@@ -386,7 +386,7 @@ class ProductionDeploymentPipeline:
         provider_id = str(service.provider.id) if service and service.provider else None
         result = enqueue_smart_deploy_task(
             deployment_id=str(deployment.id),
-            provider_id=provider_id,
+            provider_id=provider_id or "",  # type: ignore[arg-type]
             skip_review=True,
         )
         if result is not None and hasattr(result, "get"):

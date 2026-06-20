@@ -9,6 +9,7 @@ import re
 import secrets
 import tarfile
 import tempfile
+from typing import Any
 
 from django.utils import timezone
 
@@ -84,7 +85,7 @@ def parse_ai_resource_recommendation(ai_response: str) -> dict:
             return {}
 
         # Validate and sanitise
-        result = {}
+        result: dict[str, Any] = {}
 
         # Resources
         res = parsed.get('resources', {})

@@ -109,7 +109,9 @@ def fetch_all_repos(token: str) -> list[dict]:
         resp = requests.get(
             f"{_GITHUB_API_BASE}/user/repos",
             headers=headers,
-            params={"per_page": 100, "page": page, "sort": "updated"},
+            params={  # type: ignore[arg-type]
+                "per_page": 100, "page": page, "sort": "updated"
+            },
             timeout=15,
         )
 
@@ -338,8 +340,9 @@ def heuristic_analysis(files: list[str], clone_dir: str | None = None) -> dict:
 
     # ── Deep Import Scan (Code Analysis Integration) ─────────────────
     # If we have a cloned directory, scan actual imports for precise addons
-    import_scan = _detect_addons_from_imports(clone_dir)
-    addons |= import_scan["addons"]
+    if clone_dir:
+        import_scan = _detect_addons_from_imports(clone_dir)
+        addons |= import_scan["addons"]
 
     # Primary stack is the first detected, but expose all languages
     stack = languages[0] if languages else "unknown"
@@ -850,7 +853,9 @@ def analyze_ecosystem(repos_data: list[dict], github_token: str | None = None, a
         except ValueError as e:
             logger.warning(f"AI response validation failed: {e}")
             # Try to revalidate with AI
-            return _attempt_ai_revalidation(repos_data, ai_provider, str(e))
+            if ai_provider:
+                return _attempt_ai_revalidation(repos_data, ai_provider, str(e))
+            return _build_heuristic_plan(repos_data, str(e))
         except Exception as e:
             logger.error("Failed to parse AI ecosystem response: %s", e)
             # Fall back to heuristic-only plan

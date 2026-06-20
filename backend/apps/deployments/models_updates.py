@@ -18,48 +18,48 @@ class PlatformUpdate(models.Model):
         FAILED = 'FAILED', 'Failed'
         ROLLED_BACK = 'ROLLED_BACK', 'Rolled Back'
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    status = models.CharField(
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)  # type: ignore[var-annotated]
+    status = models.CharField(  # type: ignore[var-annotated]
         max_length=20, choices=Status.choices, default=Status.PENDING)
 
     # Version tracking
-    from_version = models.CharField(max_length=50, blank=True)
-    to_version = models.CharField(max_length=50, blank=True)
-    from_commit = models.CharField(max_length=40, blank=True)
-    to_commit = models.CharField(max_length=40, blank=True)
+    from_version = models.CharField(max_length=50, blank=True)  # type: ignore[var-annotated]
+    to_version = models.CharField(max_length=50, blank=True)  # type: ignore[var-annotated]
+    from_commit = models.CharField(max_length=40, blank=True)  # type: ignore[var-annotated]
+    to_commit = models.CharField(max_length=40, blank=True)  # type: ignore[var-annotated]
 
     # Progress
-    progress_percent = models.IntegerField(default=0)
-    current_step = models.CharField(max_length=200, blank=True)
-    logs = models.TextField(blank=True)
+    progress_percent = models.IntegerField(default=0)  # type: ignore[var-annotated]
+    current_step = models.CharField(max_length=200, blank=True)  # type: ignore[var-annotated]
+    logs = models.TextField(blank=True)  # type: ignore[var-annotated]
 
     # Rollback data
-    snapshot_data = models.JSONField(
+    snapshot_data = models.JSONField(  # type: ignore[var-annotated]
         default=dict, blank=True,
         help_text="Snapshot of container image tags before update")
-    can_rollback = models.BooleanField(default=True)
-    rollback_deadline = models.DateTimeField(null=True, blank=True)
+    can_rollback = models.BooleanField(default=True)  # type: ignore[var-annotated]
+    rollback_deadline = models.DateTimeField(null=True, blank=True)  # type: ignore[var-annotated]
 
     # Error
-    error_message = models.TextField(blank=True)
+    error_message = models.TextField(blank=True)  # type: ignore[var-annotated]
 
     # Federated Deployment Tracking (Elite Feature)
-    node_statuses = models.JSONField(
+    node_statuses = models.JSONField(  # type: ignore[var-annotated]
         default=dict, blank=True,
         help_text="Tracks update status per Lite Agent node {node_id: status}")
 
-    addon_compatibility_results = models.JSONField(
+    addon_compatibility_results = models.JSONField(  # type: ignore[var-annotated]
         default=dict, blank=True,
         help_text="Results of pre-update addon compatibility checks")
 
-    fleet_progress = models.JSONField(
+    fleet_progress = models.JSONField(  # type: ignore[var-annotated]
         default=dict, blank=True,
         help_text="Step-by-step progress per node")
 
     # Timing
-    created_at = models.DateTimeField(auto_now_add=True)
-    completed_at = models.DateTimeField(null=True, blank=True)
-    initiated_by = models.CharField(
+    created_at = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
+    completed_at = models.DateTimeField(null=True, blank=True)  # type: ignore[var-annotated]
+    initiated_by = models.CharField(  # type: ignore[var-annotated]
         max_length=50, default='manual',
         help_text="'manual', 'auto', or 'api'")
 

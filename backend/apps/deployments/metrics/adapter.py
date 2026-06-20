@@ -304,7 +304,7 @@ class MetricsAdapter:
         try:
             resp = requests.get(
                 f'{PROMETHEUS_URL}/api/v1/query_range',
-                params={
+                params={  # type: ignore[arg-type]
                     'query': query,
                     'start': start,
                     'end': end,

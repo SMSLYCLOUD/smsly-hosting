@@ -188,8 +188,8 @@ class RemoteOrchestrator:
             return results
 
         # 2. Auth/API Check
-        resp = self._request("GET", "/api/v1/services/", timeout=10)
-        if resp and resp.status_code == 200:
+        resp: requests.Response | None = self._request("GET", "/api/v1/services/", timeout=10)
+        if resp is not None and resp.status_code == 200:
             results["auth"] = True
         else:
             results["error"] = self.describe_last_error() or f"API returned {resp.status_code if resp else 'no response'}"

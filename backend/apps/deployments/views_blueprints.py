@@ -8,7 +8,7 @@ from apps.deployments.services.blueprint_manager import BlueprintManager
 
 
 class BlueprintPayloadSerializer(serializers.Serializer):
-    data = serializers.JSONField(required=False)
+    data = serializers.JSONField(required=False)  # type: ignore[assignment]
 
 
 class BlueprintViewSet(viewsets.GenericViewSet):

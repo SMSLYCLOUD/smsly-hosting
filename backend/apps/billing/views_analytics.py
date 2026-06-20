@@ -6,7 +6,7 @@ from .services.analytics import RevenueAnalytics
 
 
 class AnalyticsPayloadSerializer(serializers.Serializer):
-    data = serializers.JSONField()
+    data = serializers.JSONField()  # type: ignore[assignment]
 
 
 class AnalyticsViewSet(viewsets.GenericViewSet):

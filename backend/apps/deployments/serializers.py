@@ -3,7 +3,7 @@ import re
 
 from rest_framework import serializers
 
-from .models import Deployment, EnvironmentVariable, Region, Service
+from .models import Deployment, EnvironmentVariable, Region, Service  # type: ignore[attr-defined]  # models re-exports from submodules
 from .models_audit import AuditLog
 from .models_backup import BackupSchedule, ServerBackup, ServiceBackup
 from .models_safedeploy import (
