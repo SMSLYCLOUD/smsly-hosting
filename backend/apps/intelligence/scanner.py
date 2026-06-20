@@ -403,7 +403,7 @@ class RepoScanner:
 
     def _directory_summary(self, max_depth: int = 2) -> str:
         """Generate a tree-like directory summary."""
-        lines = []
+        lines: list[str] = []
         self._build_tree(self.source_dir, "", max_depth, 0, lines)
         return "\n".join(lines[:100])  # Cap at 100 lines
 

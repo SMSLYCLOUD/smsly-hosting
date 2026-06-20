@@ -8,39 +8,39 @@ from .models_core import Service, TimeStampedModel
 
 class ServiceMetric(TimeStampedModel):
     """Real service metrics collected from Docker stats."""
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    service = models.ForeignKey(
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)  # type: ignore[var-annotated]
+    service = models.ForeignKey(  # type: ignore[var-annotated]
         Service,
         on_delete=models.CASCADE,
         related_name='metrics')
 
     # CPU
-    cpu_usage = models.DecimalField(
+    cpu_usage = models.DecimalField(  # type: ignore[var-annotated]
         max_digits=10, decimal_places=4,
         help_text="CPU cores used")
-    cpu_limit = models.DecimalField(
+    cpu_limit = models.DecimalField(  # type: ignore[var-annotated]
         max_digits=10, decimal_places=4, default=1.0,
         help_text="CPU cores allocated")
 
     # Memory
-    memory_usage = models.IntegerField(help_text="Memory used in MB")
-    memory_limit = models.IntegerField(
+    memory_usage = models.IntegerField(help_text="Memory used in MB")  # type: ignore[var-annotated]
+    memory_limit = models.IntegerField(  # type: ignore[var-annotated]
         default=512, help_text="Memory allocated in MB")
 
     # Network I/O
-    network_rx_bytes = models.BigIntegerField(
+    network_rx_bytes = models.BigIntegerField(  # type: ignore[var-annotated]
         default=0, help_text="Network bytes received")
-    network_tx_bytes = models.BigIntegerField(
+    network_tx_bytes = models.BigIntegerField(  # type: ignore[var-annotated]
         default=0, help_text="Network bytes sent")
 
     # Disk I/O
-    disk_read_bytes = models.BigIntegerField(
+    disk_read_bytes = models.BigIntegerField(  # type: ignore[var-annotated]
         default=0, help_text="Disk bytes read")
-    disk_write_bytes = models.BigIntegerField(
+    disk_write_bytes = models.BigIntegerField(  # type: ignore[var-annotated]
         default=0, help_text="Disk bytes written")
 
     # Timestamp
-    timestamp = models.DateTimeField(db_index=True)
+    timestamp = models.DateTimeField(db_index=True)  # type: ignore[var-annotated]
 
     class Meta:
         ordering = ['-timestamp']

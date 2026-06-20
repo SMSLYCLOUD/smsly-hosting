@@ -33,13 +33,13 @@ class ManagedServer(models.Model):
         DONE = "DONE", "Done"
         FAILED = "FAILED", "Failed"
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    owner = models.ForeignKey(
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)  # type: ignore[var-annotated]
+    owner = models.ForeignKey(  # type: ignore[var-annotated]
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name="managed_servers",
     )
-    project = models.ForeignKey(
+    project = models.ForeignKey(  # type: ignore[var-annotated]
         'deployments.Project',
         on_delete=models.SET_NULL,
         null=True,
@@ -47,23 +47,23 @@ class ManagedServer(models.Model):
         related_name='managed_servers',
         help_text="Project this server belongs to (null = ungrouped)"
     )
-    name = models.CharField(
+    name = models.CharField(  # type: ignore[var-annotated]
         max_length=100,
         help_text="Human-readable label, e.g. 'Production VPS' or 'Staging EU'",
     )
-    host = models.CharField(
+    host = models.CharField(  # type: ignore[var-annotated]
         max_length=255,
         help_text="Public IP address or domain, e.g. '198.51.100.5' or 'prod.example.com'",
     )
-    private_ip = models.GenericIPAddressField(
+    private_ip = models.GenericIPAddressField(  # type: ignore[var-annotated]
         protocol="IPv4", null=True, blank=True,
         help_text="Internal/Private IP (e.g. AWS Private IP 172.31.x.x)"
     )
-    provider_metadata = models.JSONField(
+    provider_metadata = models.JSONField(  # type: ignore[var-annotated]
         default=dict, blank=True,
         help_text="Cloud provider metadata (VPC ID, Instance ID, etc.)"
     )
-    hardware_fingerprint = models.JSONField(
+    hardware_fingerprint = models.JSONField(  # type: ignore[var-annotated]
         default=dict, blank=True,
         help_text="Captured hardware identifiers collected during provisioning "
                   "(CPU serial, DMI UUID, MAC addresses, disk serials). Used for "
@@ -71,7 +71,7 @@ class ManagedServer(models.Model):
     )
 
     # ── Connection credentials ──
-    api_url = models.URLField(
+    api_url = models.URLField(  # type: ignore[var-annotated]
         blank=True, default="",
         help_text="Full URL to the SMSLY Hosting API",
     )
@@ -83,23 +83,23 @@ class ManagedServer(models.Model):
     )
 
     # ── SSH credentials ──
-    ssh_port = models.IntegerField(default=22)
-    ssh_user = models.CharField(max_length=100, default="root")
+    ssh_port = models.IntegerField(default=22)  # type: ignore[var-annotated]
+    ssh_user = models.CharField(max_length=100, default="root")  # type: ignore[var-annotated]
     ssh_password = EncryptedCharField(max_length=255, blank=True, default="")
     ssh_key = EncryptedTextField(blank=True, default="")
 
-    is_primary = models.BooleanField(default=False)
-    allow_user_workloads = models.BooleanField(
+    is_primary = models.BooleanField(default=False)  # type: ignore[var-annotated]
+    allow_user_workloads = models.BooleanField(  # type: ignore[var-annotated]
         default=True,
         help_text="When false, user services cannot be scheduled to this server.",
     )
 
     # ── Status ──
-    status = models.CharField(
+    status = models.CharField(  # type: ignore[var-annotated]
         max_length=20, choices=Status.choices, default=Status.UNKNOWN)
-    last_health_check = models.DateTimeField(null=True, blank=True)
-    server_version = models.CharField(max_length=50, blank=True, default="")
-    services_count = models.IntegerField(default=0)
+    last_health_check = models.DateTimeField(null=True, blank=True)  # type: ignore[var-annotated]
+    server_version = models.CharField(max_length=50, blank=True, default="")  # type: ignore[var-annotated]
+    services_count = models.IntegerField(default=0)  # type: ignore[var-annotated]
 
     # ── Cluster Role ──
     class ClusterRole(models.TextChoices):
@@ -107,19 +107,19 @@ class ManagedServer(models.Model):
         FOLLOWER = "FOLLOWER", "Follower"
         CANDIDATE = "CANDIDATE", "Candidate"
 
-    role = models.CharField(
+    role = models.CharField(  # type: ignore[var-annotated]
         max_length=20, choices=ClusterRole.choices, default=ClusterRole.FOLLOWER)
-    wg_address = models.GenericIPAddressField(
+    wg_address = models.GenericIPAddressField(  # type: ignore[var-annotated]
         protocol="IPv4", null=True, blank=True)
 
     # ── Provisioning ──
-    is_lite_agent = models.BooleanField(
+    is_lite_agent = models.BooleanField(  # type: ignore[var-annotated]
         default=False,
         help_text="If true, this server is a lightweight node connecting to the Master's DB/Redis.",
     )
-    provision_status = models.CharField(
+    provision_status = models.CharField(  # type: ignore[var-annotated]
         max_length=20, choices=ProvisionStatus.choices, default=ProvisionStatus.NONE)
-    provision_logs = models.TextField(blank=True, default="")
+    provision_logs = models.TextField(blank=True, default="")  # type: ignore[var-annotated]
 
     # SECURITY: TLS verification controls. ``verify_tls`` defaults to True
     # — the platform refuses to skip certificate verification unless
@@ -127,13 +127,13 @@ class ManagedServer(models.Model):
     # `ALLOW_INSECURE_INTER_NODE_TLS` is set, see settings.py).
     # `tls_cert_sha256` is the optional pin: when set, the connection
     # is only accepted if the remote cert's SHA-256 matches.
-    verify_tls = models.BooleanField(
+    verify_tls = models.BooleanField(  # type: ignore[var-annotated]
         default=True,
         help_text="If false, the platform skips TLS verification when "
                   "calling this server's API. Requires the "
                   "ALLOW_INSECURE_INTER_NODE_TLS env flag.",
     )
-    tls_cert_sha256 = models.CharField(
+    tls_cert_sha256 = models.CharField(  # type: ignore[var-annotated]
         max_length=64, blank=True, default="",
         help_text="Optional SHA-256 fingerprint of the server's TLS cert "
                   "(hex, no colons). When set, connections are pinned to "
@@ -145,8 +145,8 @@ class ManagedServer(models.Model):
         """Return the primary/control-plane server."""
         return cls.objects.filter(is_primary=True).first()
 
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
+    updated_at = models.DateTimeField(auto_now=True)  # type: ignore[var-annotated]
 
     class Meta:
         ordering = ["-is_primary", "name"]
@@ -158,28 +158,28 @@ class ManagedServer(models.Model):
 
 class Project(models.Model):
     """ logical grouping of services. """
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    owner = models.ForeignKey(
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)  # type: ignore[var-annotated]
+    owner = models.ForeignKey(  # type: ignore[var-annotated]
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name="projects",
     )
-    team = models.ForeignKey(
+    team = models.ForeignKey(  # type: ignore[var-annotated]
         'teams.Team',
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name="projects",
     )
-    name = models.CharField(max_length=100)
-    slug = models.SlugField(max_length=120)
-    description = models.TextField(blank=True, default="")
-    icon_emoji = models.CharField(max_length=10, default="📦")
-    color = models.CharField(max_length=7, default="#6366f1")
-    is_default = models.BooleanField(default=False)
+    name = models.CharField(max_length=100)  # type: ignore[var-annotated]
+    slug = models.SlugField(max_length=120)  # type: ignore[var-annotated]
+    description = models.TextField(blank=True, default="")  # type: ignore[var-annotated]
+    icon_emoji = models.CharField(max_length=10, default="📦")  # type: ignore[var-annotated]
+    color = models.CharField(max_length=7, default="#6366f1")  # type: ignore[var-annotated]
+    is_default = models.BooleanField(default=False)  # type: ignore[var-annotated]
 
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
+    updated_at = models.DateTimeField(auto_now=True)  # type: ignore[var-annotated]
 
     class Meta:
         ordering = ["-is_default", "-updated_at"]
@@ -203,8 +203,8 @@ class Project(models.Model):
 
 class TimeStampedModel(models.Model):
     """Abstract base class with created_at and updated_at fields."""
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
+    updated_at = models.DateTimeField(auto_now=True)  # type: ignore[var-annotated]
 
     class Meta:
         abstract = True
@@ -214,14 +214,14 @@ class Region(models.Model):
     """
     Physical deployment regions (e.g. us-east-1, eu-central-1).
     """
-    name = models.CharField(max_length=100)
-    slug = models.SlugField(max_length=100, unique=True)
-    provider = models.CharField(max_length=50, default='aws')
-    country_code = models.CharField(max_length=2, help_text="ISO 3166-1 alpha-2")
-    city = models.CharField(max_length=100)
-    lat = models.FloatField(null=True, blank=True)
-    lng = models.FloatField(null=True, blank=True)
-    is_active = models.BooleanField(default=True)
+    name = models.CharField(max_length=100)  # type: ignore[var-annotated]
+    slug = models.SlugField(max_length=100, unique=True)  # type: ignore[var-annotated]
+    provider = models.CharField(max_length=50, default='aws')  # type: ignore[var-annotated]
+    country_code = models.CharField(max_length=2, help_text="ISO 3166-1 alpha-2")  # type: ignore[var-annotated]
+    city = models.CharField(max_length=100)  # type: ignore[var-annotated]
+    lat = models.FloatField(null=True, blank=True)  # type: ignore[var-annotated]
+    lng = models.FloatField(null=True, blank=True)  # type: ignore[var-annotated]
+    is_active = models.BooleanField(default=True)  # type: ignore[var-annotated]
 
     def __str__(self):
         return f"{self.name} ({self.provider})"
@@ -238,15 +238,15 @@ class Service(TimeStampedModel):
         DELETED = 'DELETED', 'Deleted'
         UNKNOWN = 'UNKNOWN', 'Unknown'
 
-    status = models.CharField(max_length=20, choices=Status.choices, default=Status.ACTIVE)
-    deletion_error = models.TextField(blank=True, default='')
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.ACTIVE)  # type: ignore[var-annotated]
+    deletion_error = models.TextField(blank=True, default='')  # type: ignore[var-annotated]
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    name = models.CharField(max_length=255, unique=True)
-    slug = models.SlugField(max_length=255, blank=True, unique=True)
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)  # type: ignore[var-annotated]
+    name = models.CharField(max_length=255, unique=True)  # type: ignore[var-annotated]
+    slug = models.SlugField(max_length=255, blank=True, unique=True)  # type: ignore[var-annotated]
 
     # Provider Integration
-    provider = models.ForeignKey(
+    provider = models.ForeignKey(  # type: ignore[var-annotated]
         CloudProvider,
         on_delete=models.SET_NULL,
         null=True,
@@ -254,9 +254,9 @@ class Service(TimeStampedModel):
         related_name='services')
 
     # Source Config
-    repository_url = models.URLField(
+    repository_url = models.URLField(  # type: ignore[var-annotated]
         help_text="Git repository URL", blank=True, null=True)
-    branch = models.CharField(max_length=255, default='main')
+    branch = models.CharField(max_length=255, default='main')  # type: ignore[var-annotated]
 
     # Deployment Config
     DEPLOY_TYPE_CHOICES = [
@@ -266,7 +266,7 @@ class Service(TimeStampedModel):
         ('TEMPLATE', 'Predefined Template'),
         ('FUNCTION', 'Serverless Function'),
     ]
-    deploy_type = models.CharField(
+    deploy_type = models.CharField(  # type: ignore[var-annotated]
         max_length=20,
         choices=DEPLOY_TYPE_CHOICES,
         default='GIT')
@@ -276,31 +276,31 @@ class Service(TimeStampedModel):
         ('DOCKER', 'Dockerfile'),
         ('STATIC', 'Static Site'),
     ]
-    buildpack = models.CharField(
+    buildpack = models.CharField(  # type: ignore[var-annotated]
         max_length=20,
         choices=BUILDPACK_CHOICES,
         default='NIXPACKS',
         help_text="Build strategy for source code deployments")
 
     # Serverless Function Config
-    function_code = models.TextField(
+    function_code = models.TextField(  # type: ignore[var-annotated]
         blank=True,
         help_text="Raw source code for serverless functions")
-    function_runtime = models.CharField(
+    function_runtime = models.CharField(  # type: ignore[var-annotated]
         max_length=50,
         default='nodejs18',
         help_text="Runtime environment (e.g. nodejs18, python3.9)")
 
-    docker_image = models.CharField(max_length=255, blank=True, null=True)
+    docker_image = models.CharField(max_length=255, blank=True, null=True)  # type: ignore[var-annotated]
 
-    owner = models.ForeignKey(
+    owner = models.ForeignKey(  # type: ignore[var-annotated]
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name='services')
 
-    server = models.ForeignKey(
+    server = models.ForeignKey(  # type: ignore[var-annotated]
         'ManagedServer',
         on_delete=models.SET_NULL,
         null=True,
@@ -310,7 +310,7 @@ class Service(TimeStampedModel):
     )
 
     # Project grouping (Railway-style)
-    project = models.ForeignKey(
+    project = models.ForeignKey(  # type: ignore[var-annotated]
         'deployments.Project',
         on_delete=models.SET_NULL,
         null=True,
@@ -319,48 +319,48 @@ class Service(TimeStampedModel):
         help_text="Project this service belongs to (null = ungrouped)")
 
     # Build & Run Config
-    build_command = models.CharField(max_length=255, blank=True, null=True)
-    start_command = models.CharField(max_length=255, blank=True, null=True)
-    root_directory = models.CharField(max_length=255, default='/')
+    build_command = models.CharField(max_length=255, blank=True, null=True)  # type: ignore[var-annotated]
+    start_command = models.CharField(max_length=255, blank=True, null=True)  # type: ignore[var-annotated]
+    root_directory = models.CharField(max_length=255, default='/')  # type: ignore[var-annotated]
 
     # Network
-    internal_port = models.IntegerField(default=8000)
-    public_domain = models.CharField(
+    internal_port = models.IntegerField(default=8000)  # type: ignore[var-annotated]
+    public_domain = models.CharField(  # type: ignore[var-annotated]
         max_length=255, blank=True, null=True, unique=True)
-    public_domain_hidden = models.BooleanField(
+    public_domain_hidden = models.BooleanField(  # type: ignore[var-annotated]
         default=False,
         help_text="When true, the auto-generated platform domain is not exposed; only custom domains serve traffic.",
     )
-    domain_verified = models.BooleanField(default=False)
-    verification_token = models.CharField(max_length=64, blank=True)
+    domain_verified = models.BooleanField(default=False)  # type: ignore[var-annotated]
+    verification_token = models.CharField(max_length=64, blank=True)  # type: ignore[var-annotated]
 
     # Resource Limits (Simulated for now)
-    cpu_cores = models.DecimalField(
+    cpu_cores = models.DecimalField(  # type: ignore[var-annotated]
         max_digits=6, decimal_places=2, default=1.0)
-    memory_mb = models.IntegerField(default=2048)
+    memory_mb = models.IntegerField(default=2048)  # type: ignore[var-annotated]
 
     # Auto-Scaling
-    min_replicas = models.IntegerField(
+    min_replicas = models.IntegerField(  # type: ignore[var-annotated]
         default=1, validators=[MinValueValidator(1)])
-    max_replicas = models.IntegerField(
+    max_replicas = models.IntegerField(  # type: ignore[var-annotated]
         default=3, validators=[MinValueValidator(1)])
-    autoscale_cpu_target = models.IntegerField(
+    autoscale_cpu_target = models.IntegerField(  # type: ignore[var-annotated]
         default=80, help_text="Target CPU utilization percentage (HPA)")
-    vpa_enabled = models.BooleanField(
+    vpa_enabled = models.BooleanField(  # type: ignore[var-annotated]
         default=False, help_text="Enable Vertical Pod Autoscaling (VPA)")
-    alert_config = models.JSONField(
+    alert_config = models.JSONField(  # type: ignore[var-annotated]
         default=dict,
         blank=True,
         help_text="Per-service autoscaler alert thresholds and notification targets.",
     )
 
     # Multi-Region
-    regions = models.ManyToManyField(
+    regions = models.ManyToManyField(  # type: ignore[var-annotated]
         Region,
         blank=True,
         related_name='services',
         help_text="Regions to deploy this service to")
-    primary_region = models.ForeignKey(
+    primary_region = models.ForeignKey(  # type: ignore[var-annotated]
         Region,
         on_delete=models.SET_NULL,
         null=True,
@@ -368,17 +368,17 @@ class Service(TimeStampedModel):
         related_name='primary_services')
 
     # SafeDeploy Config
-    safe_deploy_enabled = models.BooleanField(default=False)
-    safedeploy_enabled = models.BooleanField(
+    safe_deploy_enabled = models.BooleanField(default=False)  # type: ignore[var-annotated]
+    safedeploy_enabled = models.BooleanField(  # type: ignore[var-annotated]
         default=False,
         help_text="When true, production deploys go through the SafeDeploy pipeline (preview → migration validation → risk classification → manual approval).",
     )
-    preview_environments_enabled = models.BooleanField(default=True)
-    auto_create_preview_on_branch_push = models.BooleanField(default=False)
+    preview_environments_enabled = models.BooleanField(default=True)  # type: ignore[var-annotated]
+    auto_create_preview_on_branch_push = models.BooleanField(default=False)  # type: ignore[var-annotated]
     MIGRATION_AUTO_APPROVAL_CHOICES = [('NEVER', 'Never'), ('LOW_RISK_ONLY', 'Low Risk Only'), ('LOW_AND_MEDIUM', 'Low and Medium'), ('ALWAYS_REQUIRE_MANUAL', 'Always Require Manual')]
-    migration_auto_approval_policy = models.CharField(max_length=50, choices=MIGRATION_AUTO_APPROVAL_CHOICES, default='LOW_RISK_ONLY')
-    production_requires_backup = models.BooleanField(default=True)
-    health_check_path = models.CharField(max_length=255, default='/health')
+    migration_auto_approval_policy = models.CharField(max_length=50, choices=MIGRATION_AUTO_APPROVAL_CHOICES, default='LOW_RISK_ONLY')  # type: ignore[var-annotated]
+    production_requires_backup = models.BooleanField(default=True)  # type: ignore[var-annotated]
+    health_check_path = models.CharField(max_length=255, default='/health')  # type: ignore[var-annotated]
 
     # Deployment Strategy
     DEPLOY_STRATEGY_CHOICES = [
@@ -386,52 +386,52 @@ class Service(TimeStampedModel):
         ('BLUE_GREEN', 'Blue/Green'),
         ('CANARY', 'Canary'),
     ]
-    deploy_strategy = models.CharField(
+    deploy_strategy = models.CharField(  # type: ignore[var-annotated]
         max_length=20,
         choices=DEPLOY_STRATEGY_CHOICES,
         default='ROLLING',
         help_text="Deployment strategy for this service")
-    canary_percentage = models.IntegerField(
+    canary_percentage = models.IntegerField(  # type: ignore[var-annotated]
         default=10,
         help_text="Percentage of traffic routed to canary (1-100)")
 
     # Legacy compat
-    use_blue_green = models.BooleanField(
+    use_blue_green = models.BooleanField(  # type: ignore[var-annotated]
         default=False, help_text="Deprecated: use deploy_strategy instead")
 
     # Preview Environments
-    is_preview = models.BooleanField(default=False)
-    parent_service = models.ForeignKey(
+    is_preview = models.BooleanField(default=False)  # type: ignore[var-annotated]
+    parent_service = models.ForeignKey(  # type: ignore[var-annotated]
         'self',
         on_delete=models.CASCADE,
         null=True,
         blank=True,
         related_name='previews')
-    pr_number = models.IntegerField(null=True, blank=True)
+    pr_number = models.IntegerField(null=True, blank=True)  # type: ignore[var-annotated]
 
     # Coolify Integration
-    coolify_uuid = models.CharField(max_length=64, blank=True, null=True, unique=True,
+    coolify_uuid = models.CharField(max_length=64, blank=True, null=True, unique=True,  # type: ignore[var-annotated]
                                     help_text="UUID of the application in Coolify")
 
     # Health Check Configuration
-    health_check_path = models.CharField(
+    health_check_path = models.CharField(  # type: ignore[var-annotated]
         max_length=255, default='/health', blank=True,
         help_text="HTTP path for health checks (e.g. /health, /api/health)")
-    health_check_port = models.IntegerField(
+    health_check_port = models.IntegerField(  # type: ignore[var-annotated]
         null=True, blank=True,
         help_text="Port for health checks. Leave blank to auto-detect from PORT env var.")
-    health_check_interval = models.IntegerField(
+    health_check_interval = models.IntegerField(  # type: ignore[var-annotated]
         default=30, help_text="Seconds between health checks")
-    health_check_timeout = models.IntegerField(
+    health_check_timeout = models.IntegerField(  # type: ignore[var-annotated]
         default=300, help_text="Seconds to wait for health check response")
-    health_check_retries = models.IntegerField(
+    health_check_retries = models.IntegerField(  # type: ignore[var-annotated]
         default=90, help_text="Consecutive failures before marking unhealthy")
-    auto_restart = models.BooleanField(
+    auto_restart = models.BooleanField(  # type: ignore[var-annotated]
         default=True, help_text="Automatically restart unhealthy containers")
-    health_webhook_token = models.CharField(
+    health_webhook_token = models.CharField(  # type: ignore[var-annotated]
         max_length=64, blank=True,
         help_text="Token for the service to push health status to the platform")
-    health_status = models.CharField(
+    health_status = models.CharField(  # type: ignore[var-annotated]
         max_length=32, default='unknown',
         choices=[
             ('healthy', 'Healthy'),
@@ -449,13 +449,13 @@ class Service(TimeStampedModel):
         ('on-failure', 'On Failure'),
         ('no', 'Never'),
     ]
-    restart_policy = models.CharField(
+    restart_policy = models.CharField(  # type: ignore[var-annotated]
         max_length=20, choices=RESTART_POLICY_CHOICES,
         default='unless-stopped',
         help_text="Docker restart policy for the container")
 
     # Custom domains
-    custom_domains = models.JSONField(
+    custom_domains = models.JSONField(  # type: ignore[var-annotated]
         default=list, blank=True,
         help_text="List of custom domains attached to this service")
 
@@ -464,37 +464,37 @@ class Service(TimeStampedModel):
         ('SINGLE', 'Single Container'),
         ('COMPOSE', 'Docker Compose'),
     ]
-    deploy_mode = models.CharField(
+    deploy_mode = models.CharField(  # type: ignore[var-annotated]
         max_length=20, choices=DEPLOY_MODE_CHOICES,
         default='SINGLE',
         help_text="SINGLE = one container, COMPOSE = docker-compose multi-container")
-    compose_file = models.CharField(
+    compose_file = models.CharField(  # type: ignore[var-annotated]
         max_length=255, blank=True, default='',
         help_text="Relative path to compose file (e.g. docker-compose.prod.yml)")
-    compose_main_service = models.CharField(
+    compose_main_service = models.CharField(  # type: ignore[var-annotated]
         max_length=100, blank=True, default='',
         help_text="Name of the primary service in compose for Traefik routing")
 
     # Domain Visibility
-    is_public = models.BooleanField(
+    is_public = models.BooleanField(  # type: ignore[var-annotated]
         default=True,
         help_text="If False, Traefik route is disabled; service only reachable via Docker DNS")
 
 
     # Verified execution metadata (Truthful routing and UI)
-    active_target_type = models.CharField(
+    active_target_type = models.CharField(  # type: ignore[var-annotated]
         max_length=50,
         blank=True,
         null=True,
         help_text="The verified runtime environment where this service is actually executing (e.g., 'local', 'remote', 'lite_agent')."
     )
-    active_host_ip = models.CharField(
+    active_host_ip = models.CharField(  # type: ignore[var-annotated]
         max_length=255,
         blank=True,
         null=True,
         help_text="The verified IP address or hostname where the service is executing."
     )
-    active_runtime_id = models.CharField(
+    active_runtime_id = models.CharField(  # type: ignore[var-annotated]
         max_length=255,
         blank=True,
         null=True,
@@ -504,7 +504,7 @@ class Service(TimeStampedModel):
     # Dedicated last-scale timestamp for the autoscaler.
     # Decoupled from `updated_at` so unrelated writes (e.g. health_status
     # updates) do NOT reset the autoscaler cooldown.
-    last_scale_at = models.DateTimeField(
+    last_scale_at = models.DateTimeField(  # type: ignore[var-annotated]
         null=True, blank=True,
         help_text="Last time the autoscaler scaled this service (used for cooldown).",
     )
@@ -580,7 +580,7 @@ class Service(TimeStampedModel):
             configured = ""
 
         try:
-            from .models_addons import PlatformConfig
+            from .models_addons import PlatformConfig  # type: ignore[attr-defined]  # models_addons re-exports from submodules
             platform_cfg = PlatformConfig.objects.only("domain").first()
             if platform_cfg and platform_cfg.domain:
                 configured = platform_cfg.domain.strip().lower().rstrip(".")
@@ -604,14 +604,14 @@ class ComplianceProfile(models.Model):
     """
     Enterprise compliance settings for a service.
     """
-    service = models.OneToOneField(
+    service = models.OneToOneField(  # type: ignore[var-annotated]
         Service,
         on_delete=models.CASCADE,
         related_name='compliance')
-    hipaa_compliant = models.BooleanField(default=False)
-    gdpr_compliant = models.BooleanField(default=False)
-    soc2_compliant = models.BooleanField(default=False)
-    data_residency = models.CharField(max_length=50, default='us-east-1')
+    hipaa_compliant = models.BooleanField(default=False)  # type: ignore[var-annotated]
+    gdpr_compliant = models.BooleanField(default=False)  # type: ignore[var-annotated]
+    soc2_compliant = models.BooleanField(default=False)  # type: ignore[var-annotated]
+    data_residency = models.CharField(max_length=50, default='us-east-1')  # type: ignore[var-annotated]
 
     def __str__(self):
         return f"Compliance for {self.service.name}"
@@ -621,14 +621,14 @@ class EnvironmentVariable(TimeStampedModel):
     """
     Environment variables for a service.
     """
-    service = models.ForeignKey(
+    service = models.ForeignKey(  # type: ignore[var-annotated]
         Service,
         on_delete=models.CASCADE,
         related_name='env_vars')
-    key = models.CharField(max_length=255)
+    key = models.CharField(max_length=255)  # type: ignore[var-annotated]
     value = EncryptedCharField(max_length=10000, blank=True, default='')
-    is_secret = models.BooleanField(default=False)
-    is_locked = models.BooleanField(
+    is_secret = models.BooleanField(default=False)  # type: ignore[var-annotated]
+    is_locked = models.BooleanField(  # type: ignore[var-annotated]
         default=False,
         help_text="Locked vars are never overridden by platform auto-injection during deployment")
     SOURCE_CHOICES = [
@@ -637,7 +637,7 @@ class EnvironmentVariable(TimeStampedModel):
         ('SHORTCODE', 'Shortcode Resolved'),
         ('SYSTEM', 'System Auto-Injected'),
     ]
-    source = models.CharField(
+    source = models.CharField(  # type: ignore[var-annotated]
         max_length=20, choices=SOURCE_CHOICES,
         default='USER',
         help_text="Origin of this env var")
@@ -675,44 +675,44 @@ class Deployment(TimeStampedModel):
         ROLLING_BACK = 'ROLLING_BACK', _('Rolling Back')
         ROLLED_BACK = 'ROLLED_BACK', _('Rolled Back')
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    service = models.ForeignKey(
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)  # type: ignore[var-annotated]
+    service = models.ForeignKey(  # type: ignore[var-annotated]
         Service,
         on_delete=models.CASCADE,
         related_name='deployments')
-    commit_hash = models.CharField(max_length=40)
-    commit_message = models.TextField(blank=True)
-    branch = models.CharField(
+    commit_hash = models.CharField(max_length=40)  # type: ignore[var-annotated]
+    commit_message = models.TextField(blank=True)  # type: ignore[var-annotated]
+    branch = models.CharField(  # type: ignore[var-annotated]
         max_length=255, blank=True, default='',
         help_text="Branch name this deployment deploys (overrides service default)")
 
-    status = models.CharField(
+    status = models.CharField(  # type: ignore[var-annotated]
         max_length=20,
         choices=Status.choices,
         default=Status.QUEUED,
     )
 
-    build_logs = models.TextField(blank=True)
-    runtime_logs_url = models.URLField(blank=True, null=True)
+    build_logs = models.TextField(blank=True)  # type: ignore[var-annotated]
+    runtime_logs_url = models.URLField(blank=True, null=True)  # type: ignore[var-annotated]
 
-    pipeline_stages = models.JSONField(
+    pipeline_stages = models.JSONField(  # type: ignore[var-annotated]
         default=list, blank=True,
         help_text="List of pipeline stages (name, status, duration)")
 
-    ai_diagnosis = models.TextField(
+    ai_diagnosis = models.TextField(  # type: ignore[var-annotated]
         blank=True, help_text="AI suggested fix for failure")
 
     # Pre-deploy review: stores AI recommendations for user approval
-    review_summary = models.JSONField(
+    review_summary = models.JSONField(  # type: ignore[var-annotated]
         default=dict, blank=True,
         help_text="AI-recommended resources, env vars, and issues for review")
 
     # Security
-    vulnerability_report = models.JSONField(
+    vulnerability_report = models.JSONField(  # type: ignore[var-annotated]
         default=dict, blank=True, help_text="Trivy scan results")
 
-    container_id = models.CharField(max_length=255, blank=True, null=True)
-    remote_deployment_id = models.CharField(
+    container_id = models.CharField(max_length=255, blank=True, null=True)  # type: ignore[var-annotated]
+    remote_deployment_id = models.CharField(  # type: ignore[var-annotated]
         max_length=64,
         blank=True,
         null=True,
@@ -720,48 +720,48 @@ class Deployment(TimeStampedModel):
     )
 
     # Blue-green: stores the new (green) container ID during a deployment
-    green_container_id = models.CharField(
+    green_container_id = models.CharField(  # type: ignore[var-annotated]
         max_length=255, blank=True, null=True,
         help_text="Temp container ID for the new version during blue-green swap")
 
-    started_at = models.DateTimeField(null=True, blank=True)
-    finished_at = models.DateTimeField(null=True, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)  # type: ignore[var-annotated]
+    finished_at = models.DateTimeField(null=True, blank=True)  # type: ignore[var-annotated]
 
     # Rollback tracking
-    is_rollback = models.BooleanField(
+    is_rollback = models.BooleanField(  # type: ignore[var-annotated]
         default=False, help_text="Whether this deployment is a rollback")
-    source_node = models.CharField(
+    source_node = models.CharField(  # type: ignore[var-annotated]
         max_length=255, blank=True, null=True,
         help_text="Node that triggered this deployment (for multi-deploy)")
-    rollback_from = models.ForeignKey(
+    rollback_from = models.ForeignKey(  # type: ignore[var-annotated]
         'self',
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name='rollback_deployments',
         help_text="The deployment this was rolled back from")
-    target_server = models.ForeignKey(
+    target_server = models.ForeignKey(  # type: ignore[var-annotated]
         'deployments.ManagedServer',
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name='target_deployments',
         help_text="Server this deployment was explicitly routed to")
-    target_is_local = models.BooleanField(
+    target_is_local = models.BooleanField(  # type: ignore[var-annotated]
         default=False,
         help_text="True when this deployment was explicitly routed to the local controller")
 
-    ecosystem_retry_count = models.IntegerField(
+    ecosystem_retry_count = models.IntegerField(  # type: ignore[var-annotated]
         default=0, db_default=0,
         help_text="Number of times ecosystem deploy has retried this deployment")
 
-    queued_min_replicas = models.IntegerField(
+    queued_min_replicas = models.IntegerField(  # type: ignore[var-annotated]
         null=True, blank=True,
         help_text="Snapshot of service.min_replicas captured at queue time so the deploy "
                   "executor uses the original replica count even if the autoscaler mutates "
                   "it during the build.")
 
-    metadata = models.JSONField(
+    metadata = models.JSONField(  # type: ignore[var-annotated]
         default=dict, blank=True,
         help_text="Scratch state for in-flight pipeline phases (e.g. pre-migration state for rollback).")
 
@@ -777,25 +777,25 @@ class Deployment(TimeStampedModel):
 
 
     # Post-deployment verification metadata
-    verified_target_type = models.CharField(
+    verified_target_type = models.CharField(  # type: ignore[var-annotated]
         max_length=50,
         blank=True,
         null=True,
         help_text="The verified runtime environment where this deployment actually executed."
     )
-    verified_host_ip = models.CharField(
+    verified_host_ip = models.CharField(  # type: ignore[var-annotated]
         max_length=255,
         blank=True,
         null=True,
         help_text="The verified IP address or hostname where the deployment executed."
     )
-    verified_runtime_id = models.CharField(
+    verified_runtime_id = models.CharField(  # type: ignore[var-annotated]
         max_length=255,
         blank=True,
         null=True,
         help_text="The verified container ID or process ID of the deployment."
     )
-    verified_at = models.DateTimeField(
+    verified_at = models.DateTimeField(  # type: ignore[var-annotated]
         blank=True,
         null=True,
         help_text="When the execution location was verified."
@@ -830,25 +830,25 @@ class PlatformConfig(models.Model):
     Only one row (pk=1) exists. Stores domain, SSL mode, Cloudflare
     API token, and wildcard subdomain settings.
     """
-    domain = models.CharField(
+    domain = models.CharField(  # type: ignore[var-annotated]
         max_length=255, blank=True, default='',
         help_text="Primary domain (e.g. cloud.smsly.cloud)")
-    use_ssl = models.BooleanField(
+    use_ssl = models.BooleanField(  # type: ignore[var-annotated]
         default=False,
         help_text="Enable HTTPS via Let's Encrypt")
     cloudflare_api_token = EncryptedCharField(
         max_length=512, blank=True, default='',
         help_text="Cloudflare API Token for DNS challenge (Edit zone DNS)")
-    wildcard_subdomains = models.BooleanField(
+    wildcard_subdomains = models.BooleanField(  # type: ignore[var-annotated]
         default=True,
         help_text="Enable wildcard SSL for *.domain deployed services")
-    server_ip = models.GenericIPAddressField(
+    server_ip = models.GenericIPAddressField(  # type: ignore[var-annotated]
         blank=True, null=True,
         help_text="Server public IP (auto-detected or manual)")
-    caddy_status = models.CharField(
+    caddy_status = models.CharField(  # type: ignore[var-annotated]
         max_length=20, default='unknown',
         help_text="Last known Caddy status")
-    max_concurrent_builds = models.PositiveIntegerField(
+    max_concurrent_builds = models.PositiveIntegerField(  # type: ignore[var-annotated]
         default=1,
         help_text="Maximum concurrent builds across the entire node fleet (to prevent OOM)")
     caddy_ask_secret = EncryptedCharField(
@@ -870,7 +870,7 @@ class PlatformConfig(models.Model):
         help_text="SHA-256 hash of the 12-word recovery phrase (salted). "
                   "Used as last-resort admin account access if all trusted devices are lost.",
     )
-    updated_at = models.DateTimeField(auto_now=True)
+    updated_at = models.DateTimeField(auto_now=True)  # type: ignore[var-annotated]
 
     class Meta:
         verbose_name = "Platform Configuration"
@@ -1014,23 +1014,23 @@ class TrustedDevice(models.Model):
     This prevents credential-stuffing attacks: even with valid credentials,
     an attacker cannot access the platform from an unrecognized device.
     """
-    user = models.ForeignKey(
+    user = models.ForeignKey(  # type: ignore[var-annotated]
         'auth.User', on_delete=models.CASCADE,
         related_name='trusted_devices',
     )
-    device_token = models.CharField(
+    device_token = models.CharField(  # type: ignore[var-annotated]
         max_length=128, unique=True,
         help_text="Cryptographically random token stored in browser localStorage",
     )
-    fingerprint_hash = models.CharField(
+    fingerprint_hash = models.CharField(  # type: ignore[var-annotated]
         max_length=128, db_index=True,
         help_text="SHA-256 hash of combined hardware/software fingerprint signals",
     )
-    fingerprint_data = models.JSONField(
+    fingerprint_data = models.JSONField(  # type: ignore[var-annotated]
         blank=True, default=dict,
         help_text="Raw fingerprint signals (canvas hash, WebGL, audio, fonts, CPU, GPU, etc.)",
     )
-    trust_method = models.CharField(
+    trust_method = models.CharField(  # type: ignore[var-annotated]
         max_length=32, default='browser',
         choices=[
             ('browser', 'Browser fingerprint'),
@@ -1040,34 +1040,34 @@ class TrustedDevice(models.Model):
         ],
         help_text="How this device was enrolled",
     )
-    ssh_key_fingerprint = models.CharField(
+    ssh_key_fingerprint = models.CharField(  # type: ignore[var-annotated]
         max_length=128, blank=True, default='',
         help_text="SHA-256 fingerprint of SSH public key (for SSH trust method)",
     )
-    label = models.CharField(
+    label = models.CharField(  # type: ignore[var-annotated]
         max_length=255, blank=True, default='',
         help_text="User-assigned label (e.g. 'Work Laptop', 'iPhone')",
     )
-    ip_address = models.GenericIPAddressField(
+    ip_address = models.GenericIPAddressField(  # type: ignore[var-annotated]
         blank=True, null=True,
         help_text="IP address at time of enrollment",
     )
-    user_agent = models.TextField(
+    user_agent = models.TextField(  # type: ignore[var-annotated]
         blank=True, default='',
         help_text="User-Agent string at time of enrollment",
     )
-    trust_score = models.IntegerField(
+    trust_score = models.IntegerField(  # type: ignore[var-annotated]
         default=0,
         help_text="Aggregated trust score (0-100). Incremented on successful "
                   "interactions, decremented on suspicious activity.",
     )
-    trust_score_updated_at = models.DateTimeField(
+    trust_score_updated_at = models.DateTimeField(  # type: ignore[var-annotated]
         null=True, blank=True,
         help_text="Last time the trust score was modified.",
     )
-    last_seen_at = models.DateTimeField(auto_now=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    is_active = models.BooleanField(default=True)
+    last_seen_at = models.DateTimeField(auto_now=True)  # type: ignore[var-annotated]
+    created_at = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
+    is_active = models.BooleanField(default=True)  # type: ignore[var-annotated]
 
     class Meta:
         verbose_name = "Trusted Device"

@@ -21,11 +21,14 @@ def _extract_service_name_from_backup(file_path: str) -> str:
     try:
         with tarfile.open(file_path, "r:gz") as tar:
             member = tar.getmember("metadata.json")
-            with tar.extractfile(member) as fp:
-                if fp is None:
-                    return ""
+            fp = tar.extractfile(member)
+            if fp is None:
+                return ""
+            try:
                 metadata = json.loads(fp.read().decode("utf-8"))
-                return str(metadata.get("service_name") or "").strip()
+            finally:
+                fp.close()
+            return str(metadata.get("service_name") or "").strip()
     except Exception:
         return ""
 

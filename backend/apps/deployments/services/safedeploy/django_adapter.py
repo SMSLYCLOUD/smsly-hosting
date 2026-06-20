@@ -60,7 +60,7 @@ class DjangoAdapter:
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                 op_name = node.func.attr
                 if op_name in op_names:
-                    entry = {'type': op_name, 'file': os.path.basename(filepath)}
+                    entry: dict[str, Any] = {'type': op_name, 'file': os.path.basename(filepath)}
                     if op_name == 'RunPython':
                         entry['no_reverse'] = self._runpython_has_no_reverse(node)
                     operations.append(entry)
@@ -85,7 +85,7 @@ class DjangoAdapter:
         has_critical = has_high = has_medium = False
         reasons = []
         for op in operations:
-            op_type = op.get('type')
+            op_type = str(op.get('type') or "")
             score = score_map.get(op_type, 0)
             risk_score += score
             if op_type in ('DeleteModel', 'RunSQL'):

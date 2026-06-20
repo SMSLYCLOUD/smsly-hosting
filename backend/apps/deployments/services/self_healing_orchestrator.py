@@ -789,7 +789,7 @@ class SelfHealingOrchestrator:
                 action_taken=RecoveryAction.RESTART_STACK,
                 success=True,
                 details="Stack restarted successfully",
-                post_recovery_status=status,
+                post_recovery_status=status or "stack restarted",
             )
 
         return RecoveryResult(

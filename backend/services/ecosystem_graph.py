@@ -37,7 +37,7 @@ def build_ecosystem_graph(service) -> dict[str, Any]:
             },
         }
     """
-    from apps.deployments.models import Service
+    from apps.deployments.models import Service  # type: ignore[attr-defined]
 
     if not service.owner:
         logger.debug("Service %s has no owner — skipping ecosystem graph", service.name)
@@ -96,7 +96,7 @@ def get_sibling_env_value(service, sibling_name: str, key: str) -> str | None:
     Retrieve an environment variable from a deployed sibling service.
     Used to propagate shared secrets (e.g., INTERNAL_API_SECRET).
     """
-    from apps.deployments.models import EnvironmentVariable, Service
+    from apps.deployments.models import EnvironmentVariable, Service  # type: ignore[attr-defined]
 
     try:
         sib = Service.objects.get(name=sibling_name, owner=service.owner)

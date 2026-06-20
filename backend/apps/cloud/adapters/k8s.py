@@ -46,7 +46,7 @@ class KubernetesAdapter(BaseCloudAdapter):
         # pylint: disable=too-many-positional-arguments
     def deploy_container(self, service_name: str, image: str,
                          env_vars: dict[str, str], cpu: int, memory: int,
-                         replicas: int = 1, **kwargs) -> str:
+                         replicas: int = 1, vpa_enabled: bool = True, **kwargs) -> str:
         # pylint: disable=too-many-positional-arguments, too-many-locals, too-many-arguments
         """
         Deploy container to K8s cluster.

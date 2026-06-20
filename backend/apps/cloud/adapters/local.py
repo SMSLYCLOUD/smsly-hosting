@@ -297,7 +297,7 @@ class LocalAdapter(BaseCloudAdapter):
 
         is_public = True
         try:
-            from apps.deployments.models import Service
+            from apps.deployments.models import Service  # type: ignore[attr-defined]
             svc_obj = Service.objects.filter(name=name).first()
             if svc_obj is not None:
                 is_public = svc_obj.is_public
@@ -311,7 +311,7 @@ class LocalAdapter(BaseCloudAdapter):
         host_rule = ' || '.join(f'Host(`{d}`)' for d in all_domains)
 
         try:
-            from apps.deployments.models import PlatformConfig
+            from apps.deployments.models import PlatformConfig  # type: ignore[attr-defined]
             config = PlatformConfig.load()
             use_ssl = config.use_ssl
         except Exception:
@@ -353,7 +353,7 @@ class LocalAdapter(BaseCloudAdapter):
         hc_primary_path = "/"
         docker_healthcheck = None
 
-        if platform_hc_enabled:
+        if platform_hc_enabled and healthcheck is not None:
             hc_primary_path = _normalize_health_path(healthcheck['path'])
             hc_interval = max(
                 min_interval,
@@ -414,7 +414,7 @@ class LocalAdapter(BaseCloudAdapter):
         # Local previews keep their Traefik labels so they route consistently with
         # remote services (Caddy → Traefik → container).
         try:
-            from apps.deployments.models import Service
+            from apps.deployments.models import Service  # type: ignore[attr-defined]
             svc_obj = Service.objects.filter(name=name).first()
             if svc_obj is not None and svc_obj.is_preview and svc_obj.parent_service:
                 server = getattr(svc_obj, 'server', None)
@@ -452,7 +452,7 @@ class LocalAdapter(BaseCloudAdapter):
             "blue-green staged cutover" if stage_before_cutover else "direct start",
         )
 
-        run_kwargs = {}
+        run_kwargs: dict[str, Any] = {}
         if memory and memory > 0:
             if vpa_enabled:
                 run_kwargs['mem_reservation'] = f"{memory}m"
@@ -606,6 +606,8 @@ class LocalAdapter(BaseCloudAdapter):
         network_name = os.getenv('DOCKER_NETWORK', 'smsly-net')
 
         try:
+            if self.docker_client is None:
+                raise RuntimeError("Docker client unavailable")
             green = self.docker_client.containers.get(green_container_id)
         except docker.errors.NotFound:
             raise RuntimeError(
@@ -660,7 +662,7 @@ class LocalAdapter(BaseCloudAdapter):
         # Local previews keep their Traefik labels so they route consistently with
         # remote services (Caddy → Traefik → container).
         try:
-            from apps.deployments.models import Service
+            from apps.deployments.models import Service  # type: ignore[attr-defined]
             svc_obj = Service.objects.filter(name=name).first()
             if svc_obj is not None and svc_obj.is_preview and svc_obj.parent_service:
                 server = getattr(svc_obj, 'server', None)
@@ -702,7 +704,7 @@ class LocalAdapter(BaseCloudAdapter):
         if not image_ref:
             image_ref = green.image.id
 
-        run_kwargs = {}
+        run_kwargs: dict[str, Any] = {}
         mem_limit = green_host_config.get('Memory')
         if mem_limit and mem_limit > 0:
             run_kwargs['mem_limit'] = mem_limit
@@ -729,6 +731,8 @@ class LocalAdapter(BaseCloudAdapter):
         old_container = None
         backup_name = ""
         try:
+            if self.docker_client is None:
+                raise RuntimeError("Docker client unavailable")
             old_container = self.docker_client.containers.get(name)
             backup_name = f"{name}-rollback-{secrets.token_hex(3)}"
             old_container.rename(backup_name)
@@ -756,6 +760,8 @@ class LocalAdapter(BaseCloudAdapter):
         )
         promote_health_timeout = max(promote_health_timeout, green_start_period + 120)
         try:
+            if self.docker_client is None:
+                raise RuntimeError("Docker client unavailable")
             networking_config = self.docker_client.api.create_networking_config({
                 network_name: self.docker_client.api.create_endpoint_config(
                     aliases=[name, f"{name}.default.internal"]
@@ -789,6 +795,8 @@ class LocalAdapter(BaseCloudAdapter):
                 )
 
             try:
+                if self.docker_client is None:
+                    raise RuntimeError("Docker client unavailable")
                 net = self.docker_client.networks.get(network_name)
                 net.disconnect(promoted)
                 net.connect(promoted, aliases=[name, f"{name}.default.internal"])
@@ -846,6 +854,8 @@ class LocalAdapter(BaseCloudAdapter):
                     ) from restore_exc
 
                 try:
+                    if self.docker_client is None:
+                        raise RuntimeError("Docker client unavailable")
                     net = self.docker_client.networks.get(network_name)
                     net.disconnect(old_container)
                     net.connect(old_container, aliases=[name, f"{name}.default.internal"])
@@ -866,6 +876,8 @@ class LocalAdapter(BaseCloudAdapter):
         poll_count = 0
         while _time.monotonic() < deadline:
             try:
+                if self.docker_client is None:
+                    raise RuntimeError("Docker client unavailable")
                 container = self.docker_client.containers.get(container_id)
                 container.reload()
                 state = container.attrs.get("State") or {}
@@ -1017,7 +1029,9 @@ EOF
 
         if self.docker_client:
             return self._deploy_docker_function(
-                function_name, image, env_vars, volumes, entrypoint, code_mount)
+                function_name, image, env_vars,
+                volumes or [], entrypoint or [], code_mount or "",
+            )
 
         raise RuntimeError("No local orchestrator available (Kubernetes deployment is not supported)")
 

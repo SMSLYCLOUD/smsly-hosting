@@ -2341,13 +2341,13 @@ def _wait_for_local_route_ready(
                 try:
                     response = requests.get(
                         url,
-                        headers=probe["headers"],
+                        headers=probe["headers"],  # type: ignore[arg-type]
                         timeout=(
                             _env_int("LOCAL_ROUTE_EDGE_PROBE_TIMEOUT_SECONDS", 4, minimum=1)
                             if probe.get("kind") == "edge"
                             else 8
                         ),
-                        verify=probe["verify"],
+                        verify=probe["verify"],  # type: ignore[arg-type]
                         allow_redirects=False,
                     )
                 except requests.RequestException as exc:

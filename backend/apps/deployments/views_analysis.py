@@ -438,7 +438,7 @@ class RepoAnalysisView(GenericAPIView):
                 seen.add(v.upper())
 
         # Enrich with hints
-        enriched_vars = self._enrich_env_vars(all_var_keys, port)
+        enriched_vars = self._enrich_env_vars(all_var_keys, int(port) if port is not None else None)
 
         # Detect if Dockerfile exists
         has_dockerfile = files and 'Dockerfile' in files if files else False

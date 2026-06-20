@@ -14,16 +14,16 @@ from encrypted_model_fields.fields import EncryptedTextField
 
 class Organization(models.Model):
     """Top-level tenant. Contains teams, members, and SSO configuration."""
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    name = models.CharField(max_length=255)
-    slug = models.SlugField(max_length=128, unique=True, help_text="URL-safe identifier")
-    owner = models.ForeignKey(
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)  # type: ignore[var-annotated]
+    name = models.CharField(max_length=255)  # type: ignore[var-annotated]
+    slug = models.SlugField(max_length=128, unique=True, help_text="URL-safe identifier")  # type: ignore[var-annotated]
+    owner = models.ForeignKey(  # type: ignore[var-annotated]
         'auth.User', on_delete=models.CASCADE,
         related_name='owned_organizations',
     )
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
+    updated_at = models.DateTimeField(auto_now=True)  # type: ignore[var-annotated]
+    is_active = models.BooleanField(default=True)  # type: ignore[var-annotated]
 
     class Meta:
         ordering = ['-created_at']
@@ -41,20 +41,20 @@ class OrganizationMembership(models.Model):
         ADMIN = 'ADMIN', 'Admin'
         MEMBER = 'MEMBER', 'Member'
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    organization = models.ForeignKey(
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)  # type: ignore[var-annotated]
+    organization = models.ForeignKey(  # type: ignore[var-annotated]
         Organization, on_delete=models.CASCADE,
         related_name='memberships',
     )
-    user = models.ForeignKey(
+    user = models.ForeignKey(  # type: ignore[var-annotated]
         'auth.User', on_delete=models.CASCADE,
         related_name='organization_memberships',
     )
-    role = models.CharField(
+    role = models.CharField(  # type: ignore[var-annotated]
         max_length=20, choices=Role.choices, default=Role.MEMBER,
     )
-    invited_at = models.DateTimeField(auto_now_add=True)
-    accepted_at = models.DateTimeField(null=True, blank=True)
+    invited_at = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
+    accepted_at = models.DateTimeField(null=True, blank=True)  # type: ignore[var-annotated]
 
     class Meta:
         unique_together = [('organization', 'user')]
@@ -78,43 +78,43 @@ class OrganizationSSO(models.Model):
         GOOGLE_WORKSPACE = 'GOOGLE_WORKSPACE', 'Google Workspace'
         AZURE_AD = 'AZURE_AD', 'Azure AD / Entra ID'
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    organization = models.ForeignKey(
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)  # type: ignore[var-annotated]
+    organization = models.ForeignKey(  # type: ignore[var-annotated]
         Organization, on_delete=models.CASCADE,
         related_name='sso_providers',
     )
-    provider_type = models.CharField(
+    provider_type = models.CharField(  # type: ignore[var-annotated]
         max_length=32, choices=ProviderType.choices,
     )
-    label = models.CharField(
+    label = models.CharField(  # type: ignore[var-annotated]
         max_length=255, blank=True, default='',
         help_text="Display name (e.g. 'Company Okta')",
     )
-    is_active = models.BooleanField(default=True)
+    is_active = models.BooleanField(default=True)  # type: ignore[var-annotated]
 
     # ── OIDC fields ──
-    oidc_issuer_url = models.URLField(blank=True, default='')
+    oidc_issuer_url = models.URLField(blank=True, default='')  # type: ignore[var-annotated]
     oidc_client_id = EncryptedTextField(blank=True, default='')
     oidc_client_secret = EncryptedTextField(blank=True, default='')
 
     # ── SAML fields ──
-    saml_entity_id = models.URLField(blank=True, default='')
-    saml_sso_url = models.URLField(blank=True, default='')
+    saml_entity_id = models.URLField(blank=True, default='')  # type: ignore[var-annotated]
+    saml_sso_url = models.URLField(blank=True, default='')  # type: ignore[var-annotated]
     saml_x509_cert = EncryptedTextField(blank=True, default='')
 
     # ── Domain auto-provisioning ──
-    auto_provision_domains = models.JSONField(
+    auto_provision_domains = models.JSONField(  # type: ignore[var-annotated]
         default=list, blank=True,
         help_text="Email domains that auto-provision users (e.g. ['company.com'])",
     )
-    default_role = models.CharField(
+    default_role = models.CharField(  # type: ignore[var-annotated]
         max_length=20, choices=OrganizationMembership.Role.choices,
         default=OrganizationMembership.Role.MEMBER,
         help_text="Role assigned to auto-provisioned users",
     )
 
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
+    updated_at = models.DateTimeField(auto_now=True)  # type: ignore[var-annotated]
 
     class Meta:
         verbose_name = "Organization SSO Provider"

@@ -16,7 +16,7 @@ from apps.teams.permissions import (
     get_team_q_filter,
 )
 
-from .models import Service
+from .models import Service  # type: ignore[attr-defined]  # models re-exports from submodules
 from .models_addons import Addon
 
 logger = logging.getLogger(__name__)

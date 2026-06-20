@@ -181,7 +181,7 @@ class CloudResourceViewSet(viewsets.ModelViewSet):
 
 
 class IntelligencePayloadSerializer(serializers.Serializer):
-    data = serializers.JSONField(required=False)
+    data = serializers.JSONField(required=False)  # type: ignore[assignment]
 
 
 class IntelligenceViewSet(viewsets.GenericViewSet):

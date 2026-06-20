@@ -64,8 +64,8 @@ def _loki_time_to_ns(value: str) -> str:
             'h': timedelta(hours=amount),
             'd': timedelta(days=amount),
         }[unit]
-        ts = datetime.now(timezone.utc) - delta
-        return str(int(ts.timestamp() * 1_000_000_000))
+        ts_dt = datetime.now(timezone.utc) - delta
+        return str(int(ts_dt.timestamp() * 1_000_000_000))
     try:
         ts = float(value)
     except ValueError:

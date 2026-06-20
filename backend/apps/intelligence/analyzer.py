@@ -98,7 +98,7 @@ class LogAnalyzer:
                     detected_issues.append({
                         'type': issue_type,
                         'pattern': pattern,
-                        'confidence': 0.95  # Regex match is high confidence
+                        'confidence': '0.95'  # Regex match is high confidence
                     })
                     break  # Found one match for this type, move to next type
 

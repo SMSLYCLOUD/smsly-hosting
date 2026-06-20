@@ -77,8 +77,8 @@ def _validate_localllm_base_url(url: str) -> None:
                     {'localllm_base_url': f'localllm_base_url host {host!r} is in a '
                      f'disallowed network range ({network}).'}
                 )
-    allowed_hosts = tuple(getattr(settings, 'LOCALLM_ALLOWED_HOSTS', ()) or ())
-    allowed_hosts = {h.lower() for h in allowed_hosts}
+    allowed_hosts_raw = tuple(getattr(settings, 'LOCALLM_ALLOWED_HOSTS', ()) or ())
+    allowed_hosts = {h.lower() for h in allowed_hosts_raw}
     if not allowed_hosts or host not in allowed_hosts:
         raise ValidationError(
             {'localllm_base_url': f'localllm_base_url host {host!r} is not in the '
@@ -91,51 +91,51 @@ class AIProviderSettings(models.Model):
     """Singleton table for AI provider configuration (admin-managed)."""
 
     # Enforce singleton row (pk=1).
-    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)  # type: ignore[var-annotated]
 
     # Provider keys — set any/all. System auto-discovers configured providers.
     openai_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
-    openai_model = models.CharField(max_length=100, default="gpt-4o-mini", blank=True)
+    openai_model = models.CharField(max_length=100, default="gpt-4o-mini", blank=True)  # type: ignore[var-annotated]
 
     grok_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
-    grok_model = models.CharField(max_length=100, default="grok-3-mini", blank=True)
+    grok_model = models.CharField(max_length=100, default="grok-3-mini", blank=True)  # type: ignore[var-annotated]
 
     gemini_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
-    gemini_model = models.CharField(max_length=100, default="gemini-2.0-flash", blank=True)
+    gemini_model = models.CharField(max_length=100, default="gemini-2.0-flash", blank=True)  # type: ignore[var-annotated]
 
     claude_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
-    claude_model = models.CharField(max_length=100, default="claude-sonnet-4-20250514", blank=True)
+    claude_model = models.CharField(max_length=100, default="claude-sonnet-4-20250514", blank=True)  # type: ignore[var-annotated]
 
     deepseek_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
-    deepseek_model = models.CharField(max_length=100, default="deepseek-coder", blank=True)
+    deepseek_model = models.CharField(max_length=100, default="deepseek-coder", blank=True)  # type: ignore[var-annotated]
 
     # OpenAI-compatible Providers
     openrouter_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
-    openrouter_model = models.CharField(max_length=100, default="openrouter/auto", blank=True)
+    openrouter_model = models.CharField(max_length=100, default="openrouter/auto", blank=True)  # type: ignore[var-annotated]
 
     groq_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
-    groq_model = models.CharField(max_length=100, default="llama-3.3-70b-versatile", blank=True)
+    groq_model = models.CharField(max_length=100, default="llama-3.3-70b-versatile", blank=True)  # type: ignore[var-annotated]
 
     alibaba_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
-    alibaba_model = models.CharField(max_length=100, default="qwen-max", blank=True)
+    alibaba_model = models.CharField(max_length=100, default="qwen-max", blank=True)  # type: ignore[var-annotated]
 
     jules_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
-    jules_model = models.CharField(max_length=100, default="jules-latest", blank=True)
-    jules_base_url = models.CharField(
+    jules_model = models.CharField(max_length=100, default="jules-latest", blank=True)  # type: ignore[var-annotated]
+    jules_base_url = models.CharField(  # type: ignore[var-annotated]
         max_length=255,
         default="https://api.jules.google.com/v1",
         blank=True,
         help_text="OpenAI-compatible base URL for Jules provider",
     )
-    jules_auto_deploy_pr = models.BooleanField(
+    jules_auto_deploy_pr = models.BooleanField(  # type: ignore[var-annotated]
         default=False,
         help_text="Automatically redeploy services from the branch of Jules auto-fix PRs",
     )
 
     # Local LLM (OpenAI-compatible)
     localllm_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
-    localllm_model = models.CharField(max_length=100, default="local-model", blank=True)
-    localllm_base_url = models.CharField(
+    localllm_model = models.CharField(max_length=100, default="local-model", blank=True)  # type: ignore[var-annotated]
+    localllm_base_url = models.CharField(  # type: ignore[var-annotated]
         max_length=255,
         default="http://localhost:11434/v1",
         blank=True,
@@ -144,12 +144,12 @@ class AIProviderSettings(models.Model):
 
     # SMSLY Cloud AI
     smslycloud_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
-    smslycloud_model = models.CharField(max_length=100, default="smsly-latest", blank=True)
+    smslycloud_model = models.CharField(max_length=100, default="smsly-latest", blank=True)  # type: ignore[var-annotated]
 
     # FreeModel.dev
     freemodel_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
-    freemodel_model = models.CharField(max_length=100, default="gpt-4o-mini", blank=True)
-    freemodel_base_url = models.CharField(
+    freemodel_model = models.CharField(max_length=100, default="gpt-4o-mini", blank=True)  # type: ignore[var-annotated]
+    freemodel_base_url = models.CharField(  # type: ignore[var-annotated]
         max_length=255,
         default="https://api.freemodel.dev/v1",
         blank=True,
@@ -158,8 +158,8 @@ class AIProviderSettings(models.Model):
 
     # OpenCode API
     opencode_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
-    opencode_model = models.CharField(max_length=100, default="opencode-latest", blank=True)
-    opencode_base_url = models.CharField(
+    opencode_model = models.CharField(max_length=100, default="opencode-latest", blank=True)  # type: ignore[var-annotated]
+    opencode_base_url = models.CharField(  # type: ignore[var-annotated]
         max_length=255,
         default="https://api.opencode.ai/v1",
         blank=True,
@@ -168,8 +168,8 @@ class AIProviderSettings(models.Model):
 
     # Mistral AI (La Plateforme)
     mistral_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
-    mistral_model = models.CharField(max_length=100, default="mistral-small-latest", blank=True)
-    mistral_base_url = models.CharField(
+    mistral_model = models.CharField(max_length=100, default="mistral-small-latest", blank=True)  # type: ignore[var-annotated]
+    mistral_base_url = models.CharField(  # type: ignore[var-annotated]
         max_length=255,
         default="https://api.mistral.ai/v1",
         blank=True,
@@ -178,8 +178,8 @@ class AIProviderSettings(models.Model):
 
     # NVIDIA NIM
     nvidia_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
-    nvidia_model = models.CharField(max_length=100, default="nvidia/llama-3.1-nemotron-70b-instruct", blank=True)
-    nvidia_base_url = models.CharField(
+    nvidia_model = models.CharField(max_length=100, default="nvidia/llama-3.1-nemotron-70b-instruct", blank=True)  # type: ignore[var-annotated]
+    nvidia_base_url = models.CharField(  # type: ignore[var-annotated]
         max_length=255,
         default="https://integrate.api.nvidia.com/v1",
         blank=True,
@@ -188,33 +188,33 @@ class AIProviderSettings(models.Model):
 
     # Cloudflare Workers AI (via AI Gateway)
     cloudflare_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
-    cloudflare_model = models.CharField(max_length=100, default="@cf/meta/llama-3.1-8b-instruct", blank=True)
-    cloudflare_base_url = models.CharField(
+    cloudflare_model = models.CharField(max_length=100, default="@cf/meta/llama-3.1-8b-instruct", blank=True)  # type: ignore[var-annotated]
+    cloudflare_base_url = models.CharField(  # type: ignore[var-annotated]
         max_length=255,
         default="https://gateway.ai.cloudflare.com/v1/YOUR_ACCOUNT_ID/default/workers-ai",
         blank=True,
         help_text="Cloudflare AI Gateway URL. Replace YOUR_ACCOUNT_ID with your Cloudflare account ID.",
     )
 
-    ecosystem_wave_size = models.PositiveSmallIntegerField(
+    ecosystem_wave_size = models.PositiveSmallIntegerField(  # type: ignore[var-annotated]
         default=10,
         help_text="Maximum services deployed concurrently per dependency wave",
     )
 
-    senate_enabled = models.BooleanField(
+    senate_enabled = models.BooleanField(  # type: ignore[var-annotated]
         default=True,
         help_text="Enable collaborative deliberation (Senate Committee) when 2+ providers configured",
     )
-    senate_max_members = models.PositiveSmallIntegerField(
+    senate_max_members = models.PositiveSmallIntegerField(  # type: ignore[var-annotated]
         default=5,
         help_text="Maximum number of AI members allowed in a Senate Committee",
     )
-    ecosystem_wave_recheck_seconds = models.PositiveSmallIntegerField(
+    ecosystem_wave_recheck_seconds = models.PositiveSmallIntegerField(  # type: ignore[var-annotated]
         default=15,
         help_text="Seconds between dependency-wave status checks",
     )
 
-    updated_at = models.DateTimeField(auto_now=True)
+    updated_at = models.DateTimeField(auto_now=True)  # type: ignore[var-annotated]
 
     @classmethod
     def get_solo(cls) -> "AIProviderSettings":
@@ -266,19 +266,19 @@ class AIProviderSettings(models.Model):
 class LLMUsage(models.Model):
     """Per-call LLM usage record for token / cost accounting."""
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user = models.ForeignKey(
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)  # type: ignore[var-annotated]
+    user = models.ForeignKey(  # type: ignore[var-annotated]
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name='llm_usages',
     )
-    provider = models.CharField(max_length=64)
-    model = models.CharField(max_length=128, blank=True)
-    prompt_tokens = models.IntegerField(default=0)
-    completion_tokens = models.IntegerField(default=0)
-    total_tokens = models.IntegerField(default=0)
-    estimated_cost_usd = models.DecimalField(max_digits=10, decimal_places=6, default=0)
-    created_at = models.DateTimeField(auto_now_add=True)
+    provider = models.CharField(max_length=64)  # type: ignore[var-annotated]
+    model = models.CharField(max_length=128, blank=True)  # type: ignore[var-annotated]
+    prompt_tokens = models.IntegerField(default=0)  # type: ignore[var-annotated]
+    completion_tokens = models.IntegerField(default=0)  # type: ignore[var-annotated]
+    total_tokens = models.IntegerField(default=0)  # type: ignore[var-annotated]
+    estimated_cost_usd = models.DecimalField(max_digits=10, decimal_places=6, default=0)  # type: ignore[var-annotated]
+    created_at = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
 
     class Meta:
         indexes = [models.Index(fields=['user', '-created_at'])]
@@ -287,10 +287,10 @@ class LLMUsage(models.Model):
 class UserAICap(models.Model):
     """Per-user daily spend / token caps for LLM calls."""
 
-    user = models.OneToOneField(
+    user = models.OneToOneField(  # type: ignore[var-annotated]
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name='ai_cap',
     )
-    daily_token_cap = models.IntegerField(default=100000)
-    daily_cost_cap_usd = models.DecimalField(max_digits=8, decimal_places=2, default=10.00)
+    daily_token_cap = models.IntegerField(default=100000)  # type: ignore[var-annotated]
+    daily_cost_cap_usd = models.DecimalField(max_digits=8, decimal_places=2, default=10.00)  # type: ignore[var-annotated]

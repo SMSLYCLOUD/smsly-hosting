@@ -82,8 +82,8 @@ class Addon(TimeStampedModel):
         DELETION_PENDING = 'DELETION_PENDING', 'Deletion Pending'
         DELETION_FAILED = 'DELETION_FAILED', 'Deletion Failed'
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    project = models.ForeignKey(
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)  # type: ignore[var-annotated]
+    project = models.ForeignKey(  # type: ignore[var-annotated]
         'deployments.Project',
         on_delete=models.SET_NULL,
         null=True,
@@ -91,30 +91,30 @@ class Addon(TimeStampedModel):
         related_name='project_addons',
         help_text="Project this addon belongs to (null = ungrouped)"
     )
-    service = models.ForeignKey(
+    service = models.ForeignKey(  # type: ignore[var-annotated]
         Service,
         on_delete=models.CASCADE,
         related_name='addons')
-    name = models.CharField(max_length=255)
-    addon_type = models.CharField(max_length=20, choices=Type.choices)
-    is_bucket_public = models.BooleanField(
+    name = models.CharField(max_length=255)  # type: ignore[var-annotated]
+    addon_type = models.CharField(max_length=20, choices=Type.choices)  # type: ignore[var-annotated]
+    is_bucket_public = models.BooleanField(  # type: ignore[var-annotated]
         default=False,
         help_text="Whether the default bucket is public read-only."
     )
-    status = models.CharField(
+    status = models.CharField(  # type: ignore[var-annotated]
         max_length=20,
         choices=Status.choices,
         default=Status.PROVISIONING)
-    deletion_error = models.TextField(blank=True, default='')
+    deletion_error = models.TextField(blank=True, default='')  # type: ignore[var-annotated]
     connection_url = EncryptedCharField(
         max_length=512, blank=True)  # H-1 fix: encrypted at rest
 
     # Coolify Integration
-    coolify_uuid = models.CharField(max_length=64, blank=True, null=True,
+    coolify_uuid = models.CharField(max_length=64, blank=True, null=True,  # type: ignore[var-annotated]
                                     help_text="UUID of the database in Coolify")
 
     # Public Routing
-    public_domain = models.CharField(max_length=255, blank=True, null=True, unique=True,
+    public_domain = models.CharField(max_length=255, blank=True, null=True, unique=True,  # type: ignore[var-annotated]
                                      help_text="Public domain assigned to expose this addon externally via proxy")
 
     @property
@@ -239,22 +239,22 @@ class Backup(TimeStampedModel):
         COMPLETED = 'COMPLETED', 'Completed'
         FAILED = 'FAILED', 'Failed'
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    addon = models.ForeignKey(
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)  # type: ignore[var-annotated]
+    addon = models.ForeignKey(  # type: ignore[var-annotated]
         Addon,
         on_delete=models.CASCADE,
         related_name='backups')
 
-    file_path = models.CharField(max_length=512, blank=True)
-    size_bytes = models.BigIntegerField(default=0)
+    file_path = models.CharField(max_length=512, blank=True)  # type: ignore[var-annotated]
+    size_bytes = models.BigIntegerField(default=0)  # type: ignore[var-annotated]
 
-    status = models.CharField(
+    status = models.CharField(  # type: ignore[var-annotated]
         max_length=20,
         choices=Status.choices,
         default=Status.PENDING)
 
-    completed_at = models.DateTimeField(null=True, blank=True)
-    error_message = models.TextField(blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)  # type: ignore[var-annotated]
+    error_message = models.TextField(blank=True)  # type: ignore[var-annotated]
 
     def __str__(self):
         return f"Backup {self.id} ({self.status})"

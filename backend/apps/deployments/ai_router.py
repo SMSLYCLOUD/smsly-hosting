@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass
 
 import yaml
 
-from .models import EnvironmentVariable, Service
+from .models import EnvironmentVariable, Service  # type: ignore[attr-defined]  # models re-exports from submodules
 
 AI_ROUTER_IMAGE = "ghcr.io/berriai/litellm"
 OLLAMA_IMAGE = "ollama/ollama"

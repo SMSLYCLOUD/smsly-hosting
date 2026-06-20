@@ -300,7 +300,7 @@ def diagnose_runtime_logs(
         fix = pattern.get('auto_fix')
         if fix and auto_apply and service:
             try:
-                action = _apply_fix(fix, match, logs, service, deployment)
+                action = _apply_fix(dict(fix), match, logs, service, deployment)  # type: ignore[arg-type]
                 if action:
                     result['action_taken'] = action
                     result['auto_fixed'] = True

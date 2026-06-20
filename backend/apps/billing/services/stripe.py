@@ -65,9 +65,11 @@ class StripeService:
         if account.stripe_customer_id:
             return account
 
+        email_value = getattr(user, "email", "") or ""
+        name_value = getattr(user, "username", "") or ""
         customer = stripe.Customer.create(
-            email=getattr(user, "email", "") or None,
-            name=getattr(user, "username", "") or None,
+            email=email_value or "",
+            name=name_value or "",
             metadata={"user_id": str(getattr(user, "id", ""))},
         )
         account.stripe_customer_id = customer.id
@@ -100,7 +102,7 @@ class StripeService:
             cancel_url=cancel_url,
             metadata={"plan": plan},
         )
-        return session.url
+        return session.url or ""
 
     @staticmethod
     def create_portal_session(*, user, return_url: str) -> str:

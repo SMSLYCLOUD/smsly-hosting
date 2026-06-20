@@ -154,7 +154,7 @@ def create_error_response(
         Dict with standardized error structure
     """
     if isinstance(error, StandardizedError):
-        response = {
+        response: dict[str, Any] = {
             "error": {
                 "type": error.error_type.value,
                 "message": error.user_message,
@@ -193,7 +193,7 @@ def log_error(
         error: The error to log
         context: Additional context information
     """
-    log_data = {
+    log_data: dict[str, Any] = {
         "error_type": error.error_type.value if isinstance(error, StandardizedError) else "unknown",
         "severity": error.severity.value if isinstance(error, StandardizedError) else "high",
         "message": str(error),

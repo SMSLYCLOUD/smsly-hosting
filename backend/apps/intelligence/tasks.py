@@ -74,7 +74,7 @@ def _process_service_anomaly(
     fixed_count = 0
     for issue in issues:
         issue_type = str(issue.get("type") or "")
-        confidence = float(issue.get("confidence") or 0.0)
+        confidence = float(issue.get("confidence") or 0.0)  # type: ignore[arg-type]
         if confidence < 0.9 or not issue_type:
             continue
 

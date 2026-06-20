@@ -163,21 +163,22 @@ def _dispatch_preview_deployment(deployment: Deployment, provider_id: str | None
         return None
 
     from apps.deployments.tasks_deploy import enqueue_smart_deploy_task
-    return enqueue_smart_deploy_task(str(deployment.id), provider_id, skip_review=True)
+    return enqueue_smart_deploy_task(str(deployment.id), provider_id or "", skip_review=True)  # type: ignore[arg-type]
 
 def checkout_code(repo_url: str, branch: str, commit_sha: str, target_dir: str, token: str | None = None) -> str:
     from apps.deployments.services.git_manager import GitManager
     try:
-        return GitManager.clone_repo(
+        result = GitManager.clone_repo(
             repo_url=repo_url,
             branch=branch,
             destination=target_dir,
             token=token,
             commit_hash=commit_sha
         )
+        return result if result else ""
     except Exception as e:
         logger.error(f"Git clone failed: {e!s}")
-        return None
+        return ""
 
 @shared_task
 def create_preview_environment_job(preview_id: str):

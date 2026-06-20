@@ -165,10 +165,10 @@ class GitHubWebhookHandler:
         for parent in parent_services:
             if action in ['opened', 'reopened', 'synchronize']:
                 triggered_count += self._create_or_update_preview(
-                    parent, pr_number, head_ref, head_sha
+                    parent, int(pr_number) if pr_number is not None else 0, head_ref, head_sha  # type: ignore[arg-type]
                 )
             elif action == 'closed':
-                triggered_count += self._destroy_preview(parent, pr_number)
+                triggered_count += self._destroy_preview(parent, int(pr_number) if pr_number is not None else 0)  # type: ignore[arg-type]
 
         return triggered_count > 0
 

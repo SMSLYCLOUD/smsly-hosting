@@ -9,9 +9,9 @@ try:
     HAS_GCP_SDK = True
 except ImportError:
     HAS_GCP_SDK = False
-    run_v2 = None
-    policy_pb2 = None
-    service_account = None
+    run_v2: Any = None
+    policy_pb2: Any = None
+    service_account: Any = None
 
 class GCPAdapter(BaseCloudAdapter):
     def __init__(self, service_account_json: dict,
@@ -37,7 +37,8 @@ class GCPAdapter(BaseCloudAdapter):
         return True
 
     def deploy_container(self, service_name: str, image: str,
-                         env_vars: dict[str, str], cpu: int, memory: int, replicas: int = 1, **kwargs) -> str:
+                         env_vars: dict[str, str], cpu: int, memory: int, replicas: int = 1,
+                         vpa_enabled: bool = True, **kwargs) -> str:
         """
         Deploys a container to Google Cloud Run.
         """

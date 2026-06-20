@@ -10,6 +10,7 @@ cleared so the next OAuth flow picks up the new values.
 
 import unittest
 from collections import OrderedDict
+from typing import Any
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
@@ -20,12 +21,12 @@ from rest_framework.test import APIClient
 try:
     from allauth.socialaccount.models import SocialApp
 except ImportError:
-    SocialApp = None
+    SocialApp: Any = None
 
 try:
     from django.contrib.sites.models import Site
 except ImportError:
-    Site = None
+    Site: Any = None
 
 try:
     from allauth.socialaccount import providers as allauth_providers

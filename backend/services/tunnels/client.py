@@ -28,10 +28,10 @@ import aiohttp
 try:
     from rich.console import Console
     # pylint: disable=unused-import
-    CONSOLE = Console()
+    CONSOLE: Console | None = Console()
     RICH_AVAILABLE = True
 except ImportError:
-    CONSOLE = None
+    CONSOLE: Console | None = None
     RICH_AVAILABLE = False
 
 logger = logging.getLogger('smsly.tunnel.client')
@@ -87,7 +87,7 @@ class TunnelClient:
         """Print connection success message."""
         self.public_url = data.get('public_url')
 
-        if RICH_AVAILABLE:
+        if RICH_AVAILABLE and CONSOLE is not None:
             CONSOLE.print("[green]✓[/green] Tunnel established")
             CONSOLE.print(f"[bold]→[/bold] {self.public_url}")
             CONSOLE.print(f"[dim]  Forwarding to localhost:{self.local_port}[/dim]")
@@ -109,7 +109,7 @@ class TunnelClient:
         method = data.get('method', 'GET')
         path = data.get('path', '/')
 
-        if RICH_AVAILABLE:
+        if RICH_AVAILABLE and CONSOLE is not None:
             color = "green" if method == "GET" else "yellow" if method == "POST" else "blue"
             CONSOLE.print(f"[{color}]{method}[/{color}] {path}")
         else:

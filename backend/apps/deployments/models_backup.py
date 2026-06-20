@@ -52,53 +52,53 @@ def validate_endpoint_url(url: str) -> None:
 
 class ServiceBackup(models.Model):
     """Full snapshot of a service: container state + volumes + env vars + addons."""
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4)
-    service = models.ForeignKey(Service, on_delete=models.CASCADE, related_name='backups')
-    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
-    status = models.CharField(choices=[
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4)  # type: ignore[var-annotated]
+    service = models.ForeignKey(Service, on_delete=models.CASCADE, related_name='backups')  # type: ignore[var-annotated]
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)  # type: ignore[var-annotated]
+    status = models.CharField(choices=[  # type: ignore[var-annotated]
         ('PENDING', 'Pending'), ('IN_PROGRESS', 'In Progress'),
         ('COMPLETED', 'Completed'), ('FAILED', 'Failed'),
     ], default='PENDING', max_length=20)
-    backup_type = models.CharField(choices=[
+    backup_type = models.CharField(choices=[  # type: ignore[var-annotated]
         ('MANUAL', 'Manual'), ('SCHEDULED', 'Scheduled'),
         ('PRE_TRANSFER', 'Pre-Transfer'),
     ], default='MANUAL', max_length=20)
-    file_path = models.CharField(max_length=500, blank=True)  # path to tarball
-    size_bytes = models.BigIntegerField(default=0)
-    metadata = models.JSONField(default=dict)  # snapshot of env vars, resources, config
-    error_message = models.TextField(blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    completed_at = models.DateTimeField(null=True, blank=True)
+    file_path = models.CharField(max_length=500, blank=True)  # path to tarball  # type: ignore[var-annotated]
+    size_bytes = models.BigIntegerField(default=0)  # type: ignore[var-annotated]
+    metadata = models.JSONField(default=dict)  # snapshot of env vars, resources, config  # type: ignore[var-annotated]
+    error_message = models.TextField(blank=True)  # type: ignore[var-annotated]
+    created_at = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
+    completed_at = models.DateTimeField(null=True, blank=True)  # type: ignore[var-annotated]
 
 class ServerBackup(models.Model):
     """Full server export: all services + platform config + Traefik + SSL certs."""
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4)
-    status = models.CharField(max_length=20, default='PENDING')
-    file_path = models.CharField(max_length=500, blank=True)
-    size_bytes = models.BigIntegerField(default=0)
-    services_included = models.JSONField(default=list)
-    error_message = models.TextField(blank=True, default='')
-    created_at = models.DateTimeField(auto_now_add=True)
-    completed_at = models.DateTimeField(null=True, blank=True)
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4)  # type: ignore[var-annotated]
+    status = models.CharField(max_length=20, default='PENDING')  # type: ignore[var-annotated]
+    file_path = models.CharField(max_length=500, blank=True)  # type: ignore[var-annotated]
+    size_bytes = models.BigIntegerField(default=0)  # type: ignore[var-annotated]
+    services_included = models.JSONField(default=list)  # type: ignore[var-annotated]
+    error_message = models.TextField(blank=True, default='')  # type: ignore[var-annotated]
+    created_at = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
+    completed_at = models.DateTimeField(null=True, blank=True)  # type: ignore[var-annotated]
 
 class BackupSchedule(models.Model):
     """Cron-based backup schedule per service or server-wide."""
-    service = models.ForeignKey(Service, on_delete=models.CASCADE, null=True, blank=True)
-    is_server_wide = models.BooleanField(default=False)
-    cron_expression = models.CharField(max_length=100, default='0 3 * * *')  # daily 3am
-    retention_days = models.IntegerField(default=7)
-    enabled = models.BooleanField(default=True)
-    last_run = models.DateTimeField(null=True)
-    next_run = models.DateTimeField(null=True)
+    service = models.ForeignKey(Service, on_delete=models.CASCADE, null=True, blank=True)  # type: ignore[var-annotated]
+    is_server_wide = models.BooleanField(default=False)  # type: ignore[var-annotated]
+    cron_expression = models.CharField(max_length=100, default='0 3 * * *')  # daily 3am  # type: ignore[var-annotated]
+    retention_days = models.IntegerField(default=7)  # type: ignore[var-annotated]
+    enabled = models.BooleanField(default=True)  # type: ignore[var-annotated]
+    last_run = models.DateTimeField(null=True)  # type: ignore[var-annotated]
+    next_run = models.DateTimeField(null=True)  # type: ignore[var-annotated]
     # ── S3 / object storage destination (optional) ──────────────────────────
-    storage_backend = models.CharField(
+    storage_backend = models.CharField(  # type: ignore[var-annotated]
         max_length=20,
         choices=[('local', 'Local'), ('s3', 'S3 / R2 / MinIO')],
         default='local',
     )
-    s3_bucket = models.CharField(max_length=255, blank=True, default='')
-    s3_region = models.CharField(max_length=100, blank=True, default='us-east-1')
-    s3_endpoint = models.CharField(
+    s3_bucket = models.CharField(max_length=255, blank=True, default='')  # type: ignore[var-annotated]
+    s3_region = models.CharField(max_length=100, blank=True, default='us-east-1')  # type: ignore[var-annotated]
+    s3_endpoint = models.CharField(  # type: ignore[var-annotated]
         max_length=500, blank=True, default='',
         help_text='Custom endpoint for R2/MinIO. Leave blank for AWS S3.',
     )
@@ -133,14 +133,14 @@ class BackupEncryptionKey(models.Model):
     ``BACKUP_ENCRYPTION_KEY``, a new active row is created on the
     next backup.
     """
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4)
-    key_id = models.CharField(
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4)  # type: ignore[var-annotated]
+    key_id = models.CharField(  # type: ignore[var-annotated]
         max_length=8,
         unique=True,
         db_index=True,
         help_text='4 random bytes as 8-char hex; matches the V2 backup header key_id.',
     )
-    fingerprint = models.CharField(
+    fingerprint = models.CharField(  # type: ignore[var-annotated]
         max_length=8,
         db_index=True,
         help_text='First 4 bytes of SHA-256(raw_key) as 8-char hex; matches V2 header fingerprint.',
@@ -149,13 +149,13 @@ class BackupEncryptionKey(models.Model):
         max_length=512,
         help_text='Fernet BACKUP_ENCRYPTION_KEY, encrypted at rest with FIELD_ENCRYPTION_KEY.',
     )
-    label = models.CharField(
+    label = models.CharField(  # type: ignore[var-annotated]
         max_length=100,
         blank=True,
         default='',
         help_text='Operator label e.g. "master-a-imported-2026-06-14".',
     )
-    source = models.CharField(
+    source = models.CharField(  # type: ignore[var-annotated]
         max_length=20,
         choices=[
             ('AUTO', 'Auto-generated by this master'),
@@ -163,12 +163,12 @@ class BackupEncryptionKey(models.Model):
         ],
         default='AUTO',
     )
-    is_active = models.BooleanField(
+    is_active = models.BooleanField(  # type: ignore[var-annotated]
         default=True,
         help_text='True for the row matching the current BACKUP_ENCRYPTION_KEY env var.',
     )
-    created_at = models.DateTimeField(auto_now_add=True)
-    last_used_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
+    last_used_at = models.DateTimeField(null=True, blank=True)  # type: ignore[var-annotated]
 
     class Meta:
         ordering = ['-created_at']

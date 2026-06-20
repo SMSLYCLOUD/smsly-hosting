@@ -212,8 +212,10 @@ class MetricsCollector:
         try:
             resp = requests.get(
                 f"{LOKI_URL}/loki/api/v1/query_range",
-                params={'query': query, 'start': str(ts_ns),
-                        'end': str(end_ns), 'limit': 50},
+                params={  # type: ignore[arg-type]
+                    'query': query, 'start': str(ts_ns),
+                    'end': str(end_ns), 'limit': 50
+                },
                 timeout=METRICS_TIMEOUT,
             )
             resp.raise_for_status()

@@ -309,8 +309,8 @@ def _restrict_ssh_key_to_master_ip(ssh, server: ManagedServer) -> None:
             _sp.run(['ssh-keygen', '-t', 'rsa', '-b', '4096', '-f', _tmp.name, '-N', '', '-q'],
                     capture_output=True, timeout=30, check=True)
             with open(f'{_tmp.name}.pub') as _pf:
-                pub_key_line = _pf.read().strip().split(' ', 2)
-                pub_key_line = f"{pub_key_line[0]} {pub_key_line[1]}"
+                _parts = _pf.read().strip().split(' ', 2)
+                pub_key_line = f"{_parts[0]} {_parts[1]}"
             with open(_tmp.name) as _pf:
                 priv_key_pem = _pf.read()
         finally:

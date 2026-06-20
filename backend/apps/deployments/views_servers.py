@@ -565,24 +565,24 @@ def _lite_agent_proxy_response(server, request, method: str, path: str) -> Respo
 
     path_only = path.split("?", 1)[0].rstrip("/")
     if path_only == "/api/v1/services":
-        qs = (
+        services_qs = (
             Service.objects
             .filter(server=server)
             .exclude(status=Service.Status.DELETED)
             .select_related("project")
             .order_by("-updated_at")
         )
-        data = ServiceSerializer(qs, many=True, context={"request": request}).data
+        data = ServiceSerializer(services_qs, many=True, context={"request": request}).data
         return Response({"status_code": 200, "data": {"results": data, "count": len(data)}})
 
     if path_only == "/api/v1/deployments":
-        qs = (
+        deployments_qs = (
             Deployment.objects
             .filter(service__server=server)
             .select_related("service")
             .order_by("-created_at")[:50]
         )
-        data = DeploymentSerializer(qs, many=True).data
+        data = DeploymentSerializer(deployments_qs, many=True).data
         return Response({"status_code": 200, "data": {"results": data, "count": len(data)}})
 
     service_prefix = "/api/v1/services/"

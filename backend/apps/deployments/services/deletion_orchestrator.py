@@ -261,12 +261,13 @@ class DeletionOrchestrator:
         pass
 
     def _cancel_deployments(self, service: Service):
-        service.deployments.filter(
+        Deployment.objects.filter(
+            service=service,
             status__in=[
                 Deployment.Status.ACTIVE,
                 Deployment.Status.BUILDING,
                 Deployment.Status.DEPLOYING,
                 Deployment.Status.QUEUED,
                 Deployment.Status.REVIEW,
-            ]
+            ],
         ).update(status=Deployment.Status.CANCELLED, finished_at=timezone.now())

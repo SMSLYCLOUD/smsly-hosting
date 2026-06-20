@@ -63,8 +63,8 @@ def _k8s_container_stats() -> dict | None:
         containers = {}
         for pod in pod_metrics.get("items", []):
             name = pod["metadata"]["name"]
-            total_cpu = 0
-            total_mem = 0
+            total_cpu: float = 0.0
+            total_mem: float = 0.0
             for container in pod.get("containers", []):
                 cpu_raw = container["usage"].get("cpu", "0")
                 mem_raw = container["usage"].get("memory", "0")
