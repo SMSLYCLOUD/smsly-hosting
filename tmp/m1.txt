@@ -1,0 +1,4 @@
+﻿backend\apps\deployments\tasks_deploy_local.py:715: error: "object" has no attribute "items"  [attr-defined]
+backend\apps\deployments\tasks_deploy_local.py:756: error: Argument "headers" to "get" has incompatible type "object"; expected "Mapping[str, str | bytes | None] | None"  [arg-type]
+backend\apps\deployments\tasks_deploy_local.py:762: error: Argument "verify" to "get" has incompatible type "object"; expected "bool | str | None"  [arg-type]
+Found 3 errors in 1 file (checked 1 source file)

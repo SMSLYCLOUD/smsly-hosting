@@ -1,0 +1,5 @@
+﻿backend\apps\deployments\services\deletion_orchestrator.py:110: error: Need type annotation for "containers" (hint: "containers: set[<type>] = ...")  [var-annotated]
+backend\apps\deployments\services\deletion_orchestrator.py:165: error: Need type annotation for "containers" (hint: "containers: set[<type>] = ...")  [var-annotated]
+backend\apps\deployments\services\deletion_orchestrator.py:195: error: Need type annotation for "volumes" (hint: "volumes: set[<type>] = ...")  [var-annotated]
+backend\apps\deployments\services\deletion_orchestrator.py:212: error: Need type annotation for "volumes" (hint: "volumes: set[<type>] = ...")  [var-annotated]
+Found 4 errors in 1 file (checked 3 source files)
