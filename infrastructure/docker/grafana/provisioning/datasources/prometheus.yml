@@ -1,11 +1,18 @@
 apiVersion: 1
+# This file is kept as a shim for operators who provisioned Grafana before the
+# consolidated datasources.yml existed. The single source of truth now lives
+# in datasources.yml — Grafana rejects startup when two datasources in the
+# same organisation both set isDefault: true.
+#
+# Do NOT re-enable isDefault here or Grafana will refuse to start.
 datasources:
   - name: Prometheus
     type: prometheus
     access: proxy
     url: http://smsly-prometheus:9090
-    isDefault: true
+    isDefault: false
   - name: Loki
     type: loki
     access: proxy
     url: http://smsly-loki:3100
+    isDefault: false

@@ -1193,21 +1193,45 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
             return result
 
         os.makedirs(CADDY_CONFIG_DIR, exist_ok=True)
-        # Ensure the caddy-config directory is readable by the Caddy container
-        # which runs as uid 1000 (nextjs user). Try chmod first, then test
-        # write access with a probe file so we fail fast with a clear message.
-        os.chmod(CADDY_CONFIG_DIR, 0o775)
+        # Caddy container runs as uid 1000 and the host-side watcher also
+        # touches the directory. If the volume was created by a different
+        # process (e.g. a fresh `docker compose up` on a new host) the
+        # permissions will silently block writes from this container.
+        # Try a self-heal chmod first, and if that fails fall back to
+        # chowning the dir so the Caddy container (uid 1000) can read it.
         try:
+            os.chmod(CADDY_CONFIG_DIR, 0o775)
+            # Touch a probe file to verify the dir is actually writable by
+            # this process AND that the file mode allows the Caddy user to
+            # read whatever we drop in.
             probe = os.path.join(CADDY_CONFIG_DIR, ".perm_probe")
             with open(probe, "w") as f:
                 f.write("ok")
             os.remove(probe)
-        except (OSError, PermissionError):
-            raise PermissionError(
-                f"Cannot write to {CADDY_CONFIG_DIR}. "
-                "Fix host permissions: sudo chown -R 1000:1000 "
-                f"{CADDY_CONFIG_DIR} && sudo chmod 775 {CADDY_CONFIG_DIR}"
-            )
+        except (OSError, PermissionError) as chmod_exc:
+            # The dir is owned by another user (e.g. systemd-created).
+            # Try to chown it so the Caddy container — which runs as
+            # uid/gid 1000 — can read whatever we drop in. Do NOT
+            # chown to os.getuid(); the backend runs as root, so that
+            # would leave the dir root-owned and still unreadable by
+            # Caddy.
+            try:
+                CADDY_UID = int(os.environ.get("CADDY_UID", "1000"))
+                CADDY_GID = int(os.environ.get("CADDY_GID", "1000"))
+                os.chown(CADDY_CONFIG_DIR, CADDY_UID, CADDY_GID)
+                os.chmod(CADDY_CONFIG_DIR, 0o775)
+                logger.warning(
+                    "Self-healed caddy-config dir ownership to uid=%s gid=%s "
+                    "(previous chmod failed: %s)",
+                    CADDY_UID, CADDY_GID, chmod_exc,
+                )
+            except (OSError, PermissionError, ValueError) as chown_exc:
+                raise PermissionError(
+                    f"Cannot write to {CADDY_CONFIG_DIR}. "
+                    "Fix host permissions: sudo chown -R 1000:1000 "
+                    f"{CADDY_CONFIG_DIR} && sudo chmod 775 {CADDY_CONFIG_DIR}. "
+                    f"chmod_error={chmod_exc} chown_error={chown_exc}"
+                )
 
         with open(CADDY_FILE_PATH, "w", encoding="utf-8") as handle:
             handle.write(content)
