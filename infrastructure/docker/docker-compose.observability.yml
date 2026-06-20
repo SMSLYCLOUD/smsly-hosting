@@ -99,8 +99,9 @@ services:
     image: prom/alertmanager:v0.26.0
     container_name: smsly-alertmanager
     restart: unless-stopped
+    entrypoint: /entrypoint.sh
     command:
-      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --config.file=/etc/alertmanager/alertmanager.generated.yml
       - --storage.path=/alertmanager
     environment:
       - ALERT_SLACK_WEBHOOK_URL=${ALERT_SLACK_WEBHOOK_URL:-}
@@ -112,7 +113,7 @@ services:
       - ALERT_EMAIL_TO=${ALERT_EMAIL_TO:-}
       - ALERT_ENV=${ALERT_ENV:-smsly}
     volumes:
-      - ../monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ../../scripts/alertmanager-entrypoint.sh:/entrypoint.sh:ro
       - alertmanager-data:/alertmanager
     networks:
       - smsly-net
