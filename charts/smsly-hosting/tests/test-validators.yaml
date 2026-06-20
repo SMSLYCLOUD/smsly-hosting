@@ -1,0 +1,213 @@
+suite: chart security validators
+templates:
+  - secret-env.yaml
+  - backend-deployment.yaml
+  - frontend-deployment.yaml
+  - celery-workers.yaml
+release:
+  name: smsly-hosting
+  namespace: default
+values:
+  - values.yaml
+
+setters:
+  - name: global.environment
+    value: production
+  - name: secrets.secretKey
+    value: strong-random-secret-key-1234567890
+  - name: secrets.dbPassword
+    value: strong-db-password-1234567890
+  - name: secrets.redisPassword
+    value: strong-redis-password-1234567890
+  - name: secrets.fieldEncryptionKey
+    value: strong-fernet-key-1234567890
+  - name: secrets.githubWebhookSecret
+    value: strong-webhook-secret-1234567890
+  - name: backend.env.allowedHosts
+    value: smsly.cloud
+  - name: backend.env.corsAllowedOrigins
+    value: https://smsly.cloud
+  - name: redis.auth.enabled
+    value: true
+  - name: redis.auth.password
+    value: strong-redis-password-1234567890
+
+tests:
+
+  - it: renders cleanly with all secure values
+    asserts:
+      - hasDocuments:
+          count: 1
+          kind: Secret
+          name: smsly-hosting-env
+
+  - it: rejects empty secrets.secretKey
+    set:
+      secrets.secretKey: ""
+    asserts:
+      - failedTemplate:
+          contains: "secrets.secretKey must be set"
+
+  - it: rejects empty secrets.dbPassword
+    set:
+      secrets.dbPassword: ""
+    asserts:
+      - failedTemplate:
+          contains: "secrets.dbPassword must be set"
+
+  - it: rejects empty secrets.redisPassword
+    set:
+      secrets.redisPassword: ""
+    asserts:
+      - failedTemplate:
+          contains: "secrets.redisPassword must be set"
+
+  - it: rejects empty secrets.fieldEncryptionKey
+    set:
+      secrets.fieldEncryptionKey: ""
+    asserts:
+      - failedTemplate:
+          contains: "secrets.fieldEncryptionKey must be set"
+
+  - it: rejects empty secrets.githubWebhookSecret
+    set:
+      secrets.githubWebhookSecret: ""
+    asserts:
+      - failedTemplate:
+          contains: "secrets.githubWebhookSecret must be set"
+
+  - it: rejects secrets.secretKey=change-me
+    set:
+      secrets.secretKey: change-me
+    asserts:
+      - failedTemplate:
+          contains: "secrets.secretKey must be set"
+
+  - it: rejects secrets.dbPassword=change-me-in-prod
+    set:
+      secrets.dbPassword: change-me-in-prod
+    asserts:
+      - failedTemplate:
+          contains: "secrets.dbPassword must be set"
+
+  - it: rejects backend.image.tag=latest
+    set:
+      backend.image.tag: latest
+    asserts:
+      - failedTemplate:
+          contains: "backend.image.tag must be pinned"
+
+  - it: rejects frontend.image.tag=latest
+    set:
+      frontend.image.tag: latest
+    asserts:
+      - failedTemplate:
+          contains: "frontend.image.tag must be pinned"
+
+  - it: rejects celery.image.tag=latest
+    set:
+      celery.image.tag: latest
+    asserts:
+      - failedTemplate:
+          contains: "celery.image.tag must be pinned"
+
+  - it: rejects postgresql.image.tag=latest
+    set:
+      postgresql.image.tag: latest
+    asserts:
+      - failedTemplate:
+          contains: "postgresql.image.tag must be pinned"
+
+  - it: rejects redis.image=latest (image:tag form)
+    set:
+      redis.image: redis:latest
+    asserts:
+      - failedTemplate:
+          contains: "redis.image must be pinned"
+
+  - it: rejects backend.env.allowedHosts="*" in production
+    set:
+      backend.env.allowedHosts: "*"
+    asserts:
+      - failedTemplate:
+          contains: 'allowedHosts="*" is forbidden in production'
+
+  - it: rejects empty backend.env.allowedHosts in production
+    set:
+      backend.env.allowedHosts: ""
+    asserts:
+      - failedTemplate:
+          contains: "backend.env.allowedHosts is empty in production"
+
+  - it: rejects backend.env.corsAllowedOrigins="*" in production
+    set:
+      backend.env.corsAllowedOrigins: "*"
+    asserts:
+      - failedTemplate:
+          contains: 'corsAllowedOrigins="*" is forbidden in production'
+
+  - it: rejects redis with empty password and auth disabled in production
+    set:
+      secrets.redisPassword: ""
+      redis.auth.enabled: false
+      redis.auth.password: ""
+    asserts:
+      - failedTemplate:
+          contains: "secrets.redisPassword must be set"
+
+  - it: rejects accidental re-introduction of backend.env.dbPassword
+    set:
+      backend.env.dbPassword: ""
+    asserts:
+      - failedTemplate:
+          contains: "backend.env.dbPassword must not be empty"
+
+  - it: rejects accidental re-introduction of backend.env.secretKey
+    set:
+      backend.env.secretKey: ""
+    asserts:
+      - failedTemplate:
+          contains: "backend.env.secretKey must not be empty"
+
+  - it: rejects accidental re-introduction of backend.env.fieldEncryptionKey
+    set:
+      backend.env.fieldEncryptionKey: ""
+    asserts:
+      - failedTemplate:
+          contains: "backend.env.fieldEncryptionKey must not be empty"
+
+  - it: rejects accidental re-introduction of backend.env.githubWebhookSecret
+    set:
+      backend.env.githubWebhookSecret: ""
+    asserts:
+      - failedTemplate:
+          contains: "backend.env.githubWebhookSecret must not be empty"
+
+  - it: allows wildcard allowedHosts in non-production
+    set:
+      global.environment: staging
+      backend.env.allowedHosts: "*"
+      backend.env.corsAllowedOrigins: ""
+    asserts:
+      - hasDocuments:
+          count: 1
+          kind: Secret
+          name: smsly-hosting-env
+
+  - it: still requires secrets.redisPassword unconditionally (even in staging)
+    set:
+      global.environment: staging
+      secrets.redisPassword: ""
+      redis.auth.enabled: false
+      redis.auth.password: ""
+    asserts:
+      - failedTemplate:
+          contains: "secrets.redisPassword must be set"
+
+  - it: still requires secrets.fieldEncryptionKey in non-production
+    set:
+      global.environment: staging
+      secrets.fieldEncryptionKey: ""
+    asserts:
+      - failedTemplate:
+          contains: "secrets.fieldEncryptionKey must be set"

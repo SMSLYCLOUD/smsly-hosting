@@ -18,14 +18,17 @@ backend:
     port: 8000
   env:
     debug: "False"
-    secretKey: ""
     dbName: "smsly_hosting"
     dbUser: "smsly_admin"
-    dbPassword: ""
-    redisPassword: ""
-    fieldEncryptionKey: ""
-    githubWebhookSecret: ""
-    allowedHosts: "*"
+    # Non-secret application configuration only. All secret material
+    # (SECRET_KEY, dbPassword, redisPassword, FIELD_ENCRYPTION_KEY,
+    # GITHUB_WEBHOOK_SECRET) is sourced from the `secrets` section below
+    # and rendered into the {{ include "smsly-hosting.fullname" . }}-env
+    # Secret by templates/secret-env.yaml. Do NOT add password fields here.
+    # Comma-separated list of hostnames Django will serve. Must NOT be "*"
+    # when global.environment == "production" — the chart validator fails
+    # the install rather than ship an open host header check.
+    allowedHosts: ""
     csrfTrustedOrigins: ""
     corsAllowedOrigins: ""
     internalApiUrl: "http://smsly-hosting-backend:8000"
@@ -254,9 +257,25 @@ secrets:
   extraEnvVarsSecret: ""
   # Required when not using secrets.existingSecret. The chart validator
   # refuses "change-me", "change-me-in-prod", "latest" or empty values.
+  # Generate with: python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"
   secretKey: ""
+  # Postgres password injected into the rendered Secret. Must match
+  # postgresql.auth.password — the chart will not enforce this match for
+  # you, so rotate both together.
   dbPassword: ""
+  # Redis password. Required when redis.auth.enabled == true. In production
+  # you must EITHER set this to a strong value OR set redis.auth.enabled=false
+  # explicitly to acknowledge an unauthenticated Redis.
   redisPassword: ""
+  # Fernet key used by Django's cryptography.fernet for at-rest field
+  # encryption (e.g. SECRET_FIELDS). MUST be set — generate with:
+  #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+  # Rotate with care: changing this key invalidates all encrypted blobs.
+  fieldEncryptionKey: ""
+  # HMAC secret used to verify the X-Hub-Signature-256 header on inbound
+  # GitHub webhooks. Must match the secret configured in the GitHub App /
+  # webhook settings, otherwise webhook delivery will be rejected.
+  githubWebhookSecret: ""
 
 networkPolicy:
   enabled: true
