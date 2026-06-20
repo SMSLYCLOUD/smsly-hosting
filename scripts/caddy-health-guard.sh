@@ -180,12 +180,9 @@ fi
 
 if ! is_real_domain_name "$DOMAIN"; then
     if docker compose ps -q caddy 2>/dev/null | grep -q .; then
-    exit 0
-fi
-
-    if docker compose ps -q caddy 2>/dev/null | grep -q .; then
-    cp "$CADDY_CONF" "$LAST_GOOD_CONF" 2>/dev/null || true
-    sync_active_to_shared
+        cp "$CADDY_CONF" "$LAST_GOOD_CONF" 2>/dev/null || true
+        sync_active_to_shared
+    fi
     exit 0
 fi
 

@@ -139,6 +139,7 @@ def _stop_local_service_container(service_name: str):
 
 
 def _remote_deploy_failed(deployment, orchestrator, fallback_msg, stage):
+    from .tasks_deploy import _handle_failure  # noqa: E402
     _handle_failure(None, deployment, _remote_failure_message(orchestrator, fallback_msg), stage)
 
 
@@ -150,6 +151,7 @@ def _handle_remote_deployment(deployment, server, skip_review=False, image_name=
     it is forwarded to the remote so that node can skip its own build phase
     and go straight to pull + run (build-agent optimization).
     """
+    from .tasks_deploy import _handle_failure  # noqa: E402
     from apps.deployments.services.server_guard import ServerGuard
 
     service = deployment.service
@@ -230,6 +232,7 @@ def _handle_remote_deployment(deployment, server, skip_review=False, image_name=
 
 def _resume_remote_deployment(deployment, server):
     """Approve/resume an existing remote deployment and keep polling it."""
+    from .tasks_deploy import _handle_failure  # noqa: E402
     from apps.deployments.services.server_guard import ServerGuard
 
     service = deployment.service
@@ -316,6 +319,7 @@ def _poll_remote_deployment(
     remote_service_id=None,
 ):
     """Poll a delegated deployment until it reaches REVIEW or a terminal state."""
+    from .tasks_deploy import _handle_failure  # noqa: E402
     max_retries = 90  # 15 minutes (10s intervals)
     max_empty_polls = 12  # 2 minutes of unreachable/invalid poll responses.
     empty_polls = 0
