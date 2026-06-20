@@ -20,11 +20,28 @@ jobs:
       SECRET_KEY: "ci-secret-key-must-be-long-enough-for-checks"
       DEBUG: "False"
       USE_SSL: "True"
-      DATABASE_URL: "sqlite://:memory:"
+      DATABASE_URL: "postgres://smsly_admin:test_password@localhost:5432/smsly_hosting"
       REDIS_URL: "redis://localhost:6379/0"
       GITHUB_WEBHOOK_SECRET: "dummy"
       FIELD_ENCRYPTION_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" # 32 bytes base64
+      RABBITMQ_PASSWORD: "guest"
+      POSTGRES_PASSWORD: "test_password"
+      POSTGRES_USER: "smsly_admin"
+      POSTGRES_DB: "smsly_hosting"
     services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: smsly_hosting
+          POSTGRES_USER: smsly_admin
+          POSTGRES_PASSWORD: test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U smsly_admin -d smsly_hosting"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
       redis:
         image: redis
         ports:
@@ -43,6 +60,7 @@ jobs:
         else
           pip install -r requirements.txt
         fi
+        pip install pytest pytest-django coverage pytest-cov pytest-asyncio hypothesis
     - name: Run PIP Check
       run: pip check
     - name: Run Django Check
@@ -53,7 +71,23 @@ jobs:
     - name: Run Tests
       working-directory: ./backend
       run: |
-        python manage.py test
+        pytest --import-mode=importlib -ra --tb=short \
+          --strict-markers \
+          --cov=apps \
+          --cov=config \
+          --cov-report=xml \
+          --cov-report=term-missing \
+          -m "not e2e and not integration" \
+          backend/
+      env:
+        DATABASE_URL: postgres://smsly_admin:test_password@localhost:5432/smsly_hosting
+        DJANGO_SETTINGS_MODULE: config.settings
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v4
+      if: always()
+      with:
+        file: backend/coverage.xml
+        fail_ci_if_error: false
 
   frontend-build:
     runs-on: ubuntu-latest
