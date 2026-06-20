@@ -2236,7 +2236,7 @@ def _wait_for_local_route_ready(
     # Probe through the public edge first, then the raw Traefik ingress. The
     # direct Traefik probe is useful during DNS propagation, but it must not
     # mask a Caddy misroute that serves the platform homepage.
-    probe_candidates = []
+    probe_candidates: list = []    # type: ignore[var-annotated]
 
     def _add_probe(base_url: str, headers: dict | None = None, verify: bool = True, kind: str = "direct"):
         normalized = (base_url or "").rstrip("/")
@@ -4042,7 +4042,7 @@ def provision_addon_task(self, addon_id: str):
             try:
                 from services.caddy_manager import apply_caddyfile, generate_caddyfile
 
-                from .models import PlatformConfig
+                from .models import PlatformConfig  # type: ignore[attr-defined]
                 cfg = PlatformConfig.load()
                 caddy_content = generate_caddyfile(cfg)
                 apply_caddyfile(caddy_content)
@@ -4152,7 +4152,7 @@ def run_scheduled_backups_task():
     """Execute all due BackupSchedule entries."""
     from datetime import datetime
 
-    import croniter
+    import croniter  # type: ignore[import-untyped]
     from django.utils import timezone
 
     from .models_backup import BackupSchedule
@@ -4302,7 +4302,7 @@ def _clear_directory_contents(path: str) -> dict:
     if root in {"/", "/app", "/opt", "/opt/smsly-hosting"}:
         raise ValueError(f"Refusing to clear unsafe directory: {root}")
 
-    result = {"path": root, "removed": 0, "missing": False, "errors": []}
+    result: dict = {"path": root, "removed": 0, "missing": False, "errors": []}
     if not os.path.isdir(root):
         result["missing"] = True
         return result

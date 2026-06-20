@@ -41,7 +41,7 @@ class ProductionDeploymentPipeline:
         deployment.status = Deployment.Status.MIGRATION_PLANNING
         deployment.save()
 
-        validation = self._get_latest_validation_for_commit(deployment.service_id, deployment.commit_hash)
+        validation = self._get_latest_validation_for_commit(deployment.service.id, deployment.commit_hash)
 
         if validation:
             validation.deployment = deployment
@@ -211,7 +211,7 @@ class ProductionDeploymentPipeline:
         (marked ``[X]``) migration per app, which is the target for an
         automatic rollback.
         """
-        state = {}
+        state: dict[str, str] = {}
         pattern = re.compile(r"\[\s*([X x])\s*\]\s+([A-Za-z0-9_]+)\.([A-Za-z0-9_]+)\s*$")
         for raw_line in (output or "").splitlines():
             line = raw_line.strip()

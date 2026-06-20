@@ -43,7 +43,7 @@ class OrganizationMembershipSerializer(serializers.ModelSerializer):
 class InviteMemberSerializer(serializers.Serializer):
     email = serializers.EmailField()
     role = serializers.ChoiceField(
-        choices=[r.value for r in OrganizationMembership.Role if r.value != 'OWNER'],
+        choices=[r.value for r in OrganizationMembership.Role if r.value != 'OWNER'],  # type: ignore[attr-defined]  # TextChoices is iterable at runtime; mypy stubs only model the enum-style access.
         default=OrganizationMembership.Role.MEMBER,
     )
 

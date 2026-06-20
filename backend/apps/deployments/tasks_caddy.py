@@ -3,7 +3,7 @@ import logging
 logger = logging.getLogger(__name__)
 import logging  # noqa: E402
 
-from apps.deployments.models import (  # noqa: E402
+from apps.deployments.models import (  # noqa: E402  # type: ignore[attr-defined]
     PlatformConfig,
 )
 

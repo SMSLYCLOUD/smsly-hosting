@@ -9,9 +9,9 @@ try:
     HAS_GCP_SDK = True
 except ImportError:
     HAS_GCP_SDK = False
-    run_v2: Any = None
-    policy_pb2: Any = None
-    service_account: Any = None
+    run_v2: Any = None  # type: ignore[no-redef]
+    policy_pb2: Any = None  # type: ignore[no-redef]
+    service_account: Any = None  # type: ignore[no-redef]
 
 class GCPAdapter(BaseCloudAdapter):
     def __init__(self, service_account_json: dict,

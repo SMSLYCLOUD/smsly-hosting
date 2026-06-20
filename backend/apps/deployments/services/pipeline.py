@@ -127,7 +127,7 @@ class PipelineManager:
         self.build_dir = None
         self.source_dir = None
         self.image_name = None
-        self.secret_values = []
+        self.secret_values: list[str] = []
 
     def run(self) -> str:
         """

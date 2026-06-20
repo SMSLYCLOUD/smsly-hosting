@@ -147,7 +147,7 @@ class MetricsCollector:
         if not os.path.exists('/var/run/docker.sock'):
             return MetricsSnapshot(source='docker')
         try:
-            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)  # type: ignore[attr-defined]  # Unix-only socket family; not exposed on Windows where this fallback never runs.
             sock.settimeout(10)
             sock.connect('/var/run/docker.sock')
             sock.sendall(b"GET /containers/json?all=true HTTP/1.0\r\nHost: localhost\r\n\r\n")
@@ -168,7 +168,7 @@ class MetricsCollector:
                 if self.service_name not in (canonical, compose_svc):
                     continue
 
-                sock2 = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                sock2 = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)  # type: ignore[attr-defined]  # Unix-only socket family; not exposed on Windows.
                 sock2.settimeout(10)
                 sock2.connect('/var/run/docker.sock')
                 sock2.sendall(

@@ -11,8 +11,8 @@ from rest_framework import serializers as drf_serializers
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
-from .models import Service
-from .models_project import Project
+from .models import Service  # type: ignore[attr-defined]
+from .models_project import Project  # type: ignore[attr-defined]
 from .serializers import ServiceSerializer
 
 logger = logging.getLogger(__name__)
@@ -57,7 +57,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
             read_only_fields = ['id', 'slug', 'created_at', 'updated_at']
             # Disable DRF's auto UniqueTogetherValidator for (owner, slug)
             # because slug is auto-generated + deduplicated in Project.save()
-            validators = []
+            validators: list = []
 
         def get_services_count(self, obj):
             return obj.services.count()

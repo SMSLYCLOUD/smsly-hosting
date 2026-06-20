@@ -192,8 +192,8 @@ try:
     print(f"  Caddyfile has {len(lines)} lines")
 
     # Look for domain blocks
-    domain_blocks = []
-    current_block = []
+    domain_blocks: list = []
+    current_block: list = []
     for line in lines:
         if line.strip() and not line.startswith('#') and not line.startswith('{') and line.strip().endswith('{'):
             # Start of a new block

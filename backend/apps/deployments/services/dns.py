@@ -91,7 +91,7 @@ def ensure_dns_records(domains: Iterable[str], server_ip: str, token: str) -> di
 
     Returns summary dict with successes and errors.
     """
-    result = {"ok": True, "created": [], "updated": [], "skipped": [], "errors": []}
+    result: dict = {"ok": True, "created": [], "updated": [], "skipped": [], "errors": []}
     token = (token or "").strip()
     server_ip = (server_ip or "").strip()
     domains = [d.strip().lower() for d in domains if d and d.strip()]

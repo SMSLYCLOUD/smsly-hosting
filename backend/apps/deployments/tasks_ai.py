@@ -1,17 +1,18 @@
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 import logging  # noqa: E402
 
 from celery import shared_task  # noqa: E402
 
-from apps.deployments.models import (  # noqa: E402
+from apps.deployments.models import (  # type: ignore[attr-defined]  # noqa: E402
     Deployment,
 )
 from services.ai_engine import DevOpsAgent  # noqa: E402
 
-_HIDDEN_UNICODE_CHARS = frozenset(['\u200b', '\u200c', '\u200d'])
-_INJECTION_PATTERNS = []
+_HIDDEN_UNICODE_CHARS = re.compile(r'[​‌‍]')
+_INJECTION_PATTERNS: list[re.Pattern[str]] = []
 
 
 def _sanitize_for_llm(logs: str) -> str:

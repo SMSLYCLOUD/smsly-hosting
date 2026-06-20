@@ -195,7 +195,7 @@ def run_scheduled_backups_task():
     """Execute all due BackupSchedule entries."""
     from datetime import datetime
 
-    import croniter
+    import croniter  # type: ignore[import-untyped]
 
     from .models_backup import BackupSchedule
 

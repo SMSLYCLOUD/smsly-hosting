@@ -870,8 +870,8 @@ def analyze_ecosystem_chunked(repos_data: list[dict], github_token: str | None =
     """
     import json
 
-    global_services = []
-    global_addons_map = {}
+    global_services: list = []
+    global_addons_map: dict = {}
 
     # Process in chunks
     chunks = [repos_data[i:i + chunk_size] for i in range(0, len(repos_data), chunk_size)]

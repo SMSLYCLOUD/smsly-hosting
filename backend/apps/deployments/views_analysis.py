@@ -18,7 +18,7 @@ from rest_framework.response import Response
 logger = logging.getLogger(__name__)
 
 # Framework detection patterns
-FRAMEWORK_PATTERNS = {
+FRAMEWORK_PATTERNS: dict = {
     # JavaScript/Node.js frameworks
     'nextjs': {'files': ['next.config.js', 'next.config.mjs', 'next.config.ts'], 'deps': ['next'], 'port': 3000},
     'react': {'files': [], 'deps': ['react', 'react-dom'], 'port': 3000},

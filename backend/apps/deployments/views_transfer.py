@@ -15,10 +15,10 @@ from rest_framework.decorators import action, throttle_classes
 from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle
 
-from .models import PlatformConfig, Service
+from .models import PlatformConfig, Service  # type: ignore[attr-defined]
 from .models_servers import ManagedServer
 from .models_transfer import ServerTransfer
-from .serializers import ServerTransferCreateSerializer, ServerTransferSerializer
+from .serializers import ServerTransferCreateSerializer, ServerTransferSerializer  # type: ignore[attr-defined]    # defined in serializers_transfer.py; not re-exported by serializers.py hub.
 from .services.server_guard import ServerGuard
 from .tasks_transfer import execute_server_transfer_task, rollback_transfer_task
 

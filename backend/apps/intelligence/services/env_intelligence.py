@@ -215,7 +215,7 @@ class EnvironmentIntelligenceService:
         """
         Applies intelligence to a specific service model instance.
         """
-        from apps.deployments.models import EnvironmentVariable
+        from apps.deployments.models import EnvironmentVariable  # type: ignore[attr-defined]  # noqa: F401
 
         env_context = scan_results.get('env_vars_context', {})
         stack = scan_results.get('stack', '')

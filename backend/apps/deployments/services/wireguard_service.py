@@ -322,7 +322,7 @@ class WireGuardService:
             or not peer_existed
             or mesh.mesh_status != "ACTIVE"
         )
-        if deploy_async and should_deploy and mesh.peers.filter(is_active=True).count() >= 2:
+        if deploy_async and should_deploy and WireGuardPeer.objects.filter(mesh=mesh, is_active=True).count() >= 2:
             if mesh.mesh_status != "DEPLOYING":
                 mesh.mesh_status = "DEPLOYING"
                 mesh.mesh_last_error = ""
@@ -367,7 +367,8 @@ class WireGuardService:
         peer.delete()
 
         # Update configs on all remaining peers
-        remaining_peers = mesh.peers.filter(is_active=True)
+        from apps.deployments.models_mesh import WireGuardPeer  # noqa: F401
+        remaining_peers = WireGuardPeer.objects.filter(mesh=mesh, is_active=True)
         for p in remaining_peers:
             try:
                 cls.deploy_config(p)
@@ -521,7 +522,8 @@ class WireGuardService:
                 logger.error(message)
                 return {"success": [], "failed": [{"peer": "mesh", "error": message}]}
 
-        peers = mesh.peers.filter(is_active=True)
+        from apps.deployments.models_mesh import WireGuardPeer  # noqa: F401
+        peers = WireGuardPeer.objects.filter(mesh=mesh, is_active=True)
         results = {"success": [], "failed": []}
 
         for peer in peers:
@@ -551,13 +553,13 @@ class WireGuardService:
 
         Pings each peer from the local server and updates latency_ms.
         """
-
-        local_peer = mesh.peers.filter(is_local=True).first()
+        from apps.deployments.models_mesh import WireGuardPeer  # noqa: F401
+        local_peer = WireGuardPeer.objects.filter(mesh=mesh, is_local=True).first()
         if not local_peer:
             return {"error": "No local peer configured in mesh"}
 
         results = []
-        for peer in mesh.peers.filter(is_active=True).exclude(is_local=True):
+        for peer in WireGuardPeer.objects.filter(mesh=mesh, is_active=True).exclude(is_local=True):
             try:
                 latency = cls._ping(peer.wg_address)
                 peer.latency_ms = latency

@@ -2068,7 +2068,7 @@ def _sync_db_to_env():
 def get_available_providers(include_balance: bool = False) -> list[dict]:
     """Return list of all providers with connection status and optional balance."""
     _sync_db_to_env()
-    result = []
+    result: list = []
     provider_instances: dict[str, AIProvider] = {}
     for key, cls in PROVIDERS.items():
         if key == "mock":
@@ -2108,9 +2108,9 @@ def get_available_providers(include_balance: bool = False) -> list[dict]:
             balances_by_id[provider_id] = cached
             continue
 
-        instance = provider_instances.get(provider_id)
-        if instance:
-            pending[provider_id] = instance
+        provider_instance: AIProvider | None = provider_instances.get(provider_id)
+        if provider_instance is not None:
+            pending[provider_id] = provider_instance
 
     if pending:
         max_workers = min(4, len(pending))

@@ -48,8 +48,8 @@ class ServiceHealthWebhookView(APIView):
     window — preventing replay of an intercepted webhook. Every
     invocation is recorded in the immutable ``AuditLog``.
     """
-    authentication_classes = []
-    permission_classes = []
+    authentication_classes: list = []
+    permission_classes: list = []
     throttle_classes = [ServiceHealthWebhookThrottle]
 
     def post(self, request, service_id):

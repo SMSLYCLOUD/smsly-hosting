@@ -1,7 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
-from ..models import EnvironmentVariable, Region, Service
+from ..models import EnvironmentVariable, Region, Service  # type: ignore[attr-defined]
 from ..models_addons import Addon
 from ..services.graph_builder import GraphBuilder
 

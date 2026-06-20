@@ -222,14 +222,14 @@ def analyze_codebase(repo_path: str) -> dict:
             stats: { files, directories, lines, languages }
         }
     """
-    nodes = []
-    edges = []
-    file_index = {}  # path -> node_id
-    dir_index = {}   # dir_path -> node_id
+    nodes: list = []
+    edges: list = []
+    file_index: dict = {}  # path -> node_id
+    dir_index: dict = {}   # dir_path -> node_id
     file_count = 0
     total_lines = 0
     total_bytes = 0
-    lang_stats = {}
+    lang_stats: dict = {}
 
     for root, dirs, filenames in os.walk(repo_path, topdown=True):
         # Filter out skipped directories

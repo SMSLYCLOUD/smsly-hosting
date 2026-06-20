@@ -7,8 +7,8 @@ with open('backend/apps/deployments/fixtures/templates.json') as f:
 print(f"Original count: {len(templates)}")
 
 unique_templates = []
-seen_repos = set()
-seen_names = set()
+seen_repos: set[str] = set()
+seen_names: set[str] = set()
 
 # Pattern to catch "Something Preset 01" etc.
 preset_pattern = re.compile(r'Preset \d+', re.IGNORECASE)

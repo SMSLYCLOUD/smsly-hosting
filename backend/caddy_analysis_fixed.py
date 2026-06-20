@@ -34,8 +34,8 @@ try:
     print(f"Total lines: {len(lines)}")
     
     # Find domain blocks
-    domain_blocks = []
-    current_block = []
+    domain_blocks: list = []
+    current_block: list = []
     current_domain = ""
     
     for i, line in enumerate(lines):

@@ -31,7 +31,7 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
-from apps.deployments.models_servers import ManagedServer
+from apps.deployments.models_servers import ManagedServer  # noqa: F401
 from apps.deployments.utils import (
     build_local_source_bundle as utils_build_bundle,
 )
@@ -741,12 +741,14 @@ def _get_ssh_client(server: ManagedServer) -> paramiko.SSHClient:
     if server.ssh_key:
         # Use SSH private key
         key_file = io.StringIO(server.ssh_key)
+        pkey: paramiko.PKey | None = None
         try:
             pkey = paramiko.RSAKey.from_private_key(key_file)
         except paramiko.SSHException:
             key_file.seek(0)
             pkey = paramiko.Ed25519Key.from_private_key(key_file)
-        connect_kwargs["pkey"] = pkey
+        if pkey is not None:
+            connect_kwargs["pkey"] = pkey
     elif server.ssh_password:
         connect_kwargs["password"] = server.ssh_password
     else:
@@ -1122,6 +1124,8 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
 
         # Execute with a channel for streaming output
         transport = ssh.get_transport()
+        if transport is None:
+            raise RuntimeError("SSH transport is not active; cannot open session")
         channel = transport.open_session()
         channel.set_combine_stderr(True)
         channel.settimeout(PROVISION_TIMEOUT_SECONDS + 60)

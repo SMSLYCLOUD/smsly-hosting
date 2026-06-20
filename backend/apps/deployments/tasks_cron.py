@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime
 
-import croniter
+import croniter  # type: ignore[import-untyped]
 from celery import shared_task
 from django.utils import timezone
 
