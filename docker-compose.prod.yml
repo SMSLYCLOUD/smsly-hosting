@@ -217,7 +217,9 @@ services:
     - static_volume:/app/staticfiles
     - media_volume:/app/media
     - caddy_config:/caddy-config
-    - ./install.sh:/app/install.sh:ro
+    # SECURITY: install.sh is baked into the Docker image. The host bind
+    # mount was overriding it with a stale copy, causing provisioning
+    # failures (acquire_install_lock not found) until the host pulled.
     # SECURITY: mount .env read-only. The backend's platform-config sync
     # (`apps.deployments.signals.sync_infrastructure_on_config_change`) writes
     # to /app/.env, but the existing PermissionError handler already logs a
@@ -295,7 +297,6 @@ services:
     volumes:
     - media_volume:/app/media
     - caddy_config:/caddy-config
-    - ./install.sh:/app/install.sh:ro
     - /opt/smsly-cache:/opt/smsly-cache
     - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds
     - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets
@@ -412,7 +413,6 @@ services:
     volumes:
     - media_volume:/app/media
     - caddy_config:/caddy-config
-    - ./install.sh:/app/install.sh:ro
     - /opt/smsly-cache:/opt/smsly-cache
     - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds
     - backups_data:/app/backups
@@ -460,7 +460,6 @@ services:
     volumes:
     - media_volume:/app/media
     - caddy_config:/caddy-config
-    - ./install.sh:/app/install.sh:ro
     - /opt/smsly-cache:/opt/smsly-cache
     - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds
     - backups_data:/app/backups
