@@ -131,8 +131,50 @@ esac
 export INSTALL_MODE MODE NODE_TYPE
 
 # ─── Resolve script path ─────────────────────────────────────────────────────
-SCRIPT_PATH="$(readlink -f "$0")"
+SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || echo "$0")"
 SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
+
+# ─── Bootstrap lib/ when running from a standalone install.sh ──────────────────
+# When invoked via `curl ... -o /tmp/install.sh && bash /tmp/install.sh`, lib/
+# is not co-located with install.sh. Detect that and fetch lib/ from the same
+# source so the rest of the script can source lib/*.sh normally.
+if [ ! -d "$SCRIPT_DIR/lib" ] && [ -n "${SMSLY_GIT_REMOTE:-}" ]; then
+    BOOTSTRAP_LIB_DIR="/tmp/smsly-lib-$$"
+    mkdir -p "$BOOTSTRAP_LIB_DIR"
+    echo -e "\033[0;34m  → Bootstrapping lib/ from $SMSLY_GIT_REMOTE ...\033[0m"
+    # Try tarball download first (cheap and deterministic)
+    _lib_branch="${SMSLY_BRANCH:-main}"
+    _lib_tar_url="${SMSLY_GIT_REMOTE%.git}/archive/refs/heads/${_lib_branch}.tar.gz"
+    if command -v curl >/dev/null 2>&1; then
+        if curl -fsSL "$SMSLY_GIT_REMOTE/archive/refs/heads/${_lib_branch}.tar.gz" -o "/tmp/smsly-repo-${$}.tar.gz" 2>/dev/null \
+            && tar -xzf "/tmp/smsly-repo-${$}.tar.gz" -C /tmp 2>/dev/null; then
+            _extracted_dir=$(tar -tzf "/tmp/smsly-repo-${$}.tar.gz" 2>/dev/null | head -1 | cut -d/ -f1)
+            if [ -d "/tmp/$_extracted_dir/lib" ]; then
+                cp -r "/tmp/$_extracted_dir/lib/"* "$BOOTSTRAP_LIB_DIR/" 2>/dev/null && \
+                    echo -e "\033[0;32m  ✓ lib/ bootstrapped to $BOOTSTRAP_LIB_DIR\033[0m"
+            fi
+            rm -rf "/tmp/smsly-repo-${$}.tar.gz" "/tmp/$_extracted_dir" 2>/dev/null
+        fi
+    fi
+    # Fallback: try git clone if tarball failed
+    if [ ! -d "$BOOTSTRAP_LIB_DIR/common.sh" ] && command -v git >/dev/null 2>&1; then
+        _tmp_clone=$(mktemp -d)
+        if git clone --depth 1 --branch "${SMSLY_BRANCH:-main}" "$SMSLY_GIT_REMOTE" "$_tmp_clone" 2>/dev/null; then
+            if [ -d "$_tmp_clone/lib" ]; then
+                cp -r "$_tmp_clone/lib/"* "$BOOTSTRAP_LIB_DIR/" 2>/dev/null && \
+                    echo -e "\033[0;32m  ✓ lib/ bootstrapped via git clone\033[0m"
+            fi
+        fi
+        rm -rf "$_tmp_clone" 2>/dev/null
+    fi
+    if [ -d "$BOOTSTRAP_LIB_DIR" ] && [ -f "$BOOTSTRAP_LIB_DIR/common.sh" ]; then
+        SCRIPT_DIR="$BOOTSTRAP_LIB_DIR/.."
+        LIB_DIR="$BOOTSTRAP_LIB_DIR"
+    else
+        echo -e "\033[1;33m  ⚠ Warning: could not bootstrap lib/. Install.sh must be run with lib/ co-located or from a full repo checkout.\033[0m"
+    fi
+    unset _lib_branch _lib_tar_url _extracted_dir _tmp_clone
+fi
 
 # ─── Screen Guard ────────────────────────────────────────────────────────────
 if [ "${NO_SCREEN:-false}" != "true" ] && [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ] && [ -z "${STY:-}" ] && [[ "${TERM:-}" != screen* ]] && [ -z "${TMUX:-}" ]; then
@@ -180,8 +222,12 @@ RECREATE_TRAEFIK="false"
 OBSERVABILITY_MODE="false"
 
 # ─── Source library modules ───────────────────────────────────────────────────
+# LIB_DIR is set by either the bootstrap block above (standalone install.sh) or
+# by the repo's own $SCRIPT_DIR/lib when run from a clone.
 # --- BEGIN_LIB_SOURCING ---
-LIB_DIR="$SCRIPT_DIR/lib"
+if [ -z "${LIB_DIR:-}" ] || [ ! -d "$LIB_DIR" ]; then
+    LIB_DIR="$SCRIPT_DIR/lib"
+fi
 for lib in "$LIB_DIR"/*.sh; do
     # Skip mode-entry files — they are sourced on-demand by the
     # mode dispatch below (they contain inline code, not just functions).
