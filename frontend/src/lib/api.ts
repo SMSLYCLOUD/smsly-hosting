@@ -257,6 +257,12 @@ api.interceptors.response.use(
     }
 
     if (error.response?.status === 401 && typeof window !== 'undefined') {
+      // MUST call backend logout so the server clears the HttpOnly
+      // __Host-auth_token cookie via Set-Cookie: Max-Age=0.  Without
+      // this the cookie survives in the browser, the middleware sees
+      // it on /login and redirects straight back to /dashboard,
+      // creating an infinite loop.
+      fetch('/api/v1/auth/logout/', { method: 'POST', credentials: 'include' }).catch(() => {});
       clearAuthCookies();
       const path = window.location.pathname;
       if (
