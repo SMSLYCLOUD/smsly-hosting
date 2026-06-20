@@ -11,10 +11,10 @@ Scans a cloned repository to build comprehensive AI context:
 Returns a structured context dict that AI providers use for intelligent
 pre-deploy analysis and auto-fix decisions.
 """
+import logging
 import os
 import re
-import logging
-from typing import Dict, List, Any
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +95,7 @@ class RepoScanner:
     def __init__(self, source_dir: str):
         self.source_dir = source_dir
 
-    def scan(self) -> Dict[str, Any]:
+    def scan(self) -> dict[str, Any]:
         """
         Full scan of the repository.
 
@@ -206,7 +206,7 @@ class RepoScanner:
     def _safe_read(self, filepath: str, max_read: int = 50000) -> str:
         """Read a file safely, stripping NUL bytes for Postgres compatibility."""
         try:
-            with open(filepath, 'r', errors='ignore', encoding='utf-8') as fh:
+            with open(filepath, errors='ignore', encoding='utf-8') as fh:
                 content = fh.read(max_read)
                 sanitized = content.replace('\x00', '')
                 if len(content) == max_read:
@@ -220,7 +220,7 @@ class RepoScanner:
     # Config File Reading
     # -----------------------------------------------------------------------
 
-    def _read_config_files(self) -> Dict[str, str]:
+    def _read_config_files(self) -> dict[str, str]:
         """Read all config, package, build, and env files."""
         configs = {}
         all_targets = CONFIG_FILES | PACKAGE_FILES | BUILD_FILES | ENV_FILES
@@ -255,14 +255,14 @@ class RepoScanner:
     # Environment Variable Detection
     # -----------------------------------------------------------------------
 
-    def _detect_env_vars_with_context(self) -> Dict[str, List[str]]:
+    def _detect_env_vars_with_context(self) -> dict[str, list[str]]:
         # pylint: disable=too-many-locals, too-many-branches
         """
         Detect all environment variables the app expects, along with code context.
         Scans .env files, code files, and config files for patterns.
         Covers 50+ frameworks and languages.
         """
-        env_vars: Dict[str, List[str]] = {}
+        env_vars: dict[str, list[str]] = {}
 
         def add_var(name: str, context: str):
             name = name.strip()
@@ -380,7 +380,7 @@ class RepoScanner:
                     # Scan for compose interpolations
                     for match in compose_pattern.finditer(content):
                         add_var(match.group(1), f"Found in {f} (interpolation)")
-                    
+
                     # Scan for Docker ENV/ARG
                     for match in docker_env_pattern.finditer(content):
                         add_var(match.group(1), f"Found in {f} (ENV)")
@@ -393,7 +393,7 @@ class RepoScanner:
 
         return env_vars
 
-    def _detect_env_vars(self) -> List[str]:
+    def _detect_env_vars(self) -> list[str]:
         """Legacy wrapper for flat list return."""
         return sorted(list(self._detect_env_vars_with_context().keys()))
 
@@ -408,7 +408,7 @@ class RepoScanner:
         return "\n".join(lines[:100])  # Cap at 100 lines
 
     def _build_tree(self, path: str, prefix: str, max_depth: int,
-                    current_depth: int, lines: List[str]):
+                    current_depth: int, lines: list[str]):
         # pylint: disable=too-many-arguments, too-many-positional-arguments
         if current_depth > max_depth:
             return
@@ -435,7 +435,7 @@ class RepoScanner:
                 max_depth, current_depth + 1, lines
             )
 
-    def _get_subdirs(self) -> List[str]:
+    def _get_subdirs(self) -> list[str]:
         """Get immediate subdirectories (for monorepo detection)."""
         try:
             return [
@@ -450,7 +450,7 @@ class RepoScanner:
     # Issue Detection
     # -----------------------------------------------------------------------
 
-    def _detect_issues(self, scan: Dict) -> List[str]:
+    def _detect_issues(self, scan: dict) -> list[str]:
         """Detect potential deployment issues from scan results."""
         issues = []
         configs = scan.get('configs', {})

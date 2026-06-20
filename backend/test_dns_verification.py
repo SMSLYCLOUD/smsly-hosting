@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 import os
 import sys
-import django
 
+import django
 import pytest
 
 # Add the current directory to Python path
@@ -16,9 +16,9 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 def test_dns_verification():
     django.setup()
 
-    from apps.domains.verification import verify_custom_domain_dns
     from apps.deployments.models import PlatformConfig
     from apps.domains.models import Domain, DomainStatus
+    from apps.domains.verification import verify_custom_domain_dns
 
     print('=== Testing DNS Verification Function ===')
 

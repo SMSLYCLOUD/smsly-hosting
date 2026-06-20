@@ -1,7 +1,7 @@
-import json
 import collections
+import json
 
-with open('backend/apps/deployments/fixtures/templates.json', 'r') as f:
+with open('backend/apps/deployments/fixtures/templates.json') as f:
     templates = json.load(f)
 
 ids = [t.get('id') for t in templates]

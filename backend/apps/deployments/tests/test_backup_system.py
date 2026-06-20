@@ -1,21 +1,23 @@
+import json
 import os
 import shutil
+import tarfile
+import tempfile
 import unittest
 import uuid
-import tempfile
-import json
-import tarfile
+from datetime import timedelta
+from unittest.mock import MagicMock, patch
+
 import docker
+from cryptography.fernet import Fernet
+from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.utils import timezone
-from datetime import timedelta
-from unittest.mock import patch, MagicMock
-from cryptography.fernet import Fernet
-from apps.deployments.models import Service, Project, EnvironmentVariable
-from apps.deployments.models_backup import ServiceBackup, BackupSchedule
-from apps.deployments.tasks_backup import cleanup_old_backups_task
+
+from apps.deployments.models import EnvironmentVariable, Project, Service
+from apps.deployments.models_backup import BackupSchedule, ServiceBackup
 from apps.deployments.services.backup_service import BackupService
-from django.contrib.auth import get_user_model
+from apps.deployments.tasks_backup import cleanup_old_backups_task
 
 User = get_user_model()
 
@@ -43,7 +45,7 @@ class BackupSystemTest(TestCase):
         )
 
     def test_cleanup_old_backups_task_keeps_latest_valid_backup(self):
-        schedule = BackupSchedule.objects.create(service=self.service, enabled=True, retention_days=7)
+        BackupSchedule.objects.create(service=self.service, enabled=True, retention_days=7)
 
         # Create an old valid backup (10 days old, beyond the 7-day retention)
         old_valid_backup = ServiceBackup.objects.create(
@@ -245,7 +247,7 @@ class BackupSystemTest(TestCase):
             provider = MagicMock()
             provider.id = uuid.uuid4()
             mock_resolve_provider.return_value = provider
-            
+
             # Set server on service to trigger remote restore target resolution
             self.service.server = server
             self.service.save()
@@ -253,7 +255,7 @@ class BackupSystemTest(TestCase):
             success = BackupService().restore_service(backup.id)
             self.assertTrue(success)
             mock_ssh.upload_file.assert_called()
-            
+
         if os.path.exists(backup.file_path):
             os.remove(backup.file_path)
 

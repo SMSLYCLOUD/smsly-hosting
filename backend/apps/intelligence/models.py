@@ -18,7 +18,6 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from encrypted_model_fields.fields import EncryptedCharField
 
-
 _DISALLOWED_LOCALLM_NETWORKS = (
     ipaddress.ip_network('127.0.0.0/8'),
     ipaddress.ip_network('::1/128'),
@@ -106,7 +105,7 @@ class AIProviderSettings(models.Model):
 
     claude_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
     claude_model = models.CharField(max_length=100, default="claude-sonnet-4-20250514", blank=True)
-    
+
     deepseek_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
     deepseek_model = models.CharField(max_length=100, default="deepseek-coder", blank=True)
 
@@ -201,7 +200,7 @@ class AIProviderSettings(models.Model):
         default=10,
         help_text="Maximum services deployed concurrently per dependency wave",
     )
-    
+
     senate_enabled = models.BooleanField(
         default=True,
         help_text="Enable collaborative deliberation (Senate Committee) when 2+ providers configured",

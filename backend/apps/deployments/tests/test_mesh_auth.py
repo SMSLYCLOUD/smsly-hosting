@@ -1,19 +1,18 @@
-import pytest
-from django.test import TestCase
-import os
-
-
-from unittest.mock import patch, MagicMock
-from apps.deployments.views_attestation import attestation_verify
-from apps.deployments.models import ManagedServer
-from apps.deployments.models_mesh import WireGuardPeer, MeshNetwork
-from django.contrib.auth import get_user_model
-from rest_framework.test import APIRequestFactory, force_authenticate
-from rest_framework.throttling import BaseThrottle
 import hashlib
 import hmac
-import time
 import uuid
+from unittest.mock import patch
+
+import pytest
+from django.contrib.auth import get_user_model
+from django.test import TestCase
+from rest_framework.test import APIRequestFactory, force_authenticate
+from rest_framework.throttling import BaseThrottle
+
+from apps.deployments.models import ManagedServer
+from apps.deployments.models_mesh import MeshNetwork, WireGuardPeer
+from apps.deployments.views_attestation import attestation_verify
+
 
 # Mock the throttle to avoid Redis connection issues
 class MockThrottle(BaseThrottle):
@@ -74,7 +73,7 @@ class TestMeshAuth(TestCase):
 
         nonce = "my-nonce"
         valid_signature = hmac.new(
-            "my-mesh-secret".encode(),
+            b"my-mesh-secret",
             nonce.encode(),
             hashlib.sha256,
         ).hexdigest()

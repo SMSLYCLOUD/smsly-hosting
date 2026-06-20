@@ -4,16 +4,16 @@ AI-Powered Repository Analysis View
 Analyzes Git repositories to detect framework, runtime, and provide intelligent
 deployment suggestions. Features real GitHub API integration for accurate detection.
 """
-from rest_framework import serializers
-from rest_framework.generics import GenericAPIView
-from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
-from rest_framework import status
 import base64
 import json
-import re
-import requests
 import logging
+import re
+
+import requests
+from rest_framework import serializers, status
+from rest_framework.generics import GenericAPIView
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
 
 logger = logging.getLogger(__name__)
 
@@ -379,7 +379,7 @@ class RepoAnalysisView(GenericAPIView):
                     break
         return list(set(found_vars))
 
-    def _enrich_env_vars(self, var_keys: list, port: int = None) -> list:
+    def _enrich_env_vars(self, var_keys: list, port: int | None = None) -> list:
         """Convert plain key names into rich env var objects with hints."""
         import secrets
         seen = set()
@@ -415,9 +415,9 @@ class RepoAnalysisView(GenericAPIView):
         return result
 
     def _build_response(self, framework: str, confidence: float,
-                        files: list = None, error: str = None,
-                        owner: str = None, repo: str = None,
-                        token: str = None) -> dict:
+                        files: list | None = None, error: str | None = None,
+                        owner: str | None = None, repo: str | None = None,
+                        token: str | None = None) -> dict:
         """Build the analysis response with enriched env vars."""
         port = FRAMEWORK_PATTERNS.get(framework, {}).get('port', 8080)
         commands = BUILD_COMMANDS.get(framework, {'build': '', 'start': ''})
@@ -508,6 +508,7 @@ class CodeIntelligenceView(GenericAPIView):
             return Response({"detail": "repos_data and deploy_plan are required."}, status=400)
 
         from rest_framework.exceptions import PermissionDenied
+
         from apps.deployments.models import Service
 
         for repo in repos_data:
@@ -558,6 +559,7 @@ class DeepScanTaskStatusView(GenericAPIView):
             return Response({"error": "task_id required"}, status=400)
 
         import json
+
         from celery.result import AsyncResult
         task_result = AsyncResult(task_id)
 

@@ -1,8 +1,10 @@
 # NOT USED — K8s deployment is not supported. Kept for reference.
 """Kubernetes module."""
 import logging
-from typing import Dict, Any, List
+from typing import Any
+
 from kubernetes import client, config
+
 from .base import BaseCloudAdapter
 
 logger = logging.getLogger(__name__)
@@ -14,7 +16,7 @@ class KubernetesAdapter(BaseCloudAdapter):
     Supports scaling, rolling updates, and ingress management.
     """
 
-    def __init__(self, kubeconfig_path: str = None):
+    def __init__(self, kubeconfig_path: str | None = None):
         try:
             if kubeconfig_path:
                 config.load_kube_config(config_file=kubeconfig_path)
@@ -43,7 +45,7 @@ class KubernetesAdapter(BaseCloudAdapter):
 
         # pylint: disable=too-many-positional-arguments
     def deploy_container(self, service_name: str, image: str,
-                         env_vars: Dict[str, str], cpu: int, memory: int,
+                         env_vars: dict[str, str], cpu: int, memory: int,
                          replicas: int = 1, **kwargs) -> str:
         # pylint: disable=too-many-positional-arguments, too-many-locals, too-many-arguments
         """
@@ -116,7 +118,7 @@ class KubernetesAdapter(BaseCloudAdapter):
         """Request/Issue an SSL Certificate (ACM/Managed)."""
         raise NotImplementedError
 
-    def create_iam_role(self, role_name: str, policy: Dict[str, Any]) -> str:
+    def create_iam_role(self, role_name: str, policy: dict[str, Any]) -> str:
         """Create an IAM Role with specific permissions."""
         raise NotImplementedError
 
@@ -125,7 +127,7 @@ class KubernetesAdapter(BaseCloudAdapter):
         raise NotImplementedError
 
     def get_metrics(self, resource_id: str, metric_name: str,
-                    start_time: str, end_time: str) -> List[Dict]:
+                    start_time: str, end_time: str) -> list[dict]:
         """Fetch metrics for a resource."""
         # pylint: disable=unused-argument
         return []

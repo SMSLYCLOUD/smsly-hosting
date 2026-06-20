@@ -1,12 +1,18 @@
 import uuid
 from unittest.mock import MagicMock, patch
-from django.contrib.auth.models import User, AnonymousUser
+
+from django.contrib.auth.models import AnonymousUser, User
 from django.test import override_settings
-from rest_framework.test import APITestCase, APIRequestFactory
 from rest_framework import status as http_status
-from apps.deployments.models import Service, Deployment, Project
-from apps.deployments.models_safedeploy import PreviewEnvironment, DeploymentApproval, MigrationValidation
+from rest_framework.test import APIRequestFactory, APITestCase
+
 from apps.cloud.models import CloudProvider
+from apps.deployments.models import Deployment, Project, Service
+from apps.deployments.models_safedeploy import (
+    DeploymentApproval,
+    MigrationValidation,
+    PreviewEnvironment,
+)
 from apps.teams.models import Team, TeamMember
 
 TEST_CACHES = {
@@ -693,7 +699,9 @@ class PipelineTests(APITestCase):
         self.service = _make_service(self.user, self.provider)
 
     def test_reject_sets_rejected_by(self):
-        from apps.deployments.services.safedeploy.deployment_pipeline import ProductionDeploymentPipeline
+        from apps.deployments.services.safedeploy.deployment_pipeline import (
+            ProductionDeploymentPipeline,
+        )
 
         dep = Deployment.objects.create(
             service=self.service,
@@ -709,7 +717,9 @@ class PipelineTests(APITestCase):
         self.assertEqual(dep.status, Deployment.Status.CANCELLED)
 
     def test_reject_rolls_back_on_error(self):
-        from apps.deployments.services.safedeploy.deployment_pipeline import ProductionDeploymentPipeline
+        from apps.deployments.services.safedeploy.deployment_pipeline import (
+            ProductionDeploymentPipeline,
+        )
 
         dep = Deployment.objects.create(
             service=self.service,
@@ -726,7 +736,9 @@ class PipelineTests(APITestCase):
         )
 
     def test_approve_sets_approved_by(self):
-        from apps.deployments.services.safedeploy.deployment_pipeline import ProductionDeploymentPipeline
+        from apps.deployments.services.safedeploy.deployment_pipeline import (
+            ProductionDeploymentPipeline,
+        )
 
         dep = Deployment.objects.create(
             service=self.service,
@@ -741,7 +753,9 @@ class PipelineTests(APITestCase):
         self.assertIsNotNone(approval.approved_at)
 
     def test_get_latest_validation_finds_deployment_validation(self):
-        from apps.deployments.services.safedeploy.deployment_pipeline import ProductionDeploymentPipeline
+        from apps.deployments.services.safedeploy.deployment_pipeline import (
+            ProductionDeploymentPipeline,
+        )
 
         dep = Deployment.objects.create(
             service=self.service,

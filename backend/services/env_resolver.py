@@ -20,9 +20,10 @@ Platform shortcuts (no need to know the addon name):
 
 NOTE: For backwards compatibility, addon-name resolution still works.
 """
-import re
 import logging
+import re
 from urllib.parse import urlparse
+
 from apps.deployments.models_addons import Addon
 
 logger = logging.getLogger(__name__)

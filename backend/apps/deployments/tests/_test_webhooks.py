@@ -1,8 +1,11 @@
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import MagicMock, patch
-from apps.deployments.webhooks.github import GitHubWebhookHandler
-from apps.deployments.models import Service, Deployment
+
 from apps.cloud.models import CloudProvider
+from apps.deployments.models import Service
+from apps.deployments.webhooks.github import GitHubWebhookHandler
+
 
 @pytest.fixture
 def webhook_handler():

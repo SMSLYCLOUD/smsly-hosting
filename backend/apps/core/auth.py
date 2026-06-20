@@ -9,13 +9,15 @@ fallback disabled CSRF protection on every session-authenticated
 request, which allowed a cross-site forged request to land against
 any session-cookie holder (admin, OAuth user, etc.).
 """
+from django.contrib.auth.hashers import check_password
+from django.utils import timezone
 from rest_framework.authentication import (
     BaseAuthentication,
     SessionAuthentication,
     TokenAuthentication,
 )
 from rest_framework.exceptions import AuthenticationFailed
-from django.contrib.auth.hashers import check_password
+
 from .auth_cookies import get_cookie_token
 from .models import APIKey
 
@@ -46,7 +48,7 @@ class APIKeyAuthentication(BaseAuthentication):
     def authenticate(self, request):
         auth_header = str(request.META.get("HTTP_AUTHORIZATION", "")).strip()
         scheme, _, raw_key = auth_header.partition(" ")
-        
+
         if scheme.lower() != self.keyword.lower() or not raw_key.startswith("sk_"):
             return None
 
@@ -65,13 +67,12 @@ class APIKeyAuthentication(BaseAuthentication):
             for api_key in keys:
                 if check_password(raw_key, api_key.key_hash):
                     # Update last used
-                    from django.utils import timezone
                     api_key.last_used = timezone.now()
                     api_key.save(update_fields=['last_used'])
                     return (api_key.user, api_key)
-            
+
             raise AuthenticationFailed("Invalid API key.")
-            
+
         except AuthenticationFailed:
             raise
         except Exception:

@@ -1,11 +1,12 @@
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 from django.contrib.auth import get_user_model
 from django.test import TestCase
-from apps.deployments.services.deletion_orchestrator import DeletionOrchestrator
-from apps.deployments.models_core import ManagedServer, Service
+
 from apps.deployments.models_addons import Addon
+from apps.deployments.models_core import ManagedServer, Service
+from apps.deployments.services.deletion_orchestrator import DeletionOrchestrator
 from apps.deployments.tasks_deploy import delete_service_task
-import uuid
 
 User = get_user_model()
 

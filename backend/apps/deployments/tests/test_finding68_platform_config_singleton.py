@@ -87,9 +87,8 @@ class Finding68PlatformConfigSingletonTests(TestCase):
             cfg = PlatformConfig.objects.get(pk=1)
             original_domain = cfg.domain
             cfg.domain = "rollback.example.com"
-            with self.assertRaises(RuntimeError):
-                with transaction.atomic():
-                    cfg.save()
+            with self.assertRaises(RuntimeError), transaction.atomic():
+                cfg.save()
         finally:
             PlatformConfig.save = original_save
 

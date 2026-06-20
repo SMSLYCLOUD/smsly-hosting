@@ -1,7 +1,7 @@
 # Add source SSH credentials for node-to-node transfers
 
-from django.db import migrations, models
 import encrypted_model_fields.fields
+from django.db import migrations, models
 
 
 class Migration(migrations.Migration):

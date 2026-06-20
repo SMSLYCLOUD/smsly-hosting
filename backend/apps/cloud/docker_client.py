@@ -5,6 +5,7 @@ calls go through the socket-proxy service rather than hitting the raw
 Docker socket directly.
 """
 import os
+
 import docker
 
 # Default timeout for normal Docker operations (builds, container ops).

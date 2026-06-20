@@ -19,8 +19,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from apps.deployments.models import Service, Deployment
-
+from apps.deployments.models import Deployment, Service
 
 User = get_user_model()
 
@@ -40,6 +39,7 @@ class BulkActionAtomicRegressionTests(TestCase):
 
     def test_deploy_uses_atomic_and_lock(self):
         from unittest.mock import MagicMock
+
         from django.db.models import QuerySet
 
         original_select_for_update = QuerySet.select_for_update
@@ -66,6 +66,7 @@ class BulkActionAtomicRegressionTests(TestCase):
 
     def test_cancel_updates_status_under_lock(self):
         from unittest.mock import MagicMock
+
         from django.db.models import QuerySet
 
         Deployment.objects.create(

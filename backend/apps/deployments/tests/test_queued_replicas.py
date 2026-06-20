@@ -8,14 +8,14 @@ Behavior contract:
   * Snapshot at queue time = 1, current = 3 -> deploy uses 1.
   * Snapshot is None (legacy data) -> falls back to current.
 """
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from django.contrib.auth.models import User
 from django.test import TestCase
 
 from apps.cloud.models import CloudProvider
-from apps.deployments.models import Deployment, Service
 from apps.deployments import tasks
+from apps.deployments.models import Deployment, Service
 
 
 class QueuedReplicasSnapshotTests(TestCase):

@@ -7,7 +7,7 @@ import hashlib
 import json
 import logging
 from decimal import Decimal
-from typing import Any, Dict, Optional
+from typing import Any
 
 import requests
 from django.conf import settings
@@ -39,19 +39,19 @@ class CryptomusService:
         return api_key
 
     @staticmethod
-    def _json_b64(payload: Dict[str, Any]) -> str:
+    def _json_b64(payload: dict[str, Any]) -> str:
         # Cryptomus signs base64(json) + api_key (md5).
         # Use compact separators; preserve key insertion order.
         raw = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
         return base64.b64encode(raw).decode("ascii")
 
     @staticmethod
-    def sign(payload: Dict[str, Any]) -> str:
+    def sign(payload: dict[str, Any]) -> str:
         base = CryptomusService._json_b64(payload) + CryptomusService._api_key()
         return hashlib.md5(base.encode("utf-8")).hexdigest()
 
     @staticmethod
-    def _headers(payload: Dict[str, Any]) -> Dict[str, str]:
+    def _headers(payload: dict[str, Any]) -> dict[str, str]:
         return {
             "merchant": CryptomusService._merchant_id(),
             "sign": CryptomusService.sign(payload),
@@ -67,9 +67,9 @@ class CryptomusService:
         url_return: str,
         url_callback: str,
         lifetime_seconds: int = 3600,
-        additional_data: Optional[str] = None,
+        additional_data: str | None = None,
     ) -> str:
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "order_id": order_id,
             "amount": str(amount),
             "currency": (currency or "USD").upper(),
@@ -98,7 +98,7 @@ class CryptomusService:
         return pay_url
 
     @staticmethod
-    def verify_webhook(*, payload: Dict[str, Any]) -> bool:
+    def verify_webhook(*, payload: dict[str, Any]) -> bool:
         """
         Cryptomus webhook verification.
 

@@ -5,8 +5,8 @@ API endpoints for managing mesh networks, peers, and
 deploying WireGuard configurations across the server fleet.
 """
 
-import logging
 import ipaddress
+import logging
 
 from django.db import DatabaseError
 from django.db.models import Q
@@ -17,8 +17,8 @@ from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
 
 from .models_mesh import MeshNetwork, WireGuardPeer
-from .tasks_mesh import deploy_mesh_task
 from .services.wireguard_service import WireGuardService
+from .tasks_mesh import deploy_mesh_task
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +143,7 @@ class MeshNetworkViewSet(viewsets.ModelViewSet):
         """
         try:
             return super().list(request, *args, **kwargs)
-        except (DatabaseError, Exception) as exc:  # noqa: BLE001
+        except (DatabaseError, Exception) as exc:
             logger.error("Mesh list unavailable: %s", exc)
             return Response(
                 {

@@ -20,7 +20,6 @@ import logging
 import os
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Optional
 
 from django.utils import timezone
 
@@ -82,7 +81,7 @@ class DecisionEngine:
         running_replicas: int,
         max_replicas: int,
         cpu_target: int,
-        last_scale_at: Optional[object] = None,
+        last_scale_at: object | None = None,
         spawning_in_progress: bool = False,
         now=None,
         cpu_high: float = DEFAULT_CPU_HIGH,

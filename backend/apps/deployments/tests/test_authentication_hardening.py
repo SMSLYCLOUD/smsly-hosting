@@ -1,16 +1,17 @@
-import os
 import unittest
+
 import django
+
 django.setup()
 
-from unittest.mock import patch, MagicMock
-from apps.deployments.api_token_auth import RemoteSyncHMACAuthentication
-from django.test import RequestFactory
-from django.conf import settings
-from rest_framework.exceptions import AuthenticationFailed
-import hashlib
-import hmac
-import time
+import time  # noqa: E402
+from unittest.mock import patch  # noqa: E402
+
+from django.test import RequestFactory  # noqa: E402
+from rest_framework.exceptions import AuthenticationFailed  # noqa: E402
+
+from apps.deployments.api_token_auth import RemoteSyncHMACAuthentication  # noqa: E402
+
 
 class TestAuthenticationHardening(unittest.TestCase):
     def setUp(self):

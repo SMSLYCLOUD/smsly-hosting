@@ -1,9 +1,8 @@
-import re
 import logging
+from typing import Any
 from urllib.parse import urlparse
-from typing import Dict, List, Any, Set
-from django.db.models import Q
-from ..models import Service, EnvironmentVariable, Deployment
+
+from ..models import Service
 from ..models_addons import Addon
 
 logger = logging.getLogger(__name__)
@@ -16,13 +15,13 @@ class GraphBuilder:
 
     def __init__(self, user):
         self.user = user
-        self.nodes: List[Dict[str, Any]] = []
-        self.edges: List[Dict[str, Any]] = []
-        self.service_map: Dict[str, Service] = {}  # name -> Service
-        self.addon_map: Dict[str, Addon] = {}      # name -> Addon
-        self.processed_ids: Set[str] = set()
+        self.nodes: list[dict[str, Any]] = []
+        self.edges: list[dict[str, Any]] = []
+        self.service_map: dict[str, Service] = {}  # name -> Service
+        self.addon_map: dict[str, Addon] = {}      # name -> Addon
+        self.processed_ids: set[str] = set()
 
-    def build(self) -> Dict[str, List[Dict[str, Any]]]:
+    def build(self) -> dict[str, list[dict[str, Any]]]:
         """Main entry point to build the graph."""
         services = Service.objects.filter(
             owner=self.user
@@ -152,7 +151,7 @@ class GraphBuilder:
                     pass
 
             # 2. Check for hostnames in comma-separated lists (e.g. KAFKA_BROKERS)
-            if ',' in val and not '://' in val:
+            if ',' in val and '://' not in val:
                 parts = val.split(',')
                 for part in parts:
                     # simplistic check: host:port or just host
@@ -170,9 +169,7 @@ class GraphBuilder:
                 for candidate in known_names:
                     # Avoid matching "db" in "db-prod" if "db" is a service name (substring issue)
                     # We require word boundaries or exact match
-                    if candidate == val:
-                        self._match_and_link(service, candidate, 'custom', key)
-                    elif f"://{candidate}" in val or f"@{candidate}" in val:
+                    if candidate == val or f"://{candidate}" in val or f"@{candidate}" in val:
                         self._match_and_link(service, candidate, 'custom', key)
 
     def _match_and_link(self, source_service: Service, target_name: str, protocol: str, env_key: str):

@@ -1,6 +1,8 @@
 """Auto-scaling replica spawner: create/destroy container replicas on remote nodes."""
-import shlex
+import contextlib
 import logging
+import shlex
+
 from django.utils import timezone
 
 from .ssh_client import SSHClient
@@ -71,7 +73,7 @@ class SpawningService:
             labels.append(f"traefik.http.routers.{router}.entrypoints=websecure")
             labels.append("traefik.http.routers.{router}.tls=true")
 
-        label_args = " ".join(f"-l {shlex.quote(l)}" for l in labels)
+        label_args = " ".join(f"-l {shlex.quote(label)}" for label in labels)
 
         # Env vars from the service
         env_args = ""
@@ -87,7 +89,7 @@ class SpawningService:
             f"{shlex.quote(image)}"
         )
 
-        out, err, exit_code = ssh.exec_command(cmd, raise_on_error=False)
+        _out, err, exit_code = ssh.exec_command(cmd, raise_on_error=False)
         if exit_code != 0:
             raise RuntimeError(f"Failed to spawn replica on {node.name}: {err}")
 
@@ -133,15 +135,14 @@ class SpawningService:
     def cleanup(self):
         """Close all SSH connections."""
         for client in self._ssh_clients.values():
-            try:
+            with contextlib.suppress(Exception):
                 client.close()
-            except Exception:
-                pass
         self._ssh_clients.clear()
 
     def spawn_local(self, service, replica):
         """Create a replica on the local Docker daemon — no SSH needed."""
         import docker as docker_lib
+
         from apps.deployments.models import PlatformConfig
 
         config = PlatformConfig.load()
@@ -161,7 +162,7 @@ class SpawningService:
 
         labels = {
             "traefik.enable": "true",
-            f"traefik.docker.network": net,
+            "traefik.docker.network": net,
             f"traefik.http.routers.{router}.rule": f"Host(`{domain}`)",
             f"traefik.http.routers.{router}.entrypoints": "web",
             f"traefik.http.services.{router}.loadbalancer.server.port": port,

@@ -1,8 +1,10 @@
 """Test Audit Log Unit module."""
-from django.test import TestCase
-from apps.deployments.models_audit import AuditLog
 import hashlib
 import json
+
+from django.test import TestCase
+
+from apps.deployments.models_audit import AuditLog
 
 
 class AuditLogUnitTests(TestCase):

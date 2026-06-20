@@ -5,8 +5,7 @@ from django.db.models import Q
 from django.test import TestCase
 
 from apps.deployments.consumers import TerminalConsumer
-from apps.deployments.models import Service, Deployment
-
+from apps.deployments.models import Deployment, Service
 
 User = get_user_model()
 

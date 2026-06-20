@@ -7,7 +7,6 @@ for automatic failover in the CloudNeuron server fleet.
 
 import uuid
 
-from django.conf import settings
 from django.db import models
 
 

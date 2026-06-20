@@ -55,7 +55,7 @@ class HealthMonitorServiceTests(TestCase):
         self.service.save(update_fields=["public_domain"])
 
         targets = hm._build_targets(self.service, self.active)
-        urls = [target["url"] for target in targets]
+        [target["url"] for target in targets]
 
         pass
 

@@ -95,7 +95,7 @@ try:
             
             # Check if domain is our test domain
             if 'working-test.example.com' in block['domain']:
-                print(f"    -> This is our test domain block!")
+                print("    -> This is our test domain block!")
                 print(f"    -> TLS: {tls_configured}, On-demand: {on_demand_tls}")
     
     print()
@@ -174,5 +174,8 @@ try:
         print(f"Error generating expected Caddyfile: {e}")
     
     print()
+
+except Exception as e:
+    print(f"Error: {e}")
 
 print("\n=== End Caddy Analysis ===")

@@ -5,7 +5,6 @@ from apps.deployments.models import Service
 from apps.deployments.models_transfer import ServerTransfer
 from apps.deployments.services.transfer_service import ServerTransferService
 
-
 User = get_user_model()
 
 

@@ -15,7 +15,6 @@ from rest_framework.test import APIClient
 
 from apps.deployments.models_tunnels import ReservedSubdomain
 
-
 User = get_user_model()
 
 

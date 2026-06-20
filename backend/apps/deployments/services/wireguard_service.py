@@ -5,14 +5,15 @@ Handles key generation, config rendering, and SSH deployment
 of WireGuard configurations across the server fleet.
 """
 
-import logging
 import ipaddress
+import logging
 import re
-import subprocess
 import shlex
+import subprocess
 import textwrap
 
 from django.utils import timezone
+
 from apps.deployments.utils import log_event
 
 logger = logging.getLogger(__name__)
@@ -93,8 +94,9 @@ class WireGuardService:
     def _generate_keypair_python() -> tuple[str, str]:
         """Generate WireGuard keys using Python cryptography (X25519)."""
         import base64
-        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+
         from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
         private_key = X25519PrivateKey.generate()
         private_bytes = private_key.private_bytes(
@@ -180,8 +182,8 @@ class WireGuardService:
         Returns:
             WireGuardPeer instance
         """
-        from apps.deployments.models_mesh import WireGuardPeer
         from apps.deployments.models_core import ManagedServer
+        from apps.deployments.models_mesh import WireGuardPeer
 
         # Check if peer already exists
         existing = WireGuardPeer.objects.filter(
@@ -257,8 +259,8 @@ class WireGuardService:
 
         This is idempotent and intended for server provisioning/connect flows.
         """
-        from apps.deployments.models_mesh import MeshNetwork
         from apps.deployments.models_core import ManagedServer
+        from apps.deployments.models_mesh import MeshNetwork
 
         if not server:
             raise ValueError("server is required")
@@ -307,7 +309,7 @@ class WireGuardService:
             server.wg_address = peer.wg_address
             update_fields.append("wg_address")
         if update_fields:
-            server.save(update_fields=update_fields + ["updated_at"])
+            server.save(update_fields=[*update_fields, "updated_at"])
 
         primary = ManagedServer.get_primary()
         if primary and getattr(primary, "wg_address", None) != local_peer.wg_address:
@@ -405,8 +407,9 @@ class WireGuardService:
         Since the API runs unprivileged, we use the Docker socket proxy to spin up
         an ephemeral privileged container to apply the config to the host network.
         """
-        import docker
         import os
+
+        import docker
         iface = cls.validate_interface_name(iface)
         cls.validate_wg_config(config)
         client = docker.from_env()
@@ -417,7 +420,7 @@ class WireGuardService:
         import base64
         b64_config = base64.b64encode(config.encode()).decode()
         cmd = f"mkdir -p /etc/wireguard && echo '{b64_config}' | base64 -d > /etc/wireguard/{safe_iface}.conf && chmod 600 /etc/wireguard/{safe_iface}.conf"
-        
+
         try:
             client.containers.run(
                 "alpine",
@@ -548,7 +551,6 @@ class WireGuardService:
 
         Pings each peer from the local server and updates latency_ms.
         """
-        from apps.deployments.models_mesh import WireGuardPeer
 
         local_peer = mesh.peers.filter(is_local=True).first()
         if not local_peer:

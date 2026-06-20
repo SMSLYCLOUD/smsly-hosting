@@ -1,14 +1,17 @@
 """WebSocket consumers for deployment real-time features."""
-import json
 import asyncio
+import base64
+import contextlib
+import json
 import logging
 import os
-import base64
 import time
-from django.conf import settings
-from apps.deployments.utils import log_event
-from channels.generic.websocket import AsyncWebsocketConsumer
+
 from channels.db import database_sync_to_async
+from channels.generic.websocket import AsyncWebsocketConsumer
+from django.conf import settings
+
+from apps.deployments.utils import log_event
 
 logger = logging.getLogger(__name__)
 
@@ -157,10 +160,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             if settings.DEBUG:
                 logger.error("TerminalConsumer.connect() failed: %s", e, exc_info=True)
             if self._accepted:
-                try:
+                with contextlib.suppress(Exception):
                     await self.send(text_data=json.dumps({'error': 'Internal error'}))
-                except Exception:
-                    pass
             await self.close(code=4000)
 
     async def _async_setup(self):
@@ -177,7 +178,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 return
 
             logger.info("Terminal connect: Found container %s for deployment %s", self.container_id, self.deployment_id)
-            
+
             # Give the proxy a moment to settle the state
             await asyncio.sleep(0.5)
 
@@ -210,10 +211,10 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             # Force-trigger a prompt by sending a newline to the shell
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, self._send_to_shell, "\n")
-            
+
             # Start reading output
             self._read_task = asyncio.create_task(self._read_output())
-            
+
         except asyncio.CancelledError:
             logger.info("Terminal setup task cancelled")
         except Exception as e:
@@ -262,10 +263,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         for sock in (self._raw_sock, self.exec_socket):
             if sock is None:
                 continue
-            try:
+            with contextlib.suppress(Exception):
                 sock.close()
-            except Exception:
-                pass
         self._raw_sock = None
         self.exec_socket = None
         self.exec_id = None
@@ -280,7 +279,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         # SECURITY: Re-check authentication on each message
         if not self.user:
             if settings.DEBUG:
-                logger.error("Closing 4001: Missing token"); await self.close(code=4001)
+                logger.error("Closing 4001: Missing token")
+                await self.close(code=4001)
             return
 
         # 1. Handle structured JSON messages
@@ -456,15 +456,12 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             if settings.DEBUG:
                 logger.info("_read_output task CANCELLED")
         except Exception as e:
-            if not self.is_disconnected:
-                if settings.DEBUG:
-                    logger.error(
-                        "_read_output error: %s",
-                        e, exc_info=True)
-            try:
+            if not self.is_disconnected and settings.DEBUG:
+                logger.error(
+                    "_read_output error: %s",
+                    e, exc_info=True)
+            with contextlib.suppress(Exception):
                 await self.close()
-            except Exception:
-                pass
         finally:
             if settings.DEBUG:
                 logger.info("_read_output task TERMINATED")
@@ -487,13 +484,13 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                     # After that, use a less chatty keepalive to avoid reconnect churn.
                     current_duration = time.time() - start_time
                     wait_timeout = 5.0 if current_duration < 10.0 else 20.0
-                    
+
                     msg = await asyncio.wait_for(self._out_queue.get(), timeout=wait_timeout)
-                    
+
                     if not self.is_disconnected:
                         await self.send(text_data=json.dumps(msg))
                         await asyncio.sleep(0.01)
-                
+
                 except asyncio.TimeoutError:
                     # No data? Send a protocol-level 'pong' to keep the tunnel "hot"
                     if not self.is_disconnected:
@@ -501,7 +498,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                             await self.send(text_data=json.dumps({'type': 'pong'}))
                         except Exception:
                             break
-                
+
         except asyncio.CancelledError:
             if settings.DEBUG:
                 logger.info("_send_loop task CANCELLED")
@@ -519,7 +516,6 @@ class TerminalConsumer(AsyncWebsocketConsumer):
 
         Relies on the underlying docker-py socket timeout.
         """
-        import socket
 
         sock = self._raw_sock or self.exec_socket
         if sock is None:
@@ -532,12 +528,12 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 data = sock.read(4096)
             else:
                 return None
-            
+
             if not data:
                 # True EOF
                 return None
             return data
-        except socket.timeout:
+        except TimeoutError:
             # Timeout case - return empty heartbeat-equivalent
             return b''
         except Exception as e:
@@ -596,8 +592,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
 
     def _sync_start_exec(self):
         """Blocking part of exec start."""
+
         from apps.cloud.docker_client import get_docker_exec_client
-        import socket as _socket
         try:
             client = get_docker_exec_client()
             container = client.containers.get(self.container_id)
@@ -638,7 +634,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
 
             try:
                 self._raw_sock.settimeout(15.0)
-            except (AttributeError, _socket.error) as e:
+            except (OSError, AttributeError) as e:
                 logger.warning("Could not set exec socket timeout: %s", e)
 
             return True
@@ -649,48 +645,49 @@ class TerminalConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def _authenticate_token(self, token_key):
         """Validate token and return user with enhanced error handling."""
-        from rest_framework.authtoken.models import Token
-        from django.core.cache import cache
         import hashlib
-        
+
+        from django.core.cache import cache
+        from rest_framework.authtoken.models import Token
+
         if not token_key or not isinstance(token_key, str):
             logger.warning("Invalid token format: %s", type(token_key))
             return None
-        
+
         # Basic token format validation (should be 40 chars hex)
         if len(token_key) != 40 or not all(c in '0123456789abcdef' for c in token_key):
             logger.warning("Token format validation failed: %s", token_key[:10] + '...')
             return None
-        
+
         # Check for common invalid token patterns
         if token_key.startswith('0') * 40 or token_key == '0' * 40:
             logger.warning("Invalid token pattern detected")
             return None
-        
+
         # Use cache to reduce database load for invalid tokens
         cache_key = f'invalid_token:{hashlib.sha256(token_key.encode()).hexdigest()}'
         if cache.get(cache_key):
             logger.info("Token found in invalid cache: %s", token_key[:10] + '...')
             return None
-        
+
         try:
             token = Token.objects.select_related('user').get(key=token_key)
-            
+
             # Additional validation: check if user is active
             if not token.user.is_active:
                 logger.warning("User account inactive for token: %s", token_key[:10] + '...')
                 cache.set(cache_key, True, 300)  # Cache for 5 minutes
                 return None
-            
+
             # Check if user has required permissions
             if not token.user.has_perm('deployments.view_deployment'):
                 logger.warning("User lacks required permissions for token: %s", token_key[:10] + '...')
                 cache.set(cache_key, True, 300)  # Cache for 5 minutes
                 return None
-            
+
             logger.debug("Token validated successfully for user: %s", token.user.username)
             return token.user
-            
+
         except Token.DoesNotExist:
             logger.warning("Token not found: %s", token_key[:10] + '...')
             # Cache the invalid token to prevent repeated database hits
@@ -715,6 +712,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         immediately loses access on the next ``receive()`` call.
         """
         from django.db.models import Q
+
         from apps.deployments.models import Deployment
         try:
             return Deployment.objects.filter(
@@ -804,10 +802,8 @@ class BuildLogConsumer(AsyncWebsocketConsumer):
         except Exception as e:
             if settings.DEBUG:
                 logger.error("BuildLogConsumer.connect() failed: %s", e, exc_info=True)
-            try:
+            with contextlib.suppress(Exception):
                 await self.send(text_data=json.dumps({'error': 'Internal error'}))
-            except Exception:
-                pass
             await self.close(code=4000)
 
     async def disconnect(self, code):
@@ -849,48 +845,49 @@ class BuildLogConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def _authenticate_token(self, token_key):
         """Validate token and return user with enhanced error handling."""
-        from rest_framework.authtoken.models import Token
-        from django.core.cache import cache
         import hashlib
-        
+
+        from django.core.cache import cache
+        from rest_framework.authtoken.models import Token
+
         if not token_key or not isinstance(token_key, str):
             logger.warning("Invalid token format: %s", type(token_key))
             return None
-        
+
         # Basic token format validation (should be 40 chars hex)
         if len(token_key) != 40 or not all(c in '0123456789abcdef' for c in token_key):
             logger.warning("Token format validation failed: %s", token_key[:10] + '...')
             return None
-        
+
         # Check for common invalid token patterns
         if token_key.startswith('0') * 40 or token_key == '0' * 40:
             logger.warning("Invalid token pattern detected")
             return None
-        
+
         # Use cache to reduce database load for invalid tokens
         cache_key = f'invalid_token:{hashlib.sha256(token_key.encode()).hexdigest()}'
         if cache.get(cache_key):
             logger.info("Token found in invalid cache: %s", token_key[:10] + '...')
             return None
-        
+
         try:
             token = Token.objects.select_related('user').get(key=token_key)
-            
+
             # Additional validation: check if user is active
             if not token.user.is_active:
                 logger.warning("User account inactive for token: %s", token_key[:10] + '...')
                 cache.set(cache_key, True, 300)  # Cache for 5 minutes
                 return None
-            
+
             # Check if user has required permissions
             if not token.user.has_perm('deployments.view_deployment'):
                 logger.warning("User lacks required permissions for token: %s", token_key[:10] + '...')
                 cache.set(cache_key, True, 300)  # Cache for 5 minutes
                 return None
-            
+
             logger.debug("Token validated successfully for user: %s", token.user.username)
             return token.user
-            
+
         except Token.DoesNotExist:
             logger.warning("Token not found: %s", token_key[:10] + '...')
             # Cache the invalid token to prevent repeated database hits
@@ -906,6 +903,7 @@ class BuildLogConsumer(AsyncWebsocketConsumer):
         # not just the service owner. See TerminalConsumer._verify_ownership
         # for the full rationale.
         from django.db.models import Q
+
         from apps.deployments.models import Deployment
         try:
             return Deployment.objects.filter(
@@ -940,13 +938,13 @@ class BuildLogConsumer(AsyncWebsocketConsumer):
 class ServiceStatusConsumer(AsyncWebsocketConsumer):
     """
     WebSocket consumer for real-time service status updates.
-    
+
     Connects to channel groups per user and broadcasts service status changes
     as they happen. Services update their status via channel_layer.
-    
+
     Usage:
         ws://host/ws/service-status/?token=xxx
-    
+
     Messages sent to client:
         {
             "type": "service_status_update",
@@ -999,10 +997,8 @@ class ServiceStatusConsumer(AsyncWebsocketConsumer):
         except Exception as e:
             if settings.DEBUG:
                 logger.error("ServiceStatusConsumer.connect() failed: %s", e, exc_info=True)
-            try:
+            with contextlib.suppress(Exception):
                 await self.send(text_data=json.dumps({'error': 'Internal error'}))
-            except Exception:
-                pass
             await self.close(code=4000)
 
     async def disconnect(self, code):
@@ -1048,17 +1044,18 @@ class ServiceStatusConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def _authenticate_token(self, token_key):
         """Validate token and return user with enhanced error handling."""
-        from django.core.cache import cache
+        import hashlib
+
         from django.contrib.auth import get_user_model
         from django.core import signing
-        import hashlib
-        
+        from django.core.cache import cache
+
         if not token_key or not isinstance(token_key, str):
             logger.warning("Invalid token format: %s", type(token_key))
             return None
-            
+
         User = get_user_model()
-        
+
         # 1. Try to decode as a short-lived signed token (frontend WebSocket auth)
         try:
             # Token valid for 60 seconds
@@ -1069,44 +1066,44 @@ class ServiceStatusConsumer(AsyncWebsocketConsumer):
         except Exception:
             # Not a signed token, proceed to check if it's a DRF token
             pass
-            
+
         # 2. Fallback to checking if it's a long-lived DRF token
         from rest_framework.authtoken.models import Token
-        
+
         # Basic token format validation (should be 40 chars hex)
         if len(token_key) != 40 or not all(c in '0123456789abcdef' for c in token_key):
             logger.warning("Token format validation failed: %s", token_key[:10] + '...')
             return None
-        
+
         # Check for common invalid token patterns
         if token_key.startswith('0') * 40 or token_key == '0' * 40:
             logger.warning("Invalid token pattern detected")
             return None
-        
+
         # Use cache to reduce database load for invalid tokens
         cache_key = f'invalid_token:{hashlib.sha256(token_key.encode()).hexdigest()}'
         if cache.get(cache_key):
             logger.info("Token found in invalid cache: %s", token_key[:10] + '...')
             return None
-        
+
         try:
             token = Token.objects.select_related('user').get(key=token_key)
-            
+
             # Additional validation: check if user is active
             if not token.user.is_active:
                 logger.warning("User account inactive for token: %s", token_key[:10] + '...')
                 cache.set(cache_key, True, 300)  # Cache for 5 minutes
                 return None
-            
+
             # Check if user has required permissions
             if not token.user.has_perm('deployments.view_deployment'):
                 logger.warning("User lacks required permissions for token: %s", token_key[:10] + '...')
                 cache.set(cache_key, True, 300)  # Cache for 5 minutes
                 return None
-            
+
             logger.debug("Token validated successfully for user: %s", token.user.username)
             return token.user
-            
+
         except Token.DoesNotExist:
             logger.warning("Token not found: %s", token_key[:10] + '...')
             # Cache the invalid token to prevent repeated database hits
@@ -1120,13 +1117,14 @@ class ServiceStatusConsumer(AsyncWebsocketConsumer):
     def _get_user_services(self):
         """Get all services for the authenticated user, including team projects."""
         from django.db.models import Q
-        from apps.deployments.models import Service, Deployment
+
+        from apps.deployments.models import Service
         services = Service.objects.filter(
             Q(owner=self.user) | Q(project__team__members__user=self.user)
         ).distinct().prefetch_related(
             'deployments', 'deployments__service'
         )
-        
+
         # Get the latest deployment for each service
         services_with_status = []
         for service in services:
@@ -1138,7 +1136,7 @@ class ServiceStatusConsumer(AsyncWebsocketConsumer):
                 'deployment_status': latest_deployment.status if latest_deployment else 'unknown',
                 'updated_at': service.updated_at.isoformat() if service.updated_at else None,
             })
-        
+
         return services_with_status
 
     async def _send_initial_services(self):

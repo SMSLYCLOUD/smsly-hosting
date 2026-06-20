@@ -1,6 +1,8 @@
-from apps.deployments.models_addons import Addon
-from .db_proxy import DatabaseProxy
 import logging
+
+from apps.deployments.models_addons import Addon
+
+from .db_proxy import DatabaseProxy
 
 logger = logging.getLogger(__name__)
 

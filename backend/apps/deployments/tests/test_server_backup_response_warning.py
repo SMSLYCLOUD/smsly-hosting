@@ -11,7 +11,6 @@ from django.test import TestCase
 from apps.deployments.models_backup import ServerBackup
 from apps.deployments.services.backup_service import BackupService
 
-
 User = get_user_model()
 
 
@@ -54,8 +53,8 @@ class ServerBackupResponseWarningTest(TestCase):
         self.assertIn("DISASTER_RECOVERY", joined)
 
     def test_server_backup_viewset_restore_includes_warning(self):
-        from rest_framework.test import APIClient
         from django.urls import reverse
+        from rest_framework.test import APIClient
 
         client = APIClient()
         client.force_authenticate(user=self.admin)

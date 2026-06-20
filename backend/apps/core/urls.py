@@ -1,10 +1,20 @@
 """Core app URL patterns."""
-from django.urls import path, include
-from rest_framework.routers import DefaultRouter
-from apps.core.views import ContactView, DashboardOverviewView, APIKeyViewSet, SubdomainStubViewSet, AdminUserViewSet, SystemResourcesView
-from apps.core.views_observability import (
-    grafana_embed_url, loki_query, loki_label_values, prometheus_query,
+from apps.core.views import (
+    AdminUserViewSet,
+    APIKeyViewSet,
+    ContactView,
+    DashboardOverviewView,
+    SubdomainStubViewSet,
+    SystemResourcesView,
 )
+from apps.core.views_observability import (
+    grafana_embed_url,
+    loki_label_values,
+    loki_query,
+    prometheus_query,
+)
+from django.urls import include, path
+from rest_framework.routers import DefaultRouter
 
 router = DefaultRouter()
 router.register(r'api-keys', APIKeyViewSet, basename='api-keys')

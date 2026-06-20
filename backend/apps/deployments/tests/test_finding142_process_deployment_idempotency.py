@@ -21,13 +21,11 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
-from django.utils import timezone
 
-from apps.deployments.models import Service, Deployment
+from apps.deployments.models import Deployment, Service
 from apps.deployments.services.safedeploy.deployment_pipeline import (
     ProductionDeploymentPipeline,
 )
-
 
 User = get_user_model()
 

@@ -1,8 +1,6 @@
-from django.contrib.auth.models import User
-from django.db import connection
-from django.test import TestCase
-
 from apps.teams.models import Team, TeamMember
+from django.contrib.auth.models import User
+from django.test import TestCase
 
 
 class Finding157TeamOwnerSetNullTests(TestCase):

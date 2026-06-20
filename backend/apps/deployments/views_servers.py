@@ -10,10 +10,10 @@ import hmac as hmac_mod
 import ipaddress
 import json as json_mod
 import logging
+import os
 import re
 import shlex
 import time
-import os
 import uuid
 from typing import Any
 from urllib.parse import urlparse
@@ -25,12 +25,13 @@ from rest_framework.decorators import action, throttle_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle
-from .rate_limiting import ServerHealthCheckRateThrottle
 
-from .models_servers import ManagedServer
-from .models_core import Service, Deployment
-from .serializers import ServiceSerializer, DeploymentSerializer
 from apps.deployments.services.transfer_service import _redact_transfer_text
+
+from .models_core import Deployment, Service
+from .models_servers import ManagedServer
+from .rate_limiting import ServerHealthCheckRateThrottle
+from .serializers import DeploymentSerializer, ServiceSerializer
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +134,7 @@ def _detect_reachable_api_url(server) -> tuple[str | None, Any | None]:
     # Try multiple health paths: /health is the standard endpoint,
     # /health/live is the liveness-only probe used by some lite agent configs.
     health_paths = ("/health", "/health/live")
-    from .services.tls_verify import resolve_tls_verify, _check_pin_after_handshake
+    from .services.tls_verify import _check_pin_after_handshake, resolve_tls_verify
     verify, fingerprint = resolve_tls_verify(server)
     for base_url in _candidate_api_urls(server):
         for health_path in health_paths:
@@ -270,7 +271,10 @@ def _try_auto_token_exchange(server, base_url: str) -> str | None:
                 payload = f"POST|{path}|{ts}|{body_hash}"
                 sig = hmac_mod.new(gateway_secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
 
-                from .services.tls_verify import resolve_tls_verify, _check_pin_after_handshake
+                from .services.tls_verify import (
+                    _check_pin_after_handshake,
+                    resolve_tls_verify,
+                )
                 verify, fingerprint = resolve_tls_verify(server)
                 resp = requests.post(
                     f"{url_base}{path}",
@@ -514,7 +518,6 @@ def _fetch_remote_json_with_fallback(server, kind, api_path, timeout=15):
     modes = _iter_remote_auth_modes(server)
     retryable_statuses = {401, 403, 500, 502, 503}
 
-    last_error = None
     last_status = None
 
     for base_url in candidate_urls:
@@ -529,7 +532,7 @@ def _fetch_remote_json_with_fallback(server, kind, api_path, timeout=15):
             try:
                 resp = requests.get(url, headers=headers, timeout=timeout)
             except requests.RequestException as exc:
-                last_error = str(exc)
+                str(exc)
                 continue
 
             last_status = resp.status_code
@@ -738,7 +741,7 @@ def _bind_request_user(user):
     """Bind the current user to the worker thread for ``_is_command_allowed``."""
     from threading import current_thread
 
-    setattr(current_thread(), 'smsly_request_user', user)
+    current_thread().smsly_request_user = user
 
 
 # --- Serializers -------------------------------------------------------------
@@ -752,9 +755,6 @@ class ManagedServerSerializer(serializers.ModelSerializer):
 
     def get_has_ssh_credentials(self, obj):
         return bool(str(obj.ssh_password or '').strip() or str(obj.ssh_key or '').strip())
-
-    def get_tls_cert_sha256_set(self, obj):
-        return bool((getattr(obj, "tls_cert_sha256", "") or "").strip())
 
     class Meta:
         model = ManagedServer
@@ -1210,8 +1210,8 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
         Forward an API request to a remote server.
         Body: { "method": "GET", "path": "/api/v1/services/", "body": null }
         """
-        import posixpath
         import json as json_mod
+        import posixpath
         from urllib.parse import urlparse
 
         MAX_PROXY_BODY_SIZE = 1_048_576  # 1MB
@@ -1326,7 +1326,7 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
                 "data": data,
             })
         except requests.RequestException as e:
-            return _proxy_error_response(f"Proxy request failed: {str(e)}")
+            return _proxy_error_response(f"Proxy request failed: {e!s}")
 
     # ── Remote Services (convenience) ────────────────────────────────────
 
@@ -1571,7 +1571,9 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
             )
 
         try:
-            from apps.deployments.services.self_healing_orchestrator import SelfHealingOrchestrator
+            from apps.deployments.services.self_healing_orchestrator import (
+                SelfHealingOrchestrator,
+            )
             orchestrator = SelfHealingOrchestrator(server)
             out, err, code = orchestrator._exec(command, timeout=60)
             orchestrator._close_ssh()
@@ -1595,14 +1597,16 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
             })
         except Exception as exc:
             return Response(
-                {"error": f"Command execution failed: {str(exc)}"},
+                {"error": f"Command execution failed: {exc!s}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
     def _run_diagnostics(self, server):
         """Run diagnostics on a remote server and return results."""
         try:
-            from apps.deployments.services.self_healing_orchestrator import SelfHealingOrchestrator
+            from apps.deployments.services.self_healing_orchestrator import (
+                SelfHealingOrchestrator,
+            )
             orchestrator = SelfHealingOrchestrator(server)
             diagnostics = orchestrator.run_full_diagnostics()
             orchestrator._close_ssh()
@@ -1625,7 +1629,7 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
             })
         except Exception as exc:
             return Response(
-                {"error": f"Diagnostics failed: {str(exc)}"},
+                {"error": f"Diagnostics failed: {exc!s}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -1633,8 +1637,8 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
         """Trigger node-level healing actions."""
         try:
             from apps.deployments.services.self_healing_orchestrator import (
-                SelfHealingOrchestrator,
                 RecoveryAction,
+                SelfHealingOrchestrator,
             )
 
             orchestrator = SelfHealingOrchestrator(server)
@@ -1667,6 +1671,6 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
             })
         except Exception as exc:
             return Response(
-                {"error": f"Healing failed: {str(exc)}"},
+                {"error": f"Healing failed: {exc!s}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )

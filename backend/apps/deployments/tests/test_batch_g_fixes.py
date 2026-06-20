@@ -19,17 +19,14 @@ Covers the 5 remaining items addressed in this commit:
 import os
 import tempfile
 import uuid
-from unittest.mock import patch, MagicMock
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase, override_settings
+from django.test import TestCase
 from rest_framework.test import APIClient
 
-from apps.deployments.models import Service, PlatformConfig
-from apps.deployments.models_servers import ManagedServer
+from apps.deployments.models import Service
 from apps.deployments.services.transfer_service import _scrub_env_for_transfer
 from apps.intelligence.views import _record_usage
-
 
 User = get_user_model()
 
@@ -72,7 +69,6 @@ class HealthWebhookSecurityTests(TestCase):
         self.assertEqual(resp.status_code, 404)
 
     def test_valid_token_returns_200(self):
-        import uuid
         client = APIClient()
         resp = client.post(
             self.url,

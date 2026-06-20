@@ -22,7 +22,6 @@ sync block is verified by checking the actual source
 structure.
 """
 import os
-import re
 import unittest
 
 

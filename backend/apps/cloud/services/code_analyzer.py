@@ -7,9 +7,8 @@ the canonical guard against an attacker shipping a 10 GB file
 that would OOM the analysis process (Issue 65 / 154 / 195).
 """
 import os
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Iterator
-
 
 MAX_TOTAL_BYTES = 50 * 1024 * 1024
 

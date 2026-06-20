@@ -1,13 +1,12 @@
 """Audit log coverage for domain and backup events (Fix 5)."""
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 
 from apps.deployments.models import Project, Service
-from apps.deployments.models_backup import ServiceBackup
 from apps.deployments.models_audit import AuditLog
-
+from apps.deployments.models_backup import ServiceBackup
 
 User = get_user_model()
 
@@ -138,8 +137,8 @@ class AuditLogDomainBackupTest(TestCase):
         self.assertEqual(log.metadata["result"], "success")
 
     def test_restore_service_backup_task_writes_audit_log(self):
-        from apps.deployments.tasks_backup import restore_service_backup_task
         from apps.deployments.services.backup_service import BackupService
+        from apps.deployments.tasks_backup import restore_service_backup_task
 
         backup = ServiceBackup.objects.create(
             service=self.service,

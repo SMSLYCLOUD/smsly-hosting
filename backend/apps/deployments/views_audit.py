@@ -6,11 +6,11 @@ re-exported from ``apps.deployments.views`` for backwards compatibility with
 ``apps.deployments.urls`` and any test that imports it from the parent
 module.
 """
+from django.db.models import Q
 from rest_framework import permissions, viewsets
 
 from .models_audit import AuditLog
 from .serializers import AuditLogSerializer
-from django.db.models import Q
 
 
 class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):

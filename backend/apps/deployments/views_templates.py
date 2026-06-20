@@ -1,18 +1,22 @@
 """Views Templates module."""
 import json
 import os
-import secrets
 import re
+import secrets
+
 from django.conf import settings
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema
-from rest_framework import serializers, viewsets, status
-from rest_framework.response import Response
-from rest_framework.permissions import AllowAny
-from rest_framework.permissions import IsAuthenticated
+from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.response import Response
 
-from .ai_router import DEFAULT_AI_ROUTER_API_BASE, DEFAULT_AI_ROUTER_UI_BASE, DEFAULT_BRAID_ALIAS
+from .ai_router import (
+    DEFAULT_AI_ROUTER_API_BASE,
+    DEFAULT_AI_ROUTER_UI_BASE,
+    DEFAULT_BRAID_ALIAS,
+)
 
 
 class TemplateSchemaSerializer(serializers.Serializer):
@@ -35,7 +39,7 @@ class TemplateViewSet(viewsets.GenericViewSet):
         try:
             path = os.path.join(settings.BASE_DIR,
                                 'apps/deployments/fixtures/templates.json')
-            with open(path, 'r', encoding='utf-8-sig') as f:
+            with open(path, encoding='utf-8-sig') as f:
                 data = json.load(f)
 
             category = request.query_params.get('category')
@@ -72,7 +76,7 @@ class TemplateViewSet(viewsets.GenericViewSet):
         try:
             path = os.path.join(settings.BASE_DIR,
                                 'apps/deployments/fixtures/templates.json')
-            with open(path, 'r', encoding='utf-8-sig') as f:
+            with open(path, encoding='utf-8-sig') as f:
                 data = json.load(f)
 
             template = next((t for t in data if t['id'] == pk), None)
@@ -105,7 +109,7 @@ class TemplateViewSet(viewsets.GenericViewSet):
         try:
             path = os.path.join(settings.BASE_DIR,
                                 'apps/deployments/fixtures/templates.json')
-            with open(path, 'r', encoding='utf-8-sig') as f:
+            with open(path, encoding='utf-8-sig') as f:
                 data = json.load(f)
 
             template = next((t for t in data if t['id'] == pk), None)
@@ -143,8 +147,8 @@ class TemplateViewSet(viewsets.GenericViewSet):
                 return Response({'error': 'Template is missing docker_image'},
                                 status=status.HTTP_400_BAD_REQUEST)
 
-            from apps.deployments.models import Service, EnvironmentVariable
             from apps.cloud.models import CloudProvider
+            from apps.deployments.models import EnvironmentVariable, Service
             from apps.deployments.tasks_templates import one_click_deploy_template_task
 
             # Resolve provider (prefer existing active provider, else create LOCAL fallback).
@@ -175,7 +179,7 @@ class TemplateViewSet(viewsets.GenericViewSet):
                 provider=provider,
             )
 
-            base_domain = getattr(settings, 'DOMAIN', 'localhost') or 'localhost'
+            getattr(settings, 'DOMAIN', 'localhost') or 'localhost'
             service_domain = service.public_domain
 
             def render_value(raw: str) -> str:

@@ -1,13 +1,14 @@
 """Views Topology module — enriched topology data for canvas visualization."""
-import re
 import logging
+import re
 import uuid
 
 from rest_framework import serializers, viewsets
 from rest_framework.decorators import action
-from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from .models import Service, Deployment
+from rest_framework.response import Response
+
+from .models import Deployment, Service
 
 logger = logging.getLogger(__name__)
 
@@ -35,15 +36,15 @@ class TopologyViewSet(viewsets.GenericViewSet):
         from django.db.models import Q
 
         project_id = request.query_params.get('project_id')
-        
+
         # Build base queryset with RBAC
         qs = Service.objects.filter(
             Q(owner=request.user) | Q(project__team__members__user=request.user)
         )
-        
+
         if project_id:
             qs = qs.filter(project_id=project_id)
-            
+
         user_services = qs.distinct().prefetch_related(
             'addons', 'volumes', 'env_vars',
             'cron_jobs',
@@ -139,9 +140,7 @@ class TopologyViewSet(viewsets.GenericViewSet):
                     addon_kind = 'CACHE'
                 elif addon_upper in ('RABBITMQ', 'KAFKA'):
                     addon_kind = 'QUEUE'
-                elif addon_upper == 'ELASTICSEARCH':
-                    addon_kind = 'SEARCH'
-                elif addon_upper == 'QDRANT':
+                elif addon_upper in {'ELASTICSEARCH', 'QDRANT'}:
                     addon_kind = 'SEARCH'
                 elif addon_upper == 'MINIO':
                     addon_kind = 'STORAGE'
@@ -265,7 +264,7 @@ class TopologyViewSet(viewsets.GenericViewSet):
                     if service.internal_port == tunnel.local_port:
                         matched_service = service
                         break
-                
+
                 if matched_service:
                     tunnel_id = f"tunnel-{tunnel.id}"
                     nodes.append({
@@ -305,7 +304,7 @@ class TopologyViewSet(viewsets.GenericViewSet):
                 for other in user_services:
                     if other.id == service.id:
                         continue
-                    
+
                     is_match = False
                     match_type = "API"
                     evidence = ""

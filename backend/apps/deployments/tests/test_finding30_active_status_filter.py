@@ -8,7 +8,6 @@ from apps.deployments import views_safedeploy
 from apps.deployments.models_core import Service
 from apps.deployments.models_safedeploy import PreviewEnvironment
 
-
 User = get_user_model()
 
 

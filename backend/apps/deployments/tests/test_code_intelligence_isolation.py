@@ -8,7 +8,6 @@ from rest_framework.test import APIClient
 
 from apps.deployments.models import Service
 
-
 User = get_user_model()
 
 

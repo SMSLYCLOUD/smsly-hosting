@@ -15,11 +15,10 @@ The tests below pin all three behaviors and verify the argv is a
 list, not a string (which would be unsafe under ``shell=True``).
 """
 import json
-from unittest.mock import patch, MagicMock
-
-from django.test import SimpleTestCase
+from unittest.mock import MagicMock, patch
 
 from apps.cloud.services.builder import NixpacksBuilder
+from django.test import SimpleTestCase
 
 
 class TrivySubprocessHardeningTests(SimpleTestCase):
@@ -36,7 +35,7 @@ class TrivySubprocessHardeningTests(SimpleTestCase):
             stdout=json.dumps({"Results": []}),
         )
         NixpacksBuilder.scan_image("example/image:tag")
-        args, kwargs = mock_run.call_args
+        args, _kwargs = mock_run.call_args
         self.assertTrue(args, "subprocess.run should be called positionally")
         argv = args[0]
         self.assertIsInstance(argv, list)

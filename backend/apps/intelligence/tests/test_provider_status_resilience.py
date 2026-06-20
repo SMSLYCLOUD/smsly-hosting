@@ -7,9 +7,12 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
+from apps.intelligence.providers import (
+    AIProvider,
+    MockProvider,
+    get_available_providers,
+)
 from apps.licensing.models import PlatformLicense, PlatformTier
-from apps.intelligence.providers import AIProvider, MockProvider, get_available_providers
-
 
 User = get_user_model()
 

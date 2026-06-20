@@ -6,7 +6,7 @@ import hmac
 import json
 import os
 import time
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import requests
 from django.contrib.auth import get_user_model
@@ -16,6 +16,7 @@ from django.urls import reverse
 from rest_framework.test import APIClient
 
 from apps.cloud.models import CloudProvider
+
 from ..models import Deployment, Service
 from ..models_servers import ManagedServer
 from ..tasks import (

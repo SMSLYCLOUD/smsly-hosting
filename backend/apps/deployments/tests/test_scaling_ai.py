@@ -13,8 +13,6 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
-from django.utils import timezone
-
 
 User = get_user_model()
 
@@ -59,10 +57,10 @@ class ScalingAIDecisionTests(TestCase):
 
     @patch("apps.deployments.services.scaling_ai.requests.get")
     def test_scale_down_decision_does_not_raise_nameerror(self, mock_get):
+        from apps.deployments.models_replica import ServiceReplica
         from apps.deployments.services.scaling_ai import (
             CPU_LOW,
         )
-        from apps.deployments.models_replica import ServiceReplica
 
         ServiceReplica.objects.create(
             service=self.service,

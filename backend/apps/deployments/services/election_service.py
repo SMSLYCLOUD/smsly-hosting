@@ -59,9 +59,9 @@ class ElectionService:
         Called periodically by Celery beat. Only executes if this server
         is the current leader.
         """
-        from apps.deployments.models_election import HeartbeatLog
-        from apps.deployments.models_mesh import WireGuardPeer
         import requests
+
+        from apps.deployments.models_election import HeartbeatLog
 
         if not cluster.leader:
             logger.warning("No leader set for cluster — skipping heartbeat")
@@ -220,8 +220,9 @@ class ElectionService:
         3. Request votes from all peers
         4. If majority, promote to leader
         """
-        from apps.deployments.models_election import ElectionVote
         import requests
+
+        from apps.deployments.models_election import ElectionVote
 
         # Increment term and become candidate
         cluster.term += 1
@@ -298,7 +299,7 @@ class ElectionService:
                     logger.warning(f"Vote denied by {peer.wg_address}: HTTP {resp.status_code}")
             except Exception as e:
                 logger.warning(f"Failed to request vote from {peer.wg_address}: {e}")
-                
+
         # --- SPECIAL CASE: Handle 2-node deadlock ---
         # In a 2-node cluster, if 1 node is down, Raft cannot reach a majority (2/2).
         # We allow a solo win if the peer is unreachable and we have 'primary' preference
@@ -308,7 +309,7 @@ class ElectionService:
             # Check if peer is unreachable (no latency reported in logs)
             # This is a safety heuristic for small clusters.
             logger.info("2-node deadlock detected. Checking if we can force promote...")
-            votes_for_self += 1 
+            votes_for_self += 1
             logger.warning(f"Force-promoting single node in 2-node cluster (peer {peer.wg_address} unreachable)")
 
         logger.info(
@@ -324,7 +325,7 @@ class ElectionService:
             cls._set_local_role("FOLLOWER")
             cluster.state = "STABLE"
             cluster.save(update_fields=["state"])
-            logger.info(f"Election lost — reverting to follower")
+            logger.info("Election lost — reverting to follower")
             return False
 
     # ── Promotion / Demotion ─────────────────────────────────────────────
@@ -466,7 +467,6 @@ class ElectionService:
         We track its role via the ClusterState or a local config file.
         For now, we log it; Phase 3 will use it for DB routing.
         """
-        import os
         role_file = "/tmp/.smsly_cluster_role"
         try:
             with open(role_file, "w") as f:

@@ -1,8 +1,4 @@
 import logging
-from django.conf import settings
-from django.utils import timezone
-from django.http import JsonResponse
-from .models import PlatformLicense
 
 logger = logging.getLogger(__name__)
 

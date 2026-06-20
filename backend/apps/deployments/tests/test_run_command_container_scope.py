@@ -1,15 +1,14 @@
 # pylint: disable=invalid-name
 """Tests for SEC (Issue 75): docker logs is restricted to containers the user owns."""
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from apps.deployments.models_servers import ManagedServer
-from apps.deployments.models_core import Service
 from apps.cloud.models import CloudProvider
-
+from apps.deployments.models_core import Service
+from apps.deployments.models_servers import ManagedServer
 
 User = get_user_model()
 

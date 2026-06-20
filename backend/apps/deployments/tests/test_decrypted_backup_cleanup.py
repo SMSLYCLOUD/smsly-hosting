@@ -3,7 +3,6 @@ import os
 import platform
 import stat
 import tempfile
-import uuid
 from unittest import skipIf
 from unittest.mock import patch
 
@@ -14,9 +13,8 @@ from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
 from apps.deployments.models import Project, Service
-from apps.deployments.models_backup import ServiceBackup, ServerBackup
+from apps.deployments.models_backup import ServerBackup, ServiceBackup
 from apps.deployments.services.backup_service import BackupService
-
 
 IS_WINDOWS = platform.system() == 'Windows'
 User = get_user_model()
@@ -28,12 +26,14 @@ def _make_signed(pk: str) -> str:
 
 def _encrypt_chunked(source: bytes, key: str) -> bytes:
     """Replicate the chunked AES-GCM encryption format for tests."""
+    import struct
+
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
     from apps.deployments.services.backup_service import (
         _CHUNKED_BACKUP_MAGIC,
         _CHUNKED_BACKUP_NONCE_PREFIX_BYTES,
     )
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-    import struct
 
     raw_key = BackupService._decode_backup_key(key)
     aesgcm = AESGCM(raw_key)

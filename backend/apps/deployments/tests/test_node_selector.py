@@ -1,9 +1,8 @@
 import unittest
 from unittest.mock import MagicMock, patch
-import sys
-import os
 
 from django.test import TestCase
+
 
 class TestNodeSelectorSafe(TestCase):
     @patch('apps.deployments.services.node_selector.ManagedServer')

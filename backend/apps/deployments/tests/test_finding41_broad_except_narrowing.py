@@ -29,7 +29,6 @@ import re
 
 from django.test import SimpleTestCase
 
-
 REPO_ROOT = os.path.dirname(
     os.path.dirname(
         os.path.dirname(
@@ -48,7 +47,7 @@ class Finding41ReportedLinesNotBareExceptTests(SimpleTestCase):
     because it has been narrowed to a specific class."""
 
     def _load_lines(self):
-        with open(VIEWS_PATH, "r", encoding="utf-8") as fh:
+        with open(VIEWS_PATH, encoding="utf-8") as fh:
             return fh.read().splitlines()
 
     def test_reported_line_896_window_has_no_bare_except(self):
@@ -80,7 +79,7 @@ class Finding41BroadExceptSafetyNetTests(SimpleTestCase):
     HTTP / DNS calls."""
 
     def test_count_of_except_exception_is_bounded(self):
-        with open(VIEWS_PATH, "r", encoding="utf-8") as fh:
+        with open(VIEWS_PATH, encoding="utf-8") as fh:
             src = fh.read()
         count = len(re.findall(r"^\s*except Exception\b", src, flags=re.MULTILINE))
         self.assertGreaterEqual(count, 30)

@@ -1,20 +1,20 @@
 """Urls module."""
-from django.urls import path, include
+from django.urls import include, path
 from rest_framework.routers import DefaultRouter
+
 from .views import (
+    AdminPricingPlanViewSet,
+    AdminResourcePriceViewSet,
     BillingSummaryView,
     CheckoutView,
     CryptomusWebhookView,
     FlutterwaveWebhookView,
-    InvoicesView,
-    PortalSessionView,
-    StripeWebhookView,
-    PricingPlanViewSet,
-    SubscriptionViewSet,
     InvoiceViewSet,
+    PortalSessionView,
+    PricingPlanViewSet,
+    StripeWebhookView,
+    SubscriptionViewSet,
     UsageViewSet,
-    AdminPricingPlanViewSet,
-    AdminResourcePriceViewSet
 )
 from .views_analytics import AnalyticsViewSet
 

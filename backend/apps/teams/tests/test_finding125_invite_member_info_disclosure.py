@@ -10,12 +10,11 @@ distinguish ``not found`` from ``forbidden``.
 """
 from unittest.mock import patch
 
+from apps.teams.models import Team, TeamMember
 from django.contrib.auth.models import User
 from django.test import TestCase
-from rest_framework.test import APIClient
 from rest_framework import status as http_status
-
-from apps.teams.models import Team, TeamMember
+from rest_framework.test import APIClient
 
 
 class Finding125InviteMemberInfoDisclosureTests(TestCase):

@@ -7,20 +7,21 @@ All providers work together when multiple keys are configured:
 - 2+ providers: collaborative consensus mode
 - 0 providers: mock fallback
 """
-import os
+import concurrent.futures
+import hashlib
 import json as _json
 import logging
-import hashlib
+import os
 import threading
-import concurrent.futures
+import time
 from abc import ABC, abstractmethod
 from collections import defaultdict
+from collections.abc import Generator
 from datetime import datetime, timedelta
-from typing import Optional, List, Tuple, Generator
-import time
+from functools import wraps
+
 import httpx
 from django.core.cache import cache
-from functools import wraps
 
 logger = logging.getLogger(__name__)
 
@@ -71,8 +72,7 @@ def _is_circuit_open(provider_id: str) -> bool:
         until = _provider_circuit_open_until.get(provider_id)
         if until and datetime.now() < until:
             return True
-        if provider_id in _provider_circuit_open_until:
-            del _provider_circuit_open_until[provider_id]
+        _provider_circuit_open_until.pop(provider_id, None)
         return False
 
 def retry_429(max_retries=3, base_delay=2.0):
@@ -113,7 +113,7 @@ _KEY_PLACEHOLDERS = {
 }
 
 
-def _sanitize_api_key(raw: Optional[str]) -> str:
+def _sanitize_api_key(raw: str | None) -> str:
     """Normalize user-entered key values and strip placeholder text."""
     if raw is None:
         return ""
@@ -133,7 +133,7 @@ def _sanitize_api_key(raw: Optional[str]) -> str:
     return value
 
 
-def _normalize_model(raw: Optional[str], default: str) -> str:
+def _normalize_model(raw: str | None, default: str) -> str:
     value = str(raw or "").strip()
     return value or default
 
@@ -147,7 +147,7 @@ def _looks_like_model_error(exc: Exception) -> bool:
         return False
     try:
         payload = exc.response.json()
-    except Exception:  # noqa: BLE001
+    except Exception:
         payload = {}
     message = str(payload).lower()
     return any(
@@ -171,7 +171,7 @@ class AIProvider(ABC):
     id: str = ""
 
     @abstractmethod
-    def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+    def ask(self, prompt: str, system_prompt: str | None = None) -> str:
         """Send a prompt and return the AI response text."""
 
     @abstractmethod
@@ -182,7 +182,7 @@ class AIProvider(ABC):
         """Check if this provider has a valid API key."""
         return bool(getattr(self, 'api_key', ''))
 
-    def ask_stream(self, prompt: str, system_prompt: Optional[str] = None) -> Generator[str, None, None]:
+    def ask_stream(self, prompt: str, system_prompt: str | None = None) -> Generator[str, None, None]:
         """Yield response chunks as they arrive. Override in subclasses that support streaming."""
         response = self.ask(prompt, system_prompt)
         yield response
@@ -213,7 +213,7 @@ class OpenAIProvider(AIProvider):
         return f"OpenAI ({self.model})"
 
     @retry_429()
-    def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+    def ask(self, prompt: str, system_prompt: str | None = None) -> str:
         if not self.api_key:
             raise ValueError("[OpenAI] API key not configured.")
 
@@ -222,12 +222,12 @@ class OpenAIProvider(AIProvider):
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
-        candidate_models: List[str] = []
+        candidate_models: list[str] = []
         for candidate in [self.model, "gpt-4o-mini", "gpt-4o"]:
             if candidate and candidate not in candidate_models:
                 candidate_models.append(candidate)
 
-        last_error: Optional[Exception] = None
+        last_error: Exception | None = None
         client = _get_client("openai", timeout=60)
         for candidate_model in candidate_models:
             try:
@@ -246,7 +246,7 @@ class OpenAIProvider(AIProvider):
                 resp.raise_for_status()
                 data = resp.json()
                 return data["choices"][0]["message"]["content"]
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 last_error = exc
                 if _looks_like_model_error(exc):
                     logger.warning(
@@ -259,7 +259,7 @@ class OpenAIProvider(AIProvider):
         logger.error("OpenAI ask failed: %s", last_error)
         raise last_error or RuntimeError("OpenAI request failed")
 
-    def ask_stream(self, prompt: str, system_prompt: Optional[str] = None) -> Generator[str, None, None]:
+    def ask_stream(self, prompt: str, system_prompt: str | None = None) -> Generator[str, None, None]:
         """Yield response chunks as they arrive (SSE streaming)."""
         if not self.api_key:
             raise ValueError("[OpenAI] API key not configured.")
@@ -363,7 +363,7 @@ class GrokProvider(AIProvider):
         return f"Grok ({self.model})"
 
     @retry_429()
-    def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+    def ask(self, prompt: str, system_prompt: str | None = None) -> str:
         if not self.api_key:
             raise ValueError("[Grok] API key not configured.")
 
@@ -372,12 +372,12 @@ class GrokProvider(AIProvider):
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
-        candidate_models: List[str] = []
+        candidate_models: list[str] = []
         for candidate in [self.model, "grok-3-mini", "grok-3"]:
             if candidate and candidate not in candidate_models:
                 candidate_models.append(candidate)
 
-        last_error: Optional[Exception] = None
+        last_error: Exception | None = None
         client = _get_client("grok", timeout=60)
         for candidate_model in candidate_models:
             try:
@@ -396,7 +396,7 @@ class GrokProvider(AIProvider):
                 resp.raise_for_status()
                 data = resp.json()
                 return data["choices"][0]["message"]["content"]
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 last_error = exc
                 if _looks_like_model_error(exc):
                     logger.warning(
@@ -409,7 +409,7 @@ class GrokProvider(AIProvider):
         logger.error("Grok ask failed: %s", last_error)
         raise last_error or RuntimeError("Grok request failed")
 
-    def ask_stream(self, prompt: str, system_prompt: Optional[str] = None) -> Generator[str, None, None]:
+    def ask_stream(self, prompt: str, system_prompt: str | None = None) -> Generator[str, None, None]:
         """Yield response chunks as they arrive (SSE streaming)."""
         if not self.api_key:
             raise ValueError("[Grok] API key not configured.")
@@ -497,7 +497,7 @@ class GeminiProvider(AIProvider):
         return f"Gemini ({self.model})"
 
     @retry_429()
-    def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+    def ask(self, prompt: str, system_prompt: str | None = None) -> str:
         if not self.api_key:
             raise ValueError("[Gemini] API key not configured.")
 
@@ -507,13 +507,13 @@ class GeminiProvider(AIProvider):
             contents.append({"role": "model", "parts": [{"text": "Understood."}]})
         contents.append({"role": "user", "parts": [{"text": prompt}]})
 
-        candidate_models: List[str] = []
+        candidate_models: list[str] = []
         for candidate in [self.model, "gemini-2.0-flash", "gemini-1.5-flash"]:
             normalized = str(candidate or "").strip().replace("models/", "")
             if normalized and normalized not in candidate_models:
                 candidate_models.append(normalized)
 
-        last_error: Optional[Exception] = None
+        last_error: Exception | None = None
         client = _get_client("gemini", timeout=60)
         for candidate_model in candidate_models:
             try:
@@ -526,7 +526,7 @@ class GeminiProvider(AIProvider):
                 resp.raise_for_status()
                 data = resp.json()
                 return data["candidates"][0]["content"]["parts"][0]["text"]
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 last_error = exc
                 if _looks_like_model_error(exc):
                     logger.warning(
@@ -539,7 +539,7 @@ class GeminiProvider(AIProvider):
         logger.error("Gemini ask failed: %s", last_error)
         raise last_error or RuntimeError("Gemini request failed")
 
-    def ask_stream(self, prompt: str, system_prompt: Optional[str] = None) -> Generator[str, None, None]:
+    def ask_stream(self, prompt: str, system_prompt: str | None = None) -> Generator[str, None, None]:
         """Fallback: yield full response as single chunk."""
         response = self.ask(prompt, system_prompt)
         yield response
@@ -594,7 +594,7 @@ class ClaudeProvider(AIProvider):
         return f"Claude ({self.model})"
 
     @retry_429()
-    def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+    def ask(self, prompt: str, system_prompt: str | None = None) -> str:
         if not self.api_key:
             raise ValueError("[Claude] API key not configured.")
 
@@ -631,7 +631,7 @@ class ClaudeProvider(AIProvider):
             logger.error("Claude ask failed: %s", e)
             raise
 
-    def ask_stream(self, prompt: str, system_prompt: Optional[str] = None) -> Generator[str, None, None]:
+    def ask_stream(self, prompt: str, system_prompt: str | None = None) -> Generator[str, None, None]:
         """Fallback: yield full response as single chunk."""
         response = self.ask(prompt, system_prompt)
         yield response
@@ -700,7 +700,7 @@ class JulesProvider(AIProvider):
         return f"Jules ({self.model})"
 
     @retry_429()
-    def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+    def ask(self, prompt: str, system_prompt: str | None = None) -> str:
         if not self.api_key:
             raise ValueError("[Jules] API key not configured.")
 
@@ -730,7 +730,7 @@ class JulesProvider(AIProvider):
             logger.error("Jules ask failed: %s", exc)
             raise
 
-    def ask_stream(self, prompt: str, system_prompt: Optional[str] = None) -> Generator[str, None, None]:
+    def ask_stream(self, prompt: str, system_prompt: str | None = None) -> Generator[str, None, None]:
         """Fallback: yield full response as single chunk."""
         response = self.ask(prompt, system_prompt)
         yield response
@@ -763,7 +763,7 @@ class OpenRouterProvider(AIProvider):
         return f"OpenRouter ({self.model})"
 
     @retry_429()
-    def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+    def ask(self, prompt: str, system_prompt: str | None = None) -> str:
         if not self.api_key:
             raise ValueError("[OpenRouter] API key not configured.")
 
@@ -795,7 +795,7 @@ class OpenRouterProvider(AIProvider):
             logger.error("OpenRouter ask failed: %s", exc)
             raise
 
-    def ask_stream(self, prompt: str, system_prompt: Optional[str] = None) -> Generator[str, None, None]:
+    def ask_stream(self, prompt: str, system_prompt: str | None = None) -> Generator[str, None, None]:
         """Yield response chunks as they arrive (SSE streaming)."""
         if not self.api_key:
             raise ValueError("[OpenRouter] API key not configured.")
@@ -883,7 +883,7 @@ class GroqProvider(AIProvider):
         return f"Groq ({self.model})"
 
     @retry_429()
-    def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+    def ask(self, prompt: str, system_prompt: str | None = None) -> str:
         if not self.api_key:
             raise ValueError("[Groq] API key not configured.")
 
@@ -913,7 +913,7 @@ class GroqProvider(AIProvider):
             logger.error("Groq ask failed: %s", exc)
             raise
 
-    def ask_stream(self, prompt: str, system_prompt: Optional[str] = None) -> Generator[str, None, None]:
+    def ask_stream(self, prompt: str, system_prompt: str | None = None) -> Generator[str, None, None]:
         """Yield response chunks as they arrive (SSE streaming)."""
         if not self.api_key:
             raise ValueError("[Groq] API key not configured.")
@@ -972,7 +972,7 @@ class AlibabaProvider(AIProvider):
         return f"Alibaba ({self.model})"
 
     @retry_429()
-    def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+    def ask(self, prompt: str, system_prompt: str | None = None) -> str:
         if not self.api_key:
             raise ValueError("[Alibaba] API key not configured.")
 
@@ -1002,7 +1002,7 @@ class AlibabaProvider(AIProvider):
             logger.error("Alibaba ask failed: %s", exc)
             raise
 
-    def ask_stream(self, prompt: str, system_prompt: Optional[str] = None) -> Generator[str, None, None]:
+    def ask_stream(self, prompt: str, system_prompt: str | None = None) -> Generator[str, None, None]:
         """Yield response chunks as they arrive (SSE streaming)."""
         if not self.api_key:
             raise ValueError("[Alibaba] API key not configured.")
@@ -1061,7 +1061,7 @@ class DeepSeekProvider(AIProvider):
         return f"DeepSeek ({self.model})"
 
     @retry_429()
-    def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+    def ask(self, prompt: str, system_prompt: str | None = None) -> str:
         if not self.api_key:
             raise ValueError("[DeepSeek] API key not configured.")
 
@@ -1091,7 +1091,7 @@ class DeepSeekProvider(AIProvider):
             logger.error("DeepSeek ask failed: %s", exc)
             raise
 
-    def ask_stream(self, prompt: str, system_prompt: Optional[str] = None) -> Generator[str, None, None]:
+    def ask_stream(self, prompt: str, system_prompt: str | None = None) -> Generator[str, None, None]:
         """Yield response chunks as they arrive (SSE streaming)."""
         if not self.api_key:
             raise ValueError("[DeepSeek] API key not configured.")
@@ -1169,7 +1169,7 @@ class LocalLLMProvider(AIProvider):
     Expects an OpenAI-compatible /v1/chat/completions endpoint.
     """
 
-    def __init__(self, model_override: Optional[str] = None):
+    def __init__(self, model_override: str | None = None):
         self.api_key = _sanitize_api_key(os.environ.get("LOCALLM_API_KEY", ""))
         default_model = os.environ.get("LOCALLM_MODEL", "local-model")
         self.model = model_override or _normalize_model(default_model, "local-model")
@@ -1182,7 +1182,7 @@ class LocalLLMProvider(AIProvider):
         return f"Local LLM ({self.model})"
 
     @retry_429()
-    def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+    def ask(self, prompt: str, system_prompt: str | None = None) -> str:
         # API key is optional for local LLMs but we support it
         messages = []
         if system_prompt:
@@ -1211,7 +1211,7 @@ class LocalLLMProvider(AIProvider):
             logger.error("Local LLM ask failed at %s: %s", self.base_url, exc)
             raise
 
-    def ask_stream(self, prompt: str, system_prompt: Optional[str] = None) -> Generator[str, None, None]:
+    def ask_stream(self, prompt: str, system_prompt: str | None = None) -> Generator[str, None, None]:
         """Yield response chunks as they arrive (SSE streaming)."""
         messages = []
         if system_prompt:
@@ -1281,7 +1281,7 @@ class SMSLYCloudProvider(AIProvider):
         return f"SMSLY Cloud AI ({self.model})"
 
     @retry_429()
-    def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+    def ask(self, prompt: str, system_prompt: str | None = None) -> str:
         if not self.api_key:
             raise ValueError("[SMSLY Cloud AI] API key not configured.")
 
@@ -1311,7 +1311,7 @@ class SMSLYCloudProvider(AIProvider):
             logger.error("SMSLY Cloud AI ask failed: %s", exc)
             raise
 
-    def ask_stream(self, prompt: str, system_prompt: Optional[str] = None) -> Generator[str, None, None]:
+    def ask_stream(self, prompt: str, system_prompt: str | None = None) -> Generator[str, None, None]:
         """Yield response chunks as they arrive (SSE streaming)."""
         if not self.api_key:
             raise ValueError("[SMSLY Cloud AI] API key not configured.")
@@ -1367,7 +1367,7 @@ class FreeModelProvider(AIProvider):
     Uses an OpenAI-compatible `/chat/completions` endpoint.
     """
 
-    def __init__(self, model_override: Optional[str] = None):
+    def __init__(self, model_override: str | None = None):
         self.api_key = _sanitize_api_key(os.environ.get("FREEMODEL_API_KEY", ""))
         default_model = os.environ.get("FREEMODEL_MODEL", "gpt-4o-mini")
         self.model = model_override or _normalize_model(default_model, "gpt-4o-mini")
@@ -1380,7 +1380,7 @@ class FreeModelProvider(AIProvider):
         return f"FreeModel ({self.model})"
 
     @retry_429()
-    def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+    def ask(self, prompt: str, system_prompt: str | None = None) -> str:
         if not self.api_key:
             raise ValueError("[FreeModel] API key not configured.")
 
@@ -1410,7 +1410,7 @@ class FreeModelProvider(AIProvider):
             logger.error("FreeModel ask failed: %s", exc)
             raise
 
-    def ask_stream(self, prompt: str, system_prompt: Optional[str] = None) -> Generator[str, None, None]:
+    def ask_stream(self, prompt: str, system_prompt: str | None = None) -> Generator[str, None, None]:
         """Yield response chunks as they arrive (SSE streaming)."""
         if not self.api_key:
             raise ValueError("[FreeModel] API key not configured.")
@@ -1468,7 +1468,7 @@ class OpenCodeProvider(AIProvider):
     Uses an OpenAI-compatible `/chat/completions` endpoint.
     """
 
-    def __init__(self, model_override: Optional[str] = None):
+    def __init__(self, model_override: str | None = None):
         self.api_key = _sanitize_api_key(os.environ.get("OPENCODE_API_KEY", ""))
         default_model = os.environ.get("OPENCODE_MODEL", "opencode-latest")
         self.model = model_override or _normalize_model(default_model, "opencode-latest")
@@ -1481,7 +1481,7 @@ class OpenCodeProvider(AIProvider):
         return f"OpenCode ({self.model})"
 
     @retry_429()
-    def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+    def ask(self, prompt: str, system_prompt: str | None = None) -> str:
         if not self.api_key:
             raise ValueError("[OpenCode] API key not configured.")
 
@@ -1511,7 +1511,7 @@ class OpenCodeProvider(AIProvider):
             logger.error("OpenCode ask failed: %s", exc)
             raise
 
-    def ask_stream(self, prompt: str, system_prompt: Optional[str] = None) -> Generator[str, None, None]:
+    def ask_stream(self, prompt: str, system_prompt: str | None = None) -> Generator[str, None, None]:
         """Yield response chunks as they arrive (SSE streaming)."""
         if not self.api_key:
             raise ValueError("[OpenCode] API key not configured.")
@@ -1570,7 +1570,7 @@ class MistralProvider(AIProvider):
     Free tier requires phone verification and training opt-in.
     """
 
-    def __init__(self, model_override: Optional[str] = None):
+    def __init__(self, model_override: str | None = None):
         self.api_key = _sanitize_api_key(os.environ.get("MISTRAL_API_KEY", ""))
         default_model = os.environ.get("MISTRAL_MODEL", "mistral-small-latest")
         self.model = model_override or _normalize_model(default_model, "mistral-small-latest")
@@ -1583,7 +1583,7 @@ class MistralProvider(AIProvider):
         return f"Mistral ({self.model})"
 
     @retry_429()
-    def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+    def ask(self, prompt: str, system_prompt: str | None = None) -> str:
         if not self.api_key:
             raise ValueError("[Mistral] API key not configured.")
 
@@ -1613,7 +1613,7 @@ class MistralProvider(AIProvider):
             logger.error("Mistral ask failed: %s", exc)
             raise
 
-    def ask_stream(self, prompt: str, system_prompt: Optional[str] = None) -> Generator[str, None, None]:
+    def ask_stream(self, prompt: str, system_prompt: str | None = None) -> Generator[str, None, None]:
         """Yield response chunks as they arrive (SSE streaming)."""
         if not self.api_key:
             raise ValueError("[Mistral] API key not configured.")
@@ -1671,7 +1671,7 @@ class NvidiaNimProvider(AIProvider):
     Uses an OpenAI-compatible `/chat/completions` endpoint.
     """
 
-    def __init__(self, model_override: Optional[str] = None):
+    def __init__(self, model_override: str | None = None):
         self.api_key = _sanitize_api_key(os.environ.get("NVIDIA_API_KEY", ""))
         default_model = os.environ.get("NVIDIA_MODEL", "nvidia/llama-3.1-nemotron-70b-instruct")
         self.model = model_override or _normalize_model(default_model, "nvidia/llama-3.1-nemotron-70b-instruct")
@@ -1684,7 +1684,7 @@ class NvidiaNimProvider(AIProvider):
         return f"NVIDIA NIM ({self.model})"
 
     @retry_429()
-    def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+    def ask(self, prompt: str, system_prompt: str | None = None) -> str:
         if not self.api_key:
             raise ValueError("[NVIDIA NIM] API key not configured.")
 
@@ -1714,7 +1714,7 @@ class NvidiaNimProvider(AIProvider):
             logger.error("NVIDIA NIM ask failed: %s", exc)
             raise
 
-    def ask_stream(self, prompt: str, system_prompt: Optional[str] = None) -> Generator[str, None, None]:
+    def ask_stream(self, prompt: str, system_prompt: str | None = None) -> Generator[str, None, None]:
         """Yield response chunks as they arrive (SSE streaming)."""
         if not self.api_key:
             raise ValueError("[NVIDIA NIM] API key not configured.")
@@ -1774,7 +1774,7 @@ class CloudflareProvider(AIProvider):
     Base URL format: https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway}/workers-ai
     """
 
-    def __init__(self, model_override: Optional[str] = None):
+    def __init__(self, model_override: str | None = None):
         self.api_key = _sanitize_api_key(os.environ.get("CLOUDFLARE_API_KEY", ""))
         default_model = os.environ.get("CLOUDFLARE_MODEL", "@cf/meta/llama-3.1-8b-instruct")
         self.model = model_override or _normalize_model(default_model, "@cf/meta/llama-3.1-8b-instruct")
@@ -1787,7 +1787,7 @@ class CloudflareProvider(AIProvider):
         return f"Cloudflare AI ({self.model})"
 
     @retry_429()
-    def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+    def ask(self, prompt: str, system_prompt: str | None = None) -> str:
         if not self.api_key:
             raise ValueError("[Cloudflare] API key not configured.")
 
@@ -1817,7 +1817,7 @@ class CloudflareProvider(AIProvider):
             logger.error("Cloudflare ask failed: %s", exc)
             raise
 
-    def ask_stream(self, prompt: str, system_prompt: Optional[str] = None) -> Generator[str, None, None]:
+    def ask_stream(self, prompt: str, system_prompt: str | None = None) -> Generator[str, None, None]:
         """Fallback: yield full response as single chunk."""
         response = self.ask(prompt, system_prompt)
         yield response
@@ -1841,7 +1841,7 @@ class MockProvider(AIProvider):
     def is_configured(self) -> bool:
         return True  # Always available as last resort
 
-    def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+    def ask(self, prompt: str, system_prompt: str | None = None) -> str:
         raise NotImplementedError("No AI provider is configured. Add an API key in Settings > AI to use this feature.")
 
 
@@ -1911,8 +1911,8 @@ def _get_db_settings():
     # pylint: disable=too-many-locals, too-many-return-statements, import-outside-toplevel
     try:
         from django.apps import apps
-        from django.db.utils import OperationalError, ProgrammingError
         from django.db import connection
+        from django.db.utils import OperationalError, ProgrammingError
 
         model = apps.get_model("intelligence", "AIProviderSettings")
         if model is None:
@@ -2065,7 +2065,7 @@ def _sync_db_to_env():
 # Provider Discovery
 # ---------------------------------------------------------------------------
 
-def get_available_providers(include_balance: bool = False) -> List[dict]:
+def get_available_providers(include_balance: bool = False) -> list[dict]:
     """Return list of all providers with connection status and optional balance."""
     _sync_db_to_env()
     result = []
@@ -2129,7 +2129,7 @@ def get_available_providers(include_balance: bool = False) -> List[dict]:
                         balance = future.result()
                         if not isinstance(balance, dict):
                             balance = {"balance": "Unknown", "currency": "", "raw": {}}
-                    except Exception as exc:  # noqa: BLE001
+                    except Exception as exc:
                         logger.warning("Balance fetch failed for %s: %s", provider_id, exc)
                         balance = {"balance": "Error checking", "currency": "", "raw": {}}
                     balances_by_id[provider_id] = balance
@@ -2161,7 +2161,7 @@ def get_available_providers(include_balance: bool = False) -> List[dict]:
     return result
 
 
-def get_configured_providers() -> List[AIProvider]:
+def get_configured_providers() -> list[AIProvider]:
     """Return all providers that have valid API keys configured."""
     _sync_db_to_env()
     configured = []
@@ -2185,7 +2185,7 @@ def get_configured_providers() -> List[AIProvider]:
         if instance.is_configured():
             instance.id = key
             configured.append(instance)
-    
+
     # Respect Senate Committee size limits if configured
     try:
         max_members = int(os.environ.get("SENATE_MAX_MEMBERS", "5"))
@@ -2213,8 +2213,8 @@ def get_provider() -> AIProvider:
 def _ask_single(
     provider: AIProvider,
     prompt: str,
-    system_prompt: Optional[str] = None
-) -> Tuple[str, str]:
+    system_prompt: str | None = None
+) -> tuple[str, str]:
     """Ask a single provider. Returns (response, provider_name) or raises."""
     response = provider.ask(prompt, system_prompt=system_prompt)
     return response, provider.name()
@@ -2245,10 +2245,10 @@ CODE_REVIEW_SYSTEM_PROMPT = (
 SENATE_COMMITTEE_COST_MULTIPLIER = 3
 
 
-def _parallel_ask(providers: List[AIProvider], prompt: str,
-                  system_prompt: Optional[str] = None) -> List[Tuple[str, str]]:
+def _parallel_ask(providers: list[AIProvider], prompt: str,
+                  system_prompt: str | None = None) -> list[tuple[str, str]]:
     """Ask multiple providers in parallel. Returns list of (response, name)."""
-    results: List[Tuple[str, str]] = []
+    results: list[tuple[str, str]] = []
 
     timeout = int(os.environ.get("SENATE_TIMEOUT_SECONDS", "180"))
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=len(providers))
@@ -2273,7 +2273,7 @@ def _parallel_ask(providers: List[AIProvider], prompt: str,
     return results
 
 
-def ask_collaborative(prompt: str, system_prompt: Optional[str] = None) -> Tuple[str, str]:
+def ask_collaborative(prompt: str, system_prompt: str | None = None) -> tuple[str, str]:
     # pylint: disable=too-many-locals, too-many-statements, too-many-return-statements
     """
     Senate Committee deliberation when 2+ providers are active.
@@ -2388,7 +2388,7 @@ def ask_collaborative(prompt: str, system_prompt: Optional[str] = None) -> Tuple
 # Provider Resolution Helper
 # ---------------------------------------------------------------------------
 
-def _resolve_providers(provider_ids: List[str]) -> List[AIProvider]:
+def _resolve_providers(provider_ids: list[str]) -> list[AIProvider]:
     """Resolve a list of provider IDs to instantiated provider objects.
     Only returns providers that are configured and available."""
     _sync_db_to_env()
@@ -2412,9 +2412,9 @@ _ask_code_review_depth = [0]
 
 def ask_code_review(
     prompt: str,
-    system_prompt: Optional[str] = None,
-    provider_ids: Optional[List[str]] = None,
-) -> Tuple[str, str]:
+    system_prompt: str | None = None,
+    provider_ids: list[str] | None = None,
+) -> tuple[str, str]:
     """2-Agent code review: two providers cross-check each other.
 
     Flow:
@@ -2518,11 +2518,11 @@ def ask_code_review(
 
 def ask_with_fallback(
     prompt: str,
-    system_prompt: Optional[str] = None,
-    provider_id: str = None,
+    system_prompt: str | None = None,
+    provider_id: str | None = None,
     mode: str = "auto",
     return_usage: bool = False,
-) -> Tuple[str, str]:
+) -> tuple[str, str]:
     """
     Smart multi-provider ask:
     - mode="code_review": 2-agent cross-review (4 API calls)
@@ -2561,7 +2561,7 @@ def ask_with_fallback(
         for provider in configured:
             try:
                 return _wrap(*_ask_single(provider, prompt, system_prompt))
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 _record_provider_failure(getattr(provider, "id", ""))
                 logger.warning("Direct provider rescue with %s failed: %s", provider.name(), exc)
         raise RuntimeError("All configured AI providers failed to respond.")
@@ -2580,7 +2580,7 @@ def ask_with_fallback(
         for provider in configured:
             try:
                 return _wrap(*_ask_single(provider, prompt, system_prompt))
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 _record_provider_failure(getattr(provider, "id", ""))
                 logger.warning("Direct provider rescue with %s failed: %s", provider.name(), exc)
         raise RuntimeError("All configured AI providers failed to respond.")
@@ -2615,7 +2615,7 @@ def ask_with_fallback(
         for provider in configured:
             try:
                 return _wrap(*_ask_single(provider, prompt, system_prompt))
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 _record_provider_failure(getattr(provider, "id", ""))
                 logger.warning("Committee rescue with %s failed: %s", provider.name(), exc)
         raise RuntimeError("All configured AI providers failed to respond.")
@@ -2633,8 +2633,8 @@ def ask_with_fallback(
 
 def _cached_ask(
     prompt: str,
-    system_prompt: str = None,
-    provider_id: str = None,
+    system_prompt: str | None = None,
+    provider_id: str | None = None,
     ttl: int = 600,  # 10 minutes
     cache_bypass: bool = False,
     mode: str = "auto",

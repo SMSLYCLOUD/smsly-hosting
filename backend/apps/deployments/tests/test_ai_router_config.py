@@ -5,7 +5,10 @@ from django.contrib.auth import get_user_model
 from django.test import override_settings
 from rest_framework.test import APIClient
 
-from apps.deployments.ai_router import generate_ai_router_proxy_config, serialize_ai_router_config
+from apps.deployments.ai_router import (
+    generate_ai_router_proxy_config,
+    serialize_ai_router_config,
+)
 from apps.deployments.models import Deployment, EnvironmentVariable, Service
 
 User = get_user_model()

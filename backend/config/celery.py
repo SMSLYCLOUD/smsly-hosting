@@ -1,6 +1,6 @@
 """Celery module."""
-import os
 import logging
+import os
 
 if os.name == "nt":
     # Python 3.14's WMI-backed platform detection can hang on some Windows
@@ -13,8 +13,8 @@ if os.name == "nt":
         pass
 
 from celery import Celery, signals
-from kombu import Exchange, Queue
 from celery.schedules import crontab
+from kombu import Exchange, Queue
 
 logger = logging.getLogger(__name__)
 
@@ -37,55 +37,7 @@ app.autodiscover_tasks()
 # otherwise models.py triggers AppRegistryNotReady.
 @app.on_after_finalize.connect
 def register_extra_tasks(sender, **kwargs):  # pylint: disable=unused-argument
-    import apps.cloud.services.ssl_monitor  # noqa: F401
-    import apps.deployments.services.autoscaler  # noqa: F401
-    import apps.deployments.services.health_monitor  # noqa: F401
-    import apps.deployments.services.provisioner  # noqa: F401
-    import apps.addons.tasks  # noqa: F401
-    import apps.deployments.tasks  # noqa: F401
-    import apps.deployments.tasks_deploy
-    import apps.deployments.tasks_deploy_local
-    import apps.deployments.tasks_deploy_remote
-    import apps.deployments.tasks_build
-    import apps.deployments.tasks_ai_router
-    import apps.deployments.tasks_templates
-    import apps.deployments.tasks_addons
-    import apps.deployments.tasks_backup
-    import apps.deployments.tasks_cron
-    import apps.deployments.tasks_transfer
-    import apps.deployments.tasks_platform_update
-    import apps.deployments.tasks_maintenance
-    import apps.deployments.tasks_server_update
-    import apps.deployments.tasks_health
-    import apps.deployments.tasks_caddy
-    import apps.deployments.tasks_utils
-
-    import apps.deployments.tasks_deploy
-    import apps.deployments.tasks_deploy_local
-    import apps.deployments.tasks_deploy_remote
-    import apps.deployments.tasks_build
-    import apps.deployments.tasks_ai_router
-    import apps.deployments.tasks_templates
-    import apps.deployments.tasks_addons
-    import apps.deployments.tasks_backup
-    import apps.deployments.tasks_cron
-    import apps.deployments.tasks_transfer
-    import apps.deployments.tasks_platform_update
-    import apps.deployments.tasks_maintenance
-    import apps.deployments.tasks_server_update
-    import apps.deployments.tasks_health
-    import apps.deployments.tasks_caddy
-    import apps.deployments.tasks_utils
-
-    import apps.deployments.tasks_alerts  # noqa: F401
-    import apps.deployments.tasks_ai  # noqa: F401
-    import apps.deployments.tasks_ecosystem  # noqa: F401
-    import apps.deployments.tasks_code_intelligence  # noqa: F401
-    import apps.deployments.tasks_metrics  # noqa: F401
-    import apps.deployments.tasks_election  # noqa: F401
-    import apps.deployments.tasks_replication  # noqa: F401
-    import apps.deployments.tasks_mesh  # noqa: F401
-    import apps.deployments.services.self_healing_orchestrator  # noqa: F401
+    pass
 
 # =============================================================================
 # Beat Schedule — Periodic tasks for metrics, health, autoscaling, cleanup
@@ -282,7 +234,8 @@ def debug_task(self):
     print(f'Request: {self.request!r}')
 
 # Prevent Celery database connection leaks (especially for PgCat)
-from django.db import close_old_connections
+from django.db import close_old_connections  # noqa: E402
+
 
 @signals.task_prerun.connect
 def on_task_prerun(**kwargs):

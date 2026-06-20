@@ -1,9 +1,9 @@
 import logging
+
 from django.core.management.base import BaseCommand
-from apps.deployments.models import Deployment, Service, ManagedServer
-from apps.deployments.services.ecosystem_persist import bulk_persist_and_verify_ecosystem_env
+
+from apps.deployments.models import Deployment, Service
 from apps.deployments.services.node_selector import select_eligible_node
-import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ class Command(BaseCommand):
             return
 
         self.stdout.write(self.style.SUCCESS(f"Found {services.count()} services for project {project_id}"))
-        created_services = {s.name: s for s in services}
+        {s.name: s for s in services}
         user = services.first().owner
 
         issues_found = []

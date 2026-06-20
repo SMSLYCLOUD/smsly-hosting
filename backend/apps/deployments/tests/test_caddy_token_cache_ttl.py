@@ -8,7 +8,6 @@ import time
 from unittest.mock import patch
 
 from django.test import SimpleTestCase
-
 from services import caddy_manager
 
 
@@ -101,7 +100,7 @@ class CaddyTokenCacheTtlTests(SimpleTestCase):
 
         self.assertTrue(result.get("ok"), msg=result)
         self.assertTrue(os.path.exists(self.cache_path))
-        with open(self.cache_path, "r", encoding="utf-8") as handle:
+        with open(self.cache_path, encoding="utf-8") as handle:
             payload = json.loads(handle.read())
         self.assertEqual(payload["token"], "t" * 40)
         self.assertEqual(

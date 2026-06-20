@@ -5,20 +5,22 @@
 # ============================================================================
 # pylint: disable=too-many-lines
 """Tasks module."""
+import hashlib
+import hmac
+import json
 import logging
+import os
 import random
 import re
+import secrets
 import shlex
 import shutil
-import tempfile
 import subprocess
-import os
-import json
+import tempfile
+import threading
 import time
 import zipfile
-import secrets
-import threading
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from urllib.parse import unquote, urlparse
 
 import docker
@@ -27,7 +29,6 @@ from celery import shared_task
 from django.conf import settings
 from django.core.cache import cache
 from django.utils import timezone
-from django.db.models import Sum
 
 from apps.cloud.models import CloudProvider
 from apps.cloud.services.builder import NixpacksBuilder
@@ -42,30 +43,33 @@ from apps.deployments.ai_router import (
     is_ai_router_service,
     is_ollama_service,
 )
-from apps.deployments.models import Service, Deployment, EnvironmentVariable, PlatformConfig
+from apps.deployments.models import (
+    Deployment,
+    EnvironmentVariable,
+    PlatformConfig,
+    Service,
+)
 from apps.deployments.models_addons import Addon, Backup
-from apps.deployments.models_backup import BackupSchedule, ServiceBackup
 from apps.deployments.models_storage import Volume
-from apps.deployments.models_transfer import ServerTransfer
-from apps.deployments.services.backup_service import BackupService
-from apps.deployments.services.pipeline import PipelineManager, PipelineError
+from apps.deployments.services.pipeline import PipelineError, PipelineManager
 from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
 from apps.deployments.services.tls_verify import should_verify
 from apps.deployments.services.transfer_service import ServerTransferService
 from apps.deployments.utils import (
     append_log,
     broadcast_status,
-    build_local_source_bundle,
-    update_stage,
     is_deployment_local,
+    update_stage,
 )
+
 # Imports for AIProviderSettings; jules_fix is imported lazily inside tasks
 # Note: AIProviderSettings is not available in agent mode
 try:
-    from apps.intelligence.models import AIProviderSettings
+    from apps.intelligence.models import AIProviderSettings as _AIProviderSettings
 except (ImportError, RuntimeError):
-    AIProviderSettings = None
-from services.addon_provisioner import addon_provisioner
+    _AIProviderSettings = None  # type: ignore[assignment]
+AIProviderSettings = _AIProviderSettings
+from services.addon_provisioner import addon_provisioner  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -290,7 +294,7 @@ def _regenerate_caddyfile():
     """
     try:
         config = PlatformConfig.load()
-        from services.caddy_manager import generate_caddyfile, apply_caddyfile
+        from services.caddy_manager import apply_caddyfile, generate_caddyfile
         content = generate_caddyfile(config)
         cf_token = (getattr(config, "cloudflare_api_token", "") or "").strip()
         result = apply_caddyfile(content, cloudflare_token=cf_token)
@@ -320,7 +324,7 @@ def fleet_build_lock(deployment):
         yield
         return
 
-    max_builds = getattr(config, "max_concurrent_builds", 1) or 1
+    getattr(config, "max_concurrent_builds", 1) or 1
     # For now, we enforce a strict single-build lock for maximum safety on small VPS nodes.
     # A true semaphore can be implemented later if needed.
     lock_key = "smsly_fleet_build_lock"
@@ -329,7 +333,7 @@ def fleet_build_lock(deployment):
     max_wait = _env_int("SMSLY_FLEET_BUILD_LOCK_WAIT_SECONDS", 1800, minimum=30)
     poll_seconds = _env_int("SMSLY_FLEET_BUILD_LOCK_POLL_SECONDS", 15, minimum=1)
     stale_seconds = _env_int("SMSLY_FLEET_BUILD_LOCK_STALE_SECONDS", 600, minimum=60)
-    
+
     acquired = False
     start_time = time.monotonic()
     heartbeat_stop = threading.Event()
@@ -383,7 +387,7 @@ def fleet_build_lock(deployment):
                 return True, f"legacy owner has no heartbeat and is stale ({int(updated_age)}s old)"
 
         return False, "legacy owner has no heartbeat but is still within grace period"
-    
+
     while time.monotonic() - start_time < max_wait:
         # Try to set the lock if it doesn't exist
         deployment_id = str(deployment.id)
@@ -391,7 +395,7 @@ def fleet_build_lock(deployment):
             acquired = True
             cache.set(heartbeat_key, _heartbeat_payload(deployment_id), timeout=lock_timeout)
             break
-        
+
         # Check if the existing lock is stale (owner doesn't exist or is different but old)
         # This is a safety measure against worker crashes
         current_owner = _normalize_cache_value(cache.get(lock_key))
@@ -413,16 +417,16 @@ def fleet_build_lock(deployment):
             cache.delete(lock_key)
             cache.delete(heartbeat_key)
             continue
-            
+
         if attempt_count := getattr(fleet_build_lock, "_attempt_count", 0):
-            setattr(fleet_build_lock, "_attempt_count", attempt_count + 1)
+            fleet_build_lock._attempt_count = attempt_count + 1
         else:
-            setattr(fleet_build_lock, "_attempt_count", 1)
+            fleet_build_lock._attempt_count = 1
             append_log(deployment, "[fleet] Another build is in progress across the node fleet. Waiting for a free slot...\n")
             broadcast_status(deployment)
 
         time.sleep(poll_seconds)
-    
+
     if not acquired:
         append_log(deployment, "❌ Timed out waiting for a free build slot in the node fleet.\n")
         raise RuntimeError("Fleet build concurrency limit reached. Please try again later.")
@@ -433,7 +437,7 @@ def fleet_build_lock(deployment):
         daemon=True,
     )
     heartbeat_thread.start()
-        
+
     try:
         append_log(deployment, "🚀 Build slot acquired. Starting build phase...\n")
         yield
@@ -466,7 +470,6 @@ def _run_managed_image_post_deploy_hooks(deployment, service: Service, container
 
     env_map = {ev.key: ev.value for ev in service.env_vars.all()}
 
-    from apps.deployments.ai_router import is_ai_router_service
 
     if str(env_map.get("RUN_PRISMA_MIGRATE", "")).strip().lower() in {"1", "true", "yes"}:
         append_log(deployment, "\n[hook] Running Prisma migrate deploy inside container...\n")
@@ -543,10 +546,8 @@ def _run_managed_image_post_deploy_hooks(deployment, service: Service, container
 
         append_log(deployment, "[hook] LiteLLM router catalog synced.\n")
     finally:
-        try:
+        with suppress(OSError):
             os.unlink(config_path)
-        except OSError:
-            pass
 
 
 def _docker_safe_segment(value: str, fallback: str = "app") -> str:
@@ -557,7 +558,7 @@ def _docker_safe_segment(value: str, fallback: str = "app") -> str:
     return slug[:63]
 
 
-def _detect_exposed_port(service, image_name: str = None) -> int | None:
+def _detect_exposed_port(service, image_name: str | None = None) -> int | None:
     """Auto-detect port from Docker image EXPOSE directive.
 
     Inspects the specified image name, or the last deployed image for this service.
@@ -659,7 +660,7 @@ def _build_platform_healthcheck(service: Service, env_vars: dict) -> dict | None
     }
 
 
-def _build_runtime_env(service: Service, image_name: str = None) -> dict:
+def _build_runtime_env(service: Service, image_name: str | None = None) -> dict:
     """Assemble runtime env vars with routing domains sourced from Service."""
     def _is_ciphertext(val: str) -> bool:
         if not val or not isinstance(val, str):
@@ -888,7 +889,7 @@ def _smart_derive_redis_vars(env_vars: dict):
         base = f"{parsed.scheme}://{parsed.netloc}"
 
         # If broker is on /0, put result backend on /1
-        if not parsed.path or parsed.path == '/' or parsed.path == '/0':
+        if not parsed.path or parsed.path in {'/', '/0'}:
             if env_vars.get('CELERY_BROKER_URL') == redis_url:
                 env_vars['CELERY_BROKER_URL'] = f"{base}/0"
             if env_vars.get('CELERY_RESULT_BACKEND') == redis_url:
@@ -972,9 +973,9 @@ def _link_ecosystem(service: Service, env_vars: dict):
     try:
         from services.ecosystem_graph import (
             build_ecosystem_graph,
-            rewrite_database_url,
-            resolve_service_url,
             get_sibling_env_value,
+            resolve_service_url,
+            rewrite_database_url,
             set_redis_db,
         )
     except ImportError:
@@ -1116,8 +1117,8 @@ def _ensure_database_exists(base_url: str, db_name: str):
     conn = None
     try:
         import psycopg2
-        from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
         from psycopg2 import sql
+        from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
         conn = psycopg2.connect(base_url)
         conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
@@ -1209,7 +1210,9 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
 
         if not skip_review and getattr(service, 'safedeploy_enabled', False) \
                 and not getattr(deployment, 'is_rollback', False) and not is_delegated:
-            from apps.deployments.services.safedeploy.deployment_pipeline import ProductionDeploymentPipeline
+            from apps.deployments.services.safedeploy.deployment_pipeline import (
+                ProductionDeploymentPipeline,
+            )
             ProductionDeploymentPipeline().process_deployment(deployment)
             if deployment.status == Deployment.Status.AWAITING_APPROVAL:
                 return  # parked; will resume on approve
@@ -1217,7 +1220,7 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
         # 0. Remote Delegation
         from apps.deployments.models import PlatformConfig
         config = PlatformConfig.load()
-        
+
         # Remote delegation: if this deployment was triggered by a remote
         # master (source_node is set), the current node should build the
         # image and then deploy to the remote via the orchestrator.
@@ -1340,7 +1343,7 @@ def resume_deploy_task(self, deployment_id: str, provider_id: str):
         # 0. Remote Delegation
         from apps.deployments.models import PlatformConfig
         config = PlatformConfig.load()
-        
+
         # Loop Prevention: If this is already a delegated deployment, handle it locally.
         is_delegated = deployment.source_node is not None
         effective_server = _deployment_effective_server(deployment)
@@ -1386,7 +1389,6 @@ def resume_deploy_task(self, deployment_id: str, provider_id: str):
 
 def _handle_remote_deployment_legacy(deployment, server):
     """Delegate deployment to a remote server and poll for status."""
-    from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
     from apps.deployments.services.server_guard import ServerGuard
 
     service = deployment.service
@@ -1435,7 +1437,7 @@ def _handle_remote_deployment_legacy(deployment, server):
 
     # 3. Polling Loop
     max_retries = 90  # 15 minutes (10s intervals)
-    for i in range(max_retries):
+    for _i in range(max_retries):
         time.sleep(10)
         remote_status = orchestrator.poll_deployment(remote_dep_id)
         if not remote_status:
@@ -1479,8 +1481,9 @@ def _stop_local_service_container(service_name: str):
     Used during remote delegation to prevent 'ghost' containers.
     """
     try:
-        from apps.cloud.docker_client import get_docker_client
         import docker
+
+        from apps.cloud.docker_client import get_docker_client
         client = get_docker_client()
         try:
             container = client.containers.get(service_name)
@@ -1500,14 +1503,13 @@ def _remote_deploy_failed(deployment, orchestrator, fallback_msg, stage):
     _handle_failure(None, deployment, _remote_failure_message(orchestrator, fallback_msg), stage)
 
 
-def _handle_remote_deployment(deployment, server, skip_review=False, image_name=None):
+def _handle_remote_deployment(deployment, server, skip_review: bool = False, image_name: str | None = None):
     """Delegate deployment to a remote server and poll for status.
 
     When ``image_name`` is provided (master pre-built and pushed the image),
     it is forwarded to the remote so that node can skip its own build phase
     and go straight to pull + run (build-agent optimization).
     """
-    from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
     from apps.deployments.services.server_guard import ServerGuard
 
     service = deployment.service
@@ -1587,7 +1589,6 @@ def _handle_remote_deployment(deployment, server, skip_review=False, image_name=
 
 def _resume_remote_deployment(deployment, server):
     """Approve/resume an existing remote deployment and keep polling it."""
-    from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
     from apps.deployments.services.server_guard import ServerGuard
 
     service = deployment.service
@@ -1680,10 +1681,10 @@ def _poll_remote_deployment(
 
     for i in range(max_retries):
         time.sleep(10 + random.uniform(0, 2))
-        
+
         if i % 6 == 0:  # Log every 60 seconds
              logger.debug("Polling remote deployment %s (attempt %d/%d)", remote_dep_id, i+1, max_retries)
-             
+
         remote_status = orchestrator.poll_deployment(remote_dep_id)
         if not remote_status:
             empty_polls += 1
@@ -1736,8 +1737,8 @@ def _poll_remote_deployment(
             broadcast_status(deployment)
 
         # [STALE DETECTION]
-        # If the remote is still QUEUED after 3 minutes (18 polls), it might mean 
-        # the remote worker is stuck or down. 
+        # If the remote is still QUEUED after 3 minutes (18 polls), it might mean
+        # the remote worker is stuck or down.
         if status == Deployment.Status.QUEUED and i > 18:
             warning_msg = (
                 "[Remote] Warning: Deployment has been QUEUED on the remote node for >3 minutes. "
@@ -1817,7 +1818,7 @@ def _poll_remote_deployment(
             Deployment.Status.MIGRATION_FAILED,
         ):
             error_detail = remote_status.get("error") or f"Remote deployment failed with status: {status}."
-            append_log(deployment, f"[Self-Heal] Remote failure detected — triggering self-healing...\n")
+            append_log(deployment, "[Self-Heal] Remote failure detected — triggering self-healing...\n")
             try:
                 self_heal_remote_deployment.delay(
                     deployment_id=str(deployment.id),
@@ -1927,7 +1928,7 @@ def _build_function(deployment, service) -> str:
                 "A registry is required to push/pull images for remote node deployments."
             )
         if registry:
-            remote_tag = NixpacksBuilder.push_image(tag, registry)
+            remote_tag, _push_error = NixpacksBuilder.push_image(tag, registry)
             pushed_to_registry = bool(remote_tag and remote_tag.startswith(registry))
             if not pushed_to_registry and not is_local:
                 raise RuntimeError(
@@ -2003,7 +2004,7 @@ def _build_uploaded_source(deployment, service) -> str:
             )
         if registry:
             append_log(deployment, f"Pushing uploaded image to {registry}...\n")
-            remote_tag = NixpacksBuilder.push_image(image_name, registry)
+            remote_tag, _push_error = NixpacksBuilder.push_image(image_name, registry)
             pushed_to_registry = bool(remote_tag and remote_tag.startswith(registry))
             if not pushed_to_registry and not is_local:
                 raise RuntimeError(
@@ -2069,14 +2070,6 @@ def _route_misroute_reason(response: requests.Response) -> str:
         return "service hostname rendered the platform homepage"
 
     return ""
-
-
-def _env_int(name: str, default: int, minimum: int = 0) -> int:
-    try:
-        value = int(os.environ.get(name, default))
-    except (TypeError, ValueError):
-        value = default
-    return max(minimum, value)
 
 
 def _is_low_resource_service(service: Service) -> bool:
@@ -2245,7 +2238,7 @@ def _wait_for_local_route_ready(
     # mask a Caddy misroute that serves the platform homepage.
     probe_candidates = []
 
-    def _add_probe(base_url: str, headers=None, verify=True, kind="direct"):
+    def _add_probe(base_url: str, headers: dict | None = None, verify: bool = True, kind: str = "direct"):
         normalized = (base_url or "").rstrip("/")
         if not normalized:
             return
@@ -2668,8 +2661,8 @@ def _deploy_container(deployment, provider, image_name):
             _regenerate_caddyfile()
         append_log(
             deployment,
-            f"[DEPLOY] ✅ Container live with Traefik routing enabled.\n"
-            f"Domain should be accessible immediately.\n"
+            "[DEPLOY] ✅ Container live with Traefik routing enabled.\n"
+            "Domain should be accessible immediately.\n"
         )
 
         # Post-deploy runtime monitor (watches for crashes)
@@ -2770,8 +2763,8 @@ def _do_promote(deployment, provider):
 
 
 @shared_task(bind=True, max_retries=0, soft_time_limit=120, time_limit=150)
-def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
-                         image_name):
+def _post_deploy_monitor(self, deployment_id: str, provider_id: str, container_id: str,
+                         image_name: str):
     """
     Real-time post-deploy health monitor.
 
@@ -3032,11 +3025,11 @@ def _handle_failure(task, deployment, error_msg, reason):
         if deployment.status != 'CANCELLED':
             deployment.status = 'FAILED'
             deployment.finished_at = timezone.now()
-            
+
             # Sanitize inputs for PostgreSQL
             safe_reason = str(reason).replace('\x00', '')
             safe_msg = str(error_msg).replace('\x00', '')
-            
+
             deployment.build_logs += f"\n✗ {safe_reason}: {safe_msg}\n"
             deployment.save()
             broadcast_status(deployment)
@@ -3059,7 +3052,7 @@ def _handle_failure(task, deployment, error_msg, reason):
                         except Exception as e:
                             logger.warning(f"Failed to cleanup container {c_id}: {e}")
                     if cleaned_any:
-                        deployment.build_logs += f"\n🧹 Cleaned up orphaned container resources.\n"
+                        deployment.build_logs += "\n🧹 Cleaned up orphaned container resources.\n"
                         deployment.save(update_fields=['build_logs'])
             except Exception as e:
                 logger.warning(f"Docker client error during failure cleanup: {e}")
@@ -3151,7 +3144,6 @@ def _handle_failure(task, deployment, error_msg, reason):
     # Build failures are deterministic and system failures should be
     # investigated, not blindly retried. Users can manually redeploy.
     logger.error("Deployment failed (%s), not retrying: %s", reason, error_msg)
-    return
 
 
 @shared_task(bind=True, max_retries=0, soft_time_limit=600, time_limit=660)
@@ -3191,8 +3183,8 @@ def self_heal_remote_deployment(self, deployment_id: str, server_id: str):
 
     try:
         from apps.deployments.services.self_healing_orchestrator import (
-            SelfHealingOrchestrator,
             RecoveryAction,
+            SelfHealingOrchestrator,
         )
 
         orchestrator = SelfHealingOrchestrator(server)
@@ -3333,7 +3325,7 @@ def _ensure_shared_ollama_cpp(service, provider) -> str | None:
     Returns the shared service ID (str) or None if creation fails.
     Only one shared Ollama CPP is maintained per project to save VPS resources.
     """
-    from apps.deployments.models import Service, Deployment
+    from apps.deployments.models import Deployment, Service
 
     project = getattr(service, 'project', None)
     owner = getattr(service, 'owner', None)
@@ -3520,12 +3512,11 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
         return
 
     # Load template
-    import json
     template_path = os.path.join(
         settings.BASE_DIR, 'apps/deployments/fixtures/templates.json'
     )
     try:
-        with open(template_path, 'r', encoding='utf-8') as f:
+        with open(template_path, encoding='utf-8') as f:
             templates = json.load(f)
         template = next((t for t in templates if t.get('id') == template_id), None)
     except Exception as exc: # pylint: disable=broad-exception-caught
@@ -3620,7 +3611,7 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
     if template and template.get('docker_image'):
         _verify_image_available(template['docker_image'])
     supported_addons = set(addon_provisioner.ADDON_IMAGES.keys())
-    
+
     # Track addon URLs for template rendering
     addon_urls = {}
 
@@ -3742,9 +3733,11 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
         env_vars = template.get('env_vars') or []
         if isinstance(env_vars, list):
             for item in env_vars:
-                if not isinstance(item, dict): continue
+                if not isinstance(item, dict):
+                    continue
                 key = str(item.get('key') or '').strip()
-                if not key: continue
+                if not key:
+                    continue
                 EnvironmentVariable.objects.update_or_create(
                     service=service,
                     key=key,
@@ -3753,7 +3746,7 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
                         'is_secret': bool(item.get('is_secret', False)),
                     }
                 )
-                
+
                 # Generic custom domain handling from Env Vars
                 if key == 'CUSTOM_DOMAINS':
                     rendered_val = render_value(item.get('value', ''))
@@ -4047,8 +4040,9 @@ def provision_addon_task(self, addon_id: str):
         # If public domain is assigned, regenerate Caddy configuration
         if addon.public_domain:
             try:
+                from services.caddy_manager import apply_caddyfile, generate_caddyfile
+
                 from .models import PlatformConfig
-                from services.caddy_manager import generate_caddyfile, apply_caddyfile
                 cfg = PlatformConfig.load()
                 caddy_content = generate_caddyfile(cfg)
                 apply_caddyfile(caddy_content)
@@ -4137,28 +4131,6 @@ def restore_addon_task(self, backup_id: str):
     except Exception as e:
         raise e
 
-@shared_task(bind=True, soft_time_limit=3600, time_limit=3900, max_retries=3, default_retry_delay=300)
-def create_service_backup_task(self, service_id, backup_type='MANUAL', backup_id=None):
-    from .services.backup_service import BackupService
-    from apps.deployments.utils import log_event
-    log_event(
-        action='BACKUP_CREATE',
-        target=f'Service: {service_id}',
-        actor='system',
-        metadata={
-            'service_id': str(service_id),
-            'backup_id': str(backup_id) if backup_id else None,
-            'backup_type': backup_type,
-        },
-    )
-    try:
-        backup_service = BackupService()
-        backup_service.backup_service(service_id, backup_id=backup_id, backup_type=backup_type)
-    except Exception as exc:
-        if self.request.retries < self.max_retries:
-            raise self.retry(exc=exc)
-        raise
-
 # ── Backup tasks re-exported from tasks_backup (single source of truth) ──
 # These tasks are defined in tasks_backup.py with correct signatures,
 # retry config, and schedule_id handling.  Importing them here so the
@@ -4166,103 +4138,24 @@ def create_service_backup_task(self, service_id, backup_type='MANUAL', backup_id
 # maintaining duplicate definitions.
 
 from apps.deployments.tasks_backup import (  # noqa: E402, F401
-    create_service_backup_task,
-    create_server_backup_task,
-    restore_service_backup_task,
-    restore_server_backup_task,
     cleanup_old_backups_task,
-    run_scheduled_backups_task,
+    create_server_backup_task,
+    create_service_backup_task,
     purge_user_backups_task,
+    restore_server_backup_task,
+    restore_service_backup_task,
 )
-
-
-@shared_task(bind=True, soft_time_limit=7200, time_limit=7500, max_retries=2, default_retry_delay=120)
-def purge_user_backups_task(self, user_id, actor: str = 'system', force: bool = False):
-    """
-    GDPR right-to-erasure background task.
-
-    Should be enqueued BEFORE the user account is deleted so that the
-    ``ServiceBackup.service`` FK still resolves. The task:
-      1. Removes ``ServiceBackup.file_path`` tarballs for every service
-         owned by the user.
-      2. Removes any matching cloud-storage object (S3 / R2 / MinIO).
-      3. Deletes the ``ServiceBackup`` and ``ServerBackup`` rows.
-      4. Emits an ``AuditLog`` entry recording the count of artifacts purged.
-    """
-    from apps.deployments.services.backup_service import purge_user_backups
-    from apps.deployments.models_audit import AuditLog
-
-    try:
-        counters = purge_user_backups(user_id)
-    except Exception as exc:
-        logger.error("purge_user_backups_task failed for user %s: %s", user_id, exc)
-        if self.request.retries < self.max_retries:
-            raise self.retry(exc=exc)
-        if not force:
-            raise
-
-    try:
-        AuditLog.objects.create(
-            actor=actor or 'system',
-            action='USER_BACKUPS_PURGED',
-            target=f'User: {user_id}',
-            metadata={
-                'user_id': str(user_id),
-                'service_backups_deleted': counters.get('service_backups_deleted', 0),
-                'service_backup_files_deleted': counters.get('service_backup_files_deleted', 0),
-                'server_backups_deleted': counters.get('server_backups_deleted', 0),
-                'server_backup_files_deleted': counters.get('server_backup_files_deleted', 0),
-                'cloud_objects_deleted': counters.get('cloud_objects_deleted', 0),
-                'errors': counters.get('errors', 0),
-            },
-        )
-    except Exception as exc:
-        logger.warning("Failed to record USER_BACKUPS_PURGED audit log: %s", exc)
-
-    return counters
-
-@shared_task
-def cleanup_old_backups_task():
-    """Delete backups older than retention_days per schedule."""
-    from .models_backup import BackupSchedule, ServiceBackup, ServerBackup
-    from datetime import timedelta
-    from django.utils import timezone
-    import os
-
-    schedules = BackupSchedule.objects.filter(enabled=True)
-    cleaned = 0
-    for sched in schedules:
-        try:
-            cutoff = timezone.now() - timedelta(days=sched.retention_days)
-            if sched.service:
-                old = ServiceBackup.objects.filter(
-                    service=sched.service, created_at__lt=cutoff
-                ).exclude(backup_type='TRANSFER')
-                for b in old:
-                    if b.file_path and os.path.exists(b.file_path):
-                        os.remove(b.file_path)
-                    b.delete()
-                    cleaned += 1
-            elif sched.is_server_wide:
-                old = ServerBackup.objects.filter(created_at__lt=cutoff)
-                for b in old:
-                    if b.file_path and os.path.exists(b.file_path):
-                        os.remove(b.file_path)
-                    b.delete()
-                    cleaned += 1
-        except Exception as exc:
-            logger.warning("Backup cleanup failed for schedule %s: %s", sched.id, exc)
-    return cleaned
 
 
 @shared_task
 def run_scheduled_backups_task():
     """Execute all due BackupSchedule entries."""
-    from .models_backup import BackupSchedule
-    from .services.backup_service import BackupService
-    from django.utils import timezone
-    import croniter
     from datetime import datetime
+
+    import croniter
+    from django.utils import timezone
+
+    from .models_backup import BackupSchedule
 
     now = timezone.now()
     schedules = BackupSchedule.objects.filter(enabled=True)
@@ -4289,8 +4182,9 @@ def run_scheduled_backups_task():
 
 @shared_task(bind=True, soft_time_limit=3600, time_limit=4200)
 def execute_server_transfer_task(self, transfer_id):
+    from apps.deployments.services.transfer_service import _redact_transfer_text
+
     from .models_transfer import ServerTransfer as TransferModel
-    from apps.deployments.services.transfer_service import ServerTransferService, _redact_transfer_text
 
     lock_key = f"server-transfer:{transfer_id}"
     if not cache.add(lock_key, "1", timeout=3600):
@@ -4348,7 +4242,6 @@ def execute_server_transfer_task(self, transfer_id):
 @shared_task(bind=True)
 def rollback_transfer_task(self, transfer_id):
     from .models_transfer import ServerTransfer as TransferModel
-    from apps.deployments.services.transfer_service import ServerTransferService
 
     lock_key = f"server-transfer-rollback:{transfer_id}"
     if not cache.add(lock_key, "1", timeout=1800):
@@ -4376,8 +4269,9 @@ def rollback_transfer_task(self, transfer_id):
 @shared_task(bind=True, max_retries=0)
 def platform_update_task(self, update_id: str):
     """Execute platform update in background."""
-    from .models_updates import PlatformUpdate
     from services.platform_updater import perform_update
+
+    from .models_updates import PlatformUpdate
 
     try:
         update = PlatformUpdate.objects.get(id=update_id)
@@ -4390,8 +4284,9 @@ def platform_update_task(self, update_id: str):
 @shared_task(bind=True, max_retries=0)
 def platform_rollback_task(self, update_id: str):
     """Execute platform rollback in background (avoids blocking the request thread)."""
-    from .models_updates import PlatformUpdate
     from services.platform_updater import _rollback
+
+    from .models_updates import PlatformUpdate
 
     try:
         update = PlatformUpdate.objects.get(id=update_id)
@@ -4520,7 +4415,7 @@ def _clear_orphaned_runtime_resources() -> dict:
             logger.warning("Failed to remove orphaned container %s: %s", container.name, exc)
             errors.append({"name": container.name, "error": str(exc)})
 
-    image_prune = {}
+    image_prune: dict = {}
     try:
         image_prune = client.images.prune(filters={"dangling": ["false"]}) or {}
     except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -4574,8 +4469,9 @@ def run_maintenance_task(self, command_flag: str, lock_key: str = ""):
 
         elif command_flag == '--refresh':
             # Restart caddy via the shared volume .reload flag
+            from services.caddy_manager import apply_caddyfile, generate_caddyfile
+
             from apps.deployments.models import PlatformConfig
-            from services.caddy_manager import generate_caddyfile, apply_caddyfile
 
             config = PlatformConfig.load()
             content = generate_caddyfile(config)
@@ -4651,15 +4547,14 @@ def delete_service_task(self, service_id: str, force: bool = False):
     """Async reliable deletion of a Service"""
     from apps.deployments.models_core import Service
     from apps.deployments.services.deletion_orchestrator import DeletionOrchestrator
-    from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
-    
+
     try:
         service = Service.objects.get(id=service_id)
     except Service.DoesNotExist:
         return
 
     success = False
-    
+
     # 1. Handle remote server cleanup if applicable
     try:
         from apps.deployments.utils_target import resolve_active_execution_target
@@ -4673,7 +4568,7 @@ def delete_service_task(self, service_id: str, force: bool = False):
             logger.info("Decommissioning service %s on remote node %s", service.name, active_server.host)
             remote = RemoteOrchestrator(active_server)
             success = remote.delete_service_for_local(service, force=force)
-            
+
             # If force=True, we proceed even if remote call fails (best-effort local cleanup)
             if force:
                 success = True
@@ -4751,9 +4646,10 @@ def delete_service_task(self, service_id: str, force: bool = False):
 @shared_task(bind=True, max_retries=3)
 def delete_addon_task(self, addon_id: str):
     """Async reliable deletion of an Addon"""
+    from services.addon_provisioner import addon_provisioner
+
     from apps.deployments.models_addons import Addon
     from apps.deployments.services.deletion_orchestrator import DeletionOrchestrator
-    from services.addon_provisioner import addon_provisioner
     try:
         addon = Addon.objects.get(id=addon_id)
     except Addon.DoesNotExist:
@@ -4787,13 +4683,12 @@ def delete_addon_task(self, addon_id: str):
 def auto_authenticate_nodes_task():
     """
     Periodic task to automatically repair inter-node authentication.
-    
+
     Checks for ManagedServer records missing API tokens and attempts to
     retrieve them via SSH using RemoteOrchestrator.
     """
     from apps.deployments.models import ManagedServer
-    from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
-    
+
     # Target nodes missing tokens but having SSH access
     servers = ManagedServer.objects.filter(api_token='')
     count = 0
@@ -4806,7 +4701,7 @@ def auto_authenticate_nodes_task():
                     count += 1
             except Exception as e:
                 logger.warning("Auto-Auth Task failed for %s: %s", server.host, e)
-    
+
     if count > 0:
         logger.info("Auto-Auth Task completed: Fixed %d node(s)", count)
     return count
@@ -4932,10 +4827,8 @@ class ThrottledLogAppender:
 
     def flush(self):
         if self.buffer:
-            try:
+            with suppress(Exception):
                 self.server.refresh_from_db(fields=["provision_logs"])
-            except Exception:
-                pass
             _append_remote_update_log(self.server, self.buffer)
             self.buffer = ""
             self.last_save = time.time()
@@ -4972,7 +4865,7 @@ exit 0
 """
 
 
-def _run_ssh_command(ssh, command, timeout=None, raise_on_error=True, callback=None):
+def _run_ssh_command(ssh, command: str, timeout: int | None = None, raise_on_error: bool = True, callback=None):  # type: ignore[no-untyped-def]
     from unittest.mock import Mock
     stdout, stderr, code = ssh.exec_command(
         command,
@@ -5057,7 +4950,7 @@ def update_remote_server_task(server_id: str):
         # instead of depending on a user's linked GitHub OAuth token.
         branch = (os.environ.get('SMSLY_BRANCH') or 'main').strip() or 'main'
         logger.info("Update Task: Triggering installer update on %s (branch: %s)", server.host, branch)
-        
+
         # Build environment for the update
         config = PlatformConfig.load()
         master_ip = str(config.server_ip or os.environ.get('PUBLIC_IP') or '').strip() or '127.0.0.1'
@@ -5075,19 +4968,21 @@ def update_remote_server_task(server_id: str):
         quoted_path = shlex.quote(hosting_path)
         quoted_branch = shlex.quote(branch)
         git_steps = (
-            "cd {quoted_path} && "
+            f"cd {quoted_path} && "
             "if [ \"$(id -u)\" -eq 0 ]; then SUDO=''; else SUDO='sudo -n'; fi; "
             "git config --global --add safe.directory \"$PWD\" 2>/dev/null || true; "
             "if [ -n \"$(git status --porcelain 2>/dev/null)\" ]; then "
             "git stash push --include-untracked -m \"remote-update-$(date +%s)\" >/dev/null 2>&1 || true; "
             "fi; "
-            "git fetch origin {quoted_branch} >/dev/null 2>&1 && "
-            "git checkout -B {quoted_branch} origin/{quoted_branch} >/dev/null 2>&1 && "
-            "git branch --set-upstream-to=origin/{quoted_branch} {quoted_branch} >/dev/null 2>&1 || true"
-        ).format(quoted_path=quoted_path, quoted_branch=quoted_branch)
+            f"git fetch origin {quoted_branch} >/dev/null 2>&1 && "
+            f"git checkout -B {quoted_branch} origin/{quoted_branch} >/dev/null 2>&1 && "
+            f"git branch --set-upstream-to=origin/{quoted_branch} {quoted_branch} >/dev/null 2>&1 || true"
+        )
 
         if is_lite:
-            from apps.deployments.services.provisioner import build_agent_lite_install_env
+            from apps.deployments.services.provisioner import (
+                build_agent_lite_install_env,
+            )
 
             lite_env, lite_messages = build_agent_lite_install_env(
                 server,
@@ -5279,11 +5174,11 @@ def update_remote_server_task(server_id: str):
         return True
 
     except Exception as e:
-        error_msg = f"Update Task failed for {server.host}: {str(e)}"
+        error_msg = f"Update Task failed for {server.host}: {e!s}"
         logger.error(error_msg)
         server.provision_status = ManagedServer.ProvisionStatus.FAILED
         server.save(update_fields=["provision_status", "updated_at"])
-        _append_remote_update_log(server, f"\nFATAL ERROR: {str(e)}\n")
+        _append_remote_update_log(server, f"\nFATAL ERROR: {e!s}\n")
 
         # Dispatch notification to server owner when update fails
         try:
@@ -5292,7 +5187,7 @@ def update_remote_server_task(server_id: str):
                 event_type='server_update_failed',
                 user_id=server.owner.id,
                 title=f"❌ Server Update Failed: {server.name}",
-                message=f"The update process for server '{server.name}' ({server.host}) failed.\nReason: {str(e)}",
+                message=f"The update process for server '{server.name}' ({server.host}) failed.\nReason: {e!s}",
                 metadata={'server_id': str(server.id), 'server_name': server.name, 'host': server.host, 'error': str(e)},
             )
         except Exception as notify_exc:
@@ -5331,8 +5226,8 @@ def node_watchdog_task(self):
     try:
         from apps.deployments.models_core import ManagedServer
         from apps.deployments.services.self_healing_orchestrator import (
-            SelfHealingOrchestrator,
             FailureType,
+            SelfHealingOrchestrator,
         )
     except ImportError:
         logger.warning("Self-healing modules not available — watchdog skipped")
@@ -5369,10 +5264,10 @@ def node_watchdog_task(self):
             if server.status == ManagedServer.Status.ONLINE:
                 try:
                     from apps.deployments.services.prometheus_targets import (
-                        deploy_docker_labels_exporter_on_node,
-                        deploy_promtail_on_node,
                         deploy_cadvisor_on_node,
+                        deploy_docker_labels_exporter_on_node,
                         deploy_node_exporter_on_node,
+                        deploy_promtail_on_node,
                     )
                     deploy_docker_labels_exporter_on_node(server)
                     deploy_promtail_on_node(server)
@@ -5447,16 +5342,17 @@ def sync_master_db_to_agents_task():
     Periodically push a compressed pg_dump of the master database to all
     connected lite agents. Enables disaster recovery: if the master goes
     down, any agent's backup can restore the database on a replacement master.
-    
+
     Runs every 6 hours via Celery beat.
     """
+    import shutil
     import subprocess
     import tempfile
-    import shutil
-    
-    from .models_servers import ManagedServer
+
     from django.conf import settings
-    
+
+    from .models_servers import ManagedServer
+
     agents = ManagedServer.objects.filter(
         is_lite_agent=True,
         status=ManagedServer.Status.ONLINE,
@@ -5464,15 +5360,15 @@ def sync_master_db_to_agents_task():
     if not agents.exists():
         logger.info("sync_master_db_to_agents: no lite agents connected — skipping")
         return
-    
+
     db_url = getattr(settings, 'DATABASE_URL', '')
     if not db_url:
         logger.warning("sync_master_db_to_agents: DATABASE_URL not configured — skipping")
         return
-    
+
     tmp_dir = tempfile.mkdtemp(prefix='master_db_sync_')
     dump_path = os.path.join(tmp_dir, 'master_db.sql.gz')
-    
+
     try:
         # Create compressed pg_dump
         result = subprocess.run(
@@ -5482,18 +5378,18 @@ def sync_master_db_to_agents_task():
         if result.returncode != 0:
             logger.error("sync_master_db_to_agents: pg_dump failed: %s", result.stderr[:500])
             return
-        
+
         file_size = os.path.getsize(dump_path)
         logger.info("sync_master_db_to_agents: dump created (%.1f MB), pushing to %d agents",
                     file_size / (1024 * 1024), agents.count())
-        
+
         # Push to each lite agent via REST API
         # Send raw binary in body (not multipart) so body_hash computed
         # from file content matches request.body on the receiving end.
         with open(dump_path, 'rb') as f_body:
             raw_body_bytes = f_body.read()
         body_hash = hashlib.sha256(raw_body_bytes).hexdigest()
-        
+
         for agent in agents:
             target_ip = agent.wg_address or agent.private_ip or agent.host
             if not target_ip:
@@ -5502,10 +5398,10 @@ def sync_master_db_to_agents_task():
             secret = str(getattr(settings, 'GATEWAY_SECRET', '') or getattr(settings, 'SECRET_KEY', ''))
             timestamp = str(int(time.time()))
             nonce = secrets.token_hex(16)
-            
+
             raw_sig = f"POST|/api/v1/transfers/incoming/db-backup/|{timestamp}|{nonce}|{body_hash}"
             signature = hmac.new(secret.encode(), raw_sig.encode(), hashlib.sha256).hexdigest()
-            
+
             try:
                 resp = requests.post(
                     url,
@@ -5524,7 +5420,7 @@ def sync_master_db_to_agents_task():
                     logger.warning("sync_master_db_to_agents: agent %s returned %s", agent.name, resp.status_code)
             except requests.RequestException as e:
                 logger.warning("sync_master_db_to_agents: failed to push to agent %s: %s", agent.name, e)
-    
+
     except subprocess.TimeoutExpired:
         logger.error("sync_master_db_to_agents: pg_dump timed out")
     except Exception as e:
@@ -5555,7 +5451,7 @@ def registry_garbage_collection_task():
             logger.warning("registry_gc: dry-run failed: %s", dry_run.stderr[:500])
             return
 
-        freed_lines = [l for l in dry_run.stdout.split('\n') if 'marking blob' in l.lower() or 'blob eligible' in l.lower()]
+        freed_lines = [line for line in dry_run.stdout.split('\n') if 'marking blob' in line.lower() or 'blob eligible' in line.lower()]
         logger.info("registry_gc: dry-run found %d blobs eligible for removal", len(freed_lines))
 
         result = subprocess.run(

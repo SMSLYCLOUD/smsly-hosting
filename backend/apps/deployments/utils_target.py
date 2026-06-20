@@ -1,5 +1,6 @@
 import logging
-from apps.deployments.models_core import Service, Deployment, ManagedServer
+
+from apps.deployments.models_core import ManagedServer, Service
 
 logger = logging.getLogger(__name__)
 

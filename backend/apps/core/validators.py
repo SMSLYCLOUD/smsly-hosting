@@ -1,6 +1,8 @@
-import urllib.parse
 import ipaddress
+import urllib.parse
+
 from django.core.exceptions import ValidationError
+
 
 def validate_ssrf(value):
     """

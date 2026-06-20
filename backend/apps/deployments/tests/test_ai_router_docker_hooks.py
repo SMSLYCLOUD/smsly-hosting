@@ -7,7 +7,6 @@ from django.contrib.auth import get_user_model
 from apps.deployments.models import Deployment, EnvironmentVariable, Service
 from apps.deployments.tasks_deploy import _run_managed_image_post_deploy_hooks
 
-
 User = get_user_model()
 
 

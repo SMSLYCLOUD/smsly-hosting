@@ -18,7 +18,6 @@ from apps.deployments.models import Service
 from apps.deployments.models_storage import Volume
 from apps.deployments.views_storage import VolumeViewSet
 
-
 User = get_user_model()
 
 

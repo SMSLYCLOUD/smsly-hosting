@@ -5,9 +5,9 @@ Used by transfer engine after uploading a backup tarball to a target server.
 
 from __future__ import annotations
 
+import json
 import os
 import tarfile
-import json
 
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
@@ -26,7 +26,7 @@ def _extract_service_name_from_backup(file_path: str) -> str:
                     return ""
                 metadata = json.loads(fp.read().decode("utf-8"))
                 return str(metadata.get("service_name") or "").strip()
-    except Exception:  # noqa: BLE001
+    except Exception:
         return ""
 
 

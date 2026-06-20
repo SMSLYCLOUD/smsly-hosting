@@ -4,10 +4,9 @@
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
+from apps.addons.services.maintenance import AddonMaintenanceService
 from apps.deployments.models import Service
 from apps.deployments.models_addons import Addon
-from apps.addons.services.maintenance import AddonMaintenanceService
-
 
 User = get_user_model()
 

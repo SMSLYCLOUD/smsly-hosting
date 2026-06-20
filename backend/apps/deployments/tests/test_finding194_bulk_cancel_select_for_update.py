@@ -21,9 +21,8 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from apps.deployments.models import Service, Deployment
+from apps.deployments.models import Deployment, Service
 from apps.deployments.models_audit import AuditLog
-
 
 User = get_user_model()
 
@@ -87,10 +86,8 @@ class Finding194BulkCancelLockTests(TestCase):
         with patch(
             "apps.deployments.views.Deployment.objects.filter",
             side_effect=RuntimeError("boom"),
-        ):
-            with self.assertRaises(RuntimeError):
-                with transaction.atomic():
-                    raise RuntimeError("synthetic")
+        ), self.assertRaises(RuntimeError), transaction.atomic():
+            raise RuntimeError("synthetic")
 
         self.assertFalse(
             AuditLog.objects.filter(action="DEPLOYMENT_BULK_CANCEL").exists(),

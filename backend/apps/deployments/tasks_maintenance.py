@@ -1,50 +1,23 @@
 import logging
+
 logger = logging.getLogger(__name__)
-import logging
-import random
-import re
-import shlex
-import shutil
-import tempfile
-import subprocess
-import os
-import json
-import time
-import zipfile
-import secrets
-import threading
-from contextlib import contextmanager
-from urllib.parse import unquote, urlparse
-import docker
-import requests
-from celery import shared_task
-from django.conf import settings
-from django.core.cache import cache
-from django.utils import timezone
-from django.db.models import Sum
-from apps.cloud.models import CloudProvider
-from apps.cloud.services.builder import NixpacksBuilder
-from apps.cloud.services.compute import ComputeService
-from apps.cloud.services.function_provisioner import FunctionProvisioner
-from apps.deployments.ai_router import DEFAULT_AI_ROUTER_API_BASE, DEFAULT_AI_ROUTER_UI_BASE, DEFAULT_BRAID_ALIAS, generate_ai_router_proxy_config, get_ollama_model_name, is_ai_router_service, is_ollama_service
-from apps.deployments.models import Service, Deployment, EnvironmentVariable, PlatformConfig
-from apps.deployments.models_addons import Addon, Backup
-from apps.deployments.models_backup import BackupSchedule, ServiceBackup
-from apps.deployments.models_storage import Volume
-from apps.deployments.models_transfer import ServerTransfer
-from apps.deployments.services.backup_service import BackupService
-from apps.deployments.services.pipeline import PipelineManager, PipelineError
-from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
-from apps.deployments.services.tls_verify import should_verify
-from apps.deployments.services.transfer_service import ServerTransferService
-from apps.deployments.utils import append_log, broadcast_status, build_local_source_bundle, update_stage, is_deployment_local
-from services.addon_provisioner import addon_provisioner
+import contextlib  # noqa: E402
+import logging  # noqa: E402
+import subprocess  # noqa: E402
+import time  # noqa: E402
 
+import docker  # noqa: E402
+from celery import shared_task  # noqa: E402
+from django.core.cache import cache  # noqa: E402
+from django.utils import timezone  # noqa: E402
 
-from .tasks_platform_update import _clear_directory_contents
-from .tasks_platform_update import platform_update_task
-from .tasks_platform_update import platform_update_task
-from .tasks_platform_update import _clear_directory_contents
+from apps.deployments.models import (  # noqa: E402
+    Service,
+)
+from apps.deployments.models_addons import Addon  # noqa: E402
+
+from .tasks_platform_update import _clear_directory_contents, platform_update_task  # noqa: E402
+
 
 def _extract_addon_id_from_name(name: str) -> str:
     prefix = "smsly-addon-"
@@ -194,8 +167,9 @@ def run_maintenance_task(self, command_flag: str, lock_key: str = ""):
 
         elif command_flag == '--refresh':
             # Restart caddy via the shared volume .reload flag
+            from services.caddy_manager import apply_caddyfile, generate_caddyfile
+
             from apps.deployments.models import PlatformConfig
-            from services.caddy_manager import generate_caddyfile, apply_caddyfile
 
             config = PlatformConfig.load()
             content = generate_caddyfile(config)
@@ -288,10 +262,8 @@ class ThrottledLogAppender:
         from .tasks_server_update import _append_remote_update_log
 
         if self.buffer:
-            try:
+            with contextlib.suppress(Exception):
                 self.server.refresh_from_db(fields=["provision_logs"])
-            except Exception:
-                pass
             _append_remote_update_log(self.server, self.buffer)
             self.buffer = ""
             self.last_save = time.time()
@@ -320,7 +292,7 @@ def registry_garbage_collection_task():
             logger.warning("registry_gc: dry-run failed: %s", dry_run.stderr[:500])
             return
 
-        freed_lines = [l for l in dry_run.stdout.split('\n') if 'marking blob' in l.lower() or 'blob eligible' in l.lower()]
+        freed_lines = [line for line in dry_run.stdout.split('\n') if 'marking blob' in line.lower() or 'blob eligible' in line.lower()]
         logger.info("registry_gc: dry-run found %d blobs eligible for removal", len(freed_lines))
 
         result = subprocess.run(

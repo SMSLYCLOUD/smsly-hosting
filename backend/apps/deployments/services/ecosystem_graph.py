@@ -1,24 +1,26 @@
-import yaml
-from typing import Dict, Any, List
+from typing import Any
 
-def parse_ecosystem_manifest(manifest_content: str) -> Dict[str, Any]:
+import yaml
+
+
+def parse_ecosystem_manifest(manifest_content: str) -> dict[str, Any]:
     try:
         return yaml.safe_load(manifest_content) or {}
     except yaml.YAMLError as e:
         raise ValueError(f"Invalid ecosystem manifest: {e}")
 
 class EcosystemGraph:
-    def __init__(self, manifest: Dict[str, Any]):
+    def __init__(self, manifest: dict[str, Any]):
         self.manifest = manifest
         self.services = self.manifest.get("services", {})
         self.addons = self.manifest.get("addons", {})
         self.shared_env = self.manifest.get("shared_env", {}).get("groups", {})
 
-    def get_service_dependencies(self, service_key: str) -> List[str]:
+    def get_service_dependencies(self, service_key: str) -> list[str]:
         service = self.services.get(service_key, {})
         return service.get("dependencies", [])
 
-    def get_topological_order(self) -> List[str]:
+    def get_topological_order(self) -> list[str]:
         visited = set()
         temp_mark = set()
         order = []

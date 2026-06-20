@@ -2,12 +2,13 @@
 Circuit Breaker Middleware for SMSLY Hosting.
 Prevents cascade failures by failing fast when dependencies are unhealthy.
 """
-import time
-import threading
 import functools
 import logging
-from typing import Callable, Any, Optional
+import threading
+import time
+from collections.abc import Callable
 from enum import Enum
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ class CircuitBreaker:
 
         self._state = CircuitState.CLOSED
         self._failure_count = 0
-        self._last_failure_time: Optional[float] = None
+        self._last_failure_time: float | None = None
         self._lock = threading.Lock()
 
     @property

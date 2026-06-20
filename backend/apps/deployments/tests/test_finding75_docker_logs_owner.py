@@ -24,7 +24,6 @@ from apps.deployments.views_servers import (
     _user_owns_container_name,
 )
 
-
 User = get_user_model()
 
 

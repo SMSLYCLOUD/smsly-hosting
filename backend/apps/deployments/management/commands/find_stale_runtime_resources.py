@@ -1,8 +1,9 @@
-import logging
-from django.core.management.base import BaseCommand
 import docker
-from apps.deployments.models_core import Service
+from django.core.management.base import BaseCommand
+
 from apps.deployments.models_addons import Addon
+from apps.deployments.models_core import Service
+
 
 class Command(BaseCommand):
     help = "Find and clean up stale/duplicate runtime resources that don't match active DB state (legacy pattern based)."
@@ -32,7 +33,7 @@ class Command(BaseCommand):
             c_name = c.name.lower()
 
             # Identify core platform containers to skip
-            if 'smsly-hosting' in c_name or 'postgres' in c_name and 'addon' not in c_name or 'redis' in c_name and 'addon' not in c_name:
+            if 'smsly-hosting' in c_name or ('postgres' in c_name and 'addon' not in c_name) or ('redis' in c_name and 'addon' not in c_name):
                 continue
 
             # Identify stale addons by legacy pattern: "smsly-addon-postgres-<uuid>"
@@ -40,7 +41,7 @@ class Command(BaseCommand):
                 parts = c_name.split('-')
                 if len(parts) >= 4:
                     # extract potential UUID
-                    potential_id = "-".join(parts[-5:]) if len(parts) >= 8 else "-".join(parts[-1:])
+                    "-".join(parts[-5:]) if len(parts) >= 8 else "-".join(parts[-1:])
                     # Actually uuid is 36 chars. Let's just substring check against active ids
                     is_active = any(aid in c_name for aid in active_addon_ids)
                     if not is_active:

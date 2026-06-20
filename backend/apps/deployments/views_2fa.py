@@ -5,8 +5,8 @@ import logging
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django_otp import devices_for_user, user_has_device
 from django_otp.plugins.otp_totp.models import TOTPDevice
-from django_otp import user_has_device, devices_for_user
 from rest_framework import permissions, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response

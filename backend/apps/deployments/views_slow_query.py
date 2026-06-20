@@ -1,9 +1,13 @@
 """Slow query API endpoints."""
-from rest_framework import viewsets, permissions
+from rest_framework import permissions, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
-from apps.deployments.services.slow_query import fetch_slow_queries, fetch_query_stats, reset_pg_stat_statements
+from apps.deployments.services.slow_query import (
+    fetch_query_stats,
+    fetch_slow_queries,
+    reset_pg_stat_statements,
+)
 
 
 class SlowQueryViewSet(viewsets.GenericViewSet):

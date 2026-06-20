@@ -1,12 +1,13 @@
-import paramiko
-import time
-import socket
-import logging
+import contextlib
 import io
+import logging
 import os
 import re
 import shlex
+import time
 import warnings
+
+import paramiko
 
 logger = logging.getLogger(__name__)
 
@@ -133,10 +134,10 @@ class SSHClient:
             self.client.set_missing_host_key_policy(paramiko.RejectPolicy())
         elif allow_auto_add:
             self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            warnings.warn("Using AutoAddPolicy for initial provisioning (Trust On First Use).")
+            warnings.warn("Using AutoAddPolicy for initial provisioning (Trust On First Use).", stacklevel=2)
         else:
             self.client.set_missing_host_key_policy(paramiko.WarningPolicy())
-            warnings.warn("Strict SSH host key checking is disabled. This is insecure!")
+            warnings.warn("Strict SSH host key checking is disabled. This is insecure!", stacklevel=2)
 
 
         # Determine auth method: key or password
@@ -176,7 +177,7 @@ class SSHClient:
 
         retries = 3
         last_exc = None
-        
+
         # Connect to self.ip first, then self.wg_address if provided and self.ip failed
         hosts_to_try = [self.ip]
         if self.wg_address and self.wg_address != self.ip:
@@ -196,7 +197,7 @@ class SSHClient:
                     return
                 except paramiko.AuthenticationException:
                     raise
-                except (socket.error, socket.timeout, TimeoutError, paramiko.SSHException) as e:
+                except (OSError, TimeoutError, paramiko.SSHException) as e:
                     last_exc = e
                     if i < retries - 1:
                         time.sleep(2)
@@ -207,15 +208,11 @@ class SSHClient:
 
     def close(self):
         if self.sftp:
-            try:
+            with contextlib.suppress(Exception):
                 self.sftp.close()
-            except Exception:
-                pass
         if self.client:
-            try:
+            with contextlib.suppress(Exception):
                 self.client.close()
-            except Exception:
-                pass
         self.sftp = None
         self.client = None
 
@@ -229,7 +226,7 @@ class SSHClient:
             self.connect()
 
         logger.debug(f"SSH Exec ({self.ip}): {command}")
-        stdin, stdout, stderr = self.client.exec_command(command, timeout=timeout)
+        stdin, stdout, _stderr = self.client.exec_command(command, timeout=timeout)
         stdin.close()
 
         # Drain stdout/stderr while the command runs. Waiting for exit before
@@ -334,7 +331,7 @@ class SSHClient:
 
     def check_docker(self):
         try:
-            out, err, code = self.exec_command("docker --version")
+            _out, _err, code = self.exec_command("docker --version")
             return code == 0
         except Exception:
             return False
@@ -362,7 +359,7 @@ class SSHClient:
                 return path
             except Exception:
                 continue
-        
+
         # Fallback: try to find it via locate or find if available
         try:
             out, _err, code = self.exec_command(
@@ -376,7 +373,7 @@ class SSHClient:
                 return path
         except Exception:
             pass
-            
+
         return candidates[0]  # Default to /opt/smsly-hosting
 
     def run_diagnose_nodes_fix(self, hosting_path):
@@ -384,7 +381,7 @@ class SSHClient:
         # Try both 'docker compose' and 'docker-compose'
         quoted_path = shlex.quote(hosting_path)
         cmd = f"cd {quoted_path} && (docker compose exec -T backend python manage.py diagnose_nodes --fix || docker-compose exec -T backend python manage.py diagnose_nodes --fix)"
-        out, err, code = self.exec_command(cmd)
+        out, err, _code = self.exec_command(cmd)
         return out + err
 
     def create_api_token(self, hosting_path):
@@ -455,7 +452,7 @@ class SSHClient:
                 f"tok, _ = Token.objects.get_or_create(user=u); "
                 f"print(\"TOKEN: \" + tok.key)' 2>&1"
             )
-            out2, err2, code2 = self.exec_command(shell_cmd, raise_on_error=False)
+            out2, err2, _code2 = self.exec_command(shell_cmd, raise_on_error=False)
             raw2 = (out2 or "") + (err2 or "")
             m = re.search(r"TOKEN:\s+(\w+)", raw2)
             if m:
@@ -469,7 +466,7 @@ class SSHClient:
         try:
             env_path = shlex.quote(f"{hosting_path.rstrip('/')}/.env")
             cmd = f"sed -n 's/^GATEWAY_SECRET=//p' {env_path} | head -n 1"
-            out, err, code = self.exec_command(cmd)
+            out, _err, _code = self.exec_command(cmd)
             secret = out.strip().strip("'\"")
             if secret:
                 return secret

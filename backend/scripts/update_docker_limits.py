@@ -1,7 +1,8 @@
+import logging
 import os
 import sys
+
 import django
-import logging
 import docker
 
 # Setup Django environment
@@ -9,7 +10,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 django.setup()
 
-from apps.deployments.models import Service
+from apps.deployments.models import Service  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

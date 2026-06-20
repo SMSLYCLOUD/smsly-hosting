@@ -6,31 +6,36 @@ import json
 import logging
 import uuid
 from decimal import Decimal
-from typing import Optional
 
 import stripe
 from django.conf import settings
 from django.db.models import Sum
 from django.utils import timezone
-from rest_framework import serializers, status, viewsets, permissions
-from rest_framework.throttling import AnonRateThrottle
-from rest_framework.throttling import AnonRateThrottle
+from rest_framework import permissions, serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import AnonRateThrottle
 
 from apps.billing.models import (
-    BillingAccount, BillingPayment, UsageRecord,
-    PricingPlan, UserSubscription, Invoice, ResourcePrice
+    BillingAccount,
+    BillingPayment,
+    Invoice,
+    PricingPlan,
+    ResourcePrice,
+    UsageRecord,
+    UserSubscription,
 )
 from apps.billing.serializers import (
-    PricingPlanSerializer, UserSubscriptionSerializer, InvoiceSerializer,
-    ResourcePriceSerializer
+    InvoiceSerializer,
+    PricingPlanSerializer,
+    ResourcePriceSerializer,
+    UserSubscriptionSerializer,
 )
-from apps.billing.services.metering import UsageMeter
 from apps.billing.services.cryptomus import CryptomusService
 from apps.billing.services.flutterwave import FlutterwaveService
+from apps.billing.services.metering import UsageMeter
 from apps.billing.services.stripe import StripeService
 from apps.billing.utils import _activate_paid_plan
 
@@ -89,7 +94,7 @@ def _base_url_from_request(request) -> str:
     return base[:-1] if base.endswith("/") else base
 
 
-def _choose_provider(provider_in: Optional[str]) -> str:
+def _choose_provider(provider_in: str | None) -> str:
     """Select the active billing provider."""
     p = (provider_in or "").strip().lower()
     if p:
@@ -139,7 +144,6 @@ class BillingSummaryView(GenericAPIView):
             service_cost = (
                 service.usage_records.aggregate(total=Sum("cost"))["total"] or Decimal("0.00")
             )
-            from django.db.models import Sum
             cpu_hours = service.usage_records.filter(
                 resource_type='cpu_hours'
             ).aggregate(s=Sum('quantity'))['s'] or 0
@@ -359,7 +363,7 @@ class StripeWebhookView(GenericAPIView):
         event_type = event.get("type")
         obj = (event.get("data") or {}).get("object") or {}
 
-        def norm_status(s: Optional[str]) -> str:
+        def norm_status(s: str | None) -> str:
             return (s or "").upper().strip()
 
         try:

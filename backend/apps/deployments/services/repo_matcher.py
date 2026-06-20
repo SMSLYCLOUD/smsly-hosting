@@ -1,8 +1,7 @@
 """Normalize repository URLs for accurate webhook-to-service matching."""
-from typing import Optional
 
 
-def normalize_repo_url(url: str) -> Optional[str]:
+def normalize_repo_url(url: str) -> str | None:
     """
     Normalize a repository URL to ``{host}/{owner}/{repo}`` format for matching.
 

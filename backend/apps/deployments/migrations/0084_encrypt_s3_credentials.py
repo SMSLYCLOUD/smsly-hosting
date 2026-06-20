@@ -1,7 +1,7 @@
 # Encrypt S3 credentials in BackupSchedule
 
-from django.db import migrations
 import encrypted_model_fields.fields
+from django.db import migrations
 
 
 class Migration(migrations.Migration):

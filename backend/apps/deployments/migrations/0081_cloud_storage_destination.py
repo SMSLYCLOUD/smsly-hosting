@@ -1,8 +1,9 @@
 # CloudStorageDestination model
 
-from django.db import migrations, models
 import uuid
+
 import encrypted_model_fields.fields
+from django.db import migrations, models
 
 
 class Migration(migrations.Migration):

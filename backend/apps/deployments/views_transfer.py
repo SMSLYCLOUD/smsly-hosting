@@ -1,24 +1,26 @@
-import ipaddress
+import contextlib
 import hashlib
 import hmac
+import ipaddress
 import logging
 import os
 import socket
 import time
 
 from django.conf import settings
-from django.utils import timezone
 from django.db.models import Q
-from rest_framework import viewsets, permissions, status
+from django.utils import timezone
+from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action, throttle_classes
 from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle
-from .models_transfer import ServerTransfer
-from .serializers import ServerTransferSerializer, ServerTransferCreateSerializer
-from .models import Service, PlatformConfig
+
+from .models import PlatformConfig, Service
 from .models_servers import ManagedServer
-from .tasks_transfer import execute_server_transfer_task, rollback_transfer_task
+from .models_transfer import ServerTransfer
+from .serializers import ServerTransferCreateSerializer, ServerTransferSerializer
 from .services.server_guard import ServerGuard
+from .tasks_transfer import execute_server_transfer_task, rollback_transfer_task
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +48,7 @@ def is_safe_ip(ip_str, allow_private=False):
         if (ip.is_loopback or ip.is_link_local or
             ip.is_multicast or ip.is_reserved or ip.is_unspecified):
             return False
-        if ip.is_private and not allow_private:
-            return False
-        return True
+        return not (ip.is_private and not allow_private)
     except ValueError:
         return False
 
@@ -240,12 +240,12 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
             bool(request.data.get('target_server_ip')),
             bool(request.data.get('target_ssh_key') or request.data.get('target_ssh_password')),
         )
-        
+
         serializer = ServerTransferCreateSerializer(data=request.data)
         if not serializer.is_valid():
             logger.warning(f"Transfer validation failed: {serializer.errors}")
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        
+
         payload = serializer.validated_data
 
         transfer_type = payload['transfer_type']
@@ -737,10 +737,8 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
             )
             while len(existing) > 5:
                 old = existing.pop(0)
-                try:
+                with contextlib.suppress(OSError):
                     os.remove(old)
-                except OSError:
-                    pass
 
             return Response({
                 'status': 'stored',

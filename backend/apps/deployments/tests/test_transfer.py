@@ -25,8 +25,7 @@ These tests pin down the behavioral contracts that were fixed:
     snapshots pre-transfer env-var values into `transfer.metadata`, and
     `_revert_target_platform_env()` writes them back during rollback.
 """
-from types import SimpleNamespace
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
 from django.test import TestCase, override_settings
 
@@ -37,7 +36,6 @@ from apps.deployments.services.transfer_service import (
     ServerTransferService,
     _safe_service_name,
 )
-
 
 # ── Issue 6: TRANSFER_REQUIRE_BIDIRECTIONAL_SSH default ─────────────────────
 
@@ -128,7 +126,6 @@ class StopSourceServiceBeforeDNSCutoverTests(TestCase):
         self.transfer.status = 'VERIFYING'
         self.transfer.save(update_fields=['status'])
 
-        from apps.deployments.models_servers import ManagedServer
         target = ManagedServer.objects.create(
             owner=self.user, name='cutover-target',
             host='10.0.0.20', private_ip='10.0.0.20',
@@ -202,7 +199,8 @@ class SSHCredentialClearingTests(TestCase):
         not plain text — that's what the docstring promises.
         """
         from encrypted_model_fields.fields import (
-            EncryptedCharField, EncryptedTextField,
+            EncryptedCharField,
+            EncryptedTextField,
         )
         self.assertIsInstance(
             ServerTransfer._meta.get_field('source_ssh_key'),
@@ -262,7 +260,6 @@ class PreTransferEnvSnapshotTests(TestCase):
         """
         import apps.deployments.services.transfer_service as ts
 
-        payload = {'service_name': 'snapshot-svc'}
         script = ts.ServerTransferService._remap_target_platform_env
         source = script.__code__.co_consts
         joined = ' '.join(c for c in source if isinstance(c, str))
@@ -304,7 +301,7 @@ class PreTransferEnvSnapshotTests(TestCase):
         uploaded = []
 
         def fake_upload(local_path, remote_path):
-            with open(local_path, 'r') as f:
+            with open(local_path) as f:
                 uploaded.append(f.read())
 
         svc.ssh.upload_file.side_effect = fake_upload

@@ -1,12 +1,15 @@
 import os
+
 from django.test import TestCase
-from apps.deployments.services.ecosystem_graph import build_ecosystem_graph
+
 from apps.deployments.services.ecosystem_env import EcosystemEnvResolver, is_weak_value
+from apps.deployments.services.ecosystem_graph import build_ecosystem_graph
+
 
 class TestEcosystemSimulationSafe(TestCase):
     def load_fixture(self, name):
         path = os.path.join(os.path.dirname(__file__), 'fixtures/ecosystems', name)
-        with open(path, 'r') as f:
+        with open(path) as f:
             return f.read()
 
     def test_simple_backend_frontend(self):
@@ -17,7 +20,7 @@ class TestEcosystemSimulationSafe(TestCase):
         self.assertIn('web', graph.services)
 
         resolver = EcosystemEnvResolver(graph)
-        success, envs, errors = resolver.validate_and_resolve()
+        success, _envs, errors = resolver.validate_and_resolve()
 
         self.assertFalse(success)
         self.assertIn("Service 'api' missing external required env 'EXTERNAL_API_KEY'", "".join(errors))
@@ -34,7 +37,7 @@ class TestEcosystemSimulationSafe(TestCase):
         manifest = self.load_fixture('invalid_placeholder_env.yml')
         graph = build_ecosystem_graph(manifest)
 
-        resolver = EcosystemEnvResolver(graph)
+        EcosystemEnvResolver(graph)
 
         self.assertTrue(is_weak_value("changeme"))
         self.assertTrue(is_weak_value("secret"))

@@ -1,49 +1,66 @@
 """Urls module."""
+from django.urls import include, path
 from rest_framework.routers import DefaultRouter
-from django.urls import path, include
 from rest_framework_nested import routers
+
 from .views import (
-    DeploymentViewSet, ServiceViewSet, SessionTokenView, SystemConfigView, AuditLogViewSet, DomainConfigView,
-    RouteRecheckView, ServiceBackupViewSet, ServerBackupViewSet, BackupScheduleViewSet
-    , PlatformResourcesView, RemoteTriggerView
+    AuditLogViewSet,
+    BackupScheduleViewSet,
+    DeploymentViewSet,
+    DomainConfigView,
+    PlatformResourcesView,
+    RemoteTriggerView,
+    RouteRecheckView,
+    ServerBackupViewSet,
+    ServiceBackupViewSet,
+    ServiceViewSet,
+    SessionTokenView,
+    SystemConfigView,
 )
-from .views_safedeploy import PreviewEnvironmentViewSet, DeploymentApprovalViewSet
-from .views_transfer import ServerTransferViewSet
 from .views_addons import AddonViewSet
-from .views_metrics import MetricsViewSet
-from .views_cron import CronJobViewSet
-from .views_storage import VolumeViewSet
-from .views_templates import TemplateViewSet
-from .views_blueprints import BlueprintViewSet
-from .views_topology import TopologyViewSet
 from .views_analysis import RepoAnalysisView
-from .views_chat import AIChatView
-from .views_webhooks import GitHubWebhookView, GitLabWebhookView, BitbucketWebhookView
-from .views_tunnels import TunnelViewSet
-from .views_subdomains import subdomains_list_create, subdomains_release
-from .views_health_webhook import ServiceHealthWebhookView
-from .views_oauth import oauth_providers_status, oauth_credentials
-from .views_integrations import (
-    github_connection, github_connect, github_oauth_url, github_oauth_callback,
-    gitlab_connection, gitlab_oauth_url, gitlab_oauth_callback,
-    bitbucket_connection, bitbucket_oauth_url, bitbucket_oauth_callback,
-)
-from .views_github import github_repos, github_branches, github_commits
-from .views_gitlab import gitlab_repos, gitlab_branches, gitlab_commits
-from .views_bitbucket import bitbucket_repos, bitbucket_branches, bitbucket_commits
-from .views_tokens import list_tokens, create_token, revoke_token
-from .views_servers import ManagedServerViewSet
-from .views_mesh import MeshNetworkViewSet
-from .views_election import ClusterViewSet, heartbeat_receive, vote_request
-from .views_replication import ReplicationViewSet
-from .views_project import ProjectViewSet
-from .views_updates import PlatformUpdateViewSet
-from .views_node_exchange import node_token_exchange, node_token_exchange_via_gateway
-from .views_device import register_device, list_devices, revoke_device
 from .views_autoscale import ScalingViewSet
+from .views_bitbucket import bitbucket_branches, bitbucket_commits, bitbucket_repos
+from .views_blueprints import BlueprintViewSet
+from .views_chat import AIChatView
 from .views_cloud_storage import CloudStorageViewSet
-from .views_slow_query import SlowQueryViewSet
+from .views_cron import CronJobViewSet
+from .views_device import list_devices, register_device, revoke_device
+from .views_election import ClusterViewSet, heartbeat_receive, vote_request
+from .views_github import github_branches, github_commits, github_repos
+from .views_gitlab import gitlab_branches, gitlab_commits, gitlab_repos
+from .views_health_webhook import ServiceHealthWebhookView
+from .views_integrations import (
+    bitbucket_connection,
+    bitbucket_oauth_callback,
+    bitbucket_oauth_url,
+    github_connect,
+    github_connection,
+    github_oauth_callback,
+    github_oauth_url,
+    gitlab_connection,
+    gitlab_oauth_callback,
+    gitlab_oauth_url,
+)
+from .views_mesh import MeshNetworkViewSet
+from .views_metrics import MetricsViewSet
+from .views_node_exchange import node_token_exchange, node_token_exchange_via_gateway
+from .views_oauth import oauth_credentials, oauth_providers_status
+from .views_project import ProjectViewSet
 from .views_recovery import recovery_phrase_generate, recovery_phrase_verify
+from .views_replication import ReplicationViewSet
+from .views_safedeploy import DeploymentApprovalViewSet, PreviewEnvironmentViewSet
+from .views_servers import ManagedServerViewSet
+from .views_slow_query import SlowQueryViewSet
+from .views_storage import VolumeViewSet
+from .views_subdomains import subdomains_list_create, subdomains_release
+from .views_templates import TemplateViewSet
+from .views_tokens import create_token, list_tokens, revoke_token
+from .views_topology import TopologyViewSet
+from .views_transfer import ServerTransferViewSet
+from .views_tunnels import TunnelViewSet
+from .views_updates import PlatformUpdateViewSet
+from .views_webhooks import BitbucketWebhookView, GitHubWebhookView, GitLabWebhookView
 
 # Create main router
 router = DefaultRouter()

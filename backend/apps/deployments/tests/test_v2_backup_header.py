@@ -14,27 +14,25 @@ model, the encrypt/decrypt round-trip, and the public service
 methods (``import_backup_key``, ``read_v2_header``, ``lookup_key_by_id``).
 No DB row creation requires external services.
 """
+import contextlib
 import os
-import struct
 import tempfile
 import uuid
 from unittest.mock import patch
 
-from cryptography.fernet import Fernet, InvalidToken
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.fernet import Fernet
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
 from apps.deployments.models_backup import BackupEncryptionKey
 from apps.deployments.services.backup_service import (
-    BackupKeyCollisionError,
-    BackupService,
-    UnknownBackupKeyIdError,
     _CHUNKED_BACKUP_FINGERPRINT_BYTES,
     _CHUNKED_BACKUP_KEY_ID_BYTES,
     _CHUNKED_BACKUP_V2_MAGIC,
+    BackupKeyCollisionError,
+    BackupService,
+    UnknownBackupKeyIdError,
 )
-
 
 User = get_user_model()
 
@@ -83,15 +81,11 @@ class V2HeaderRoundTripTests(TestCase):
 
     @staticmethod
     def _rm(path):
-        try:
+        with contextlib.suppress(OSError):
             os.remove(path)
-        except OSError:
-            pass
         parent = os.path.dirname(path)
-        try:
+        with contextlib.suppress(OSError):
             os.rmdir(parent)
-        except OSError:
-            pass
 
     def test_encrypt_writes_v2_magic_with_key_id_and_fingerprint(self):
         key = Fernet.generate_key().decode()
@@ -158,15 +152,11 @@ class V2HeaderDecryptTests(TestCase):
 
     @staticmethod
     def _rm(path):
-        try:
+        with contextlib.suppress(OSError):
             os.remove(path)
-        except OSError:
-            pass
         parent = os.path.dirname(path)
-        try:
+        with contextlib.suppress(OSError):
             os.rmdir(parent)
-        except OSError:
-            pass
 
     def test_v1_backup_still_decrypts_with_env_key(self):
         """Backward compat: V1 (no key_id in header) backups written
@@ -338,12 +328,8 @@ class V2HeaderReadTests(TestCase):
 
     @staticmethod
     def _rm(path):
-        try:
+        with contextlib.suppress(OSError):
             os.remove(path)
-        except OSError:
-            pass
         parent = os.path.dirname(path)
-        try:
+        with contextlib.suppress(OSError):
             os.rmdir(parent)
-        except OSError:
-            pass

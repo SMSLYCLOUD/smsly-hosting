@@ -5,8 +5,9 @@ Pipeline Manager Service.
 Handles the build pipeline steps: Clone -> Analyze -> Build -> Push.
 Refactored from monolithic tasks.py to improve maintainability and error isolation.
 """
-import logging
+import contextlib
 import json
+import logging
 import os
 import re
 import shlex
@@ -14,13 +15,15 @@ import shutil
 import subprocess
 import tempfile
 import threading
-import yaml
 from pathlib import Path
 from urllib.parse import urlparse as parse_url
 
 import git
+import yaml
 from django.conf import settings
 from django.utils import timezone
+from services.builders import cleanup_stuck_buildkit as _cleanup_stuck_buildkit
+from services.builders import is_buildkit_cache_error, prune_buildkit_cache
 
 from apps.cloud.services.builder import NixpacksBuilder
 from apps.deployments.ai_router import (
@@ -30,20 +33,18 @@ from apps.deployments.ai_router import (
     is_ollama_service,
 )
 from apps.deployments.models import Deployment, EnvironmentVariable, PlatformConfig
-from apps.deployments.services.git_manager import GitManager
 from apps.deployments.utils import (
     append_log,
-    update_stage,
-    get_github_oauth_token_for_user,
-    get_default_env_value,
-    extract_dockerfile_arg_names,
-    redact_values,
-    parse_ai_resource_recommendation,
     estimate_resources_from_deps,
+    extract_dockerfile_arg_names,
+    get_default_env_value,
+    get_github_oauth_token_for_user,
     is_deployment_local,
+    parse_ai_resource_recommendation,
+    redact_values,
+    update_stage,
 )
 from apps.intelligence.services.env_intelligence import EnvironmentIntelligenceService
-from services.builders import is_buildkit_cache_error, prune_buildkit_cache, cleanup_stuck_buildkit as _cleanup_stuck_buildkit
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +88,7 @@ _BUILDS_ROOT = _get_builds_root()
 
 def _read_env_file(path):
     """Read a docker-compose .env file, yielding non-comment key=value lines."""
-    with open(path, 'r') as fh:
+    with open(path) as fh:
         for line in fh:
             stripped = line.strip()
             if not stripped or stripped.startswith('#'):
@@ -144,13 +145,15 @@ class PipelineManager:
                 self._auto_provision_addons()
             self._build_image()
             self._push_image()
+            if not self.image_name:
+                raise PipelineError("Pipeline completed without producing an image")
             return self.image_name
         except PipelineError as e:
             # Re-raise known errors
             raise e
         except Exception as e:
             # Wrap unknown errors
-            raise InfraError(f"Unexpected pipeline failure: {str(e)}") from e
+            raise InfraError(f"Unexpected pipeline failure: {e!s}") from e
         finally:
             self._cleanup()
 
@@ -199,7 +202,7 @@ class PipelineManager:
         except Exception as e:
             self._cleanup()  # Clean up on failure
             raise InfraError(
-                f"Analysis phase failure: {str(e)}"
+                f"Analysis phase failure: {e!s}"
             ) from e
 
     def run_build_only(self) -> str:
@@ -214,12 +217,14 @@ class PipelineManager:
 
             self._build_image()
             self._push_image()
+            if not self.image_name:
+                raise PipelineError("Build phase completed without producing an image")
             return self.image_name
         except PipelineError as e:
             raise e
         except Exception as e:
             raise InfraError(
-                f"Build phase failure: {str(e)}"
+                f"Build phase failure: {e!s}"
             ) from e
         finally:
             self._cleanup()
@@ -459,7 +464,7 @@ class PipelineManager:
 
         except Exception as e:
             update_stage(self.deployment, 'Clone', 'failed')
-            raise BuildError(f"Clone failed: {str(e)}") from e
+            raise BuildError(f"Clone failed: {e!s}") from e
 
         # Auto-inject .env file from repo (if present)
         self._inject_dotenv_from_repo()
@@ -590,7 +595,7 @@ class PipelineManager:
                     continue
 
                 try:
-                    with open(env_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    with open(env_path, encoding='utf-8', errors='ignore') as f:
                         for line in f:
                             line = line.strip()
                             # Skip empty lines, comments, exports
@@ -656,11 +661,11 @@ class PipelineManager:
         try:
             from apps.intelligence.scanner import RepoScanner
             scanner = RepoScanner(self.source_dir)
-            
+
             # Step A: Perform aggressive scan
             scan_result = scanner.scan()
             ai_context = scanner.build_ai_context()
-            
+
             # Step B: Consult the AI Senate for resource recommendations and diagnosis
             # (Keeping the resource logic as it was but optimizing the prompt)
             prompt = (
@@ -674,15 +679,15 @@ class PipelineManager:
                 f'  "diagnosis": "..."\n'
                 f'}}\n'
             )
-            
+
             from apps.intelligence.providers import ask_with_fallback
             response, provider = ask_with_fallback(prompt, mode="code_review")
-            
+
             self.deployment.ai_diagnosis = (response or "").replace('\x00', '')
             self.deployment.save(update_fields=['ai_diagnosis'])
-            
+
             append_log(self.deployment, f"\n🤖 AI Senate Analysis ({provider}) complete.\n")
-            
+
             # Step C: Apply resource recommendations
             recommendation = parse_ai_resource_recommendation(response)
             if recommendation:
@@ -692,10 +697,10 @@ class PipelineManager:
 
             # Step D: EXHAUSTIVE ENV FILLING via AI Senate
             append_log(self.deployment, "🧠 Convening AI Senate for exhaustive environment filling...\n")
-            suggestions, injected = EnvironmentIntelligenceService.apply_intelligence_to_service(
+            _suggestions, injected = EnvironmentIntelligenceService.apply_intelligence_to_service(
                 self.service, scan_result
             )
-            
+
             if injected:
                 append_log(self.deployment, f"  ✅ AI Senate auto-filled {len(injected)} variables: {', '.join(injected[:10])}...\n")
             else:
@@ -703,7 +708,7 @@ class PipelineManager:
 
         except Exception as e:
             logger.warning("AI analysis failed: %s", e)
-            append_log(self.deployment, f"\n🤖 AI analysis encountered an error: {str(e)}. Falling back to heuristics.\n")
+            append_log(self.deployment, f"\n🤖 AI analysis encountered an error: {e!s}. Falling back to heuristics.\n")
 
         # Heuristic fallback for resources
         if self.source_dir:
@@ -875,7 +880,7 @@ class PipelineManager:
             if default_val and str(default_val).strip():
                 # Sanitize for PostgreSQL
                 safe_val = str(default_val).strip().replace('\x00', '')
-                
+
                 # Has a sensible default → inject it
                 EnvironmentVariable.objects.create(
                     service=self.service,
@@ -1069,7 +1074,7 @@ class PipelineManager:
             for name in req_candidates:
                 req_path = os.path.join(self.source_dir, name)
                 if os.path.isfile(req_path):
-                    with open(req_path, 'r', encoding='utf-8',
+                    with open(req_path, encoding='utf-8',
                               errors='ignore') as f:
                         for line in f:
                             pkg = line.strip().split('==')[0].split('>=')[0] \
@@ -1093,7 +1098,7 @@ class PipelineManager:
 
             for pyproject in pyproject_candidates:
                 if os.path.isfile(pyproject):
-                    with open(pyproject, 'r', encoding='utf-8',
+                    with open(pyproject, encoding='utf-8',
                               errors='ignore') as f:
                         content = f.read()
                         for pkg, addon in self._REQUIREMENTS_ADDON_MAP.items():
@@ -1126,7 +1131,7 @@ class PipelineManager:
                 if not os.path.isfile(pkg_json):
                     continue
                 try:
-                    with open(pkg_json, 'r', encoding='utf-8') as f:
+                    with open(pkg_json, encoding='utf-8') as f:
                         pkg_data = json.load(f)
                     all_deps = {}
                     all_deps.update(pkg_data.get('dependencies', {}))
@@ -1152,7 +1157,7 @@ class PipelineManager:
             for name in COMPOSE_NAMES:
                 compose_path = os.path.join(self.source_dir, name)
                 if os.path.isfile(compose_path):
-                    with open(compose_path, 'r', encoding='utf-8',
+                    with open(compose_path, encoding='utf-8',
                               errors='ignore') as f:
                         content = f.read()
                     # Match image: lines for addon detection
@@ -1189,8 +1194,9 @@ class PipelineManager:
 
             # --- Provision missing addons ---
             # pylint: disable=import-outside-toplevel
-            from apps.deployments.models_addons import Addon
             from services.addon_provisioner import addon_provisioner
+
+            from apps.deployments.models_addons import Addon
 
             supported_addons = set(addon_provisioner.ADDON_IMAGES.keys())
             unsupported = detected_types - supported_addons
@@ -1342,7 +1348,7 @@ class PipelineManager:
     def _detect_compose_main_service(self, compose_path: str) -> str:
         """Parse compose YAML and pick the best 'main' service."""
         try:
-            with open(compose_path, 'r', encoding='utf-8') as f:
+            with open(compose_path, encoding='utf-8') as f:
                 data = yaml.safe_load(f)
             if not data or 'services' not in data:
                 return ''
@@ -1489,7 +1495,7 @@ class PipelineManager:
 
         except Exception as e:
             update_stage(self.deployment, 'Build', 'failed')
-            raise BuildError(f"Build failed: {str(e)}") from e
+            raise BuildError(f"Build failed: {e!s}") from e
 
     def _collect_compose_domains(self) -> list:
         """Collect primary + custom domains for compose routing."""
@@ -1579,8 +1585,13 @@ class PipelineManager:
         Docker labels are immutable after container creation, so labels must be
         injected into compose config before `docker compose up`.
         """
+        routing_dir = self.build_dir or self.source_dir
+        if not routing_dir:
+            raise BuildError(
+                "Cannot write compose routing override: no build/source directory available"
+            )
         override_path = os.path.join(
-            self.build_dir or self.source_dir,
+            routing_dir,
             f".smsly-routing-{self.deployment.id}.yml",
         )
         override_payload = {
@@ -1612,7 +1623,7 @@ class PipelineManager:
 
         # Validate compose file and resolve main service
         try:
-            with open(compose_path, "r", encoding="utf-8") as handle:
+            with open(compose_path, encoding="utf-8") as handle:
                 compose_data = yaml.safe_load(handle) or {}
             compose_services = set((compose_data.get("services") or {}).keys())
         except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -1659,8 +1670,9 @@ class PipelineManager:
             env[ev.key] = ev.value
 
         # Inject addon connection URLs
-        from apps.deployments.models_addons import Addon
         from services.addon_provisioner import AddonProvisioner
+
+        from apps.deployments.models_addons import Addon
         for addon in Addon.objects.filter(
             service=self.service, status='ACTIVE'
         ):
@@ -1676,7 +1688,7 @@ class PipelineManager:
         # downtime window. Old containers keep serving traffic during build.
         append_log(
             self.deployment,
-            f"  Building images (services stay live)...\n"
+            "  Building images (services stay live)...\n"
         )
         build_cmd = [
             'docker', 'compose',
@@ -1687,8 +1699,7 @@ class PipelineManager:
         try:
             process = subprocess.run(
                 build_cmd, check=True, cwd=self.source_dir, env=env,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, timeout=3600,
+                capture_output=True, text=True, timeout=3600,
             )
             output = redact_values(
                 process.stdout + process.stderr, self.secret_values
@@ -1708,7 +1719,7 @@ class PipelineManager:
         # whose config changed, using the cached images. No rebuild needed.
         append_log(
             self.deployment,
-            f"  Deploying from cached images...\n"
+            "  Deploying from cached images...\n"
         )
         cmd = [
             'docker', 'compose',
@@ -1722,8 +1733,7 @@ class PipelineManager:
         try:
             process = subprocess.run(
                 cmd, check=True, cwd=self.source_dir, env=env,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, timeout=3600,  # 60 minutes max
+                capture_output=True, text=True, timeout=3600,  # 60 minutes max
             )
             output = redact_values(
                 process.stdout + process.stderr, self.secret_values
@@ -1866,7 +1876,7 @@ class PipelineManager:
 
             from apps.cloud.docker_client import get_docker_client
             client = get_docker_client()
-            container = client.containers.get(container_name)
+            client.containers.get(container_name)
             # Simple health poll — the compose adapter isn't available here.
             import time as _time
             deadline = _time.monotonic() + 180
@@ -1885,13 +1895,13 @@ class PipelineManager:
             else:
                 append_log(self.deployment, "[hook] Router restart completed but health did not recover in time.\n")
         finally:
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(config_path)
-            except OSError:
-                pass
 
     def _get_build_context(self) -> str:
         """Resolve root directory."""
+        if not self.source_dir:
+            raise BuildError("Source directory is not available for build context")
         root_dir = (self.service.root_directory or "/").strip()
         if root_dir in ("", "/", ".", "./"):
             return self.source_dir
@@ -1903,7 +1913,7 @@ class PipelineManager:
             raise BuildError(f"Directory not found: {root_dir}")
         return candidate
 
-    def _find_dockerfile(self, context_dir: str) -> str:
+    def _find_dockerfile(self, context_dir: str) -> str | None:
         """Locate Dockerfile in context or subdirs."""
         # Direct check
         direct = os.path.join(context_dir, "Dockerfile")
@@ -1996,16 +2006,17 @@ class PipelineManager:
         # Bare image names (e.g. "smsly/name:tag") cause BuildKit to
         # resolve them to docker.io, triggering "insufficient_scope"
         # errors when the repo doesn't exist or requires auth.
+        image_name = self.image_name or ""
         registry_host = (
-            self.image_name.split("/")[0] if "/" in self.image_name else ""
+            image_name.split("/")[0] if "/" in image_name else ""
         )
         use_cache = bool(registry_host) and ("." in registry_host or ":" in registry_host)
-        cache_from = [self.image_name] if use_cache else []
+        cache_from = [image_name] if use_cache else []
 
         self._build_via_docker_py(
             context_dir=context_dir,
             dockerfile_path=dockerfile_path,
-            tag=self.image_name,
+            tag=image_name,
             buildargs=build_args_dict,
             cache_from=cache_from,
         )
@@ -2035,6 +2046,7 @@ class PipelineManager:
         """
         import io
         import tarfile
+
         from apps.cloud.docker_client import get_docker_client
 
         # The daemon needs the Dockerfile path relative to the build
@@ -2056,7 +2068,7 @@ class PipelineManager:
 
             try:
                 client = get_docker_client()
-                image, build_log = client.images.build(
+                _image, build_log = client.images.build(
                     fileobj=tar_buffer,
                     custom_context=True,
                     tag=tag,
@@ -2098,9 +2110,9 @@ class PipelineManager:
             for entry in build_log:
                 if not isinstance(entry, dict):
                     continue
-                if "error" in entry and entry["error"]:
+                if entry.get("error"):
                     raise BuildError(entry["error"].strip())
-                if "stream" in entry and entry["stream"]:
+                if entry.get("stream"):
                     log_chunks.append(entry["stream"])
 
             full_log = "".join(log_chunks)
@@ -2236,7 +2248,7 @@ class PipelineManager:
         Currently handles: Node.js 18 -> 20 (for Next.js compatibility).
         """
         try:
-            with open(dockerfile_path, "r", encoding="utf-8") as f:
+            with open(dockerfile_path, encoding="utf-8") as f:
                 content = f.read()
 
             new_content = content
@@ -2246,9 +2258,9 @@ class PipelineManager:
             # Matches: node:18, node:18-alpine, node:18-slim, etc.
             if re.search(r"FROM\s+node:18", content, re.IGNORECASE):
                 new_content = re.sub(
-                    r"(FROM\s+node:)18", 
-                    r"\1 20", 
-                    new_content, 
+                    r"(FROM\s+node:)18",
+                    r"\1 20",
+                    new_content,
                     flags=re.IGNORECASE
                 ).replace("node: 20", "node:20") # Cleanup any accidental space
                 patches.append("Node.js 18 → 20")
@@ -2256,7 +2268,7 @@ class PipelineManager:
             if content != new_content:
                 with open(dockerfile_path, "w", encoding="utf-8") as f:
                     f.write(new_content)
-                
+
                 patch_list = ", ".join(patches)
                 append_log(
                     self.deployment,
@@ -2287,7 +2299,7 @@ class PipelineManager:
         procfile_path = os.path.join(context_dir, "Procfile")
         if os.path.isfile(procfile_path):
             try:
-                with open(procfile_path, "r", encoding="utf-8", errors="replace") as handle:
+                with open(procfile_path, encoding="utf-8", errors="replace") as handle:
                     for raw_line in handle:
                         line = raw_line.strip()
                         if not line or line.startswith("#") or ":" not in line:
@@ -2301,7 +2313,7 @@ class PipelineManager:
         package_json = os.path.join(context_dir, "package.json")
         if os.path.isfile(package_json):
             try:
-                with open(package_json, "r", encoding="utf-8", errors="replace") as handle:
+                with open(package_json, encoding="utf-8", errors="replace") as handle:
                     pkg = json.load(handle)
                 scripts = pkg.get("scripts", {}) if isinstance(pkg, dict) else {}
                 if isinstance(scripts, dict) and str(scripts.get("start", "")).strip():
@@ -2327,7 +2339,7 @@ class PipelineManager:
         main_py = os.path.join(context_dir, "main.py")
         if os.path.isfile(main_py):
             try:
-                with open(main_py, "r", encoding="utf-8", errors="replace") as handle:
+                with open(main_py, encoding="utf-8", errors="replace") as handle:
                     main_text = handle.read()
                 if "FastAPI(" in main_text or "fastapi.FastAPI(" in main_text:
                     return "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"
@@ -2352,6 +2364,11 @@ class PipelineManager:
             append_log(
                 self.deployment,
                 "No start command detected; building with --no-error-without-start.\n",
+            )
+
+        if not self.image_name:
+            raise BuildError(
+                "Cannot run Nixpacks build: no image_name was generated"
             )
 
         try:
@@ -2394,8 +2411,7 @@ class PipelineManager:
             try:
                 process = subprocess.run(
                     cmd, check=True, cwd=cwd, env=env,
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                    text=True, timeout=3600  # 60 minutes max
+                    capture_output=True, text=True, timeout=3600  # 60 minutes max
                 )
                 # Log output (redacted)
                 output = redact_values(process.stdout + process.stderr, self.secret_values)
@@ -2450,7 +2466,7 @@ class PipelineManager:
             return
 
         update_stage(self.deployment, 'Push', 'running')
-        start_time = timezone.now()
+        timezone.now()
         self._check_cancellation('Push')
 
         try:

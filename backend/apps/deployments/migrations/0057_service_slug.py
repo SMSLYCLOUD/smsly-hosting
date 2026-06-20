@@ -4,7 +4,6 @@ import re
 
 from django.db import migrations, models
 
-
 POSTGRES_LOCK_TIMEOUT = '15s'
 POSTGRES_STATEMENT_TIMEOUT = '120s'
 
@@ -79,10 +78,10 @@ def populate_service_slugs(apps, schema_editor):
         batch = list(Service.objects.filter(id__gt=last_id)
                      .only('id', 'name', 'slug')
                      .order_by('id')[:batch_size])
-        
+
         if not batch:
             break
-            
+
         to_update = []
         for service in batch:
             slug = _dedupe_slug(_service_slug_base(service), used_slugs)

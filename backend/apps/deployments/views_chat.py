@@ -1,11 +1,12 @@
 """Views Chat module."""
-from rest_framework import serializers
-from rest_framework.generics import GenericAPIView
-from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
-from rest_framework import status
-from apps.deployments.rate_limiting import AIChatRateThrottle
 import logging
+
+from rest_framework import serializers, status
+from rest_framework.generics import GenericAPIView
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+
+from apps.deployments.rate_limiting import AIChatRateThrottle
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,7 @@ class AIChatView(GenericAPIView):
     throttle_classes = [AIChatRateThrottle]
 
     def post(self, request):
-        from apps.intelligence.providers import _cached_ask, SYSTEM_PROMPT
+        from apps.intelligence.providers import SYSTEM_PROMPT, _cached_ask
         message = request.data.get('message')
         if not message:
             return Response({"detail": "Message required"},
@@ -44,7 +45,7 @@ class AIChatView(GenericAPIView):
                 "text": response,
                 "provider": provider_name,
             })
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error("AI chat error: %s", e)
             return Response(
                 {"detail": "AI chat temporarily unavailable."},

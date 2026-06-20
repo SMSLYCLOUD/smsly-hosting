@@ -1,19 +1,19 @@
 # pylint: disable=invalid-name
 """Tests for the platform ecosystem topology graph builder and API."""
 
-from unittest.mock import patch, MagicMock
-from django.test import TestCase, override_settings
+from unittest.mock import MagicMock, patch
+
 from django.contrib.auth.models import User
+from django.test import TestCase, override_settings
 from rest_framework import status
 from rest_framework.test import APITestCase
 
 from apps.deployments.services.ecosystem_graph_builder import (
     EcosystemGraphBuilder,
-    _check_tcp,
     _check_http,
-    _redis_host_port,
-    _rabbitmq_host_port,
+    _check_tcp,
     _db_host_port,
+    _redis_host_port,
 )
 
 # All tests mock _check_tcp to avoid real network calls

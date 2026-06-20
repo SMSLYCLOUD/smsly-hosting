@@ -2,13 +2,12 @@ import os
 import tempfile
 from unittest.mock import patch
 
-from django.test import SimpleTestCase
-
 from apps.cloud import views_code_analysis as vca
 from apps.cloud.views_code_analysis import (
-    analyze_codebase,
     MAX_TOTAL_BYTES,
+    analyze_codebase,
 )
+from django.test import SimpleTestCase
 
 
 def _write_files(root, files):

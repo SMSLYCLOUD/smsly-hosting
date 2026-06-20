@@ -1,7 +1,8 @@
-import hmac
 import hashlib
+import hmac
 import logging
 import time
+
 from django.conf import settings
 from django.http import JsonResponse
 
@@ -16,11 +17,11 @@ class SecurityMiddleware:
     def __init__(self, get_response):
         self.get_response = get_response
         self.secret_key = getattr(settings, 'SECRET_KEY', '')
-        
+
         # Exempt routes (Health checks, Auth callbacks, Admin)
         self.exempt_routes = [
-            '/health', 
-            '/health/', 
+            '/health',
+            '/health/',
             '/admin/',
             '/static/',
             '/media/',
@@ -39,7 +40,7 @@ class SecurityMiddleware:
         if self._should_verify_signature(request):
             if not self._verify_signature(request):
                 return JsonResponse(
-                    {'error': 'Invalid or missing signature'}, 
+                    {'error': 'Invalid or missing signature'},
                     status=403
                 )
 
@@ -59,7 +60,7 @@ class SecurityMiddleware:
     def _should_verify_signature(self, request):
         """
         Determine if the request requires signature verification.
-        
+
         HMAC V2 is for INTER-SERVICE authentication (gateway → backend).
         Browser users authenticate via Token auth (Authorization: Token xxx)
         or session auth (Cookie). Those requests skip HMAC verification
@@ -70,7 +71,7 @@ class SecurityMiddleware:
             return False
 
         path = request.path
-        
+
         # Exempt allowlisted paths
         for exempt in self.exempt_routes:
             if path.startswith(exempt):
@@ -79,7 +80,7 @@ class SecurityMiddleware:
         # Only enforce on /api/
         if not path.startswith('/api/'):
             return False
-        
+
         # Skip if user is already authenticated (e.g. via session/token middleware)
         if hasattr(request, 'user') and request.user.is_authenticated:
             return False

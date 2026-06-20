@@ -1,10 +1,10 @@
 """Compute module."""
-from ..models import CloudProvider, CloudResource
+
 from ..adapters.aws import AWSAdapter
 from ..adapters.azure import AzureAdapter
 from ..adapters.gcp import GCPAdapter
 from ..adapters.local import LocalAdapter
-from typing import Dict, Optional
+from ..models import CloudProvider, CloudResource
 
 
 class ComputeService:
@@ -51,7 +51,7 @@ class ComputeService:
 
         # pylint: disable=too-many-positional-arguments
     def deploy_container(self, name: str, image: str,
-                         env_vars: Dict[str, str], cpu: int = 1000, memory: int = 2048,
+                         env_vars: dict[str, str], cpu: int = 1000, memory: int = 2048,
                          replicas: int = 1, vpa_enabled: bool = False, **kwargs) -> CloudResource:
         """
         Deploy a container service (ECS/Cloud Run/Azure Container Apps).
@@ -59,7 +59,7 @@ class ComputeService:
         resource_id = self.adapter.deploy_container(
             name, image, env_vars, cpu, memory, replicas, vpa_enabled=vpa_enabled, **kwargs)
 
-        resource, created = CloudResource.objects.update_or_create(
+        resource, _created = CloudResource.objects.update_or_create(
             provider=self.provider,
             resource_id=resource_id,
             defaults={
@@ -79,7 +79,7 @@ class ComputeService:
         resource_id = self.adapter.deploy_function(
             name, code_zip, handler, runtime)
 
-        resource, created = CloudResource.objects.update_or_create(
+        resource, _created = CloudResource.objects.update_or_create(
             provider=self.provider,
             resource_id=resource_id,
             defaults={

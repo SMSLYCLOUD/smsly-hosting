@@ -6,6 +6,7 @@ MEMBER → view and use org resources
 """
 from django.db.models import Q
 from rest_framework.exceptions import PermissionDenied
+
 from .models import OrganizationMembership
 
 

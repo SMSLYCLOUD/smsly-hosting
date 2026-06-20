@@ -1,10 +1,11 @@
 # pylint: disable=invalid-name
 """Test Api module."""
-from django.urls import reverse
 from django.contrib.auth.models import User
+from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
-from apps.deployments.models import Service, Deployment
+
+from apps.deployments.models import Deployment, Service
 
 
 class ServiceTests(APITestCase):

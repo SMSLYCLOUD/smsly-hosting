@@ -15,7 +15,6 @@ Covers:
   5. The self-healing orchestrator classifies buildx failures
      and executes the REPAIR_BUILDX action.
 """
-import subprocess
 from unittest import mock
 
 from django.test import SimpleTestCase, TestCase, override_settings
@@ -179,8 +178,8 @@ class BuildImageSelfHealTests(SimpleTestCase):
     """
 
     def setUp(self):
-        import tempfile
         import os
+        import tempfile
         # Create a real source dir so the early existence
         # check in build_image passes; the actual Nixpacks
         # invocation is mocked.
@@ -339,7 +338,6 @@ class OrchestratorBuildxHealTests(TestCase):
         # as a constructor arg or creates one internally).
         from apps.deployments.services.self_healing_orchestrator import (
             RecoveryAction,
-            RecoveryResult,
             SelfHealingOrchestrator,
         )
         # Mock the orchestrator's _exec helper to simulate

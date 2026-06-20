@@ -7,7 +7,6 @@ __dict__ directly, then save() triggers get_prep_value which encrypts.
 """
 from django.db import migrations
 
-
 BATCH_SIZE = 200
 
 

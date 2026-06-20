@@ -14,7 +14,6 @@ from rest_framework.test import APIClient
 
 from apps.deployments.rate_limiting import TokenCreateRateThrottle
 
-
 User = get_user_model()
 
 

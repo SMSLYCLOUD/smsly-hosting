@@ -1,12 +1,14 @@
-import pytest
-from django.test import TestCase
+import contextlib
+import itertools
 import os
+from unittest.mock import MagicMock, patch
 
-
-from unittest.mock import patch, MagicMock
-from apps.deployments.services.provisioner import provision_server
-from apps.deployments.models import ManagedServer
+import pytest
 from django.contrib.auth import get_user_model
+from django.test import TestCase
+
+from apps.deployments.models import ManagedServer
+from apps.deployments.services.provisioner import provision_server
 
 
 @pytest.mark.django_db(transaction=True)
@@ -109,14 +111,14 @@ class TestE2EClusterSimulator(TestCase):
         mock_build.return_value = "dummy.tar.gz"
 
         try:
-            with open("dummy.tar.gz", "w") as f: f.write("test")
+            with open("dummy.tar.gz", "w") as f:
+                f.write("test")
             with patch("os.path.getsize", return_value=4):
-                try:
+                with contextlib.suppress(Exception):
                     provision_server(str(srv.id))
-                except Exception:
-                    pass
         finally:
-            if os.path.exists("dummy.tar.gz"): os.remove("dummy.tar.gz")
+            if os.path.exists("dummy.tar.gz"):
+                os.remove("dummy.tar.gz")
 
         srv.refresh_from_db()
         self.assertEqual(srv.provision_status, ManagedServer.ProvisionStatus.FAILED)
@@ -131,11 +133,13 @@ class TestE2EClusterSimulator(TestCase):
         mock_ssh.return_value.get_transport.return_value.open_session.return_value = mock_channel
 
         try:
-            with open("dummy.tar.gz", "w") as f: f.write("test")
+            with open("dummy.tar.gz", "w") as f:
+                f.write("test")
             with patch("os.path.getsize", return_value=4):
                 provision_server(str(srv.id))
         finally:
-            if os.path.exists("dummy.tar.gz"): os.remove("dummy.tar.gz")
+            if os.path.exists("dummy.tar.gz"):
+                os.remove("dummy.tar.gz")
 
         srv.refresh_from_db()
         self.assertEqual(srv.provision_status, ManagedServer.ProvisionStatus.DONE)

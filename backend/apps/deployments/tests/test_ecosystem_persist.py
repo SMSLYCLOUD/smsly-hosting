@@ -1,6 +1,11 @@
+from unittest.mock import MagicMock, patch
+
 from django.test import TestCase
-from unittest.mock import patch, MagicMock
-from apps.deployments.services.ecosystem_persist import bulk_persist_and_verify_ecosystem_env
+
+from apps.deployments.services.ecosystem_persist import (
+    bulk_persist_and_verify_ecosystem_env,
+)
+
 
 class TestEcosystemPersistSafe(TestCase):
     @patch('apps.deployments.services.ecosystem_persist.EnvironmentVariable.objects')

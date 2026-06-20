@@ -1,9 +1,10 @@
 """GitLab Webhooks setup service."""
 import logging
+from urllib.parse import urlparse
+
 import requests
 from django.conf import settings
 from django.utils import timezone
-from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 

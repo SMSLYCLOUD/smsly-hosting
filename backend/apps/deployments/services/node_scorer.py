@@ -1,6 +1,7 @@
 """Node scoring for auto-scaling — ranks ManagedServers by available resources."""
 import logging
 import re
+
 import requests
 from django.conf import settings
 

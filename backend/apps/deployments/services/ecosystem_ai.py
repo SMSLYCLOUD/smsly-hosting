@@ -1,13 +1,14 @@
-import logging
-from typing import Dict, Any, Optional
 import json
+import logging
+from typing import Any
+
 from apps.intelligence.providers import _cached_ask
 
 logger = logging.getLogger(__name__)
 
 class EcosystemDeploymentSenate:
     @classmethod
-    def propose_env_resolution(cls, graph) -> Optional[Dict[str, Any]]:
+    def propose_env_resolution(cls, graph) -> dict[str, Any] | None:
         if not hasattr(graph, 'services'):
             return None
 
@@ -32,7 +33,7 @@ class EcosystemDeploymentSenate:
         )
 
         try:
-            response_text, provider = _cached_ask(prompt)
+            response_text, _provider = _cached_ask(prompt)
             if response_text:
                 import re
                 json_match = re.search(r'\{.*\}', response_text, re.DOTALL)

@@ -1,74 +1,63 @@
 import logging
+
 logger = logging.getLogger(__name__)
-from typing import Pattern
-from apps.intelligence.models import AIProviderSettings
-import logging
-import random
-import re
-import shlex
-import shutil
-import tempfile
-import subprocess
-import os
-import json
-import time
-import zipfile
-import secrets
-import threading
-from contextlib import contextmanager
-from urllib.parse import unquote, urlparse
-import docker
-import requests
-from celery import shared_task
-from django.conf import settings
-from django.core.cache import cache
-from django.utils import timezone
-from django.db.models import Sum
-from apps.cloud.models import CloudProvider
-from apps.cloud.services.builder import NixpacksBuilder
-from apps.cloud.services.compute import ComputeService
-from apps.cloud.services.function_provisioner import FunctionProvisioner
-from apps.deployments.ai_router import DEFAULT_AI_ROUTER_API_BASE, DEFAULT_AI_ROUTER_UI_BASE, DEFAULT_BRAID_ALIAS, generate_ai_router_proxy_config, get_ollama_model_name, is_ai_router_service, is_ollama_service
-from apps.deployments.models import Service, Deployment, EnvironmentVariable, PlatformConfig
-from apps.deployments.models_addons import Addon, Backup
-from apps.deployments.models_backup import BackupSchedule, ServiceBackup
-from apps.deployments.models_storage import Volume
-from apps.deployments.models_transfer import ServerTransfer
-from apps.deployments.services.backup_service import BackupService
-from apps.deployments.services.pipeline import PipelineManager, PipelineError
-from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
-from apps.deployments.services.tls_verify import should_verify
-from apps.deployments.services.transfer_service import ServerTransferService
-from apps.deployments.utils import append_log, broadcast_status, build_local_source_bundle, update_stage, is_deployment_local
-from services.addon_provisioner import addon_provisioner
+import logging  # noqa: E402
+import os  # noqa: E402
+import shlex  # noqa: E402
+import subprocess  # noqa: E402
+import tempfile  # noqa: E402
+import threading  # noqa: E402
+import time  # noqa: E402
+from contextlib import contextmanager, suppress  # noqa: E402
+from urllib.parse import urlparse  # noqa: E402
 
+import docker  # noqa: E402
+from celery import shared_task  # noqa: E402
+from django.conf import settings  # noqa: E402
+from django.core.cache import cache  # noqa: E402
+from django.utils import timezone  # noqa: E402
+from services.addon_provisioner import addon_provisioner  # noqa: E402
 
-from .tasks_caddy import _regenerate_caddyfile
-from .tasks_build import _build_function
-from .tasks_deploy_local import _local_route_timeout_seconds
-from .tasks_deploy_local import _wait_for_local_container_healthy
-from .tasks_deploy_local import _wait_for_local_route_ready
-from .tasks_deploy_local import _build_platform_healthcheck
-from .tasks_deploy_local import _build_runtime_env
-from .tasks_utils import should_skip_review_for_commit_message
-from .tasks_utils import _current_agent_node_queue
-from .tasks_utils import _env_bool
-from .tasks_build import _build_uploaded_source
-from .tasks_deploy_local import _local_container_timeout_seconds
-from .tasks_utils import _env_int
-from .tasks_utils import _env_bool
-from .tasks_deploy_local import _build_runtime_env
-from .tasks_build import _build_uploaded_source
-from .tasks_deploy_local import _local_container_timeout_seconds
-from .tasks_utils import should_skip_review_for_commit_message
-from .tasks_caddy import _regenerate_caddyfile
-from .tasks_deploy_local import _wait_for_local_route_ready
-from .tasks_utils import _env_int
-from .tasks_deploy_local import _local_route_timeout_seconds
-from .tasks_utils import _current_agent_node_queue
-from .tasks_deploy_local import _build_platform_healthcheck
-from .tasks_deploy_local import _wait_for_local_container_healthy
-from .tasks_build import _build_function
+from apps.cloud.models import CloudProvider  # noqa: E402
+from apps.cloud.services.compute import ComputeService  # noqa: E402
+from apps.deployments.ai_router import (  # noqa: E402
+    generate_ai_router_proxy_config,
+    get_ollama_model_name,
+    is_ai_router_service,
+    is_ollama_service,
+)
+from apps.deployments.models import (  # noqa: E402
+    Deployment,
+    EnvironmentVariable,
+    PlatformConfig,
+    Service,
+)
+from apps.deployments.models_addons import Addon  # noqa: E402
+from apps.deployments.models_storage import Volume  # noqa: E402
+from apps.deployments.services.pipeline import PipelineError, PipelineManager  # noqa: E402
+from apps.deployments.services.remote_orchestrator import RemoteOrchestrator  # noqa: E402
+from apps.deployments.utils import append_log, broadcast_status, update_stage  # noqa: E402
+from apps.intelligence.models import AIProviderSettings  # noqa: E402
+
+from .tasks_ai_router import _cleanup_shared_ollama_if_unused  # noqa: E402
+from .tasks_build import _build_function, _build_uploaded_source  # noqa: E402
+from .tasks_caddy import _regenerate_caddyfile  # noqa: E402
+from .tasks_deploy_local import (  # noqa: E402
+    _build_platform_healthcheck,
+    _build_runtime_env,
+    _local_container_timeout_seconds,
+    _local_route_timeout_seconds,
+    _wait_for_local_container_healthy,
+    _wait_for_local_route_ready,
+)
+from .tasks_deploy_remote import _handle_remote_deployment, _resume_remote_deployment  # noqa: E402
+from .tasks_utils import (  # noqa: E402
+    _current_agent_node_queue,
+    _env_bool,
+    _env_int,
+    should_skip_review_for_commit_message,
+)
+
 
 @shared_task(
     bind=True,
@@ -111,7 +100,9 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
 
         if not skip_review and getattr(service, 'safedeploy_enabled', False) \
                 and not getattr(deployment, 'is_rollback', False) and not is_delegated:
-            from apps.deployments.services.safedeploy.deployment_pipeline import ProductionDeploymentPipeline
+            from apps.deployments.services.safedeploy.deployment_pipeline import (
+                ProductionDeploymentPipeline,
+            )
             ProductionDeploymentPipeline().process_deployment(deployment)
             if deployment.status == Deployment.Status.AWAITING_APPROVAL:
                 return  # parked; will resume on approve
@@ -481,7 +472,7 @@ def fleet_build_lock(deployment):
         yield
         return
 
-    max_builds = getattr(config, "max_concurrent_builds", 1) or 1
+    getattr(config, "max_concurrent_builds", 1) or 1
     # For now, we enforce a strict single-build lock for maximum safety on small VPS nodes.
     # A true semaphore can be implemented later if needed.
     lock_key = "smsly_fleet_build_lock"
@@ -576,9 +567,9 @@ def fleet_build_lock(deployment):
             continue
 
         if attempt_count := getattr(fleet_build_lock, "_attempt_count", 0):
-            setattr(fleet_build_lock, "_attempt_count", attempt_count + 1)
+            fleet_build_lock._attempt_count = attempt_count + 1
         else:
-            setattr(fleet_build_lock, "_attempt_count", 1)
+            fleet_build_lock._attempt_count = 1
             append_log(deployment, "[fleet] Another build is in progress across the node fleet. Waiting for a free slot...\n")
             broadcast_status(deployment)
 
@@ -628,7 +619,6 @@ def _run_managed_image_post_deploy_hooks(deployment, service: Service, container
 
     env_map = {ev.key: ev.value for ev in service.env_vars.all()}
 
-    from apps.deployments.ai_router import is_ai_router_service
 
     if str(env_map.get("RUN_PRISMA_MIGRATE", "")).strip().lower() in {"1", "true", "yes"}:
         append_log(deployment, "\n[hook] Running Prisma migrate deploy inside container...\n")
@@ -705,10 +695,8 @@ def _run_managed_image_post_deploy_hooks(deployment, service: Service, container
 
         append_log(deployment, "[hook] LiteLLM router catalog synced.\n")
     finally:
-        try:
+        with suppress(OSError):
             os.unlink(config_path)
-        except OSError:
-            pass
 
 
 
@@ -1059,8 +1047,8 @@ def _deploy_container(deployment, provider, image_name):
             _regenerate_caddyfile()
         append_log(
             deployment,
-            f"[DEPLOY] ✅ Container live with Traefik routing enabled.\n"
-            f"Domain should be accessible immediately.\n"
+            "[DEPLOY] ✅ Container live with Traefik routing enabled.\n"
+            "Domain should be accessible immediately.\n"
         )
 
         # Post-deploy runtime monitor (watches for crashes)
@@ -1242,6 +1230,7 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
         return
 
     # Step 2: No pattern match → escalate to AI models
+    from apps.deployments.tasks_ai_router import _escalate_to_ai
     _escalate_to_ai(deployment, service, container_logs)
 
     # Step 3: Jules auto-fix (async) — tries to fix and redeploy
@@ -1305,7 +1294,7 @@ def _handle_failure(task, deployment, error_msg, reason):
                         except Exception as e:
                             logger.warning(f"Failed to cleanup container {c_id}: {e}")
                     if cleaned_any:
-                        deployment.build_logs += f"\n🧹 Cleaned up orphaned container resources.\n"
+                        deployment.build_logs += "\n🧹 Cleaned up orphaned container resources.\n"
                         deployment.save(update_fields=['build_logs'])
             except Exception as e:
                 logger.warning(f"Docker client error during failure cleanup: {e}")
@@ -1397,7 +1386,6 @@ def _handle_failure(task, deployment, error_msg, reason):
     # Build failures are deterministic and system failures should be
     # investigated, not blindly retried. Users can manually redeploy.
     logger.error("Deployment failed (%s), not retrying: %s", reason, error_msg)
-    return
 
 
 
@@ -1406,7 +1394,6 @@ def delete_service_task(self, service_id: str, force: bool = False):
     """Async reliable deletion of a Service"""
     from apps.deployments.models_core import Service
     from apps.deployments.services.deletion_orchestrator import DeletionOrchestrator
-    from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
 
     try:
         service = Service.objects.get(id=service_id)

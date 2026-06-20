@@ -8,14 +8,13 @@ Expose local TCP services (databases, Redis, etc.) to the internet.
 Team tier feature.
 """
 
-import asyncio
-import logging
-import uuid
-from typing import Dict, Optional
-from dataclasses import dataclass, field
-from datetime import datetime
+import asyncio  # noqa: E402
+import logging  # noqa: E402
+import uuid  # noqa: E402
+from dataclasses import dataclass, field  # noqa: E402
+from datetime import datetime  # noqa: E402
 
-from django.conf import settings
+from django.conf import settings  # noqa: E402
 
 logger = logging.getLogger('smsly.tunnels.tcp')
 
@@ -52,11 +51,11 @@ class TCPTunnelServer:
     def __init__(self, host: str = '0.0.0.0', port_range: tuple = (10000, 10999)):
         self.host = host
         self.port_range = port_range
-        self.tunnels: Dict[int, TCPTunnel] = {}  # remote_port -> tunnel
+        self.tunnels: dict[int, TCPTunnel] = {}  # remote_port -> tunnel
         self.available_ports: set = set(range(port_range[0], port_range[1] + 1))
-        self.tunnel_writers: Dict[str, asyncio.StreamWriter] = {}  # tunnel_id -> writer
+        self.tunnel_writers: dict[str, asyncio.StreamWriter] = {}  # tunnel_id -> writer
 
-    def allocate_port(self) -> Optional[int]:
+    def allocate_port(self) -> int | None:
         """Allocate an available port."""
         if not self.available_ports:
             return None
@@ -68,7 +67,7 @@ class TCPTunnelServer:
         if self.port_range[0] <= port <= self.port_range[1]:
             self.available_ports.add(port)
 
-    async def create_tunnel(self, user_id: str, local_port: int, auth_token: str = None) -> Optional[TCPTunnel]:
+    async def create_tunnel(self, user_id: str, local_port: int, auth_token: str | None = None) -> TCPTunnel | None:
         """Create a new TCP tunnel."""
         remote_port = self.allocate_port()
         if not remote_port:
@@ -227,7 +226,7 @@ class TCPTunnelServer:
 
             logger.info("TCP tunnel closed: %s", tunnel_id)
 
-    def get_tunnel_info(self, tunnel_id: str) -> Optional[dict]:
+    def get_tunnel_info(self, tunnel_id: str) -> dict | None:
         """Get tunnel information."""
         tunnel = next((t for t in self.tunnels.values()
                       if t.tunnel_id == tunnel_id), None)

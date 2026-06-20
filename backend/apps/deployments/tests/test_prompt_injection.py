@@ -1,8 +1,10 @@
-import pytest
 from unittest.mock import patch
-from apps.deployments.tasks_ai import analyze_failure_task
-from apps.deployments.models import Deployment, Service
+
+import pytest
 from django.contrib.auth import get_user_model
+
+from apps.deployments.models import Deployment, Service
+from apps.deployments.tasks_ai import analyze_failure_task
 
 User = get_user_model()
 

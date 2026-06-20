@@ -1,14 +1,17 @@
-from rest_framework import viewsets, permissions, status
+from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
+
 from apps.deployments.models_addons import Addon
 from apps.deployments.rate_limiting import (
     DBQueryRateThrottle,
     DBRotateCredentialsRateThrottle,
     DBVacuumRateThrottle,
 )
+
 from .services.db_proxy import DatabaseProxy
 from .services.maintenance import AddonMaintenanceService
+
 
 class AddonMaintenanceViewSet(viewsets.ReadOnlyModelViewSet):
     """API for Addon Maintenance & Exploration."""

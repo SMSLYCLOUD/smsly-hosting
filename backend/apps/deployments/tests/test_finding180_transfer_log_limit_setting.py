@@ -7,17 +7,16 @@ module-level constant. The fix makes it operator-tunable via
 (``100 * 1024``), so deployments with chatty pipelines can dial
 the cap down (to keep DB rows small) or up (forensics).
 """
+
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
-from unittest.mock import patch
 
 from apps.deployments.models_transfer import ServerTransfer
 from apps.deployments.services.transfer_service import (
-    ServerTransferService,
     TRANSFER_LOG_LIMIT,
+    ServerTransferService,
     get_transfer_log_limit,
 )
-
 
 User = get_user_model()
 

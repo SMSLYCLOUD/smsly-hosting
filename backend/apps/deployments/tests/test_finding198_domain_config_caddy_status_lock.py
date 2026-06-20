@@ -23,7 +23,6 @@ from rest_framework.test import APIClient
 
 from apps.deployments.models import PlatformConfig
 
-
 TEST_CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.locmem.LocMemCache",

@@ -15,20 +15,19 @@ Designed to be called from:
 - Manual API trigger
 """
 
+import contextlib
 import logging
-import time
 import re
 import shlex
-from enum import Enum
-from typing import Optional
+import time
 from dataclasses import dataclass, field
+from enum import Enum
 
 from django.conf import settings
-from django.utils import timezone
 from django.core.cache import cache
+from django.utils import timezone
 
 from .ssh_client import SSHClient
-from .error_resolver import diagnose_runtime_logs
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +95,7 @@ class RecoveryResult:
     action_taken: RecoveryAction = RecoveryAction.NONE
     details: str = ""
     post_recovery_status: str = ""
-    next_action: Optional[RecoveryAction] = None
+    next_action: RecoveryAction | None = None
 
 
 class SelfHealingOrchestrator:
@@ -160,10 +159,8 @@ class SelfHealingOrchestrator:
     def _close_ssh(self):
         """Close the SSH connection."""
         if self._ssh:
-            try:
+            with contextlib.suppress(Exception):
                 self._ssh.close()
-            except Exception:
-                pass
             self._ssh = None
 
     def _exec(self, command: str, timeout: int = DIAGNOSTIC_TIMEOUT, raise_on_error: bool = False):
@@ -272,7 +269,7 @@ class SelfHealingOrchestrator:
 
     def _check_docker_daemon(self) -> bool:
         """Check if Docker daemon is running on the remote node."""
-        out, err, code = self._exec("docker info --format '{{.ServerVersion}}'", timeout=10)
+        _out, _err, code = self._exec("docker info --format '{{.ServerVersion}}'", timeout=10)
         return code == 0
 
     def _check_resource_usage(self, result: DiagnosticResult):
@@ -439,13 +436,13 @@ class SelfHealingOrchestrator:
     def _check_network(self, result: DiagnosticResult):
         """Check network connectivity from the remote node."""
         try:
-            out, _, code = self._exec("ping -c 1 -W 3 8.8.8.8 2>&1", timeout=10)
+            _out, _, code = self._exec("ping -c 1 -W 3 8.8.8.8 2>&1", timeout=10)
             result.network_reachable = code == 0
             result.raw_diagnostics["network_reachable"] = result.network_reachable
         except Exception:
             result.network_reachable = False
 
-    def _classify_crash(self, logs: str) -> Optional[FailureType]:
+    def _classify_crash(self, logs: str) -> FailureType | None:
         """Classify the type of crash from container logs."""
         if not logs:
             return None
@@ -495,7 +492,7 @@ class SelfHealingOrchestrator:
     def _repair_buildx(
         self,
         deployment=None,
-        diagnostics: Optional[DiagnosticResult] = None,
+        diagnostics: DiagnosticResult | None = None,
     ) -> RecoveryResult:
         """Self-heal a broken buildx default builder on the node.
 
@@ -720,7 +717,7 @@ class SelfHealingOrchestrator:
             )
 
         self._log(f"Restarting container: {container_name}")
-        out, err, code = self._exec(
+        _out, _err, code = self._exec(
             f"docker restart {shlex.quote(container_name)}",
             timeout=RECOVERY_TIMEOUT,
         )
@@ -814,7 +811,7 @@ class SelfHealingOrchestrator:
 
         # First try docker-compose (for services defined in compose files)
         cmd = self._compose_cmd(f"up -d --build {shlex.quote(service_name)}")
-        out, err, code = self._exec(cmd, timeout=RECOVERY_TIMEOUT)
+        _out, _err, code = self._exec(cmd, timeout=RECOVERY_TIMEOUT)
 
         if code == 0:
             time.sleep(POST_RECOVERY_WAIT)
@@ -925,12 +922,12 @@ class SelfHealingOrchestrator:
         """Attempt to fix network connectivity issues."""
         self._log("Attempting network fix")
 
-        out1, _, code1 = self._exec("docker network ls --format '{{.Name}}' | grep smsly", timeout=10)
+        out1, _, _code1 = self._exec("docker network ls --format '{{.Name}}' | grep smsly", timeout=10)
         networks = [n.strip() for n in out1.strip().split("\n") if n.strip()]
 
         if not networks:
             self._log("No smsly networks found, checking docker network")
-            out2, _, code2 = self._exec("docker network ls --format '{{.Name}}'", timeout=10)
+            out2, _, _code2 = self._exec("docker network ls --format '{{.Name}}'", timeout=10)
             networks = [n.strip() for n in out2.strip().split("\n") if n.strip()]
 
         for net in networks:
@@ -941,7 +938,7 @@ class SelfHealingOrchestrator:
                 timeout=30,
             )
 
-        out, _, code = self._exec("ping -c 1 -W 3 8.8.8.8", timeout=10)
+        _out, _, code = self._exec("ping -c 1 -W 3 8.8.8.8", timeout=10)
         if code == 0:
             return RecoveryResult(
                 action_taken=RecoveryAction.FIX_NETWORK,
@@ -1088,7 +1085,7 @@ class SelfHealingOrchestrator:
 
     # ─── Verification ────────────────────────────────────────────────
 
-    def _verify_container_running(self, container_name: str) -> Optional[str]:
+    def _verify_container_running(self, container_name: str) -> str | None:
         """Verify a container is running and return its status."""
         out, _, code = self._exec(
             f"docker inspect {shlex.quote(container_name)} "
@@ -1220,7 +1217,7 @@ CONTAINER LOGS (last 5000 chars):
 {context['diagnostics']['container_logs']}
 
 HEAL ATTEMPTS ALREADY MADE:
-{chr(10).join('- ' + l for l in context['heal_log'][-10:])}
+{chr(10).join('- ' + entry for entry in context['heal_log'][-10:])}
 
 Analyze the issue and provide:
 1. Root cause diagnosis

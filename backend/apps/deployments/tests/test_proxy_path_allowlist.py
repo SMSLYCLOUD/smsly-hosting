@@ -7,7 +7,7 @@ Covers:
   3. api_url whose hostname does not match server.host is rejected.
   4. Allowlisted paths against the correct host still succeed.
 """
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase

@@ -1,4 +1,5 @@
 """Apps module."""
+import contextlib
 import os
 import sys
 from pathlib import Path
@@ -29,6 +30,7 @@ def _on_first_db_connection(sender, connection, **kwargs):
 
     try:
         from config.metrics import SERVICES_ACTIVE
+
         from .models import Service
         SERVICES_ACTIVE.set(
             Service.objects.filter(status=Service.Status.ACTIVE).count()
@@ -61,7 +63,7 @@ def _is_serving_process() -> bool:
     if not argv:
         return True  # Assume serving if we can't determine (e.g. embedded)
 
-    command = argv[0]
+    argv[0]
     # Include common web servers and management commands that serve traffic
     serving_commands = {"gunicorn", "uvicorn", "daphne", "runserver", "runserver_plus"}
     return any(cmd in " ".join(argv) for cmd in serving_commands)
@@ -74,9 +76,10 @@ class DeploymentsConfig(AppConfig):
     def ready(self):
         # Patch EncryptedMixin to prevent ciphertext leaks on decryption failure
         try:
-            from encrypted_model_fields.fields import EncryptedMixin
             import logging
             import time
+
+            from encrypted_model_fields.fields import EncryptedMixin
 
             logger = logging.getLogger('encrypted_model_fields')
             original_to_python = EncryptedMixin.to_python
@@ -109,25 +112,11 @@ class DeploymentsConfig(AppConfig):
             logging.getLogger('apps.deployments').error("Failed to patch EncryptedMixin: %s", e)
 
         # Import models to ensure they are registered
-        from . import models
-        from . import models_addons
-        from . import models_metrics
-        from . import models_templates
-        from . import models_cron
-        from . import models_storage
-        from . import models_tunnels
-        from . import models_backup
-        from . import models_transfer
-        from . import models_replica
-        from . import models_cloud_storage
-        from . import openapi
 
         # Import signals
         # Note: We assume there's a signals.py or we define them here.
         # Based on the failing test, we need a signal that creates SMSLY_API_KEY
-        try:
-            from . import signals
-        except ImportError:
+        with contextlib.suppress(ImportError):
             pass
 
         # Defer DB-dependent startup work (Prometheus gauge + runtime settings

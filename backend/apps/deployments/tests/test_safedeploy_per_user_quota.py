@@ -7,6 +7,7 @@ Covers:
      against the quota.
 """
 from unittest.mock import patch
+
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
@@ -14,7 +15,6 @@ from rest_framework.test import APIClient
 from apps.deployments import views_safedeploy
 from apps.deployments.models_core import Service
 from apps.deployments.models_safedeploy import PreviewEnvironment
-
 
 User = get_user_model()
 
@@ -38,7 +38,9 @@ class PerUserPreviewQuotaTests(TestCase):
         views_safedeploy.MAX_PREVIEWS_PER_CREATOR = self._original_quota
 
     def _create_preview(self, user, branch="main", sha="abc1234"):
-        from apps.deployments.services.safedeploy.branch_preview_manager import BranchPreviewManager
+        from apps.deployments.services.safedeploy.branch_preview_manager import (
+            BranchPreviewManager,
+        )
         return BranchPreviewManager().create_preview(
             self.service, branch, sha, user=user,
         )

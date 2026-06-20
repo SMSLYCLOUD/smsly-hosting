@@ -1,12 +1,12 @@
 # pylint: disable=invalid-name
 """Tests for SEC (Issue 54): SSL monitor must not dial internal addresses."""
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from django.test import TestCase
 
 from apps.cloud.services.ssl_monitor import (
-    _is_safe_outbound_target,
     SSLMonitorService,
+    _is_safe_outbound_target,
 )
 
 

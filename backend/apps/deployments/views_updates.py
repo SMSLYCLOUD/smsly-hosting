@@ -1,8 +1,9 @@
 """Views for platform self-update management."""
-from rest_framework import viewsets, permissions, status
+from rest_framework import permissions, status, viewsets
+from rest_framework import serializers as drf_serializers
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework import serializers as drf_serializers
+
 from .models_updates import PlatformUpdate
 
 

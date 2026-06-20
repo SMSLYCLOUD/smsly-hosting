@@ -1,11 +1,15 @@
 """Urls module."""
-from django.contrib import admin
-from django.urls import path, include, re_path
-from django.conf import settings
-from config.health import health_check, liveness_check, readiness_check
 from apps.deployments.views_addons import toggle_bucket_public_api
-from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
+from django.conf import settings
+from django.contrib import admin
+from django.urls import include, path, re_path
+from drf_spectacular.views import (
+    SpectacularAPIView,
+    SpectacularRedocView,
+    SpectacularSwaggerView,
+)
 
+from config.health import health_check, liveness_check, readiness_check
 
 urlpatterns = [
     # ─── CRITICAL: Direct Addon Actions (Greedy Regex bypass for router shadowing) ───
@@ -99,7 +103,10 @@ if 'apps.intelligence' in settings.INSTALLED_APPS:
 
 # ─── Server Identity Attestation (Zero-Trust challenge-response) ──────────
 try:
-    from apps.deployments.views_attestation import attestation_challenge, attestation_verify
+    from apps.deployments.views_attestation import (
+        attestation_challenge,
+        attestation_verify,
+    )
     urlpatterns += [
         path('api/v1/internal/attest/challenge/', attestation_challenge, name='attest-challenge'),
         path('api/v1/internal/attest/verify/', attestation_verify, name='attest-verify'),

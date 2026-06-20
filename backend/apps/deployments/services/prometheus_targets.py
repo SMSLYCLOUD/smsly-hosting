@@ -2,6 +2,7 @@
 Prometheus target file management.
 Writes file_sd_configs JSON files for remote docker-labels exporters.
 """
+import contextlib
 import json
 import logging
 import os
@@ -20,10 +21,8 @@ DOCKER_LABELS_PORT = int(os.environ.get("DOCKER_LABELS_PORT", "9234"))
 
 def _ensure_target_dir_writable() -> bool:
     """Try to make TARGETS_DIR writable. Returns True if writable after attempt."""
-    try:
+    with contextlib.suppress(OSError):
         os.makedirs(TARGETS_DIR, exist_ok=True)
-    except OSError:
-        pass
 
     if os.access(TARGETS_DIR, os.W_OK):
         return True
@@ -161,7 +160,7 @@ def deploy_docker_labels_exporter_on_node(server, force: bool = False):
         tmp.close()
 
         remote_path = "/opt/smsly-hosting/docker-labels-exporter.py"
-        client.exec_command(f"mkdir -p /opt/smsly-hosting")
+        client.exec_command("mkdir -p /opt/smsly-hosting")
         client.upload_file(tmp.name, remote_path)
 
         # 2. Remove any stale container and pull image
@@ -194,14 +193,10 @@ def deploy_docker_labels_exporter_on_node(server, force: bool = False):
         return False
     finally:
         if tmp:
-            try:
+            with contextlib.suppress(Exception):
                 os.unlink(tmp.name)
-            except Exception:
-                pass
-        try:
+        with contextlib.suppress(Exception):
             client.close()
-        except Exception:
-            pass
 
 
 CADVISOR_PORT = 8080
@@ -241,8 +236,8 @@ def deploy_cadvisor_on_node(server, force: bool = False):
         logger.error("cAdvisor deploy failed for %s: %s", server.name, exc)
         return False
     finally:
-        try: client.close()
-        except Exception: pass
+        with contextlib.suppress(Exception):
+            client.close()
 
 
 def deploy_node_exporter_on_node(server, force: bool = False):
@@ -270,8 +265,8 @@ def deploy_node_exporter_on_node(server, force: bool = False):
         logger.error("Node Exporter deploy failed for %s: %s", server.name, exc)
         return False
     finally:
-        try: client.close()
-        except Exception: pass
+        with contextlib.suppress(Exception):
+            client.close()
 
 
 PROMTAIL_PORT = 9080
@@ -282,12 +277,12 @@ def deploy_promtail_on_node(server, force: bool = False):
 
     The Promtail pushes container logs to the primary (VPS) Loki instance.
     """
-    from apps.deployments.models_core import ManagedServer
-    from apps.deployments.services.ssh_client import SSHClient
-
     # Determine the Loki URL for the remote node.
     # Set SMSLY_LOKI_PUBLIC_URL in .env to override (e.g. WireGuard IP or public IP).
     import os as _os
+
+    from apps.deployments.models_core import ManagedServer
+    from apps.deployments.services.ssh_client import SSHClient
     loki_ip = (_os.environ.get("SMSLY_LOKI_PUBLIC_URL") or "").strip()
     if not loki_ip:
         primary = ManagedServer.objects.filter(is_primary=True).first()
@@ -373,14 +368,10 @@ def deploy_promtail_on_node(server, force: bool = False):
         return False
     finally:
         if tmp:
-            try:
+            with contextlib.suppress(Exception):
                 os.unlink(tmp.name)
-            except Exception:
-                pass
-        try:
+        with contextlib.suppress(Exception):
             client.close()
-        except Exception:
-            pass
 
 
 def _generate_remote_promtail_config(loki_url: str) -> str:
@@ -454,6 +445,6 @@ def _get_exporter_script_content():
     for path in candidates:
         resolved = os.path.realpath(path)
         if os.path.exists(resolved):
-            with open(resolved, "r") as f:
+            with open(resolved) as f:
                 return f.read()
     raise FileNotFoundError("Could not find docker-labels-exporter.py")

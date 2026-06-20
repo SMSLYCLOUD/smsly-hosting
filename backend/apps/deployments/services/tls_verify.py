@@ -19,7 +19,6 @@ import ipaddress
 import os
 import socket
 import ssl
-from typing import Optional, Tuple
 from urllib.parse import urlparse
 
 from django.conf import settings
@@ -92,7 +91,7 @@ def _check_pin_after_handshake(response, expected_fingerprint_hex: str) -> None:
         )
 
 
-def resolve_tls_verify(managed_server) -> Tuple[bool, Optional[str]]:
+def resolve_tls_verify(managed_server) -> tuple[bool, str | None]:
     """Return ``(verify, fingerprint_hex)`` for a given ManagedServer.
 
     - If the server has a ``tls_cert_sha256`` pin set, return
@@ -117,7 +116,7 @@ def resolve_tls_verify(managed_server) -> Tuple[bool, Optional[str]]:
     return True, None  # refuse the insecure request
 
 
-def resolve_tls_verify_for_url(candidate_url: str) -> Tuple[bool, Optional[str]]:
+def resolve_tls_verify_for_url(candidate_url: str) -> tuple[bool, str | None]:
     """Return ``(verify, fingerprint_hex)`` for a POST to a peer URL.
 
     Used by the provisioner when it doesn't yet have a
@@ -134,7 +133,7 @@ def resolve_tls_verify_for_url(candidate_url: str) -> Tuple[bool, Optional[str]]
         element is that pin and the caller should pass it to
         ``_check_pin_after_handshake``.
     """
-    from urllib.parse import urlparse  # noqa: F401  (kept for backward compat)
+    from urllib.parse import urlparse
     parsed = urlparse(candidate_url or "")
     if parsed.scheme != "https":
         # Plain HTTP has no certificate to verify.
@@ -240,7 +239,7 @@ def should_verify(url: str) -> bool:
     return True
 
 
-def is_insecure_target(url: str) -> Tuple[bool, str]:
+def is_insecure_target(url: str) -> tuple[bool, str]:
     """Return ``(is_insecure, reason)`` for a given URL — useful for audit logging."""
     parsed = urlparse(url or "")
     host = (parsed.hostname or "").lower()

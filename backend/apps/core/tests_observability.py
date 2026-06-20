@@ -1,9 +1,11 @@
 import logging
+
 from django.test import TestCase
+
 
 class LogRedactionTest(TestCase):
     def test_secrets_not_logged(self):
-        logger = logging.getLogger('test_observability')
+        logging.getLogger('test_observability')
 
         def mask_secrets(log_str):
             import re

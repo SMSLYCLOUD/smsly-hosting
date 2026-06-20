@@ -3,7 +3,6 @@ from unittest.mock import MagicMock, patch
 
 from apps.notifications.webhooks import (
     _post_notification,
-    _validate_notification_url,
 )
 
 

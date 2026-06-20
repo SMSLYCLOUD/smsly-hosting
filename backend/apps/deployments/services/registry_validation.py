@@ -23,7 +23,6 @@ registry host that is not on this list — that includes personal
 private IP ranges that aren't our own.
 """
 import re
-from typing import Optional, Tuple
 
 # Same allowlist as serializers._ALLOWED_IMAGE_REGISTRIES; kept
 # here in one place so the policy cannot drift between the
@@ -114,8 +113,9 @@ def safe_registry_host_for_internal_fallback() -> str:
     Used by ``self_healing_orchestrator`` and any other code path
     that needs to construct an internal-registry image ref.
     """
-    from django.conf import settings
     from urllib.parse import urlparse
+
+    from django.conf import settings
 
     registry_url = getattr(settings, "CONTAINER_REGISTRY_URL", "") or ""
     if registry_url.startswith(("127.0.0.1", "localhost")):

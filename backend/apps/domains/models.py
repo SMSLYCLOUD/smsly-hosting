@@ -1,6 +1,7 @@
 """Models module."""
-from django.db import models
 from apps.deployments.models import Service
+from django.db import models
+
 
 class DomainStatus(models.TextChoices):
     PENDING = 'pending', 'Pending'

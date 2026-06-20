@@ -1,13 +1,11 @@
 # pylint: disable=invalid-name
 """Regression tests to ensure cloud endpoints avoid demo/stub responses."""
 
+from apps.cloud.models import CloudProvider
+from apps.deployments.models import Service
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
-
-from apps.cloud.models import CloudProvider
-from apps.deployments.models import Service
-
 
 User = get_user_model()
 

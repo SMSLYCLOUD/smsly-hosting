@@ -34,14 +34,12 @@ class AnalyzerExceptionHandlingTests(SimpleTestCase):
         with patch(
             "apps.intelligence.analyzer._cached_ask",
             side_effect=KeyboardInterrupt(),
-        ):
-            with self.assertRaises(KeyboardInterrupt):
-                self.analyzer.generate_diagnosis(self.logs)
+        ), self.assertRaises(KeyboardInterrupt):
+            self.analyzer.generate_diagnosis(self.logs)
 
     def test_system_exit_propagates(self):
         with patch(
             "apps.intelligence.analyzer._cached_ask",
             side_effect=SystemExit(1),
-        ):
-            with self.assertRaises(SystemExit):
-                self.analyzer.generate_diagnosis(self.logs)
+        ), self.assertRaises(SystemExit):
+            self.analyzer.generate_diagnosis(self.logs)

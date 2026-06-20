@@ -18,12 +18,13 @@ Data sources (in priority order):
   2. Loki (logs — OOM, crash loops, error rates)
   3. Direct Docker API (fallback if Prometheus is unreachable)
 """
+import json
 import logging
 import os
 import socket
-import json
-import requests
 from datetime import timedelta
+
+import requests
 from django.conf import settings
 from django.utils import timezone
 

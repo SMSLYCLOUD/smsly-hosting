@@ -1,8 +1,8 @@
+import logging
 import re
 import secrets
 import string
-from typing import Dict, Any, Tuple, List
-import logging
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +28,7 @@ def is_weak_value(value: str) -> bool:
     val_lower = str(value).lower().strip()
     if _WEAK_PATTERNS_RE.search(val_lower):
         return True
-    if _WEAK_LEET_RE.search(val_lower):
-        return True
-    return False
+    return bool(_WEAK_LEET_RE.search(val_lower))
 
 class EcosystemEnvResolver:
     def __init__(self, graph):
@@ -46,7 +44,7 @@ class EcosystemEnvResolver:
                     length = min(config.get("min_length", 48), 1024)  # cap to prevent DoS
                     self.shared_secrets[group_name][var_key] = generate_strong_secret(length)
 
-    def validate_and_resolve(self) -> Tuple[bool, Dict[str, Any], List[str]]:
+    def validate_and_resolve(self) -> tuple[bool, dict[str, Any], list[str]]:
         errors = []
         if not hasattr(self.graph, 'services'):
             return True, {}, []

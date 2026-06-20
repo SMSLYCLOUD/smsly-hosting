@@ -12,29 +12,26 @@ class ServerGuard:
     def is_control_plane(cls, server) -> bool:
         if not server:
             return False
-            
+
         from django.conf import settings
         # Global override or specific server flag
         allow_control_plane = getattr(settings, 'CLOUDNEURON_ALLOW_CONTROL_PLANE_WORKLOADS', False)
         server_allows = bool(getattr(server, "allow_user_workloads", False))
-        
+
         is_primary = bool(getattr(server, "is_primary", False))
         role = str(getattr(server, "role", "") or "").upper()
         server_type = str(getattr(server, "server_type", "") or "").upper()
-        
+
         # If it's a control-plane type server
         if is_primary or role in cls.CONTROL_PLANE_VALUES or server_type in cls.CONTROL_PLANE_VALUES:
             # Allow if settings or server flag says yes
             if allow_control_plane or server_allows:
                 return False
-            
+
             # Resilience: If this is the ONLY online server, we MUST allow workloads to prevent "seamless" deployment deadlocks
             online_count = ManagedServer.objects.filter(status=ManagedServer.Status.ONLINE).count()
-            if online_count <= 1:
-                return False
-                
-            return True
-        
+            return not online_count <= 1
+
         # For workers, just respect the flag
         return not bool(getattr(server, "allow_user_workloads", True))
 

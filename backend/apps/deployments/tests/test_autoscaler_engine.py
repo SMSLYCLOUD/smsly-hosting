@@ -10,24 +10,22 @@ Covers:
 """
 import threading
 from datetime import timedelta
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.utils import timezone
 
 from apps.autoscaler.engine.decision import (
+    DEFAULT_CPU_LOW,
     DecisionEngine,
     Recommendation,
-    DEFAULT_CPU_HIGH,
-    DEFAULT_CPU_LOW,
 )
 from apps.autoscaler.engine.metrics import (
     MetricsCollector,
     MetricsSnapshot,
 )
 from apps.autoscaler.engine.reconciler import Reconciler, ScaleResult
-
 
 User = get_user_model()
 
@@ -163,7 +161,7 @@ class DecisionEngineBasicTests(TestCase):
         rec = engine.decide()
         self.assertEqual(rec.action, 'scale_up')
         # (1 running + scale_up_by) must not exceed max_replicas
-        self.assertLessEqual(running_plus := 1 + rec.scale_up_by, 3)
+        self.assertLessEqual(1 + rec.scale_up_by, 3)
 
 
 # ── Metrics collector tests ────────────────────────────────────────────────
@@ -319,8 +317,8 @@ class ReconcilerRaceConditionTests(TestCase):
 
     def test_lock_is_per_service(self):
         """The lock for service A must not block work for service B."""
-        from apps.deployments.models_core import Service
         from apps.autoscaler.engine.reconciler import _SPAWN_LOCKS
+        from apps.deployments.models_core import Service
 
         other_service = Service.objects.create(
             name='race-svc-b', owner=self.user, project=self.project,
@@ -329,7 +327,7 @@ class ReconcilerRaceConditionTests(TestCase):
         _SPAWN_LOCKS.pop(str(self.service.id), None)
         _SPAWN_LOCKS.pop(str(other_service.id), None)
 
-        rec = Recommendation(action='scale_up', reason='test', scale_up_by=1)
+        Recommendation(action='scale_up', reason='test', scale_up_by=1)
 
         # Hold the lock for service A
         lock_a = _SPAWN_LOCKS.get(str(self.service.id)) or Reconciler(self.service)._lock

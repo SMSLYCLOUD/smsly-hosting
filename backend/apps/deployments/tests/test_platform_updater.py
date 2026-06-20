@@ -4,10 +4,10 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
-
-from apps.deployments.models_updates import PlatformUpdate
 from services import platform_updater
 from services.platform_updater import perform_update
+
+from apps.deployments.models_updates import PlatformUpdate
 
 User = get_user_model()
 

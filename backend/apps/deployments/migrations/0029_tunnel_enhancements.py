@@ -8,10 +8,11 @@ Adds:
   - Tunnel.expires_at (optional expiration)
   - ReservedSubdomain model
 """
+import uuid
+
+import django.db.models.deletion
 from django.conf import settings
 from django.db import migrations, models
-import django.db.models.deletion
-import uuid
 
 
 class Migration(migrations.Migration):

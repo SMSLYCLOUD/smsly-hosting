@@ -10,7 +10,6 @@ The webhook must, in addition to the per-service token, require:
   * an AuditLog entry on every successful or rejected invocation.
 """
 
-import hmac
 
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
@@ -19,7 +18,6 @@ from rest_framework.test import APIClient
 
 from apps.deployments.models_audit import AuditLog
 from apps.deployments.models_core import Service
-
 
 User = get_user_model()
 

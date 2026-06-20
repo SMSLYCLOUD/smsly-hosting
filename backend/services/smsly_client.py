@@ -7,10 +7,11 @@ SMSLY Platform Integration Client.
 Provides native integration with SMSLY's SMS, Voice, and Verification services
 for the hosting platform's internal use (alerts, notifications, 2FA).
 """
-import logging
-import httpx
-from typing import Dict, Any
-from decouple import config
+import logging  # noqa: E402
+from typing import Any  # noqa: E402
+
+import httpx  # noqa: E402
+from decouple import config  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,7 @@ class SMSLYClient:
         to_phone: str,
         message: str,
         sender_id: str = "SMSLY"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Send SMS via SMSLY-SMS service.
 
@@ -77,7 +78,7 @@ class SMSLYClient:
                     f"SMS sent to {to_phone[:6]}***: {result.get('message_id')}")
                 return result
         except Exception as e:
-            logger.error(f"Failed to send SMS: {str(e)}")
+            logger.error(f"Failed to send SMS: {e!s}")
             return {"error": str(e), "status": "failed"}
 
     async def send_voice_alert(
@@ -85,7 +86,7 @@ class SMSLYClient:
         to_phone: str,
         message: str,
         voice: str = "en-US-Neural2-F"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Send voice call alert via SMSLY-VOICE service.
         Uses text-to-speech to deliver urgent alerts.
@@ -116,10 +117,10 @@ class SMSLYClient:
                     f"Voice alert initiated to {to_phone[:6]}***: {result.get('call_id')}")
                 return result
         except Exception as e:
-            logger.error(f"Failed to send voice alert: {str(e)}")
+            logger.error(f"Failed to send voice alert: {e!s}")
             return {"error": str(e), "status": "failed"}
 
-    async def get_user_api_keys(self, user_id: str) -> Dict[str, str]:
+    async def get_user_api_keys(self, user_id: str) -> dict[str, str]:
         """
         Fetch user's SMSLY API keys from Platform API.
         Used to auto-inject keys into deployed services.
@@ -139,7 +140,7 @@ class SMSLYClient:
                 response.raise_for_status()
                 return response.json()
         except Exception as e:
-            logger.error(f"Failed to fetch user API keys: {str(e)}")
+            logger.error(f"Failed to fetch user API keys: {e!s}")
             return {}
 
     def analyze_logs_sync(self, logs: str) -> str:
@@ -168,7 +169,7 @@ class SMSLYClient:
                 response.raise_for_status()
                 return response.json().get("diagnosis", "No diagnosis returned.")
         except Exception as e:
-            logger.error(f"Failed to analyze logs with Jules AI: {str(e)}")
+            logger.error(f"Failed to analyze logs with Jules AI: {e!s}")
             return "AI Analysis failed. Please check logs manually."
 
     def send_sms_sync(
@@ -176,7 +177,7 @@ class SMSLYClient:
         to_phone: str,
         message: str,
         sender_id: str = "SMSLY"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Synchronous SMS send for use in Celery tasks.
         """
@@ -198,7 +199,7 @@ class SMSLYClient:
                     f"SMS sent to {to_phone[:6]}***: {result.get('message_id')}")
                 return result
         except Exception as e:
-            logger.error(f"Failed to send SMS: {str(e)}")
+            logger.error(f"Failed to send SMS: {e!s}")
             return {"error": str(e), "status": "failed"}
 
 

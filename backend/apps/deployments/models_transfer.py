@@ -1,11 +1,12 @@
 import logging
 import uuid
+
 from django.conf import settings
 from django.db import models
-from django.utils import timezone
 from encrypted_model_fields.fields import EncryptedCharField, EncryptedTextField
+
+from .models_backup import ServerBackup, ServiceBackup
 from .models_core import Service
-from .models_backup import ServiceBackup, ServerBackup
 
 logger = logging.getLogger(__name__)
 

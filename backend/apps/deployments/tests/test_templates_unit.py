@@ -1,8 +1,9 @@
 """Test Templates Unit module."""
 import ast
 from pathlib import Path
+
 from django.test import SimpleTestCase
-from services.app_templates import list_templates, get_template, APP_TEMPLATES
+from services.app_templates import APP_TEMPLATES, get_template, list_templates
 
 
 class TemplateRegistryTest(SimpleTestCase):
@@ -68,12 +69,14 @@ class TemplateRegistryTest(SimpleTestCase):
                     msg=f"Template '{template.id}' requires unsupported addon '{addon}'",
                 )
 
-import pytest
-from unittest.mock import patch, MagicMock
-from apps.deployments.models import Service, EnvironmentVariable
-from apps.cloud.models import CloudProvider
-from django.contrib.auth import get_user_model
-import json
+import json  # noqa: E402
+from unittest.mock import MagicMock, patch  # noqa: E402
+
+import pytest  # noqa: E402
+from django.contrib.auth import get_user_model  # noqa: E402
+
+from apps.cloud.models import CloudProvider  # noqa: E402
+from apps.deployments.models import EnvironmentVariable, Service  # noqa: E402
 
 User = get_user_model()
 
@@ -95,7 +98,7 @@ def test_all_ai_templates_dry_run(mock_addon_provisioner, mock_subprocess_run, m
         is_active=True,
     )
 
-    with open('apps/deployments/fixtures/templates.json', 'r', encoding='utf-8-sig') as f:
+    with open('apps/deployments/fixtures/templates.json', encoding='utf-8-sig') as f:
         templates = json.load(f)
 
     assert len(templates) > 0, "No templates found in fixtures!"

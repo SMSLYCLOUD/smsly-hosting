@@ -7,7 +7,6 @@ from rest_framework.test import APIClient
 from apps.deployments.models_mesh import MeshNetwork, WireGuardPeer
 from apps.deployments.models_servers import ManagedServer
 
-
 User = get_user_model()
 
 

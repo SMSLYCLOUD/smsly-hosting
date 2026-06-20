@@ -7,11 +7,13 @@ Validates:
   - Deployment timeout enforcement
   - Auto-rollback after consecutive failures
 """
-from unittest.mock import patch, MagicMock, PropertyMock
-from django.test import TestCase, override_settings
+from unittest.mock import MagicMock, patch
+
 from django.contrib.auth.models import User
-from apps.deployments.models import Service, Deployment
+from django.test import TestCase
+
 from apps.cloud.models import CloudProvider
+from apps.deployments.models import Deployment, Service
 
 
 class OrchestratorStatusTransitionTests(TestCase):

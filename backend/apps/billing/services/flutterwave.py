@@ -8,7 +8,7 @@ import hmac
 import json
 import logging
 from decimal import Decimal
-from typing import Any, Dict, Optional
+from typing import Any
 
 import requests
 from django.conf import settings
@@ -38,7 +38,7 @@ class FlutterwaveService:
         return (getattr(settings, "FLUTTERWAVE_WEBHOOK_SECRET_HASH", "") or "").strip()
 
     @staticmethod
-    def _headers() -> Dict[str, str]:
+    def _headers() -> dict[str, str]:
         return {
             "Authorization": f"Bearer {FlutterwaveService._secret_key()}",
             "Content-Type": "application/json",
@@ -54,9 +54,9 @@ class FlutterwaveService:
         redirect_url: str,
         title: str = "Grid",
         description: str = "Grid plan upgrade",
-        meta: Optional[Dict[str, Any]] = None,
+        meta: dict[str, Any] | None = None,
     ) -> str:
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "tx_ref": tx_ref,
             "amount": str(amount),
             "currency": (currency or "USD").upper(),
@@ -89,7 +89,7 @@ class FlutterwaveService:
         return link
 
     @staticmethod
-    def verify_webhook_signature(*, raw_body: bytes, headers: Dict[str, str]) -> bool:
+    def verify_webhook_signature(*, raw_body: bytes, headers: dict[str, str]) -> bool:
         """
         Flutterwave webhook verification.
 
@@ -121,7 +121,7 @@ class FlutterwaveService:
         return hmac.compare_digest(signature, hex_sig) or hmac.compare_digest(signature, b64_sig)
 
     @staticmethod
-    def parse_webhook(raw_body: bytes) -> Dict[str, Any]:
+    def parse_webhook(raw_body: bytes) -> dict[str, Any]:
         try:
             return json.loads(raw_body.decode("utf-8"))
         except Exception as e:

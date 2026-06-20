@@ -1,5 +1,6 @@
 """Models Cron module."""
 import uuid
+
 from django.db import models
 
 

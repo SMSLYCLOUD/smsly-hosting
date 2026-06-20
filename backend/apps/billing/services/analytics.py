@@ -1,8 +1,15 @@
 # pylint: disable=invalid-name
-from django.db.models import Sum, Count
-from django.utils import timezone
 from datetime import timedelta
-from apps.billing.models import DailyRevenue, InfrastructureCost, UserSubscription, Invoice, PricingPlan
+
+from apps.billing.models import (
+    DailyRevenue,
+    InfrastructureCost,
+    PricingPlan,
+    UserSubscription,
+)
+from django.db.models import Sum
+from django.utils import timezone
+
 
 class RevenueAnalytics:
     @staticmethod
@@ -112,7 +119,7 @@ class RevenueAnalytics:
         # Group by user, sum total
         # This requires aggregation on Invoice
         from django.contrib.auth import get_user_model
-        User = get_user_model()
+        get_user_model()
 
         # Simplified: just return list of active subscriptions sorted by plan price
         subs = UserSubscription.objects.filter(status='ACTIVE').select_related('user', 'plan')

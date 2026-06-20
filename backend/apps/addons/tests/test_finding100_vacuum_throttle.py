@@ -10,7 +10,6 @@ from apps.deployments.models import Service
 from apps.deployments.models_addons import Addon
 from apps.deployments.rate_limiting import DBVacuumRateThrottle
 
-
 User = get_user_model()
 
 

@@ -1,7 +1,6 @@
 """Cloud storage destinations for backup offloading — R2, S3, MinIO, B2."""
 import uuid
-from django.conf import settings
-from django.core.exceptions import ValidationError
+
 from django.db import models
 from encrypted_model_fields.fields import EncryptedCharField
 
@@ -101,7 +100,9 @@ class CloudStorageDestination(models.Model):
 
     def upload_test_file(self) -> bool:
         """Upload a test file to verify connectivity."""
-        import tempfile, os
+        import os
+        import tempfile
+
         from apps.deployments.services.backup_service import upload_backup_to_s3
         with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
             f.write('SMSLY connectivity test')

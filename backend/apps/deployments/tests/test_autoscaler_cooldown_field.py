@@ -1,14 +1,14 @@
 # pylint: disable=invalid-name
 """Tests for autoscaler cooldown using the dedicated last_scale_at field."""
+from datetime import timedelta
+
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.utils import timezone
-from datetime import timedelta
 
 from apps.deployments.models import Project, Service
 from apps.deployments.models_metrics import ServiceMetric
 from apps.deployments.services.autoscaler import _evaluate_scaling
-
 
 User = get_user_model()
 

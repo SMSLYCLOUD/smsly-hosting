@@ -1,45 +1,21 @@
 import logging
+
 logger = logging.getLogger(__name__)
-import logging
-from typing import Any, Dict
-import random
-import re
-import shlex
-import shutil
-import tempfile
-import subprocess
-import os
-import json
-import time
-import zipfile
-import secrets
-import threading
-from contextlib import contextmanager
-from urllib.parse import unquote, urlparse
-import docker
-import requests
-from celery import shared_task
-from django.conf import settings
-from django.core.cache import cache
-from django.utils import timezone
-from django.db.models import Sum
-from apps.cloud.models import CloudProvider
-from apps.cloud.services.builder import NixpacksBuilder
-from apps.cloud.services.compute import ComputeService
-from apps.cloud.services.function_provisioner import FunctionProvisioner
-from apps.deployments.ai_router import DEFAULT_AI_ROUTER_API_BASE, DEFAULT_AI_ROUTER_UI_BASE, DEFAULT_BRAID_ALIAS, generate_ai_router_proxy_config, get_ollama_model_name, is_ai_router_service, is_ollama_service
-from apps.deployments.models import Service, Deployment, EnvironmentVariable, PlatformConfig
-from apps.deployments.models_addons import Addon, Backup
-from apps.deployments.models_backup import BackupSchedule, ServiceBackup
-from apps.deployments.models_storage import Volume
-from apps.deployments.models_transfer import ServerTransfer
-from apps.deployments.services.backup_service import BackupService
-from apps.deployments.services.pipeline import PipelineManager, PipelineError
-from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
-from apps.deployments.services.tls_verify import should_verify
-from apps.deployments.services.transfer_service import ServerTransferService
-from apps.deployments.utils import append_log, broadcast_status, build_local_source_bundle, update_stage, is_deployment_local
-from services.addon_provisioner import addon_provisioner
+import asyncio  # noqa: E402
+import logging  # noqa: E402
+from typing import Any  # noqa: E402
+
+import docker  # noqa: E402
+import requests  # noqa: E402
+from celery import shared_task  # noqa: E402
+from decouple import config  # noqa: E402
+from django.core.cache import cache  # noqa: E402
+from django.core.mail import send_mail  # noqa: E402
+
+from apps.deployments.models import (  # noqa: E402
+    Deployment,
+)
+
 
 def _env_bool(value: Any, default: bool = False) -> bool:
     if value is None:
@@ -54,7 +30,7 @@ def _env_bool(value: Any, default: bool = False) -> bool:
     return text in ("1", "true", "yes", "on", "enabled")
 
 
-def _load_service_env(service) -> Dict[str, str]:
+def _load_service_env(service) -> dict[str, str]:
     return {
         str(env.key or "").strip().upper(): str(env.value or "").strip()
         for env in service.env_vars.all()
@@ -62,7 +38,7 @@ def _load_service_env(service) -> Dict[str, str]:
     }
 
 
-def _service_flag(env_map: Dict[str, str], key: str, default: bool) -> bool:
+def _service_flag(env_map: dict[str, str], key: str, default: bool) -> bool:
     return _env_bool(env_map.get(key.upper()), default=default)
 
 
@@ -80,7 +56,7 @@ def _get_dashboard_url() -> str:
     return f"{scheme}://{host}"
 
 
-def _create_in_app_notification(owner, title: str, message: str, event_type: str) -> Dict[str, Any]:
+def _create_in_app_notification(owner, title: str, message: str, event_type: str) -> dict[str, Any]:
     try:
         from apps.notifications.models import Notification
 
@@ -96,7 +72,7 @@ def _create_in_app_notification(owner, title: str, message: str, event_type: str
         return {"ok": False, "error": str(exc)}
 
 
-def _send_sms_alert(owner, service, message: str, env_map: Dict[str, str]) -> Dict[str, Any]:
+def _send_sms_alert(owner, service, message: str, env_map: dict[str, str]) -> dict[str, Any]:
     from services.smsly_client import smsly_client
 
     alert_phone = _first_non_empty(
@@ -118,7 +94,7 @@ def _send_sms_alert(owner, service, message: str, env_map: Dict[str, str]) -> Di
     return {"ok": ok, "result": result}
 
 
-def _send_email_alert(owner, subject: str, message: str, env_map: Dict[str, str]) -> Dict[str, Any]:
+def _send_email_alert(owner, subject: str, message: str, env_map: dict[str, str]) -> dict[str, Any]:
     """
     Send email via Resend if configured, otherwise fall back to Django's send_mail.
     """
@@ -170,7 +146,7 @@ def _send_email_alert(owner, subject: str, message: str, env_map: Dict[str, str]
         return {"ok": False, "error": str(exc)}
 
 
-def _send_telegram_alert(message: str, env_map: Dict[str, str]) -> Dict[str, Any]:
+def _send_telegram_alert(message: str, env_map: dict[str, str]) -> dict[str, Any]:
     bot_token = _first_non_empty(
         env_map.get("ALERT_TELEGRAM_BOT_TOKEN"),
         config("TELEGRAM_BOT_TOKEN", default=""),
@@ -196,7 +172,7 @@ def _send_telegram_alert(message: str, env_map: Dict[str, str]) -> Dict[str, Any
         return {"ok": False, "error": str(exc)}
 
 
-def _send_whatsapp_alert(message: str, env_map: Dict[str, str]) -> Dict[str, Any]:
+def _send_whatsapp_alert(message: str, env_map: dict[str, str]) -> dict[str, Any]:
     # Preferred path: Twilio WhatsApp API
     account_sid = _first_non_empty(
         env_map.get("TWILIO_ACCOUNT_SID"),
@@ -253,7 +229,7 @@ def _send_whatsapp_alert(message: str, env_map: Dict[str, str]) -> Dict[str, Any
         return {"ok": False, "error": str(exc)}
 
 
-def _dispatch_failure_alert(deployment, error_message: str) -> Dict[str, Any]:
+def _dispatch_failure_alert(deployment, error_message: str) -> dict[str, Any]:
     service = deployment.service
     owner = service.owner
     env_map = _load_service_env(service)
@@ -273,7 +249,7 @@ def _dispatch_failure_alert(deployment, error_message: str) -> Dict[str, Any]:
         f"View logs: {dashboard_url}/deployments/{deployment.id}"
     )
 
-    channel_results: Dict[str, Any] = {}
+    channel_results: dict[str, Any] = {}
 
     if _service_flag(env_map, "JULES_NOTIFY_IN_APP", default=True):
         channel_results["in_app"] = _create_in_app_notification(
@@ -318,10 +294,8 @@ def scan_running_containers_logs_task():
     Periodically scans logs of all active containers for crashing errors.
     If an error is found, dispatches an alert.
     """
-    import docker
     from apps.deployments.models import Deployment
     from apps.deployments.services.error_resolver import diagnose_runtime_logs
-    from django.core.cache import cache
 
     try:
         client = docker.from_env()
@@ -377,7 +351,6 @@ def alert_user_task(self, deployment_id: str, error_message: str):
     """
     Fan out deployment failure notifications across configured channels.
     """
-    from apps.deployments.models import Deployment
 
     try:
         deployment = Deployment.objects.select_related("service", "service__owner").get(id=deployment_id)
@@ -398,7 +371,6 @@ def voice_alert_critical_task(self, deployment_id: str, error_message: str):
     """
     Sends a voice call alert for critical failures.
     """
-    from apps.deployments.models import Deployment
     from services.smsly_client import smsly_client
 
     try:
@@ -441,7 +413,6 @@ def notify_deployment_success(deployment_id: str):
     """
     Optional success notification via SMS.
     """
-    from apps.deployments.models import Deployment
     from services.smsly_client import smsly_client
 
     try:
@@ -480,7 +451,8 @@ def _send_slack_alert(message, env_map):
     """Send alert to Slack webhook."""
     try:
         webhook = env_map.get("JULES_SLACK_WEBHOOK", "").strip()
-        if not webhook: return {"ok": False, "reason": "No webhook URL"}
+        if not webhook:
+            return {"ok": False, "reason": "No webhook URL"}
         resp = requests.post(webhook, json={"text": message}, timeout=10)
         return {"ok": resp.ok, "status": resp.status_code}
     except Exception as exc:
@@ -492,7 +464,8 @@ def _send_discord_alert(message, env_map):
     """Send alert to Discord webhook."""
     try:
         webhook = env_map.get("JULES_DISCORD_WEBHOOK", "").strip()
-        if not webhook: return {"ok": False, "reason": "No webhook URL"}
+        if not webhook:
+            return {"ok": False, "reason": "No webhook URL"}
         resp = requests.post(webhook, json={"content": message[:2000]}, timeout=10)
         return {"ok": resp.ok, "status": resp.status_code}
     except Exception as exc:

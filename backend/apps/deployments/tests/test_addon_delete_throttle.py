@@ -21,7 +21,6 @@ from apps.deployments.models import Service
 from apps.deployments.models_addons import Addon
 from apps.deployments.rate_limiting import AddonDeleteRateThrottle
 
-
 User = get_user_model()
 
 
@@ -88,7 +87,7 @@ class AddonDeleteThrottleTests(TestCase):
     def _delete(self, addon):
         with patch(
             'apps.deployments.tasks.delete_addon_task.delay',
-        ) as mock_delay:
+        ):
             resp = self.client.delete(f'/api/v1/addons/{addon.id}/')
         return resp
 

@@ -5,11 +5,11 @@ Operates on the ``apps.domains.models.Domain`` model so the frontend's
 across all services owned by the requesting user.
 """
 import logging
+
 from django.db import IntegrityError
-from rest_framework import serializers, viewsets, permissions, status
+from rest_framework import permissions, serializers, status, viewsets
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
-from rest_framework.decorators import action
 
 from .models import Domain, DomainStatus
 
@@ -71,7 +71,6 @@ class GlobalDomainViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        from apps.deployments.models_core import Service
         from django.db.models import Q
         user = self.request.user
         return Domain.objects.filter(
@@ -110,7 +109,7 @@ class GlobalDomainViewSet(viewsets.ModelViewSet):
                 defaults={'service': service, 'status': DomainStatus.PENDING},
             )
         except IntegrityError:
-            existing = Domain.objects.filter(domain_name=domain_name).first()
+            Domain.objects.filter(domain_name=domain_name).first()
             return Response(
                 {'error': f'Domain {domain_name} is already registered.'},
                 status=status.HTTP_409_CONFLICT,

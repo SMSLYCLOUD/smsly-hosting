@@ -1,7 +1,8 @@
 import uuid
+
 from django.db import models
-from django.conf import settings
-from .models_core import Service, ManagedServer
+
+from .models_core import ManagedServer, Service
 
 
 class ServiceReplica(models.Model):

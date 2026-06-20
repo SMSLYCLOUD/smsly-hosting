@@ -1,19 +1,19 @@
 """Contact form API — stores messages for admin review."""
-from rest_framework import viewsets, mixins
-from rest_framework.generics import GenericAPIView
-from rest_framework.response import Response
-from rest_framework import status, serializers
-from rest_framework.permissions import AllowAny, IsAuthenticated, IsAdminUser
 import logging
 import os
-from django.utils import timezone
-from django.contrib.auth.models import User
-from django.db.models import Q
-from apps.deployments.models import Service, Deployment
-from apps.deployments.models_addons import Addon
-from .models import APIKey
 import secrets
+
+from apps.deployments.models import Deployment, Service
+from apps.deployments.models_addons import Addon
 from django.contrib.auth.hashers import make_password
+from django.contrib.auth.models import User
+from django.utils import timezone
+from rest_framework import mixins, serializers, status, viewsets
+from rest_framework.generics import GenericAPIView
+from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
+from rest_framework.response import Response
+
+from .models import APIKey
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +110,7 @@ class DashboardOverviewView(GenericAPIView):
             env_default = os.getenv('DJANGO_SUPERUSER_PASSWORD')
             if env_default:
                 common_defaults.append(env_default)
-            
+
             is_default = any(user.check_password(p) for p in common_defaults)
             if is_default:
                 alerts.append({
@@ -257,15 +257,15 @@ class SystemResourcesView(GenericAPIView):
         import psutil
         vm = psutil.virtual_memory()
         sm = psutil.swap_memory()
-        
+
         # Round up RAM slightly to handle odd manufacturer sizes (e.g., 11.7GB -> 12GB)
         # But we'll just send exactly what we have in MB
         ram_mb = int(vm.total / (1024 * 1024))
         swap_mb = int(sm.total / (1024 * 1024))
-        
+
         # CPU cores
         cpu_cores = psutil.cpu_count(logical=True) or 1
-        
+
         return Response({
             "cpu_cores": cpu_cores,
             "ram_mb": ram_mb,

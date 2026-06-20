@@ -7,9 +7,9 @@ The frontend ``coreApi.getApiKeys / createApiKey / revokeApiKey``
 This alias keeps the existing frontend working without a
 rebuild.
 """
-from django.urls import path, include
-from rest_framework.routers import DefaultRouter
 from apps.core.views import APIKeyViewSet
+from django.urls import include, path
+from rest_framework.routers import DefaultRouter
 
 router = DefaultRouter()
 router.register(r'', APIKeyViewSet, basename='api-keys-alias')

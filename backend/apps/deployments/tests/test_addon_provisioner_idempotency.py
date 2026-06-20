@@ -10,11 +10,10 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from services.addon_provisioner import AddonProvisioner
 
 from apps.deployments.models import Region, Service
 from apps.deployments.models_addons import Addon
-from services.addon_provisioner import AddonProvisioner
-
 
 User = get_user_model()
 

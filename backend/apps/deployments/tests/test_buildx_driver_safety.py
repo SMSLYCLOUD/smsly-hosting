@@ -3,12 +3,11 @@
 
 import subprocess
 import threading
-import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from django.test import SimpleTestCase
 
-from apps.deployments.services.pipeline import BuildError, PipelineManager
+from apps.deployments.services.pipeline import PipelineManager
 
 
 def _completed(returncode=0, stdout="", stderr=""):
@@ -164,7 +163,6 @@ class EnsureDockerDriverSafetyTests(SimpleTestCase):
             return return_value
 
         call_log = []
-        original_run = subprocess.run
 
         def spy_run(*args, **kwargs):
             cmd = args[0] if args else kwargs.get("args", [])

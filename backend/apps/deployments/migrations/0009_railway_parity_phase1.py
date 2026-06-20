@@ -2,8 +2,9 @@
 # Adds health check fields to Service model
 # Expands ServiceMetric with CPU/Memory limits, Network I/O, Disk I/O
 
-from django.db import migrations, models
 import uuid
+
+from django.db import migrations, models
 
 
 class Migration(migrations.Migration):

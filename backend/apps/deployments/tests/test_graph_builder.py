@@ -1,6 +1,7 @@
-from django.test import TestCase
 from django.contrib.auth import get_user_model
-from ..models import Service, EnvironmentVariable, Region, Project
+from django.test import TestCase
+
+from ..models import EnvironmentVariable, Region, Service
 from ..models_addons import Addon
 from ..services.graph_builder import GraphBuilder
 

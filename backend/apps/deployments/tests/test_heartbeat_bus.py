@@ -18,7 +18,6 @@ from django.test import SimpleTestCase, TestCase
 from apps.deployments.models_election import HeartbeatLog
 from apps.deployments.models_servers import ManagedServer
 
-
 User = get_user_model()
 
 

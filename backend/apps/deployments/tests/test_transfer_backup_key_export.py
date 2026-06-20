@@ -1,3 +1,4 @@
+import contextlib
 import json
 import os
 from types import SimpleNamespace
@@ -30,7 +31,7 @@ class ExportBackupKeyShapeTests(TestCase):
         svc = ServerTransferService(transfer)
         svc.transfer = transfer
         log_calls = []
-        svc._log = lambda msg: log_calls.append(msg)
+        svc._log = log_calls.append
         return svc, log_calls
 
     def test_writes_json_bundle_with_required_fields(self):
@@ -51,10 +52,8 @@ class ExportBackupKeyShapeTests(TestCase):
             with open(path) as f:
                 bundle = json.load(f)
         finally:
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(path)
-            except OSError:
-                pass
         self.assertEqual(bundle['key_id'], 'a1b2c3d4')
         self.assertEqual(bundle['key_material'], key_material)
         self.assertEqual(bundle['fingerprint'], fingerprint)

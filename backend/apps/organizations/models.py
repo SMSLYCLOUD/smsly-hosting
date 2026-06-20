@@ -7,6 +7,7 @@ An Organization owns teams, manages members at the org level,
 and can have SSO providers configured for automatic login.
 """
 import uuid
+
 from django.db import models
 from encrypted_model_fields.fields import EncryptedTextField
 

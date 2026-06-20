@@ -1,8 +1,7 @@
 """Recovery phrase views — generate, verify, and use recovery phrases."""
 import json
 
-from django.contrib.auth import login
-from django.contrib.auth import get_user_model
+from django.contrib.auth import get_user_model, login
 from rest_framework import permissions, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
@@ -10,9 +9,9 @@ from rest_framework.response import Response
 from .models_core import PlatformConfig
 from .services.recovery import (
     generate_recovery_phrase,
+    generate_recovery_salt,
     hash_recovery_phrase,
     verify_recovery_phrase,
-    generate_recovery_salt,
 )
 
 

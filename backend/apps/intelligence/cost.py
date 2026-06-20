@@ -1,7 +1,8 @@
 """Cost module."""
-from typing import Dict, List, Any
 from decimal import Decimal
+
 from .providers import _cached_ask
+
 
 class CostAdvisor:
     """
@@ -24,7 +25,7 @@ class CostAdvisor:
     }
 
     def estimate_monthly_cost(self, cpu_count: float,
-                              memory_gb: float) -> Dict[str, Decimal]:
+                              memory_gb: float) -> dict[str, Decimal]:
         """
         Calculates estimated monthly cost (730 hours) for a given resource configuration.
         """

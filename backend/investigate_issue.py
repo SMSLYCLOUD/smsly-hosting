@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import os
 import sys
+
 import django
 
 # Add the current directory to Python path
@@ -12,9 +13,9 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 # Setup Django
 django.setup()
 
-from apps.deployments.models import Service, PlatformConfig
-from apps.domains.models import Domain, DomainStatus
-from apps.domains.verification import verify_custom_domain_dns
+from apps.deployments.models import PlatformConfig, Service  # noqa: E402
+from apps.domains.models import Domain, DomainStatus  # noqa: E402
+from apps.domains.verification import verify_custom_domain_dns  # noqa: E402
 
 print('=== Investigation of Custom Domain SSL Issue ===')
 
@@ -61,14 +62,14 @@ if domains.exists():
         print(f'  Actual: {result.actual}')
         print(f'  Matched by: {result.matched_by}')
         print(f'  Error: {result.error}')
-        
+
         # Check if domain should be verified based on current DNS
         if result.verified and domain.status != DomainStatus.DNS_VERIFIED:
             print(f'  -> DNS is verified but status is still {domain.status}')
-            print(f'  -> This indicates the background task may not be running')
+            print('  -> This indicates the background task may not be running')
         elif not result.verified and domain.status in [DomainStatus.DNS_VERIFIED, DomainStatus.ACTIVE]:
             print(f'  -> DNS is not verified but status is {domain.status}')
-            print(f'  -> This indicates a potential issue with DNS verification logic')
+            print('  -> This indicates a potential issue with DNS verification logic')
 
 print('\n=== Testing with Platform Domain ===')
 # Test with the actual platform domain

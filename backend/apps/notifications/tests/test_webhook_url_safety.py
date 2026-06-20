@@ -15,10 +15,9 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from apps.notifications.webhooks import (
-    _validate_notification_url,
-    _post_notification,
     _log_notification,
-    _ALLOWED_NOTIFICATION_HOSTS,
+    _post_notification,
+    _validate_notification_url,
 )
 
 
@@ -150,7 +149,6 @@ class AuditLogRedactionTests(unittest.TestCase):
     contains the secret token in the path)."""
 
     def test_log_notification_never_logs_full_url(self):
-        from apps.notifications.webhooks import _log_notification
         with self.assertLogs('apps.notifications.webhooks', level='INFO') as cm:
             _log_notification(
                 provider='slack',

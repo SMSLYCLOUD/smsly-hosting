@@ -14,7 +14,7 @@ rollback path must:
 These tests pin the ordering and the per-method no-op rules.
 """
 from datetime import timedelta
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase

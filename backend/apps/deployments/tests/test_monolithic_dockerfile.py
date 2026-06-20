@@ -2,8 +2,8 @@
 """Tests to verify the monolithic Dockerfile no longer installs nginx."""
 
 import os
-from django.test import TestCase
 
+from django.test import TestCase
 
 REPO_ROOT = os.path.join(
     os.path.dirname(__file__), '..', '..', '..', '..'
@@ -17,7 +17,7 @@ class MonolithicDockerfileTests(TestCase):
         dockerfile_path = os.path.join(REPO_ROOT, 'Dockerfile')
         if not os.path.exists(dockerfile_path):
             self.skipTest("Dockerfile not found")
-        with open(dockerfile_path, 'r') as f:
+        with open(dockerfile_path) as f:
             self.dockerfile = f.read()
 
     def test_no_nginx_apt_install(self):
@@ -38,7 +38,7 @@ class EntrypointTests(TestCase):
         path = os.path.join(REPO_ROOT, 'scripts', 'entrypoint.platform.sh')
         if not os.path.exists(path):
             self.skipTest("entrypoint.platform.sh not found")
-        with open(path, 'r') as f:
+        with open(path) as f:
             content = f.read()
         self.assertNotIn('nginx', content.lower().split('#')[0])  # Ignore comments
 
@@ -54,7 +54,7 @@ class CaddyMonolithTemplateTests(TestCase):
         path = os.path.join(REPO_ROOT, 'infrastructure', 'caddy', 'Caddyfile.monolith.template')
         if not os.path.exists(path):
             self.skipTest("Caddyfile.monolith.template not found")
-        with open(path, 'r') as f:
+        with open(path) as f:
             content = f.read()
         self.assertIn('${PORT}', content)
         self.assertIn('${BACKEND_PORT}', content)

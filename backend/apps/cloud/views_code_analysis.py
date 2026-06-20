@@ -19,13 +19,12 @@ import shutil
 import tempfile
 import uuid
 
-from celery import shared_task
-from rest_framework import serializers, viewsets, permissions, status
-from rest_framework.decorators import action
-from rest_framework.response import Response
-from rest_framework.exceptions import ValidationError
-
 from apps.deployments.models import Service
+from celery import shared_task
+from rest_framework import permissions, serializers, status, viewsets
+from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
+from rest_framework.response import Response
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +73,8 @@ LANGUAGE_COLORS = {
 
 MAX_FILES = 500  # Safety cap
 MAX_FILE_SIZE = 100_000  # 100KB per file
+import contextlib  # noqa: E402
+
 from apps.cloud.services.code_analyzer import MAX_TOTAL_BYTES  # noqa: E402
 
 _AI_CODE_DISCLAIMER = (
@@ -97,9 +98,8 @@ def _extract_python_imports(content: str) -> list[str]:
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     imports.append(alias.name)
-            elif isinstance(node, ast.ImportFrom):
-                if node.module:
-                    imports.append(node.module)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imports.append(node.module)
     except SyntaxError:
         # Fallback to regex for invalid Python
         for m in re.finditer(r'^(?:from|import)\s+([\w.]+)', content, re.MULTILINE):
@@ -283,7 +283,7 @@ def analyze_codebase(repo_path: str) -> dict:
                     continue
                 if total_bytes + file_size > MAX_TOTAL_BYTES:
                     raise ValidationError("Repository too large")
-                with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
+                with open(full_path, encoding='utf-8', errors='ignore') as f:
                     content = f.read()
             except (OSError, UnicodeDecodeError):
                 continue
@@ -435,7 +435,7 @@ def analyze_codebase(repo_path: str) -> dict:
 def _generate_ai_summary(analysis: dict) -> str:
     """Use AI to generate a high-level architecture summary."""
     try:
-        from apps.intelligence.providers import ask_with_fallback, SYSTEM_PROMPT
+        from apps.intelligence.providers import ask_with_fallback
 
         file_nodes = [n for n in analysis['nodes'] if n['type'] == 'file']
         route_nodes = [n for n in analysis['nodes'] if n['type'] == 'route']
@@ -458,7 +458,7 @@ def _generate_ai_summary(analysis: dict) -> str:
             f"What patterns/frameworks does it use? What are the main components?"
         )
 
-        response, provider = ask_with_fallback(
+        response, _provider = ask_with_fallback(
             prompt=prompt,
             system_prompt=(
                 "You are a senior software architect analyzing codebase structure. "
@@ -497,10 +497,8 @@ def analyze_service_code_task(self, service_id: str, user_id: str):
 
     # Get git token
     token = None
-    try:
+    with contextlib.suppress(Exception):
         token = get_github_oauth_token_for_user(user)
-    except Exception:
-        pass
 
     # Clone to temp
     tmp_dir = tempfile.mkdtemp(prefix='code-analysis-')

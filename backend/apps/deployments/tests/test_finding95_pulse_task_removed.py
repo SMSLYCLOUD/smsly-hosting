@@ -1,3 +1,4 @@
+import contextlib
 import inspect
 
 from django.test import SimpleTestCase
@@ -27,7 +28,5 @@ class Finding95PulseTaskRemovalTests(SimpleTestCase):
             for sock_name in ('_raw_sock', 'exec_socket'):
                 sock = getattr(consumer, sock_name, None)
                 if sock is not None and hasattr(sock, 'close'):
-                    try:
+                    with contextlib.suppress(Exception):
                         sock.close()
-                    except Exception:
-                        pass

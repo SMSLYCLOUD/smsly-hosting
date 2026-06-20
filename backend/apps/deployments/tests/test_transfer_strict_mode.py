@@ -1,6 +1,7 @@
-import django.test
 from types import SimpleNamespace
 from unittest.mock import patch
+
+import django.test
 from django.test import override_settings
 
 from apps.deployments.models_transfer import ServerTransfer

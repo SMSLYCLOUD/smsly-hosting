@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Iterable, List, Tuple
+from collections.abc import Iterable
 
 import requests
 
@@ -53,7 +53,7 @@ def _record_exists(token: str, zone_id: str, name: str, record_type: str) -> boo
     return bool(_get_records(token, zone_id, name, record_type))
 
 
-def _create_record(token: str, zone_id: str, name: str, content: str, proxied: bool = False) -> Tuple[bool, str]:
+def _create_record(token: str, zone_id: str, name: str, content: str, proxied: bool = False) -> tuple[bool, str]:
     url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     payload = {"type": "A", "name": name, "content": content, "proxied": proxied, "ttl": 120}
@@ -69,7 +69,7 @@ def _create_record(token: str, zone_id: str, name: str, content: str, proxied: b
         return False, str(exc)
 
 
-def _update_record(token: str, zone_id: str, record_id: str, name: str, content: str, proxied: bool = False) -> Tuple[bool, str]:
+def _update_record(token: str, zone_id: str, record_id: str, name: str, content: str, proxied: bool = False) -> tuple[bool, str]:
     url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records/{record_id}"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     payload = {"type": "A", "name": name, "content": content, "proxied": proxied, "ttl": 120}

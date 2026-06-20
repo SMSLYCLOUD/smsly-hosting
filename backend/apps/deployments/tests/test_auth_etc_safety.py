@@ -14,12 +14,10 @@ import uuid
 
 from allauth.socialaccount.models import SocialAccount
 from django.contrib.auth import get_user_model
-from django.test import TestCase, override_settings
-from django.urls import reverse
+from django.test import TestCase
 from rest_framework.test import APIClient
 
 from apps.deployments.models import Project, Service
-from apps.deployments.models_election import ClusterState, HeartbeatLog, ElectionVote
 from apps.teams.models import Team, TeamMember
 
 User = get_user_model()
@@ -75,7 +73,7 @@ class GitHubOAuthRelinkCallbackTests(TestCase):
     def test_callback_refuses_to_relink_existing_account_to_different_user(self):
         # Find the actual GitHub callback URL by reading the URL conf.
         from django.urls import get_resolver
-        resolver = get_resolver()
+        get_resolver()
         # The GitHub callback typically ends with 'github/login/callback/'.
         # We POST the same data that an OAuth code-exchange callback would,
         # but with state=valid (we don't have a real state so we set the
@@ -153,8 +151,9 @@ class WebSocketRoleCheckTests(TestCase):
     the query directly to avoid channels/asyncio setup overhead."""
 
     def setUp(self):
-        from apps.deployments.models import Deployment
         from django.db.models import Q
+
+        from apps.deployments.models import Deployment
         self._Q = Q
         self.owner = User.objects.create_user(username='owner', password='x')
         self.team_member = User.objects.create_user(username='member', password='x')
@@ -226,7 +225,6 @@ class SessionTokenViewPostOnlyTests(TestCase):
             self.assertIn(resp.status_code, [400, 405])
 
     def test_post_request_returns_fresh_token(self):
-        from rest_framework.authtoken.models import Token
         resp = self.client.post('/api/v1/auth/session-token/')
         # New code accepts POST and returns a fresh token (rotated).
         if resp.status_code in (200, 201):

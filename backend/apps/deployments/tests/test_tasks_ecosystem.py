@@ -7,6 +7,13 @@ from celery.exceptions import SoftTimeLimitExceeded
 from django.contrib.auth import get_user_model
 from django.test import SimpleTestCase, TestCase
 
+from apps.cloud.models import CloudProvider
+from apps.deployments.models import (
+    Deployment,
+    EnvironmentVariable,
+    ManagedServer,
+    Service,
+)
 from apps.deployments.tasks_ecosystem import (
     _apply_service_profile,
     _build_dependency_waves,
@@ -22,8 +29,6 @@ from apps.deployments.tasks_ecosystem import (
     ecosystem_deploy_task,
     ecosystem_scan_task,
 )
-from apps.cloud.models import CloudProvider
-from apps.deployments.models import Deployment, EnvironmentVariable, ManagedServer, Service
 
 
 class TasksEcosystemHelpersTests(SimpleTestCase):
@@ -335,7 +340,7 @@ class DependencyWaveTests(SimpleTestCase):
             "b": {"repo": "owner/b", "deploy_order": 1, "depends_on": []},
         }
         deps = _resolve_dependency_map(entries)
-        waves, unresolved = _build_dependency_waves(entries, deps, wave_size=10)
+        waves, _unresolved = _build_dependency_waves(entries, deps, wave_size=10)
 
         # Both should be in wave 0
         self.assertEqual(len(waves), 1)
@@ -347,7 +352,7 @@ class DependencyWaveTests(SimpleTestCase):
             "b": {"repo": "owner/b", "deploy_order": 2, "depends_on": ["owner/a"]},
         }
         deps = _resolve_dependency_map(entries)
-        waves, unresolved = _build_dependency_waves(entries, deps, wave_size=10)
+        _waves, unresolved = _build_dependency_waves(entries, deps, wave_size=10)
 
         self.assertTrue(len(unresolved) > 0)
 
@@ -387,22 +392,22 @@ class EcosystemScanTaskTests(TestCase):
             ],
             "addons": []
         }
-        
+
         # Deploy existing-svc first
         Service.objects.create(
             owner=self.user,
             name="existing-svc",
             repository_url="https://github.com/owner/existing-svc"
         )
-        
+
         result = ecosystem_scan_task.run(str(self.user.id), 30)
-        
+
         services = result.get("services", [])
         self.assertEqual(len(services), 2)
-        
+
         existing_svc_plan = next(s for s in services if s["name"] == "existing-svc")
         new_svc_plan = next(s for s in services if s["name"] == "new-svc")
-        
+
         self.assertTrue(existing_svc_plan["skip"])
         self.assertFalse(new_svc_plan["skip"])
 
@@ -598,7 +603,7 @@ class EcosystemDeployTaskTests(TestCase):
             repository_url="https://github.com/owner/auth",
             internal_port=8080,
         )
-        
+
         host, port = _service_placeholder_target("auth-service", {})
         self.assertEqual(host, "auth-service")
         self.assertEqual(port, 8080)
@@ -607,7 +612,7 @@ class EcosystemDeployTaskTests(TestCase):
     def test_addon_reuse_user_wide(self, _queue_wave):
         """Verify that deploying new services reuses existing user-wide active addons."""
         from apps.deployments.models_addons import Addon
-        
+
         # Create an existing active addon for the user
         existing_service = Service.objects.create(
             owner=self.user,
@@ -622,7 +627,7 @@ class EcosystemDeployTaskTests(TestCase):
             status=Addon.Status.ACTIVE,
             connection_url="postgresql://reused-user:reused-pass@reused-db:5432/app"
         )
-        
+
         plan = {
             "services": [
                 {
@@ -636,10 +641,10 @@ class EcosystemDeployTaskTests(TestCase):
                 }
             ]
         }
-        
+
         with self.settings(SENATE_ENABLED=False):
             result = ecosystem_deploy_task.run(str(self.user.id), plan)
-            
+
         self.assertEqual(result["failed"], 0)
         new_svc = Service.objects.get(owner=self.user, name="new-api")
         db_url_env = EnvironmentVariable.objects.get(service=new_svc, key="DATABASE_URL")
@@ -648,7 +653,7 @@ class EcosystemDeployTaskTests(TestCase):
     def test_heuristic_analysis_is_dynamic(self):
         """Heuristic analysis detects Dockerfile if present, otherwise defaults to nixpacks."""
         from services.ecosystem import heuristic_analysis
-        
+
         # Scenario A: No Dockerfile present -> nixpacks
         res_nix = heuristic_analysis(["index.js", "package.json"])
         self.assertEqual(res_nix["build"], "nixpacks")
@@ -661,7 +666,7 @@ class EcosystemDeployTaskTests(TestCase):
         """Simulated DevOps Agent analysis suggests dockerfile for Django, nixpacks for Node."""
         from services.ai_engine import DevOpsAgent
         agent = DevOpsAgent()
-        
+
         analysis_django = agent._simulate_analysis("https://github.com/owner/django-repo.git")
         self.assertEqual(analysis_django.build_strategy, "dockerfile")
 

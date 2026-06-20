@@ -22,7 +22,6 @@ from rest_framework.test import APIClient
 from apps.deployments.models_core import Service
 from apps.deployments.models_safedeploy import PreviewEnvironment
 
-
 User = get_user_model()
 
 

@@ -1,3 +1,4 @@
+import contextlib
 import inspect
 from unittest.mock import MagicMock, patch
 
@@ -7,7 +8,6 @@ from django.test import TestCase
 from apps.deployments.models import Service
 from apps.deployments.models_transfer import ServerTransfer
 from apps.deployments.services.transfer_service import ServerTransferService
-
 
 User = get_user_model()
 
@@ -95,10 +95,8 @@ class Finding105PrepareUsesPollHelperTests(TestCase):
             backup_mock.return_value.backup_service.return_value = MagicMock(
                 file_path='/tmp/fake.tar.gz',
             )
-            try:
+            with contextlib.suppress(Exception):
                 svc._prepare()
-            except Exception:
-                pass
 
         poll_mock.assert_called()
 

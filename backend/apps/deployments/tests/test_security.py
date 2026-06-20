@@ -3,10 +3,11 @@
 Security-focused tests for SMSLY Hosting API.
 Ensures authentication and authorization are properly enforced.
 """
-from django.urls import reverse
 from django.contrib.auth.models import User
+from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
+
 from apps.deployments.models import Service
 
 

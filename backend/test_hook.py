@@ -1,6 +1,6 @@
 import os
-import django
 
+import django
 import pytest
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")

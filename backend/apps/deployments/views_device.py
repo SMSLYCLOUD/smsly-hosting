@@ -70,7 +70,7 @@ def register_device(request):
     # Generate a cryptographically random device token
     device_token = secrets.token_urlsafe(48)
 
-    device = TrustedDevice.objects.create(
+    TrustedDevice.objects.create(
         user=request.user,
         device_token=device_token,
         fingerprint_hash=fingerprint_hash,

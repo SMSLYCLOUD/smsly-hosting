@@ -1,45 +1,14 @@
 import logging
-logger = logging.getLogger(__name__)
-import logging
-import random
-import re
-import shlex
-import shutil
-import tempfile
-import subprocess
-import os
-import json
-import time
-import zipfile
-import secrets
-import threading
-from contextlib import contextmanager
-from urllib.parse import unquote, urlparse
-import docker
-import requests
-from celery import shared_task
-from django.conf import settings
-from django.core.cache import cache
-from django.utils import timezone
-from django.db.models import Sum
-from apps.cloud.models import CloudProvider
-from apps.cloud.services.builder import NixpacksBuilder
-from apps.cloud.services.compute import ComputeService
-from apps.cloud.services.function_provisioner import FunctionProvisioner
-from apps.deployments.ai_router import DEFAULT_AI_ROUTER_API_BASE, DEFAULT_AI_ROUTER_UI_BASE, DEFAULT_BRAID_ALIAS, generate_ai_router_proxy_config, get_ollama_model_name, is_ai_router_service, is_ollama_service
-from apps.deployments.models import Service, Deployment, EnvironmentVariable, PlatformConfig
-from apps.deployments.models_addons import Addon, Backup
-from apps.deployments.models_backup import BackupSchedule, ServiceBackup
-from apps.deployments.models_storage import Volume
-from apps.deployments.models_transfer import ServerTransfer
-from apps.deployments.services.backup_service import BackupService
-from apps.deployments.services.pipeline import PipelineManager, PipelineError
-from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
-from apps.deployments.services.tls_verify import should_verify
-from apps.deployments.services.transfer_service import ServerTransferService
-from apps.deployments.utils import append_log, broadcast_status, build_local_source_bundle, update_stage, is_deployment_local
-from services.addon_provisioner import addon_provisioner
 
+logger = logging.getLogger(__name__)
+
+from celery import shared_task  # noqa: E402
+from services.addon_provisioner import addon_provisioner  # noqa: E402
+
+from apps.deployments.models import (  # noqa: E402
+    EnvironmentVariable,
+)
+from apps.deployments.models_addons import Addon, Backup  # noqa: E402
 
 
 @shared_task(bind=True, max_retries=3)
@@ -65,8 +34,9 @@ def provision_addon_task(self, addon_id: str):
         # If public domain is assigned, regenerate Caddy configuration
         if addon.public_domain:
             try:
+                from services.caddy_manager import apply_caddyfile, generate_caddyfile
+
                 from .models import PlatformConfig
-                from services.caddy_manager import generate_caddyfile, apply_caddyfile
                 cfg = PlatformConfig.load()
                 caddy_content = generate_caddyfile(cfg)
                 apply_caddyfile(caddy_content)
@@ -172,9 +142,10 @@ def restore_addon_task(self, backup_id: str):
 @shared_task(bind=True, max_retries=3)
 def delete_addon_task(self, addon_id: str):
     """Async reliable deletion of an Addon"""
+    from services.addon_provisioner import addon_provisioner
+
     from apps.deployments.models_addons import Addon
     from apps.deployments.services.deletion_orchestrator import DeletionOrchestrator
-    from services.addon_provisioner import addon_provisioner
     try:
         addon = Addon.objects.get(id=addon_id)
     except Addon.DoesNotExist:

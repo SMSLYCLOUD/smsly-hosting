@@ -36,7 +36,7 @@ def classify(name: str):
                 return result
         except Exception:
             continue
-            
+
     return _builtin_classify(name)
 
 
@@ -93,4 +93,4 @@ def _builtin_classify(name: str):
         return "gunicorn", "platform"
 
     # Customer apps – use the part before the first dash or the whole name
-    return "gunicorn", name.split("-")[0] if "-" in name else name
+    return "gunicorn", name.split("-", maxsplit=1)[0] if "-" in name else name

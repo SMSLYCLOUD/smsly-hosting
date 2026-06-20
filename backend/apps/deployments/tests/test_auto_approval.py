@@ -1,11 +1,12 @@
 import unittest
-from django.test import TestCase
 from unittest.mock import patch
-from apps.deployments.models import Service, Deployment, Project
-from apps.deployments.models_servers import ManagedServer
-from apps.cloud.models import CloudProvider
-from apps.deployments.webhooks.github import GitHubWebhookHandler
+
 from django.contrib.auth import get_user_model
+from django.test import TestCase
+
+from apps.cloud.models import CloudProvider
+from apps.deployments.models import Deployment, Project, Service
+from apps.deployments.webhooks.github import GitHubWebhookHandler
 
 User = get_user_model()
 

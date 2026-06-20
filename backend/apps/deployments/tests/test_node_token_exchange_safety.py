@@ -18,12 +18,10 @@ import hmac
 import json
 import time
 
-from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
-
 
 User = get_user_model()
 

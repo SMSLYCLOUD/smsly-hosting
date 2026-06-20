@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import SimpleTestCase, TestCase
+from services.caddy_manager import apply_caddyfile
 
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import EnvironmentVariable, Service
@@ -12,8 +13,6 @@ from apps.deployments.services.provisioner import (
     server_install_mode,
 )
 from apps.deployments.tasks_addons import provision_addon_task
-from services.caddy_manager import apply_caddyfile
-
 
 User = get_user_model()
 

@@ -5,6 +5,7 @@ Generates Caddyfile content from PlatformConfig and writes it
 to a shared volume for the host-side watcher to pick up.
 """
 
+import contextlib
 import datetime
 import ipaddress
 import json
@@ -15,8 +16,8 @@ import secrets
 import subprocess
 import time
 
-from django.conf import settings
 from apps.deployments.domain_utils import normalize_domain
+from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
@@ -67,15 +68,15 @@ def is_agent_lite() -> bool:
 
 def _generate_selfsigned_cert(cert_path: str, key_path: str, ip_address: str):
     """Generate a self-signed X.509 cert with the IP as SAN using cryptography.
-    
+
     Always regenerates to ensure the cert stays current with the server's IP.
     (The RSA key generation + self-sign takes <100ms.)
     """
     try:
         from cryptography import x509
-        from cryptography.x509.oid import NameOID
         from cryptography.hazmat.primitives import hashes, serialization
         from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
     except ImportError:
         logger.warning("cryptography not available; skipping self-signed cert")
         return
@@ -288,7 +289,7 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
     blocks = []
     seen = set()
     # Note: Caddy global 'ask' endpoint is defined in generate_caddyfile.
-    
+
     try:
         from apps.deployments.models import Service
 
@@ -355,7 +356,7 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                     continue
                 seen.add(value)
                 target_host = public_domain if (public_domain and not isHidden) else value
-                
+
                 # Custom domains use direct on-demand TLS. Do not attach the
                 # platform Cloudflare DNS challenge; customers may use any DNS
                 # provider as long as public DNS points here.
@@ -363,7 +364,7 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                 lines.append("    tls {")
                 lines.append("        on_demand")
                 lines.append("    }")
-                
+
                 upstream_url = _remote_upstream_url_for_service(service)
                 if upstream_url:
                     _append_reverse_proxy(lines, upstream_url, target_host or value)
@@ -690,7 +691,7 @@ def generate_caddyfile(config) -> str:
     sections = []
     domain = ""
     cloudflare_token = (getattr(config, "cloudflare_api_token", "") or "").strip()
-    
+
     # Global options for On-Demand TLS
     # The secret is embedded as a query parameter (Caddy v2's on_demand_tls.ask
     # cannot send custom headers, but it CAN include query strings in the URL).
@@ -722,7 +723,7 @@ def generate_caddyfile(config) -> str:
         cloudflare_token = ""
 
     env_domain = os.environ.get("DOMAIN", "").strip()
-    
+
     # 1. Determine Effective Domain/Protocol (Fallback to .env)
     effective_domain = config.domain if config.domain else env_domain
     use_ssl = config.use_ssl if config.domain else (os.environ.get("DEBUG", "False").lower() not in {"true", "1", "t"})
@@ -851,7 +852,7 @@ def generate_caddyfile(config) -> str:
                             f"    {matcher} host {p_domain}",
                             f"    handle {matcher} {{",
                             f"        reverse_proxy {p_service.name}:{port}",
-                            f"    }}",
+                            "    }",
                         ]
                     )
 
@@ -903,10 +904,9 @@ def generate_caddyfile(config) -> str:
             sections.append("\n".join(wildcard_lines))
 
     # Site block for the primary access point (Domain or IP)
-    if domain:
-        if not use_ssl:
-            sections.append(
-                f"""http://{domain} {{
+    if domain and not use_ssl:
+        sections.append(
+            f"""http://{domain} {{
     encode gzip
     handle /api/* {{
         reverse_proxy backend:8000
@@ -951,7 +951,7 @@ def generate_caddyfile(config) -> str:
         reverse_proxy frontend:3000
     }}
 }}"""
-            )
+        )
 
     # Catch-all :443 with self-signed cert for IP redirect to HTTP.
     # The cert is generated here (at Caddyfile write time) so it's
@@ -1034,13 +1034,12 @@ def generate_caddyfile(config) -> str:
     }
 }"""
         )
-    else:
-        # Only add the generic :80 catch-all when there is no platform domain.
-        # When a domain is configured (SSL or non-SSL), the domain-specific
-        # http://domain block already handles port 80.
-        if not domain:
-            sections.append(
-                """:80 {
+    # Only add the generic :80 catch-all when there is no platform domain.
+    # When a domain is configured (SSL or non-SSL), the domain-specific
+    # http://domain block already handles port 80.
+    elif not domain:
+        sections.append(
+            """:80 {
     handle /api/* {
         reverse_proxy backend:8000
     }
@@ -1070,7 +1069,7 @@ def generate_caddyfile(config) -> str:
     }
     encode gzip
 }"""
-            )
+        )
 
     # Per-service custom domains routed to Traefik.
     # Skip subdomains already covered by the *.domain wildcard.
@@ -1094,7 +1093,7 @@ def _read_cached_token_payload() -> dict:
     try:
         if not os.path.exists(CADDY_TOKEN_CACHE):
             return {}
-        with open(CADDY_TOKEN_CACHE, "r", encoding="utf-8") as handle:
+        with open(CADDY_TOKEN_CACHE, encoding="utf-8") as handle:
             raw = (handle.read() or "").strip()
     except OSError:
         return {}
@@ -1132,10 +1131,8 @@ def _load_cached_token() -> str:
             datetime.datetime.fromtimestamp(expires_at, datetime.timezone.utc).isoformat(),
             int((now - expires_at) / 86400),
         )
-        try:
+        with contextlib.suppress(OSError):
             os.remove(CADDY_TOKEN_CACHE)
-        except OSError:
-            pass
         return ""
     return cached_token
 
@@ -1218,7 +1215,14 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
             try:
                 CADDY_UID = int(os.environ.get("CADDY_UID", "1000"))
                 CADDY_GID = int(os.environ.get("CADDY_GID", "1000"))
-                os.chown(CADDY_CONFIG_DIR, CADDY_UID, CADDY_GID)
+                if hasattr(os, "chown"):
+                    os.chown(CADDY_CONFIG_DIR, CADDY_UID, CADDY_GID)
+                else:
+                    logger.warning(
+                        "os.chown unavailable on this platform; skipping ownership "
+                        "change for %s (uid=%s gid=%s)",
+                        CADDY_CONFIG_DIR, CADDY_UID, CADDY_GID,
+                    )
                 os.chmod(CADDY_CONFIG_DIR, 0o775)
                 logger.warning(
                     "Self-healed caddy-config dir ownership to uid=%s gid=%s "
@@ -1317,7 +1321,7 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
     except Exception as exc:
         result["message"] = f"Failed to apply Caddyfile: {exc}"
         if isinstance(exc, PermissionError):
-            result["message"] += (
+            result["message"] = result["message"] + (
                 " | Fix host dir perms: sudo chown -R 1000:1000 /opt/smsly-hosting/caddy-config "
                 "&& sudo chmod 775 /opt/smsly-hosting/caddy-config"
             )

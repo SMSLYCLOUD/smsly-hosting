@@ -13,7 +13,7 @@ from django.db.models import Q
 
 def _team_role(user, service_or_project) -> str | None:
     """Return the user's role on the team that owns this resource.
-    
+
     Returns one of ``ADMIN``, ``MEMBER``, ``VIEWER``, or ``None``
     if the user is not on the owning team.
     """
@@ -58,7 +58,7 @@ def user_can_read(user, service_or_project) -> bool:
 
 def user_is_owner_or_team_member(user, service_or_project) -> bool:
     """Legacy check — any team membership (binary)."""
-    from .models import Team, TeamMember
+    from .models import TeamMember
     team = _resolve_team(service_or_project)
     if not team:
         return False
@@ -67,7 +67,7 @@ def user_is_owner_or_team_member(user, service_or_project) -> bool:
 
 def get_team_q_filter(user) -> Q:
     """Return a Q filter for queryset scoping.
-    
+
     Returns a filter that matches resources owned by *user* or
     belonging to a project whose team includes *user* (any role).
     """

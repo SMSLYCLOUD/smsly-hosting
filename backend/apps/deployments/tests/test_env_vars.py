@@ -8,13 +8,14 @@ Validates:
   - Duplicate key prevention
   - Env var injection during deployment
 """
-from django.test import TestCase
-from django.db import connection
 from django.contrib.auth.models import User
-from rest_framework.test import APITestCase
+from django.db import connection
+from django.test import TestCase
 from rest_framework import status as http_status
-from apps.deployments.models import Service, EnvironmentVariable
+from rest_framework.test import APITestCase
+
 from apps.cloud.models import CloudProvider
+from apps.deployments.models import EnvironmentVariable, Service
 
 
 class EnvironmentVariableModelTests(TestCase):
@@ -248,14 +249,15 @@ class EnvironmentVariableAPITests(APITestCase):
 
     def test_build_runtime_env_filters_ciphertext(self):
         """_build_runtime_env should exclude environment variables that are still Fernet ciphertext."""
-        from apps.deployments.tasks_deploy_local import _build_runtime_env
         from cryptography.fernet import Fernet
+
+        from apps.deployments.tasks_deploy_local import _build_runtime_env
         key = Fernet.generate_key()
         f = Fernet(key)
         ciphertext = f.encrypt(b"secret-value").decode('utf-8')
 
         # Create env vars directly in DB bypassing validation
-        valid_var = EnvironmentVariable.objects.create(
+        EnvironmentVariable.objects.create(
             service=self.service,
             key='VALID_VAR',
             value='good-value'

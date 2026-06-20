@@ -1,9 +1,10 @@
 """Management command to setup social apps."""
 import os
-from django.core.management.base import BaseCommand
-from django.contrib.sites.models import Site
-from django.conf import settings
+
 from allauth.socialaccount.models import SocialApp
+from django.conf import settings
+from django.contrib.sites.models import Site
+from django.core.management.base import BaseCommand
 
 
 class Command(BaseCommand):

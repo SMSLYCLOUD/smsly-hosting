@@ -11,11 +11,11 @@ Handles:
 - Generating parametrized docker-compose and HAProxy configs
 """
 
+import base64
+import ipaddress
+import json
 import logging
 import re
-import base64
-import json
-import ipaddress
 import shlex
 import textwrap
 import time
@@ -239,8 +239,9 @@ class ReplicationService:
         - Verifies Docker installation
         - Verifies network reachability via ping
         """
-        from apps.deployments.services.wireguard_service import WireGuardService
         import subprocess
+
+        from apps.deployments.services.wireguard_service import WireGuardService
 
         target_peer = mesh.peers.filter(wg_address=target_wg_address, is_active=True).first()
         if not target_peer:
@@ -338,7 +339,6 @@ class ReplicationService:
 
         Returns deployment results.
         """
-        from apps.deployments.services.wireguard_service import WireGuardService
 
         cls.validate_mesh_for_replication(mesh)
 
@@ -438,7 +438,7 @@ class ReplicationService:
         import os
         docker_host = os.environ.get("DOCKER_HOST", "tcp://socket-proxy:2375")
         compose_b64 = base64.b64encode(compose_content.encode()).decode()
-        
+
         commands = [
             "mkdir -p /tmp/smsly-patroni",
             f"printf %s {shlex.quote(compose_b64)} | base64 -d > /tmp/smsly-patroni/docker-compose.yml",
@@ -476,8 +476,9 @@ class ReplicationService:
     @classmethod
     def _deploy_haproxy_local(cls, compose_content: str, haproxy_cfg: str):
         """Deploy HAProxy on the local server via Docker container proxy."""
-        import docker
         import os
+
+        import docker
 
         client = docker.from_env()
         docker_host = os.environ.get("DOCKER_HOST", "tcp://socket-proxy:2375")
@@ -517,8 +518,9 @@ class ReplicationService:
 
         Returns health report.
         """
-        import requests
         from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        import requests
 
         peers = list(
             mesh.peers.filter(is_active=True)
@@ -574,11 +576,11 @@ class ReplicationService:
                 executor.submit(_check_node, idx, wg_ip, server_name): wg_ip
                 for idx, wg_ip, server_name in node_specs
             }
-            
+
             node_results = []
             for future in as_completed(future_to_node):
                 node_results.append(future.result())
-        
+
         # Sort node results back into original order
         node_results.sort(key=lambda x: x["wg_address"])
         results["nodes"] = node_results
@@ -650,9 +652,11 @@ class ReplicationService:
     @classmethod
     def disable_replication(cls, mesh):
         """Stop Patroni/etcd/HAProxy containers on all mesh peers and persist state."""
-        from apps.deployments.services.wireguard_service import WireGuardService
-        import docker
         import os
+
+        import docker
+
+        from apps.deployments.services.wireguard_service import WireGuardService
 
         results = {"local": None, "remote": []}
 

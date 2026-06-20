@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import inspect
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -74,10 +75,8 @@ class Finding177AsyncSetupTimeoutTests(TestCase):
                 async def _wait_for(coro, timeout):
                     call_count['n'] += 1
                     if call_count['n'] >= 2:
-                        try:
+                        with contextlib.suppress(Exception):
                             coro.close()
-                        except Exception:
-                            pass
                         raise asyncio.TimeoutError()
                     return await real_wait_for(coro, timeout)
 

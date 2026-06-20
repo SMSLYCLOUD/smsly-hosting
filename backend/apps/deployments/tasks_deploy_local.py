@@ -1,4 +1,5 @@
 import logging
+
 logger = logging.getLogger(__name__)
 _SERVICE_DB_MAP = {
     'smsly-backend':            'smsly_backend',
@@ -41,48 +42,27 @@ _SERVICE_REDIS_DB = {
     'smsly-marketer':   4,
 }
 
-import logging
-import random
-import re
-import shlex
-import shutil
-import tempfile
-import subprocess
-import os
-import json
-import time
-import zipfile
-import secrets
-import threading
-from contextlib import contextmanager
-from urllib.parse import unquote, urlparse
-import docker
-import requests
-from celery import shared_task
-from django.conf import settings
-from django.core.cache import cache
-from django.utils import timezone
-from django.db.models import Sum
-from apps.cloud.models import CloudProvider
-from apps.cloud.services.builder import NixpacksBuilder
-from apps.cloud.services.compute import ComputeService
-from apps.cloud.services.function_provisioner import FunctionProvisioner
-from apps.deployments.ai_router import DEFAULT_AI_ROUTER_API_BASE, DEFAULT_AI_ROUTER_UI_BASE, DEFAULT_BRAID_ALIAS, generate_ai_router_proxy_config, get_ollama_model_name, is_ai_router_service, is_ollama_service
-from apps.deployments.models import Service, Deployment, EnvironmentVariable, PlatformConfig
-from apps.deployments.models_addons import Addon, Backup
-from apps.deployments.models_backup import BackupSchedule, ServiceBackup
-from apps.deployments.models_storage import Volume
-from apps.deployments.models_transfer import ServerTransfer
-from apps.deployments.services.backup_service import BackupService
-from apps.deployments.services.pipeline import PipelineManager, PipelineError
-from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
-from apps.deployments.services.tls_verify import should_verify
-from apps.deployments.services.transfer_service import ServerTransferService
-from apps.deployments.utils import append_log, broadcast_status, build_local_source_bundle, update_stage, is_deployment_local
-from services.addon_provisioner import addon_provisioner
+import logging  # noqa: E402
+import os  # noqa: E402
+import re  # noqa: E402
+import secrets  # noqa: E402
+import time  # noqa: E402
+from urllib.parse import urlparse  # noqa: E402
 
+import docker  # noqa: E402
+import requests  # noqa: E402
 
-from .tasks_utils import _env_int, _env_bool
+from apps.deployments.models import (  # noqa: E402
+    Service,
+)
+from apps.deployments.models_addons import Addon  # noqa: E402
+from apps.deployments.services.tls_verify import should_verify  # noqa: E402
+from apps.deployments.utils import (  # noqa: E402
+    append_log,
+)
+
+from .tasks_utils import _env_bool, _env_int  # noqa: E402
+
 
 def _docker_safe_segment(value: str, fallback: str = "app") -> str:
     """Normalize strings used in Docker image tags and names."""
@@ -93,7 +73,7 @@ def _docker_safe_segment(value: str, fallback: str = "app") -> str:
 
 
 
-def _detect_exposed_port(service, image_name: str = None) -> int | None:
+def _detect_exposed_port(service, image_name: str | None = None) -> int | None:
     """Auto-detect port from Docker image EXPOSE directive.
 
     Inspects the specified image name, or the last deployed image for this service.
@@ -199,7 +179,7 @@ def _build_platform_healthcheck(service: Service, env_vars: dict) -> dict | None
 
 
 
-def _build_runtime_env(service: Service, image_name: str = None) -> dict:
+def _build_runtime_env(service: Service, image_name: str | None = None) -> dict:
     """Assemble runtime env vars with routing domains sourced from Service."""
     def _is_ciphertext(val: str) -> bool:
         if not val or not isinstance(val, str):
@@ -430,7 +410,7 @@ def _smart_derive_redis_vars(env_vars: dict):
         base = f"{parsed.scheme}://{parsed.netloc}"
 
         # If broker is on /0, put result backend on /1
-        if not parsed.path or parsed.path == '/' or parsed.path == '/0':
+        if not parsed.path or parsed.path in {'/', '/0'}:
             if env_vars.get('CELERY_BROKER_URL') == redis_url:
                 env_vars['CELERY_BROKER_URL'] = f"{base}/0"
             if env_vars.get('CELERY_RESULT_BACKEND') == redis_url:
@@ -479,8 +459,8 @@ def _ensure_database_exists(base_url: str, db_name: str):
     conn = None
     try:
         import psycopg2
-        from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
         from psycopg2 import sql
+        from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
         conn = psycopg2.connect(base_url)
         conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
@@ -670,7 +650,7 @@ def _wait_for_local_route_ready(
     # mask a Caddy misroute that serves the platform homepage.
     probe_candidates = []
 
-    def _add_probe(base_url: str, headers=None, verify=True, kind="direct"):
+    def _add_probe(base_url: str, headers: dict | None = None, verify: bool = True, kind: str = "direct"):
         normalized = (base_url or "").rstrip("/")
         if not normalized:
             return
@@ -849,9 +829,9 @@ def _link_ecosystem(service: Service, env_vars: dict):
     try:
         from services.ecosystem_graph import (
             build_ecosystem_graph,
-            rewrite_database_url,
-            resolve_service_url,
             get_sibling_env_value,
+            resolve_service_url,
+            rewrite_database_url,
             set_redis_db,
         )
     except ImportError:

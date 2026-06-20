@@ -6,13 +6,12 @@ re-exported from ``apps.deployments.views`` for backwards compatibility with
 ``apps.deployments.urls`` and any test that imports it from the parent
 module.
 """
-from rest_framework import permissions, serializers, authentication
-from rest_framework.authtoken.models import Token
+import hmac
+
+from django.conf import settings
+from rest_framework import authentication, permissions, serializers, status
 from rest_framework.generics import GenericAPIView
 from rest_framework.response import Response
-from rest_framework import status
-from django.conf import settings
-import hmac
 
 
 class EmptySerializer(serializers.Serializer):
@@ -73,6 +72,7 @@ class ZeroTrustHMACAuthentication(authentication.BaseAuthentication):
     def authenticate(self, request):
         import hashlib
         import time
+
         from django.contrib.auth import get_user_model
         User = get_user_model()
 
@@ -157,9 +157,7 @@ class CaddySecretOrAdminPermission(permissions.BasePermission):
         ):
             return True
         # No secret configured — allow through with domain + rate limit protections only
-        if not expected:
-            return True
-        return False
+        return bool(not expected)
 
     @staticmethod
     def _get_expected_secret():

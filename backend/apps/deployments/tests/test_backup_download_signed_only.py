@@ -9,8 +9,7 @@ from rest_framework.authtoken.models import Token
 from rest_framework.test import APIClient
 
 from apps.deployments.models import Project, Service
-from apps.deployments.models_backup import ServiceBackup, ServerBackup
-
+from apps.deployments.models_backup import ServerBackup, ServiceBackup
 
 User = get_user_model()
 

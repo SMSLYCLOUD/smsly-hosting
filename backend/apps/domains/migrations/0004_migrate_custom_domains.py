@@ -1,6 +1,5 @@
 from django.db import migrations
 
-
 BATCH_SIZE = 500
 
 

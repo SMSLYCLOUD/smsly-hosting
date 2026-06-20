@@ -3,6 +3,7 @@ import base64
 import logging
 import re
 import urllib.parse
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import requests
@@ -214,7 +215,7 @@ def grafana_embed_url(request, dashboard_uid: str):
     query = {
         'theme': params.pop('theme', ['dark'])[0],
         'kiosk': params.pop('kiosk', ['tv'])[0],
-        'from': f'now-1h' if time_range == 'auto' else time_range,
+        'from': 'now-1h' if time_range == 'auto' else time_range,
         'to': 'now',
     }
     for key, value in params.items():
@@ -269,7 +270,7 @@ def loki_query(request):
 
     try:
         service_names = _user_owned_service_names(request.user)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("Loki query service lookup failed: %s", exc)
         return Response(
             {'error': 'Unable to resolve user services for tenant scoping.'},
@@ -408,7 +409,7 @@ def prometheus_query(request):
 
     try:
         service_names = _user_owned_service_names(request.user)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("Prometheus query service lookup failed: %s", exc)
         return Response(
             {'error': 'Unable to resolve user services for tenant scoping.'},

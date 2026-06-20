@@ -3,11 +3,13 @@ from apps.cloud.adapters.aws import AWSAdapter
 from apps.cloud.adapters.azure import AzureAdapter
 from apps.cloud.adapters.gcp import GCPAdapter
 
+
 def test_aws_adapter_initialization():
     adapter = AWSAdapter("fake-key", "fake-secret", "us-east-1")
     assert adapter.region == "us-east-1"
 
-from unittest.mock import patch
+from unittest.mock import patch  # noqa: E402
+
 
 @patch('apps.cloud.adapters.azure.HAS_AZURE_SDK', True)
 def test_azure_adapter_initialization():
@@ -26,4 +28,4 @@ def test_gcp_adapter_initialization():
     }
     # We catch the exception because google auth will fail to parse fake-private-key, which is fine for init test
     with pytest.raises(Exception):
-        adapter = GCPAdapter(fake_info, "fake-project", "us-central1")
+        GCPAdapter(fake_info, "fake-project", "us-central1")

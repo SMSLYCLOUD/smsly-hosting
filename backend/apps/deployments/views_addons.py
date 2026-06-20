@@ -1,16 +1,23 @@
 """Views Addons module."""
-from rest_framework import serializers, viewsets, status
-from rest_framework.decorators import action
-from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
-from django.conf import settings
-from django.http import FileResponse
-import re
-from django.db.models import Q
-from apps.teams.permissions import get_team_q_filter, assert_can_write, assert_can_delete
-from .models_addons import Addon
-from .models import Service
 import logging
+import re
+
+from django.conf import settings
+from django.db.models import Q
+from django.http import FileResponse
+from rest_framework import serializers, status, viewsets
+from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+
+from apps.teams.permissions import (
+    assert_can_delete,
+    assert_can_write,
+    get_team_q_filter,
+)
+
+from .models import Service
+from .models_addons import Addon
 
 logger = logging.getLogger(__name__)
 
@@ -131,9 +138,9 @@ class AddonViewSet(viewsets.ModelViewSet):
 
     def perform_destroy(self, instance):
         """Set status to pending and queue async deletion."""
-        from .tasks_addons import delete_addon_task
         from .models_addons import Addon
-        
+        from .tasks_addons import delete_addon_task
+
         instance.status = Addon.Status.DELETION_PENDING
         instance.save(update_fields=['status'])
 
@@ -260,7 +267,7 @@ class AddonViewSet(viewsets.ModelViewSet):
         backup_id = request.data.get('backup_id')
         if not backup_id:
             return Response({'error': 'backup_id required'}, status=status.HTTP_400_BAD_REQUEST)
-        
+
         # Verify backup belongs to addon
         from .models_addons import Backup
         if not Backup.objects.filter(id=backup_id, addon=addon).exists():
@@ -286,13 +293,13 @@ class AddonViewSet(viewsets.ModelViewSet):
         backup_id = request.query_params.get('backup_id')
         if not backup_id:
             return Response({'error': 'backup_id required'}, status=status.HTTP_400_BAD_REQUEST)
-        
+
         from .models_addons import Backup
         try:
             backup = Backup.objects.get(id=backup_id, addon=addon)
         except Backup.DoesNotExist:
             return Response({'error': 'Backup not found'}, status=status.HTTP_404_NOT_FOUND)
-            
+
         import os
         if not os.path.exists(backup.file_path):
             return Response({'error': 'File not found on disk'}, status=status.HTTP_404_NOT_FOUND)
@@ -343,7 +350,7 @@ class AddonViewSet(viewsets.ModelViewSet):
                     return Response({
                         'error': f'MinIO container not found: {container_name}'
                     }, status=status.HTTP_404_NOT_FOUND)
-            
+
             # Execute the mc command inside the container
             cmd = ['mc', 'anonymous', 'set', policy, f'myminio/{bucket_name}']
             exit_code, output = container.exec_run(cmd)
@@ -395,8 +402,9 @@ class AddonViewSet(viewsets.ModelViewSet):
             }, status=status.HTTP_200_OK)
 
 
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.decorators import api_view, permission_classes  # noqa: E402
+from rest_framework.permissions import IsAuthenticated  # noqa: E402
+
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -405,8 +413,9 @@ def toggle_bucket_public_api(request, pk):
     if settings.DEBUG:
         logger.info("toggle_bucket_public_api entered for pk=%s, method=%s", pk, request.method)
     try:
-        from apps.deployments.models_addons import Addon
         from django.db.models import Q
+
+        from apps.deployments.models_addons import Addon
         # SECURITY: scope the lookup to addons the caller can access
         # (mirrors AddonViewSet.get_queryset). Without this, any
         # authenticated user could flip any tenant's MinIO bucket
@@ -420,13 +429,13 @@ def toggle_bucket_public_api(request, pk):
             if settings.DEBUG:
                 logger.warning("Addon %s not accessible to user %s", pk, request.user.id)
             return Response({'error': f'Addon {pk} not found'}, status=404)
-        
+
         if settings.DEBUG:
             logger.info("Found addon %s (%s)", addon.name, addon.addon_type)
         if addon.addon_type != 'MINIO':
             return Response({'error': f'Addon type {addon.addon_type} does not support bucket toggling'}, status=400)
-        
-        # Reuse the existing ViewSet method logic by passing the addon directly 
+
+        # Reuse the existing ViewSet method logic by passing the addon directly
         # or just reimplementing the core logic here for absolute safety
         from apps.cloud.docker_client import get_docker_client
         is_public = request.data.get('is_public', False)
@@ -437,12 +446,12 @@ def toggle_bucket_public_api(request, pk):
         client = get_docker_client()
         container = None
         addon_uuid = str(addon.id)
-        
+
         # ── UUID DISCOVERY: Search for the Addon ID in the container names ──
         all_containers = client.containers.list()
         if settings.DEBUG:
             logger.info("Scanning %s containers for ID: %s", len(all_containers), addon_uuid)
-        
+
         for c in all_containers:
             # Match by UUID (case-insensitive substring)
             if addon_uuid.lower() in c.name.lower():

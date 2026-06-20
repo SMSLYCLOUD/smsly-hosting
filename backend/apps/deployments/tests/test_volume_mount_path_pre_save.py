@@ -7,7 +7,6 @@ from apps.deployments.models import Service
 from apps.deployments.models_storage import Volume
 from apps.deployments.signals import _VOLUME_MOUNT_PATH_ALLOWED_PREFIXES
 
-
 User = get_user_model()
 
 

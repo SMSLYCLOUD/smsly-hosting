@@ -1,8 +1,7 @@
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
 
 import requests
-
 from django.conf import settings
 
 from apps.deployments.utils import get_github_oauth_token_for_user
@@ -29,7 +28,7 @@ def _extract_owner_repo(repo_url: str) -> tuple[str, str]:
     raise ValueError(f"Cannot parse owner/repo from: {repo_url}")
 
 
-def _get_system_token() -> Optional[str]:
+def _get_system_token() -> str | None:
     return getattr(settings, "GITHUB_SYSTEM_TOKEN", None) or None
 
 
@@ -37,21 +36,21 @@ class GitHubClient:
     def __init__(
         self,
         repo_url: str,
-        token: Optional[str] = None,
-        owner: Optional[Any] = None,
+        token: str | None = None,
+        owner: Any | None = None,
     ):
         self.owner, self.repo = _extract_owner_repo(repo_url)
         self.token = token or _get_system_token()
         self._owner_obj = owner
 
-    def _resolve_token(self) -> Optional[str]:
+    def _resolve_token(self) -> str | None:
         if self.token:
             return self.token
         if self._owner_obj:
             return get_github_oauth_token_for_user(self._owner_obj)
         return None
 
-    def _headers(self) -> Dict[str, str]:
+    def _headers(self) -> dict[str, str]:
         headers = {"Accept": "application/vnd.github.v3+json"}
         token = self._resolve_token()
         if token:
@@ -65,7 +64,7 @@ class GitHubClient:
         body: str,
         head: str,
         base: str = "main",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         url = f"{_GITHUB_API_BASE}/repos/{repo}/pulls"
         payload = {
             "title": title,
@@ -84,7 +83,7 @@ class GitHubClient:
         resp.raise_for_status()
         return {}
 
-    def get_repository(self, repo: str) -> Dict[str, Any]:
+    def get_repository(self, repo: str) -> dict[str, Any]:
         url = f"{_GITHUB_API_BASE}/repos/{repo}"
         resp = requests.get(url, headers=self._headers(), timeout=30)
         if resp.status_code == 200:

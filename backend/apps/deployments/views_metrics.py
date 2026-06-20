@@ -2,14 +2,15 @@
 import logging
 from datetime import timedelta
 
+from django.utils import timezone
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema
-from django.utils import timezone
-from rest_framework import serializers, viewsets, permissions, status
+from rest_framework import permissions, serializers, status, viewsets
 from rest_framework.response import Response
+
+from .metrics import metrics_adapter
 from .models import Service
 from .models_metrics import ServiceMetric
-from .metrics import metrics_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +119,9 @@ def _live_metrics_fallback(service: Service):
     if not container_id:
         return None
 
-    from .tasks_metrics import _collect_container_stats  # local import to avoid eager deps
+    from .tasks_metrics import (
+        _collect_container_stats,  # local import to avoid eager deps
+    )
 
     stats = _collect_container_stats(str(container_id))
     if not stats:

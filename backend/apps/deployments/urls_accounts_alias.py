@@ -9,7 +9,7 @@ URLs are mounted at ``/accounts/...`` (no /api/v1/ prefix).
 This alias re-exports the same allauth.urls under the
 ``/api/v1/accounts/`` path so the OAuth start links resolve.
 """
-from django.urls import path, include
+from django.urls import include, path
 
 urlpatterns = [
     path('', include('allauth.urls')),

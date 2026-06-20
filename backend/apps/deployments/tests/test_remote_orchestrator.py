@@ -5,18 +5,15 @@ import os
 import unittest
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import patch, MagicMock, Mock
-from urllib.parse import urlparse
+from unittest.mock import Mock, patch
 
 from requests.exceptions import ConnectTimeout
 
 # Import the module under test
 from apps.deployments.services.remote_orchestrator import (
+    RemoteOrchestrator,
     _host_is_ip,
     _is_internal_target,
-    RemoteOrchestrator,
-    _REMOTE_VERIFY,
-    _ENFORCE_TLS,
 )
 
 
@@ -109,11 +106,11 @@ class TestCandidateBaseURLs(unittest.TestCase):
         """Test that IP-based hosts prioritize HTTP for mesh VPN."""
         orchestrator = RemoteOrchestrator(self.mock_server)
         urls = orchestrator._candidate_base_urls()
-        
+
         # HTTP should come before HTTPS for IP hosts (mesh optimization)
         http_urls = [u for u in urls if u.startswith("http://")]
-        https_urls = [u for u in urls if u.startswith("https://")]
-        
+        [u for u in urls if u.startswith("https://")]
+
         self.assertTrue(len(http_urls) > 0, "Should generate HTTP URLs for mesh")
         # First URL should be HTTP for IP hosts
         if urls:
@@ -124,7 +121,7 @@ class TestCandidateBaseURLs(unittest.TestCase):
         """Test that TLS enforcement returns only HTTPS URLs."""
         orchestrator = RemoteOrchestrator(self.mock_server)
         urls = orchestrator._candidate_base_urls()
-        
+
         # All URLs should be HTTPS when enforcement is on
         for url in urls:
             self.assertTrue(url.startswith("https://"), f"URL should be HTTPS: {url}")
@@ -134,10 +131,10 @@ class TestCandidateBaseURLs(unittest.TestCase):
         """Test that domain-based hosts use the configured api_url."""
         self.mock_server.host = "api.smsly.cloud"
         self.mock_server.api_url = "https://api.smsly.cloud"
-        
+
         orchestrator = RemoteOrchestrator(self.mock_server)
         urls = orchestrator._candidate_base_urls()
-        
+
         # Should include the configured URL
         self.assertIn("https://api.smsly.cloud", urls)
 
@@ -160,15 +157,15 @@ class TestRemoteRequestSSLVerification(unittest.TestCase):
     def test_internal_ip_skips_ssl_verification(self, mock_request):
         """Test that internal IPs skip SSL verification even when _REMOTE_VERIFY is True."""
         mock_request.return_value = Mock(status_code=200, json=lambda: {"id": "test"})
-        
+
         orchestrator = RemoteOrchestrator(self.mock_server)
-        
+
         # Mock the auth methods to avoid actual auth logic
         with patch.object(orchestrator, '_auth_modes', return_value=['token']):
             with patch.object(orchestrator, '_candidate_base_urls', return_value=['http://192.168.1.100']):
                 with patch.object(orchestrator, '_filter_reachable', side_effect=lambda urls, *a, **kw: urls):
                     orchestrator._request("GET", "/api/v1/test/", timeout=10)
-        
+
         # Verify that verify=False was passed for internal IP
         call_kwargs = mock_request.call_args[1]
         self.assertFalse(call_kwargs.get('verify', True), "Should skip SSL verification for internal IP")
@@ -178,16 +175,16 @@ class TestRemoteRequestSSLVerification(unittest.TestCase):
     def test_public_domain_uses_ssl_verification(self, mock_request):
         """Test that public domains respect _REMOTE_VERIFY setting."""
         mock_request.return_value = Mock(status_code=200, json=lambda: {"id": "test"})
-        
+
         self.mock_server.host = "api.smsly.cloud"
         self.mock_server.api_url = "https://api.smsly.cloud"
         orchestrator = RemoteOrchestrator(self.mock_server)
-        
+
         with patch.object(orchestrator, '_auth_modes', return_value=['token']):
             with patch.object(orchestrator, '_candidate_base_urls', return_value=['https://api.smsly.cloud']):
                 with patch.object(orchestrator, '_filter_reachable', side_effect=lambda urls, *a, **kw: urls):
                     orchestrator._request("GET", "/api/v1/test/", timeout=10)
-        
+
         # For HTTPS public domains, verify should be True (when _REMOTE_VERIFY is True)
         call_kwargs = mock_request.call_args[1]
         self.assertTrue(call_kwargs.get('verify', False), "Should verify SSL for public HTTPS domain")
@@ -210,7 +207,7 @@ class TestRemoteOrchestratorLogging(unittest.TestCase):
     def test_init_logs_server_info(self, mock_logger):
         """Test that __init__ logs server initialization."""
         RemoteOrchestrator(self.mock_server)
-        
+
         # Should log initialization with server name and host
         mock_logger.info.assert_any_call(
             "RemoteOrchestrator initialized for %s (%s)",
@@ -222,9 +219,9 @@ class TestRemoteOrchestratorLogging(unittest.TestCase):
         """Test that _is_internal_target logs its decision."""
         # This is a static method, so we test it directly
         from apps.deployments.services.remote_orchestrator import _is_internal_target
-        
+
         _is_internal_target("http://192.168.1.1")
-        
+
         # Should log the URL, host, and decision
         mock_logger.debug.assert_called()
         call_args = mock_logger.debug.call_args[0]
@@ -362,14 +359,14 @@ class TestMeshOptimizationIntegration(unittest.TestCase):
     def test_worker_ip_from_error_log(self):
         """Test the specific worker IP from the deployment error."""
         worker_ip = "69.164.244.51"
-        
+
         # This IP should be detected as internal for mesh purposes
         # (even though it's a public IP, in the mesh context it's treated as internal)
         self.assertTrue(_host_is_ip(worker_ip), "Worker IP should be recognized as IP address")
-        
+
         # The _is_internal_target function should return True for any IP
         # because mesh VPN handles encryption
-        self.assertTrue(_is_internal_target(f"https://{worker_ip}"), 
+        self.assertTrue(_is_internal_target(f"https://{worker_ip}"),
                        "Mesh worker IP should skip SSL verification")
 
     def test_env_var_controls(self):
@@ -378,16 +375,18 @@ class TestMeshOptimizationIntegration(unittest.TestCase):
         with patch.dict(os.environ, {"SMSLY_REMOTE_VERIFY": "0"}):
             # Reload the module to pick up new env var
             import importlib
+
             import apps.deployments.services.remote_orchestrator as ro
             importlib.reload(ro)
-            
+
             # When SMSLY_REMOTE_VERIFY=0, _REMOTE_VERIFY should be False
             # Note: This is a simplified test; in practice, the module would need
             # to be reloaded or the value cached differently
-        
+
         # Test SMSLY_ENFORCE_INTERSERVER_TLS
         with patch.dict(os.environ, {"SMSLY_ENFORCE_INTERSERVER_TLS": "true"}):
             import importlib
+
             import apps.deployments.services.remote_orchestrator as ro
             importlib.reload(ro)
             # When enforcement is on, only HTTPS URLs should be returned

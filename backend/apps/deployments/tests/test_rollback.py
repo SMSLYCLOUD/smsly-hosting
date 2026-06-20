@@ -1,4 +1,5 @@
 import unittest
+
 # pylint: disable=invalid-name
 """
 Tests for deployment rollback functionality.
@@ -8,13 +9,15 @@ Validates that:
   - Rollback fails gracefully without a provider
   - Multiple sequential rollbacks preserve audit trail
 """
-import uuid
-from unittest.mock import patch
-from django.contrib.auth.models import User
-from rest_framework.test import APITestCase
-from rest_framework import status as http_status
-from apps.deployments.models import Service, Deployment
-from apps.cloud.models import CloudProvider
+import uuid  # noqa: E402
+from unittest.mock import patch  # noqa: E402
+
+from django.contrib.auth.models import User  # noqa: E402
+from rest_framework import status as http_status  # noqa: E402
+from rest_framework.test import APITestCase  # noqa: E402
+
+from apps.cloud.models import CloudProvider  # noqa: E402
+from apps.deployments.models import Deployment, Service  # noqa: E402
 
 
 class RollbackTests(APITestCase):

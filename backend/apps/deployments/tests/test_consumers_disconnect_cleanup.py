@@ -101,7 +101,7 @@ class TerminalConsumerDisconnectCleanupTests(TestCase):
             return None
 
         with patch.object(consumer, '_find_container', new=AsyncMock(return_value=None)), \
-             patch.object(consumer, '_out_queue') as q_mock, \
+             patch.object(consumer, '_out_queue'), \
              patch.object(consumer, '_close_exec_socket', new=AsyncMock()) as close_mock, \
              patch.object(consumer, '_async_setup', new=_noop):
             # The actual setup body returns early when _find_container is None.

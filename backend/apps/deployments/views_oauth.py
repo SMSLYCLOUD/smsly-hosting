@@ -1,20 +1,19 @@
 """OAuth configuration views."""
 from collections import OrderedDict
 
+from allauth.socialaccount import providers as allauth_providers
+from allauth.socialaccount.models import SocialApp
+from django.conf import settings
+from django.contrib.sites.models import Site
+from django.core.cache import cache
+from django.db.models.signals import post_delete, post_save
+from django.dispatch import receiver
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
-from allauth.socialaccount.models import SocialApp
-from allauth.socialaccount import providers as allauth_providers
-from django.contrib.sites.models import Site
-from django.conf import settings
-from django.core.cache import cache
-from django.db.models.signals import post_save, post_delete
-from django.dispatch import receiver
-
 
 # SECURITY (Issue 23): the oauth_credentials POST handler writes
 # credentials to SocialApp and the dashboard expects the next
@@ -53,7 +52,7 @@ def oauth_providers_status(request):
         google_configured = SocialApp.objects.filter(provider='google').exists()
         gitlab_configured = SocialApp.objects.filter(provider='gitlab').exists()
         bitbucket_configured = SocialApp.objects.filter(provider='bitbucket_oauth2').exists()
-        
+
         return Response({
             'github': github_configured,
             'google': google_configured,
@@ -78,7 +77,7 @@ def oauth_credentials(request):
             google_app = SocialApp.objects.filter(provider='google').first()
             gitlab_app = SocialApp.objects.filter(provider='gitlab').first()
             bitbucket_app = SocialApp.objects.filter(provider='bitbucket_oauth2').first()
-            
+
             return Response({
                 'github': {
                     'configured': github_app is not None,
@@ -102,12 +101,12 @@ def oauth_credentials(request):
                 {'error': str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-    
+
     elif request.method == 'POST':
         try:
             data = request.data
             site = Site.objects.get(id=settings.SITE_ID)
-            
+
             # Update GitHub
             if 'github' in data:
                 github_data = data['github']
@@ -121,7 +120,7 @@ def oauth_credentials(request):
                         }
                     )
                     github_app.sites.add(site)
-            
+
             # Update Google
             if 'google' in data:
                 google_data = data['google']
@@ -163,7 +162,7 @@ def oauth_credentials(request):
                         }
                     )
                     bitbucket_app.sites.add(site)
-            
+
             return Response({'success': True})
         except Exception as e:
             return Response(

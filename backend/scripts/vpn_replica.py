@@ -1,24 +1,26 @@
+import argparse
 import os
 import sys
+
 import django
-import argparse
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 django.setup()
 
-from apps.deployments.models_mesh import MeshNetwork, WireGuardPeer
-from apps.deployments.models_servers import ManagedServer
-from apps.deployments.services.wireguard_service import WireGuardService
-from apps.deployments.services.replication_service import ReplicationService
-from django.contrib.auth import get_user_model
+from apps.deployments.models_mesh import MeshNetwork, WireGuardPeer  # noqa: E402
+from apps.deployments.models_servers import ManagedServer  # noqa: E402
+from apps.deployments.services.replication_service import ReplicationService  # noqa: E402
+from apps.deployments.services.wireguard_service import WireGuardService  # noqa: E402
+from django.contrib.auth import get_user_model  # noqa: E402
+
 
 def run_script(mesh_name, server_ids, subnet, deploy_db):
     print(f"Setting up real VPN Mesh '{mesh_name}' and optionally DB Replication...")
 
     User = get_user_model()
     # Find a superuser to own it if needed, or leave unowned (system)
-    admin_user = User.objects.filter(is_superuser=True).first()
+    User.objects.filter(is_superuser=True).first()
 
     mesh, _ = MeshNetwork.objects.get_or_create(
         name=mesh_name,

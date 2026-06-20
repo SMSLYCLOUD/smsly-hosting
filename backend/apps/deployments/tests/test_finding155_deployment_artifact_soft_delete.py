@@ -26,7 +26,6 @@ from apps.deployments.services.safedeploy.branch_preview_manager import (
     BranchPreviewManager,
 )
 
-
 User = get_user_model()
 
 

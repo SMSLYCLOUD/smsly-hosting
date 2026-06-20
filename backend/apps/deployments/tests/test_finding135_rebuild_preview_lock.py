@@ -5,10 +5,10 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 
 from apps.deployments.models import Service
-from apps.deployments.models_safedeploy import PreviewEnvironment, MigrationValidation
-from apps.deployments.services.safedeploy import branch_preview_manager
-from apps.deployments.services.safedeploy.branch_preview_manager import BranchPreviewManager
-
+from apps.deployments.models_safedeploy import MigrationValidation, PreviewEnvironment
+from apps.deployments.services.safedeploy.branch_preview_manager import (
+    BranchPreviewManager,
+)
 
 User = get_user_model()
 

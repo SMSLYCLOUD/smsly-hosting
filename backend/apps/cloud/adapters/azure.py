@@ -1,17 +1,23 @@
-from typing import Dict, Any, List, Optional
 import logging
+from typing import Any
+
 from .base import BaseCloudAdapter
 
 logger = logging.getLogger(__name__)
 
 try:
-    from azure.mgmt.resource import ResourceManagementClient
+    from azure.identity import ClientSecretCredential
     from azure.mgmt.appcontainers import ContainerAppsAPIClient
     from azure.mgmt.appcontainers.models import (
-        ContainerApp, Template, Container, EnvironmentVar,
-        Configuration, Ingress, TrafficWeight
+        Configuration,
+        Container,
+        ContainerApp,
+        EnvironmentVar,
+        Ingress,
+        Template,
+        TrafficWeight,
     )
-    from azure.identity import ClientSecretCredential
+    from azure.mgmt.resource import ResourceManagementClient
     from azure.storage.blob import BlobServiceClient
     HAS_AZURE_SDK = True
 except ImportError:
@@ -57,13 +63,13 @@ class AzureAdapter(BaseCloudAdapter):
         return True
 
     def deploy_container(self, service_name: str, image: str,
-                         env_vars: Dict[str, str], cpu: int, memory: int, replicas: int = 1, **kwargs) -> str:
+                         env_vars: dict[str, str], cpu: int, memory: int, replicas: int = 1, **kwargs) -> str:
         """
         Deploys a container to Azure Container Apps.
         """
         resource_group = kwargs.get('resource_group', 'smsly-rg')
         managed_env_id = kwargs.get('managed_environment_id')
-        
+
         # Ensure resource group exists
         self.resource_client.resource_groups.create_or_update(
             resource_group, {"location": self.region}
@@ -139,7 +145,7 @@ class AzureAdapter(BaseCloudAdapter):
     def create_vpc(self, cidr_block: str) -> str:
         return f"/subscriptions/{self.subscription_id}/resourceGroups/smsly-rg/providers/Microsoft.Network/virtualNetworks/smsly-vnet"
 
-    def create_iam_role(self, role_name: str, policy: Dict[str, Any]) -> str:
+    def create_iam_role(self, role_name: str, policy: dict[str, Any]) -> str:
         return f"/subscriptions/{self.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/{role_name}"
 
     def store_secret(self, secret_name: str, secret_value: str) -> str:
@@ -147,7 +153,7 @@ class AzureAdapter(BaseCloudAdapter):
         return f"https://smsly-kv.vault.azure.net/secrets/{secret_name}"
 
     def get_metrics(self, resource_id: str, metric_name: str,
-                    start_time: str, end_time: str) -> List[Dict]:
+                    start_time: str, end_time: str) -> list[dict]:
         return []
 
     def create_waf_policy(self, name: str, scope: str = 'REGIONAL') -> str:

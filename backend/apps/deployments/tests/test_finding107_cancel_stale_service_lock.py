@@ -23,9 +23,8 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.utils import timezone
 
-from apps.deployments.models import Service, Deployment
 from apps.deployments import views as deployments_views
-
+from apps.deployments.models import Deployment, Service
 
 User = get_user_model()
 

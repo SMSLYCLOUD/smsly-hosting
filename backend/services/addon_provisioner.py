@@ -10,17 +10,19 @@ using Docker directly, without external PaaS dependencies.
 
 Uses the same Docker network as deployed services for internal connectivity.
 """
-import os
-import secrets
-import shlex
-import subprocess
-import logging
-import time
-import base64
-import uuid
-from urllib.parse import urlparse
-from typing import Dict, Optional, Tuple
-from decouple import config
+import base64  # noqa: E402
+import contextlib  # noqa: E402
+import logging  # noqa: E402
+import os  # noqa: E402
+import secrets  # noqa: E402
+import shlex  # noqa: E402
+import subprocess  # noqa: E402
+import time  # noqa: E402
+import uuid  # noqa: E402
+from typing import cast  # noqa: E402
+from urllib.parse import urlparse  # noqa: E402
+
+from decouple import config  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -159,14 +161,14 @@ class AddonProvisioner:
                 capture_output=True,
                 text=True
             )
-            
+
             # Get the network ID of the proxy network
             network_id_proc = subprocess.run(
                 ['docker', 'network', 'inspect', '-f', '{{.Id}}', self.proxy_network_name],
                 capture_output=True,
                 text=True
             )
-            
+
             if network_id_proc.returncode == 0:
                 network_id = network_id_proc.stdout.strip()
                 if network_id not in inspect_proc.stdout:
@@ -179,7 +181,7 @@ class AddonProvisioner:
         except Exception as e:
             logger.warning(f"Could not connect {container_name} to proxy network: {e}")
 
-    def _container_status(self, container_name: str) -> Tuple[Optional[str], bool]:
+    def _container_status(self, container_name: str) -> tuple[str | None, bool]:
         """
         Return (container_id, is_running) for a given docker container name.
 
@@ -215,7 +217,7 @@ class AddonProvisioner:
         except Exception:
             return False
 
-    def _parse_connection_url(self, url: str) -> Dict[str, object]:
+    def _parse_connection_url(self, url: str) -> dict[str, object]:
         """Parse a connection URL into components used for idempotent reprovisioning."""
         parsed = urlparse(str(url or '').strip())
         db_name = ''
@@ -280,12 +282,12 @@ class AddonProvisioner:
                 return set()
 
             inspect_result = subprocess.run(
-                ['docker', 'inspect', '--format', '{{range $p, $conf := .HostConfig.PortBindings}}{{range $conf}}{{.HostPort}} {{end}}{{end}}'] + container_ids,
+                ['docker', 'inspect', '--format', '{{range $p, $conf := .HostConfig.PortBindings}}{{range $conf}}{{.HostPort}} {{end}}{{end}}', *container_ids],
                 capture_output=True,
                 text=True,
                 check=True
             )
-            
+
             occupied = set()
             for line in inspect_result.stdout.strip().splitlines():
                 for port in line.split():
@@ -299,16 +301,16 @@ class AddonProvisioner:
     def _get_free_host_port(self, base_port: int) -> int:
         """Find a free port on the host for Lite Agent connectivity."""
         occupied = self._get_occupied_host_ports()
-        
+
         # Add common system ports to occupied set
         occupied.update({22, 80, 443, 8000, 8090, 2375, 5000, 5001, 7000, 5672, 5432, 6379})
-        
+
         # Start searching from a high range (50000+)
         # Use base_port to stay somewhat consistent (e.g. 5432 -> 55432)
         start_port = 50000 + (base_port % 10000)
         if start_port > 64000:
             start_port = 50000
-            
+
         for port in range(start_port, 65000):
             if port not in occupied:
                 import socket
@@ -320,7 +322,7 @@ class AddonProvisioner:
                         continue
         raise RuntimeError(f"No free host ports available in range {start_port}-65000")
 
-    def provision(self, addon) -> Tuple[str, str]:
+    def provision(self, addon) -> tuple[str, str]:
         """
         Provision a database addon container.
 
@@ -351,8 +353,8 @@ class AddonProvisioner:
 
         generic_config = self.GENERIC_ADDONS_CONFIG.get(addon_type)
         if generic_config:
-            image = generic_config['image']
-            port = generic_config['port']
+            image = cast(str, generic_config['image'])
+            port = cast(int, generic_config['port'])
 
         if not image:
             raise ValueError(f"Unknown addon type: {addon_type}")
@@ -367,6 +369,7 @@ class AddonProvisioner:
         existing_cid, is_running = self._container_status(container_name)
 
         if existing_cid:
+            cid: str = existing_cid
             # Check if Traefik routing labels match the current public_domain
             try:
                 inspect_proc = subprocess.run(
@@ -389,15 +392,19 @@ class AddonProvisioner:
                         logger.info(f"Public domain changed for {container_name}. Recreating container to update Traefik labels.")
                         subprocess.run(['docker', 'rm', '-f', container_name], capture_output=True, check=False)
                         existing_cid = None
+                        cid = ""
             except Exception as e:
                 logger.warning(f"Failed to inspect labels for {container_name}: {e}")
 
-        if existing_cid:
+        if existing_cid and cid:
             if not is_running:
                 logger.info("Starting existing addon container: %s", container_name)
                 self._start_container(container_name)
                 time.sleep(1)
                 existing_cid, _ = self._container_status(container_name)
+                if not existing_cid:
+                    raise RuntimeError(f"Container {container_name} disappeared after start")
+                cid = existing_cid
 
             # Enforce network connection for existing containers to fix missing aliases
             # when upgrading from older platforms or recovering from network drops.
@@ -409,7 +416,7 @@ class AddonProvisioner:
                 # Check if the container is already connected to the network with the correct alias
                 # to prevent dropping active database connections on every deployment.
                 inspect_proc = subprocess.run(
-                    ['docker', 'inspect', '-f', f'{{{{range .NetworkSettings.Networks}}}}{{{{.Aliases}}}}{{{{end}}}}', container_name],
+                    ['docker', 'inspect', '-f', '{{range .NetworkSettings.Networks}}{{.Aliases}}{{end}}', container_name],
                     capture_output=True,
                     text=True,
                     check=False
@@ -443,12 +450,12 @@ class AddonProvisioner:
                         use_http=True,
                     )
                 else:
-                    self._wait_for_health(container_name, port)
+                    self._wait_for_health(container_name, cast(int, port))
             except Exception as exc:  # pragma: no cover
                 logger.warning("Addon health check failed for %s: %s", container_name, exc)
 
             if existing_url:
-                return existing_cid, existing_url
+                return cid, existing_url
 
             # URL missing in DB but container exists (e.g. task crashed after docker run).
             # Attempt best-effort reconstruction from container config to avoid password rotation.
@@ -457,29 +464,29 @@ class AddonProvisioner:
                 if addon_type == 'MINIO':
                     minio_user = self._get_container_env(container_name, 'MINIO_ROOT_USER')
                     minio_password = self._get_container_env(container_name, 'MINIO_ROOT_PASSWORD')
-                    return existing_cid, f"s3://{minio_user}:{minio_password}@{hostname}:{port}"
+                    return cid, f"s3://{minio_user}:{minio_password}@{hostname}:{port}"
 
                 if addon_type == 'POSTGRES':
                     db_user = self._get_container_env(container_name, 'POSTGRES_USER')
                     db_name = self._get_container_env(container_name, 'POSTGRES_DB')
                     password = self._get_container_env(container_name, 'POSTGRES_PASSWORD')
-                    return existing_cid, f"postgresql://{db_user}:{password}@{hostname}:{port}/{db_name}"
+                    return cid, f"postgresql://{db_user}:{password}@{hostname}:{port}/{db_name}"
 
                 if addon_type == 'MYSQL':
                     db_user = self._get_container_env(container_name, 'MYSQL_USER')
                     db_name = self._get_container_env(container_name, 'MYSQL_DATABASE')
                     password = self._get_container_env(container_name, 'MYSQL_PASSWORD')
-                    return existing_cid, f"mysql://{db_user}:{password}@{hostname}:{port}/{db_name}"
+                    return cid, f"mysql://{db_user}:{password}@{hostname}:{port}/{db_name}"
 
                 if addon_type == 'MONGODB':
                     db_user = self._get_container_env(container_name, 'MONGO_INITDB_ROOT_USERNAME')
                     password = self._get_container_env(container_name, 'MONGO_INITDB_ROOT_PASSWORD')
-                    return existing_cid, f"mongodb://{db_user}:{password}@{hostname}:{port}/app_db?authSource=admin"
+                    return cid, f"mongodb://{db_user}:{password}@{hostname}:{port}/app_db?authSource=admin"
 
                 if addon_type == 'RABBITMQ':
                     user = self._get_container_env(container_name, 'RABBITMQ_DEFAULT_USER')
                     password = self._get_container_env(container_name, 'RABBITMQ_DEFAULT_PASS')
-                    return existing_cid, f"amqp://{user}:{password}@{hostname}:{port}//"
+                    return cid, f"amqp://{user}:{password}@{hostname}:{port}//"
 
                 if addon_type == 'REDIS':
                     result = subprocess.run(
@@ -494,32 +501,34 @@ class AddonProvisioner:
                             idx = cmd.index('--requirepass')
                             if idx + 1 < len(cmd) and cmd[idx + 1]:
                                 password = cmd[idx + 1]
-                                return existing_cid, f"redis://:{password}@{hostname}:{port}/0"
+                                return cid, f"redis://:{password}@{hostname}:{port}/0"
 
                 if addon_type in ('QDRANT', 'ELASTICSEARCH'):
-                    return existing_cid, f"http://{hostname}:{port}"
+                    return cid, f"http://{hostname}:{port}"
 
                 if generic_config:
-                    scheme = generic_config.get('scheme', addon_type.lower())
+                    scheme = cast(str, generic_config.get('scheme', addon_type.lower()))
                     user = 'admin'
                     db = 'app_db'
                     password = ''
                     if generic_config.get('auth'):
                         # attempt to fetch password
-                        pass_env = generic_config.get('pass_env') or generic_config.get('root_pass_env')
+                        pass_env = cast(str, generic_config.get('pass_env') or generic_config.get('root_pass_env') or '')
                         if pass_env:
                             password = self._get_container_env(container_name, pass_env)
-                        if generic_config.get('user_env'):
-                            user = self._get_container_env(container_name, generic_config['user_env'])
-                        if generic_config.get('db_env'):
-                            db = self._get_container_env(container_name, generic_config['db_env'])
+                        user_env_val = cast(str, generic_config.get('user_env') or '')
+                        if user_env_val:
+                            user = self._get_container_env(container_name, user_env_val)
+                        db_env_val = cast(str, generic_config.get('db_env') or '')
+                        if db_env_val:
+                            db = self._get_container_env(container_name, db_env_val)
 
-                        if generic_config.get('user_env'):
-                            return existing_cid, f"{scheme}://{user}:{password}@{hostname}:{port}/{db}"
+                        if user_env_val:
+                            return cid, f"{scheme}://{user}:{password}@{hostname}:{port}/{db}"
                         else:
-                            return existing_cid, f"{scheme}://:{password}@{hostname}:{port}"
+                            return cid, f"{scheme}://:{password}@{hostname}:{port}"
                     else:
-                        return existing_cid, f"{scheme}://{hostname}:{port}"
+                        return cid, f"{scheme}://{hostname}:{port}"
 
             except Exception as exc:
                 logger.warning("Failed to reconstruct addon URL for %s: %s", container_name, exc)
@@ -541,31 +550,31 @@ class AddonProvisioner:
             if generic_config:
                 if generic_config.get('auth') and not password:
                     raise ValueError(f"Existing connection_url is missing a password for {addon_type}; refusing to reprovision.")
-                container_id, _ = self._provision_generic(addon_type, container_name, password, port, hostname, generic_config, username=username, db_name=db_name, public_domain=public_domain)
+                container_id, _ = self._provision_generic(addon_type, container_name, password, cast(int, port), hostname, cast(dict, generic_config), username=username, db_name=db_name, public_domain=public_domain)
             elif addon_type == 'MINIO':
-                container_id, _ = self._provision_minio(container_name, password, port, hostname, username=username, public_domain=public_domain)
+                container_id, _ = self._provision_minio(container_name, password, cast(int, port), hostname, username=username, public_domain=public_domain)
             elif addon_type == 'POSTGRES':
                 container_id, _ = self._provision_postgres(
                     container_name,
                     password,
-                    port,
+                    cast(int, port),
                     hostname,
                     db_user=username or None,
                     db_name=db_name or None,
                     public_domain=public_domain,
                 )
             elif addon_type == 'REDIS':
-                container_id, _ = self._provision_redis(container_name, password, port, hostname, public_domain=public_domain)
+                container_id, _ = self._provision_redis(container_name, password, cast(int, port), hostname, public_domain=public_domain)
             elif addon_type == 'MYSQL':
-                container_id, _ = self._provision_mysql(container_name, password, port, hostname, public_domain=public_domain)
+                container_id, _ = self._provision_mysql(container_name, password, cast(int, port), hostname, public_domain=public_domain)
             elif addon_type == 'MONGODB':
-                container_id, _ = self._provision_mongodb(container_name, password, port, hostname, public_domain=public_domain)
+                container_id, _ = self._provision_mongodb(container_name, password, cast(int, port), hostname, public_domain=public_domain)
             elif addon_type == 'QDRANT':
-                container_id, _ = self._provision_qdrant(container_name, port, hostname, public_domain=public_domain)
+                container_id, _ = self._provision_qdrant(container_name, cast(int, port), hostname, public_domain=public_domain)
             elif addon_type == 'ELASTICSEARCH':
-                container_id, _ = self._provision_elasticsearch(container_name, port, hostname, public_domain=public_domain)
+                container_id, _ = self._provision_elasticsearch(container_name, cast(int, port), hostname, public_domain=public_domain)
             elif addon_type == 'RABBITMQ':
-                container_id, _ = self._provision_rabbitmq(container_name, password, port, hostname, public_domain=public_domain)
+                container_id, _ = self._provision_rabbitmq(container_name, password, cast(int, port), hostname, public_domain=public_domain)
             else:
                 raise ValueError(f"Unsupported addon type: {addon_type}")
 
@@ -582,73 +591,73 @@ class AddonProvisioner:
         password = secrets.token_urlsafe(24) if is_passworded else ''
 
         if generic_config:
-            container_id, connection_url = self._provision_generic(addon_type, container_name, password, port, alias_name, generic_config, public_domain=public_domain)
+            container_id, connection_url = self._provision_generic(addon_type, container_name, password, cast(int, port), alias_name, cast(dict, generic_config), public_domain=public_domain)
         elif addon_type == 'MINIO':
             # Minio needs a username too, we can auto-generate one or use a default like 'admin'
             username = secrets.token_hex(8)
-            container_id, connection_url = self._provision_minio(container_name, password, port, alias_name, username=username, public_domain=public_domain)
+            container_id, connection_url = self._provision_minio(container_name, password, cast(int, port), alias_name, username=username, public_domain=public_domain)
         elif addon_type == 'POSTGRES':
-            container_id, connection_url = self._provision_postgres(container_name, password, port, alias_name, public_domain=public_domain)
+            container_id, connection_url = self._provision_postgres(container_name, password, cast(int, port), alias_name, public_domain=public_domain)
         elif addon_type == 'REDIS':
-            container_id, connection_url = self._provision_redis(container_name, password, port, alias_name, public_domain=public_domain)
+            container_id, connection_url = self._provision_redis(container_name, password, cast(int, port), alias_name, public_domain=public_domain)
         elif addon_type == 'MYSQL':
-            container_id, connection_url = self._provision_mysql(container_name, password, port, alias_name, public_domain=public_domain)
+            container_id, connection_url = self._provision_mysql(container_name, password, cast(int, port), alias_name, public_domain=public_domain)
         elif addon_type == 'MONGODB':
-            container_id, connection_url = self._provision_mongodb(container_name, password, port, alias_name, public_domain=public_domain)
+            container_id, connection_url = self._provision_mongodb(container_name, password, cast(int, port), alias_name, public_domain=public_domain)
         elif addon_type == 'QDRANT':
-            container_id, connection_url = self._provision_qdrant(container_name, port, alias_name, public_domain=public_domain)
+            container_id, connection_url = self._provision_qdrant(container_name, cast(int, port), alias_name, public_domain=public_domain)
         elif addon_type == 'ELASTICSEARCH':
-            container_id, connection_url = self._provision_elasticsearch(container_name, port, alias_name, public_domain=public_domain)
+            container_id, connection_url = self._provision_elasticsearch(container_name, cast(int, port), alias_name, public_domain=public_domain)
         elif addon_type == 'RABBITMQ':
-            container_id, connection_url = self._provision_rabbitmq(container_name, password, port, alias_name, public_domain=public_domain)
+            container_id, connection_url = self._provision_rabbitmq(container_name, password, cast(int, port), alias_name, public_domain=public_domain)
         else:
             raise ValueError(f"Unsupported addon type: {addon_type}")
 
         logger.info(f"Addon {addon_type} provisioned: {container_name} (alias: {alias_name})")
-        
+
         # Final bridge connection for new/missing containers
         self._connect_to_proxy_network(container_name)
-        
+
         # ── LITE AGENT ROUTING ──
         # If we are provisioning on the Master but the service is on a Remote Node (Lite Agent),
         # we must expose the port and translate 'localhost' to the Master's Public IP.
         service_server = getattr(addon.service, 'server', None)
         if service_server and not service_server.is_primary:
             master_ip = os.environ.get("PUBLIC_IP") or "127.0.0.1"
-            
+
             # Find a free port on the host to map to this container
-            host_port = self._get_free_host_port(port)
-            
+            host_port = self._get_free_host_port(cast(int, port))
+
             # Re-provision with port exposure if not already done
             # (In a real scenario, we'd modify the docker run command to include -p)
             # For this fix, we'll force a re-provision with the host port.
             try:
                 logger.info(f"Exposing {addon_type} on Master host port {host_port} for Lite Agent")
                 subprocess.run(['docker', 'rm', '-f', container_name], capture_output=True)
-                
+
                 # We need to call the internal provisioner again with the port mapping.
                 # Since we don't want to refactor everything yet, we'll do a quick manual run.
                 # This is a bit hacky but effective for this specific architectural bridge.
                 if addon_type == 'POSTGRES':
-                    container_id, _ = self._provision_postgres(container_name, password, port, alias_name, host_port=host_port)
+                    container_id, _ = self._provision_postgres(container_name, password, cast(int, port), alias_name, host_port=host_port)
                 elif addon_type == 'REDIS':
-                    container_id, _ = self._provision_redis(container_name, password, port, alias_name, host_port=host_port)
+                    container_id, _ = self._provision_redis(container_name, password, cast(int, port), alias_name, host_port=host_port)
                 else:
                     # Fallback for others
-                    container_id, _ = self._provision_generic(addon_type, container_name, password, port, alias_name, generic_config, host_port=host_port)
-                
+                    container_id, _ = self._provision_generic(addon_type, container_name, password, cast(int, port), alias_name, cast(dict, generic_config), host_port=host_port)
+
                 # Update URL to use Master IP and Host Port
                 from urllib.parse import urlparse, urlunparse
-                parsed = urlparse(connection_url)
-                new_netloc = f"{parsed.username}:{parsed.password}@{master_ip}:{host_port}" if parsed.password else f"{parsed.username}@{master_ip}:{host_port}"
-                connection_url = urlunparse(parsed._replace(netloc=new_netloc))
-                
+                new_parsed = urlparse(connection_url)
+                new_netloc = f"{new_parsed.username}:{new_parsed.password}@{master_ip}:{host_port}" if new_parsed.password else f"{new_parsed.username}@{master_ip}:{host_port}"
+                connection_url = urlunparse(new_parsed._replace(netloc=new_netloc))
+
             except Exception as e:
                 logger.warning(f"Failed to auto-expose port for Lite Agent: {e}")
 
         return container_id, connection_url
 
-    def provision_dispatch(self, addon) -> Tuple[str, str]:
+    def provision_dispatch(self, addon) -> tuple[str, str]:
         """
         Provision an addon on the correct host.
 
@@ -664,7 +673,7 @@ class AddonProvisioner:
             return self.provision_remote(addon, server)
         return self.provision(addon)
 
-    def provision_remote(self, addon, server) -> Tuple[str, str]:
+    def provision_remote(self, addon, server) -> tuple[str, str]:
         """
         Provision an addon on a full-stack remote node via SSH.
 
@@ -692,8 +701,8 @@ class AddonProvisioner:
         port = self.ADDON_PORTS.get(addon_type)
         generic_config = self.GENERIC_ADDONS_CONFIG.get(addon_type)
         if generic_config:
-            image = generic_config['image']
-            port = generic_config['port']
+            image = cast(str, generic_config['image'])
+            port = cast(int, generic_config['port'])
         if not image:
             raise ValueError(f"Unknown addon type: {addon_type}")
 
@@ -770,7 +779,7 @@ class AddonProvisioner:
 
         elif addon_type == 'MONGODB':
             cmd_parts.extend([
-                '-e', f'MONGO_INITDB_ROOT_USERNAME=admin',
+                '-e', 'MONGO_INITDB_ROOT_USERNAME=admin',
                 '-e', f'MONGO_INITDB_ROOT_PASSWORD={password}',
                 '-v', f'{container_name}-data:/data/db',
             ])
@@ -833,7 +842,7 @@ class AddonProvisioner:
             if generic_config.get('db_env'):
                 cmd_parts.extend(['-e', f'{generic_config["db_env"]}={db}'])
             cluster_id = self._generate_kraft_cluster_id()
-            env_extra = generic_config.get('env', {})
+            env_extra = cast(dict, generic_config.get('env') or {})
             for k, v in env_extra.items():
                 val = (
                     v.replace('{password}', password)
@@ -847,11 +856,11 @@ class AddonProvisioner:
             if generic_config.get('command'):
                 cmd_args = [
                     arg.replace('{password}', password).replace('{hostname}', hostname)
-                    for arg in generic_config['command']
+                    for arg in cast(list, generic_config['command'])
                 ]
                 cmd_parts.extend(cmd_args)
             cmd_str = ' '.join(shlex.quote(p) for p in cmd_parts)
-            scheme = generic_config.get('scheme', addon_type.lower())
+            scheme = cast(str, generic_config.get('scheme', addon_type.lower()))
             if generic_config.get('auth'):
                 if generic_config.get('user_env'):
                     connection_url = f"{scheme}://{user}:{password}@{hostname}:{port}/{db}"
@@ -892,7 +901,7 @@ class AddonProvisioner:
 
     def _provision_rabbitmq(self, container_name: str,
                             password: str, port: int,
-                            alias_name: str = '', public_domain: str = None) -> Tuple[str, str]:
+                            alias_name: str = '', public_domain: str | None = None) -> tuple[str, str]:
         """Provision a RabbitMQ container with management plugin enabled."""
         user = "appuser"
         vhost = "/"
@@ -924,7 +933,7 @@ class AddonProvisioner:
 
     def _provision_minio(self, container_name: str,
                          password: str, port: int,
-                         alias_name: str = '', username: str = 'admin', public_domain: str = None) -> Tuple[str, str]:
+                         alias_name: str = '', username: str = 'admin', public_domain: str | None = None) -> tuple[str, str]:
         """Provision a MinIO container."""
         cmd = [
             'docker', 'run', '-d',
@@ -983,7 +992,7 @@ class AddonProvisioner:
 
     def _provision_generic(self, addon_type: str, container_name: str,
                            password: str, port: int, alias_name: str, config: dict,
-                           username: str = '', db_name: str = '', public_domain: str = None, host_port: int = None) -> Tuple[str, str]:
+                           username: str = '', db_name: str = '', public_domain: str | None = None, host_port: int | None = None) -> tuple[str, str]:
         """Provision a generic addon from GENERIC_ADDONS_CONFIG."""
         cmd = [
             'docker', 'run', '-d',
@@ -998,7 +1007,7 @@ class AddonProvisioner:
 
         if public_domain:
             # Use dashboard port if explicitly defined for this addon, otherwise default API port
-            target_port = config.get('dashboard_port', port)
+            target_port = cast(int, config.get('dashboard_port', port))
             self._append_traefik_labels(cmd, container_name.replace(".", "-").replace("_", "-"), public_domain, target_port)
 
         if alias_name:
@@ -1019,7 +1028,7 @@ class AddonProvisioner:
         if config.get('db_env'):
             cmd.extend(['-e', f'{config["db_env"]}={db}'])
 
-        env_extra = config.get('env', {})
+        env_extra = cast(dict, config.get('env') or {})
         for k, v in env_extra.items():
             # Format custom variables if they need placeholder injection
             val = (
@@ -1032,14 +1041,14 @@ class AddonProvisioner:
         cmd.append(config['image'])
 
         if config.get('command'):
-            cmd_args = [arg.replace('{password}', password).replace('{hostname}', hostname) for arg in config['command']]
+            cmd_args = [arg.replace('{password}', password).replace('{hostname}', hostname) for arg in cast(list, config['command'])]
             cmd.extend(cmd_args)
 
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         container_id = result.stdout.strip()[:12]
 
         # Build connection URL
-        scheme = config.get('scheme', addon_type.lower())
+        scheme = cast(str, config.get('scheme', addon_type.lower()))
         if config.get('auth'):
             if config.get('user_env'):
                 connection_url = f"{scheme}://{user}:{password}@{hostname}:{port}/{db}"
@@ -1089,11 +1098,11 @@ class AddonProvisioner:
         password: str,
         port: int,
         alias_name: str = '',
-        db_user: Optional[str] = None,
-        db_name: Optional[str] = None,
-        public_domain: str = None,
-        host_port: int = None,
-    ) -> Tuple[str, str]:
+        db_user: str | None = None,
+        db_name: str | None = None,
+        public_domain: str | None = None,
+        host_port: int | None = None,
+    ) -> tuple[str, str]:
         """Provision a PostgreSQL container."""
         # Derive service-specific user/db from alias (e.g. "postgres-myapp")
         # so each addon gets isolated credentials.
@@ -1166,8 +1175,8 @@ class AddonProvisioner:
 
     def _provision_redis(self, container_name: str,
                          password: str, port: int,
-                         alias_name: str = '', public_domain: str = None,
-                         host_port: int = None) -> Tuple[str, str]:
+                         alias_name: str = '', public_domain: str | None = None,
+                         host_port: int | None = None) -> tuple[str, str]:
         """Provision a Redis container with authentication."""
         cmd = [
             'docker', 'run', '-d',
@@ -1203,7 +1212,7 @@ class AddonProvisioner:
 
     def _provision_mysql(self, container_name: str,
                          password: str, port: int,
-                         alias_name: str = '', public_domain: str = None) -> Tuple[str, str]:
+                         alias_name: str = '', public_domain: str | None = None) -> tuple[str, str]:
         """Provision a MySQL container."""
         db_name = "app_db"
         db_user = "app_user"
@@ -1243,7 +1252,7 @@ class AddonProvisioner:
 
     def _provision_mongodb(self, container_name: str,
                            password: str, port: int,
-                           alias_name: str = '', public_domain: str = None) -> Tuple[str, str]:
+                           alias_name: str = '', public_domain: str | None = None) -> tuple[str, str]:
         """Provision a MongoDB container."""
         db_user = "app_user"
         db_name = "app_db"
@@ -1278,7 +1287,7 @@ class AddonProvisioner:
 
     def _provision_qdrant(self, container_name: str,
                           port: int,
-                          alias_name: str = '', public_domain: str = None) -> Tuple[str, str]:
+                          alias_name: str = '', public_domain: str | None = None) -> tuple[str, str]:
         """Provision a Qdrant vector database container."""
         cmd = [
             'docker', 'run', '-d',
@@ -1310,7 +1319,7 @@ class AddonProvisioner:
 
     def _provision_elasticsearch(self, container_name: str,
                                  port: int,
-                                 alias_name: str = '', public_domain: str = None) -> Tuple[str, str]:
+                                 alias_name: str = '', public_domain: str | None = None) -> tuple[str, str]:
         """Provision a single-node Elasticsearch container."""
         cmd = [
             'docker', 'run', '-d',
@@ -1394,7 +1403,7 @@ class AddonProvisioner:
         raise RuntimeError(f"{container_name} health check timed out after {timeout}s")
 
     def deprovision(self, container_id: str,
-                    container_name: Optional[str] = None) -> bool:
+                    container_name: str | None = None) -> bool:
         """
         Remove an addon container and its volumes.
 
@@ -1423,7 +1432,7 @@ class AddonProvisioner:
             return False
 
     def deprovision_remote(self, container_id: str, server,
-                           container_name: Optional[str] = None) -> bool:
+                           container_name: str | None = None) -> bool:
         """
         Remove an addon container from a remote full-stack node via SSH.
         """
@@ -1451,7 +1460,7 @@ class AddonProvisioner:
             return False
 
     def deprovision_dispatch(self, container_id: str, addon,
-                             container_name: Optional[str] = None) -> bool:
+                             container_name: str | None = None) -> bool:
         """
         De-provision an addon from the correct host (master or full-stack node).
         """
@@ -1461,7 +1470,7 @@ class AddonProvisioner:
             return self.deprovision_remote(container_id, server, container_name)
         return self.deprovision(container_id, container_name)
 
-    def get_status(self, container_id: str) -> Dict:
+    def get_status(self, container_id: str) -> dict:
         """Get the status of an addon container."""
         try:
             result = subprocess.run(
@@ -1526,15 +1535,15 @@ class AddonProvisioner:
         """
         import os
         from datetime import datetime
-        
+
         container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_dir = os.path.join("/tmp", "backups", str(addon.service.id))
         os.makedirs(backup_dir, exist_ok=True)
-        
+
         filename = f"{addon.addon_type.lower()}_{addon.id}_{timestamp}.dump"
         backup_path = os.path.join(backup_dir, filename)
-        
+
         try:
             if addon.addon_type == 'POSTGRES':
                 postgres_user = self._get_container_env(
@@ -1602,7 +1611,7 @@ class AddonProvisioner:
         """
         container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
         validated_backup_path = self._validate_backup_path(backup_path)
-        
+
         try:
             if addon.addon_type == 'POSTGRES':
                 postgres_user = self._get_container_env(
@@ -1655,10 +1664,8 @@ class AddonProvisioner:
                 logger.warning("Native restore not implemented for %s, skipping gracefully.", addon.addon_type)
 
             # Clean up the backup file after a successful restore.
-            try:
+            with contextlib.suppress(OSError):
                 os.remove(backup_path)
-            except OSError:
-                pass
 
             return True
         except Exception as e:

@@ -1,29 +1,32 @@
-import os
-import io
-import sys
-import tarfile
-import json
-import uuid
-import logging
-import shutil
-import traceback
-import docker
-import tempfile
-import hashlib
 import base64
 import binascii
+import contextlib
+import hashlib
+import json
+import logging
+import os
+import shutil
 import struct
-from django.core.exceptions import PermissionDenied, ObjectDoesNotExist
-from django.utils import timezone
-from django.utils.text import slugify
-from django.conf import settings
+import sys
+import tarfile
+import tempfile
+import time
+import traceback
+import uuid
+
+import docker
 from cryptography.exceptions import InvalidSignature
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes, hmac, padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from apps.deployments.models import Service, EnvironmentVariable
-from apps.deployments.models_backup import ServiceBackup, ServerBackup
+from django.conf import settings
+from django.core.exceptions import PermissionDenied
+from django.utils import timezone
+from django.utils.text import slugify
+
+from apps.deployments.models import EnvironmentVariable, Service
+from apps.deployments.models_backup import ServerBackup, ServiceBackup
 from apps.deployments.models_storage import Volume
 
 logger = logging.getLogger(__name__)
@@ -514,7 +517,7 @@ class BackupService:
             with tarfile.open(archive_path, "r:gz") as tar:
                 _safe_tar_extractall(tar, temp_dir)
 
-            with open(os.path.join(temp_dir, "metadata.json"), 'r') as f:
+            with open(os.path.join(temp_dir, "metadata.json")) as f:
                 metadata = json.load(f)
 
             # 2. Restore Env Vars
@@ -597,7 +600,7 @@ class BackupService:
                     vol_tar_path = os.path.join(temp_dir, vol_meta['filename'])
                     if os.path.exists(vol_tar_path):
                         logger.info(f"Restoring volume {vol_obj.name}...")
-                        
+
                         # Use docker-py to restore data instead of subprocess
                         # 1. Start a temporary helper container
                         helper = self.docker_client.containers.run(
@@ -607,7 +610,7 @@ class BackupService:
                             detach=True,
                             remove=True
                         )
-                        
+
                         try:
                             # Docker put_archive expects an uncompressed tar
                             # stream, so wrap the saved .tar.gz as a file in a
@@ -643,8 +646,11 @@ class BackupService:
 
             logger.info("Restore complete. Queueing deployment.")
             from apps.deployments.models import Deployment
-            from apps.deployments.tasks_deploy import enqueue_smart_deploy_task, _resolve_provider_for_service
-            
+            from apps.deployments.tasks_deploy import (
+                _resolve_provider_for_service,
+                enqueue_smart_deploy_task,
+            )
+
             provider = _resolve_provider_for_service(target_service, prefer_local=True)
             if provider:
                 deployment = Deployment.objects.create(
@@ -653,7 +659,7 @@ class BackupService:
                     commit_hash='latest',
                     commit_message=f"Restored from backup {backup.id}",
                 )
-                
+
                 # Ensure the service is properly marked as active before deployment
                 target_service.status = Service.Status.ACTIVE
 
@@ -667,22 +673,22 @@ class BackupService:
                     provider_id=str(provider.id),
                     skip_review=True
                 )
-                
+
                 # Force the deployment to become immediately "latest" by clearing any cached status
                 # and ensuring immediate processing
                 from django.core.cache import cache
                 cache.delete(f'service_{target_service.id}_latest_deployment')
-                
+
                 # Also update the service's active_target metadata to reflect the restored state
                 target_service.active_target_type = 'local'  # Assuming restored services run locally
                 target_service.save()
-                
+
             else:
                 logger.warning(f"Could not resolve provider to queue deployment for restored service {target_service.id}")
                 # Ensure service is marked as active even if provider resolution fails
                 target_service.status = Service.Status.ACTIVE
                 target_service.save()
-                
+
             return True
 
         except Exception as e:
@@ -697,7 +703,7 @@ class BackupService:
     def _backup_remote_service(self, service, backup, server, include_secret_values) -> ServiceBackup:
         """Perform backup of a service running on a remote/lite-agent node via SSH."""
         logger.info(f"Starting remote backup of service {service.name} on server {server.name}")
-        
+
         # Instantiate SSHClient
         from apps.deployments.services.ssh_client import SSHClient
         ssh = SSHClient(
@@ -737,18 +743,17 @@ class BackupService:
                     has_image = True
                 else:
                     logger.warning(f"Failed to save remote image: {err or out}")
-            else:
-                # If not running, fall back to configured docker_image
-                if service.docker_image:
-                    image_tag = service.docker_image
-                    # Try to pull it on remote if not exists
-                    ssh.exec_command(f"docker image inspect {image_tag} || docker pull {image_tag}")
-                    logger.info(f"Saving remote image {image_tag}...")
-                    out, err, code = ssh.exec_command(f"docker save -o {remote_image_path} {image_tag}")
-                    if code == 0:
-                        has_image = True
-                    else:
-                        logger.warning(f"Failed to save remote image: {err or out}")
+            # If not running, fall back to configured docker_image
+            elif service.docker_image:
+                image_tag = service.docker_image
+                # Try to pull it on remote if not exists
+                ssh.exec_command(f"docker image inspect {image_tag} || docker pull {image_tag}")
+                logger.info(f"Saving remote image {image_tag}...")
+                out, err, code = ssh.exec_command(f"docker save -o {remote_image_path} {image_tag}")
+                if code == 0:
+                    has_image = True
+                else:
+                    logger.warning(f"Failed to save remote image: {err or out}")
 
             # 3. Backup Volumes remotely
             volumes = Volume.objects.filter(service=service)
@@ -761,9 +766,8 @@ class BackupService:
                     continue
 
                 vol_filename = f"volume_{vol.name}.tar.gz"
-                remote_vol_path = f"{remote_temp_dir}/{vol_filename}"
                 logger.info(f"Backing up remote volume {vol.name}...")
-                
+
                 # Compress remote volume using alpine helper container
                 compress_cmd = (
                     f"docker run --rm -v {vol.name}:/volume_data:ro "
@@ -827,7 +831,7 @@ class BackupService:
             local_filename = f"backup_{safe_name}_{uuid.uuid4().hex[:8]}.tar.gz"
             local_filepath = os.path.join(backups_dir, local_filename)
 
-            logger.info(f"Downloading remote backup archive to local control plane...")
+            logger.info("Downloading remote backup archive to local control plane...")
             ssh.download_file(remote_archive_path, local_filepath)
 
             # Optional encryption
@@ -840,7 +844,7 @@ class BackupService:
             backup.size_bytes = os.path.getsize(local_filepath)
             backup.completed_at = timezone.now()
             backup.save()
-            
+
             self._prune_old_backups(ServiceBackup, service_id=service.id)
             return backup
 
@@ -850,7 +854,7 @@ class BackupService:
             ssh.exec_command(f"rm -rf {remote_temp_dir} {remote_archive_path}")
             if image_tag.startswith("backup/"):
                 ssh.exec_command(f"docker rmi -f {image_tag}")
-            
+
             # Clean up local temp files
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
@@ -879,7 +883,7 @@ class BackupService:
             with tarfile.open(archive_path, "r:gz") as tar:
                 _safe_tar_extractall(tar, temp_dir)
 
-            with open(os.path.join(temp_dir, "metadata.json"), 'r') as f:
+            with open(os.path.join(temp_dir, "metadata.json")) as f:
                 metadata = json.load(f)
 
             # 2. Restore Env Vars (always local in the database)
@@ -908,7 +912,7 @@ class BackupService:
                 logger.info("Uploading Docker image to remote server...")
                 remote_image_path = f"/tmp/image_{uuid.uuid4().hex[:8]}.tar"
                 ssh.upload_file(image_path, remote_image_path)
-                
+
                 logger.info("Loading Docker image remotely...")
                 out, err, code = ssh.exec_command(f"docker load -i {remote_image_path}")
                 ssh.exec_command(f"rm -f {remote_image_path}") # clean up immediately
@@ -956,8 +960,11 @@ class BackupService:
 
             logger.info("Remote restore complete. Queueing deployment.")
             from apps.deployments.models import Deployment
-            from apps.deployments.tasks_deploy import enqueue_smart_deploy_task, _resolve_provider_for_service
-            
+            from apps.deployments.tasks_deploy import (
+                _resolve_provider_for_service,
+                enqueue_smart_deploy_task,
+            )
+
             provider = _resolve_provider_for_service(target_service, prefer_local=False)
             if provider:
                 deployment = Deployment.objects.create(
@@ -966,19 +973,19 @@ class BackupService:
                     commit_hash='latest',
                     commit_message=f"Restored from backup {backup.id}",
                 )
-                
+
                 target_service.status = Service.Status.ACTIVE
                 target_service.save()
-                
+
                 enqueue_smart_deploy_task(
                     deployment_id=str(deployment.id),
                     provider_id=str(provider.id),
                     skip_review=True
                 )
-                
+
                 from django.core.cache import cache
                 cache.delete(f'service_{target_service.id}_latest_deployment')
-                
+
                 target_service.active_target_type = target_service.active_target_type or 'remote'
                 target_service.save()
             else:
@@ -1160,6 +1167,7 @@ class BackupService:
             # be stored in the clear inside the archive (and cleartext
             # on disk if the tar is not itself encrypted).
             from django.core import serializers
+
             from apps.deployments.models import PlatformConfig
 
             with open(os.path.join(temp_dir, "platform_config.json"), 'w') as f:
@@ -1316,12 +1324,12 @@ class BackupService:
         """Restore platform domain/SSL config from backup JSON."""
         try:
             import json as _json
-            with open(config_path, 'r') as f:
+            with open(config_path) as f:
                 data = _json.load(f)
             from apps.deployments.models import PlatformConfig
             cfg = PlatformConfig.load()
             for field in ('domain', 'use_ssl', 'wildcard_subdomains', 'server_ip'):
-                if field in data and data[field]:
+                if data.get(field):
                     setattr(cfg, field, data[field])
             cfg.save()
             logger.info("Platform config restored from server backup.")
@@ -1330,7 +1338,7 @@ class BackupService:
 
     def _restore_service_from_file(self, filepath, owner=None):
         """Restore a service from a backup archive file.
-        
+
         Args:
             filepath: Path to the service backup .tar.gz
             owner: User who owns the restored service (required for new services)
@@ -1342,7 +1350,7 @@ class BackupService:
             with tarfile.open(archive_path, "r:gz") as tar:
                 _safe_tar_extractall(tar, temp_dir)
 
-            with open(os.path.join(temp_dir, "metadata.json"), 'r') as f:
+            with open(os.path.join(temp_dir, "metadata.json")) as f:
                 metadata = json.load(f)
 
             # Create/Get Service
@@ -1643,10 +1651,8 @@ class BackupService:
                     chunk_index += 1
                 encrypted.write(struct.pack(">I", 0))
 
-            try:
+            with contextlib.suppress(OSError):
                 os.remove(path)
-            except OSError:
-                pass
             return enc_path
         except Exception as e:
             # Clean up the partial encrypted file.
@@ -1659,10 +1665,8 @@ class BackupService:
             # cleartext — delete the original and raise so the caller
             # knows the backup is unsafe.
             if self._backup_encryption_required():
-                try:
+                with contextlib.suppress(OSError):
                     os.remove(path)
-                except OSError:
-                    pass
                 raise BackupEncryptionRequired(
                     f"Encryption failed for {path}: {e}. "
                     "BACKUP_REQUIRE_ENCRYPTION is set — refusing to retain cleartext backup."
@@ -1769,7 +1773,7 @@ class BackupService:
         raw_key, _fingerprint = BackupService._resolve_key_for_v2(path, key)
         aesgcm = AESGCM(raw_key)
 
-        tmp_path, private_dir = BackupService._make_private_decrypted_path()
+        tmp_path, _private_dir = BackupService._make_private_decrypted_path()
         try:
             with open(path, "rb") as source, open(tmp_path, "wb") as target:
                 magic = BackupService._read_exact(source, len(_CHUNKED_BACKUP_V2_MAGIC))
@@ -1808,18 +1812,14 @@ class BackupService:
             f"smsly-decrypted-{_uuid.uuid4().hex}",
         )
         os.makedirs(private_dir, mode=0o700, exist_ok=False)
-        try:
+        with contextlib.suppress(OSError):
             os.chmod(private_dir, 0o700)
-        except OSError:
-            pass
         fd, tmp_path = tempfile.mkstemp(
             prefix="backup_dec_", suffix=suffix, dir=private_dir,
         )
         os.close(fd)
-        try:
+        with contextlib.suppress(OSError):
             os.chmod(tmp_path, 0o600)
-        except OSError:
-            pass
         return tmp_path, private_dir
 
     @staticmethod
@@ -1844,23 +1844,19 @@ class BackupService:
         try:
             for entry in os.listdir(parent):
                 if entry.startswith('backup_dec_'):
-                    try:
+                    with contextlib.suppress(OSError):
                         os.remove(os.path.join(parent, entry))
-                    except OSError:
-                        pass
         except OSError:
             pass
-        try:
+        with contextlib.suppress(OSError):
             os.rmdir(parent)
-        except OSError:
-            pass
 
     @staticmethod
     def _decrypt_chunked_backup(path: str, key: str) -> str:
         raw_key = BackupService._decode_backup_key(key)
         aesgcm = AESGCM(raw_key)
 
-        tmp_path, private_dir = BackupService._make_private_decrypted_path()
+        tmp_path, _private_dir = BackupService._make_private_decrypted_path()
         try:
             with open(path, "rb") as source, open(tmp_path, "wb") as target:
                 magic = BackupService._read_exact(source, len(_CHUNKED_BACKUP_MAGIC))
@@ -1905,10 +1901,8 @@ class BackupService:
                     target.write(base64.urlsafe_b64decode(remainder + (b"=" * padding_len)))
             return token_path
         except Exception:
-            try:
+            with contextlib.suppress(OSError):
                 os.remove(token_path)
-            except OSError:
-                pass
             raise
 
     @staticmethod
@@ -1924,7 +1918,7 @@ class BackupService:
         encryption_key = raw_key[16:]
 
         token_path = BackupService._decode_fernet_token_to_file(path)
-        tmp_path, private_dir = BackupService._make_private_decrypted_path()
+        tmp_path, _private_dir = BackupService._make_private_decrypted_path()
         try:
             token_size = os.path.getsize(token_path)
             min_size = _FERNET_HEADER_SIZE + _FERNET_HMAC_SIZE + 16
@@ -1983,10 +1977,8 @@ class BackupService:
             BackupService.cleanup_decrypted_path(tmp_path)
             raise
         finally:
-            try:
+            with contextlib.suppress(OSError):
                 os.remove(token_path)
-            except OSError:
-                pass
 
     @staticmethod
     def _prune_old_backups(model_cls, service_id=None):
@@ -2002,8 +1994,7 @@ class BackupService:
             retain = int(os.environ.get("BACKUP_RETENTION_COUNT", "5"))
         except ValueError:
             retain = 5
-        if retain < 1:
-            retain = 1
+        retain = max(retain, 1)
 
         qs = model_cls.objects.order_by("-created_at")
         if service_id and hasattr(model_cls, "service_id"):
@@ -2037,7 +2028,6 @@ def repair_double_encrypted_env_vars(service_id: str | None = None) -> dict:
     Detect and repair EnvironmentVariables corrupted by pre-fix backup/restore
     double-encryption. Returns {fixed: N, skipped: N} counts.
     """
-    import base64
     from cryptography.fernet import Fernet, InvalidToken
     from django.conf import settings
     from django.db import connection
@@ -2153,8 +2143,9 @@ def _stop_service_for_restore(service, is_remote):
 
 def backup_addon(addon_id: str) -> str | None:
     """Back up a single addon (Postgres/MySQL/Redis/Mongo). Returns path to dump file or None."""
-    from apps.deployments.models_addons import Addon
     import docker as _docker
+
+    from apps.deployments.models_addons import Addon
     client = _docker.from_env()
     try:
         addon = Addon.objects.get(id=addon_id, status='ACTIVE')
@@ -2166,13 +2157,15 @@ def backup_addon(addon_id: str) -> str | None:
             dump_file = os.path.join(temp_dir, 'db_dump.sql')
             result = ctr.exec_run(['pg_dumpall', '-U', 'postgres', '-c'])
             if result.exit_code == 0:
-                with open(dump_file, 'wb') as f: f.write(result.output)
+                with open(dump_file, 'wb') as f:
+                    f.write(result.output)
                 return dump_file
         elif 'mysql' in atype or 'mariadb' in atype:
             dump_file = os.path.join(temp_dir, 'db_dump.sql')
             result = ctr.exec_run(['mysqldump', '--all-databases', '-u', 'root'])
             if result.exit_code == 0:
-                with open(dump_file, 'wb') as f: f.write(result.output)
+                with open(dump_file, 'wb') as f:
+                    f.write(result.output)
                 return dump_file
         elif 'redis' in atype:
             dump_file = os.path.join(temp_dir, 'redis_dump.rdb')
@@ -2181,7 +2174,8 @@ def backup_addon(addon_id: str) -> str | None:
             bits, _ = ctr.get_archive('/data/dump.rdb')
             if bits:
                 with open(dump_file, 'wb') as f:
-                    for chunk in bits: f.write(chunk)
+                    for chunk in bits:
+                        f.write(chunk)
                 return dump_file
         elif 'mongo' in atype:
             dump_file = os.path.join(temp_dir, 'mongo_dump.archive')
@@ -2190,7 +2184,8 @@ def backup_addon(addon_id: str) -> str | None:
                 bits, _ = ctr.get_archive('/tmp/mongo.archive')
                 if bits:
                     with open(dump_file, 'wb') as f:
-                        for chunk in bits: f.write(chunk)
+                        for chunk in bits:
+                            f.write(chunk)
                     return dump_file
     except Exception as exc:
         logger.warning("Addon backup failed for %s: %s", addon_id, exc)
@@ -2298,7 +2293,11 @@ def purge_user_backups(user_id) -> dict:
 
     Returns a dict of counters that callers can use for audit logging.
     """
-    from apps.deployments.models_backup import ServiceBackup, ServerBackup, BackupSchedule
+    from apps.deployments.models_backup import (
+        BackupSchedule,
+        ServerBackup,
+        ServiceBackup,
+    )
 
     counters = {
         'service_backups_deleted': 0,

@@ -1,10 +1,13 @@
 from unittest.mock import patch
-from django.urls import reverse
+
 from django.contrib.auth import get_user_model
+from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
-from apps.deployments.models import Service, Deployment, ManagedServer
+
 from apps.cloud.models import CloudProvider
+from apps.deployments.models import Deployment, ManagedServer, Service
+
 
 class AsyncMultiDeployTests(APITestCase):
     def setUp(self):
@@ -80,7 +83,7 @@ class AsyncMultiDeployTests(APITestCase):
         url = reverse("service-detail", kwargs={"pk": str(self.service.id)})
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        
+
         metadata = response.json().get("node_metadata")
         self.assertIsNotNone(metadata)
         self.assertEqual(metadata.get("id"), str(self.server.id))

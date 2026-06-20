@@ -1,19 +1,15 @@
 """Background anomaly detection tasks for the intelligence system."""
 
 import logging
-from typing import Dict, List
-import json
 from datetime import timedelta
-from django.utils import timezone
 
 from celery import shared_task
+from django.utils import timezone
 
-from apps.deployments.models import Service, Deployment
+from apps.deployments.models import Deployment, Service
 from apps.deployments.models_audit import AuditLog
 from apps.intelligence.analyzer import LogAnalyzer
 from apps.intelligence.remediator import RemediationEngine
-from apps.intelligence.providers import ask_with_fallback
-from apps.intelligence.cost import CostAdvisor
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +53,7 @@ def _process_service_anomaly(
     service: Service,
     analyzer: LogAnalyzer,
     remediator: RemediationEngine,
-) -> Dict[str, int]:
+) -> dict[str, int]:
     """Analyze one service and apply fixes for high-confidence issues."""
     latest_deployment = (
         service.deployments.order_by("-created_at").only("id", "build_logs").first()
@@ -69,7 +65,7 @@ def _process_service_anomaly(
     if latest_deployment and latest_deployment.build_logs:
         logs = latest_deployment.build_logs[-20000:]
 
-    issues: List[Dict[str, object]] = analyzer.analyze_logs(logs)
+    issues: list[dict[str, object]] = analyzer.analyze_logs(logs)
 
     # Health monitor signal fallback: treat persistent unhealthy status as crash-loop risk.
     if service.health_status == "unhealthy" and not issues:

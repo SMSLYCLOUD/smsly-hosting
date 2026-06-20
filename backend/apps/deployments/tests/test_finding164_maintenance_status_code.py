@@ -23,7 +23,7 @@ This test asserts:
   * Celery-dispatch failure returns 503;
   * eager-mode failure also returns 503 (the new contract).
 """
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
@@ -31,7 +31,6 @@ from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
 from apps.deployments import views as deployments_views
-
 
 User = get_user_model()
 
@@ -48,7 +47,7 @@ class Finding164MaintenanceStatusTests(TestCase):
 
     def test_module_constant_is_503(self):
         self.assertEqual(
-            getattr(deployments_views, "_MAINTENANCE_FAILURE_STATUS"), 503,
+            deployments_views._MAINTENANCE_FAILURE_STATUS, 503,
         )
 
     def test_validation_failure_returns_400(self):

@@ -8,11 +8,9 @@ Verifies:
   * The cap is keyed per-apex: a different apex is independent.
 """
 
-import pytest
 from django.test import TestCase, override_settings
 from rest_framework import status
 from rest_framework.test import APIClient
-
 
 FAST_THROTTLE_RATES = {
     "anon": "200/hour",
@@ -57,9 +55,10 @@ class PerApexCertCapTests(TestCase):
 
     def setUp(self):
         from django.conf import settings as dj_settings
-        from apps.deployments.models import Service, Project
-        from apps.domains.models import Domain, DomainStatus
         from django.contrib.auth import get_user_model
+
+        from apps.deployments.models import Project, Service
+        from apps.domains.models import Domain, DomainStatus
 
         User = get_user_model()
         self.owner = User.objects.create_user(

@@ -1,8 +1,9 @@
-from unittest.mock import patch, MagicMock
-from django.test import TestCase
-from django.contrib.auth import get_user_model
-from apps.deployments.models import Service, Project, PlatformConfig, ServerTransfer
+from unittest.mock import MagicMock, patch
+
+from apps.deployments.models import PlatformConfig, Project, ServerTransfer, Service
 from apps.deployments.services.transfer_service import ServerTransferService
+from django.contrib.auth import get_user_model
+from django.test import TestCase
 
 User = get_user_model()
 
@@ -13,7 +14,7 @@ class TransferServiceLocalDetectionTests(TestCase):
         )
         self.project = Project.objects.create(name='Test Project', owner=self.user)
         self.service = Service.objects.create(name='Test Service', project=self.project)
-        
+
         # Configure PlatformConfig with a dummy server IP
         self.local_ip = '198.51.100.1'
         self.config = PlatformConfig.objects.create(
@@ -36,15 +37,15 @@ class TransferServiceLocalDetectionTests(TestCase):
         )
 
         service = ServerTransferService(transfer)
-        
+
         # Mock target connection to avoid outbound socket connection
         service.ssh = MagicMock()
-        
+
         # Calling _init_source_ssh directly or running the init step in execute
         # should NOT raise ValueError because the source is local.
         try:
             service._init_source_ssh()
         except ValueError as exc:
             self.fail(f"_init_source_ssh raised ValueError unexpectedly: {exc}")
-            
+
         self.assertIsNone(service.source_ssh)

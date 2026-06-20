@@ -7,12 +7,14 @@ Validates:
   - Build log streaming
   - Build failure cleanup
 """
-from unittest.mock import patch, MagicMock
-from django.test import TestCase
+from unittest.mock import MagicMock, patch
+
 from django.contrib.auth.models import User
-from apps.deployments.models import Service, Deployment
-from apps.cloud.models import CloudProvider
+from django.test import TestCase
 from services.builders import is_buildkit_cache_error, prune_buildkit_cache
+
+from apps.cloud.models import CloudProvider
+from apps.deployments.models import Deployment, Service
 
 
 class BuildKitRecoveryTests(TestCase):
@@ -80,7 +82,7 @@ class BuildManagerTests(TestCase):
 
         try:
             bm = BuildManager(self.deployment)
-            result = bm.build_image()
+            bm.build_image()
             # If build_image succeeds, verify subprocess was called
             mock_run.assert_called()
         except Exception:

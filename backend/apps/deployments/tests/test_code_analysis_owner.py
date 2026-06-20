@@ -1,12 +1,11 @@
 # pylint: disable=invalid-name
 """Tests for SEC (Issue 52): code_analysis result owner check."""
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.test import TestCase
 from rest_framework.test import APIClient
-
 
 User = get_user_model()
 

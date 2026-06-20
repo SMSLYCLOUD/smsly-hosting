@@ -1,5 +1,6 @@
 from .base import PaymentProvider
 
+
 class PaystackProvider(PaymentProvider):
     def create_subscription(self, plan_id, customer_email, **kwargs):
         raise NotImplementedError(

@@ -2,14 +2,15 @@
 import ipaddress
 import logging
 import socket
-from datetime import datetime, timezone as dt_timezone
+from datetime import datetime
+from datetime import timezone as dt_timezone
 
+from apps.deployments.models import PlatformConfig
+from apps.domains.models import Domain, DomainStatus
+from apps.domains.tasks import verify_dns_and_provision_ssl_task
+from apps.notifications.models import Notification
 from celery import shared_task
 from django.utils import timezone
-from apps.deployments.models import Service, PlatformConfig
-from apps.domains.models import Domain, DomainStatus
-from apps.notifications.models import Notification
-from apps.domains.tasks import verify_dns_and_provision_ssl_task
 
 logger = logging.getLogger(__name__)
 
@@ -70,8 +71,8 @@ class SSLMonitorService:
             self._check_cert_domain_obj(domain_obj)
 
     def _check_cert_platform(self, domain):
-        import ssl
         import socket
+        import ssl
         try:
             if not _is_safe_outbound_target(domain):
                 logger.warning(
@@ -97,8 +98,8 @@ class SSLMonitorService:
             logger.warning(f"SSL check failed for platform domain {domain}: {e}")
 
     def _check_cert_domain_obj(self, domain_obj):
-        import ssl
         import socket
+        import ssl
         domain = domain_obj.domain_name
         owner = domain_obj.service.owner
 
@@ -142,9 +143,8 @@ class SSLMonitorService:
             # Only mark SSL_FAILED after consecutive failures (transient protection).
             fail_count = domain_obj.ssl_fail_count + 1
             domain_obj.ssl_fail_count = fail_count
-            if fail_count >= 3:
-                if domain_obj.status == DomainStatus.ACTIVE:
-                    domain_obj.status = DomainStatus.SSL_FAILED
+            if fail_count >= 3 and domain_obj.status == DomainStatus.ACTIVE:
+                domain_obj.status = DomainStatus.SSL_FAILED
             domain_obj.save(update_fields=['ssl_active', 'status', 'last_error', 'checked_at', 'ssl_fail_count'])
             logger.warning("SSL check failed for %s (attempt %d): %s", domain, fail_count, e)
 
@@ -163,7 +163,7 @@ class SSLMonitorService:
         # Caddy auto-renews certs. Trigger a safe config apply/reload so
         # failed/paused cert jobs are nudged without manual SSH intervention.
         try:
-            from services.caddy_manager import generate_caddyfile, apply_caddyfile
+            from services.caddy_manager import apply_caddyfile, generate_caddyfile
 
             config = PlatformConfig.load()
             caddyfile = generate_caddyfile(config)

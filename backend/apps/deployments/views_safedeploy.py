@@ -1,22 +1,28 @@
-from rest_framework import viewsets, status, permissions, authentication
-from rest_framework.decorators import action, throttle_classes
-from rest_framework.response import Response
-from rest_framework.throttling import UserRateThrottle
+import logging
+
 from django.conf import settings as django_settings
 from django.db import transaction
 from django.db.models import Q
-import logging
-from apps.deployments.models_core import Service, Deployment
-from apps.deployments.models_safedeploy import PreviewEnvironment, DeploymentApproval
+from rest_framework import authentication, permissions, status, viewsets
+from rest_framework.decorators import action, throttle_classes
+from rest_framework.response import Response
+from rest_framework.throttling import UserRateThrottle
+
 from apps.deployments.models_audit import AuditLog
-from apps.deployments.serializers import (
-    PreviewEnvironmentSerializer, DeploymentApprovalSerializer,
-    PreviewCreateSerializer, PreviewRebuildSerializer,
-    ApprovalRejectSerializer,
-)
-from apps.deployments.services.safedeploy.branch_preview_manager import BranchPreviewManager
+from apps.deployments.models_core import Deployment, Service
+from apps.deployments.models_safedeploy import DeploymentApproval, PreviewEnvironment
 from apps.deployments.permissions import CanApproveDeployment, CanManagePreviews
-from apps.teams.permissions import get_team_q_filter, assert_can_write
+from apps.deployments.serializers import (
+    ApprovalRejectSerializer,
+    DeploymentApprovalSerializer,
+    PreviewCreateSerializer,
+    PreviewEnvironmentSerializer,
+    PreviewRebuildSerializer,
+)
+from apps.deployments.services.safedeploy.branch_preview_manager import (
+    BranchPreviewManager,
+)
+from apps.teams.permissions import assert_can_write, get_team_q_filter
 
 logger = logging.getLogger(__name__)
 
@@ -89,8 +95,8 @@ def send_approval_notification(approval, service_pk):
 
     if not delivered:
         try:
-            from django.core.mail import send_mail
             from django.conf import settings as django_settings
+            from django.core.mail import send_mail
             send_mail(
                 subject=subject,
                 message=message,
@@ -115,9 +121,7 @@ class PreviewEnvironmentViewSet(viewsets.ModelViewSet):
         if service.owner == self.request.user:
             return True
         team = getattr(service.project, 'team', None)
-        if team and team.members.filter(user=self.request.user).exists():
-            return True
-        return False
+        return bool(team and team.members.filter(user=self.request.user).exists())
 
     def get_queryset(self):
         service_id = self.kwargs.get('service_pk')
@@ -298,7 +302,9 @@ class DeploymentApprovalViewSet(viewsets.ModelViewSet):
     @throttle_classes([ApprovalThrottle])
     @action(detail=True, methods=['post'])
     def approve(self, request, pk=None, service_pk=None):
-        from apps.deployments.services.safedeploy.deployment_pipeline import ProductionDeploymentPipeline
+        from apps.deployments.services.safedeploy.deployment_pipeline import (
+            ProductionDeploymentPipeline,
+        )
 
         with transaction.atomic():
             try:
@@ -349,7 +355,9 @@ class DeploymentApprovalViewSet(viewsets.ModelViewSet):
     @throttle_classes([ApprovalThrottle])
     @action(detail=True, methods=['post'])
     def reject(self, request, pk=None, service_pk=None):
-        from apps.deployments.services.safedeploy.deployment_pipeline import ProductionDeploymentPipeline
+        from apps.deployments.services.safedeploy.deployment_pipeline import (
+            ProductionDeploymentPipeline,
+        )
 
         approval = self._get_approval_for_service(pk, service_pk)
         if approval is None:
@@ -394,7 +402,9 @@ class DeploymentApprovalViewSet(viewsets.ModelViewSet):
     @throttle_classes([ApprovalThrottle])
     @action(detail=True, methods=['post'])
     def retry(self, request, pk=None, service_pk=None):
-        from apps.deployments.services.safedeploy.deployment_pipeline import ProductionDeploymentPipeline
+        from apps.deployments.services.safedeploy.deployment_pipeline import (
+            ProductionDeploymentPipeline,
+        )
         approval = self._get_approval_for_service(pk, service_pk)
         if approval is None:
             return Response({"error": "Approval not found"}, status=status.HTTP_404_NOT_FOUND)

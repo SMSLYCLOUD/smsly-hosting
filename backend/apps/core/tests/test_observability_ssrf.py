@@ -2,10 +2,6 @@
 """Hermetic tests for the observability proxy SSRF / tenant-leak guards."""
 from unittest.mock import patch
 
-from django.contrib.auth import get_user_model
-from django.test import TestCase, override_settings
-from rest_framework.test import APIClient
-
 from apps.core.views_observability import (
     ALLOWED_LOKI_LABELS,
     MAX_LOKI_QUERY_LENGTH,
@@ -17,7 +13,9 @@ from apps.core.views_observability import (
     _user_owned_service_names,
     _validate_query_chars,
 )
-
+from django.contrib.auth import get_user_model
+from django.test import TestCase, override_settings
+from rest_framework.test import APIClient
 
 User = get_user_model()
 
@@ -105,7 +103,7 @@ class QueryValidationUnitTests(TestCase):
         self.assertIn(r'svc\.a\+b', out)
 
     def test_parse_prometheus_time_rejects_out_of_range(self):
-        from datetime import datetime, timezone, timedelta
+        from datetime import datetime, timedelta, timezone
         too_old = (datetime.now(timezone.utc) - timedelta(days=365)).timestamp()
         self.assertIsNone(_parse_prometheus_time(str(too_old)))
         self.assertIsNone(_parse_prometheus_time('not-a-number'))
@@ -113,7 +111,7 @@ class QueryValidationUnitTests(TestCase):
         self.assertIsNone(_parse_prometheus_time(None))
 
     def test_parse_prometheus_time_accepts_recent_timestamp(self):
-        from datetime import datetime, timezone, timedelta
+        from datetime import datetime, timedelta, timezone
         recent = (datetime.now(timezone.utc) - timedelta(hours=1)).timestamp()
         self.assertEqual(
             _parse_prometheus_time(str(recent)),
@@ -200,7 +198,8 @@ class ObservabilitySafetyTests(TestCase):
         CACHES={'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}},
     )
     def test_prometheus_query_rejects_time_outside_30_days(self):
-        from datetime import datetime, timezone, timedelta
+        from datetime import datetime, timedelta, timezone
+
         from apps.deployments.models import Service
         # Give the user a service so the tenant-scope guard does not short-circuit
         # the time validation below.

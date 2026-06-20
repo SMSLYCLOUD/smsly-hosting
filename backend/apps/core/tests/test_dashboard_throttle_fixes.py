@@ -17,15 +17,14 @@ Covers:
 """
 from unittest.mock import patch
 
-from django.test import TestCase, override_settings
-from django.urls import resolve, reverse
-from rest_framework.test import APIClient
-
 from apps.deployments.models_core import Service
 from apps.deployments.rate_limiting import (
     BurstRateThrottle,
     DeploymentRateThrottle,
 )
+from django.test import TestCase
+from django.urls import resolve
+from rest_framework.test import APIClient
 
 
 class ServiceViewSetThrottleTests(TestCase):
@@ -239,7 +238,8 @@ class EnvVarDetailActionTests(TestCase):
 
     def test_env_var_detail_accepts_get(self):
         from apps.deployments.models_core import (
-            Service, EnvironmentVariable,
+            EnvironmentVariable,
+            Service,
         )
         service = Service.objects.create(
             owner=self.user, name='svc-1', deploy_type='DOCKER',
@@ -259,7 +259,8 @@ class EnvVarDetailActionTests(TestCase):
 
     def test_env_var_detail_still_supports_delete(self):
         from apps.deployments.models_core import (
-            Service, EnvironmentVariable,
+            EnvironmentVariable,
+            Service,
         )
         service = Service.objects.create(
             owner=self.user, name='svc-2', deploy_type='DOCKER',
@@ -289,7 +290,6 @@ class EcosystemBulkEnvAliasTests(TestCase):
 
     def test_bulk_env_alias_resolves(self):
         from django.urls import resolve
-        from apps.cloud.views import IntelligenceViewSet
         match = resolve('/api/v1/ecosystem/bulk-update-environment/')
         # The view is a method-bound view, not a class.
         # Verify the resolved view dispatches to the same action.
@@ -309,7 +309,6 @@ class PreferencesAliasTests(TestCase):
 
     def test_preferences_alias_resolves(self):
         from django.urls import resolve
-        from apps.notifications.views import NotificationPreferenceViewSet
         match = resolve('/api/v1/preferences/')
         self.assertTrue(hasattr(match.func, 'actions'))
         self.assertIn('get', match.func.actions)

@@ -1,9 +1,11 @@
 import logging
-from django.core.management.base import BaseCommand
-from apps.deployments.services.deletion_orchestrator import DeletionOrchestrator
-from apps.deployments.models_core import Service
-from apps.deployments.models_addons import Addon
+
 import docker
+from django.core.management.base import BaseCommand
+
+from apps.deployments.models_addons import Addon
+from apps.deployments.models_core import Service
+from apps.deployments.services.deletion_orchestrator import DeletionOrchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +50,7 @@ class Command(BaseCommand):
         # 1. Detect orphaned containers
         for c in all_containers:
             labels = c.labels
-            if not labels.get('smsly.managed') == 'true' and not labels.get('managed_by') == 'smsly-hosting':
+            if labels.get('smsly.managed') != 'true' and labels.get('managed_by') != 'smsly-hosting':
                 continue
 
             service_id = labels.get('smsly.service_id')

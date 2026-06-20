@@ -1,5 +1,7 @@
 from django.test import TestCase
+
 from apps.deployments.services.ecosystem_graph import build_ecosystem_graph
+
 
 class EcosystemGraphTests(TestCase):
     def test_simple_dependency(self):

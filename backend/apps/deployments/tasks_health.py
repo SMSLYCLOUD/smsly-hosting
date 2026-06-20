@@ -1,47 +1,22 @@
 import logging
-logger = logging.getLogger(__name__)
-import hashlib
-import hmac
-import logging
-import random
-import re
-import shlex
-import shutil
-import tempfile
-import subprocess
-import os
-import json
-import time
-import zipfile
-import secrets
-import threading
-from contextlib import contextmanager
-from urllib.parse import unquote, urlparse
-import docker
-import requests
-from celery import shared_task
-from django.conf import settings
-from django.core.cache import cache
-from django.utils import timezone
-from django.db.models import Sum
-from apps.cloud.models import CloudProvider
-from apps.cloud.services.builder import NixpacksBuilder
-from apps.cloud.services.compute import ComputeService
-from apps.cloud.services.function_provisioner import FunctionProvisioner
-from apps.deployments.ai_router import DEFAULT_AI_ROUTER_API_BASE, DEFAULT_AI_ROUTER_UI_BASE, DEFAULT_BRAID_ALIAS, generate_ai_router_proxy_config, get_ollama_model_name, is_ai_router_service, is_ollama_service
-from apps.deployments.models import Service, Deployment, EnvironmentVariable, PlatformConfig
-from apps.deployments.models_addons import Addon, Backup
-from apps.deployments.models_backup import BackupSchedule, ServiceBackup
-from apps.deployments.models_storage import Volume
-from apps.deployments.models_transfer import ServerTransfer
-from apps.deployments.services.backup_service import BackupService
-from apps.deployments.services.pipeline import PipelineManager, PipelineError
-from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
-from apps.deployments.services.tls_verify import should_verify
-from apps.deployments.services.transfer_service import ServerTransferService
-from apps.deployments.utils import append_log, broadcast_status, build_local_source_bundle, update_stage, is_deployment_local
-from services.addon_provisioner import addon_provisioner
 
+logger = logging.getLogger(__name__)
+import hashlib  # noqa: E402
+import hmac  # noqa: E402
+import logging  # noqa: E402
+import os  # noqa: E402
+import secrets  # noqa: E402
+import shutil  # noqa: E402
+import subprocess  # noqa: E402
+import tempfile  # noqa: E402
+import time  # noqa: E402
+
+import requests  # noqa: E402
+from celery import shared_task  # noqa: E402
+from django.conf import settings  # noqa: E402
+from django.utils import timezone  # noqa: E402
+
+from apps.deployments.services.remote_orchestrator import RemoteOrchestrator  # noqa: E402
 
 
 @shared_task(name="apps.deployments.tasks.auto_authenticate_nodes_task")
@@ -53,7 +28,6 @@ def auto_authenticate_nodes_task():
     retrieve them via SSH using RemoteOrchestrator.
     """
     from apps.deployments.models import ManagedServer
-    from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
 
     # Target nodes missing tokens but having SSH access
     servers = ManagedServer.objects.filter(api_token='')
@@ -136,8 +110,8 @@ def node_watchdog_task(self):
     try:
         from apps.deployments.models_core import ManagedServer
         from apps.deployments.services.self_healing_orchestrator import (
-            SelfHealingOrchestrator,
             FailureType,
+            SelfHealingOrchestrator,
         )
     except ImportError:
         logger.warning("Self-healing modules not available — watchdog skipped")
@@ -174,10 +148,10 @@ def node_watchdog_task(self):
             if server.status == ManagedServer.Status.ONLINE:
                 try:
                     from apps.deployments.services.prometheus_targets import (
-                        deploy_docker_labels_exporter_on_node,
-                        deploy_promtail_on_node,
                         deploy_cadvisor_on_node,
+                        deploy_docker_labels_exporter_on_node,
                         deploy_node_exporter_on_node,
+                        deploy_promtail_on_node,
                     )
                     deploy_docker_labels_exporter_on_node(server)
                     deploy_promtail_on_node(server)
@@ -257,12 +231,8 @@ def sync_master_db_to_agents_task():
 
     Runs every 6 hours via Celery beat.
     """
-    import subprocess
-    import tempfile
-    import shutil
 
     from .models_servers import ManagedServer
-    from django.conf import settings
 
     agents = ManagedServer.objects.filter(
         is_lite_agent=True,

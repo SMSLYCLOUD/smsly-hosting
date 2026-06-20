@@ -18,9 +18,8 @@ This test asserts:
     existing ``test_transfer_strict_mode`` covers the actual
     execute path; this test pins the read-once contract).
 """
-import os
-import re
 import inspect
+import re
 
 from django.conf import settings
 from django.test import SimpleTestCase, override_settings

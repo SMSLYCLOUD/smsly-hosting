@@ -2,11 +2,10 @@
 """Tests for SEC (Issue 76): _load_install_script enforces a pinned SHA-256."""
 import os
 import tempfile
-from unittest.mock import patch, mock_open
+from unittest.mock import mock_open, patch
 
 from django.test import SimpleTestCase
 
-from apps.deployments.services import provisioner
 from apps.deployments.services.provisioner import (
     EXPECTED_INSTALL_SCRIPT_SHA256,
     _load_install_script,

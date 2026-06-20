@@ -8,9 +8,8 @@ Regression tests for Finding #124 (dead code).
 """
 import importlib
 
-from django.test import SimpleTestCase
-
 from apps.teams import permissions as teams_permissions
+from django.test import SimpleTestCase
 
 
 class Finding124DeadCodeRemovalTests(SimpleTestCase):

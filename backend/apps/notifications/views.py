@@ -1,8 +1,14 @@
-from rest_framework import viewsets, permissions, status
+from rest_framework import permissions, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
+
 from .models import Notification, NotificationPreference, ResourceAlert
-from .serializers import NotificationSerializer, NotificationPreferenceSerializer, ResourceAlertSerializer
+from .serializers import (
+    NotificationPreferenceSerializer,
+    NotificationSerializer,
+    ResourceAlertSerializer,
+)
+
 
 class ResourceAlertViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = ResourceAlertSerializer

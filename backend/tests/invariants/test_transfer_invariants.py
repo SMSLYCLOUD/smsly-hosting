@@ -1,6 +1,6 @@
-from django.test import TestCase
-from apps.deployments.models import ServerTransfer, ManagedServer, Service, Project
+from apps.deployments.models import ManagedServer, Project, ServerTransfer, Service
 from django.contrib.auth import get_user_model
+from django.test import TestCase
 
 User = get_user_model()
 

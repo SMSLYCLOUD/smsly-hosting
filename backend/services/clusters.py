@@ -3,11 +3,12 @@
 """Clusters module."""
 # pylint: disable=no-member
 """Cluster manager service."""
-import time
-import logging
-import re
-from tenacity import retry, stop_after_attempt, wait_exponential
-from kubernetes import client, config
+import logging  # noqa: E402
+import re  # noqa: E402
+import time  # noqa: E402
+
+from kubernetes import client, config  # noqa: E402
+from tenacity import retry, stop_after_attempt, wait_exponential  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ class ClusterManager:
         Deploys the image to Kubernetes, handling multi-region distribution.
         """
         regions = list(self.service.regions.all())
-        
+
         # If no regions configured, use default/primary behavior (single deployment)
         if not regions:
             logger.info(f"Deploying {self.service.name} to default region")
@@ -67,7 +68,7 @@ class ClusterManager:
             logger.info(f"Deploying {self.service.name} to region {region.slug}")
             result = self._deploy_to_region(image_tag, region=region)
             results.append(result)
-        
+
         return ", ".join(results)
 
     def _deploy_to_region(self, image_tag, region=None):
@@ -79,7 +80,7 @@ class ClusterManager:
 
         # Base name
         base_name = f"svc-{self.service.name}"
-        
+
         # Suffix if region-specific
         name = base_name
         if region:
@@ -96,7 +97,7 @@ class ClusterManager:
 
         # Define Deployment
         deployment_name = name
-        
+
         # Strategy modification
         # If blue/green, append suffix (simple implementation)
         if self.service.deploy_strategy == 'BLUE_GREEN':
@@ -223,7 +224,7 @@ class ClusterManager:
             # Ensure CronJobs (Only in primary region or default)
             # We don't want cronjobs running in every region typically
             is_primary = not region or (
-                self.service.primary_region and 
+                self.service.primary_region and
                 region.id == self.service.primary_region.id
             )
             if is_primary:
@@ -237,7 +238,7 @@ class ClusterManager:
             return f"pod-{name}"
 
         except Exception as e:
-            self._log(f"K8s Error: {str(e)}")
+            self._log(f"K8s Error: {e!s}")
             raise
 
     def _ensure_service(self, name, namespace, target_app_label=None):
@@ -348,13 +349,13 @@ class ClusterManager:
                 }
             }
         }
-        
+
         try:
             # VPA is a Custom Resource
             group = "autoscaling.k8s.io"
             version = "v1"
             plural = "verticalpodautoscalers"
-            
+
             try:
                 self.custom_obj.get_namespaced_custom_object(
                     group, version, namespace, plural, vpa_name)
@@ -366,14 +367,13 @@ class ClusterManager:
                     self.custom_obj.create_namespaced_custom_object(
                         group, version, namespace, plural, vpa_manifest)
                     self._log(f"Created VPA {vpa_name}.")
+                # If CRD not found, log warning but don't crash
+                elif e.status == 404:
+                    self._log("VPA CRD not found in cluster. Skipping VPA.")
                 else:
-                    # If CRD not found, log warning but don't crash
-                    if e.status == 404:
-                        self._log("VPA CRD not found in cluster. Skipping VPA.")
-                    else:
-                        # Log but don't fail deployment for VPA
-                        logger.warning(f"VPA error: {e}")
-                        self._log(f"Warning: Failed to configure VPA: {e}")
+                    # Log but don't fail deployment for VPA
+                    logger.warning(f"VPA error: {e}")
+                    self._log(f"Warning: Failed to configure VPA: {e}")
         except Exception as e:
             logger.error(f"VPA configuration failed: {e}")
             self._log(f"Warning: VPA configuration failed: {e}")
@@ -385,9 +385,9 @@ class ClusterManager:
         name = base_name
         if region:
             name = f"{base_name}-{region.slug}"
-            
+
         name = self._sanitize_name(name)
-            
+
         manifest = {
             "apiVersion": "v1",
             "kind": "PersistentVolumeClaim",
@@ -451,7 +451,7 @@ class ClusterManager:
 
     def _ensure_ingress(self, name, namespace, region=None):
         """Ensure a K8s Ingress exists for the domain."""
-        
+
         # For multi-region, we might want unique domains per region
         # e.g. us-east.app.com
         hostname = self.service.public_domain
@@ -462,9 +462,9 @@ class ClusterManager:
             # If utilizing GeoDNS, we might use the SAME hostname and let DNS resolve to closest IP
             # So, keep hostname same, but Ingress targets the region-specific service
             pass
-            
-        ingress_name = name 
-        
+
+        ingress_name = name
+
         ingress_manifest = {
             "apiVersion": "networking.k8s.io/v1",
             "kind": "Ingress",
@@ -539,7 +539,7 @@ class ClusterManager:
         """Append logs atomically to avoid race conditions."""
         from django.db.models import Value
         from django.db.models.functions import Concat
-        
+
         # Don't try to log if deployment is None (simulation)
         if not self.deployment:
             return
@@ -550,7 +550,7 @@ class ClusterManager:
         # Atomic append using Concat to avoid race condition
         # We need to import Deployment model here to avoid circular imports
         from apps.deployments.models import Deployment
-        
+
         Deployment.objects.filter(id=self.deployment.id).update(
             build_logs=Concat('build_logs', Value(log_line))
         )

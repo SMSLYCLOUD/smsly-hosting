@@ -22,9 +22,9 @@ Usage:
     # Re-encrypt a specific model+field
     python manage.py reencrypt_fields --model deployments.EnvironmentVariable --field value
 """
-from django.core.management.base import BaseCommand, CommandError
 from django.apps import apps
 from django.conf import settings
+from django.core.management.base import BaseCommand, CommandError
 from django.db import connection
 from encrypted_model_fields.fields import EncryptedCharField, EncryptedTextField
 

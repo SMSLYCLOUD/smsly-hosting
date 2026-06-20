@@ -16,11 +16,11 @@ Examples:
 
 import argparse
 import asyncio
+import contextlib
 import json
 import logging
 import os
 import signal
-from typing import Optional
 
 import aiohttp
 
@@ -28,8 +28,6 @@ import aiohttp
 try:
     from rich.console import Console
     # pylint: disable=unused-import
-    from rich.table import Table
-    from rich.live import Live
     CONSOLE = Console()
     RICH_AVAILABLE = True
 except ImportError:
@@ -64,15 +62,15 @@ class TunnelClient:
     def __init__(
         self,
         local_port: int,
-        server_url: Optional[str] = None,
-        subdomain: Optional[str] = None,
+        server_url: str | None = None,
+        subdomain: str | None = None,
         inspect: bool = False,
     ):
         self.local_port = local_port
         self.server_url = server_url or default_tunnel_server_url()
         self.subdomain = subdomain
         self.inspect = inspect
-        self.public_url: Optional[str] = None
+        self.public_url: str | None = None
         self.request_count = 0
         self._running = False
 
@@ -273,10 +271,8 @@ def main():
 
     signal.signal(signal.SIGINT, signal_handler)
 
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(client.run())
-    except KeyboardInterrupt:
-        pass
 
 
 if __name__ == '__main__':

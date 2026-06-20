@@ -15,7 +15,6 @@ from apps.deployments.models_backup import (
 from apps.deployments.services.backup_service import purge_user_backups
 from apps.deployments.tasks_backup import purge_user_backups_task
 
-
 User = get_user_model()
 
 
@@ -118,7 +117,7 @@ class BackupGDPRCleanupTest(TestCase):
 
             self.assertEqual(counters["cloud_objects_deleted"], 1)
             self.assertEqual(mock_delete.call_count, 1)
-            args, kwargs = mock_delete.call_args
+            args, _kwargs = mock_delete.call_args
             self.assertEqual(args[0], "test-bucket")
             self.assertTrue(args[1].startswith("smsly-backups/"))
         finally:

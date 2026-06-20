@@ -1,6 +1,4 @@
 """Verify the pre-restore snapshot failure is surfaced (Fix 4)."""
-import os
-import tempfile
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -9,7 +7,6 @@ from django.test import TestCase
 from apps.deployments.models import Project, Service
 from apps.deployments.models_backup import ServiceBackup
 from apps.deployments.services.backup_service import BackupService
-
 
 User = get_user_model()
 
@@ -54,16 +51,15 @@ class RestoreSnapshotRequiredTest(TestCase):
         ), patch.object(
             BackupService, "_prepare_archive_for_restore",
             side_effect=FileNotFoundError("Backup archive file not found."),
-        ):
-            with self.assertRaises(FileNotFoundError):
-                BackupService().restore_service(
-                    self.backup.id,
-                    requesting_user_id=self.user.id,
-                )
+        ), self.assertRaises(FileNotFoundError):
+            BackupService().restore_service(
+                self.backup.id,
+                requesting_user_id=self.user.id,
+            )
 
     def test_service_backup_viewset_returns_422_on_snapshot_failure(self):
-        from rest_framework.test import APIClient
         from django.urls import reverse
+        from rest_framework.test import APIClient
 
         client = APIClient()
         client.force_authenticate(user=self.user)

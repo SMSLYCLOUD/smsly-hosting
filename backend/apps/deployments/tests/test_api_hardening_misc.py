@@ -1,9 +1,7 @@
 import pytest
+from django.contrib.auth import get_user_model
 from django.urls import reverse
 from rest_framework.test import APIClient
-from django.contrib.auth import get_user_model
-from apps.deployments.models import Service, Project
-from apps.deployments.models_servers import ManagedServer
 
 User = get_user_model()
 

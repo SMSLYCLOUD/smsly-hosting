@@ -18,11 +18,11 @@ import time
 
 import requests
 from django.core.management.base import BaseCommand
-
-from apps.deployments.models_servers import ManagedServer
-from apps.deployments.api_token_auth import APIToken
-from apps.deployments.services.tls_verify import should_verify, audit_verify
 from rest_framework.authtoken.models import Token as DRFToken
+
+from apps.deployments.api_token_auth import APIToken
+from apps.deployments.models_servers import ManagedServer
+from apps.deployments.services.tls_verify import audit_verify, should_verify
 
 
 class Command(BaseCommand):
@@ -74,15 +74,17 @@ class Command(BaseCommand):
         for server in servers:
             has_token = bool(str(server.api_token or "").strip())
             has_secret = bool(str(server.gateway_secret or "").strip())
-            
+
             # --- Auto-fix Missing Tokens via SSH ---
             if fix and not has_token:
                 if server.ssh_key or server.ssh_password:
                     self.stdout.write(f"   Attempting SSH auto-authentication for {server.name}...")
-                    from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+                    from apps.deployments.services.remote_orchestrator import (
+                        RemoteOrchestrator,
+                    )
                     orch = RemoteOrchestrator(server)
                     if orch.auto_authenticate():
-                        self.stdout.write(self.style.SUCCESS(f"     ✅ Successfully retrieved API token via SSH!"))
+                        self.stdout.write(self.style.SUCCESS("     ✅ Successfully retrieved API token via SSH!"))
                         server.refresh_from_db()
                         has_token = True
                 else:
@@ -115,7 +117,7 @@ class Command(BaseCommand):
     def _test_connectivity(self, server: ManagedServer, has_token: bool, has_secret: bool):
         from apps.deployments.views_servers import _candidate_api_urls
         candidates = _candidate_api_urls(server)
-        
+
         # Local-first fallbacks for self-diagnostics
         if server.is_primary or server.host in ("127.0.0.1", "localhost"):
              local_candidates = ["http://localhost:8000", "http://backend:8000", "http://127.0.0.1:8000"]
@@ -123,12 +125,11 @@ class Command(BaseCommand):
                  if lc not in candidates:
                      candidates.append(lc)
 
-        
+
         base = None
-        response = None
-        
+
         self.stdout.write(f"     Probing candidates: {', '.join(candidates)}")
-        
+
         for candidate in candidates:
             try:
                 _probe_url = f"{candidate.rstrip('/')}/health"
@@ -138,17 +139,16 @@ class Command(BaseCommand):
                 resp = requests.get(_probe_url, timeout=5, verify=_verify)
                 if resp.status_code < 500:
                     base = candidate.rstrip("/")
-                    response = resp
                     break
                 else:
                     self.stdout.write(self.style.WARNING(f"       - {candidate} → HTTP {resp.status_code}"))
             except Exception as e:
                 self.stdout.write(self.style.WARNING(f"       - {candidate} → FAILED: {str(e)[:60]}..."))
 
-        self.stdout.write(f"     Connectivity Audit:")
+        self.stdout.write("     Connectivity Audit:")
         from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
         orch = RemoteOrchestrator(server)
-        
+
         audit = orch.check_connectivity()
         if audit["network"]:
             self.stdout.write(self.style.SUCCESS(f"       ✅ Network Reachable ({audit['latency_ms']}ms)"))
@@ -157,7 +157,7 @@ class Command(BaseCommand):
             return
 
         if audit["auth"]:
-            self.stdout.write(self.style.SUCCESS(f"       ✅ API Authentication Valid"))
+            self.stdout.write(self.style.SUCCESS("       ✅ API Authentication Valid"))
         else:
             self.stdout.write(self.style.ERROR(f"       ❌ API Authentication Failed: {audit['error']}"))
             if "401" in str(audit['error']) or "403" in str(audit['error']):
@@ -240,7 +240,7 @@ class Command(BaseCommand):
         """Ensure a primary ManagedServer record exists for the local machine."""
         from apps.deployments.models import PlatformConfig
         config = PlatformConfig.load()
-        
+
         primary = ManagedServer.get_primary()
         if primary:
             self.stdout.write(f"   ✅ Primary server already exists: {primary.name} ({primary.host})")
@@ -258,8 +258,8 @@ class Command(BaseCommand):
             return
 
         host = config.server_ip or "127.0.0.1"
-        
-        # Primary node should use port 8090 (Nginx) or 80/443 (Traefik/Caddy) 
+
+        # Primary node should use port 8090 (Nginx) or 80/443 (Traefik/Caddy)
         # when accessed from outside. Port 8000 is internal.
         if host in ("localhost", "127.0.0.1"):
             api_url = f"http://{host}:8000"
@@ -294,7 +294,7 @@ class Command(BaseCommand):
             self.stdout.write(self.style.ERROR("   No superuser found — cannot auto-create token."))
             return
 
-        token_instance, raw_token = APIToken.create_token(admin, name="Inter-Node Access")
+        _token_instance, raw_token = APIToken.create_token(admin, name="Inter-Node Access")
         self.stdout.write(self.style.SUCCESS(
             f"\n   ✅ Created API token for [{admin.username}]:\n"
             f"   TOKEN: {raw_token}\n\n"

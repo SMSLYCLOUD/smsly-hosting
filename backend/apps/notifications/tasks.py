@@ -31,7 +31,6 @@ import json
 import logging
 import os
 import time
-from typing import Optional
 
 import requests
 from celery import shared_task
@@ -177,12 +176,15 @@ def _dispatch_sms(user, message: str, metadata: dict) -> dict:
     return result
 
 
-def _dispatch_webhook(user, title: str, message: str, metadata: dict, webhook_url: str = None) -> dict:
+def _dispatch_webhook(user, title: str, message: str, metadata: dict, webhook_url: str | None = None) -> dict:
     """
     Send a notification to a configured webhook (Slack, Discord, or generic HTTP).
     Preference order: per-user webhook_url → settings.SLACK_WEBHOOK_URL → settings.DISCORD_WEBHOOK_URL
     """
-    from apps.notifications.webhooks import send_slack_notification, send_discord_notification
+    from apps.notifications.webhooks import (
+        send_discord_notification,
+        send_slack_notification,
+    )
 
     result = {'channel': CHANNEL_WEBHOOK, 'status': 'skipped'}
 
@@ -278,9 +280,9 @@ def dispatch_notification(
     user_id: int,
     title: str,
     message: str,
-    metadata: Optional[dict] = None,
-    channels: Optional[list] = None,
-    webhook_url: Optional[str] = None,
+    metadata: dict | None = None,
+    channels: list | None = None,
+    webhook_url: str | None = None,
 ):
     """
     Master notification dispatcher.

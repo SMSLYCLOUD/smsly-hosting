@@ -14,13 +14,13 @@ not signed / cert-pinned and a network-adjacent attacker could flip
 """
 
 import base64
+import contextlib
 import json
 import tempfile
 from unittest import mock
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
-
 from django.test import TestCase, override_settings
 
 from apps.licensing import validator
@@ -117,10 +117,8 @@ class LicenseValidatorOfflineSignatureTests(TestCase):
 
     def tearDown(self):
         import os
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(self._pubkey_file.name)
-        except OSError:
-            pass
 
     def _license(self, key='smsly_ent_abcdef'):
         obj = PlatformLicense.load()

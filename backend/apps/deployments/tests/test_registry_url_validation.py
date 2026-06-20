@@ -9,10 +9,9 @@ reload the settings module under multiple environment overrides.
 """
 import os
 
+from config.settings import _validate_registry_url
 from django.core.exceptions import ImproperlyConfigured
 from django.test import SimpleTestCase
-
-from config.settings import _validate_registry_url
 
 
 class ValidateRegistryUrlTests(SimpleTestCase):

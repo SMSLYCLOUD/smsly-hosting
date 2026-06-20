@@ -20,9 +20,8 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from apps.deployments import views_safedeploy
-from apps.deployments.models_core import Service, Deployment
+from apps.deployments.models_core import Deployment, Service
 from apps.deployments.models_safedeploy import DeploymentApproval
-
 
 User = get_user_model()
 

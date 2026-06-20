@@ -23,7 +23,6 @@ from apps.deployments.services.tls_verify import (
     resolve_tls_verify_for_url,
 )
 
-
 User = get_user_model()
 
 

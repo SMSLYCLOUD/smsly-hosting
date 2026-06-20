@@ -10,7 +10,6 @@ from rest_framework.test import APITestCase
 
 from apps.deployments.models import EnvironmentVariable, PlatformConfig, Service
 
-
 TEST_CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.locmem.LocMemCache",

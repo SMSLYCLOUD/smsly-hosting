@@ -1,11 +1,16 @@
 import logging
 from decimal import Decimal
-from django.db.models import Sum
-from django.utils import timezone
-from apps.billing.models import PricingPlan, ResourcePrice, UsageRecord, UserSubscription
+
+from apps.billing.models import (
+    ResourcePrice,
+    UsageRecord,
+    UserSubscription,
+)
 from apps.deployments.models import Service
 from apps.deployments.models_addons import Addon
 from apps.deployments.models_storage import Volume
+from django.db.models import Sum
+from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
@@ -61,19 +66,18 @@ class UsageMeter:
         summary['memory_gb_hours'] = Decimal(ram_mb_sum) / Decimal(1024)
 
         # 5. Add current unrecorded usage for currently active services
-        from django.utils import timezone
         now = timezone.now()
         active_services = Service.objects.filter(owner=user, deployments__status='ACTIVE').distinct()
         for service in active_services:
             # Find the most recent usage record for this service
             last_record = UsageRecord.objects.filter(service=service).order_by('-timestamp').first()
-            
+
             # If there's a record, calculate time since then. Otherwise, use service created_at.
             start_time = last_record.timestamp if last_record else service.created_at
-            
+
             # Ensure start_time is within the current billing period
             start_time = max(start_time, period_start)
-            
+
             hours_running = Decimal((now - start_time).total_seconds()) / Decimal(3600)
             if hours_running > 0:
                 summary['cpu_hours'] += Decimal(service.cpu_cores) * hours_running

@@ -11,9 +11,10 @@
 # The key_material field is EncryptedCharField (FIELD_ENCRYPTION_KEY
 # at rest) so a raw DB read does not yield decryption capability.
 
-from django.db import migrations, models
-import encrypted_model_fields.fields
 import uuid
+
+import encrypted_model_fields.fields
+from django.db import migrations, models
 
 
 class Migration(migrations.Migration):

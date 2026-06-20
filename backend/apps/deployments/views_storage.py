@@ -1,20 +1,22 @@
+import base64
 import logging
 import os
 import posixpath
 import re
 import uuid
-import base64
 
-from django.http import StreamingHttpResponse
 from django.core.exceptions import ValidationError as DjangoValidationError
-from rest_framework import viewsets, permissions, serializers, status
+from django.http import StreamingHttpResponse
+from rest_framework import permissions, serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound, PermissionDenied
 from rest_framework.response import Response
-from .models_storage import Volume
-from .models import Service
-from .utils import resolve_running_container, validate_and_sanitize_path
+
 from apps.deployments.utils_file_browser import exec_file_list
+
+from .models import Service
+from .models_storage import Volume
+from .utils import resolve_running_container, validate_and_sanitize_path
 
 logger = logging.getLogger(__name__)
 
@@ -347,13 +349,13 @@ class VolumeViewSet(viewsets.ModelViewSet):
             exit_code, output = container.exec_run(
                 ["python3", "-c", "import os,sys; print(os.path.realpath(sys.argv[1]))", path], user="root"
             )
-            
+
         if exit_code == 0:
             real_path = output.decode('utf-8').strip()
             # If path resolution succeeds but points outside mount, reject.
             if not (real_path == mount or real_path.startswith(mount + "/")):
                 return Response({'error': 'Path escapes volume mount'}, status=status.HTTP_403_FORBIDDEN)
-                
+
         return exec_file_list(container, path, fallback_to_root=False, user="root")
 
     @action(detail=True, methods=['post'], url_path='delete-file')
@@ -386,7 +388,7 @@ class VolumeViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST,
                 ),
             },
-            local_action=lambda container, p: self._local_volume_delete(container, p),
+            local_action=self._local_volume_delete,
             path=path,
         )
 
@@ -433,13 +435,13 @@ class VolumeViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST,
                 ),
             },
-            local_action=lambda container, p: self._local_volume_download(container, p),
+            local_action=self._local_volume_download,
             path=path,
         )
 
     def _local_volume_download(self, container, path):
         try:
-            bits, stat = container.get_archive(path)
+            bits, _stat = container.get_archive(path)
             response = StreamingHttpResponse(bits, content_type='application/x-tar')
             filename = os.path.basename(path) + ".tar"
             response['Content-Disposition'] = f'attachment; filename="{filename}"'
@@ -477,7 +479,7 @@ class VolumeViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST,
                 ),
             },
-            local_action=lambda container, p: self._local_volume_mkdir(container, p),
+            local_action=self._local_volume_mkdir,
             path=path,
         )
 
@@ -520,7 +522,7 @@ class VolumeViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST,
                 ),
             },
-            local_action=lambda container, p: self._local_volume_file_read(container, p),
+            local_action=self._local_volume_file_read,
             path=path,
         )
 
@@ -598,8 +600,8 @@ class VolumeViewSet(viewsets.ModelViewSet):
 
     def _local_volume_file_write(self, container, path, content):
         try:
-            import tarfile
             import io
+            import tarfile
             import time
 
             base_name = posixpath.basename(path)
@@ -607,10 +609,7 @@ class VolumeViewSet(viewsets.ModelViewSet):
                 return Response({'error': 'Invalid filename'}, status=status.HTTP_400_BAD_REQUEST)
 
             # Accept bytes or str; encode str to bytes
-            if isinstance(content, str):
-                file_data = content.encode('utf-8')
-            else:
-                file_data = content
+            file_data = content.encode('utf-8') if isinstance(content, str) else content
 
             tar_stream = io.BytesIO()
             with tarfile.open(fileobj=tar_stream, mode='w') as tar:

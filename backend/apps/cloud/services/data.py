@@ -1,7 +1,7 @@
 """Data module."""
+
 from ..models import CloudProvider, CloudResource
 from .factory import get_cloud_adapter
-from typing import Optional, Dict
 
 
 class DataService:
@@ -19,7 +19,7 @@ class DataService:
         resource_id = self.adapter.provision_database(name, engine, version)
 
         # Create resource record
-        resource, created = CloudResource.objects.update_or_create(
+        resource, _created = CloudResource.objects.update_or_create(
             provider=self.provider,
             resource_id=resource_id,
             defaults={
@@ -45,7 +45,7 @@ class StorageService:
         """
         resource_id = self.adapter.create_bucket(bucket_name, public)
 
-        resource, created = CloudResource.objects.update_or_create(
+        resource, _created = CloudResource.objects.update_or_create(
             provider=self.provider,
             resource_id=resource_id,
             defaults={

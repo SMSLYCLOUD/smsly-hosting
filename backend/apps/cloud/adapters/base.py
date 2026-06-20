@@ -1,6 +1,6 @@
 """Base module."""
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List
+from typing import Any
 
 
 class BaseCloudAdapter(ABC):
@@ -22,7 +22,7 @@ class BaseCloudAdapter(ABC):
 
     @abstractmethod
     def deploy_container(self, service_name: str, image: str,
-                         env_vars: Dict[str, str], cpu: int, memory: int,
+                         env_vars: dict[str, str], cpu: int, memory: int,
                          replicas: int = 1, vpa_enabled: bool = True, **kwargs) -> str:
         # pylint: disable=too-many-positional-arguments, too-many-arguments
         """
@@ -66,7 +66,7 @@ class BaseCloudAdapter(ABC):
 
     # --- Security ---
     @abstractmethod
-    def create_iam_role(self, role_name: str, policy: Dict[str, Any]) -> str:
+    def create_iam_role(self, role_name: str, policy: dict[str, Any]) -> str:
         """Create an IAM Role with specific permissions."""
 
     @abstractmethod
@@ -76,5 +76,5 @@ class BaseCloudAdapter(ABC):
     # --- Observability ---
     @abstractmethod
     def get_metrics(self, resource_id: str, metric_name: str,
-                    start_time: str, end_time: str) -> List[Dict]:
+                    start_time: str, end_time: str) -> list[dict]:
         """Fetch metrics for a resource."""

@@ -1,7 +1,9 @@
-from .models_analytics import DailyRevenue
-from datetime import timedelta
-from django.utils import timezone
 import logging
+from datetime import timedelta
+
+from django.utils import timezone
+
+from .models_analytics import DailyRevenue
 
 logger = logging.getLogger(__name__)
 

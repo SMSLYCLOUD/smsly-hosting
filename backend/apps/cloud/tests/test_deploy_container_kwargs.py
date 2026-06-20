@@ -1,6 +1,8 @@
 import unittest
 from unittest.mock import MagicMock, patch
+
 from apps.cloud.adapters.local import LocalAdapter
+
 
 class TestLocalAdapterDeployContainer(unittest.TestCase):
     @patch('apps.cloud.adapters.local.client') # k8s client mock

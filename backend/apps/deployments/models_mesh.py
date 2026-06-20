@@ -7,9 +7,7 @@ communication.
 
 import uuid
 
-from django.conf import settings
 from django.db import models
-
 from encrypted_model_fields.fields import EncryptedCharField
 
 

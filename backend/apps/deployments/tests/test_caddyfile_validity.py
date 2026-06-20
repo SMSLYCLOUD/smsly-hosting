@@ -2,8 +2,8 @@
 """Tests to verify the Caddyfile is valid and routes correctly after nginx removal."""
 
 import os
-from django.test import TestCase
 
+from django.test import TestCase
 
 CADDYFILE_PATH = os.path.join(
     os.path.dirname(__file__), '..', '..', '..', '..', 'caddy-config', 'Caddyfile'
@@ -14,7 +14,7 @@ class CaddyfileValidityTests(TestCase):
     """Verify the static Caddyfile has correct structure after nginx removal."""
 
     def setUp(self):
-        with open(CADDYFILE_PATH, 'r') as f:
+        with open(CADDYFILE_PATH) as f:
             self.caddyfile = f.read()
 
     def test_caddyfile_exists(self):

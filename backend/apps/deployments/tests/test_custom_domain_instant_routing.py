@@ -10,16 +10,16 @@ from django.test import TestCase
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
-
-from apps.billing.models import PricingPlan, UserSubscription
-from apps.cloud.models import CloudProvider
-from apps.deployments.models import Deployment, ManagedServer, Service
-from apps.licensing.models import PlatformLicense, PlatformTier
 from services.caddy_manager import (
     apply_caddyfile,
     generate_caddyfile,
     validate_service_routes_do_not_hit_control_plane,
 )
+
+from apps.billing.models import PricingPlan, UserSubscription
+from apps.cloud.models import CloudProvider
+from apps.deployments.models import Deployment, ManagedServer, Service
+from apps.licensing.models import PlatformLicense, PlatformTier
 
 
 class CaddyCustomDomainRoutingTests(TestCase):

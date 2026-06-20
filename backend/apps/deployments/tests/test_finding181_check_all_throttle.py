@@ -16,7 +16,6 @@ from apps.deployments.views_servers import (
     ServerCheckAllThrottle,
 )
 
-
 User = get_user_model()
 
 
@@ -50,8 +49,10 @@ class Finding181CheckAllRateLimitTests(TestCase):
         self.assertIn(ServerCheckAllThrottle, bound)
 
     def test_throttle_blocks_subsequent_requests_within_window(self):
+        from unittest.mock import MagicMock, patch
+
         from django.core.cache import cache
-        from unittest.mock import patch, MagicMock
+
         from apps.deployments.models_servers import ManagedServer
         cache.clear()
         ManagedServer.objects.create(
