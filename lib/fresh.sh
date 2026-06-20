@@ -631,7 +631,7 @@ else
     [ -n "${AUTOSCALER_API_TOKEN:-}" ] || AUTOSCALER_API_TOKEN="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
     [ -n "${FRP_AUTH_TOKEN:-}" ] || FRP_AUTH_TOKEN="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
     [ -n "${PGCAT_ADMIN_PASSWORD:-}" ] || PGCAT_ADMIN_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(24))" 2>/dev/null || true)"
-GRAFANA_PASSWORD=$GRAFANA_PASSWORD
+    [ -n "${GRAFANA_PASSWORD:-}" ] || GRAFANA_PASSWORD="$(python3 -c "import secrets,string; print(''.join(secrets.choice(string.ascii_letters+string.digits+'-_') for _ in range(40)))" 2>/dev/null || openssl rand -base64 30 | tr -d '+/=' )"
     [ -n "${BACKUP_ENCRYPTION_KEY:-}" ] || BACKUP_ENCRYPTION_KEY="$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null || openssl rand -base64 32)"
     [ -n "${BACKUP_REQUIRE_ENCRYPTION:-}" ] || BACKUP_REQUIRE_ENCRYPTION="true"
     # SECURITY: default to true (was false pre-2026-06). Strict SSH host-key
@@ -751,7 +751,7 @@ FRP_AUTH_TOKEN=$FRP_AUTH_TOKEN
 PGCAT_ADMIN_PASSWORD=$PGCAT_ADMIN_PASSWORD
 
 # Grafana admin password (used by the standalone observability stack)
-GRAFANA_PASSWORD=$GRAFANA_PASSWORD
+GRAFANA_PASSWORD=${GRAFANA_PASSWORD:-}
 
 # Grafana external URL for browser embeds (auto-derived from domain)
 GRAFANA_EXTERNAL_URL=${DOMAIN_ORIGINS}/grafana
