@@ -15,6 +15,7 @@ import { useToast } from "@/components/ui/use-toast"
 import { BuildpackSelector, BuildpackType } from "@/components/deployments/BuildpackSelector"
 import api, { serversApi, servicesApi, deployApi, projectsApi, ManagedServer, Project } from "@/lib/api"
 import { templatesApi } from "@/lib/api"
+import { slugify } from "@/lib/utils"
 import { motion, AnimatePresence } from "framer-motion"
 
 const STACK_ICONS: Record<string, string> = {
@@ -284,9 +285,9 @@ export default function NewServicePage() {
       const localOnlyRequest = { _skipRemoteProxy: true } as any
 
       // Auto-derive name from repo URL if still empty
-      let finalName = name.trim()
+      let finalName = slugify(name.trim())
       if (!finalName && repoUrl) {
-        finalName = (repoUrl.split("/").pop()?.replace(".git", "")?.replace(/[^a-zA-Z0-9-]/g, "-") || "my-service") + "-" + Math.random().toString(36).substring(2, 7)
+        finalName = slugify((repoUrl.split("/").pop()?.replace(".git", "")?.replace(/[^a-zA-Z0-9-]/g, "-") || "my-service") + "-" + Math.random().toString(36).substring(2, 7))
         setName(finalName)
       }
       if (!finalName) throw new Error("Service name is required")

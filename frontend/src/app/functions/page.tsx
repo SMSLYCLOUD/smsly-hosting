@@ -13,6 +13,7 @@ import Editor from '@monaco-editor/react';
 import { servicesApi, Service } from '@/lib/api';
 import { useRouter } from 'next/navigation';
 import { RequiresTier } from '@/components/licensing/RequiresTier';
+import { slugify } from '@/lib/utils';
 
 const DEFAULT_NODE_CODE = '// Write your function here\nexports.handler = async (req, res) => {\n  res.json({ message: "Hello from Edge!" });\n};';
 const DEFAULT_PYTHON_CODE = '# Write your function here\ndef handler(req):\n    return {"message": "Hello from Edge!"}';
@@ -73,7 +74,7 @@ export default function FunctionsPage() {
   };
 
   const handleDeploy = async () => {
-    const trimmedName = name.trim();
+    const trimmedName = slugify(name.trim());
     if (!trimmedName) {
       toast({ title: "Name required", variant: "destructive" });
       return;
