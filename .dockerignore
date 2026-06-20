@@ -6,6 +6,9 @@ research
 scratch
 tmp
 verification
+archive
+K8native
+
 __pycache__
 *.pyc
 *.pyo
@@ -14,17 +17,52 @@ __pycache__
 .mypy_cache
 .ruff_cache
 .coverage
+.coverage.*
 htmlcov
+
 node_modules
 frontend/node_modules
 frontend/.next
+frontend/.next/cache
 frontend/out
+
+# Backend cruft
+backend/__pycache__
+backend/.venv
+backend/venv
+backend/.pytest_cache
+backend/backups
+backend/scratch
+backend/tests
+backend/test_*.py
+backend/conftest.py
+backend/*.sqlite3
+backend/staticfiles
+backend/media
+backend/.coverage
+backend/db.sqlite3
+backend/fallback.db
+
+# Logs, databases, backups
 **/*.log
 **/*.sqlite3
+**/*.db
 **/*.bak
 **/*.orig
-old_templates.json
+
+# Env files (except example)
 db.sqlite3
 .env
 .env.*
 !.env.example
+
+# Local dev tooling
+.devcontainer
+.agent
+.pre-commit-config.yaml
+.pylintrc
+
+# Charts/docs not needed at build
+charts
+secrets
+certs
