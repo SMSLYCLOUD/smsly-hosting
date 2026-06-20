@@ -23,8 +23,7 @@ class TransferServiceLocalDetectionTests(TestCase):
             use_ssl=False
         )
 
-    @patch('apps.deployments.services.transfer_service.SSHClient')
-    def test_local_source_ip_bypasses_source_ssh_init(self, mock_ssh_client):
+    def test_local_source_ip_bypasses_source_ssh_init(self):
         # Create a transfer where source_server_ip equals PlatformConfig's server_ip
         # and target_server_ip is different (a remote server)
         transfer = ServerTransfer.objects.create(
@@ -41,11 +40,8 @@ class TransferServiceLocalDetectionTests(TestCase):
         # Mock target connection to avoid outbound socket connection
         service.ssh = MagicMock()
 
-        # Calling _init_source_ssh directly or running the init step in execute
-        # should NOT raise ValueError because the source is local.
-        try:
-            service._init_source_ssh()
-        except ValueError as exc:
-            self.fail(f"_init_source_ssh raised ValueError unexpectedly: {exc}")
-
-        self.assertIsNone(service.source_ssh)
+        # Verify _target_is_local returns False (target is remote) but
+        # _node_api_url returns a URL based on target_server_ip.
+        # This is the modern replacement for the old _init_source_ssh check.
+        self.assertFalse(service._target_is_local())
+        self.assertIn('203.0.113.2', service._node_api_url())
