@@ -4,8 +4,8 @@
 # Runs: Django backend + Next.js frontend + (optional) celery/beat.
 #
 # Build-time args:
-#   INSTALL_BUILD_DEPS  Install Docker CLI + buildx + nixpacks (default: false).
-#                       Only needed when the app provisions containers at runtime.
+#   INSTALL_BUILD_DEPS  Install Docker CLI + buildx + nixpacks (default: true).
+#                       Required for addon provisioning and runtime container builds.
 
 FROM node:20-bookworm-slim AS frontend_builder
 WORKDIR /frontend
@@ -32,7 +32,7 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PORT=8080
 
-ARG INSTALL_BUILD_DEPS=false
+ARG INSTALL_BUILD_DEPS=true
 
 # --- System packages + supervisor + PostgreSQL client ---
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \

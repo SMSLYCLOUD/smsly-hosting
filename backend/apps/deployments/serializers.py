@@ -147,17 +147,26 @@ class ServiceSerializer(serializers.ModelSerializer):
 
     def validate_name(self, value):
         # SECURITY: Service.name flows into docker container names,
-        # traefik labels, and image tags. Reject anything outside the
-        # DNS-label / container-name charset.
+        # traefik labels, and image tags. Auto-slugify rather than
+        # reject: replace invalid characters with '-', lowercase,
+        # strip leading/trailing separators, truncate to 63 chars.
         if not value or not isinstance(value, str):
             raise serializers.ValidationError("name is required.")
-        if not re.fullmatch(r"[a-z0-9]([-a-z0-9_.]{0,61}[a-z0-9])?", value):
+        value = value.strip()
+        slug = re.sub(r'[^a-zA-Z0-9_.-]', '-', value).lower()
+        slug = re.sub(r'-{2,}', '-', slug)
+        slug = slug.strip('-_').strip()
+        if not slug:
             raise serializers.ValidationError(
-                "name must be a DNS label: lowercase alphanumeric with "
-                "'-', '_', or '.', starting and ending with a letter or digit "
+                "name must contain at least one alphanumeric character."
+            )
+        slug = slug[:63].rstrip('-_').strip()
+        if not re.fullmatch(r"[a-z0-9]([-a-z0-9_.]{0,61}[a-z0-9])?", slug):
+            raise serializers.ValidationError(
+                "name must start and end with a letter or digit "
                 "(max 63 chars)."
             )
-        return value
+        return slug
 
     class Meta:
         model = Service
