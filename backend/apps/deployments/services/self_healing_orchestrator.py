@@ -20,6 +20,7 @@ import logging
 import re
 import shlex
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -673,7 +674,7 @@ class SelfHealingOrchestrator:
         diagnostics: DiagnosticResult,
     ) -> RecoveryResult:
         """Execute a specific recovery action."""
-        handlers = {
+        handlers: dict[RecoveryAction, Callable[..., RecoveryResult]] = {
         RecoveryAction.RESTART_CONTAINER: self._restart_container,
         RecoveryAction.RESTART_STACK: self._restart_stack,
         RecoveryAction.RESTART_DOCKER_DAEMON: self._restart_docker_daemon,

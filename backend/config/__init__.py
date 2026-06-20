@@ -15,7 +15,7 @@ try:
         duplicate.dicts = self.dicts[:]
         return duplicate
 
-    BaseContext.__copy__ = _safe_copy
+    BaseContext.__copy__ = _safe_copy  # type: ignore[method-assign]  # noqa: E501
 except Exception:
     pass
 

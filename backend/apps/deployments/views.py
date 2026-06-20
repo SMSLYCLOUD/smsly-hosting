@@ -63,7 +63,7 @@ from .ai_router import (
     serialize_ai_router_config,
 )
 from .domain_utils import normalize_domain
-from .models import Deployment, EnvironmentVariable, PlatformConfig, Service
+from .models import Deployment, EnvironmentVariable, PlatformConfig, Service  # type: ignore[attr-defined]    # models.py hub no longer re-exports; classes live in models_core.py.
 from .models_audit import AuditLog
 from .models_backup import BackupSchedule, ServerBackup, ServiceBackup
 from .rate_limiting import BurstRateThrottle, DeploymentRateThrottle

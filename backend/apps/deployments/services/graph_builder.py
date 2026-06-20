@@ -2,7 +2,7 @@ import logging
 from typing import Any
 from urllib.parse import urlparse
 
-from ..models import Service
+from ..models import Service  # type: ignore[attr-defined]
 from ..models_addons import Addon
 
 logger = logging.getLogger(__name__)

@@ -11,7 +11,7 @@ from django.db.models.signals import post_delete, post_save, pre_delete, pre_sav
 from django.dispatch import receiver
 from services.caddy_manager import apply_caddyfile, generate_caddyfile
 
-from .models import (
+from .models import (  # type: ignore[attr-defined]
     Deployment,
     EnvironmentVariable,
     ManagedServer,

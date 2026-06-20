@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import requests
 from drf_spectacular.types import OpenApiTypes
@@ -275,7 +276,7 @@ def _cluster_repos(repos: list[dict]) -> list[dict]:
     if not repos:
         return []
 
-    prefixes = {}
+    prefixes: dict[str, list[dict[str, Any]]] = {}
     for repo in repos:
         name = repo["name"]
         if "-" in name:

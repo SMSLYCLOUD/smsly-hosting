@@ -291,7 +291,7 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
     # Note: Caddy global 'ask' endpoint is defined in generate_caddyfile.
 
     try:
-        from apps.deployments.models import Service
+        from apps.deployments.models import Service  # type: ignore[attr-defined]
 
         # Schema Guard: Check if tables exist before querying
         if not _table_exists(Service._meta.db_table):
@@ -416,7 +416,7 @@ def _get_wildcard_known_hosts(wildcard_domain: str) -> list[str]:
         return []
 
     try:
-        from apps.deployments.models import Service
+        from apps.deployments.models import Service  # type: ignore[attr-defined]
         from apps.deployments.models_addons import Addon
 
         # Schema Guard: Check if tables exist before querying
@@ -498,7 +498,7 @@ def _get_wildcard_remote_host_map(wildcard_domain: str) -> dict[str, list[str]]:
         return {}
 
     try:
-        from apps.deployments.models import Service
+        from apps.deployments.models import Service  # type: ignore[attr-defined]
 
         # Schema Guard: Check if tables exist before querying
         if not _table_exists(Service._meta.db_table):
@@ -559,7 +559,7 @@ def _known_service_route_domains() -> set[str]:
     """Return service/addon domains that must never route to the control plane."""
     domains: set[str] = set()
     try:
-        from apps.deployments.models import Service
+        from apps.deployments.models import Service  # type: ignore[attr-defined]
         from apps.deployments.models_addons import Addon
 
         if not _table_exists(Service._meta.db_table):
@@ -827,7 +827,7 @@ def generate_caddyfile(config) -> str:
             # Direct routing for local preview environments (bypass Traefik)
             local_previews = []
             try:
-                from apps.deployments.models import Service
+                from apps.deployments.models import Service  # type: ignore[attr-defined]
                 if _table_exists(Service._meta.db_table):
                     local_previews = list(
                         Service.objects.select_related("server")
@@ -1321,7 +1321,7 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
     except Exception as exc:
         result["message"] = f"Failed to apply Caddyfile: {exc}"
         if isinstance(exc, PermissionError):
-            result["message"] = result["message"] + (
+            result["message"] = str(result["message"]) + (
                 " | Fix host dir perms: sudo chown -R 1000:1000 /opt/smsly-hosting/caddy-config "
                 "&& sudo chmod 775 /opt/smsly-hosting/caddy-config"
             )

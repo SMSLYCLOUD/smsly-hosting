@@ -47,6 +47,7 @@ import os  # noqa: E402
 import re  # noqa: E402
 import secrets  # noqa: E402
 import time  # noqa: E402
+from typing import Any  # noqa: E402
 from urllib.parse import urlparse  # noqa: E402
 
 import docker  # noqa: E402
@@ -648,7 +649,7 @@ def _wait_for_local_route_ready(
     # Probe through the public edge first, then the raw Traefik ingress. The
     # direct Traefik probe is useful during DNS propagation, but it must not
     # mask a Caddy misroute that serves the platform homepage.
-    probe_candidates = []
+    probe_candidates: list[dict[str, Any]] = []
 
     def _add_probe(base_url: str, headers: dict | None = None, verify: bool = True, kind: str = "direct"):
         normalized = (base_url or "").rstrip("/")

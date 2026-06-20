@@ -728,7 +728,7 @@ def is_deployment_local(deployment) -> bool:
     if bool(getattr(server, "is_primary", False)):
         return True
 
-    from apps.deployments.models import PlatformConfig
+    from apps.deployments.models import PlatformConfig  # type: ignore[attr-defined]  # noqa: F401
     config = PlatformConfig.objects.first()
     server_ip = str(getattr(config, "server_ip", "") or "")
     return str(getattr(server, "host", "") or "") == server_ip

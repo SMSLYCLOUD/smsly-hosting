@@ -23,8 +23,8 @@ class WebhookRateThrottle(permissions.BasePermission):
 
 class GitHubWebhookView(GenericAPIView):
     serializer_class = WebhookSchemaSerializer
-    authentication_classes = []
-    permission_classes = []
+    authentication_classes: list = []
+    permission_classes: list = []
 
     def _get_secret(self):
         from .models_core import PlatformConfig
@@ -62,8 +62,8 @@ class GitHubWebhookView(GenericAPIView):
 
 class GitLabWebhookView(GenericAPIView):
     serializer_class = WebhookSchemaSerializer
-    authentication_classes = []
-    permission_classes = []
+    authentication_classes: list = []
+    permission_classes: list = []
 
     def post(self, request):
         webhook_secret = getattr(settings, 'GITLAB_WEBHOOK_SECRET', '')
@@ -99,8 +99,8 @@ class GitLabWebhookView(GenericAPIView):
 
 class BitbucketWebhookView(GenericAPIView):
     serializer_class = WebhookSchemaSerializer
-    authentication_classes = []
-    permission_classes = []
+    authentication_classes: list = []
+    permission_classes: list = []
 
     def post(self, request):
         webhook_secret = getattr(settings, 'BITBUCKET_WEBHOOK_SECRET', '')

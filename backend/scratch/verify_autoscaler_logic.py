@@ -13,7 +13,7 @@ from django.core.cache import cache
 from django.utils import timezone
 
 # Mock the cache to avoid Redis connection issues
-mock_cache_store = {}
+mock_cache_store: dict = {}
 def mock_get(key, default=None): return mock_cache_store.get(key, default)
 def mock_set(key, val, timeout=None): mock_cache_store[key] = val
 def mock_delete(key): mock_cache_store.pop(key, None)

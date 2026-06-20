@@ -12,7 +12,7 @@ from decouple import config  # noqa: E402
 from django.core.cache import cache  # noqa: E402
 from django.core.mail import send_mail  # noqa: E402
 
-from apps.deployments.models import (  # noqa: E402
+from apps.deployments.models import (  # type: ignore[attr-defined]  # noqa: E402
     Deployment,
 )
 

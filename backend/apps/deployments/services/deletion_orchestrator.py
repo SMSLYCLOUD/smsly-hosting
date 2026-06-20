@@ -107,7 +107,7 @@ class DeletionOrchestrator:
     # -- Internal Discovery Methods --
 
     def _find_service_containers(self, service: Service) -> set[Any]:
-        containers = set()
+        containers: set[Any] = set()
         if not self.docker_client:
             return containers
 
@@ -162,7 +162,7 @@ class DeletionOrchestrator:
         return containers
 
     def _find_addon_containers(self, addon: Addon) -> set[Any]:
-        containers = set()
+        containers: set[Any] = set()
         if not self.docker_client:
             return containers
 
@@ -192,7 +192,7 @@ class DeletionOrchestrator:
         return containers
 
     def _find_service_volumes(self, service: Service) -> set[Any]:
-        volumes = set()
+        volumes: set[Any] = set()
         if not self.docker_client:
             return volumes
         try:
@@ -209,7 +209,7 @@ class DeletionOrchestrator:
         return volumes
 
     def _find_addon_volumes(self, addon: Addon) -> set[Any]:
-        volumes = set()
+        volumes: set[Any] = set()
         if not self.docker_client:
             return volumes
         try:

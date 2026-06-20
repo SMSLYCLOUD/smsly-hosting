@@ -13,8 +13,9 @@ Called by the pipeline health-check stage and the AI diagnosis task.
 
 import logging
 import re
+from typing import Any, cast
 
-from apps.deployments.models import EnvironmentVariable
+from apps.deployments.models import EnvironmentVariable  # type: ignore[attr-defined]
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,7 @@ logger = logging.getLogger(__name__)
 #   port: str — correct PORT value to set
 #   action: str — description for the user
 
-ERROR_PATTERNS = [
+ERROR_PATTERNS: list[dict[str, Any]] = [
     # ── Django ────────────────────────────────────────────────────────
     {
         'regex': re.compile(
@@ -285,7 +286,8 @@ def diagnose_runtime_logs(
     results = []
 
     for pattern in ERROR_PATTERNS:
-        match = pattern['regex'].search(logs)
+        regex = cast("re.Pattern[str]", pattern['regex'])
+        match = regex.search(logs)
         if not match:
             continue
 
@@ -300,7 +302,7 @@ def diagnose_runtime_logs(
         fix = pattern.get('auto_fix')
         if fix and auto_apply and service:
             try:
-                action = _apply_fix(dict(fix), match, logs, service, deployment)  # type: ignore[arg-type]
+                action = _apply_fix(cast(dict, fix), match, logs, service, deployment)
                 if action:
                     result['action_taken'] = action
                     result['auto_fixed'] = True

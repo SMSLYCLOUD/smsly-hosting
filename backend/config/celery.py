@@ -8,7 +8,8 @@ if os.name == "nt":
     # fallback path in local development and test runs.
     try:
         import platform
-        platform._wmi = None  # pylint: disable=protected-access
+        # mypy doesn't see platform._wmi (implementation detail of stdlib on Windows).
+        setattr(platform, "_wmi", None)  # type: ignore[attr-defined]  # noqa: E501
     except Exception:
         pass
 

@@ -29,7 +29,7 @@ class DjangoAdapter:
         return self.executor.run("python manage.py migrate --noinput", cwd, env)
 
     def inspect_migration_files(self, project_path: str) -> list[dict[str, Any]]:
-        operations = []
+        operations: list[dict[str, Any]] = []
         if not os.path.exists(project_path):
             return operations
         for root, dirs, files in os.walk(project_path):

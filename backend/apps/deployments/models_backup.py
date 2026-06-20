@@ -63,7 +63,7 @@ class ServiceBackup(models.Model):
         ('MANUAL', 'Manual'), ('SCHEDULED', 'Scheduled'),
         ('PRE_TRANSFER', 'Pre-Transfer'),
     ], default='MANUAL', max_length=20)
-    file_path = models.CharField(max_length=500, blank=True)  # path to tarball  # type: ignore[var-annotated]
+    file_path = models.CharField(max_length=500, blank=True)  # type: ignore[var-annotated]  # path to tarball
     size_bytes = models.BigIntegerField(default=0)  # type: ignore[var-annotated]
     metadata = models.JSONField(default=dict)  # snapshot of env vars, resources, config  # type: ignore[var-annotated]
     error_message = models.TextField(blank=True)  # type: ignore[var-annotated]
@@ -85,7 +85,7 @@ class BackupSchedule(models.Model):
     """Cron-based backup schedule per service or server-wide."""
     service = models.ForeignKey(Service, on_delete=models.CASCADE, null=True, blank=True)  # type: ignore[var-annotated]
     is_server_wide = models.BooleanField(default=False)  # type: ignore[var-annotated]
-    cron_expression = models.CharField(max_length=100, default='0 3 * * *')  # daily 3am  # type: ignore[var-annotated]
+    cron_expression = models.CharField(max_length=100, default='0 3 * * *')  # type: ignore[var-annotated]  # daily 3am
     retention_days = models.IntegerField(default=7)  # type: ignore[var-annotated]
     enabled = models.BooleanField(default=True)  # type: ignore[var-annotated]
     last_run = models.DateTimeField(null=True)  # type: ignore[var-annotated]

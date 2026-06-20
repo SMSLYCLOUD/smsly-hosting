@@ -8,7 +8,7 @@ from apps.teams.permissions import (
     get_team_q_filter,
 )
 
-from .models import Service
+from .models import Service  # type: ignore[attr-defined]
 from .models_cron import CronJob
 from .rate_limiting import CronJobCreateRateThrottle
 

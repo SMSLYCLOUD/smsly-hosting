@@ -7,7 +7,7 @@ a callable that receives a container name and returns a tuple
 """
 
 # Global list of registered classifiers
-_CLASSIFIERS = []
+_CLASSIFIERS: list = []
 
 
 def register_classifier(func):

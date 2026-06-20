@@ -22,17 +22,17 @@ try:
     HAS_AZURE_SDK = True
 except ImportError:
     HAS_AZURE_SDK = False
-    ResourceManagementClient: Any = None
-    ContainerAppsAPIClient: Any = None
-    ContainerApp: Any = None
-    Template: Any = None
-    Container: Any = None
-    EnvironmentVar: Any = None
-    Configuration: Any = None
-    Ingress: Any = None
-    TrafficWeight: Any = None
-    ClientSecretCredential: Any = None
-    BlobServiceClient: Any = None
+    ResourceManagementClient: Any = None  # type: ignore[no-redef]
+    ContainerAppsAPIClient: Any = None  # type: ignore[no-redef]
+    ContainerApp: Any = None  # type: ignore[no-redef]
+    Template: Any = None  # type: ignore[no-redef]
+    Container: Any = None  # type: ignore[no-redef]
+    EnvironmentVar: Any = None  # type: ignore[no-redef]
+    Configuration: Any = None  # type: ignore[no-redef]
+    Ingress: Any = None  # type: ignore[no-redef]
+    TrafficWeight: Any = None  # type: ignore[no-redef]
+    ClientSecretCredential: Any = None  # type: ignore[no-redef]
+    BlobServiceClient: Any = None  # type: ignore[no-redef]
 
 class AzureAdapter(BaseCloudAdapter):
     def __init__(self, tenant_id: str, client_id: str,

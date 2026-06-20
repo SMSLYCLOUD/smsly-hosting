@@ -46,7 +46,7 @@ def _clear_directory_contents(path: str) -> dict:
     if root in {"/", "/app", "/opt", "/opt/smsly-hosting"}:
         raise ValueError(f"Refusing to clear unsafe directory: {root}")
 
-    result = {"path": root, "removed": 0, "missing": False, "errors": []}
+    result: dict = {"path": root, "removed": 0, "missing": False, "errors": []}
     if not os.path.isdir(root):
         result["missing"] = True
         return result

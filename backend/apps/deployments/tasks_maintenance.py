@@ -112,7 +112,7 @@ def _clear_orphaned_runtime_resources() -> dict:
             logger.warning("Failed to remove orphaned container %s: %s", container.name, exc)
             errors.append({"name": container.name, "error": str(exc)})
 
-    image_prune = {}
+    image_prune: dict = {}
     try:
         image_prune = client.images.prune(filters={"dangling": ["false"]}) or {}
     except Exception as exc:  # pylint: disable=broad-exception-caught

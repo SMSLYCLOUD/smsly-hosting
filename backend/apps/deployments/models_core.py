@@ -668,6 +668,7 @@ class Deployment(TimeStampedModel):
         MIGRATION_FAILED = 'MIGRATION_FAILED', _('Migration Failed')
         DEPLOYING = 'DEPLOYING', _('Deploying')
         HEALTH_CHECK = 'HEALTH_CHECK', _('Health Check')
+        HEALTH_CHECK_FAILED = 'HEALTH_CHECK_FAILED', _('Health Check Failed')
         ACTIVE = 'ACTIVE', _('Active')
         FAILED = 'FAILED', _('Failed')
         CANCELLED = 'CANCELLED', _('Cancelled')
@@ -891,7 +892,7 @@ class PlatformConfig(models.Model):
         the token is acceptable (either empty, which is allowed, or it
         meets the length/charset requirements).
         """
-        errors = []
+        errors: list[str] = []
         token = (self.cloudflare_api_token or "").strip()
         if not token:
             return errors

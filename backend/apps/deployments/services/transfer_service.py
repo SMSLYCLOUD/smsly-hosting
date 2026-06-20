@@ -17,7 +17,7 @@ from django.conf import settings
 from django.db.models import Q
 from django.utils import timezone
 
-from ..models import PlatformConfig
+from ..models import PlatformConfig  # type: ignore[attr-defined]
 from .backup_service import BackupService, UnknownBackupKeyIdError
 
 logger = logging.getLogger(__name__)

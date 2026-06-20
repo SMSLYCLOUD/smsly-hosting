@@ -13,7 +13,7 @@ from urllib.parse import urlencode, urlparse
 
 import requests
 
-from apps.deployments.models import (
+from apps.deployments.models import (  # type: ignore[attr-defined]
     EnvironmentVariable,
     ManagedServer,
     PlatformConfig,
@@ -188,11 +188,11 @@ class RemoteOrchestrator:
             return results
 
         # 2. Auth/API Check
-        resp: requests.Response | None = self._request("GET", "/api/v1/services/", timeout=10)
-        if resp is not None and resp.status_code == 200:
+        api_resp = self._request("GET", "/api/v1/services/", timeout=10)
+        if api_resp is not None and api_resp.status_code == 200:
             results["auth"] = True
         else:
-            results["error"] = self.describe_last_error() or f"API returned {resp.status_code if resp else 'no response'}"
+            results["error"] = self.describe_last_error() or f"API returned {api_resp.status_code if api_resp else 'no response'}"
 
         return results
 
