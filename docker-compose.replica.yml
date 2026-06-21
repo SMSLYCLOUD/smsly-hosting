@@ -1,0 +1,109 @@
+# SMSLY Hosting — Opt-in PostgreSQL Read Replica
+#
+# Usage:
+#   docker compose -f docker-compose.prod.yml -f docker-compose.replica.yml up -d
+#
+# This overlay adds a single read-replica container that streams WAL
+# from the primary ``db`` service. PgCat (built into
+# docker-compose.prod.yml) is told about the replica via
+# DB_REPLICA_HOSTS so SELECTs are routed to it.
+#
+# Opt-in requirements (all must be true, otherwise the replica will
+# fail to start or replicate):
+#
+#   1. REPLICATION_PASSWORD must be set in .env to a strong random
+#      value. Generate one with:
+#        python -c "import secrets; print(secrets.token_hex(16))"
+#   2. The primary ``db`` container must be running with WAL settings
+#      that allow streaming replication. The production compose
+#      (``docker-compose.prod.yml``) defaults are already sufficient
+#      (max_wal_senders >= 1, wal_level != minimal). If you have a
+#      custom command for ``db``, append:
+#        -c wal_level=replica -c max_wal_senders=5 -c max_replication_slots=5
+#   3. The primary's ``db`` container must be reachable from this
+#      container on the ``smsly-net`` Docker network. Both share that
+#      network via the parent compose.
+#
+# To enable on the running stack:
+#   1. Edit .env and add:  REPLICATION_PASSWORD=<random>
+#   2. Re-render pgcat config (it auto-picks REPLICATION_PASSWORD).
+#   3. Pull and run:
+#        cd /opt/smsly-hosting
+#        git pull
+#        docker compose -f docker-compose.prod.yml -f docker-compose.replica.yml up -d
+#   4. Verify:
+#        docker exec smsly-hosting-db-replica-1 \
+#          psql -U ${POSTGRES_USER:-smsly_admin} -d ${POSTGRES_DB:-smsly_hosting} \
+#          -c "SELECT pg_is_in_recovery();"  # should return 't'
+#        docker exec smsly-hosting-db-1 \
+#          psql -U ${POSTGRES_USER:-smsly_admin} -d ${POSTGRES_DB:-smsly_hosting} \
+#          -c "SELECT client_addr, state FROM pg_stat_replication;"
+#        # should list the replica's address with state='streaming'
+
+services:
+  # Read replica — streams WAL from the primary ``db`` container
+  # via the smsly-net bridge. The first start runs pg_basebackup
+  # from scratch; subsequent starts re-attach using the persisted
+  # primary_conninfo in /var/lib/postgresql/data.
+  db-replica:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    container_name: smsly-hosting-db-replica-1
+    hostname: db-replica
+    # No port binding — the replica is internal-only and reachable
+    # only via pgcat on the smsly-net network. Removing the
+    # ``ports:`` block prevents accidental external exposure.
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-smsly_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: ${POSTGRES_DB:-smsly_hosting}
+      # The replicator user's password must match the primary. The
+      # REPLICATION_PASSWORD env var is set in .env; the fallback
+      # below is only for local dev.
+      PGUSER: replicator
+      PGPASSWORD: ${REPLICATION_PASSWORD:?REPLICATION_PASSWORD must be set to enable the replica}
+    volumes:
+      - db-replica-data:/var/lib/postgresql/data
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ ! -s /var/lib/postgresql/data/PG_VERSION ]; then
+          echo "Initializing replica via pg_basebackup from db..."
+          # The replication user 'replicator' is created by the
+          # primary's init scripts (see docker-compose.ha-postgres.yml
+          # for the equivalent pattern in a separate stack).
+          PGPASSWORD="$$REPLICATION_PASSWORD" pg_basebackup \
+            -h db \
+            -D /var/lib/postgresql/data \
+            -U replicator \
+            -Fp -Xs -P -R
+        fi
+        exec docker-entrypoint.sh postgres \
+          -c hot_standby=on \
+          -c max_connections=${DB_REPLICA_MAX_CONNECTIONS:-200} \
+          -c hot_standby_feedback=on
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - PGPASSWORD="$${POSTGRES_PASSWORD}" pg_isready -U "$${POSTGRES_USER:-smsly_admin}" -d "$${POSTGRES_DB:-smsly_hosting}"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
+    networks:
+      - smsly-net
+    depends_on:
+      db:
+        condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          memory: ${DB_REPLICA_MEMORY_RESERVATION:-512M}
+        limits:
+          memory: ${DB_REPLICA_MEMORY_LIMIT:-2G}
+    labels:
+      - managed_by=smsly-hosting
+      - role=read-replica
+
+volumes:
+  db-replica-data:

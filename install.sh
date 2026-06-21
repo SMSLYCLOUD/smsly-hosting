@@ -428,6 +428,7 @@ deploy_observability_stack() {
 
         # Ensure scripts mounted into containers are executable (git may not preserve +x).
         chmod +x "$INSTALL_DIR"/scripts/alertmanager-entrypoint.sh 2>/dev/null || true
+        chmod +x "$INSTALL_DIR"/scripts/enable-replica.sh 2>/dev/null || true
 
         docker compose \
             --env-file "$INSTALL_DIR/.env" \
