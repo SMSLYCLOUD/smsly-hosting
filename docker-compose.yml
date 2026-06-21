@@ -28,11 +28,6 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       - socket-proxy
-    read_only: true
-    tmpfs:
-      - /run
-      - /tmp
-      - /usr/local/etc/haproxy
     healthcheck:
       test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/2375 && echo -e 'GET /version HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && grep -q '200 OK' <&3 || exit 1"]
       interval: 5s
