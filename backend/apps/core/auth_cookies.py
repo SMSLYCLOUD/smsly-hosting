@@ -5,7 +5,7 @@ The auth token is delivered to the browser as an HttpOnly+Secure+SameSite=Strict
 cookie. The cookie is set by the login view and cleared by the logout view.
 
 Cookie name selection:
-- In production (non-DEBUG, served over HTTPS) we use the ``__Host-auth_token``
+- In production (non-DEBUG, USE_SSL=true, served over HTTPS) we use the ``__Host-auth_token``
   prefix. The ``__Host-`` prefix instructs the browser to (a) reject the cookie
   unless the request is secure, (b) reject it unless ``Secure`` is set,
   (c) reject it unless ``Path=/`` and no ``Domain`` attribute is present.
@@ -48,10 +48,15 @@ def cookie_name() -> str:
 
     The decision is made per-request because ``settings.DEBUG`` is read at
     runtime (the test-suite flips DEBUG via ``override_settings``).
+
+    The ``__Host-`` prefix REQUIRES ``Secure=True``, ``Path=/``, and no
+    ``Domain`` attribute. If USE_SSL is false the cookie cannot be Secure,
+    so we must use the plain ``auth_token`` name even in production.
     """
-    if getattr(settings, "DEBUG", False):
-        return DEV_COOKIE_NAME
-    return PROD_COOKIE_NAME
+    is_secure = not getattr(settings, "DEBUG", False) and getattr(settings, "USE_SSL", False)
+    if is_secure:
+        return PROD_COOKIE_NAME
+    return DEV_COOKIE_NAME
 
 
 def set_auth_cookie(response: HttpResponse, token: str) -> None:
