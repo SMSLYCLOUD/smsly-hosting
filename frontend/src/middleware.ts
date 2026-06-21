@@ -203,6 +203,7 @@ export const config = {
     "/replication/:path*",
     "/restore/:path*",
     "/addons/:path*",
+    "/settings/:path*",
     "/login",
     "/register",
     "/auth/:path*",
