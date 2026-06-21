@@ -704,7 +704,11 @@ RABBITMQ_PASSWORD=$RABBITMQ_PASSWORD
 RABBITMQ_DEFAULT_USER=smsly_user
 RABBITMQ_DEFAULT_PASS=$RABBITMQ_PASSWORD
 REDIS_URL=redis://:$REDIS_PASSWORD@redis:6379/0
-REDBEAT_REDIS_URL=redis://:$REDIS_PASSWORD@redis:6379/0
+# CELERY_ prefix is required for celery-redbeat to read this (see
+# backend/config/settings.py: CELERY_REDBEAT_REDIS_URL). Without the prefix
+# redbeat falls back to CELERY_BROKER_URL (RabbitMQ AMQP) and redis-py
+# crashes with "Redis URL must specify one of the following schemes".
+CELERY_REDBEAT_REDIS_URL=redis://:$REDIS_PASSWORD@redis:6379/3
 REDIS_SOCKET_TIMEOUT=5
 CELERY_BROKER_URL=amqp://smsly_user:$RABBITMQ_PASSWORD@rabbitmq:5672//
 

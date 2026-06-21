@@ -1084,6 +1084,18 @@ def _redis_url_with_db(base_url: str, db: int) -> str:
 
 REDIS_CACHE_URL = _redis_url_with_db(_REDIS_BASE_URL, 2)
 
+# RedBeat (celery-beat scheduler) needs its own Redis DB. Build it from the
+# same _REDIS_BASE_URL so credentials/host stay in sync with the rest of the
+# Redis configuration. Without this setting, celery-redbeat falls back to
+# CELERY_BROKER_URL (RabbitMQ AMQP), which makes redis-py raise:
+#   "Redis URL must specify one of the following schemes (redis://, ...)"
+# Operators can still override via the CELERY_REDBEAT_REDIS_URL env var.
+_REDBEAT_REDIS_URL = _redis_url_with_db(_REDIS_BASE_URL, 3)
+CELERY_REDBEAT_REDIS_URL = config(
+    'CELERY_REDBEAT_REDIS_URL',
+    default=_REDBEAT_REDIS_URL,
+)
+
 if IS_TESTING:
     CACHES = {
         "default": {

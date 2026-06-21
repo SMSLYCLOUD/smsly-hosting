@@ -323,7 +323,9 @@ services:
     environment:
       MASTER_MESH_IP: ${MASTER_MESH_IP:-}
       BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
-      REDBEAT_REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      # CELERY_ prefix is required for celery-redbeat to pick it up
+      # (see backend/config/settings.py: CELERY_REDBEAT_REDIS_URL)
+      CELERY_REDBEAT_REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/3
     depends_on:
       pgcat:
         condition: service_healthy
