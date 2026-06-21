@@ -273,7 +273,7 @@ def _build_service_domain_block(domain: str, upstream_host: str, upstream_url: s
         [
             "    encode gzip",
             "    log {",
-            "        output file /var/log/caddy/access.log",
+            "        output stdout",
             "    }",
             "}",
         ]
@@ -748,7 +748,7 @@ def generate_caddyfile(config) -> str:
             [
                 "    encode gzip",
                 "    log {",
-                "        output file /var/log/caddy/access.log",
+                "        output stdout",
                 "    }",
                 "    handle /api/* {",
                 "        reverse_proxy backend:8000",
@@ -1011,16 +1011,13 @@ def generate_caddyfile(config) -> str:
     except Exception as _exc:
         logger.warning("Could not generate self-signed cert for IP redirect: %s", _exc)
 
-    # Always include :80 catch-all with ACME challenge exemption.
+    # Always include :80 catch-all. Caddy handles HTTP-01 ACME challenges
+    # itself on port 80 (on_demand_tls) — DO NOT intercept /.well-known/
+    # acme-challenge/* and proxy it to the backend, or Let's Encrypt
+    # will never receive the challenge token and cert issuance silently fails.
     if use_ssl and domain:
         sections.append(
             """:80 {
-    @acme {
-        path /.well-known/acme-challenge/*
-    }
-    handle @acme {
-        reverse_proxy backend:8000
-    }
     @redirectable {
         not header_regexp host ^([0-9]{1,3}[.]){3}[0-9]{1,3}(:[0-9]+)?$
         not host localhost
