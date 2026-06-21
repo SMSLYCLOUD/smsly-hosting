@@ -52,9 +52,15 @@ class SessionTokenView(GenericAPIView):
                 {"error": "Authentication required"},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
-        from django.core import signing
-        token = signing.dumps({'user_id': user.id}, salt='ws-terminal')
-        return Response({'token': token})
+        # Get-or-create a DRF auth token for this user. The consumer
+        # (TerminalConsumer._authenticate_token) validates the token as
+        # a 40-char hex string against the rest_framework.authtoken
+        # table, so the signed-token approach previously used here was
+        # rejected with "subprotocol is invalid" (colons in the signed
+        # value are not valid in Sec-WebSocket-Protocol).
+        from rest_framework.authtoken.models import Token
+        token, _created = Token.objects.get_or_create(user=user)
+        return Response({'token': token.key})
 
 class ZeroTrustHMACAuthentication(authentication.BaseAuthentication):
     """
