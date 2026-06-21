@@ -3,9 +3,16 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 # Multi-threaded Rust-based PostgreSQL proxy with:
 #   • Transaction-mode pooling (Django-compatible)
-#   • Read/write query splitting (Patroni-ready)
+#   • Read/write query splitting (when DB_REPLICA_HOSTS is set; see
+#     render_pgcat_config.py)
 #   • Prometheus metrics on :9930
 #   • Automatic health checks and backend banning
+#
+# NOTE: This file is a fallback / reference. The actual running config
+# is generated at container start by render_pgcat_config.py from the
+# env vars DB_HOST / DB_PORT / DB_REPLICA_HOSTS. The generator writes
+# the final pgcat.toml into the container, so the only sections that
+# actually matter at runtime are the pool/user/stanza shapes below.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 [general]
@@ -61,7 +68,15 @@ pool_mode = "transaction"
 # ── Server Definitions ────────────────────────────────────────────────────────
 # Format: [host, port, role]
 # Role: "primary" or "replica"
-# When Patroni promotes a replica, update this and send SIGHUP to reload.
+#
+# To enable read replicas, set DB_REPLICA_HOSTS in the environment as a
+# comma-separated list of "host:port" entries. The generator appends
+# them to the shards.0.servers list with role="replica".
+# PgCat then routes SELECTs to the replica pool and writes to the
+# primary. With primary_reads_enabled=true (below) the primary also
+# serves reads when the replica pool is empty.
+# When a Patroni-managed cluster promotes a new primary, SIGHUP pgcat
+# after updating this list to reload the routing.
 [pools.smsly_hosting.shards.0]
 servers = [
     ["db", 5432, "primary"],
