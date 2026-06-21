@@ -292,7 +292,9 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
-      - REDBEAT_REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      # CELERY_ prefix is required for celery-redbeat to pick it up
+      # (see backend/config/settings.py: CELERY_REDBEAT_REDIS_URL)
+      - CELERY_REDBEAT_REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/3
     depends_on:
       backend:
         condition: service_healthy
