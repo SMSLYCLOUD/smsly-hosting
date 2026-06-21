@@ -660,7 +660,11 @@ volumes:
   apt_log:
   verdaccio_data:
   caddy_config:
+    external: true
+    name: smsly-hosting_caddy_config
   caddy_data:
+    external: true
+    name: smsly-hosting_caddy_data
   letsencrypt_data:
   static_volume:
   media_volume:
