@@ -34,6 +34,8 @@ class SecurityMiddleware:
             '/api/v1/transfers/register-incoming/',  # Transfer sync verifies node auth in-view
             '/api/v1/services/check-domain/',  # Caddy On-Demand TLS authorization (Public)
             '/api/v1/templates/',  # Public template marketplace (AllowAny)
+            '/api/v1/integrations/',  # OAuth authorize/callback flows (public — authenticated elsewhere)
+            '/api/v1/oauth/',  # OAuth provider credentials status (public read)
         ]
 
     def __call__(self, request):
