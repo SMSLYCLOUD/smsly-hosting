@@ -659,8 +659,8 @@ volumes:
   apt_cache:
   apt_log:
   verdaccio_data:
-  smsly-hosting_caddy_config:
-  smsly-hosting_caddy_data:
+  caddy_config:
+  caddy_data:
   letsencrypt_data:
   static_volume:
   media_volume:
