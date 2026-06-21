@@ -62,11 +62,15 @@
 	reverse_proxy @health_live backend:8000
 	reverse_proxy @health_ready backend:8000
 
-	# OAuth handshake (allauth) — must stay on backend
-	@oauth_github path /accounts/github/*
-	@oauth_google path /accounts/google/*
-	reverse_proxy @oauth_github backend:8000
-	reverse_proxy @oauth_google backend:8000
+	# OAuth handshake (allauth) — must stay on backend.
+	# The frontend's login page links to github/google/gitlab/bitbucket_oauth2.
+	# All four providers live at /accounts/<provider>/* on the backend; if we
+	# only forward github/google, the gitlab and bitbucket buttons 404 into the
+	# Next.js catch-all page instead of initiating OAuth. The Next.js
+	# accounts/[[...slug]] page still catches the frontend-side routes that
+	# don't match a real OAuth provider.
+	@oauth_all path /accounts/github/* /accounts/google/* /accounts/gitlab/* /accounts/bitbucket* /accounts/gitlab_oauth2/*
+	reverse_proxy @oauth_all backend:8000
 
 	# Static files
 	@static path /static/*

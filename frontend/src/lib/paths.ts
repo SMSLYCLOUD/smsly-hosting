@@ -16,6 +16,7 @@ export const PROTECTED_PREFIXES = [
   "/billing",
   "/admin-dashboard",
   "/project",
+  "/projects",
   "/store",
   "/marketplace",
   "/settings",
@@ -28,6 +29,18 @@ export const PROTECTED_PREFIXES = [
   "/backups",
   "/transfers",
   "/functions",
+  "/activity",
+  "/autoscaler",
+  "/blueprints",
+  "/client",
+  "/domains",
+  "/grafana",
+  "/logs",
+  "/monitoring",
+  "/network",
+  "/replication",
+  "/restore",
+  "/addons",
 ] as const;
 
 export function isProtectedPath(pathname: string): boolean {
