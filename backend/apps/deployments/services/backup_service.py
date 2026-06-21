@@ -133,26 +133,27 @@ class BackupService:
     def _get_backups_dir(subdir: str) -> str:
         """Get or create a writable backups directory.
 
-        Tries /app/backups/{subdir} first (shared Docker volume in production),
-        then falls back to the OS temp directory if not available.
+        Always uses the persistent Docker volume at /app/backups/{subdir}.
+        The previous implementation fell back to /tmp/backups/ when the
+        primary path was not writable, but /tmp is ephemeral — a container
+        restart would delete all backups while the DB records still pointed
+        to them, causing 404 on download. Now we fail loudly instead of
+        silently writing to a non-persistent location.
         """
         primary = os.path.join('/app', 'backups', subdir)
+        os.makedirs(primary, exist_ok=True)
+        # Test write access by creating a temp file
+        test_file = os.path.join(primary, '.write_test')
         try:
-            os.makedirs(primary, exist_ok=True)
-            # Test write access by creating a temp file
-            test_file = os.path.join(primary, '.write_test')
             with open(test_file, 'w') as f:
                 f.write('ok')
             os.remove(test_file)
             return primary
         except (PermissionError, OSError) as e:
-            fallback = os.path.join(tempfile.gettempdir(), 'backups', subdir)
-            logger.warning(
-                "Cannot write to %s (%s), falling back to %s",
-                primary, e, fallback
-            )
-            os.makedirs(fallback, exist_ok=True)
-            return fallback
+            raise RuntimeError(
+                f"Cannot write to backup directory {primary}: {e}. "
+                "Check that the backups_data volume is mounted and writable."
+            ) from e
 
     def _prepare_archive_for_restore(self, backup) -> tuple[str, str | None]:
         """Return readable tar.gz path, verifying checksum if backup object has metadata."""
