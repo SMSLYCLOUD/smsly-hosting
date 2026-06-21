@@ -16,29 +16,21 @@ class CustomSocialAccountAdapter(DefaultSocialAccountAdapter):
 
     def get_callback_url(self, request, provider):
         """
-        Build the OAuth callback URL, checking provider-specific env overrides first.
-        If none is set, auto-generate from PlatformConfig.domain so the operator
-        never has to manually set GITHUB_OAUTH_CALLBACK_URL in .env.
-        Falls back to the standard allauth reverse('PROVIDER_callback') pattern.
+        Build the OAuth callback URL for django-allauth login.
+
+        The Settings UI 'Connect GitHub/Google/...' flow uses a SEPARATE
+        callback path (/auth/<provider>/callback → frontend → POST to
+        /api/v1/integrations/...).  This method is ONLY for the allauth
+        login dance — we always use the standard /accounts/<provider>/
+        login/callback/ path, which is already routed to the backend by
+        the Caddyfile.
+
+        Provider-specific env vars (GITHUB_OAUTH_CALLBACK_URL, etc.) are
+        for the custom integration only and are intentionally NOT read here.
         """
-        # allauth OAuth adapters store the provider slug as ``provider_id``
-        # (e.g. 'github', 'google', 'gitlab', 'bitbucket_oauth2'), NOT as .id.
         provider_id = getattr(provider, 'provider_id', None) or str(provider)
-        overrides = {
-            'github': getattr(settings, 'GITHUB_OAUTH_CALLBACK_URL', None),
-            'gitlab': getattr(settings, 'GITLAB_OAUTH_CALLBACK_URL', None),
-            'bitbucket_oauth2': getattr(settings, 'BITBUCKET_OAUTH_CALLBACK_URL', None),
-            'google': getattr(settings, 'GOOGLE_OAUTH_CALLBACK_URL', None),
-        }
-        override = overrides.get(provider_id)
-        if override:
-            return override
 
         # Auto-generate from the platform domain stored in the DB.
-        # This makes OAuth callback URLs zero-config: the operator only
-        # sets the platform domain once in the Settings UI and the same
-        # /auth/<provider>/callback path (already routed by Caddy) works
-        # for all providers.
         try:
             from .models_core import PlatformConfig
             cfg = PlatformConfig.load()
@@ -47,6 +39,6 @@ class CustomSocialAccountAdapter(DefaultSocialAccountAdapter):
             domain = ''
         if domain:
             protocol = 'https' if getattr(cfg, 'use_ssl', True) else 'http'
-            return f"{protocol}://{domain}/auth/{provider_id}/callback"
+            return f"{protocol}://{domain}/accounts/{provider_id}/login/callback/"
 
         return super().get_callback_url(request, provider)
