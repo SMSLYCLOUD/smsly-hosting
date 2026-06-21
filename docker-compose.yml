@@ -95,6 +95,12 @@ services:
       - socket-proxy
     command: celery -A config worker --loglevel=info -Q fast --concurrency=8
     restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A config inspect ping -t 5 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     networks:
       - smsly-net
       - socket-proxy
@@ -127,6 +133,12 @@ services:
       - socket-proxy
     command: celery -A config worker --loglevel=info -Q deploy --concurrency=8
     restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A config inspect ping -t 5 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     networks:
       - smsly-net
       - socket-proxy
@@ -150,6 +162,12 @@ services:
       - socket-proxy
     command: celery -A config worker --loglevel=info -Q celery --concurrency=8
     restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A config inspect ping -t 5 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     networks:
       - smsly-net
       - socket-proxy
@@ -300,6 +318,14 @@ services:
         condition: service_healthy
     tmpfs:
       - /tmp
+    healthcheck:
+      # celery-beat is a scheduler, not a worker. Check that the beat
+      # process is alive and writing to its schedule file.
+      test: ["CMD-SHELL", "pgrep -f 'celery.*beat' > /dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     networks:
       - smsly-net
 
@@ -352,6 +378,14 @@ services:
       - registry_data:/var/lib/registry
       - ./auth:/auth:ro
       - ./certs:/certs:ro
+    healthcheck:
+      # Registry uses TLS on 5000. Use /dev/tcp to check the socket
+      # is open without needing wget/curl in the distroless image.
+      test: ["CMD-SHELL", "(echo > /dev/tcp/127.0.0.1/5000) 2>/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     networks:
       - smsly-net
 
@@ -609,6 +643,14 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./scripts/traefik-watchdog.sh:/watchdog.sh:ro
+    healthcheck:
+      # Check the watchdog's own script is running (it loops forever).
+      # The script doesn't expose a port, so we check the process.
+      test: ["CMD-SHELL", "pgrep -f watchdog.sh > /dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     depends_on:
       - traefik
     networks:
