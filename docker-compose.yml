@@ -564,7 +564,6 @@ services:
     - --providers.docker.network=smsly-net
     - --providers.docker.endpoint=tcp://socket-proxy:2375
     - --providers.docker.httpClientTimeout=600s
-    - --providers.docker.refreshInterval=10s
     - --entrypoints.web.address=:80
     - --entrypoints.websecure.address=:443
     - --entrypoints.websecure.http.tls=true
