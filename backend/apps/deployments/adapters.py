@@ -17,6 +17,8 @@ class CustomSocialAccountAdapter(DefaultSocialAccountAdapter):
     def get_callback_url(self, request, provider):
         """
         Build the OAuth callback URL, checking provider-specific env overrides first.
+        If none is set, auto-generate from PlatformConfig.domain so the operator
+        never has to manually set GITHUB_OAUTH_CALLBACK_URL in .env.
         Falls back to the standard allauth reverse('PROVIDER_callback') pattern.
         """
         provider_id = provider.id if hasattr(provider, 'id') else str(provider)
@@ -29,4 +31,20 @@ class CustomSocialAccountAdapter(DefaultSocialAccountAdapter):
         override = overrides.get(provider_id)
         if override:
             return override
+
+        # Auto-generate from the platform domain stored in the DB.
+        # This makes OAuth callback URLs zero-config: the operator only
+        # sets the platform domain once in the Settings UI and the same
+        # /auth/<provider>/callback path (already routed by Caddy) works
+        # for all providers.
+        try:
+            from .models_core import PlatformConfig
+            cfg = PlatformConfig.load()
+            domain = (getattr(cfg, 'domain', '') or '').strip()
+        except Exception:
+            domain = ''
+        if domain:
+            protocol = 'https' if getattr(cfg, 'use_ssl', True) else 'http'
+            return f"{protocol}://{domain}/auth/{provider_id}/callback"
+
         return super().get_callback_url(request, provider)
