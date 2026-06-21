@@ -16,21 +16,16 @@ class CustomSocialAccountAdapter(DefaultSocialAccountAdapter):
 
     def get_callback_url(self, request, provider):
         """
-        Build the OAuth callback URL for django-allauth login.
+        Build the OAuth callback URL for django-allauth login & connect.
 
-        The Settings UI 'Connect GitHub/Google/...' flow uses a SEPARATE
-        callback path (/auth/<provider>/callback → frontend → POST to
-        /api/v1/integrations/...).  This method is ONLY for the allauth
-        login dance — we always use the standard /accounts/<provider>/
-        login/callback/ path, which is already routed to the backend by
-        the Caddyfile.
-
-        Provider-specific env vars (GITHUB_OAUTH_CALLBACK_URL, etc.) are
-        for the custom integration only and are intentionally NOT read here.
+        Uses the /auth/<provider>/callback path because operators
+        register their OAuth apps with that URL (e.g. GitHub app
+        callback = https://grid.smsly.cloud/auth/github/callback).
+        The Caddyfile routes /auth/<provider>/callback* to the backend
+        so allauth's callback view handles the code exchange directly.
         """
         provider_id = getattr(provider, 'provider_id', None) or str(provider)
 
-        # Auto-generate from the platform domain stored in the DB.
         try:
             from .models_core import PlatformConfig
             cfg = PlatformConfig.load()
@@ -39,6 +34,6 @@ class CustomSocialAccountAdapter(DefaultSocialAccountAdapter):
             domain = ''
         if domain:
             protocol = 'https' if getattr(cfg, 'use_ssl', True) else 'http'
-            return f"{protocol}://{domain}/accounts/{provider_id}/login/callback/"
+            return f"{protocol}://{domain}/auth/{provider_id}/callback"
 
         return super().get_callback_url(request, provider)
