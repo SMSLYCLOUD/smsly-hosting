@@ -690,6 +690,10 @@ except Exception:
 ENVIRONMENT=production
 NODE_TYPE=$ENV_NODE_TYPE
 MODE=$ENV_MODE_VALUE
+# Compose file used by `install.sh --update` and other orchestrator scripts.
+# Master mode: docker-compose.yml (base file with traefik + caddy inlined).
+# Agent-lite mode: overridden below to infrastructure/docker/docker-compose.agent-lite.yml.
+COMPOSE_FILE=docker-compose.yml
 DEBUG=False
 SECRET_KEY=$SECRET_KEY
 FIELD_ENCRYPTION_KEY=$FIELD_ENCRYPTION_KEY
