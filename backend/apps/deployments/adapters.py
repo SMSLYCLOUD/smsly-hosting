@@ -21,7 +21,9 @@ class CustomSocialAccountAdapter(DefaultSocialAccountAdapter):
         never has to manually set GITHUB_OAUTH_CALLBACK_URL in .env.
         Falls back to the standard allauth reverse('PROVIDER_callback') pattern.
         """
-        provider_id = provider.id if hasattr(provider, 'id') else str(provider)
+        # allauth OAuth adapters store the provider slug as ``provider_id``
+        # (e.g. 'github', 'google', 'gitlab', 'bitbucket_oauth2'), NOT as .id.
+        provider_id = getattr(provider, 'provider_id', None) or str(provider)
         overrides = {
             'github': getattr(settings, 'GITHUB_OAUTH_CALLBACK_URL', None),
             'gitlab': getattr(settings, 'GITLAB_OAUTH_CALLBACK_URL', None),
