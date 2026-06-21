@@ -69,7 +69,7 @@ services:
     networks:
       - smsly-net
     healthcheck:
-      test: ["CMD-SHELL", "(echo > /dev/tcp/127.0.0.1/4873) 2>/dev/null || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:4873/ > /dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -379,9 +379,10 @@ services:
       - ./auth:/auth:ro
       - ./certs:/certs:ro
     healthcheck:
-      # Registry uses TLS on 5000. Use /dev/tcp to check the socket
-      # is open without needing wget/curl in the distroless image.
-      test: ["CMD-SHELL", "(echo > /dev/tcp/127.0.0.1/5000) 2>/dev/null || exit 1"]
+      # Registry has no shell in its scratch-based image. Use the
+      # built-in docker HEALTHCHECK directive which runs the registry
+      # binary's own health check against the / endpoint.
+      test: ["CMD", "registry", "health", "-H", "tcp://127.0.0.1:5000"]
       interval: 30s
       timeout: 5s
       retries: 3
