@@ -69,7 +69,7 @@ services:
     networks:
       - smsly-net
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O- http://localhost:4873/-/ping || exit 1"]
+      test: ["CMD-SHELL", "(echo > /dev/tcp/127.0.0.1/4873) 2>/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
