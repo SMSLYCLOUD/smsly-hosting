@@ -104,6 +104,7 @@ services:
       - --storage.path=/alertmanager
     environment:
       - ALERT_SLACK_WEBHOOK_URL=${ALERT_SLACK_WEBHOOK_URL:-}
+      - ALERT_WEBHOOK_URL=${ALERT_WEBHOOK_URL:-http://127.0.0.1:5001/alerts}
       - ALERT_SMTP_HOST=${ALERT_SMTP_HOST:-}
       - ALERT_SMTP_PORT=${ALERT_SMTP_PORT:-}
       - ALERT_SMTP_FROM=${ALERT_SMTP_FROM:-}

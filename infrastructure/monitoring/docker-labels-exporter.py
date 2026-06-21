@@ -207,13 +207,13 @@ def _collect_metrics():
 def _background_collector():
     """Infinite loop: collect metrics on REFRESH_INTERVAL cadence with backpressure."""
     while True:
-        if _collecting.is_set():
-            print("[skip] Previous collection cycle still in progress — skipping tick", flush=True)
-            time.sleep(REFRESH_INTERVAL)
-            continue
-
-        _collecting.set()
         try:
+            if _collecting.is_set():
+                print("[skip] Previous collection cycle still in progress — skipping tick", flush=True)
+                time.sleep(REFRESH_INTERVAL)
+                continue
+
+            _collecting.set()
             data = _collect_metrics()
             with _lock:
                 _metrics_cache["data"] = data

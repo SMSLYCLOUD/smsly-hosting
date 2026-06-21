@@ -3,8 +3,12 @@ set -e
 
 CONFIG=/etc/alertmanager/alertmanager.generated.yml
 
-# Build the global section
-cat > "$CONFIG" <<'HEADEOF'
+ENV_LABEL="${ALERT_ENV:-smsly}"
+EMAIL_TO="${ALERT_EMAIL_TO:-}"
+SLACK_WEBHOOK="${ALERT_SLACK_WEBHOOK_URL:-}"
+GENERIC_WEBHOOK="${ALERT_WEBHOOK_URL:-http://127.0.0.1:5001/alerts}"
+
+cat > "$CONFIG" <<HEADEOF
 global:
   resolve_timeout: 5m
 HEADEOF
@@ -28,9 +32,6 @@ SMTPEOF
     fi
 fi
 
-ENV_LABEL="${ALERT_ENV:-smsly}"
-EMAIL_TO="${ALERT_EMAIL_TO:-}"
-
 cat >> "$CONFIG" <<ROUTEEOF
 
 route:
@@ -50,11 +51,22 @@ route:
 
 receivers:
   - name: 'default'
+ROUTEEOF
+
+if [ -n "$SLACK_WEBHOOK" ]; then
+    cat >> "$CONFIG" <<SLACKEOF
     slack_configs:
       - channel: '#alerts'
         title: '${ENV_LABEL} | {{ .GroupLabels.alertname }}'
         text: '{{ .CommonAnnotations.description }}'
-ROUTEEOF
+SLACKEOF
+elif [ -n "$GENERIC_WEBHOOK" ]; then
+    cat >> "$CONFIG" <<WEBEOF
+    webhook_configs:
+      - url: '${GENERIC_WEBHOOK}'
+        send_resolved: true
+WEBEOF
+fi
 
 if [ -n "$EMAIL_TO" ]; then
     cat >> "$CONFIG" <<EMAILEOF
@@ -63,19 +75,54 @@ if [ -n "$EMAIL_TO" ]; then
 EMAILEOF
 fi
 
-cat >> "$CONFIG" <<'ENDOF'
+cat >> "$CONFIG" <<RECEOF
 
   - name: 'critical'
+RECEOF
+
+if [ -n "$SLACK_WEBHOOK" ]; then
+    cat >> "$CONFIG" <<SLACKEOF
     slack_configs:
       - channel: '#alerts-critical'
         title: 'CRITICAL: {{ .GroupLabels.alertname }}'
         text: '{{ .CommonAnnotations.description }}'
+SLACKEOF
+elif [ -n "$GENERIC_WEBHOOK" ]; then
+    cat >> "$CONFIG" <<WEBEOF
+    webhook_configs:
+      - url: '${GENERIC_WEBHOOK}'
+        send_resolved: true
+WEBEOF
+fi
+
+cat >> "$CONFIG" <<RECEOF
 
   - name: 'warning'
+RECEOF
+
+if [ -n "$SLACK_WEBHOOK" ]; then
+    cat >> "$CONFIG" <<SLACKEOF
     slack_configs:
       - channel: '#alerts'
         title: 'WARNING: {{ .GroupLabels.alertname }}'
         text: '{{ .CommonAnnotations.description }}'
+SLACKEOF
+elif [ -n "$GENERIC_WEBHOOK" ]; then
+    cat >> "$CONFIG" <<WEBEOF
+    webhook_configs:
+      - url: '${GENERIC_WEBHOOK}'
+        send_resolved: true
+WEBEOF
+fi
+
+cat >> "$CONFIG" <<'ENDOF'
+
+inhibit_rules:
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'dev', 'instance']
 ENDOF
 
 exec /bin/alertmanager --config.file="$CONFIG" "$@"

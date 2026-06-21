@@ -18,21 +18,23 @@ route:
 
 receivers:
   - name: 'default'
-    slack_configs:
-      - channel: '#alerts'
-        title: '{{ .GroupLabels.alertname }}'
-        text: '{{ .CommonAnnotations.description }}'
-    email_configs:
-      - to: ''
+    webhook_configs:
+      - url: 'http://127.0.0.1:5001/alerts'
+        send_resolved: true
 
   - name: 'critical'
-    slack_configs:
-      - channel: '#alerts-critical'
-        title: 'CRITICAL: {{ .GroupLabels.alertname }}'
-        text: '{{ .CommonAnnotations.description }}'
+    webhook_configs:
+      - url: 'http://127.0.0.1:5001/alerts'
+        send_resolved: true
 
   - name: 'warning'
-    slack_configs:
-      - channel: '#alerts'
-        title: 'WARNING: {{ .GroupLabels.alertname }}'
-        text: '{{ .CommonAnnotations.description }}'
+    webhook_configs:
+      - url: 'http://127.0.0.1:5001/alerts'
+        send_resolved: true
+
+inhibit_rules:
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'dev', 'instance']
