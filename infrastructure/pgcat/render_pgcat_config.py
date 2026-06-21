@@ -18,6 +18,40 @@ def main():
     db_password = get_env_or_die("DB_PASSWORD")
     db_name = get_env_or_die("DB_NAME")
 
+    # Optional read-replica config. Comma-separated list of
+    # ``host:port`` entries. When set, pgcat routes SELECTs to the
+    # replica(s) and writes to the primary. With
+    # ``PGCAT_PRIMARY_READS_ENABLED=true`` (the default) the primary
+    # also serves reads so a single-replica deployment stays available
+    # if the replica is down. If unset, all traffic goes to the
+    # primary (single-node behaviour).
+    replica_hosts_raw = os.environ.get("DB_REPLICA_HOSTS", "").strip()
+    replica_servers = []  # list of [host, port, "replica"] arrays
+    if replica_hosts_raw:
+        for entry in replica_hosts_raw.split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            if ":" in entry:
+                r_host, r_port = entry.rsplit(":", 1)
+                try:
+                    r_port = int(r_port)
+                except ValueError:
+                    print(
+                        f"WARNING: Ignoring DB_REPLICA_HOSTS entry with "
+                        f"non-integer port: {entry!r}",
+                        file=sys.stderr,
+                    )
+                    continue
+            else:
+                r_host, r_port = entry, int(db_port)
+            replica_servers.append([r_host, r_port, "replica"])
+        if replica_servers:
+            print(
+                f"Configured {len(replica_servers)} read replica(s): "
+                + ", ".join(f"{s[0]}:{s[1]}" for s in replica_servers)
+            )
+
     # PgCat Admin
     admin_user = os.environ.get("PGCAT_ADMIN_USERNAME", "pgcat_admin")
     admin_pass = os.environ.get("PGCAT_ADMIN_PASSWORD")
@@ -110,6 +144,10 @@ username = "{username}"
 pool_size = {node_worker_pool_size}
 password = "{password}" """
 
+    primary_reads_enabled = os.environ.get(
+        "PGCAT_PRIMARY_READS_ENABLED", "true"
+    ).lower() in ("1", "true", "yes")
+
     toml_content = f"""[general]
 host = "0.0.0.0"
 port = 5432
@@ -120,12 +158,17 @@ idle_timeout = 60000
 connect_timeout = 5000
 dns_cache_enabled = true
 dns_cache_ttl = 30000
+query_parser_enabled = true
+query_parser_read_write_splitting = {"true" if replica_servers else "false"}
+primary_reads_enabled = {"true" if primary_reads_enabled else "false"}
 
 [pools.smsly_hosting]
 pool_mode = "transaction"
 
 [pools.smsly_hosting.shards.0]
-servers = [["{db_host}", {db_port}, "primary"]]
+servers = [
+    ["{db_host}", {db_port}, "primary"]{",\n    " + ",\n    ".join(f'["{s[0]}", {s[1]}, "replica"]' for s in replica_servers) if replica_servers else ""}
+]
 database = "{db_name}"
 
 {smsly_hosting_users}
@@ -134,7 +177,9 @@ database = "{db_name}"
 pool_mode = "session"
 
 [pools.smsly_hosting_session.shards.0]
-servers = [["{db_host}", {db_port}, "primary"]]
+servers = [
+    ["{db_host}", {db_port}, "primary"]{",\n    " + ",\n    ".join(f'["{s[0]}", {s[1]}, "replica"]' for s in replica_servers) if replica_servers else ""}
+]
 database = "{db_name}"
 
 {smsly_hosting_session_users}

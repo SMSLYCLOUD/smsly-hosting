@@ -15,7 +15,10 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-smsly_admin}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       POSTGRES_INITDB_ARGS: "--data-checksums"
-      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD:-}
+      # Must match the replica's PGPASSWORD default below. The default
+      # 'repl_change_me' is the safety fallback for dev/test only —
+      # production deployments MUST set REPLICATION_PASSWORD in .env.
+      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD:-repl_change_me}
     volumes:
       - postgres-primary-data:/var/lib/postgresql/data
       - ./postgres/init-primary.sh:/docker-entrypoint-initdb.d/init-primary.sh:ro
@@ -59,8 +62,12 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # The replicator user's password is created by the primary's
+      # init-primary.sh using the same REPLICATION_PASSWORD. The default
+      # below must match the primary's default (repl_change_me) so the
+      # replica can authenticate when REPLICATION_PASSWORD is unset.
       PGUSER: replicator
-      PGPASSWORD: ${REPLICATION_PASSWORD:-}
+      PGPASSWORD: ${REPLICATION_PASSWORD:-repl_change_me}
     volumes:
       - postgres-replica-data:/var/lib/postgresql/data
     entrypoint: ["/bin/sh", "-c"]
