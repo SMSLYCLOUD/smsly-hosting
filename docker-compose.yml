@@ -87,6 +87,7 @@ services:
     volumes:
       - ./backend:/app
       - ./caddy-config:/caddy-config
+      - backups_data:/app/backups
 
     depends_on:
       - redis
@@ -154,6 +155,7 @@ services:
     volumes:
       - ./backend:/app
       - ./caddy-config:/caddy-config
+      - backups_data:/app/backups
 
     depends_on:
       - redis
