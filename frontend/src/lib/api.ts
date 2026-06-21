@@ -2030,3 +2030,114 @@ export const ecosystemApi = {
   cachedScan: () => api.get('/ecosystem/cached-scan/').then(r => r.data.has_cache ? r.data.plan : null),
 };
 
+// ─── Database Replicas API ───────────────────────────────────────────────────
+//
+// Manages PostgreSQL read-replica endpoints that pgcat can route SELECTs to.
+// The password field is write-only: it is never returned in any response,
+// so callers must PATCH it to rotate.
+
+export type DatabaseReplicaKind = 'local' | 'remote';
+
+export type DatabaseReplicaSslMode =
+  | 'disable' | 'allow' | 'prefer' | 'require' | 'verify-ca' | 'verify-full';
+
+export type DatabaseReplicaStatus = 'unknown' | 'ok' | 'warn' | 'error';
+
+export interface DatabaseReplica {
+  id: string;
+  name: string;
+  kind: DatabaseReplicaKind;
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  // password is write-only; the server never returns it.
+  ssl_mode: DatabaseReplicaSslMode;
+  ssl_ca_path?: string;
+  is_active: boolean;
+  last_status: DatabaseReplicaStatus;
+  last_checked_at?: string | null;
+  last_error: string;
+  lag_seconds?: number | null;
+  application_name: string;
+  notes: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DatabaseReplicaCreateInput {
+  name: string;
+  kind: DatabaseReplicaKind;
+  host: string;
+  port?: number;
+  database?: string;
+  username: string;
+  password: string;
+  ssl_mode?: DatabaseReplicaSslMode;
+  ssl_ca_path?: string;
+  is_active?: boolean;
+  application_name?: string;
+  notes?: string;
+}
+
+export interface DatabaseReplicaTestResult {
+  ok: boolean;
+  error: string;
+  lag_seconds: number | null;
+  endpoint: string;
+}
+
+export interface DatabaseReplicaSyncResult {
+  replica_count: number;
+  endpoints: string;
+  pgcat_container: string | null;
+  config_written: boolean;
+  reloaded: boolean;
+  error: string | null;
+}
+
+export interface DatabaseReplicaEndpointsResult {
+  endpoints: string;
+  count: number;
+}
+
+export const databaseReplicasApi = {
+  list: async (): Promise<DatabaseReplica[]> => {
+    const res = await api.get('/database-replicas/');
+    const data = res.data;
+    if (Array.isArray(data)) return data;
+    if (data && Array.isArray(data.results)) return data.results;
+    return [];
+  },
+  get: async (id: string): Promise<DatabaseReplica> => {
+    const res = await api.get(`/database-replicas/${id}/`);
+    return res.data;
+  },
+  create: async (data: DatabaseReplicaCreateInput): Promise<DatabaseReplica> => {
+    const res = await api.post('/database-replicas/', data);
+    return res.data;
+  },
+  update: async (
+    id: string,
+    data: Partial<DatabaseReplicaCreateInput>,
+  ): Promise<DatabaseReplica> => {
+    const res = await api.patch(`/database-replicas/${id}/`, data);
+    return res.data;
+  },
+  remove: async (id: string): Promise<void> => {
+    await api.delete(`/database-replicas/${id}/`);
+  },
+  test: async (id: string): Promise<DatabaseReplicaTestResult> => {
+    const res = await api.post(`/database-replicas/${id}/test/`);
+    return res.data;
+  },
+  sync: async (): Promise<DatabaseReplicaSyncResult> => {
+    const res = await api.post('/database-replicas/sync/');
+    return res.data;
+  },
+  endpoints: async (): Promise<DatabaseReplicaEndpointsResult> => {
+    const res = await api.get('/database-replicas/endpoints/');
+    return res.data;
+  },
+};
+

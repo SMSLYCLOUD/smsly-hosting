@@ -25,6 +25,7 @@ from .views_blueprints import BlueprintViewSet
 from .views_chat import AIChatView
 from .views_cloud_storage import CloudStorageViewSet
 from .views_cron import CronJobViewSet
+from .views_database_replica import DatabaseReplicaViewSet
 from .views_device import list_devices, register_device, revoke_device
 from .views_election import ClusterViewSet, heartbeat_receive, vote_request
 from .views_github import github_branches, github_commits, github_repos
@@ -88,6 +89,7 @@ router.register(r'platform-updates', PlatformUpdateViewSet, basename='platform-u
 router.register(r'scaling', ScalingViewSet, basename='scaling')
 router.register(r'cloud-storage', CloudStorageViewSet, basename='cloud-storage')
 router.register(r'slow-queries', SlowQueryViewSet, basename='slow-query')
+router.register(r'database-replicas', DatabaseReplicaViewSet, basename='database-replica')
 
 # Nested Router
 # /api/v1/services/{service_pk}/metrics/
