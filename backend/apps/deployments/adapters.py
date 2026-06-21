@@ -18,11 +18,10 @@ class CustomSocialAccountAdapter(DefaultSocialAccountAdapter):
         """
         Build the OAuth callback URL for django-allauth login & connect.
 
-        Uses the /auth/<provider>/callback path because operators
-        register their OAuth apps with that URL (e.g. GitHub app
-        callback = https://grid.smsly.cloud/auth/github/callback).
-        The Caddyfile routes /auth/<provider>/callback* to the backend
-        so allauth's callback view handles the code exchange directly.
+        Uses the standard /accounts/<provider>/login/callback/ path
+        because the frontend login/register pages link to
+        /accounts/<provider>/login/ and the Settings UI instructs
+        operators to register that URL with their OAuth app.
         """
         provider_id = getattr(provider, 'provider_id', None) or str(provider)
 
@@ -34,6 +33,6 @@ class CustomSocialAccountAdapter(DefaultSocialAccountAdapter):
             domain = ''
         if domain:
             protocol = 'https' if getattr(cfg, 'use_ssl', True) else 'http'
-            return f"{protocol}://{domain}/auth/{provider_id}/callback"
+            return f"{protocol}://{domain}/accounts/{provider_id}/login/callback/"
 
         return super().get_callback_url(request, provider)
