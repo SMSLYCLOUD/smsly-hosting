@@ -136,8 +136,25 @@ start_replica() {
 
 set_replica_env() {
     blue "[4/6] Setting DB_REPLICA_HOSTS in .env so pgcat routes SELECTs to the replica..."
-    env_set "DB_REPLICA_HOSTS" "db-replica:5432"
-    green "  OK DB_REPLICA_HOSTS=db-replica:5432"
+    # Additive: if the operator already configured other replicas
+    # (e.g. a remote-replica:5432 they manage themselves), preserve
+    # them and append db-replica:5432. Duplicates are de-duped so the
+    # final list is canonical. If unset, the value is just the new
+    # entry.
+    local existing
+    existing="$(env_get DB_REPLICA_HOSTS)"
+    local entry="db-replica:5432"
+    local merged
+    if [ -z "$existing" ]; then
+        merged="$entry"
+    else
+        # De-dupe while preserving order.
+        merged="$(printf '%s\n%s\n' "$existing" "$entry" \
+            | awk '!seen[$0]++' \
+            | paste -sd, -)"
+    fi
+    env_set "DB_REPLICA_HOSTS" "$merged"
+    green "  OK DB_REPLICA_HOSTS=$merged"
 }
 
 restart_pgcat() {

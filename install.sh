@@ -102,6 +102,7 @@ for arg in "$@"; do
     --wipe)            NO_SCREEN=true; rm -f "/opt/smsly-hosting/.smsly_install_state" "/opt/smsly-hosting/.smsly_install_state.mode" ;;
     --fix-domain)      NO_SCREEN=true ;;
     --fix-permissions) NO_SCREEN=true ;;
+    --with-replica)    REPLICA_MODE="true" ;;
     --recover|--refresh|--debug|--verify|--clear|--help|-h|--recreate-traefik)
                        NO_SCREEN=true ;;
   esac
@@ -220,6 +221,7 @@ FIX_PERMISSIONS_MODE="false"
 FORCE_REDEPLOY="false"
 RECREATE_TRAEFIK="false"
 OBSERVABILITY_MODE="false"
+REPLICA_MODE="false"
 
 # ─── Source library modules ───────────────────────────────────────────────────
 # LIB_DIR is set by either the bootstrap block above (standalone install.sh) or
@@ -268,7 +270,7 @@ for arg in "$@"; do
         --recreate-traefik) RECREATE_TRAEFIK="true" ;;
         --observability) OBSERVABILITY_MODE="true" ;;
         --help|-h)
-            echo "Usage: sudo bash install.sh [--mode=...] [--update|--update-half|--update-frontend|--update-backend|--refresh|--recover|--debug|--wipe|--clear|--fix-domain|--fix-permissions]"
+            echo "Usage: sudo bash install.sh [--mode=...] [--update|--update-half|--update-frontend|--update-backend|--refresh|--recover|--debug|--wipe|--clear|--fix-domain|--fix-permissions|--with-replica]"
             echo ""
             echo "  (no args)          Fresh install (Legacy Python | Full-Stack Master)"
             echo "  --mode=agent-lite  Install as a Lite Agent (shared-DB node)"
@@ -278,6 +280,7 @@ for arg in "$@"; do
             echo "  --clear            Wipes stale addons and frees up docker resources"
             echo "  --fix-domain       Fix domain/IP sync between .env, DB PlatformConfig, and Caddy"
             echo "  --fix-permissions  Fix .env and shared directory permissions for container write access"
+            echo "  --with-replica     After install, enable PostgreSQL streaming replication (warm-standby read replica on the same host)"
             echo "  --force-redeploy   Always redeploy active services after update, even if code hasn't changed"
             echo "  --recreate-traefik One-time safe recreate of traefik (preserves acme.json + certs)"
             exit 0
@@ -303,6 +306,7 @@ elif [ "$RECOVER_MODE" = "true" ]; then MODE_LABEL="recover"
 elif [ "$DEBUG_MODE" = "true" ]; then MODE_LABEL="debug"
 elif [ "$WIPE_MODE" = "true" ]; then MODE_LABEL="wipe"
 elif [ "${FIX_DOMAIN_MODE:-false}" = "true" ]; then MODE_LABEL="fix-domain"
+elif [ "${REPLICA_MODE:-false}" = "true" ]; then MODE_LABEL="with-replica"
 fi
 
 echo ""
@@ -449,6 +453,43 @@ deploy_observability_stack() {
 if [ "${OBSERVABILITY_MODE:-false}" = "true" ]; then
     deploy_observability_stack
     exit 0
+fi
+
+# ─── Replica Mode (standalone: enable the warm-standby replica on an existing stack) ──
+deploy_replica_stack() {
+    echo -e "${BLUE}  → Enabling PostgreSQL read replica (streaming replication)...${NC}"
+    local script="$INSTALL_DIR/scripts/enable-replica.sh"
+    if [ ! -f "$script" ]; then
+        echo -e "${RED}  ✗ $script not found. Pull the latest code and re-run.${NC}"
+        return 1
+    fi
+    chmod +x "$script" 2>/dev/null || true
+    # Non-interactive: enable-replica.sh does not prompt.
+    if bash "$script"; then
+        echo -e "${GREEN}  ✓ Read replica enabled${NC}"
+    else
+        local rc=$?
+        echo -e "${RED}  ✗ enable-replica.sh exited with code $rc — replica NOT enabled${NC}"
+        echo -e "${YELLOW}    You can re-run it manually: sudo $INSTALL_DIR/scripts/enable-replica.sh${NC}"
+        return $rc
+    fi
+}
+
+# Standalone usage: `sudo bash install.sh --with-replica` (no other args)
+# against an already-deployed stack. This is the entry point operators
+# use to add the replica later, after the initial install.
+if [ "${REPLICA_MODE:-false}" = "true" ] && [ -z "${UPDATE_MODE:-}" ] \
+    && [ "${OBSERVABILITY_MODE:-false}" != "true" ] \
+    && [ "${FIX_DOMAIN_MODE:-false}" != "true" ] \
+    && [ "${FIX_PERMISSIONS_MODE:-false}" != "true" ] \
+    && [ "${WIPE_MODE:-false}" != "true" ] \
+    && [ "${RECOVER_MODE:-false}" != "true" ] \
+    && [ "${REFRESH_MODE:-false}" != "true" ] \
+    && [ "${DEBUG_MODE:-false}" != "true" ] \
+    && [ "${VERIFY_MODE:-false}" != "true" ] \
+    && [ "${CLEAR_MODE:-false}" != "true" ]; then
+    deploy_replica_stack
+    exit $?
 fi
 
 # ─── Verify Mode ──────────────────────────────────────────────────────────────
