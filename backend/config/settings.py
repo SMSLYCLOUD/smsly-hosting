@@ -657,10 +657,12 @@ ACCOUNT_LOGOUT_REDIRECT_URL = '/login'
 
 # ── Session cookie security ──────────────────────────────────────────────────
 # 'Strict' is required for allauth v65's _redirect_strict_samesite() workaround:
-# Chrome 145+ doesn't send SameSite=Lax cookies on cross-site redirect chains
-# (GitHub→our callback). 'Strict' triggers allauth to do a self-redirect, making
-# the final callback same-site so the browser sends the session cookie.
-SESSION_COOKIE_SAMESITE = 'Strict'
+# SameSite=Lax allows the session cookie to be sent on top-level GET
+# navigations from cross-site redirects (e.g. GitHub→/accounts/<provider>/
+# login/callback/). 'Strict' blocks ALL cross-site navigations, which
+# breaks OAuth callbacks — allauth's state validation 401s because the
+# session cookie (containing the OAuth state) is never sent.
+SESSION_COOKIE_SAMESITE = 'Lax'
 SESSION_COOKIE_SECURE = not DEBUG and not IS_TESTING and config('USE_SSL', default='False', cast=bool)
 SESSION_COOKIE_HTTPONLY = True
 CSRF_COOKIE_SECURE = not DEBUG and not IS_TESTING
