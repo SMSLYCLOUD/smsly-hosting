@@ -1,13 +1,26 @@
-# SMSLY Caddyfile — Caddy routes directly to backend/frontend (no nginx)
+# SMSLY Caddyfile — FALLBACK TEMPLATE ONLY.
+#
+# This file is mounted into the Caddy container at /etc/caddy/Caddyfile.
+# On a healthy deployment, caddy_manager.generate_caddyfile() OVERWRITES this
+# file at runtime via /caddy-config/Caddyfile (a bind mount shared between
+# the backend and caddy containers). Caddy never reads this template on
+# reload unless the regeneration has never succeeded.
+#
+# The template below is intentionally minimal and uses only syntax that
+# every caddy:2-alpine build (>= 2.6) understands. Do NOT add:
+#   - `allow { ... }` inside on_demand_tls (added in 2.7.6, but the
+#     operator never fills it in and an empty block trips older parsers)
+#   - `output file /var/log/caddy/access.log` (the dir does not exist
+#     in the alpine image; caddy silently fails to log)
+#   - `handle /.well-known/acme-challenge/*` (steals HTTP-01 challenges
+#     from caddy before the ACME solver can serve them; breaks issuance)
+#
+# Real routing logic lives in backend/services/caddy_manager.py. Edit that
+# file, not this one.
+
 {
 	on_demand_tls {
 		ask http://backend:8000/api/v1/services/check-domain/
-		allow {
-			# Operators: add your explicit allowed domains here.
-			# Wildcard domains require a DNS challenge (see Caddyfile docs).
-			# Without an allowlist, anyone who can reach Caddy on :443 can
-			# request a certificate for any domain pointing at this server.
-		}
 	}
 
 	# Global security headers (applied to every site block)
@@ -16,111 +29,29 @@
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "strict-origin-when-cross-origin"
 		Permissions-Policy "geolocation=(), camera=(), microphone=()"
-		# Remove fingerprinting header
 		-X-SMSLY-Control-Plane
 	}
 }
 
-{$DOMAIN} {
-	# Large backup downloads: stream without buffering
-	@backup_download {
-		path /api/v1/server/backups/*/download
-		path /api/v1/server/backups/*/download/
-		path /api/v1/backups/*/download
-		path /api/v1/backups/*/download/
-	}
-	reverse_proxy @backup_download backend:8000 {
-		transport http {
-			read_timeout 3600s
-			write_timeout 3600s
-		}
-		flush_interval -1
-	}
-
-	# API
-	@api path /api/*
-	reverse_proxy @api backend:8000
-
-	# WebSockets (Django Channels)
-	@ws path /ws/*
-	reverse_proxy @ws backend:8000 {
-		transport http {
-			read_timeout 3600s
-			write_timeout 3600s
-		}
-	}
-
-	# Admin
-	@admin path /admin/*
-	reverse_proxy @admin backend:8000
-
-	# Health
-	@health path /health
-	@health_live path /health/live
-	@health_ready path /health/ready
-	reverse_proxy @health backend:8000
-	reverse_proxy @health_live backend:8000
-	reverse_proxy @health_ready backend:8000
-
-	# OAuth handshake (allauth) — must stay on backend.
-	# The frontend's login page links to github/google/gitlab/bitbucket_oauth2.
-	# All four providers live at /accounts/<provider>/* on the backend; if we
-	# only forward github/google, the gitlab and bitbucket buttons 404 into the
-	# Next.js catch-all page instead of initiating OAuth. The Next.js
-	# accounts/[[...slug]] page still catches the frontend-side routes that
-	# don't match a real OAuth provider.
-	@oauth_all path /accounts/github/* /accounts/google/* /accounts/gitlab/* /accounts/bitbucket* /accounts/gitlab_oauth2/*
-	reverse_proxy @oauth_all backend:8000
-
-	# Static files
-	@static path /static/*
-	handle @static {
-		root * /app/staticfiles
-		file_server {
-			pass_thru
-		}
-		header Cache-Control "public, immutable"
-	}
-
-	# Media files
-	@media path /media/*
-	handle @media {
-		root * /app/media
-		file_server {
-			pass_thru
-		}
-		header Cache-Control "public"
-	}
-
-	# Health endpoint for Caddy itself
-	respond /caddy-health 200 "ok"
-
-	# Everything else → frontend
-	reverse_proxy frontend:3000
-
-	encode gzip
-
-	log {
-		output file /var/log/caddy/access.log
-	}
+# Fallback site: any HTTPS request that arrives before the auto-generated
+# Caddyfile has been written gets a 503. The backend's startup hook
+# (apps/deployments/startup.py) regenerates the Caddyfile within ~3 s of
+# boot, so this state should never be observable in normal operation.
+:443 {
+	respond "Grid is starting up, please retry in a few seconds." 503
 }
 
+# Port 80 — let Caddy handle ACME HTTP-01 natively, redirect everything
+# else to HTTPS. The ACME solver must run on :80; do NOT intercept the
+# challenge path here.
 :80 {
-	@acme {
-		path /.well-known/acme-challenge/*
-	}
-	handle @acme {
+	@not_ip not header_regexp host ^([0-9]{1,3}[.]){3}[0-9]{1,3}$
+	@not_local not host localhost
+	@not_local not host 127.0.0.1
+	@not_local not host *.local
+	@has_host header_regexp host .+
+	redir @has_host https://{host}{uri} 308
+	handle {
 		reverse_proxy backend:8000
-	}
-
-	# Explicit allowlist for hosts that may receive cleartext on :80.
-	# Any host NOT on this list is forced to HTTPS with 308.
-	redir {
-		if not {host} is localhost
-		if not {host} is 127.0.0.1
-		if not {host} ends_with .local
-		if not {host} matches ^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$
-		to https://{host}{uri}
-		status 308
 	}
 }
