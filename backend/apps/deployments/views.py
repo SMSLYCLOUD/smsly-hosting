@@ -2411,6 +2411,16 @@ class ServiceViewSet(viewsets.ModelViewSet):
             return [CaddySecretOrAdminPermission()]
         return super().get_permissions()
 
+    def get_authenticators(self):
+        # Bypass DRF's default Token/Session authentication for the Caddy
+        # on_demand_tls ask callback — Caddy calls this endpoint anonymously
+        # and authenticates via the ``?secret=`` query param checked by
+        # CaddySecretOrAdminPermission. Without this, every ask 401s before
+        # the permission check can compare the secret.
+        if self.action == 'check_domain':
+            return []
+        return super().get_authenticators()
+
     def get_throttles(self):
         """Throttle the Caddy ask endpoint to limit Let's Encrypt blast radius,
         and apply the deployment-burst guard only to write methods.
