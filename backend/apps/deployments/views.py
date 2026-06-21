@@ -2417,8 +2417,14 @@ class ServiceViewSet(viewsets.ModelViewSet):
         # and authenticates via the ``?secret=`` query param checked by
         # CaddySecretOrAdminPermission. Without this, every ask 401s before
         # the permission check can compare the secret.
-        if self.action == 'check_domain':
-            return []
+        #
+        # IMPORTANT: this is called by DRF's ``initialize_request`` BEFORE
+        # ``dispatch`` sets ``self.action``, so we MUST key on the request
+        # path (which is always available) and not on ``self.action``.
+        if getattr(self, "request", None) is not None:
+            p = self.request.path
+            if p.endswith("/check-domain") or p.endswith("/check-domain/"):
+                return []
         return super().get_authenticators()
 
     def get_throttles(self):
