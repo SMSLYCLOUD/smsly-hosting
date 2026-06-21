@@ -1984,6 +1984,10 @@ echo -e "${YELLOW}  Runtime refresh:    sudo bash install.sh --refresh${NC}"
 echo -e "${YELLOW}  Runtime recovery:   sudo bash install.sh --recover${NC}"
 echo -e "${YELLOW}  Debug snapshot:     sudo bash install.sh --debug${NC}"
 echo -e "${YELLOW}  Wipe install:       sudo bash install.sh --wipe${NC}"
+if is_master_mode; then
+    echo -e "${YELLOW}  Enable read replica (warm-standby):  sudo bash install.sh --with-replica${NC}"
+    echo -e "${YELLOW}    (or: sudo $INSTALL_DIR/scripts/enable-replica.sh)${NC}"
+fi
 
 # ─── Verification Check Summary ──────────────────────────────────────────────
 if [ "$VERIFY_PASS_COUNT" -eq "$VERIFY_TOTAL" ]; then
@@ -1996,6 +2000,33 @@ else
         echo -e "${RED}  ✗ Strict verification is enabled; failing installation.${NC}"
         exit 1
     fi
+fi
+
+# ─── Optional: Enable PostgreSQL Read Replica (only when --with-replica) ─────
+# Runs AFTER verification so the primary is confirmed healthy. Runs BEFORE
+# the final exit 0 so the post-install message can also report the replica
+# status. Non-fatal: if the replica fails to start, the install itself is
+# still considered successful and the operator can re-run
+# `install.sh --with-replica` later.
+if [ "${REPLICA_MODE:-false}" = "true" ] && is_master_mode; then
+    echo -e "\n${BLUE}════════════════════════════════════════════════════════════${NC}"
+    echo -e "${BLUE}   --with-replica: enabling PostgreSQL streaming replication${NC}"
+    echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
+    _replica_script="$INSTALL_DIR/scripts/enable-replica.sh"
+    if [ -f "$_replica_script" ]; then
+        chmod +x "$_replica_script" 2>/dev/null || true
+        if bash "$_replica_script"; then
+            echo -e "${GREEN}  ✓ Read replica enabled and streaming${NC}"
+        else
+            _rc=$?
+            echo -e "${RED}  ✗ enable-replica.sh exited with code $_rc${NC}"
+            echo -e "${YELLOW}    The install itself succeeded. Re-run later with:${NC}"
+            echo -e "${YELLOW}      sudo $INSTALL_DIR/scripts/enable-replica.sh${NC}"
+        fi
+    else
+        echo -e "${RED}  ✗ $_replica_script not found. Pull the latest code and re-run.${NC}"
+    fi
+    unset _replica_script _rc
 fi
 
 exit 0
