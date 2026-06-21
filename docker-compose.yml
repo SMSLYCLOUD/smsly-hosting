@@ -552,6 +552,89 @@ services:
       timeout: 10s
       retries: 3
 
+  # ============================================================
+  # Traefik (reverse proxy for wildcard subdomains)
+  # Routes *.grid.smsly.cloud to deployed service containers via
+  # Docker labels. Reads Docker API through the socket-proxy.
+  # Required by the Caddyfile's wildcard block (reverse_proxy traefik:80).
+  # ============================================================
+  traefik:
+    image: traefik:v3.6
+    restart: unless-stopped
+    command:
+    - --providers.docker=true
+    - --providers.docker.exposedbydefault=false
+    - --providers.docker.network=smsly-net
+    - --providers.docker.endpoint=tcp://socket-proxy:2375
+    - --providers.docker.httpClientTimeout=300s
+    - --entrypoints.web.address=:80
+    - --entrypoints.websecure.address=:443
+    - --entrypoints.websecure.http.tls=true
+    - --entrypoints.metrics.address=:8082
+    - --log.level=WARN
+    - --ping=true
+    ports:
+    - "127.0.0.1:8081:80"
+    - "127.0.0.1:8443:443"
+    - 127.0.0.1:8082:8082
+    volumes:
+    - letsencrypt_data:/letsencrypt
+    depends_on:
+      socket-proxy:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+    - smsly-net
+    - socket-proxy
+    - smsly-proxy
+
+  # ============================================================
+  # Caddy (TLS termination + main routing)
+  # Uses the auto-generated Caddyfile at /etc/caddy/Caddyfile
+  # that the backend regenerates whenever services change.
+  # ============================================================
+  caddy:
+    build:
+      context: .
+      dockerfile: infrastructure/caddy/Dockerfile
+    restart: unless-stopped
+    ports:
+    - "80:80"
+    - "443:443"
+    environment:
+    - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
+    - DOMAIN=${DOMAIN}
+    volumes:
+    - ./caddy-config:/etc/caddy
+    - caddy_config:/config
+    - caddy_data:/data
+    - static_volume:/app/staticfiles:ro
+    - media_volume:/app/media:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+      traefik:
+        condition: service_healthy
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - wget -q -O /dev/null http://127.0.0.1:2019/config/ || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+    - smsly-net
+    deploy:
+      resources:
+        limits:
+          memory: ${CADDY_MEMORY_LIMIT:-512M}
+
 networks:
   smsly-net:
     external: true
@@ -559,6 +642,9 @@ networks:
   socket-proxy:
     driver: bridge
     internal: true
+  smsly-proxy:
+    external: true
+    name: smsly-proxy
 
 volumes:
   postgres_data:
@@ -572,3 +658,8 @@ volumes:
   apt_cache:
   apt_log:
   verdaccio_data:
+  smsly-hosting_caddy_config:
+  smsly-hosting_caddy_data:
+  letsencrypt_data:
+  static_volume:
+  media_volume:
