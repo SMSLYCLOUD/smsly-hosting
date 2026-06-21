@@ -37,6 +37,11 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
       POSTGRES_DB: ${POSTGRES_DB:-smsly_hosting}
       PGCAT_ADMIN_PASSWORD: ${PGCAT_ADMIN_PASSWORD:?PGCAT_ADMIN_PASSWORD must be set in .env}
+      # Read-replica routing. When DB_REPLICA_HOSTS is set (e.g. to
+      # "db-replica:5432" after enabling docker-compose.replica.yml),
+      # pgcat routes SELECTs to the replica(s) and writes to the
+      # primary. Unset = single-node behaviour (all traffic to primary).
+      DB_REPLICA_HOSTS: ${DB_REPLICA_HOSTS:-}
     depends_on:
       db:
         condition: service_healthy

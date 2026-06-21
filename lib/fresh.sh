@@ -709,6 +709,17 @@ REDIS_URL=redis://:$REDIS_PASSWORD@redis:6379/0
 # redbeat falls back to CELERY_BROKER_URL (RabbitMQ AMQP) and redis-py
 # crashes with "Redis URL must specify one of the following schemes".
 CELERY_REDBEAT_REDIS_URL=redis://:$REDIS_PASSWORD@redis:6379/3
+# Optional PostgreSQL streaming-replication password. Required ONLY
+# when docker-compose.replica.yml is enabled (opt-in read replica).
+# Leave empty to skip replica setup. When set, the
+# render_pgcat_config.py generator automatically routes SELECTs to
+# the replica(s) listed in DB_REPLICA_HOSTS.
+REPLICATION_PASSWORD=$REPLICATION_PASSWORD
+# Comma-separated list of read-replica endpoints. Used by pgcat
+# to route SELECTs to replicas. Default empty = single-node.
+# Example after enabling docker-compose.replica.yml:
+#   DB_REPLICA_HOSTS=db-replica:5432
+DB_REPLICA_HOSTS=$DB_REPLICA_HOSTS
 REDIS_SOCKET_TIMEOUT=5
 CELERY_BROKER_URL=amqp://smsly_user:$RABBITMQ_PASSWORD@rabbitmq:5672//
 
