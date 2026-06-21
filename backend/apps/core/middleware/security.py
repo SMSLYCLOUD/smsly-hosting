@@ -27,6 +27,7 @@ class SecurityMiddleware:
             '/media/',
             # Auth endpoints often need to be public or handle their own flow
             '/accounts/',
+            '/api/v1/accounts/',  # allauth mounted under /api/v1/accounts/ alias
             '/api/v1/auth/',
             '/api/v1/webhooks/',  # Webhooks have their own signature verification
             '/api/v1/system/route-recheck/',  # Public fallback-page recheck hook

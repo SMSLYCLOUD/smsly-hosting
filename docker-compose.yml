@@ -400,10 +400,11 @@ services:
     networks:
       - smsly-net
     healthcheck:
-      test: ["CMD", "/usr/bin/promtail", "--version"]
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:9080/ready || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 30s
     labels:
       - managed_by=smsly-hosting
     depends_on:
