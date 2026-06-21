@@ -259,14 +259,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    try:
-        t = threading.Thread(target=_background_collector, daemon=True)
-        t.start()
-        print(f"Docker exporter listening on :{LISTEN_PORT} "
-              f"(workers={MAX_WORKERS}, refresh={REFRESH_INTERVAL}s, "
-              f"parallel={'yes' if _HAS_POOL else 'no'})", flush=True)
-        server = http.server.HTTPServer(("0.0.0.0", LISTEN_PORT), Handler)
-        server.serve_forever()
-    except Exception:
-        traceback.print_exc(file=sys.stdout)
-        sys.stdout.flush()
+    t = threading.Thread(target=_background_collector, daemon=True)
+    t.start()
+    print(f"Docker exporter listening on :{LISTEN_PORT} "
+          f"(workers={MAX_WORKERS}, refresh={REFRESH_INTERVAL}s, "
+          f"parallel={'yes' if _HAS_POOL else 'no'})", flush=True)
+    # HTTP server with auto-restart on failure (port conflict, OOM, etc.)
+    while True:
+        try:
+            server = http.server.HTTPServer(("0.0.0.0", LISTEN_PORT), Handler)
+            server.serve_forever()
+        except KeyboardInterrupt:
+            raise
+        except SystemExit:
+            raise
+        except Exception:
+            traceback.print_exc(file=sys.stdout)
+            sys.stdout.flush()
+            time.sleep(5)
