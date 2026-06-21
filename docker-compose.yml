@@ -567,13 +567,16 @@ services:
     - --providers.docker.exposedbydefault=false
     - --providers.docker.network=smsly-net
     - --providers.docker.endpoint=tcp://socket-proxy:2375
-    - --providers.docker.httpClientTimeout=300s
+    - --providers.docker.httpClientTimeout=600s
+    - --providers.docker.refreshInterval=10s
     - --entrypoints.web.address=:80
     - --entrypoints.websecure.address=:443
     - --entrypoints.websecure.http.tls=true
     - --entrypoints.metrics.address=:8082
     - --log.level=WARN
     - --ping=true
+    - --accesslog=false
+    - --providers.docker.allowEmptyServices=true
     ports:
     - "127.0.0.1:8081:80"
     - "127.0.0.1:8443:443"
@@ -593,6 +596,28 @@ services:
     - smsly-net
     - socket-proxy
     - smsly-proxy
+
+  # ============================================================
+  # Traefik watchdog — auto-restart Traefik if it gets stuck on
+  # slow socket-proxy calls (symptom: process alive but API silent).
+  # The metrics/ping endpoint is the cheapest liveness check.
+  # ============================================================
+  traefik-watchdog:
+    image: docker:cli
+    container_name: smsly-traefik-watchdog
+    restart: unless-stopped
+    command: ["sh", "/watchdog.sh"]
+    environment:
+      - TRAEFIK_CONTAINER=smsly-hosting-traefik-1
+      - CHECK_INTERVAL=30
+      - MAX_FAILURES=3
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./scripts/traefik-watchdog.sh:/watchdog.sh:ro
+    depends_on:
+      - traefik
+    networks:
+      - smsly-net
 
   # ============================================================
   # Caddy (TLS termination + main routing)
