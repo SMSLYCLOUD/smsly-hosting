@@ -647,6 +647,14 @@ REST_AUTH = {
     },
 }
 
+# Social login: skip email verification so OAuth callbacks log the user in
+# immediately. The allauth default ('mandatory') blocks the login until the
+# user clicks a verification link sent to their email — but for GitHub/GitLab/
+# Google/Bitbucket OAuth, the provider has already verified the email, so
+# requiring a second verification breaks the UX (user is redirected to /login
+# instead of being logged in).
+ACCOUNT_EMAIL_VERIFICATION = 'none'
+
 # Store social OAuth tokens (required for private-repo deploys via linked GitHub accounts).
 # Explicitly set to avoid relying on allauth defaults.
 SOCIALACCOUNT_STORE_TOKENS = True
