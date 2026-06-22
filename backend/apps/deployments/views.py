@@ -5087,9 +5087,31 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         from django.db.models import Q
-        qs = self.queryset.filter(
-            Q(service__owner=self.request.user) | Q(service__project__team__members__user=self.request.user)
-        ).distinct().order_by('-created_at')
+        qs = self.queryset
+
+        # `header` and `download_key` are intentionally public actions (see
+        # their docstrings) — the data they return (V2 key_id + fingerprint +
+        # service name + creation timestamp) is non-secret and meant to be
+        # shareable. Those actions override the viewset permission to
+        # `permission_classes=[permissions.AllowAny]` and clear
+        # `authentication_classes`, so `self.request.user` arrives as
+        # `AnonymousUser`. The auth-scoped Q-filter below would then raise
+        # `TypeError: Cannot cast AnonymousUser to int` when Django tries
+        # to coerce it for the FK lookup. Return the unscoped queryset for
+        # those actions instead.
+        if getattr(self, 'action', None) in ('header', 'download_key'):
+            pass
+        elif not self.request.user.is_authenticated:
+            # Defensive: any other action reached without auth (shouldn't
+            # happen given the viewset's IsAuthenticated default, but cheap
+            # to guard against future regressions).
+            return qs.none()
+        else:
+            qs = qs.filter(
+                Q(service__owner=self.request.user) | Q(service__project__team__members__user=self.request.user)
+            ).distinct()
+
+        qs = qs.order_by('-created_at')
         project_id = self.request.query_params.get('project_id')
         if project_id:
             qs = qs.filter(service__project_id=project_id)

@@ -250,6 +250,11 @@ services:
       - backups_data:/app/backups
 
       - ./caddy-config:/caddy-config
+      # Backend writes Prometheus file_sd targets here (see
+      # apps/deployments/services/prometheus_targets.py). The `prometheus`
+      # service below mounts the same host directory read-only at its own
+      # /etc/prometheus/docker-labels-targets path and reloads on change.
+      - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets
     # SECURITY: removed `./:/platform-src:ro` — see celery-deploy comment above.
     ports:
       - "8000:8000"
