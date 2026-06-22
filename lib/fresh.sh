@@ -637,6 +637,11 @@ else
     # SECURITY: default to true (was false pre-2026-06). Strict SSH host-key
     # checking is the safe default when .env does not pin a value.
     [ -n "${SMSLY_STRICT_SSH_HOST_KEY_CHECK:-}" ] || SMSLY_STRICT_SSH_HOST_KEY_CHECK="true"
+    # Optional read-replica plumbing (only used when docker-compose.replica.yml
+    # is enabled). Initialize empty defaults so set -u doesn't trip on them
+    # later in the .env heredoc.
+    [ -n "${REPLICATION_PASSWORD:-}" ] || REPLICATION_PASSWORD=""
+    [ -n "${DB_REPLICA_HOSTS:-}" ] || DB_REPLICA_HOSTS=""
 
     # Validate Fernet key format
     if ! echo "$FIELD_ENCRYPTION_KEY" | python3 -c "
@@ -690,7 +695,10 @@ except Exception:
 ENVIRONMENT=production
 NODE_TYPE=$ENV_NODE_TYPE
 MODE=$ENV_MODE_VALUE
-# Compose file used by `install.sh --update` and other orchestrator scripts.
+# Compose file used by 'install.sh --update' and other orchestrator scripts.
+# NOTE: inside a cat <<EOF heredoc (without quoted EOF), bash still expands
+# backticks and $(...) as command substitution. Do NOT use backticks in
+# heredoc comments — single-quote literals instead.
 # Master mode: docker-compose.yml (base file with traefik + caddy inlined).
 # Agent-lite mode: overridden below to infrastructure/docker/docker-compose.agent-lite.yml.
 COMPOSE_FILE=docker-compose.yml
@@ -718,12 +726,12 @@ CELERY_REDBEAT_REDIS_URL=redis://:$REDIS_PASSWORD@redis:6379/3
 # Leave empty to skip replica setup. When set, the
 # render_pgcat_config.py generator automatically routes SELECTs to
 # the replica(s) listed in DB_REPLICA_HOSTS.
-REPLICATION_PASSWORD=$REPLICATION_PASSWORD
+REPLICATION_PASSWORD=${REPLICATION_PASSWORD:-}
 # Comma-separated list of read-replica endpoints. Used by pgcat
 # to route SELECTs to replicas. Default empty = single-node.
 # Example after enabling docker-compose.replica.yml:
 #   DB_REPLICA_HOSTS=db-replica:5432
-DB_REPLICA_HOSTS=$DB_REPLICA_HOSTS
+DB_REPLICA_HOSTS=${DB_REPLICA_HOSTS:-}
 REDIS_SOCKET_TIMEOUT=5
 CELERY_BROKER_URL=amqp://smsly_user:$RABBITMQ_PASSWORD@rabbitmq:5672//
 
