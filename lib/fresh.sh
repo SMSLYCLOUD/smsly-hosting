@@ -890,6 +890,27 @@ else
 docker network create smsly-net 2>/dev/null || true
 docker network create smsly-proxy 2>/dev/null || true
 
+# Ensure external volumes exist.
+# docker-compose.yml marks `caddy_config` and `caddy_data` as `external: true`
+# with fixed names `smsly-hosting_caddy_config` / `smsly-hosting_caddy_data`.
+# Compose refuses to create external volumes and aborts `up` with
+# `external volume "..." not found` if they are missing. Pre-create them
+# here (idempotent — Compose / Docker return a benign "already exists"
+# error which we swallow).
+if command -v docker >/dev/null 2>&1; then
+    docker volume create --name smsly-hosting_caddy_config 2>/dev/null || true
+    docker volume create --name smsly-hosting_caddy_data 2>/dev/null || true
+
+    # Caddy container runs as uid 1000 (nextjs user); chown the volume roots
+    # so the container can read/write its config + cert cache. Same pattern
+    # already used for backups_data in ensure_infrastructure_permissions.
+    for vol in smsly-hosting_caddy_config smsly-hosting_caddy_data; do
+        if docker volume inspect "$vol" >/dev/null 2>&1; then
+            docker run --rm -v "${vol}:/data" alpine chown -R 1000:1000 /data 2>/dev/null || true
+        fi
+    done
+fi
+
 # ─── BLINDSPOT FIX: Ensure entrypoint.sh has execute permissions ────────────
 # Windows git can strip +x bits. Fix before building.
 #
