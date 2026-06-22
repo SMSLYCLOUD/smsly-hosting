@@ -1122,6 +1122,19 @@ export const deploymentApprovalApi = {
 
 // ─── Servers API ────────────────────────────────────────────────────────────
 
+export interface ManagedServerRuntimeInfo {
+  node_id?: string;
+  ts?: string;
+  platform?: string;
+  python?: string;
+  docker_version?: string;
+  smsly_images?: Array<{ repo: string; tag: string; id: string; size: string }>;
+  host_uptime_s?: number;
+  disk_used_pct?: number;
+  mem_used_pct?: number;
+  registrar_version?: string;
+}
+
 export interface ManagedServer {
   id: string;
   name: string;
@@ -1136,13 +1149,27 @@ export interface ManagedServer {
   is_primary: boolean;
   is_lite_agent?: boolean;
   allow_user_workloads: boolean;
-  status: 'ONLINE' | 'OFFLINE' | 'UNKNOWN';
+  status: 'ONLINE' | 'OFFLINE' | 'UNKNOWN' | 'DEGRADED';
   last_health_check: string | null;
   server_version: string;
   services_count: number;
   provision_status?: 'NONE' | 'PENDING' | 'PROVISIONING' | 'DONE' | 'FAILED';
   provision_logs?: string;
   created_at: string;
+  // Agent self-registration signals. The registrar (a small
+  // service inside the agent's docker-compose stack) reports
+  // these to the master. See
+  // backend/apps/deployments/views_servers.py:agent_ready for
+  // the server-side handler.
+  agent_ready?: boolean;
+  last_agent_heartbeat_at?: string | null;
+  agent_runtime_info?: ManagedServerRuntimeInfo;
+  // WireGuard / mesh
+  wg_address?: string | null;
+  role?: 'LEADER' | 'FOLLOWER' | 'CANDIDATE';
+  // TLS pinning
+  verify_tls?: boolean;
+  tls_cert_sha256_set?: boolean;
 }
 
 const proxiedRequestConfig = (): any => ({ _isProxied: true });
