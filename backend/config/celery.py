@@ -34,11 +34,33 @@ app.config_from_object('django.conf:settings', namespace='CELERY')
 app.autodiscover_tasks()
 
 # Explicitly register tasks defined outside of tasks.py files.
+# Celery's autodiscover_tasks() only picks up `tasks.py` — it misses
+# the per-feature `tasks_*.py` modules (tasks_templates, tasks_ecosystem,
+# tasks_safedeploy, etc.). Without these imports, the worker raises
+# "Received unregistered task of type …" when the view queues the
+# task, the task never runs, and the user sees a Service stuck on
+# "Ready to Deploy" because the background orchestration never started.
 # These imports MUST be deferred until Django apps are fully loaded,
 # otherwise models.py triggers AppRegistryNotReady.
 @app.on_after_finalize.connect
 def register_extra_tasks(sender, **kwargs):  # pylint: disable=unused-argument
-    pass
+    # Importing the module is enough — the @shared_task decorator
+    # registers the task with the worker on import.
+    # pylint: disable=import-outside-toplevel
+    import apps.deployments.tasks_templates           # noqa: F401
+    import apps.deployments.tasks_ecosystem           # noqa: F401
+    import apps.deployments.tasks_safedeploy          # noqa: F401
+    import apps.deployments.tasks_replication          # noqa: F401
+    import apps.deployments.tasks_election             # noqa: F401
+    import apps.deployments.tasks_metrics              # noqa: F401
+    import apps.deployments.tasks_cron                 # noqa: F401
+    import apps.deployments.tasks_ai_router            # noqa: F401
+    import apps.deployments.services.autoscaler        # noqa: F401
+    import apps.deployments.services.health_monitor    # noqa: F401
+    import apps.deployments.services.provisioner       # noqa: F401
+    import apps.deployments.tasks_platform_update      # noqa: F401
+    import apps.deployments.tasks_backup               # noqa: F401
+    import apps.deployments.tasks_maintenance          # noqa: F401
 
 # =============================================================================
 # Beat Schedule — Periodic tasks for metrics, health, autoscaling, cleanup

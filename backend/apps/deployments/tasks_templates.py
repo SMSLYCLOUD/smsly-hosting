@@ -59,18 +59,31 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
         """
         Best-effort check: docker manifest inspect <image>.
         Skippable via SKIP_TEMPLATE_IMAGE_VERIFY=true.
+
+        Has a 15s timeout to prevent blocking the celery worker if the
+        registry is slow or unreachable. On timeout or error, log a
+        warning and continue — the deploy itself will surface any
+        real image-pull failure with a proper error message.
         """
         skip = os.environ.get("SKIP_TEMPLATE_IMAGE_VERIFY", "").lower() in {"1", "true", "yes", "on"}
         if skip or not image:
+            return
+        # Skip for private/credentialed registries that the worker
+        # may not have credentials for. The actual deploy will handle
+        # auth via the platform's docker config.
+        if any(host in image.lower() for host in ('ghcr.io/smslycloud', 'localhost', '127.0.0.1', 'smsly-registry', 'registry:')):
             return
         try:
             result = subprocess.run(
                 ["docker", "manifest", "inspect", image],
                 capture_output=True,
                 text=True,
+                timeout=15,
             )
             if result.returncode != 0:
                 raise RuntimeError(result.stderr.strip() or f"manifest inspect failed for {image}")
+        except subprocess.TimeoutExpired:
+            logger.warning("docker manifest inspect timed out for %s (15s) — continuing", image)
         except FileNotFoundError as exc:  # docker not installed
             logger.warning("Docker not available to verify image %s: %s", image, exc)
         except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -224,6 +237,17 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
                     service=service, key='DB_HOST',
                     value=host_port, is_secret=False
                 )
+
+    # Regenerate the Caddyfile so the wildcard block's @known_hosts
+    # includes the freshly provisioned addons (e.g. redis-9c5a408f.grid.smsly.cloud).
+    # Without this, the main service's deploy later fails the route
+    # readiness check because Caddy returns 404 for the un-listed host.
+    if required_addons:
+        try:
+            from .tasks_caddy import _regenerate_caddyfile
+            _regenerate_caddyfile()
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning("Failed to regenerate Caddyfile after addon provisioning: %s", exc)
 
     # Render and store template environment variables
     def render_value(raw: str) -> str:
@@ -518,6 +542,14 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
                     )
                 except Exception:
                     pass
+
+            # Regenerate the Caddyfile so the wildcard block includes
+            # the freshly created companion services' public_domains.
+            try:
+                from .tasks_caddy import _regenerate_caddyfile
+                _regenerate_caddyfile()
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.warning("Failed to regenerate Caddyfile after companion provisioning: %s", exc)
 
     # ── Ollama model pull for standalone Ollama templates ──────────────
     # When deploying a standalone Ollama model (e.g. deepseek-r1) and
