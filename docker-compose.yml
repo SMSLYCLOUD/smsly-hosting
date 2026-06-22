@@ -369,9 +369,11 @@ services:
     image: registry:2.8.3
     restart: unless-stopped
     ports:
-      # SECURITY: registry only exposed on loopback; remote nodes pull through
-      # an SSH tunnel or via the public Traefik route configured in prod.
-      - "127.0.0.1:5000:5000"
+      # SECURITY: registry exposed on all interfaces (0.0.0.0:5000) so
+      # that remote nodes can pull images over the same network. The TLS
+      # cert + htpasswd provide the auth layer. For additional isolation,
+      # restrict at the firewall level (e.g. only allow node IPs).
+      - "5000:5000"
     environment:
       REGISTRY_AUTH: htpasswd
       REGISTRY_AUTH_HTPASSWD_REALM: SMSLY Registry
@@ -394,8 +396,22 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    # Traefik labels for external node pulls via HTTPS.
+    # Nodes configure their docker daemon with the registry's htpasswd
+    # credentials and pull via https://registry.<DOMAIN>/v2/<image>.
+    # The TLS cert at ./certs/registry.crt must be trusted by the node.
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=smsly-net
+      - traefik.http.routers.registry.rule=Host(`registry.${DOMAIN:-grid.smsly.cloud}`)
+      - traefik.http.routers.registry.entrypoints=websecure
+      - traefik.http.routers.registry.tls=true
+      - traefik.http.routers.registry.tls.certresolver=letsencrypt
+      - traefik.http.services.registry.loadbalancer.server.port=5000
+      - managed_by=smsly-hosting
     networks:
       - smsly-net
+      - smsly-proxy
 
   # ============================================================
   # Observability Stack
