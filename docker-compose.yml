@@ -15,8 +15,8 @@ services:
       BUILD: 1
       EXEC: 1
       COMMIT: 1  # Required for backup service to snapshot container state
+      AUTH: 1  # Required for `docker login` + `docker pull` of private images
       # Deny dangerous operations
-      AUTH: 0
       SECRETS: 0
       SWARM: 0
       NODES: 0
