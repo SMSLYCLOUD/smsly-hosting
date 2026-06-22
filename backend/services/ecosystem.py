@@ -339,7 +339,10 @@ def heuristic_analysis(files: list[str], clone_dir: str | None = None) -> dict:
             addons.add("MONGODB")
 
     # ── Deep Import Scan (Code Analysis Integration) ─────────────────
-    # If we have a cloned directory, scan actual imports for precise addons
+    # If we have a cloned directory, scan actual imports for precise addons.
+    # Initialize with an empty result so the post-block lookups below stay
+    # safe when clone_dir is falsy (UnboundLocalError otherwise).
+    import_scan = {"addons": set(), "api_calls": [], "frameworks": []}
     if clone_dir:
         import_scan = _detect_addons_from_imports(clone_dir)
         addons |= import_scan["addons"]
