@@ -696,9 +696,9 @@ ENVIRONMENT=production
 NODE_TYPE=$ENV_NODE_TYPE
 MODE=$ENV_MODE_VALUE
 # Compose file used by 'install.sh --update' and other orchestrator scripts.
-# NOTE: inside a cat <<EOF heredoc (without quoted EOF), bash still expands
-# backticks and $(...) as command substitution. Do NOT use backticks in
-# heredoc comments — single-quote literals instead.
+# NOTE: inside an unquoted heredoc (cat <<EOF), bash still expands
+# command substitution on comment lines too. Do NOT put unescaped
+# dollar-paren or backtick sequences in heredoc comments.
 # Master mode: docker-compose.yml (base file with traefik + caddy inlined).
 # Agent-lite mode: overridden below to infrastructure/docker/docker-compose.agent-lite.yml.
 COMPOSE_FILE=docker-compose.yml
