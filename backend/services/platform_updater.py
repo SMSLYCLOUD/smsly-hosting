@@ -25,7 +25,14 @@ class PlatformUpdateError(Exception):
 
 INSTALL_DIR = os.environ.get('INSTALL_DIR', '/opt/smsly-hosting')
 SMSLY_BRANCH = os.environ.get('SMSLY_BRANCH', 'main')
-COMPOSE_FILE = os.path.join(INSTALL_DIR, 'docker-compose.prod.yml')
+# Read COMPOSE_FILE from the env var set by install.sh, falling back to
+# the base docker-compose.yml (which is what the master stack uses) and
+# then the prod overlay. This matches the file actually started by
+# `docker compose up -d` on the host.
+COMPOSE_FILE = os.environ.get(
+    'COMPOSE_FILE',
+    os.path.join(INSTALL_DIR, 'docker-compose.yml'),
+)
 # Shared bind mount used by caddy-watcher and smsly-update-watcher.  Inside the
 # containers it is mounted at /caddy-config; on the host it is
 # /opt/smsly-hosting/caddy-config.

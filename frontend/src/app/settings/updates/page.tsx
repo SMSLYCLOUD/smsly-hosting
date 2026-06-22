@@ -55,8 +55,14 @@ export default function UpdatesPage() {
                 const data = await res.json();
                 setUpdates(data);
 
+                // Normalize status to uppercase for comparison — backend
+                // returns UPPERCASE (PENDING, PULLING, etc.) but a future
+                // schema change could introduce lowercase. Be defensive.
                 const inProgress = data.find((u: any) =>
-                    ['queued', 'preflight_running', 'snapshotting', 'updating', 'migrating', 'health_checking', 'rollback_started', 'rollback_running'].includes(u.status)
+                    ['PENDING', 'PULLING', 'BACKING_UP', 'MIGRATING',
+                     'RESTARTING', 'HEALTH_CHECK', 'ROLLING_BACK'].includes(
+                        String(u.status).toUpperCase()
+                    )
                 );
                 if (inProgress) {
                     setIsPolling(true);
@@ -164,7 +170,7 @@ export default function UpdatesPage() {
                     </div>
                     <Button onClick={handleTrigger} disabled={triggering || !!activeUpdate} className="bg-primary text-primary-foreground">
                         {triggering ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Play className="w-4 h-4 mr-2" />}
-                        {activeUpdate ? 'Update in Progress' : 'Check for Updates'}
+                        {activeUpdate ? 'Update in Progress' : triggering ? 'Starting...' : 'Update Now'}
                     </Button>
                 </div>
 
