@@ -70,7 +70,7 @@ def create_server_backup_task(self, backup_id=None, schedule_id=None):
 
 
 @shared_task(bind=True, soft_time_limit=3600, max_retries=2, default_retry_delay=300)
-def restore_service_backup_task(self, backup_id, target_service_id=None, requesting_user_id=None, raise_on_snapshot_failure=False):
+def restore_service_backup_task(self, backup_id, target_service_id=None, requesting_user_id=None, raise_on_snapshot_failure=False, encryption_key=None):
     log_event(
         action='BACKUP_RESTORE',
         target=f'Backup: {backup_id}',
@@ -80,10 +80,30 @@ def restore_service_backup_task(self, backup_id, target_service_id=None, request
             'target_service_id': str(target_service_id) if target_service_id else None,
             'requesting_user_id': str(requesting_user_id) if requesting_user_id else None,
             'scope': 'service',
+            'encryption_key_provided': bool(encryption_key),
         },
     )
     backup_service = BackupService()
-    backup_service.restore_service(
+    # If a key was provided in the request, use it for this restore only
+    # (don't persist to BACKUP_ENCRYPTION_KEY env var).
+    if encryption_key:
+        import os
+        original_key = os.environ.get('BACKUP_ENCRYPTION_KEY', '')
+        os.environ['BACKUP_ENCRYPTION_KEY'] = encryption_key
+        try:
+            return backup_service.restore_service(
+                backup_id,
+                target_service_id=target_service_id,
+                requesting_user_id=requesting_user_id,
+                raise_on_snapshot_failure=raise_on_snapshot_failure,
+            )
+        finally:
+            # Restore the original env var (or remove if there was none)
+            if original_key:
+                os.environ['BACKUP_ENCRYPTION_KEY'] = original_key
+            else:
+                os.environ.pop('BACKUP_ENCRYPTION_KEY', None)
+    return backup_service.restore_service(
         backup_id,
         target_service_id=target_service_id,
         requesting_user_id=requesting_user_id,
@@ -93,7 +113,7 @@ def restore_service_backup_task(self, backup_id, target_service_id=None, request
 
 
 @shared_task(bind=True, soft_time_limit=7200, time_limit=7500)
-def restore_server_backup_task(self, backup_id, requesting_user_id=None):
+def restore_server_backup_task(self, backup_id, requesting_user_id=None, encryption_key=None):
     log_event(
         action='BACKUP_RESTORE',
         target=f'Backup: {backup_id}',
@@ -102,10 +122,22 @@ def restore_server_backup_task(self, backup_id, requesting_user_id=None):
             'backup_id': str(backup_id),
             'requesting_user_id': str(requesting_user_id) if requesting_user_id else None,
             'scope': 'server',
+            'encryption_key_provided': bool(encryption_key),
         },
     )
     backup_service = BackupService()
-    backup_service.restore_server(backup_id=backup_id, requesting_user_id=requesting_user_id)
+    if encryption_key:
+        import os
+        original_key = os.environ.get('BACKUP_ENCRYPTION_KEY', '')
+        os.environ['BACKUP_ENCRYPTION_KEY'] = encryption_key
+        try:
+            return backup_service.restore_server(backup_id=backup_id, requesting_user_id=requesting_user_id)
+        finally:
+            if original_key:
+                os.environ['BACKUP_ENCRYPTION_KEY'] = original_key
+            else:
+                os.environ.pop('BACKUP_ENCRYPTION_KEY', None)
+    return backup_service.restore_server(backup_id=backup_id, requesting_user_id=requesting_user_id)
 
 
 

@@ -5053,6 +5053,55 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
             return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(info)
 
+    @action(detail=True, methods=['get'], url_path='download-key')
+    def download_key(self, request, pk=None):
+        """Download the V2 backup header as a .key.json file alongside
+        the backup. The operator stores this file with the backup and
+        uses ``POST /api/v1/backups/import-key/`` on the target master
+        to import the key before restoring.
+
+        The file is safe to distribute alongside the backup — it
+        contains only the public key_id and fingerprint, NOT the
+        encryption key material itself. The key material must be
+        transferred via a separate secure channel (the
+        ``BackupEncryptionKey`` table on the source master, or an
+        out-of-band exchange).
+        """
+        from .services.backup_service import BackupService
+        backup = self.get_object()
+        if not backup.file_path or not os.path.exists(backup.file_path):
+            return Response({'error': 'Backup file not found'}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            info = BackupService.read_v2_header(backup.file_path)
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        key_payload = {
+            'backup_id': str(backup.id),
+            'service_name': getattr(getattr(backup, 'service', None), 'name', None),
+            'created_at': backup.created_at.isoformat() if backup.created_at else None,
+            'encryption': {
+                'format': info.get('format', 'CHUNKED_V2'),
+                'key_id': info.get('key_id'),
+                'fingerprint': info.get('fingerprint'),
+            },
+            'usage': (
+                'Import this key on the target master with: '
+                'POST /api/v1/backups/import-key/ '
+                '{"key_id": "<key_id>", "key_material": "<source BACKUP_ENCRYPTION_KEY>"}'
+            ),
+        }
+
+        from django.http import HttpResponse
+        import json as _json
+        response = HttpResponse(
+            _json.dumps(key_payload, indent=2),
+            content_type='application/json',
+        )
+        filename = f"backup-{backup.id}-key.json"
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
+
     @action(detail=True, methods=['post'])
     def restore(self, request, pk=None):
         backup = self.get_object()
@@ -5082,6 +5131,53 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
         guard = ServerGuard.check_user_workload_allowed(getattr(target_service, 'server', None))
         if not guard["ok"]:
             return Response(guard, status=status.HTTP_400_BAD_REQUEST)
+
+        # ── Pre-flight: verify the encryption key is available ───────
+        # If the backup is encrypted and we don't have the key (either
+        # the local BACKUP_ENCRYPTION_KEY env var, a matching imported
+        # key, or a key supplied in this request), refuse to queue
+        # the task. Without this, the task would fail silently inside
+        # the Celery worker (UnknownBackupKeyIdError), and the user
+        # would see 'restore_started' followed by no progress.
+        key_provided = request.data.get('encryption_key', '').strip()
+        if backup.file_path and backup.file_path.endswith('.enc'):
+            from .services.backup_service import (
+                BackupService,
+                UnknownBackupKeyIdError,
+            )
+            env_key = os.environ.get('BACKUP_ENCRYPTION_KEY', '').strip()
+            if not env_key and not key_provided:
+                # No local key and no key supplied in the request —
+                # check if an imported key matches the backup's key_id.
+                try:
+                    with open(backup.file_path, 'rb') as _probe:
+                        magic = _probe.read(8)
+                    if magic == b'CHUNKEDV2':
+                        _probe.seek(8)
+                        header_key_id = _probe.read(16).hex()
+                        if not BackupService.lookup_key_by_id(header_key_id):
+                            return Response(
+                                {
+                                    'error': (
+                                        'Encryption key required. This backup '
+                                                        'was encrypted on a different '
+                                                        'master. Import the key or '
+                                                        'provide it in the request.'
+                                                    ),
+                                    'error_code': 'ENCRYPTION_KEY_REQUIRED',
+                                    'key_id': header_key_id,
+                                    'remediation': (
+                                        'POST /api/v1/backups/import-key/ with '
+                                                        'key_id and key_material from '
+                                                        'the source master, or send '
+                                                        '"encryption_key" in the '
+                                                        'restore request body.'
+                                                    ),
+                                },
+                                status=status.HTTP_400_BAD_REQUEST,
+                            )
+                except (OSError, ValueError):
+                    pass
 
         # ── Pre-flight safety snapshot check (Fix 4) ─────────────
         # Run a synchronous PRE_TRANSFER snapshot. If it fails, return 422
@@ -5114,6 +5210,7 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
             target_service_id=str(target_service_id) if target_service_id else None,
             requesting_user_id=request.user.id,
             raise_on_snapshot_failure=True,
+            encryption_key=key_provided or None,
         )
         return Response({'status': 'restore_started'})
 
@@ -5192,6 +5289,43 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
         backup = serializer.save(status='PENDING')
         create_server_backup_task.delay(backup_id=str(backup.id))
 
+    @action(detail=True, methods=['get'], url_path='download-key')
+    def download_key(self, request, pk=None):
+        """Download the V2 backup header as a .key.json file. See
+        ServiceBackupViewSet.download_key for details.
+        """
+        from .services.backup_service import BackupService
+        from django.http import HttpResponse
+        import json as _json
+        backup = self.get_object()
+        if not backup.file_path or not os.path.exists(backup.file_path):
+            return Response({'error': 'Backup file not found'}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            info = BackupService.read_v2_header(backup.file_path)
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        key_payload = {
+            'backup_id': str(backup.id),
+            'scope': 'server',
+            'created_at': backup.created_at.isoformat() if backup.created_at else None,
+            'encryption': {
+                'format': info.get('format', 'CHUNKED_V2'),
+                'key_id': info.get('key_id'),
+                'fingerprint': info.get('fingerprint'),
+            },
+            'usage': (
+                'Import this key on the target master with: '
+                'POST /api/v1/backups/import-key/ '
+                '{"key_id": "<key_id>", "key_material": "<source BACKUP_ENCRYPTION_KEY>"}'
+            ),
+        }
+        response = HttpResponse(
+            _json.dumps(key_payload, indent=2),
+            content_type='application/json',
+        )
+        response['Content-Disposition'] = f'attachment; filename="backup-{backup.id}-key.json"'
+        return response
+
     @action(detail=False, methods=['post'], url_path='import-key')
     def import_key(self, request):
         """Server-wide counterpart of :meth:`ServiceBackupViewSet.import_key`.
@@ -5264,8 +5398,48 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
 
         if backup.status != 'COMPLETED':
             return Response({'error': 'Only COMPLETED backups can be restored.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Pre-flight: verify encryption key is available for cross-master restores
+        key_provided = request.data.get('encryption_key', '').strip()
+        if backup.file_path and backup.file_path.endswith('.enc'):
+            from .services.backup_service import (
+                BackupService,
+                UnknownBackupKeyIdError,
+            )
+            env_key = os.environ.get('BACKUP_ENCRYPTION_KEY', '').strip()
+            if not env_key and not key_provided:
+                try:
+                    with open(backup.file_path, 'rb') as _probe:
+                        magic = _probe.read(8)
+                    if magic == b'CHUNKEDV2':
+                        _probe.seek(8)
+                        header_key_id = _probe.read(16).hex()
+                        if not BackupService.lookup_key_by_id(header_key_id):
+                            return Response(
+                                {
+                                    'error': (
+                                        'Encryption key required. This backup '
+                                        'was encrypted on a different master. '
+                                        'Import the key or provide it in the request.'
+                                    ),
+                                    'error_code': 'ENCRYPTION_KEY_REQUIRED',
+                                    'key_id': header_key_id,
+                                    'remediation': (
+                                        'POST /api/v1/backups/import-key/ with '
+                                        'key_id and key_material from the source master, '
+                                        'or send "encryption_key" in the restore request body.'
+                                    ),
+                                },
+                                status=status.HTTP_400_BAD_REQUEST,
+                            )
+                except (OSError, ValueError):
+                    pass
+
         from apps.deployments.tasks import restore_server_backup_task
-        restore_server_backup_task.delay(backup_id=str(backup.id))
+        restore_server_backup_task.delay(
+            backup_id=str(backup.id),
+            encryption_key=key_provided or None,
+        )
         return Response({
             'status': 'restored',
             'warning': (
