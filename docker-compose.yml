@@ -322,8 +322,10 @@ services:
       - /tmp
     healthcheck:
       # celery-beat is a scheduler, not a worker. Check that the beat
-      # process is alive and writing to its schedule file.
-      test: ["CMD-SHELL", "pgrep -f 'celery.*beat' > /dev/null || exit 1"]
+      # process is alive by looking for it in the process list. The
+      # python:3.11-slim base image doesn't include procps (pgrep),
+      # so use ps which is provided by busybox.
+      test: ["CMD-SHELL", "ps aux | grep -E 'celery.*beat' | grep -v grep > /dev/null || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -652,7 +654,7 @@ services:
     healthcheck:
       # Check the watchdog's own script is running (it loops forever).
       # The script doesn't expose a port, so we check the process.
-      test: ["CMD-SHELL", "pgrep -f watchdog.sh > /dev/null || exit 1"]
+      test: ["CMD-SHELL", "ps aux | grep -E 'watchdog\\.sh' | grep -v grep > /dev/null || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
