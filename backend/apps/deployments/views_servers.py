@@ -38,6 +38,49 @@ logger = logging.getLogger(__name__)
 MANAGED_SERVER_HEALTH_TIMEOUT = 10
 
 
+# ── Helpers for the agent-ready / agent-heartbeat endpoints ────────────────
+#
+# These two helpers are imported by the agent-ready/agent-heartbeat
+# actions above. They're local to views_servers to avoid creating a new
+# module for two short functions, but they encapsulate behaviour that
+# would otherwise be inline.
+def _truncate_dict(payload, max_items=20, max_str_len=120):
+    """Sanitize an agent runtime snapshot before logging it.
+
+    Trims to ``max_items`` keys and truncates string values to
+    ``max_str_len`` chars so a verbose Docker stats payload doesn't
+    blow up the provision log.
+    """
+    if not isinstance(payload, dict):
+        return {}
+    out = {}
+    for idx, (k, v) in enumerate(payload.items()):
+        if idx >= max_items:
+            break
+        v = str(v)
+        if len(v) > max_str_len:
+            v = v[:max_str_len] + "..."
+        out[str(k)[:64]] = v
+    return out
+
+
+def _append_log_safe(server, message):
+    """Best-effort log append. Never raises — agents rely on this."""
+    try:
+        from .services.provisioner import _append_log
+        _append_log(server, message)
+    except Exception:
+        # If provisioner imports cycle, fall back to writing directly
+        # to the model. Still best-effort.
+        try:
+            from django.utils import timezone as _tz
+            line = f"[{_tz.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}"
+            server.provision_logs = (server.provision_logs or "") + line + "\n"
+            server.save(update_fields=["provision_logs", "updated_at"])
+        except Exception:
+            pass
+
+
 def _append_unique(values: list[str], value: str):
     normalized = str(value or "").strip().rstrip("/")
     if normalized and normalized not in values:
@@ -83,8 +126,15 @@ def _candidate_api_urls(server) -> list[str]:
     # ── Priority 1: WireGuard Mesh VPN (secure, internal, encrypted) ──
     if has_wg:
         if is_lite:
-            _append_unique(urls, f"http://{wg_ip}")
+            # Lite agent: backend listens on :8000 on its own host.
+            # Both the bare IP and an explicit :8090 are tried because
+            # the master→agent traffic inside the VPN is direct, and
+            # some lite deployments run a Traefik on :8090 in front of
+            # the backend. The bare :8000 form is the agent's own
+            # gunicorn.
+            _append_unique(urls, f"http://{wg_ip}:8000")
             _append_unique(urls, f"http://{wg_ip}:8090")
+            _append_unique(urls, f"http://{wg_ip}")
         else:
             _append_unique(urls, f"http://{wg_ip}:8090")
             _append_unique(urls, f"http://{wg_ip}")
@@ -97,8 +147,10 @@ def _candidate_api_urls(server) -> list[str]:
     # ── Priority 2: Public IP / Domain (fallback) ──
     if _server_host_is_ip(host_port):
         if is_lite:
-            _append_unique(urls, f"http://{host_port}")
+            # Same priority order as above for the public IP path.
+            _append_unique(urls, f"http://{host_port}:8000")
             _append_unique(urls, f"http://{host_port}:8090")
+            _append_unique(urls, f"http://{host_port}")
         else:
             _append_unique(urls, f"http://{host_port}:8090")
             _append_unique(urls, f"http://{host_port}")
@@ -765,6 +817,12 @@ class ManagedServerSerializer(serializers.ModelSerializer):
             "server_version", "services_count", "created_at",
             "provision_status", "provision_logs", "role", "wg_address",
             "has_ssh_credentials", "is_lite_agent",
+            # Agent self-registration signals: surfaced so operators
+            # can tell at a glance whether the agent's installer
+            # has finished bootstrapping and how recently the
+            # registrar last reported in. See models_core.py for
+            # the field-level rationale.
+            "agent_ready", "last_agent_heartbeat_at", "agent_runtime_info",
             # SECURITY (Batch G cont): expose the per-server TLS
             # verification settings so operators can audit which
             # nodes run with verify_tls=False. tls_cert_sha256 is
@@ -778,6 +836,7 @@ class ManagedServerSerializer(serializers.ModelSerializer):
             "id", "status", "last_health_check", "server_version",
             "services_count", "created_at", "provision_status",
             "role", "wg_address", "has_ssh_credentials", "is_lite_agent",
+            "agent_ready", "last_agent_heartbeat_at", "agent_runtime_info",
             "tls_cert_sha256_set",
         ]
 
@@ -1177,6 +1236,161 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
             ManagedServerSerializer(server).data,
             status=status.HTTP_202_ACCEPTED,
         )
+
+    # ── Agent Self-Registration (lite-agent registrar) ──────────────────
+    #
+    # The lite agent's registrar (a small service running inside the
+    # agent's docker-compose stack) calls these endpoints to tell the
+    # master "I am booted and ready" (one-shot) and "I am still alive"
+    # (every 30s). Both are HMAC-authenticated with the
+    # server.gateway_secret that the master provisioned into the
+    # agent's .env during install. They never require an admin
+    # session — that way the agent can self-register before the
+    # operator has logged in to the platform.
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="agent-ready",
+        permission_classes=[],
+        authentication_classes=[],
+        throttle_classes=[],
+    )
+    def agent_ready(self, request, pk=None):
+        """
+        Mark this node as ``agent_ready=True`` and stamp its runtime
+        info from the agent's first successful boot.
+
+        The agent-registrar service on the lite node calls this once
+        it has finished installing and confirmed all of its own
+        containers are healthy. Authentication is via the
+        per-server ``gateway_secret`` HMAC (not a user session) so
+        the agent can register itself before any operator has
+        logged in to the platform.
+        """
+        from apps.deployments.services.agent_registrar_auth import (
+            verify_agent_hmac,
+        )
+
+        server = self.get_object()
+        if not verify_agent_hmac(request, server):
+            return Response(
+                {"error": "Invalid or missing HMAC signature."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        runtime_info = {}
+        if isinstance(request.data, dict):
+            runtime_info = request.data.get("runtime_info") or {}
+            if not isinstance(runtime_info, dict):
+                runtime_info = {}
+
+        update_fields = ["agent_ready", "last_agent_heartbeat_at", "updated_at"]
+        server.agent_ready = True
+        server.last_agent_heartbeat_at = timezone.now()
+        if runtime_info:
+            server.agent_runtime_info = runtime_info
+            update_fields.append("agent_runtime_info")
+        # If the agent reports it is ready, mark the provision as done
+        if server.provision_status in {
+            ManagedServer.ProvisionStatus.PENDING,
+            ManagedServer.ProvisionStatus.PROVISIONING,
+        }:
+            server.provision_status = ManagedServer.ProvisionStatus.DONE
+            update_fields.append("provision_status")
+        server.save(update_fields=update_fields)
+
+        _append_log_safe(
+            server,
+            f"✅ Agent ready: runtime={_truncate_dict(runtime_info)}",
+        )
+
+        return Response({
+            "status": "ok",
+            "agent_ready": True,
+            "server_id": str(server.id),
+            "node_id": runtime_info.get("node_id", ""),
+            "master_time": timezone.now().isoformat(),
+        })
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="agent-heartbeat",
+        permission_classes=[],
+        authentication_classes=[],
+        throttle_classes=[],
+    )
+    def agent_heartbeat(self, request, pk=None):
+        """
+        Receive a periodic heartbeat from the agent's registrar.
+
+        The agent posts every 30s with:
+
+        * ``runtime_info``: docker version, image versions, host
+          uptime, disk/mem (refreshed on every heartbeat)
+        * ``status``: free-form health string (e.g. ``"ok"``,
+          ``"degraded"``)
+        * ``queues``: dict of celery queue depths (best-effort,
+          empty on lite agents that don't have access to the
+          master queue)
+        """
+        from apps.deployments.services.agent_registrar_auth import (
+            verify_agent_hmac,
+        )
+
+        server = self.get_object()
+        if not verify_agent_hmac(request, server):
+            return Response(
+                {"error": "Invalid or missing HMAC signature."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        runtime_info = {}
+        if isinstance(request.data, dict):
+            runtime_info = request.data.get("runtime_info") or {}
+            if not isinstance(runtime_info, dict):
+                runtime_info = {}
+
+        status_payload = ""
+        if isinstance(request.data, dict):
+            status_payload = str(request.data.get("status", "") or "").strip()
+
+        update_fields = [
+            "last_agent_heartbeat_at",
+            "agent_runtime_info",
+            "agent_ready",
+            "updated_at",
+        ]
+        server.last_agent_heartbeat_at = timezone.now()
+        if runtime_info:
+            server.agent_runtime_info = runtime_info
+        # Heartbeats always confirm readiness — the agent is alive
+        # and reporting in, even if the operator hasn't manually
+        # marked the node ready. The first heartbeat implicitly
+        # asserts readiness.
+        if not server.agent_ready:
+            server.agent_ready = True
+            _append_log_safe(
+                server,
+                "✅ Agent ready (implicit via first heartbeat)",
+            )
+        server.save(update_fields=update_fields)
+
+        # Update status if heartbeat says "degraded" or "down" so
+        # operators see the agent's self-reported state in the
+        # dashboard. Only override ONLINE; never auto-promote to
+        # ONLINE from a heartbeat alone.
+        if status_payload.lower() in {"degraded", "down", "unhealthy"}:
+            if server.status == ManagedServer.Status.ONLINE:
+                server.status = ManagedServer.Status.DEGRADED
+                server.save(update_fields=["status", "updated_at"])
+
+        return Response({
+            "status": "ok",
+            "server_id": str(server.id),
+            "master_time": timezone.now().isoformat(),
+        })
 
     # ── Health Check ─────────────────────────────────────────────────────
 

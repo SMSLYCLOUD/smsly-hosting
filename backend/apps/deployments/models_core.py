@@ -121,6 +121,39 @@ class ManagedServer(models.Model):
         max_length=20, choices=ProvisionStatus.choices, default=ProvisionStatus.NONE)
     provision_logs = models.TextField(blank=True, default="")  # type: ignore[var-annotated]
 
+    # ── Agent self-registration (lit-agent registrar) ──
+    # Distinct from status=ONLINE: ``status`` is the master's outbound
+    # health probe; ``agent_ready`` is the agent's own assertion that
+    # its installer/registrar has finished bootstrapping end-to-end
+    # (containers up, migrations applied, celery worker subscribed,
+    # the whole stack is functional). When both are True the node is
+    # trusted to accept work.
+    agent_ready = models.BooleanField(  # type: ignore[var-annotated]
+        default=False,
+        help_text=(
+            "True once the agent's installer/registrar has reported "
+            "it has finished bootstrapping and is fully ready to "
+            "accept work. Distinct from status=ONLINE which only "
+            "indicates the master can reach the API."
+        ),
+    )
+    last_agent_heartbeat_at = models.DateTimeField(  # type: ignore[var-annotated]
+        blank=True, null=True,
+        help_text=(
+            "Last time the agent's registrar sent a heartbeat. Used to "
+            "detect silent agent outages even when the API is "
+            "unreachable from the master."
+        ),
+    )
+    agent_runtime_info = models.JSONField(  # type: ignore[var-annotated]
+        blank=True, default=dict,
+        help_text=(
+            "Last-seen runtime snapshot from the agent: docker version, "
+            "image versions, host uptime, disk/mem. Refreshed on every "
+            "heartbeat."
+        ),
+    )
+
     # SECURITY: TLS verification controls. ``verify_tls`` defaults to True
     # — the platform refuses to skip certificate verification unless
     # the operator has explicitly opted in (and the env flag
