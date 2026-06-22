@@ -62,6 +62,28 @@ def audit_service_lifecycle(sender, instance, created, **kwargs):
         )
 
 
+@receiver(post_save, sender=Service)
+def regenerate_caddyfile_on_service_change(sender, instance, created, **kwargs):
+    """Regenerate the Caddyfile when a service is created or its
+    public_domain changes. This ensures new services get Caddy site blocks
+    (and SSL certs) without requiring a successful deployment — previously
+    the regeneration only happened in the deployment task, so services
+    whose deployment failed (e.g. GitHub webhook setup error) never got
+    routed and returned 404 on their wildcard subdomain.
+    """
+    # On created, the public_domain is already set (auto-generated during
+    # the deploy request). On update, only regenerate if public_domain
+    # actually changed (to avoid noise on every save).
+    update_fields = kwargs.get('update_fields')
+    if update_fields is not None and 'public_domain' not in update_fields and 'custom_domains' not in update_fields:
+        return
+    try:
+        from apps.deployments.tasks_caddy import _regenerate_caddyfile
+        _regenerate_caddyfile()
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.warning("Could not regenerate Caddyfile from Service signal: %s", exc)
+
+
 @receiver(post_save, sender=Deployment)
 def sync_service_status_on_deployment_change(sender, instance, created, **kwargs):
     """Update service status based on deployment changes."""
