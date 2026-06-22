@@ -332,6 +332,10 @@ export interface Service {
   deploy_mode?: 'SINGLE' | 'COMPOSE';
   compose_file?: string;
   compose_main_service?: string;
+  // Auto recovery
+  auto_restart?: boolean;
+  auto_rollback_enabled?: boolean;
+  auto_rollback_threshold?: number | null;
   // Domain visibility
   is_public?: boolean;
   public_domain_hidden?: boolean;
@@ -395,6 +399,22 @@ export interface Deployment {
   duration_seconds?: number;
   created_at: string;
   finished_at?: string;
+  is_rollback?: boolean;
+  rollback_from?: string | null;
+}
+
+export interface DeploymentRollbackResponse {
+  id: string;
+  service: string;
+  commit_hash: string;
+  commit_message?: string;
+  status: string;
+  is_rollback?: boolean;
+  rollback_from?: string | null;
+  rollback_state?: string;
+  rollback_target?: string;
+  created_at: string;
+  finished_at?: string | null;
 }
 
 export interface EnvVar {
@@ -493,8 +513,11 @@ export const servicesApi = {
     const response = await api.get(`/deployments/${id}/`);
     return response.data;
   },
-  rollback: async (deploymentId: string): Promise<any> => {
-    const response = await api.post(`/deployments/${deploymentId}/rollback/`, { confirm: true });
+  rollback: async (deploymentId: string): Promise<DeploymentRollbackResponse> => {
+    const response = await api.post<DeploymentRollbackResponse>(
+      `/deployments/${deploymentId}/rollback/`,
+      { confirm: true },
+    );
     return response.data;
   },
   cancelDeployment: async (deploymentId: string): Promise<any> => {

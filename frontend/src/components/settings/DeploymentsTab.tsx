@@ -81,16 +81,33 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
     };
 
     const handleRollback = async (deployment: Deployment) => {
-        if (!await confirm({ title: 'Rollback deployment?', message: `Rollback to commit ${deployment.commit_hash.substring(0, 7)}? This will trigger a new deployment.`, confirmText: 'Rollback' })) return;
+        const shortCommit = deployment.commit_hash?.substring(0, 7) ?? 'unknown';
+        if (!await confirm({
+            title: 'Rollback deployment?',
+            message: `Roll back to commit ${shortCommit}? A new deployment will be created from this successful release.`,
+            confirmText: 'Rollback',
+            variant: 'destructive',
+        })) return;
 
         try {
             setRollingBackId(deployment.id);
             await servicesApi.rollback(deployment.id);
-            toast({ title: "Rollback initiated", description: "A new deployment has started." });
+            toast({ title: "Rollback initiated", description: `Rolling back to ${shortCommit}.` });
             setTimeout(() => { void loadDeployments(); }, 2000);
-        } catch (err) {
+        } catch (err: any) {
+            const code = err?.response?.data?.code;
+            const detail =
+                err?.response?.data?.user_action
+                || err?.response?.data?.error
+                || err?.response?.data?.message
+                || err?.message
+                || 'Rollback request failed';
+            toast({
+                title: code ? `Rollback blocked (${code})` : 'Rollback failed',
+                description: detail,
+                variant: 'destructive',
+            });
             console.error(err);
-            toast({ title: "Rollback failed", variant: "destructive" });
         } finally {
             setRollingBackId(null);
         }
@@ -394,8 +411,11 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
                                                     )}
                                                 </Button>
                                             )}
-                                            {/* Rollback for terminal states */}
-                                            {['ACTIVE', 'FAILED', 'CANCELLED'].includes(d.status) && (
+                                            {/* Rollback is only available on SUCCESSFUL deployments. Rolling back to
+                                    a FAILED or CANCELLED release would just re-run the broken code,
+                                    which is never what the user wants. The backend also enforces
+                                    this with ROLLBACK_TARGET_NOT_SUCCESSFUL. */}
+                                            {(['ACTIVE', 'INACTIVE'].includes(d.status)) && d.commit_hash && (
                                                 <Button
                                                     variant="ghost"
                                                     size="sm"

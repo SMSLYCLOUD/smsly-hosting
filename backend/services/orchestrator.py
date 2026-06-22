@@ -4,8 +4,6 @@
 import logging
 import signal
 import threading
-from datetime import timedelta
-
 from apps.deployments.models import Deployment
 from apps.deployments.tasks_ai import analyze_failure_task
 from apps.deployments.tasks_alerts import alert_user_task
@@ -19,12 +17,6 @@ logger = logging.getLogger(__name__)
 
 # Default deployment timeout in seconds (configurable via settings)
 DEPLOYMENT_TIMEOUT = getattr(settings, 'DEPLOYMENT_TIMEOUT_SECONDS', 600)
-
-# Number of consecutive failures before auto-rollback triggers
-AUTO_ROLLBACK_THRESHOLD = getattr(settings, 'AUTO_ROLLBACK_THRESHOLD', 3)
-AUTO_ROLLBACK_COOLDOWN_MINUTES = getattr(
-    settings, 'AUTO_ROLLBACK_COOLDOWN_MINUTES', 10
-)
 
 
 class DeploymentTimeoutError(Exception):
@@ -166,110 +158,32 @@ class Orchestrator:
         self.deployment.save()
 
     def _check_auto_rollback(self):
-        """
-        If the last N deployments for this service all FAILED,
-        automatically rollback to the most recent ACTIVE deployment.
-        """
-        service = self.deployment.service
-        recent = (
-            Deployment.objects
-            .filter(service=service, is_rollback=False)
-            .order_by('-created_at')[:AUTO_ROLLBACK_THRESHOLD]
+        from apps.deployments.services.auto_rollback import (
+            AutoRollbackEngine,
+            Trigger,
         )
 
-        if len(recent) < AUTO_ROLLBACK_THRESHOLD:
-            return
-
-        all_failed = all(
-            d.status == Deployment.Status.FAILED for d in recent
-        )
-
-        if not all_failed:
-            return
-
-        # Find last successful deployment
-        last_good = (
-            Deployment.objects
-            .filter(service=service, status=Deployment.Status.ACTIVE)
-            .order_by('-finished_at')
-            .first()
-        )
-
-        if not last_good:
-            logger.warning(
-                "Auto-rollback: no previous ACTIVE deployment for %s",
-                service.name,
-            )
-            return
-
-        in_progress_statuses = [
-            Deployment.Status.QUEUED,
-            Deployment.Status.REVIEW,
-            Deployment.Status.BUILDING,
-            Deployment.Status.DEPLOYING,
-            Deployment.Status.HEALTH_CHECK,
-        ]
-        if Deployment.objects.filter(
-            service=service,
-            is_rollback=True,
-            status__in=in_progress_statuses,
-        ).exists():
-            logger.info(
-                "Auto-rollback suppressed for %s: rollback deployment already in progress",
-                service.name,
-            )
-            return
-
-        cutoff = timezone.now() - timedelta(minutes=AUTO_ROLLBACK_COOLDOWN_MINUTES)
-        if Deployment.objects.filter(
-            service=service,
-            is_rollback=True,
-            commit_hash=last_good.commit_hash,
-            created_at__gte=cutoff,
-        ).exclude(status=Deployment.Status.ACTIVE).exists():
-            logger.info(
-                "Auto-rollback suppressed for %s: recent rollback to %s exists",
-                service.name,
-                last_good.commit_hash,
-            )
-            return
-
-        logger.warning(
-            "Auto-rollback triggered for %s: %d consecutive failures. "
-            "Rolling back to deployment %s (commit %s)",
-            service.name,
-            AUTO_ROLLBACK_THRESHOLD,
-            last_good.id,
-            last_good.commit_hash,
-        )
-
-        # Create rollback deployment
-        rollback = Deployment.objects.create(
-            service=service,
-            status=Deployment.Status.QUEUED,
-            commit_hash=last_good.commit_hash,
-            commit_message=(
-                f"AUTO-ROLLBACK: {AUTO_ROLLBACK_THRESHOLD} consecutive "
-                f"failures -> reverting to {last_good.commit_hash[:7]}"
+        result = AutoRollbackEngine.trigger(
+            service=self.deployment.service,
+            trigger=Trigger.CONSECUTIVE_FAILURES,
+            reason_detail=(
+                f"Deployment {self.deployment.id} failed with "
+                f"{self.deployment.error_message or 'unknown error'}"
             ),
-            is_rollback=True,
-            rollback_from=self.deployment,
+            failed_deployment=self.deployment,
         )
-
-        # Trigger async deployment (import here to avoid circular)
-        from apps.deployments.tasks_deploy import enqueue_smart_deploy_task
-        provider = service.provider
-        if provider:
-            try:
-                enqueue_smart_deploy_task(str(rollback.id), str(provider.id), skip_review=True)
-            except Exception as exc:  # pragma: no cover - broker/runtime failure
-                logger.exception("Failed to enqueue automatic rollback %s", rollback.id)
-                rollback.status = Deployment.Status.FAILED
-                rollback.finished_at = timezone.now()
-                rollback.build_logs = (
-                    (rollback.build_logs or "")
-                    + f"\n[ERROR] Failed to queue automatic rollback task: {exc}\n"
-                )
-                rollback.save(update_fields=["status", "finished_at", "build_logs", "updated_at"])
+        if result.fired:
+            logger.warning(
+                "Auto-rollback fired for %s: %s (rollback_id=%s)",
+                self.deployment.service.name,
+                result.reason,
+                result.rollback_id,
+            )
+        else:
+            logger.info(
+                "Auto-rollback not fired for %s: %s",
+                self.deployment.service.name,
+                result.reason,
+            )
 
 

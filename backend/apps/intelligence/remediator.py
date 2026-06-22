@@ -303,82 +303,24 @@ class RemediationEngine:
         return False
 
     def _handle_rollback(self, service: Service) -> bool:
-        """Handle automated rollback logic."""
-        if self._has_in_progress_deployment(service):
-            logger.info(
-                "Skipping auto-rollback for %s: deployment already in progress",
-                service.name,
-            )
-            return False
+        """Handle automated rollback logic via the centralized engine."""
+        from apps.deployments.services.auto_rollback import (
+            AutoRollbackEngine,
+            Trigger,
+        )
 
-        # Find previous successful deployment
         latest_deploy = service.deployments.order_by('-created_at').first()
-        last_good_deploy = service.deployments.filter(
-            status='ACTIVE'
-        ).exclude(
-            id=latest_deploy.id if latest_deploy else None
-        ).order_by('-finished_at').first()
-
-        if last_good_deploy:
-            provider = _resolve_provider_for_service(service)
-            if not provider:
-                logger.warning(
-                    "Skipping auto-rollback for %s: no active provider",
-                    service.name,
-                )
-                return False
-            cutoff = timezone.now() - timedelta(minutes=self.AUTO_DEPLOY_COOLDOWN_MINUTES)
-            recent_duplicate = service.deployments.filter(
-                is_rollback=True,
-                commit_hash=last_good_deploy.commit_hash,
-                commit_message__startswith='Auto-Rollback:',
-                created_at__gte=cutoff,
-            ).exclude(status=Deployment.Status.ACTIVE).exists()
-            if recent_duplicate:
-                logger.info(
-                    "Skipping auto-rollback for %s: recent rollback to commit %s already queued",
-                    service.name,
-                    last_good_deploy.commit_hash,
-                )
-                return False
-
-            AuditLog.objects.create(
-                actor="AI_REMEDIATOR",
-                action="ROLLBACK",
-                target=service.name,
-                metadata={
-                    "from_commit": latest_deploy.commit_hash if latest_deploy else "unknown",
-                    "to_commit": last_good_deploy.commit_hash,
-                    "reason": "CRASH_LOOP detected"
-                }
-            )
-
-            new_deploy = Deployment.objects.create(
-                service=service,
-                status=Deployment.Status.QUEUED,
-                commit_hash=last_good_deploy.commit_hash,
-                commit_message=f"Auto-Rollback: Reverted to {last_good_deploy.commit_hash[:7]}",
-                is_rollback=True,
-                rollback_from=latest_deploy,
-            )
-
-            try:
-                enqueue_smart_deploy_task(str(new_deploy.id), str(provider.id), skip_review=True)
-            except Exception as exc:  # pragma: no cover - broker/runtime failure
-                logger.exception(
-                    "Failed to enqueue auto-rollback deployment %s",
-                    new_deploy.id,
-                )
-                new_deploy.status = Deployment.Status.FAILED
-                new_deploy.finished_at = timezone.now()
-                new_deploy.build_logs = (
-                    (new_deploy.build_logs or "")
-                    + f"\n[ERROR] Failed to queue auto-rollback task: {exc}\n"
-                )
-                new_deploy.save(update_fields=["status", "finished_at", "build_logs", "updated_at"])
-                return False
-            logger.info("Rollback triggered for %s", service.name)
+        result = AutoRollbackEngine.trigger(
+            service=service,
+            trigger=Trigger.AI_CRASH_LOOP,
+            reason_detail=(
+                f"CRASH_LOOP detected. Latest deployment: {latest_deploy.commit_hash[:7] if latest_deploy and latest_deploy.commit_hash else 'unknown'}"
+            ),
+            failed_deployment=latest_deploy,
+        )
+        if result.fired:
+            logger.info("Rollback triggered for %s (rollback_id=%s)", service.name, result.rollback_id)
             return True
 
-        logger.warning("No previous good deployment found for %s", service.name)
+        logger.info("Auto-rollback not fired for %s: %s", service.name, result.reason)
         return False

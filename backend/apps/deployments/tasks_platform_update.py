@@ -24,19 +24,50 @@ def platform_update_task(self, update_id: str):
 
 
 
-@shared_task(bind=True, max_retries=0)
+@shared_task(bind=True, max_retries=2, default_retry_delay=30)
 def platform_rollback_task(self, update_id: str):
-    """Execute platform rollback in background (avoids blocking the request thread)."""
+    """Execute platform rollback in background (avoids blocking the request thread).
+
+    Retries on transient failures (network blips during git fetch / install.sh)
+    up to max_retries with a 30s backoff. Uses a cache lock to deduplicate
+    concurrent rollback requests for the same update.
+    """
+    from django.core.cache import cache
+
     from services.platform_updater import _rollback
 
     from .models_updates import PlatformUpdate
 
-    try:
-        update = PlatformUpdate.objects.get(id=update_id)
-    except PlatformUpdate.DoesNotExist:
-        return
+    lock_key = f"platform-rollback:{update_id}"
+    if not cache.add(lock_key, "1", timeout=1800):
+        logger.warning(
+            "Platform rollback task: duplicate rollback ignored for %s", update_id,
+        )
+        return {"status": "skipped", "reason": "already_running"}
 
-    _rollback(update)
+    try:
+        try:
+            update = PlatformUpdate.objects.get(id=update_id)
+        except PlatformUpdate.DoesNotExist:
+            return {"status": "missing"}
+
+        _rollback(update)
+        return {"status": update.status}
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        # Retry on transient errors (network, git fetch blip) — _rollback
+        # already records FAILED state for permanent errors.
+        logger.exception(
+            "Platform rollback task raised for %s (attempt %s): %s",
+            update_id, self.request.retries + 1, exc,
+        )
+        try:
+            raise self.retry(exc=exc)
+        except self.MaxRetriesExceededError:
+            cache.delete(lock_key)
+            return {"status": "failed", "error": str(exc)}
+    finally:
+        # Release the lock so a future manual rollback can proceed.
+        cache.delete(lock_key)
 
 
 
