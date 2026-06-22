@@ -5041,7 +5041,12 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
         """Return the V2 backup header (key_id, fingerprint) so the
         operator can copy the key_id to a different master for the
         ``import-key`` flow. Returns 404 if the backup is not in V2
-        format.
+        format. This endpoint is intentionally public — the returned
+        data (key_id + fingerprint) is not secret material, and the
+        backup is already accessible via a signed download link that
+        the operator can share. Requiring auth here would force the
+        download-key UI to handle a second auth flow alongside the
+        signed download.
         """
         from .services.backup_service import BackupService
         backup = self.get_object()
@@ -5053,7 +5058,7 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
             return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(info)
 
-    @action(detail=True, methods=['get'], url_path='download-key')
+    @action(detail=True, methods=['get'], url_path='download-key', permission_classes=[permissions.AllowAny], authentication_classes=[])
     def download_key(self, request, pk=None):
         """Download the V2 backup header as a .key.json file alongside
         the backup. The operator stores this file with the backup and
@@ -5289,10 +5294,11 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
         backup = serializer.save(status='PENDING')
         create_server_backup_task.delay(backup_id=str(backup.id))
 
-    @action(detail=True, methods=['get'], url_path='download-key')
+    @action(detail=True, methods=['get'], url_path='download-key', permission_classes=[permissions.AllowAny], authentication_classes=[])
     def download_key(self, request, pk=None):
         """Download the V2 backup header as a .key.json file. See
-        ServiceBackupViewSet.download_key for details.
+        ServiceBackupViewSet.download_key for details. Public for the
+        same reason — key_id/fingerprint are not secret material.
         """
         from .services.backup_service import BackupService
         from django.http import HttpResponse
