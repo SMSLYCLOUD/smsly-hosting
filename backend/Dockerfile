@@ -17,21 +17,23 @@ RUN apt-get update \
     dnsutils \
     net-tools \
     iptables \
-    # SECURITY: removed from runtime - install via builder stage
-    # TODO: move docker-ce-cli + docker-buildx-plugin to a dedicated builder
-    # stage and COPY --from=builder only the static binaries needed at
-    # runtime. Installing the Docker apt repo into the runtime image enlarges
-    # the attack surface (extra signed keys, persistent apt source) for a
-    # client we only invoke against a remote socket-proxy.
-    # && install -m 0755 -d /etc/apt/keyrings \
-    # && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
-    # && chmod a+r /etc/apt/keyrings/docker.asc \
-    # && echo \
-    # "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian \
-    # $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
-    # tee /etc/apt/sources.list.d/docker.list > /dev/null \
-    # && apt-get update \
-    # && apt-get install -y docker-ce-cli docker-buildx-plugin \
+    # SECURITY: the docker CLI is installed so the celery worker can
+    # provision addons (POSTGRES/REDIS/RABBITMQ) via the socket-proxy
+    # (DOCKER_HOST=tcp://socket-proxy:2375). The CLI talks to the proxy
+    # over the internal smsly-net network, never directly to the host
+    # docker socket. The CLI binary is read-only at runtime (no docker
+    # daemon is started in this container). The previous build skipped
+    # this and addon provisioning failed with
+    # "No such file or directory: 'docker'".
+    && install -m 0755 -d /etc/apt/keyrings \
+    && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
+    && chmod a+r /etc/apt/keyrings/docker.asc \
+    && echo \
+    "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian \
+    $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+    tee /etc/apt/sources.list.d/docker.list > /dev/null \
+    && apt-get update \
+    && apt-get install -y docker-ce-cli docker-buildx-plugin \
     # Install Nixpacks (Current safest method)
     && curl -sL https://nixpacks.com/install.sh | bash \
     && rm -rf /var/lib/apt/lists/*
