@@ -47,6 +47,55 @@ def auto_authenticate_nodes_task():
     return count
 
 
+@shared_task(name="apps.deployments.tasks.check_agent_heartbeats_task")
+def check_agent_heartbeats_task():
+    """
+    Periodic task (every 60s) to detect silent agent outages.
+
+    Each lite agent's registrar posts a heartbeat every 30s. If a
+    node has stopped reporting for >120s (4 missed heartbeats)
+    this task flips its status to OFFLINE — even if the master's
+    own /health probe is still passing (which can happen if the
+    agent is up but the celery worker has crashed and the
+    registrar's HTTP path is still answering).
+
+    Decoupled from the API health probe so an inbound-vs-outbound
+    outage is diagnosable: the dashboard shows
+    ``last_health_check`` (master→agent) and
+    ``last_agent_heartbeat_at`` (agent→master) as separate
+    signals.
+    """
+    from datetime import timedelta
+
+    from apps.deployments.models_core import ManagedServer
+
+    cutoff = timezone.now() - timedelta(seconds=120)
+    stale = ManagedServer.objects.filter(
+        is_lite_agent=True,
+        agent_ready=True,
+        last_agent_heartbeat_at__lt=cutoff,
+    ).exclude(status=ManagedServer.Status.OFFLINE)
+
+    flipped = 0
+    for server in stale:
+        old_status = server.status
+        server.status = ManagedServer.Status.OFFLINE
+        # Don't reset agent_ready on a missed heartbeat — the
+        # registrar may just be restarting. Only mark as
+        # degraded so operators can see the node hasn't
+        # fully fallen out of the cluster yet.
+        server.save(update_fields=["status", "updated_at"])
+        if old_status != ManagedServer.Status.OFFLINE:
+            logger.warning(
+                "Agent %s marked OFFLINE: no registrar heartbeat since %s",
+                server.name, server.last_agent_heartbeat_at,
+            )
+            flipped += 1
+    if flipped:
+        logger.info("check_agent_heartbeats_task: flipped %d node(s) to OFFLINE", flipped)
+    return flipped
+
+
 
 @shared_task(name="apps.deployments.tasks.check_managed_servers_health_task")
 def check_managed_servers_health_task():

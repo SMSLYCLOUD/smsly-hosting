@@ -189,6 +189,21 @@ urlpatterns = [
     # Node-to-node auto token exchange
     path('auth/node-token-exchange/', node_token_exchange, name='node-token-exchange'),
     path('auth/node-token-exchange-hmac/', node_token_exchange_via_gateway, name='node-token-exchange-hmac'),
+    # Agent self-registration (HMAC auth via gateway_secret, no user session).
+    # Explicit URLs (not just router actions) so the views run without
+    # IsAuthenticated/IsAdminUser. The viewset's `agent_ready` and
+    # `agent_heartbeat` actions authenticate via the per-server
+    # gateway_secret (see services/agent_registrar_auth.py).
+    path(
+        'servers/<uuid:pk>/agent-ready/',
+        ManagedServerViewSet.as_view({'post': 'agent_ready'}),
+        name='server-agent-ready',
+    ),
+    path(
+        'servers/<uuid:pk>/agent-heartbeat/',
+        ManagedServerViewSet.as_view({'post': 'agent_heartbeat'}),
+        name='server-agent-heartbeat',
+    ),
     path('deployments/remote-trigger/', RemoteTriggerView.as_view(), name='deployment-remote-trigger'),
     # Device trust — hardware fingerprint-based device enrollment
     path('devices/register/', register_device, name='device-register'),

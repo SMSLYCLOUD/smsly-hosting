@@ -95,6 +95,14 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - FIELD_ENCRYPTION_KEY=${FIELD_ENCRYPTION_KEY:?FIELD_ENCRYPTION_KEY must be set in .env}
+      # Node identity + master endpoints. The registrar (and any
+      # inter-node code that needs the master's URL) reads these.
+      # MASTER_API_URL is the WireGuard mesh IP (fast, encrypted,
+      # always reachable inside the VPN). MASTER_API_URL_FALLBACK
+      # is the public IP — used only during the bootstrap window
+      # before WireGuard is up, or if the mesh interface drops.
+      - MASTER_API_URL=http://${MASTER_MESH_IP:-10.100.0.1}
+      - MASTER_API_URL_FALLBACK=http://${MASTER_IP:?MASTER_IP must be set in .env}
     depends_on:
       socket-proxy:
         condition: service_healthy
@@ -102,6 +110,11 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+    volumes:
+      # backups_data: shared with the master so backup encryption keys
+      # downloaded via /api/v1/servers/{id}/download-key/ are persisted
+      # locally and the node can restore without re-prompting.
+      - backups_data:/app/backups
     labels:
       - traefik.enable=true
       - traefik.http.routers.agent-api.rule=PathPrefix(`/api`) || PathPrefix(`/health`)
@@ -131,6 +144,8 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - FIELD_ENCRYPTION_KEY=${FIELD_ENCRYPTION_KEY:?FIELD_ENCRYPTION_KEY must be set in .env}
+      - MASTER_API_URL=http://${MASTER_MESH_IP:-10.100.0.1}
+      - MASTER_API_URL_FALLBACK=http://${MASTER_IP:?MASTER_IP must be set in .env}
     depends_on:
       backend:
         condition: service_healthy
@@ -140,9 +155,71 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+    volumes:
+      - backups_data:/app/backups
     networks:
       - smsly-net
       - socket-proxy
+
+  # ============================================================
+  # Agent Registrar — self-registration + heartbeats to master
+  # ============================================================
+  # A small long-running service whose only job is to make this
+  # agent's boot state visible to the master. On startup it
+  # POSTs /api/v1/servers/{id}/agent-ready/ (HMAC-authenticated
+  # with the per-server gateway_secret). It then sends a
+  # heartbeat every 30s with the agent's runtime snapshot
+  # (docker version, image tags, host uptime, disk/mem).
+  #
+  # If the master is unreachable (e.g. WireGuard is still coming
+  # up), the registrar retries with exponential backoff and
+  # never gives up. The master's check_agent_heartbeats_task
+  # flips the node's status to OFFLINE if no heartbeat has been
+  # received in >120s, so a stuck registrar is visible in the
+  # dashboard.
+  agent-registrar:
+    image: python:3.12-alpine
+    restart: unless-stopped
+    command: >
+      sh -c '
+        apk add --no-cache docker-cli curl tzdata >/dev/null 2>&1 || true;
+        pip install --no-cache-dir requests >/dev/null 2>&1 || true;
+        python /usr/local/bin/agent_registrar.py
+      '
+    env_file: ../../.env
+    environment:
+      - MASTER_API_URL=http://${MASTER_MESH_IP:-10.100.0.1}
+      - MASTER_API_URL_FALLBACK=http://${MASTER_IP:?MASTER_IP must be set in .env}
+      - SERVER_ID=${SMSLY_NODE_ID:?SMSLY_NODE_ID must be set in .env}
+      - GATEWAY_SECRET=${GATEWAY_SECRET:?GATEWAY_SECRET must be set in .env}
+      - HEARTBEAT_INTERVAL=${AGENT_HEARTBEAT_INTERVAL:-30}
+      - REGISTER_ON_START=true
+      - LOG_LEVEL=${AGENT_REGISTRAR_LOG_LEVEL:-INFO}
+      - TZ=${TZ:-UTC}
+    volumes:
+      - ../../backend/agent_registrar.py:/usr/local/bin/agent_registrar.py:ro
+      # Mount the docker socket read-only so the registrar can
+      # read docker version / image list for its runtime snapshot.
+      # This is a *read-only* mount — the registrar cannot start
+      # or stop containers. The socket-proxy (above) is the
+      # privileged path for container management.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      # The registrar is a long-running Python process; if it's
+      # stuck the process supervisor won't restart it (no
+      # `restart: on-failure` on a healthcheck failure). We use
+      # `pgrep` to check the process is alive — simpler and
+      # more reliable than the touch-file approach.
+      test: ["CMD-SHELL", "pgrep -f 'python /usr/local/bin/agent_registrar.py' >/dev/null || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - smsly-net
 
   # ============================================================
   # Traefik (Edge router for local apps)
@@ -175,6 +252,7 @@ services:
 
 volumes:
   redis_data:
+  backups_data:
 
 networks:
   smsly-net:

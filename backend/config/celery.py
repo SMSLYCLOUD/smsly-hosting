@@ -195,6 +195,15 @@ app.conf.beat_schedule = {
         'schedule': 300.0,
         'options': {'expires': 300.0},
     },
+    # Agent registrar heartbeat check every 60s. Detects silent
+    # agent outages even when the master's /health probe is
+    # still passing (e.g. the agent's gunicorn is up but its
+    # celery worker is wedged).
+    'check-agent-heartbeats-every-60s': {
+        'task': 'apps.deployments.tasks_health.check_agent_heartbeats_task',
+        'schedule': 60.0,
+        'options': {'expires': 60.0},
+    },
     # Check health of all managed servers every 5 minutes
     'check-managed-servers-health-every-5m': {
         'task': 'apps.deployments.tasks_health.check_managed_servers_health_task',

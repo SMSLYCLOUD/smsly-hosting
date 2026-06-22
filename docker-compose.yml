@@ -364,25 +364,39 @@ services:
   # ============================================================
   # Docker Registry
   # ============================================================
+  # SECURITY MODEL: all nodes (master + workers + lite agents) reach
+  # the master via the WireGuard VPN (see wg_address on ManagedServer).
+  # The VPN is the security boundary — port 5000 is bound to 0.0.0.0
+  # but the only routable path from any node is via wg0.
+  #
+  # No htpasswd: VPN auth is sufficient. Keeping htpasswd would force
+  # every node to configure docker credentials for every image pull,
+  # and the registry's TLS cert would also need to be trusted on every
+  # node. The VPN already provides both authentication and encryption.
+  #
+  # TLS is kept (REGISTRY_HTTP_TLS_*) so the registry encrypts traffic
+  # inside the VPN (defense in depth) and the cert can be reused by
+  # Traefik for the public registry.<DOMAIN> route. Nodes that prefer
+  # plaintext can use --insecure-registry=registry.<DOMAIN> or the
+  # raw port 5000 over the VPN.
+  # ============================================================
   registry:
     # TODO: pin to digest via dependabot/renovate (Renovate: digest-update).
     image: registry:2.8.3
     restart: unless-stopped
     ports:
-      # SECURITY: registry exposed on all interfaces (0.0.0.0:5000) so
-      # that remote nodes can pull images over the same network. The TLS
-      # cert + htpasswd provide the auth layer. For additional isolation,
-      # restrict at the firewall level (e.g. only allow node IPs).
+      # Bind on all interfaces so nodes on the VPN (wg0) can reach it.
+      # The 0.0.0.0 bind also covers the public NIC for Traefik to
+      # terminate the public route. Restrict at the firewall if
+      # additional isolation is needed.
       - "5000:5000"
     environment:
-      REGISTRY_AUTH: htpasswd
-      REGISTRY_AUTH_HTPASSWD_REALM: SMSLY Registry
-      REGISTRY_AUTH_HTPASSWD_PATH: /auth/htpasswd
+      # No REGISTRY_AUTH — anonymous pulls are fine inside the VPN.
+      # Remove the env vars and the auth/htpasswd volume mount.
       REGISTRY_HTTP_TLS_CERTIFICATE: /certs/registry.crt
       REGISTRY_HTTP_TLS_KEY: /certs/registry.key
     volumes:
       - registry_data:/var/lib/registry
-      - ./auth:/auth:ro
       - ./certs:/certs:ro
     healthcheck:
       # The registry:2.8.3 image is scratch-based with no shell and no
@@ -396,10 +410,11 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-    # Traefik labels for external node pulls via HTTPS.
-    # Nodes configure their docker daemon with the registry's htpasswd
-    # credentials and pull via https://registry.<DOMAIN>/v2/<image>.
-    # The TLS cert at ./certs/registry.crt must be trusted by the node.
+    # Traefik labels for the public registry.<DOMAIN> route.
+    # Inside the VPN, nodes can use either:
+    #   - https://registry.<DOMAIN>/v2/... (via Traefik, same LE cert)
+    #   - https://<master_vpn_ip>:5000/v2/... (direct, registry's own cert)
+    # Both work with --insecure-registry or after trusting the cert.
     labels:
       - traefik.enable=true
       - traefik.docker.network=smsly-net
@@ -407,7 +422,9 @@ services:
       - traefik.http.routers.registry.entrypoints=websecure
       - traefik.http.routers.registry.tls=true
       - traefik.http.routers.registry.tls.certresolver=letsencrypt
+      - traefik.http.routers.registry.priority=200
       - traefik.http.services.registry.loadbalancer.server.port=5000
+      - traefik.http.services.registry.loadbalancer.server.scheme=https
       - managed_by=smsly-hosting
     networks:
       - smsly-net
