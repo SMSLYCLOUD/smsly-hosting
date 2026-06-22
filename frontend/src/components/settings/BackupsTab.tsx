@@ -3,8 +3,9 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Loader2, Download, RotateCcw, Trash2, Plus, Clock, Save, AlertCircle, CheckCircle, FileKey } from 'lucide-react';
+import { Loader2, Download, RotateCcw, Trash2, Plus, Clock, Save, AlertCircle, CheckCircle, FileKey, Key } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import api from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
@@ -24,7 +25,14 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
     const [backups, setBackups] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [creating, setCreating] = useState(false);
-    
+
+    // Encryption key prompt (shown when restoring a cross-master backup)
+    const [keyPromptOpen, setKeyPromptOpen] = useState(false);
+    const [keyPromptValue, setKeyPromptValue] = useState('');
+    const [keyPromptBackupId, setKeyPromptBackupId] = useState<string | null>(null);
+    const [keyPromptError, setKeyPromptError] = useState<string>('');
+    const [keyPromptSubmitting, setKeyPromptSubmitting] = useState(false);
+
     // Restore progress tracking
     const [restoringId, setRestoringId] = useState<string | null>(null);
     const [restoreStatus, setRestoreStatus] = useState<string>('');
@@ -90,29 +98,59 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
         }
     };
 
-    const handleRestore = async (id: string) => {
+    const handleRestore = async (id: string, encryptionKey?: string) => {
         if (!await confirm({ title: 'Restore backup?', message: 'Are you sure? This will overwrite the current service state.', variant: 'destructive', confirmText: 'Restore' })) return;
-        
+
         setRestoringId(id);
         setRestoreStatus('RESTORING');
         setDeploymentStatus('');
         setDeploymentProgress(0);
         setDeploymentLogs('');
-        
+
         try {
-            await api.post(`/backups/${id}/restore/`, { confirm: true });
+            await api.post(`/backups/${id}/restore/`, { confirm: true, ...(encryptionKey ? { encryption_key: encryptionKey } : {}) });
             toast({ title: "Restore Started", description: "Service will restart once restored. Monitoring deployment progress..." });
-            
+
             // Start monitoring deployment status
             monitorDeploymentAfterRestore(id);
-            
+
             // Connect WebSocket for real-time updates
             connectWebSocket(id);
-            
-        } catch (err) {
-            toast({ title: "Error", description: "Failed to trigger restore.", variant: "destructive" });
+
+        } catch (err: any) {
+            const data = err?.response?.data;
+            // If the backup needs an encryption key, show the key prompt
+            if (data?.error_code === 'ENCRYPTION_KEY_REQUIRED') {
+                setKeyPromptBackupId(id);
+                setKeyPromptValue('');
+                setKeyPromptError(data?.error || 'Encryption key required');
+                setKeyPromptOpen(true);
+                setRestoringId(null);
+                setRestoreStatus('');
+                return;
+            }
+            const msg = data?.error || 'Failed to trigger restore.';
+            toast({ title: "Error", description: msg, variant: "destructive" });
             setRestoringId(null);
             setRestoreStatus('');
+        }
+    };
+
+    const submitEncryptionKey = async () => {
+        if (!keyPromptBackupId || !keyPromptValue.trim()) {
+            setKeyPromptError('Please enter the encryption key.');
+            return;
+        }
+        setKeyPromptSubmitting(true);
+        setKeyPromptError('');
+        try {
+            // Retry the restore with the encryption key
+            await handleRestore(keyPromptBackupId, keyPromptValue.trim());
+            setKeyPromptOpen(false);
+        } catch {
+            // handleRestore already shows the toast on error
+        } finally {
+            setKeyPromptSubmitting(false);
         }
     };
 
@@ -401,6 +439,26 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                                                 }} title="Download">
                                                     <Download className="w-4 h-4" />
                                                 </Button>
+                                                <Button variant="ghost" size="sm" onClick={async () => {
+                                                    try {
+                                                        const res = await api.get(`/backups/${backup.id}/download-key/`, { responseType: 'blob' });
+                                                        const blob = new Blob([res.data], { type: 'application/json' });
+                                                        const url = window.URL.createObjectURL(blob);
+                                                        const a = document.createElement('a');
+                                                        a.href = url;
+                                                        a.download = `backup-${backup.id}-key.json`;
+                                                        document.body.appendChild(a);
+                                                        a.click();
+                                                        a.remove();
+                                                        window.URL.revokeObjectURL(url);
+                                                        toast({ title: "Key downloaded", description: "Store this file with your backup. You'll need it to restore on another master." });
+                                                    } catch (err: any) {
+                                                        const msg = err?.response?.data?.error || 'Could not download key.';
+                                                        toast({ title: "Key download failed", description: msg, variant: "destructive" });
+                                                    }
+                                                }} title="Download encryption key info (for cross-master restore)">
+                                                    <Key className="w-4 h-4" />
+                                                </Button>
                                                 <Button variant="ghost" size="sm" onClick={() => handleDeleteBackup(backup.id)} title="Delete" className="text-red-400 hover:text-red-500">
                                                     <Trash2 className="w-4 h-4" />
                                                 </Button>
@@ -624,5 +682,53 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                 </CardContent>
             </Card>
         </div>
+
+        {/* Encryption Key Prompt (shown when restoring a cross-master backup) */}
+        {keyPromptOpen && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+                <div className="bg-background border border-border rounded-lg p-6 max-w-md w-full mx-4 shadow-lg">
+                    <div className="flex items-center gap-2 mb-4">
+                        <Key className="h-5 w-5 text-amber-500" />
+                        <h3 className="text-lg font-semibold">Encryption Key Required</h3>
+                    </div>
+                    <p className="text-sm text-muted-foreground mb-4">
+                        {keyPromptError}
+                    </p>
+                    <p className="text-xs text-muted-foreground mb-4">
+                        This backup was encrypted on a different master. Enter the source master's
+                        backup encryption key to decrypt and restore it.
+                    </p>
+                    <Input
+                        type="password"
+                        placeholder="Backup encryption key"
+                        value={keyPromptValue}
+                        onChange={(e) => setKeyPromptValue(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') submitEncryptionKey(); }}
+                        autoFocus
+                        className="mb-4"
+                    />
+                    <div className="flex justify-end gap-2">
+                        <Button
+                            variant="outline"
+                            onClick={() => setKeyPromptOpen(false)}
+                            disabled={keyPromptSubmitting}
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            onClick={submitEncryptionKey}
+                            disabled={keyPromptSubmitting || !keyPromptValue.trim()}
+                        >
+                            {keyPromptSubmitting ? (
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            ) : (
+                                <Key className="mr-2 h-4 w-4" />
+                            )}
+                            Restore
+                        </Button>
+                    </div>
+                </div>
+            </div>
+        )}
     );
 }

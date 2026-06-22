@@ -5,7 +5,7 @@ import { DashboardShell } from '@/components/layout/DashboardShell';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Loader2, Download, RotateCcw, Archive, Trash2, Upload } from 'lucide-react';
+import { Loader2, Download, RotateCcw, Archive, Trash2, Upload, Key } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import api from '@/lib/api';
@@ -49,14 +49,24 @@ export default function ServerBackupsPage() {
         }
     };
 
-    const handleRestore = async (backupId: string) => {
+    const handleRestore = async (backupId: string, encryptionKey?: string) => {
         if (!await confirm({ title: 'Restore server backup?', message: 'This will overwrite current state. Are you sure?', variant: 'destructive', confirmText: 'Restore' })) return;
         setRestoringId(backupId);
         try {
-            await api.post(`/server/backups/${backupId}/restore/`, { confirm: true });
+            await api.post(`/server/backups/${backupId}/restore/`, { confirm: true, ...(encryptionKey ? { encryption_key: encryptionKey } : {}) });
             toast({ title: "Restore Started", description: "Server will restart once restore is complete." });
         } catch (err: any) {
-            const msg = err?.response?.data?.error || "Failed to trigger restore.";
+            const data = err?.response?.data;
+            if (data?.error_code === 'ENCRYPTION_KEY_REQUIRED') {
+                const key = window.prompt(
+                    `${data.error}\n\nEnter the backup encryption key:`,
+                );
+                if (key && key.trim()) {
+                    return handleRestore(backupId, key.trim());
+                }
+                return;
+            }
+            const msg = data?.error || "Failed to trigger restore.";
             toast({ title: "Error", description: msg, variant: "destructive" });
         } finally {
             setRestoringId(null);
@@ -202,6 +212,26 @@ export default function ServerBackupsPage() {
                                                         }
                                                     }} title="Download">
                                                         <Download className="w-4 h-4" />
+                                                    </Button>
+                                                    <Button variant="ghost" size="sm" onClick={async () => {
+                                                        try {
+                                                            const res = await api.get(`/server/backups/${backup.id}/download-key/`, { responseType: 'blob' });
+                                                            const blob = new Blob([res.data], { type: 'application/json' });
+                                                            const url = window.URL.createObjectURL(blob);
+                                                            const a = document.createElement('a');
+                                                            a.href = url;
+                                                            a.download = `backup-${backup.id}-key.json`;
+                                                            document.body.appendChild(a);
+                                                            a.click();
+                                                            a.remove();
+                                                            window.URL.revokeObjectURL(url);
+                                                            toast({ title: "Key downloaded", description: "Store this file with your backup." });
+                                                        } catch (err: any) {
+                                                            const msg = err?.response?.data?.error || 'Could not download key.';
+                                                            toast({ title: "Key download failed", description: msg, variant: "destructive" });
+                                                        }
+                                                    }} title="Download encryption key info">
+                                                        <Key className="w-4 h-4" />
                                                     </Button>
                                                 </>
                                             )}
