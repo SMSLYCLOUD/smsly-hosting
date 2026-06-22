@@ -2026,8 +2026,8 @@ export const cloudProviderApi = {
 
 export const ecosystemApi = {
   bulkUpdateEnvironment: (data: { app_ids: string[]; env_vars: Record<string, string> }) =>
-    api.post('/ecosystem/bulk-update-environment/', data).then(r => r.data),
-  cachedScan: () => api.get('/ecosystem/cached-scan/').then(r => r.data.has_cache ? r.data.plan : null),
+    api.post('/cloud/ecosystem/bulk-update-environment/', data).then(r => r.data),
+  cachedScan: () => api.get('/cloud/ecosystem/cached-scan/').then(r => r.data.has_cache ? r.data.plan : null),
 };
 
 // ─── Database Replicas API ───────────────────────────────────────────────────
