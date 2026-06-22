@@ -683,7 +683,6 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
             </Card>
         </div>
 
-        {/* Encryption Key Prompt (shown when restoring a cross-master backup) */}
         {keyPromptOpen && (
             <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
                 <div className="bg-background border border-border rounded-lg p-6 max-w-md w-full mx-4 shadow-lg">
