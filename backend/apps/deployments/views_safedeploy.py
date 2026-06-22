@@ -131,14 +131,29 @@ class PreviewEnvironmentViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated, CanManagePreviews]
 
     def _user_owns_or_member(self, service):
-        if service.owner == self.request.user:
+        user = self.request.user
+        if not user or not user.is_authenticated:
+            # Mirror views.py:756-759 — guard against AnonymousUser being
+            # passed into FK lookups. Django's Q(owner=user) would raise
+            # TypeError: Cannot cast AnonymousUser to int.
+            return False
+        if service.owner == user:
             return True
         team = getattr(service.project, 'team', None)
-        return bool(team and team.members.filter(user=self.request.user).exists())
+        return bool(team and team.members.filter(user=user).exists())
 
     def get_queryset(self):
+        user = self.request.user
+        if not user or not user.is_authenticated:
+            # Same defensive pattern as ServiceViewSet.get_queryset
+            # (views.py:756-759). The viewset default IsAuthenticated makes
+            # this unreachable in normal flow, but guard against future
+            # regressions where a public @action is added on this viewset
+            # (cf. ServiceBackupViewSet.download_key which previously
+            # crashed with AnonymousUser cast).
+            return self.queryset.none()
         service_id = self.kwargs.get('service_pk')
-        allowed_services = Service.objects.filter(get_team_q_filter(self.request.user))
+        allowed_services = Service.objects.filter(get_team_q_filter(user))
         qs = self.queryset.filter(
             Q(service__in=allowed_services)
         ).distinct()
@@ -298,9 +313,17 @@ class DeploymentApprovalViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated, CanApproveDeployment]
 
     def get_queryset(self):
+        user = self.request.user
+        if not user or not user.is_authenticated:
+            # Defensive: same pattern as ServiceViewSet.get_queryset
+            # (views.py:756-759) and PreviewEnvironmentViewSet above. The
+            # viewset default IsAuthenticated keeps this unreachable in
+            # normal flow, but a future public @action on this viewset
+            # would otherwise raise TypeError on the FK lookup below.
+            return DeploymentApproval.objects.none()
         service_id = self.kwargs.get('service_pk')
         qs = DeploymentApproval.objects.filter(
-            Q(service__owner=self.request.user) | Q(service__project__team__members__user=self.request.user)
+            Q(service__owner=user) | Q(service__project__team__members__user=user)
         ).distinct()
         if service_id:
             return qs.filter(service_id=service_id)
