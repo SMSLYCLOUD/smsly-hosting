@@ -18,6 +18,8 @@ from .models import (  # type: ignore[attr-defined]
     PlatformConfig,
     Service,
 )
+
+logger = logging.getLogger(__name__)
 from .models_addons import Addon
 from .models_backup import BackupSchedule
 from .models_cron import CronJob

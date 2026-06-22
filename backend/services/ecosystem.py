@@ -677,10 +677,12 @@ def analyze_ecosystem(repos_data: list[dict], github_token: str | None = None, a
                 raw_configs = scan.get('configs', {})
                 critical_configs = [(k, v) for k, v in raw_configs.items() if any(p in os.path.basename(k) for p in priority_files)]
 
-                # Sort by priority, then limit to top 4 files to prevent token bloat
-                def _sort_key(item):
+                # Sort by priority, then limit to top 4 files to prevent token bloat.
+                # Bind `priority_files` explicitly to insulate the closure from any
+                # later re-binding of that name in the enclosing loop.
+                def _sort_key(item, _priority_files=priority_files):
                     bname = os.path.basename(item[0])
-                    for i, pf in enumerate(priority_files):
+                    for i, pf in enumerate(_priority_files):
                         if pf in bname:
                             return i
                     return 99
