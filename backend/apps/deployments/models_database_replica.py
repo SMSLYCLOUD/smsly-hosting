@@ -179,10 +179,10 @@ class DatabaseReplica(models.Model):
         single place to change.
         """
         return {
-            SslMode.DISABLE: "disable",
-            SslMode.ALLOW: "allow",
-            SslMode.PREFER: "prefer",
-            SslMode.REQUIRE: "require",
-            SslMode.VERIFY_CA: "verify-ca",
-            SslMode.VERIFY_FULL: "verify-full",
+            self.SslMode.DISABLE: "disable",
+            self.SslMode.ALLOW: "allow",
+            self.SslMode.PREFER: "prefer",
+            self.SslMode.REQUIRE: "require",
+            self.SslMode.VERIFY_CA: "verify-ca",
+            self.SslMode.VERIFY_FULL: "verify-full",
         }.get(self.ssl_mode, "prefer")

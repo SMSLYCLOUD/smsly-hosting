@@ -1,0 +1,39 @@
+target-version = "py311"
+extend-exclude = [
+  "K8native",
+  "archive",
+  "node_modules",
+  ".venv",
+  "venv",
+  "**/__pycache__",
+  "**/migrations",
+]
+line-length = 120
+
+[lint]
+# Default rule set + a few extras for "deeper" checks. Keep this conservative:
+# - E/W: pycodestyle
+# - F: pyflakes (unused imports, undefined names, etc.)
+# - I: isort
+# - B: bugbear (common pitfalls)
+# - UP: pyupgrade (modernization)
+# - C4: comprehensions
+# - SIM: simplify
+# - RUF: ruff-specific
+select = ["E", "W", "F", "I", "B", "UP", "C4", "SIM", "RUF"]
+ignore = [
+  "E501",   # line length — handled by formatter, noisy in legacy
+  "B008",   # function call in default argument (Django idiomatic)
+  "B904",   # raise from in except (false positives in test code)
+  "E402",   # module-level import not at top (we use sys.path hacks)
+  "E731",   # lambda assignment (acceptable in tests/scripts)
+  "SIM108", # ternary instead of if/else (style preference)
+  "UP015",  # redundant open() mode="r" (we keep explicit)
+  "UP032",  # use f-string instead of format (legacy)
+]
+
+[lint.per-file-ignores]
+"**/tests/**" = ["B", "SIM", "RUF"]
+"**/scripts/**" = ["E", "W", "B", "SIM", "RUF"]
+"**/migrations/**" = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF"]
+"conftest.py" = ["E402"]

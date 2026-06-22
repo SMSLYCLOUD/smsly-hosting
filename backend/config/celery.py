@@ -9,7 +9,11 @@ if os.name == "nt":
     try:
         import platform
         # mypy doesn't see platform._wmi (implementation detail of stdlib on Windows).
-        setattr(platform, "_wmi", None)  # type: ignore[attr-defined]  # noqa: E501
+        # setattr with a constant string is intentional here: we are patching a
+        # private stdlib implementation detail on Python 3.14. A typo would
+        # silently miss the workaround, but using setattr keeps the same line
+        # structure if the attribute name ever changes upstream.
+        setattr(platform, "_wmi", None)  # type: ignore[attr-defined]  # noqa: B010
     except Exception:
         pass
 

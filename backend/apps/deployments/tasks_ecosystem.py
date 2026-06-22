@@ -700,11 +700,15 @@ def _resolve_env_placeholders(
 
         # General case: resolve every {{...}} token inside the string.
         # This handles embedded placeholders like "{{POSTGRES_URL}}/identity".
+        # Bind `key` and `value_text` into the closure defaults so that if
+        # _replacer is ever retained beyond this iteration (async, queued,
+        # cached), it still sees the value it was created for instead of the
+        # last iteration's late-bound values.
         if "{{" in value_text:
-            def _replacer(match: re.Match) -> str:
+            def _replacer(match: re.Match, _key=key, _value_text=value_text) -> str:
                 token = match.group(1).strip()
                 if token.upper().startswith("SERVICE:"):
-                    prefix = value_text[:match.start()]
+                    prefix = _value_text[:match.start()]
                     if re.search(r"[a-z][a-z0-9+.-]*://$", prefix, re.IGNORECASE):
                         ref_name = token[8:].strip()
                         return _service_placeholder_url(
@@ -713,7 +717,7 @@ def _resolve_env_placeholders(
                             as_authority=True,
                         )
                 resolved_val = _resolve_single_placeholder(
-                    token, key, created_services, shared_addons, shared_secrets,
+                    token, _key, created_services, shared_addons, shared_secrets,
                 )
                 return resolved_val if resolved_val is not None else match.group(0)
 
