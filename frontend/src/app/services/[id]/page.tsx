@@ -311,7 +311,10 @@ export default function ServiceDetailPage() {
                 }
             } catch (err) { console.error(err); }
         };
-        const interval = setInterval(refresh, 5000);
+        // Poll every 3s so health_status changes (driven by the 30s
+        // health-monitor beat) show up within a few seconds. Previous
+        // 5s was close to the user-perceived "stale" threshold.
+        const interval = setInterval(refresh, 3000);
         return () => clearInterval(interval);
     }, [id]);
 
