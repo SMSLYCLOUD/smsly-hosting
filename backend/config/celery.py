@@ -58,6 +58,7 @@ def register_extra_tasks(sender, **kwargs):  # pylint: disable=unused-argument
     import apps.deployments.services.autoscaler        # noqa: F401
     import apps.deployments.services.health_monitor    # noqa: F401
     import apps.deployments.services.provisioner       # noqa: F401
+    import apps.deployments.services.auto_rollback     # noqa: F401
     import apps.deployments.tasks_platform_update      # noqa: F401
     import apps.deployments.tasks_backup               # noqa: F401
     import apps.deployments.tasks_maintenance          # noqa: F401
@@ -257,6 +258,14 @@ app.conf.beat_schedule = {
         'task': 'apps.deployments.tasks.registry_garbage_collection_task',
         'schedule': 86400.0,
         'options': {'expires': 86400.0},
+    },
+    # Monitor stuck auto-rollback heartbeats every 5 minutes.
+    # Alerts when a rollback deployment stays QUEUED for too long
+    # (broker down, worker wedged, etc.).
+    'monitor-stuck-rollback-heartbeats-every-5m': {
+        'task': 'apps.deployments.services.auto_rollback.monitor_stuck_rollback_heartbeats',
+        'schedule': 300.0,
+        'options': {'expires': 300.0},
     },
 }
 

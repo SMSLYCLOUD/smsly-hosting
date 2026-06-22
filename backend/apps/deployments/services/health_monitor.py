@@ -546,18 +546,46 @@ def _trigger_restart(service, service_key: str) -> bool:
         # Guard: don't auto-restart if recent deployments keep failing.
         # This prevents restart storms when the issue is persistent
         # (bad code, missing env var, broken Dockerfile, etc.).
+        # The window/threshold matches ``AutoRollbackEngine`` so the
+        # fast-path here is a thin shim around the engine's check.
         from datetime import timedelta
+        from apps.deployments.services.auto_rollback import (
+            AUTO_ROLLBACK_THRESHOLD,
+            AUTO_ROLLBACK_WINDOW_MINUTES,
+        )
+        threshold = (
+            getattr(service, 'auto_rollback_threshold', None)
+            or AUTO_ROLLBACK_THRESHOLD
+        )
         recent_failures = Deployment.objects.filter(
             service=service,
             status=Deployment.Status.FAILED,
-            created_at__gte=timezone.now() - timedelta(hours=1),
+            is_rollback=False,
+            created_at__gte=(
+                timezone.now()
+                - timedelta(minutes=AUTO_ROLLBACK_WINDOW_MINUTES)
+            ),
         ).count()
-        if recent_failures >= 3:
+        if recent_failures >= threshold:
             logger.warning(
-                "Skipping auto-restart for %s: %d deployments failed in the last hour. "
-                "Manual intervention required.",
-                service.name, recent_failures,
+                "Skipping auto-restart for %s: %d deployments failed in the last "
+                "%d min. Triggering auto-rollback instead.",
+                service.name, recent_failures, AUTO_ROLLBACK_WINDOW_MINUTES,
             )
+            from apps.deployments.services.auto_rollback import (
+                AutoRollbackEngine,
+                Trigger,
+            )
+            AutoRollbackEngine.trigger(
+                service=service,
+                trigger=Trigger.HEALTH_CHECK_FALLBACK,
+                reason_detail=(
+                    f"{recent_failures} deployments failed in the last hour; "
+                    f"health check restart aborted"
+                ),
+            )
+            service.health_status = "needs_manual_intervention"
+            service.save(update_fields=["health_status", "updated_at"])
             return False
 
         latest = Deployment.objects.filter(service=service).order_by("-created_at").first()

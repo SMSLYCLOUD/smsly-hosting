@@ -1823,11 +1823,21 @@ class ServiceViewSet(viewsets.ModelViewSet):
         """
         Instantly rollback a service to its last successful deployment.
         POST /api/v1/services/{id}/instant-rollback/
-        Body: { "message": "optional reason" } (Optional)
+        Body: { "confirm": true, "message": "optional reason" }
 
         This is the ONE-CLICK rollback that beats Railway.
         No need to find the deployment ID — just hit this endpoint.
         """
+        # Enforce explicit confirmation (mirrors /deployments/{id}/rollback/)
+        confirm = request.data.get('confirm')
+        if str(confirm).lower() != 'true':
+            return _error_response(
+                "ROLLBACK_CONFIRMATION_REQUIRED",
+                'Explicit confirmation required. Send "confirm": true.',
+                user_action="Retry instant-rollback with confirm=true.",
+                retryable=True,
+            )
+
         service = self.get_object()
         guard = ServerGuard.check_user_workload_allowed(getattr(service, 'server', None))
         if not guard["ok"]:
@@ -1858,6 +1868,25 @@ class ServiceViewSet(viewsets.ModelViewSet):
             .first()
         )
 
+        # CRITICAL: refuse no-op rollbacks. If the latest deployment is the
+        # same one we'd roll back to, there is no PRIOR good release to
+        # revert to — surface a clear error instead of silently redeploying
+        # the same commit/image.
+        if current and current.id == last_good.id:
+            return Response(
+                {
+                    'error': (
+                        'No prior successful deployment to roll back to. '
+                        'The most recent deployment is already the latest '
+                        'active release.'
+                    ),
+                    'code': 'ROLLBACK_NOOP',
+                    'deployment_id': str(current.id),
+                    'commit_hash': current.commit_hash,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
         # Create rollback deployment
         rollback_msg = f"INSTANT ROLLBACK to {last_good.commit_hash[:7]}"
         if reason:
@@ -1874,9 +1903,25 @@ class ServiceViewSet(viewsets.ModelViewSet):
         )
 
         provider = _resolve_provider_for_service(service)
-        if provider:
-            smart_deploy_task.delay(
-                deployment_id=str(rollback_deployment.id), provider_id=str(provider.id))
+        if not provider:
+            # Rollback was queued but there is no provider to run it on —
+            # fail loudly so the client can attach a provider and retry.
+            rollback_deployment.status = Deployment.Status.FAILED
+            rollback_deployment.error_message = (
+                'No active cloud provider available for this service.'
+            )
+            rollback_deployment.finished_at = timezone.now()
+            rollback_deployment.save(
+                update_fields=['status', 'error_message', 'finished_at', 'updated_at'],
+            )
+            return _error_response(
+                "ROLLBACK_PERMISSION_DENIED",
+                "No active provider available.",
+                details={"service_id": str(service.id)},
+                user_action="Attach an active provider to this service, then retry rollback.",
+            )
+        smart_deploy_task.delay(
+            deployment_id=str(rollback_deployment.id), provider_id=str(provider.id))
 
         AuditLog(
             actor=request.user.get_username(),
@@ -3612,9 +3657,20 @@ class DeploymentViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def rollback(self, request, pk=None):
         """
-        Rollback to this specific deployment.
-        Effectively triggers a new deployment using the commit hash/image
-        from this one.
+        Roll back (or forward) the service to this specific deployment.
+
+        Triggers a new deployment using the commit hash / image artifact
+        captured by ``target_deployment``. Only **successful** deployments
+        (ACTIVE or INACTIVE) are allowed as rollback targets — rolling back
+        to a FAILED or CANCELLED deployment would just re-run the broken
+        code, which is never what the user wants.
+
+        Refuses:
+          - FAILED / CANCELLED deployments (must pick a successful release).
+          - In-progress deployments (their commit/image may change while
+            the build runs).
+          - The deployment that is currently serving traffic (no-op — that
+            would redeploy the same broken commit).
         """
         # Enforce explicit confirmation for rollback operations
         confirm = request.data.get('confirm')
@@ -3632,7 +3688,30 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         if not guard["ok"]:
             return Response(guard, status=status.HTTP_400_BAD_REQUEST)
 
-        # Validate the target deployment
+        # Only successful deployments are valid rollback targets. Rolling back
+        # to a FAILED or CANCELLED row would just re-trigger the broken code.
+        successful = {
+            Deployment.Status.ACTIVE,
+            Deployment.Status.INACTIVE,
+        }
+        if target_deployment.status not in successful:
+            return _error_response(
+                "ROLLBACK_TARGET_NOT_SUCCESSFUL",
+                (
+                    f"Cannot rollback to a {target_deployment.status} deployment. "
+                    "Only successful (ACTIVE / INACTIVE) deployments can be rolled back to."
+                ),
+                details={
+                    "deployment_id": str(target_deployment.id),
+                    "status": target_deployment.status,
+                },
+                user_action=(
+                    "Pick a successful deployment from history (an ACTIVE or INACTIVE row), "
+                    "or use /instant-rollback/ to auto-select the last good release."
+                ),
+            )
+
+        # Validate the target deployment has a committed artifact to roll back to.
         if not target_deployment.commit_hash:
             return _error_response(
                 "ROLLBACK_ARTIFACT_MISSING",
@@ -3641,12 +3720,54 @@ class DeploymentViewSet(viewsets.ModelViewSet):
                 user_action="Choose a deployment that has a valid commit hash/image artifact.",
             )
 
-        if target_deployment.status != 'ACTIVE':
+        # Reject in-progress deployments — their commit_hash / image may change
+        # while the pipeline runs, so rolling back to "this row" is undefined.
+        in_progress = {
+            Deployment.Status.QUEUED,
+            Deployment.Status.BUILDING,
+            Deployment.Status.REVIEW,
+            Deployment.Status.DEPLOYING,
+            Deployment.Status.HEALTH_CHECK,
+            Deployment.Status.AWAITING_APPROVAL,
+        }
+        if target_deployment.status in in_progress:
             return _error_response(
-                "ROLLBACK_BLOCKED",
-                f"Cannot rollback to a {target_deployment.status} deployment. Only ACTIVE deployments can be rolled back to.",
-                details={"deployment_id": str(target_deployment.id), "status": target_deployment.status},
-                user_action="Pick a previous ACTIVE deployment.",
+                "ROLLBACK_IN_PROGRESS",
+                f"Cannot rollback to an in-progress ({target_deployment.status}) deployment.",
+                details={
+                    "deployment_id": str(target_deployment.id),
+                    "status": target_deployment.status,
+                },
+                user_action=(
+                    "Wait for the in-progress deployment to finish, or "
+                    "cancel it, then retry rollback."
+                ),
+            )
+
+        # Refuse to roll back to the deployment that is currently serving
+        # traffic — that would redeploy the same commit/image and silently
+        # no-op. Use Redeploy for force-rebuild of the current release, or
+        # pick a PRIOR deployment from history.
+        currently_active = (
+            Deployment.objects
+            .filter(service=service, status=Deployment.Status.ACTIVE)
+            .order_by('-created_at')
+            .first()
+        )
+        if currently_active and currently_active.id == target_deployment.id:
+            return _error_response(
+                "ROLLBACK_NOOP",
+                "Cannot rollback to the deployment that is currently active — that would redeploy the same commit/image.",
+                details={
+                    "deployment_id": str(target_deployment.id),
+                    "service_id": str(service.id),
+                    "commit_hash": target_deployment.commit_hash,
+                },
+                user_action=(
+                    "Pick a PRIOR deployment from history, or use /instant-rollback/ "
+                    "to auto-select the last good release, or use Redeploy if you "
+                    "just want to rebuild the current commit."
+                ),
             )
 
         # Create new deployment record for the rollback

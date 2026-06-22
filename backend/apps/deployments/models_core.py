@@ -413,6 +413,25 @@ class Service(TimeStampedModel):
     production_requires_backup = models.BooleanField(default=True)  # type: ignore[var-annotated]
     health_check_path = models.CharField(max_length=255, default='/health')  # type: ignore[var-annotated]
 
+    # Auto-rollback configuration (per-service opt-out + threshold override).
+    auto_rollback_enabled = models.BooleanField(  # type: ignore[var-annotated]
+        default=True,
+        help_text=(
+            "Allow this service to be auto-rolled-back when the platform "
+            "detects repeated failures or crash loops. Set to False for "
+            "sensitive workloads where you want manual control."
+        ),
+    )
+    auto_rollback_threshold = models.PositiveSmallIntegerField(  # type: ignore[var-annotated]
+        blank=True,
+        null=True,
+        help_text=(
+            "Optional per-service override for the number of consecutive "
+            "failed deployments before auto-rollback fires. Leave blank "
+            "to use the platform default (AUTO_ROLLBACK_THRESHOLD setting)."
+        ),
+    )
+
     # Deployment Strategy
     DEPLOY_STRATEGY_CHOICES = [
         ('ROLLING', 'Rolling Update'),

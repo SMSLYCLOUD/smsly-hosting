@@ -33,6 +33,7 @@ export function HealthTab({ serviceId, service: initialService }: HealthTabProps
     const [timeout, setTimeout_] = useState(5);
     const [retries, setRetries] = useState(3);
     const [autoRestart, setAutoRestart] = useState(true);
+    const [autoRollbackEnabled, setAutoRollbackEnabled] = useState(true);
     const [healthStatus, setHealthStatus] = useState('unknown');
 
     useEffect(() => {
@@ -56,6 +57,7 @@ export function HealthTab({ serviceId, service: initialService }: HealthTabProps
         setTimeout_(s.health_check_timeout ?? 5);
         setRetries(s.health_check_retries ?? 3);
         setAutoRestart(s.auto_restart ?? true);
+        setAutoRollbackEnabled(s.auto_rollback_enabled ?? true);
         setHealthStatus(s.health_status ?? 'unknown');
         setLoading(false);
     };
@@ -70,6 +72,7 @@ export function HealthTab({ serviceId, service: initialService }: HealthTabProps
                 health_check_timeout: timeout,
                 health_check_retries: retries,
                 auto_restart: autoRestart,
+                auto_rollback_enabled: autoRollbackEnabled,
             } as any);
             toast({ title: '✓ Health check settings saved' });
         } catch (err) {
@@ -238,6 +241,26 @@ export function HealthTab({ serviceId, service: initialService }: HealthTabProps
                         >
                             <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
                                 autoRestart ? 'left-6' : 'left-0.5'
+                            }`} />
+                        </button>
+                    </div>
+
+                    {/* Auto-Rollback Toggle */}
+                    <div className="flex items-center justify-between p-4 bg-muted/30 rounded-lg border border-border">
+                        <div>
+                            <label className="text-sm font-medium">Auto-Rollback</label>
+                            <p className="text-xs text-muted-foreground">
+                                Automatically roll back to the last successful deployment after repeated failures
+                            </p>
+                        </div>
+                        <button
+                            onClick={() => setAutoRollbackEnabled(!autoRollbackEnabled)}
+                            className={`relative w-12 h-6 rounded-full transition-colors ${
+                                autoRollbackEnabled ? 'bg-emerald-500' : 'bg-muted-foreground/30'
+                            }`}
+                        >
+                            <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
+                                autoRollbackEnabled ? 'left-6' : 'left-0.5'
                             }`} />
                         </button>
                     </div>

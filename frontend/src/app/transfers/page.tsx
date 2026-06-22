@@ -9,6 +9,7 @@ import { toast } from 'sonner';
 import { featureFlags, featureDisabledReason } from '@/lib/featureFlags';
 import { shouldShowAllNav } from '@/lib/nav-visibility';
 import { parseApiError } from '@/lib/apiError';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 
 export default function TransfersPage() {
     const [servers, setServers] = useState<any[]>([]);
@@ -18,6 +19,7 @@ export default function TransfersPage() {
     const [transfers, setTransfers] = useState<any[]>([]);
     const [transfersLoading, setTransfersLoading] = useState(false);
     const [targetDomain, setTargetDomain] = useState('');
+    const confirm = useConfirm();
 
     // Grouping structure for DnD
     const [groupedServices, setGroupedServices] = useState<Record<string, any[]>>({});
@@ -200,6 +202,17 @@ export default function TransfersPage() {
     const IN_PROGRESS_STATUSES = ['PREPARING', 'UPLOADING', 'RESTORING', 'DNS_CUTOVER', 'VERIFYING'];
 
     const handleRollback = async (transferId: string) => {
+        const transfer = transfers.find(t => t.id === transferId);
+        const deadline = transfer?.rollback_deadline
+            ? ` Rollback window expires ${new Date(transfer.rollback_deadline).toLocaleString()}.`
+            : '';
+        const ok = await confirm({
+            title: 'Rollback transfer?',
+            message: `Revert this transfer and reassign the service back to its source? This action cannot be undone once started.${deadline}`,
+            variant: 'destructive',
+            confirmText: 'Rollback',
+        });
+        if (!ok) return;
         try {
             await api.post(`/transfers/${transferId}/rollback/`);
             toast.success('Rollback initiated');

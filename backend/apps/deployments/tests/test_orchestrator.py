@@ -35,7 +35,12 @@ class OrchestratorStatusTransitionTests(TestCase):
             repository_url='https://github.com/test/app',
             branch='main',
             owner=self.user,
-            provider=self.provider
+            provider=self.provider,
+            # The new centralized engine defaults to a rolling-window
+            # threshold of 5 in 30 min. Pin the test service to the old
+            # consecutive-failures behavior so existing assertions hold.
+            auto_rollback_enabled=True,
+            auto_rollback_threshold=3,
         )
 
     @patch('services.orchestrator.ClusterManager')

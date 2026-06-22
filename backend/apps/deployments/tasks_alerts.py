@@ -447,6 +447,75 @@ def notify_deployment_success(deployment_id: str):
         return {"status": "error", "reason": str(exc)}
 
 
+@shared_task
+def notify_auto_rollback(service_id: str, trigger: str, reason: str, target_commit: str):
+    """
+    Notification fired by the centralized auto-rollback engine.
+
+    Dispatches to the same channels as ``_dispatch_failure_alert`` and
+    respects the per-service ``JULES_NOTIFY_*`` opt-in flags. Email
+    uses the Resend-aware ``_send_email_alert`` helper so operators
+    who configured ``RESEND_API_KEY`` get branded transactional email.
+    """
+    from apps.deployments.models import Service as ServiceModel
+
+    try:
+        service = ServiceModel.objects.get(id=service_id)
+    except ServiceModel.DoesNotExist:
+        logger.warning("notify_auto_rollback: Service %s not found", service_id)
+        return {"status": "error", "reason": "service_not_found"}
+
+    env_map = _load_service_env(service)
+    owner = getattr(service, "owner", None)
+    commit_short = target_commit[:7] if target_commit else "unknown"
+
+    title = f"Auto-Rollback ({trigger}): {service.name}"
+    subject = f"[SMSLY Hosting] {title}"
+    message = (
+        f"⚠️ SMSLY Hosting AUTO-ROLLBACK\n"
+        f"Service: {service.name}\n"
+        f"Trigger: {trigger}\n"
+        f"Reason: {reason}\n"
+        f"Reverting to commit: {commit_short}"
+    )
+
+    channel_results: dict[str, Any] = {}
+
+    if _service_flag(env_map, "JULES_NOTIFY_IN_APP", default=True):
+        channel_results["in_app"] = _create_in_app_notification(
+            owner,
+            title=title,
+            message=message,
+            event_type="auto_rollback",
+        )
+
+    if _service_flag(env_map, "JULES_NOTIFY_SMS", default=True):
+        channel_results["sms"] = _send_sms_alert(owner, service, message, env_map)
+
+    if _service_flag(env_map, "JULES_NOTIFY_EMAIL", default=True):
+        channel_results["email"] = _send_email_alert(owner, subject, message, env_map)
+
+    if _service_flag(env_map, "JULES_NOTIFY_SLACK", default=False):
+        channel_results["slack"] = _send_slack_alert(message, env_map)
+
+    if _service_flag(env_map, "JULES_NOTIFY_DISCORD", default=False):
+        channel_results["discord"] = _send_discord_alert(message, env_map)
+
+    delivered = [name for name, result in channel_results.items() if result.get("ok")]
+    failed = [name for name, result in channel_results.items() if result.get("ok") is False]
+
+    logger.info(
+        "Auto-rollback notification for %s: delivered=%s failed=%s",
+        service.name, delivered, failed,
+    )
+    return {
+        "status": "ok" if delivered else ("partial" if failed else "no_channels_configured"),
+        "delivered_channels": delivered,
+        "failed_channels": failed,
+        "channels": channel_results,
+    }
+
+
 def _send_slack_alert(message, env_map):
     """Send alert to Slack webhook."""
     try:

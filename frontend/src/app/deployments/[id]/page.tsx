@@ -13,6 +13,7 @@ import api from "@/lib/api";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { toast } from "sonner";
 
 export default function DeploymentWatchPage() {
   const params = useParams();
@@ -183,20 +184,38 @@ export default function DeploymentWatchPage() {
                                             </p>
                                             <Button variant="outline" className="w-full text-red-500 hover:bg-red-500/20 hover:text-red-500 border-red-500/30" onClick={async () => {
                                                 const confirmed = await confirm({
-                                                    title: "Rollback to previous?",
-                                                    message: "Are you sure you want to attempt a rollback to the previous version?",
+                                                    title: "Rollback to previous good version?",
+                                                    message: "This will redeploy the last successful release for this service. Continue?",
                                                     confirmText: "Yes, Rollback",
                                                     variant: "destructive"
                                                 });
-                                                if (confirmed) {
-                                                    setSpaceOpsState({ mode: 'recovering', intensity: 'high' });
-                                                    try {
-                                                        await api.post(`/deployments/${id}/rollback/`, { confirm: true });
-                                                        setSpaceOpsState({ mode: 'success', intensity: 'low' });
-                                                    } catch (err: any) {
-                                                        setSpaceOpsState({ mode: 'failed', intensity: 'high' });
-                                                        console.error("Rollback failed", err);
+                                                if (!confirmed) return;
+                                                setSpaceOpsState({ mode: 'recovering', intensity: 'high' });
+                                                try {
+                                                    // Use instant-rollback on the service so we get the
+                                                    // LAST GOOD ACTIVE release, not the current (broken)
+                                                    // deployment's commit.
+                                                    const serviceId = deployment?.service;
+                                                    if (!serviceId) {
+                                                        throw new Error('Cannot determine service for rollback');
                                                     }
+                                                    await api.post(
+                                                        `/services/${serviceId}/instant-rollback/`,
+                                                        { confirm: true },
+                                                    );
+                                                    setSpaceOpsState({ mode: 'success', intensity: 'low' });
+                                                    toast.success('Rollback initiated', {
+                                                        description: 'A new deployment is rolling back to the last good release.',
+                                                    });
+                                                } catch (err: any) {
+                                                    setSpaceOpsState({ mode: 'failed', intensity: 'high' });
+                                                    const msg =
+                                                        err?.response?.data?.error
+                                                        || err?.response?.data?.message
+                                                        || err?.message
+                                                        || 'Unknown error';
+                                                    toast.error('Rollback failed', { description: msg });
+                                                    console.error("Rollback failed", err);
                                                 }
                                             }}>
                                                 Initiate Rollback
