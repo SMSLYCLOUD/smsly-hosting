@@ -340,6 +340,7 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
     if (loading) return <div className="flex justify-center p-8"><Loader2 className="animate-spin" /></div>;
 
     return (
+        <>
         <div className="space-y-6">
             <Card>
                 <CardHeader>
@@ -694,7 +695,7 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                         {keyPromptError}
                     </p>
                     <p className="text-xs text-muted-foreground mb-4">
-                        This backup was encrypted on a different master. Enter the source master's
+                        This backup was encrypted on a different master. Enter the source master&apos;s
                         backup encryption key to decrypt and restore it.
                     </p>
                     <Input
@@ -722,12 +723,13 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                             ) : (
                                 <Key className="mr-2 h-4 w-4" />
-                            )}
-                            Restore
-                        </Button>
-                    </div>
-                </div>
-            </div>
-        )}
+                             )}
+                             Restore
+                         </Button>
+                     </div>
+                 </div>
+             </div>
+         )}
+        </>
     );
 }

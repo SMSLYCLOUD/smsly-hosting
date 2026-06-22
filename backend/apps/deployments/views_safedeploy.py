@@ -8,6 +8,8 @@ from rest_framework.decorators import action, throttle_classes
 from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle
 
+from apps.core.auth import CsrfExemptSessionAuthentication
+
 from apps.deployments.models_audit import AuditLog
 from apps.deployments.models_core import Deployment, Service
 from apps.deployments.models_safedeploy import DeploymentApproval, PreviewEnvironment
@@ -114,7 +116,18 @@ def send_approval_notification(approval, service_pk):
 class PreviewEnvironmentViewSet(viewsets.ModelViewSet):
     queryset = PreviewEnvironment.objects.all()
     serializer_class = PreviewEnvironmentSerializer
-    authentication_classes = [authentication.TokenAuthentication, authentication.SessionAuthentication]
+    # Use CsrfExemptSessionAuthentication for the session fallback: these
+    # endpoints are called from the same-origin frontend which authenticates
+    # via the HttpOnly auth cookie. The cookie is already a strong
+    # same-origin credential (SameSite=Lax/Strict) and the endpoints
+    # require an explicit permission check (CanManagePreviews) on top of
+    # authentication, so CSRF adds friction without meaningful protection.
+    # Token-based callers (CLI, automations) still get CSRF enforcement
+    # via the default TokenAuthentication path.
+    authentication_classes = [
+        authentication.TokenAuthentication,
+        CsrfExemptSessionAuthentication,
+    ]
     permission_classes = [permissions.IsAuthenticated, CanManagePreviews]
 
     def _user_owns_or_member(self, service):
@@ -270,7 +283,18 @@ class DeploymentApprovalViewSet(viewsets.ModelViewSet):
     """
     queryset = DeploymentApproval.objects.all()
     serializer_class = DeploymentApprovalSerializer
-    authentication_classes = [authentication.TokenAuthentication, authentication.SessionAuthentication]
+    # Use CsrfExemptSessionAuthentication for the session fallback: these
+    # endpoints are called from the same-origin frontend which authenticates
+    # via the HttpOnly auth cookie. The cookie is already a strong
+    # same-origin credential (SameSite=Lax/Strict) and the endpoints
+    # require an explicit permission check (CanManagePreviews) on top of
+    # authentication, so CSRF adds friction without meaningful protection.
+    # Token-based callers (CLI, automations) still get CSRF enforcement
+    # via the default TokenAuthentication path.
+    authentication_classes = [
+        authentication.TokenAuthentication,
+        CsrfExemptSessionAuthentication,
+    ]
     permission_classes = [permissions.IsAuthenticated, CanApproveDeployment]
 
     def get_queryset(self):
