@@ -1076,9 +1076,44 @@ def generate_caddyfile(config) -> str:
         header_regexp host .+
     }
     redir @redirectable https://{host}{uri} 308
-    handle {
+
+    handle /api/* {
         reverse_proxy backend:8000
     }
+    handle /ws/* {
+        reverse_proxy backend:8000
+    }
+    handle /health {
+        reverse_proxy backend:8000
+    }
+    handle /admin/* {
+        reverse_proxy backend:8000
+    }
+    handle /accounts/* {
+        reverse_proxy backend:8000
+    }
+    handle /static/* {
+        reverse_proxy backend:8000
+    }
+    handle /media/* {
+        reverse_proxy backend:8000
+    }
+    handle /grafana/* {
+        reverse_proxy grafana:3000
+    }
+    handle /grafana {
+        reverse_proxy frontend:3000
+    }
+    handle /ui {
+        redir / 301
+    }
+    handle /ui/* {
+        redir / 301
+    }
+    handle {
+        reverse_proxy frontend:3000
+    }
+    encode gzip
 }"""
         )
     # Only add the generic :80 catch-all when there is no platform domain.
