@@ -5,8 +5,15 @@
 set -e
 
 TRAEFIK_CONTAINER="${TRAEFIK_CONTAINER:-smsly-hosting-traefik-1}"
+# Traefik v3 exposes the /ping endpoint on the API port (default :8080),
+# NOT on the metrics entrypoint. The metrics entrypoint (whatever port
+# we map via --entrypoints.metrics.address=) serves Prometheus /metrics,
+# not /ping. The previous default of :8082 was a long-standing bug
+# that caused the watchdog to keep restarting a perfectly healthy traefik
+# every 90s. The variable name TRAEFIK_METRICS_HOST is kept for
+# backwards compatibility with existing env settings on upgrades.
 TRAEFIK_METRICS_HOST="${TRAEFIK_METRICS_HOST:-smsly-hosting-traefik-1}"
-TRAEFIK_METRICS_PORT="${TRAEFIK_METRICS_PORT:-8082}"
+TRAEFIK_METRICS_PORT="${TRAEFIK_METRICS_PORT:-8080}"
 CHECK_INTERVAL="${CHECK_INTERVAL:-30}"
 API_TIMEOUT="${API_TIMEOUT:-5}"
 MAX_FAILURES="${MAX_FAILURES:-3}"
