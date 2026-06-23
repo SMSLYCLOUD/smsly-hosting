@@ -148,6 +148,19 @@ password = "{password}" """
         "PGCAT_PRIMARY_READS_ENABLED", "true"
     ).lower() in ("1", "true", "yes")
 
+    # Build the optional replica suffix for each server list. Computed
+    # outside the f-string because Python <=3.11 forbids backslashes
+    # inside an f-string expression part (PEP 701 lifts this in 3.12,
+    # but the pgcat image ships Python 3.11).
+    def _replica_suffix():
+        if not replica_servers:
+            return ""
+        return ",\n    " + ",\n    ".join(
+            f'["{s[0]}", {s[1]}, "replica"]' for s in replica_servers
+        )
+
+    smsly_hosting_replica_suffix = _replica_suffix()
+
     toml_content = f"""[general]
 host = "0.0.0.0"
 port = 5432
@@ -167,7 +180,7 @@ pool_mode = "transaction"
 
 [pools.smsly_hosting.shards.0]
 servers = [
-    ["{db_host}", {db_port}, "primary"]{",\n    " + ",\n    ".join(f'["{s[0]}", {s[1]}, "replica"]' for s in replica_servers) if replica_servers else ""}
+    ["{db_host}", {db_port}, "primary"]{smsly_hosting_replica_suffix}
 ]
 database = "{db_name}"
 
@@ -178,7 +191,7 @@ pool_mode = "session"
 
 [pools.smsly_hosting_session.shards.0]
 servers = [
-    ["{db_host}", {db_port}, "primary"]{",\n    " + ",\n    ".join(f'["{s[0]}", {s[1]}, "replica"]' for s in replica_servers) if replica_servers else ""}
+    ["{db_host}", {db_port}, "primary"]{smsly_hosting_replica_suffix}
 ]
 database = "{db_name}"
 

@@ -424,13 +424,23 @@ services:
     #   - https://registry.<DOMAIN>/v2/... (via Traefik, same LE cert)
     #   - https://<master_vpn_ip>:5000/v2/... (direct, registry's own cert)
     # Both work with --insecure-registry or after trusting the cert.
+    #
+    # SECURITY NOTE: tls=true (without certresolver=) makes Traefik serve
+    # a self-signed certificate on the public route. The compose file's
+    # static traefik config does NOT declare a `letsencrypt` certificate
+    # resolver (Traefik here is internal-only behind Caddy which holds
+    # the public LE cert), so the previous `certresolver=letsencrypt`
+    # label made Traefik emit "Router uses a nonexistent certificate
+    # resolver" on every docker-provider rescan and rippled through the
+    # socket-proxy chain into the watchdog restart loop. Operators who
+    # need a real LE cert here should add a certificatesResolvers entry
+    # in the static traefik config and switch this back.
     labels:
       - traefik.enable=true
       - traefik.docker.network=smsly-net
       - traefik.http.routers.registry.rule=Host(`registry.${DOMAIN:-grid.smsly.cloud}`)
       - traefik.http.routers.registry.entrypoints=websecure
       - traefik.http.routers.registry.tls=true
-      - traefik.http.routers.registry.tls.certresolver=letsencrypt
       - traefik.http.routers.registry.priority=200
       - traefik.http.services.registry.loadbalancer.server.port=5000
       - traefik.http.services.registry.loadbalancer.server.scheme=https
