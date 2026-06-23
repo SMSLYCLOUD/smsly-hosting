@@ -169,7 +169,9 @@ if not DEBUG and not IS_TESTING:
     _is_ip = bool(re.fullmatch(r'\d{1,3}(?:\.\d{1,3}){3}', DOMAIN))
     _is_local_host = DOMAIN.lower() in ('localhost', '127.0.0.1')
     _ssl_enabled = _use_ssl and not _is_ip and not _is_local_host
-    SECURE_SSL_REDIRECT = _ssl_enabled
+    # Caddy natively redirects domains to HTTPS. If Django also redirects,
+    # it traps raw IP addresses (which bypass Caddy's redirect) in an HTTP->HTTPS loop.
+    SECURE_SSL_REDIRECT = False
 
     SECURE_REDIRECT_EXEMPT = [
         r'^api/',

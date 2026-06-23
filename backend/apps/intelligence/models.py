@@ -240,6 +240,11 @@ class AIProviderSettings(models.Model):
         # additionally required to be in ``settings.LOCALLM_ALLOWED_HOSTS``,
         # which defaults to an empty tuple so out-of-the-box deployments
         # cannot accidentally trust an attacker-controlled DNS name.
+        if self.localllm_base_url == "http://localhost:11434/v1":
+            _allowed = tuple(getattr(settings, 'LOCALLM_ALLOWED_HOSTS', ()) or ())
+            if "localhost" not in {h.lower() for h in _allowed}:
+                self.localllm_base_url = ""
+
         _validate_localllm_base_url(self.localllm_base_url)
         _validate_https_allowlist(
             self.freemodel_base_url, 'freemodel_base_url',
