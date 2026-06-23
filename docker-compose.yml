@@ -662,6 +662,15 @@ services:
     - --entrypoints.websecure.address=:443
     - --entrypoints.websecure.http.tls=true
     - --entrypoints.metrics.address=:8082
+    # Enable the API (serves /ping on :8080) so the `traefik
+    # healthcheck --ping` Docker healthcheck below has a real
+    # endpoint to hit. Port 8080 is NOT published in `ports:` so
+    # this is only reachable from inside the container / smsly-net.
+    # Without this flag the healthcheck fails 5x in a row, Docker
+    # marks the container unhealthy, and `restart: unless-stopped`
+    # cycles it every ~2 minutes (seen as the WRN about encoded
+    # characters being re-emitted on every cold start).
+    - --api.insecure=true
     - --log.level=WARN
     - --ping=true
     - --accesslog=false
