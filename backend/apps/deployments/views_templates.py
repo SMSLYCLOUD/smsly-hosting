@@ -170,6 +170,23 @@ class TemplateViewSet(viewsets.GenericViewSet):
             name = f"{base}-{suffix}"[:63]
 
             internal_port = int(template.get('default_port') or 8000)
+
+            # Decide whether the deployed Service should be exposed on a
+            # public Caddy route. The template fixture's supports_public_url
+            # flag is the source of truth: HTTP-speaking services (frontend,
+            # CMS, dev-tools) keep a public route; non-HTTP services
+            # (databases, caches, brokers — redis on RESP, postgres on
+            # SQL wire, etc.) must NOT get a public route. Otherwise
+            # Caddy reverse-proxies HTTP to a service that doesn't speak
+            # HTTP on its default port, the upstream closes / hangs, and
+            # Caddy returns 503.
+            #
+            # Service.save() auto-generates a public_domain if one is not
+            # set (see models_core.Service.save). The way to suppress that
+            # auto-generation and keep the service internal-only is to set
+            # public_domain_hidden=True after create() — caddy_manager
+            # already treats that flag as "skip public route".
+            supports_public_url = bool(template.get('supports_public_url', False))
             service = Service.objects.create(
                 name=name,
                 deploy_type='DOCKER',
@@ -177,6 +194,7 @@ class TemplateViewSet(viewsets.GenericViewSet):
                 internal_port=internal_port,
                 owner=request.user,
                 provider=provider,
+                public_domain_hidden=(not supports_public_url),
             )
 
             getattr(settings, 'DOMAIN', 'localhost') or 'localhost'
