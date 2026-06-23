@@ -924,13 +924,59 @@ fi
 # Generate registry TLS cert + htpasswd if missing (required for auth-enabled registry)
 echo -e "${BLUE}  → Configuring Docker registry auth and TLS...${NC}"
 mkdir -p "$INSTALL_DIR/auth" "$INSTALL_DIR/certs"
-if [ ! -f "$INSTALL_DIR/certs/registry.key" ] || [ ! -f "$INSTALL_DIR/certs/registry.crt" ]; then
+
+# Regenerate registry TLS if EITHER file is missing OR if the existing
+# key/cert don't match (e.g. one was rotated independently). The earlier
+# `||` check only caught missing files; mismatched pairs caused
+# `registry:2.8.3` to crash-loop with "tls: private key does not match
+# public key" forever. Regenerating as a matched pair is the only safe
+# option — we cannot repair an existing cert without the issuing key.
+_regen_registry_tls() {
     echo -e "${BLUE}    Generating self-signed TLS cert for registry...${NC}"
+    # openssl req writes key then cert; if key write fails halfway the
+    # cert from the prior generation would be orphaned. The atomic
+    # rename pattern below ensures consumers (the registry container)
+    # never see a half-written pair.
+    _tmp_dir="$(mktemp -d)"
     openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
-        -keyout "$INSTALL_DIR/certs/registry.key" \
-        -out "$INSTALL_DIR/certs/registry.crt" \
-        -subj "/CN=registry" 2>/dev/null || \
+        -keyout "${_tmp_dir}/registry.key" \
+        -out    "${_tmp_dir}/registry.crt" \
+        -subj "/CN=registry" 2>/dev/null
+    local _rc=$?
+    if [ "$_rc" -ne 0 ]; then
+        rm -rf "$_tmp_dir"
         echo -e "${YELLOW}    ⚠ Failed to generate registry cert (openssl missing?)${NC}"
+        return $_rc
+    fi
+    mv "${_tmp_dir}/registry.key" "$INSTALL_DIR/certs/registry.key"
+    mv "${_tmp_dir}/registry.crt" "$INSTALL_DIR/certs/registry.crt"
+    rm -rf "$_tmp_dir"
+    chmod 644 "$INSTALL_DIR/certs/registry.crt" "$INSTALL_DIR/certs/registry.key"
+}
+
+_registry_tls_ok() {
+    [ -f "$INSTALL_DIR/certs/registry.key" ] || return 1
+    [ -f "$INSTALL_DIR/certs/registry.crt" ] || return 1
+    # openssl x509 -noout -modulus matches the cert's modulus;
+    # openssl rsa  -noout -modulus matches the key's modulus. They must
+    # be equal for the TLS handshake to succeed.
+    local _cmod _kmod
+    _cmod="$(openssl x509 -in "$INSTALL_DIR/certs/registry.crt" -noout -modulus 2>/dev/null | openssl sha256)" || return 1
+    _kmod="$(openssl rsa  -in "$INSTALL_DIR/certs/registry.key" -noout -modulus 2>/dev/null | openssl sha256)" || return 1
+    [ "$_cmod" = "$_kmod" ]
+}
+
+if ! _registry_tls_ok; then
+    _regen_registry_tls || true
+fi
+# Post-regen sanity check — fail loudly if the regen also failed so
+# the registry container doesn't crash-loop forever with the same error.
+if ! _registry_tls_ok; then
+    echo -e "${RED}    ✗ Registry TLS cert/key still mismatched or missing after regen attempt${NC}"
+    echo -e "${YELLOW}      Manual fix on host: openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \\${NC}"
+    echo -e "${YELLOW}        -keyout /opt/smsly-hosting/certs/registry.key \\${NC}"
+    echo -e "${YELLOW}        -out    /opt/smsly-hosting/certs/registry.crt \\${NC}"
+    echo -e "${YELLOW}        -subj '/CN=registry'${NC}"
 fi
 if [ ! -f "$INSTALL_DIR/auth/htpasswd" ] || [ -z "${REGISTRY_PASSWORD:-}" ] || [ -z "${REGISTRY_USER:-}" ]; then
     REGISTRY_PASS="${REGISTRY_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_urlsafe(18))" 2>/dev/null || openssl rand -hex 12 2>/dev/null || echo 'auto-generated-change-me')}"
