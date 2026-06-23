@@ -805,8 +805,24 @@ def analyze_ecosystem(repos_data: list[dict], github_token: str | None = None, a
         if len(full_prompt) > 1000:
             logger.info("... [prompt truncated] ...")
 
-        response_text, provider = _cached_ask(full_prompt, system_prompt=ECOSYSTEM_PROMPT, provider_id=ai_provider)
-        response_text = response_text or ""
+        # Wrap the AI call in the same try as the parse so a "no AI providers
+        # configured" RuntimeError from _cached_ask falls through to the
+        # heuristic-only fallback below — same path the parser takes on a
+        # malformed response. Without this, scan_and_analyze returns an
+        # empty plan to the UI ("0 services for deployment") whenever the
+        # operator hasn't yet wired up an LLM API key.
+        try:
+            response_text, provider = _cached_ask(
+                full_prompt, system_prompt=ECOSYSTEM_PROMPT, provider_id=ai_provider,
+            )
+            response_text = response_text or ""
+        except Exception as ai_exc:
+            logger.warning(
+                "AI analysis unavailable (%s); falling back to heuristic plan",
+                ai_exc,
+            )
+            response_text = ""
+            provider = None
 
         logger.info("=== INITIAL AI RESPONSE RECEIVED ===")
         logger.info(f"Response provider: {provider}")
