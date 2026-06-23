@@ -1743,6 +1743,23 @@ echo -e "${BLUE}  → [2/4] Checking container status...${NC}"
 RUNNING_COUNT=$(docker compose -f "$COMPOSE_FILE" ps --status running -q 2>/dev/null | wc -l)
 TOTAL_COUNT=$(docker compose -f "$COMPOSE_FILE" ps -q 2>/dev/null | wc -l)
 UNHEALTHY_STATUS="$(docker compose -f "$COMPOSE_FILE" ps --format "{{.Service}}\t{{.Status}}" 2>/dev/null | awk 'tolower($0) ~ /unhealthy/ {print}' || true)"
+# Also surface containers stuck in Docker's restart loop. These are not
+# "unhealthy" (healthcheck hasn't run yet) but they're crash-looping,
+# which is the more dangerous failure mode — print them first so the
+# tail of their crash log is visible.
+RESTARTING_STATUS="$(docker compose -f "$COMPOSE_FILE" ps --format "{{.Service}}\t{{.Status}}" 2>/dev/null | awk 'tolower($0) ~ /restarting/ {print}' || true)"
+if [ -n "$RESTARTING_STATUS" ]; then
+    echo -e "${RED}  ✗ One or more containers are crash-looping:${NC}"
+    printf '%s\n' "$RESTARTING_STATUS" | sed 's/^/     - /'
+    RESTARTING_SERVICES="$(printf '%s\n' "$RESTARTING_STATUS" | awk '{print $1}' | xargs 2>/dev/null || true)"
+    if [ -n "$RESTARTING_SERVICES" ]; then
+        echo -e "${YELLOW}  ↳ Crash tail of each restarting service (last 40 lines):${NC}"
+        for _svc in $RESTARTING_SERVICES; do
+            echo -e "${YELLOW}      --- $_svc ---${NC}"
+            docker compose -f "$COMPOSE_FILE" logs --tail=40 "$_svc" 2>/dev/null | sed 's/^/        /' || true
+        done
+    fi
+fi
 if [ -n "$UNHEALTHY_STATUS" ]; then
     echo -e "${RED}  ✗ One or more containers are unhealthy:${NC}"
     printf '%s\n' "$UNHEALTHY_STATUS" | sed 's/^/     - /'
@@ -1750,9 +1767,13 @@ if [ -n "$UNHEALTHY_STATUS" ]; then
     if [ -n "$UNHEALTHY_SERVICES" ]; then
         docker compose -f "$COMPOSE_FILE" logs --tail=80 $UNHEALTHY_SERVICES 2>/dev/null || true
     fi
-elif [ "$RUNNING_COUNT" -eq "$TOTAL_COUNT" ] && [ "$TOTAL_COUNT" -gt 0 ]; then
+elif [ -z "$RESTARTING_STATUS" ] && [ "$RUNNING_COUNT" -eq "$TOTAL_COUNT" ] && [ "$TOTAL_COUNT" -gt 0 ]; then
     echo -e "${GREEN}  ✓ All $TOTAL_COUNT containers running and none are unhealthy${NC}"
     VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
+elif [ "$RUNNING_COUNT" -eq "$TOTAL_COUNT" ] && [ "$TOTAL_COUNT" -gt 0 ]; then
+    # All running but some are crash-looping — don't increment pass count
+    # but don't double-count either.
+    echo -e "${YELLOW}  ⚠ All $TOTAL_COUNT containers present, but see crash-loop warnings above${NC}"
 else
     echo -e "${RED}  ✗ Only $RUNNING_COUNT/$TOTAL_COUNT containers running${NC}"
 fi
