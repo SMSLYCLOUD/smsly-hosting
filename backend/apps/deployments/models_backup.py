@@ -178,3 +178,74 @@ class BackupEncryptionKey(models.Model):
 
     def __str__(self):
         return f'BackupEncryptionKey(key_id={self.key_id}, fp={self.fingerprint}, source={self.source})'
+
+
+class ServiceSnapshot(models.Model):
+    """Lightweight, metadata-only point-in-time capture of a service's
+    configuration state.  Unlike ``ServiceBackup`` which archives Docker
+    images, volumes, and database dumps, a snapshot stores only the JSON
+    config payload (env vars, resources, domains, deploy settings, addons)
+    making it instant to create and zero-cost in disk space.
+
+    Useful for quick config rollback, deployment diffs, and audit trails.
+    """
+
+    class Trigger(models.TextChoices):
+        MANUAL = 'MANUAL', 'Manual'
+        PRE_DEPLOY = 'PRE_DEPLOY', 'Pre-Deploy'
+        PRE_ENV_CHANGE = 'PRE_ENV_CHANGE', 'Pre-Env Change'
+        SCHEDULED = 'SCHEDULED', 'Scheduled'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4)  # type: ignore[var-annotated]
+    service = models.ForeignKey(
+        Service, on_delete=models.CASCADE, related_name='snapshots',
+    )  # type: ignore[var-annotated]
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True,
+    )  # type: ignore[var-annotated]
+
+    label = models.CharField(
+        max_length=255, blank=True, default='',
+        help_text='Optional human label e.g. "before Redis upgrade"',
+    )  # type: ignore[var-annotated]
+    trigger = models.CharField(
+        max_length=20, choices=Trigger.choices, default=Trigger.MANUAL,
+    )  # type: ignore[var-annotated]
+
+    # The full config payload captured at snapshot time.
+    config_data = models.JSONField(
+        default=dict,
+        help_text=(
+            'Full config payload: env_vars, deploy_type, docker_image, '
+            'repository_url, branch, public_domain, resources, replicas, '
+            'addons, build/start commands, health check, etc.'
+        ),
+    )  # type: ignore[var-annotated]
+
+    # Optional diff chain
+    parent_snapshot = models.ForeignKey(
+        'self', on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='children',
+        help_text='Previous snapshot in the diff chain.',
+    )  # type: ignore[var-annotated]
+    diff_summary = models.JSONField(
+        null=True, blank=True, default=None,
+        help_text='Computed diff from parent snapshot (added/removed/changed keys).',
+    )  # type: ignore[var-annotated]
+
+    created_at = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['service', '-created_at']),
+        ]
+
+    def __str__(self):
+        label_part = f' "{self.label}"' if self.label else ''
+        return (
+            f'ServiceSnapshot({self.id!s}{label_part}, '
+            f'trigger={self.trigger}, service={self.service_id})'
+        )

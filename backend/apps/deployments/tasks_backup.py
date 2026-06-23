@@ -254,3 +254,30 @@ def run_scheduled_backups_task():
         except Exception as exc:
             logger.warning("Scheduled backup failed for schedule %s: %s", sched.id, exc)
     return ran
+
+
+@shared_task(bind=True, soft_time_limit=300, max_retries=2, default_retry_delay=60)
+def create_snapshot_task(self, service_id: str, trigger: str = 'MANUAL', label: str = '', created_by_id: str | None = None):
+    from django.contrib.auth import get_user_model
+    from apps.deployments.services.snapshot_service import SnapshotService
+
+    User = get_user_model()
+    created_by = None
+    if created_by_id:
+        try:
+            created_by = User.objects.get(id=created_by_id)
+        except User.DoesNotExist:
+            pass
+
+    try:
+        SnapshotService.capture_snapshot(
+            service_id=service_id,
+            trigger=trigger,
+            label=label,
+            created_by=created_by,
+        )
+    except Exception as exc:
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=exc)
+        raise
+

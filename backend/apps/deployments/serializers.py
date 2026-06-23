@@ -5,7 +5,7 @@ from rest_framework import serializers
 
 from .models import Deployment, EnvironmentVariable, Region, Service  # type: ignore[attr-defined]  # models re-exports from submodules
 from .models_audit import AuditLog
-from .models_backup import BackupSchedule, ServerBackup, ServiceBackup
+from .models_backup import BackupSchedule, ServerBackup, ServiceBackup, ServiceSnapshot
 from .serializers_transfer import ServerTransferCreateSerializer, ServerTransferSerializer  # noqa: F401
 from .models_safedeploy import (
     DatabaseClone,
@@ -456,6 +456,23 @@ class BackupScheduleSerializer(serializers.ModelSerializer):
         except DjangoValidationError as exc:
             raise serializers.ValidationError(exc.messages)
         return value
+
+
+class ServiceSnapshotSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ServiceSnapshot
+        fields = '__all__'
+        read_only_fields = ['id', 'created_by', 'created_at', 'config_data', 'diff_summary', 'parent_snapshot']
+
+
+class ServiceSnapshotRestoreSerializer(serializers.Serializer):
+    target_service_id = serializers.UUIDField(required=False, allow_null=True)
+    redeploy = serializers.BooleanField(default=False)
+
+
+class ServiceSnapshotDiffSerializer(serializers.Serializer):
+    compare_with_id = serializers.UUIDField(required=True)
+
 
 # --- SafeDeploy Serializers ---
 

@@ -13,6 +13,7 @@ from .views import (
     RouteRecheckView,
     ServerBackupViewSet,
     ServiceBackupViewSet,
+    ServiceSnapshotViewSet,
     ServiceViewSet,
     SessionTokenView,
     SystemConfigView,
@@ -78,6 +79,7 @@ router.register(r'tunnels', TunnelViewSet, basename='tunnel')
 router.register(r'audit-logs', AuditLogViewSet, basename='auditlog')
 router.register(r'servers', ManagedServerViewSet, basename='server')
 router.register(r'backups', ServiceBackupViewSet, basename='backup')
+router.register(r'snapshots', ServiceSnapshotViewSet, basename='snapshot')
 router.register(r'server/backups', ServerBackupViewSet, basename='server-backup')
 router.register(r'backup-schedules', BackupScheduleViewSet, basename='backup-schedule')
 router.register(r'transfers', ServerTransferViewSet, basename='transfer')
@@ -104,6 +106,7 @@ services_router.register(
 services_router.register(r'cron', CronJobViewSet, basename='service-cron')
 services_router.register(r'volumes', VolumeViewSet, basename='service-volumes')
 services_router.register(r'backups', ServiceBackupViewSet, basename='service-backup')
+services_router.register(r'snapshots', ServiceSnapshotViewSet, basename='service-snapshot')
 services_router.register(r'previews', PreviewEnvironmentViewSet, basename='service-previews')
 services_router.register(r'approvals', DeploymentApprovalViewSet, basename='service-approvals')
 

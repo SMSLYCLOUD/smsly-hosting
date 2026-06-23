@@ -1199,6 +1199,19 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
         )
 
         service = deployment.service
+
+        # Capture a pre-deployment snapshot
+        try:
+            from apps.deployments.services.snapshot_service import SnapshotService
+            SnapshotService.capture_snapshot(
+                service_id=str(service.id),
+                trigger='PRE_DEPLOY',
+                label=f"Auto pre-deploy snapshot (deployment {deployment.id})",
+                created_by=None,
+            )
+        except Exception as exc:
+            logger.warning("Failed to capture auto pre-deploy snapshot for deployment %s: %s", deployment.id, exc)
+
         if not provider_id or provider_id == "None":
             provider = _resolve_provider_for_service(service, prefer_local=True)
             if not provider:
