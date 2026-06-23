@@ -326,11 +326,15 @@ services:
     tmpfs:
       - /tmp
     healthcheck:
-      # celery-beat is a scheduler, not a worker. Check that the beat
-      # process is alive by looking for it in the process list. The
-      # python:3.11-slim base image doesn't include procps (pgrep),
-      # so use ps which is provided by busybox.
-      test: ["CMD-SHELL", "ps aux | grep -E 'celery.*beat' | grep -v grep > /dev/null || exit 1"]
+      # celery-beat is a scheduler, not a worker, so it has no HTTP/AMQP
+      # endpoint to ping. Verify it is alive via its pidfile + the
+      # /proc entry for that pid. This avoids the previous fragile
+      # `ps aux | grep celery.beat` check that intermittently returned
+      # non-zero even when the scheduler was actively dispatching tasks
+      # (causing the container to be marked unhealthy despite working).
+      test:
+        - CMD-SHELL
+        - '[ -s /tmp/celerybeat.pid ] && [ -e "/proc/$(cat /tmp/celerybeat.pid)" ] || exit 1'
       interval: 30s
       timeout: 5s
       retries: 3
