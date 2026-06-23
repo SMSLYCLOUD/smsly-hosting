@@ -723,8 +723,20 @@ services:
     - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
     - DOMAIN=${DOMAIN}
     volumes:
+    # Caddyfile — written by the backend into the bind-mounted
+    # ./caddy-config/Caddyfile at runtime, plus the safety seed
+    # written by the installer.
     - ./caddy-config:/etc/caddy
-    - caddy_config:/config
+    # Cert storage. Previously this was a separate `caddy_config`
+    # named volume, which created a path mismatch: the backend wrote
+    # the IP self-signed cert to /caddy-config/certs/ip.crt (bind
+    # mount), but caddy read /config/certs/ip.crt (named volume),
+    # so caddy crash-looped on startup with:
+    #   Error: loading initial config: ... open /config/certs/ip.crt:
+    #         no such file or directory
+    # Mounting the same host dir at /config fixes the path mismatch
+    # — both sides now share storage transparently.
+    - ./caddy-config:/config
     - caddy_data:/data
     - static_volume:/app/staticfiles:ro
     - media_volume:/app/media:ro
@@ -771,9 +783,6 @@ volumes:
   apt_cache:
   apt_log:
   verdaccio_data:
-  caddy_config:
-    external: true
-    name: smsly-hosting_caddy_config
   caddy_data:
     external: true
     name: smsly-hosting_caddy_data
