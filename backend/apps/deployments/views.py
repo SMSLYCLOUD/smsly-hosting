@@ -65,7 +65,7 @@ from .ai_router import (
 from .domain_utils import normalize_domain
 from .models import Deployment, EnvironmentVariable, PlatformConfig, Service  # type: ignore[attr-defined]    # models.py hub no longer re-exports; classes live in models_core.py.
 from .models_audit import AuditLog
-from .models_backup import BackupSchedule, ServerBackup, ServiceBackup
+from .models_backup import BackupSchedule, ServerBackup, ServiceBackup, ServiceSnapshot
 from .rate_limiting import BurstRateThrottle, DeploymentRateThrottle
 from .serializers import (
     BackupScheduleSerializer,
@@ -78,6 +78,9 @@ from .serializers import (
     ServerBackupSerializer,
     ServiceBackupSerializer,
     ServiceSerializer,
+    ServiceSnapshotSerializer,
+    ServiceSnapshotRestoreSerializer,
+    ServiceSnapshotDiffSerializer,
 )
 from .services.server_guard import ServerGuard
 from .tasks import (
@@ -5426,6 +5429,139 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
     def download_url(self, request, pk=None):
         backup = self.get_object()
         return Response({'url': _generate_signed_download_url(request, str(backup.id), 'backup-download', path_params={'pk': str(backup.id)})})
+
+
+class ServiceSnapshotViewSet(viewsets.ModelViewSet):
+    queryset = ServiceSnapshot.objects.all().order_by('-created_at')
+    serializer_class = ServiceSnapshotSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    @staticmethod
+    def _user_can_access_service(user, service):
+        if not user or not user.is_authenticated or not service:
+            return False
+        if user.is_superuser or service.owner_id == user.id:
+            return True
+        return service.project_id and service.project.team_id and service.project.team.members.filter(user=user).exists()
+
+    def get_queryset(self):
+        from django.db.models import Q
+        qs = self.queryset
+        if not self.request.user.is_authenticated:
+            return qs.none()
+
+        qs = qs.filter(
+            Q(service__owner=self.request.user) | Q(service__project__team__members__user=self.request.user)
+        ).distinct()
+
+        project_id = self.request.query_params.get('project_id')
+        if project_id:
+            qs = qs.filter(service__project_id=project_id)
+        service_pk = self.kwargs.get('service_pk')
+        if service_pk:
+            qs = qs.filter(service_id=service_pk)
+        return qs
+
+    def perform_create(self, serializer):
+        service = serializer.validated_data.get('service')
+        if not self._user_can_access_service(self.request.user, service):
+            raise PermissionDenied("You do not have access to this service.")
+
+        from .services.snapshot_service import SnapshotService
+        try:
+            snapshot = SnapshotService.capture_snapshot(
+                service_id=str(service.id),
+                trigger=serializer.validated_data.get('trigger', 'MANUAL'),
+                label=serializer.validated_data.get('label', ''),
+                created_by=self.request.user,
+            )
+            serializer.instance = snapshot
+        except Exception as exc:
+            raise serializers.ValidationError({"detail": str(exc)})
+
+    @action(detail=True, methods=['post'])
+    def restore(self, request, pk=None, *args, **kwargs):
+        snapshot = self.get_object()
+
+        confirm = request.data.get('confirm')
+        if str(confirm).lower() != 'true':
+            return Response(
+                {'error': 'Explicit confirmation required. Send "confirm": true.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        serializer = ServiceSnapshotRestoreSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        target_service_id = serializer.validated_data.get('target_service_id')
+        redeploy = serializer.validated_data.get('redeploy', False)
+
+        if target_service_id:
+            target_service = Service.objects.filter(
+                id=target_service_id,
+            ).select_related('project__team').first()
+            if not self._user_can_access_service(request.user, target_service):
+                return Response(
+                    {'error': 'Target service not found or permission denied'},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+        else:
+            target_service = snapshot.service
+
+        if not self._user_can_access_service(request.user, target_service):
+            return Response(
+                {'error': 'Permission denied for target service'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        from .services.snapshot_service import SnapshotService
+        try:
+            result = SnapshotService.restore_snapshot(
+                snapshot_id=str(snapshot.id),
+                target_service_id=str(target_service.id) if target_service_id else None,
+                redeploy=redeploy,
+                requesting_user=request.user,
+            )
+            with contextlib.suppress(Exception):
+                AuditLog(
+                    actor=request.user.get_username(),
+                    action='SNAPSHOT_RESTORED',
+                    target=f'snapshot={snapshot.id}',
+                    metadata={
+                        'service_id': str(target_service.id),
+                        'redeploy': redeploy,
+                        'changes_count': result.get('config_changes', 0),
+                    },
+                ).save()
+            return Response(result, status=status.HTTP_200_OK)
+        except Exception as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'], url_path='diff')
+    def diff(self, request, pk=None, *args, **kwargs):
+        snapshot_a = self.get_object()
+        serializer = ServiceSnapshotDiffSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        compare_with_id = serializer.validated_data['compare_with_id']
+        try:
+            snapshot_b = ServiceSnapshot.objects.get(id=compare_with_id)
+        except ServiceSnapshot.DoesNotExist:
+            return Response({'error': 'Comparison snapshot not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        if not self._user_can_access_service(request.user, snapshot_a.service) or \
+           not self._user_can_access_service(request.user, snapshot_b.service):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+
+        from .services.snapshot_service import SnapshotService
+        try:
+            result = SnapshotService.diff_snapshots(
+                snapshot_a_id=str(snapshot_a.id),
+                snapshot_b_id=str(snapshot_b.id),
+            )
+            return Response(result, status=status.HTTP_200_OK)
+        except Exception as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class ServerBackupViewSet(viewsets.ModelViewSet):

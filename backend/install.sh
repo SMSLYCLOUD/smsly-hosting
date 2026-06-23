@@ -3899,9 +3899,9 @@ fi
                     if [ -f "install-custom-domain-ssl.sh" ]; then
                         echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
                         bash install-custom-domain-ssl.sh install
-                    elif [ -f "$SCRIPT_DIR/scripts/legacy/install-custom-domain-ssl.sh" ]; then
+                    elif [ -f "$INSTALL_DIR/scripts/legacy/install-custom-domain-ssl.sh" ]; then
                         echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
-                        bash "$SCRIPT_DIR/scripts/legacy/install-custom-domain-ssl.sh" install
+                        bash "$INSTALL_DIR/scripts/legacy/install-custom-domain-ssl.sh" install
 
                          # Start the services
                          echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
@@ -3984,9 +3984,9 @@ fi
                   if [ -f "install-custom-domain-ssl.sh" ]; then
                       echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
                       bash install-custom-domain-ssl.sh install
-                  elif [ -f "$SCRIPT_DIR/scripts/legacy/install-custom-domain-ssl.sh" ]; then
+                  elif [ -f "$INSTALL_DIR/scripts/legacy/install-custom-domain-ssl.sh" ]; then
                       echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
-                      bash "$SCRIPT_DIR/scripts/legacy/install-custom-domain-ssl.sh" install
+                      bash "$INSTALL_DIR/scripts/legacy/install-custom-domain-ssl.sh" install
                       
                       # Start the services
                       echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
@@ -4062,9 +4062,9 @@ fi
                   if [ -f "install-custom-domain-ssl.sh" ]; then
                       echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
                       bash install-custom-domain-ssl.sh install
-                  elif [ -f "$SCRIPT_DIR/scripts/legacy/install-custom-domain-ssl.sh" ]; then
+                  elif [ -f "$INSTALL_DIR/scripts/legacy/install-custom-domain-ssl.sh" ]; then
                       echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
-                      bash "$SCRIPT_DIR/scripts/legacy/install-custom-domain-ssl.sh" install
+                      bash "$INSTALL_DIR/scripts/legacy/install-custom-domain-ssl.sh" install
                       
                       # Start the services
                       echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
@@ -6736,9 +6736,9 @@ if should_manage_caddy; then  # Only for master mode
     if [ -f "install-custom-domain-ssl.sh" ]; then
         echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
         bash install-custom-domain-ssl.sh install
-    elif [ -f "$SCRIPT_DIR/scripts/legacy/install-custom-domain-ssl.sh" ]; then
+    elif [ -f "$INSTALL_DIR/scripts/legacy/install-custom-domain-ssl.sh" ]; then
         echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
-        bash "$SCRIPT_DIR/scripts/legacy/install-custom-domain-ssl.sh" install
+        bash "$INSTALL_DIR/scripts/legacy/install-custom-domain-ssl.sh" install
     else
         echo -e "${YELLOW}  ⚠ Custom domain SSL manager not found, skipping setup${NC}"
         return

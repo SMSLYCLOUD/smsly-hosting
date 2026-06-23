@@ -317,7 +317,7 @@ fi
                  if should_manage_caddy; then  # Only for master mode
                      echo -e "\n${YELLOW}[UPDATE] Setting up Custom Domain SSL Services...${NC}"
                      SSL_SCRIPT="install-custom-domain-ssl.sh"
-                     [ -f "$SSL_SCRIPT" ] || SSL_SCRIPT="$SCRIPT_DIR/scripts/legacy/install-custom-domain-ssl.sh"
+                     [ -f "$SSL_SCRIPT" ] || SSL_SCRIPT="$INSTALL_DIR/scripts/legacy/install-custom-domain-ssl.sh"
                      if [ -f "$SSL_SCRIPT" ]; then
                          echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
                          bash "$SSL_SCRIPT" install
@@ -401,7 +401,7 @@ fi
              if should_manage_caddy; then  # Only for master mode
                  echo -e "\n${YELLOW}[UPDATE] Setting up Custom Domain SSL Services...${NC}"
                  SSL_SCRIPT="install-custom-domain-ssl.sh"
-                 [ -f "$SSL_SCRIPT" ] || SSL_SCRIPT="$SCRIPT_DIR/scripts/legacy/install-custom-domain-ssl.sh"
+                 [ -f "$SSL_SCRIPT" ] || SSL_SCRIPT="$INSTALL_DIR/scripts/legacy/install-custom-domain-ssl.sh"
                  if [ -f "$SSL_SCRIPT" ]; then
                      echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
                      bash "$SSL_SCRIPT" install
@@ -480,7 +480,7 @@ fi
              if should_manage_caddy; then  # Only for master mode
                  echo -e "\n${YELLOW}[UPDATE] Setting up Custom Domain SSL Services...${NC}"
                  SSL_SCRIPT="install-custom-domain-ssl.sh"
-                 [ -f "$SSL_SCRIPT" ] || SSL_SCRIPT="$SCRIPT_DIR/scripts/legacy/install-custom-domain-ssl.sh"
+                 [ -f "$SSL_SCRIPT" ] || SSL_SCRIPT="$INSTALL_DIR/scripts/legacy/install-custom-domain-ssl.sh"
                  if [ -f "$SSL_SCRIPT" ]; then
                      echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
                      bash "$SSL_SCRIPT" install
@@ -618,7 +618,7 @@ fi
             if should_manage_caddy; then
                 echo -e "\n${YELLOW}[UPDATE] Setting up Custom Domain SSL Services...${NC}"
                 SSL_SCRIPT="install-custom-domain-ssl.sh"
-                [ -f "$SSL_SCRIPT" ] || SSL_SCRIPT="$SCRIPT_DIR/scripts/legacy/install-custom-domain-ssl.sh"
+                [ -f "$SSL_SCRIPT" ] || SSL_SCRIPT="$INSTALL_DIR/scripts/legacy/install-custom-domain-ssl.sh"
                 if [ -f "$SSL_SCRIPT" ]; then
                     bash "$SSL_SCRIPT" install
                     /opt/smsly-hosting/smsly-domain-ssl-manager.sh start

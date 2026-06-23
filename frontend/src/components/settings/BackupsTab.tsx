@@ -5,7 +5,7 @@ import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/com
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Loader2, Download, RotateCcw, Trash2, Plus, Clock, Save, AlertCircle, CheckCircle, FileKey, Key } from 'lucide-react';
+import { Loader2, Download, RotateCcw, Trash2, Plus, Clock, Save, AlertCircle, CheckCircle, FileKey, Key, GitCompare } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import api from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
@@ -51,6 +51,17 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
     const [scheduleEnabled, setScheduleEnabled] = useState(true);
     const [savingSchedule, setSavingSchedule] = useState(false);
 
+    // Snapshot state
+    const [snapshots, setSnapshots] = useState<any[]>([]);
+    const [snapshotsLoading, setSnapshotsLoading] = useState(true);
+    const [creatingSnapshot, setCreatingSnapshot] = useState(false);
+    const [showCreateSnapshotDialog, setShowCreateSnapshotDialog] = useState(false);
+    const [snapshotLabel, setSnapshotLabel] = useState('');
+    const [diffingSnapshot, setDiffingSnapshot] = useState<any | null>(null);
+    const [diffResults, setDiffResults] = useState<any | null>(null);
+    const [diffLoading, setDiffLoading] = useState(false);
+    const [compareSnapshotId, setCompareSnapshotId] = useState('');
+
     const loadBackups = useCallback(async () => {
         try {
             const res = await api.get(`/services/${serviceId}/backups/`);
@@ -59,6 +70,17 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
             console.error(err);
         } finally {
             setLoading(false);
+        }
+    }, [serviceId]);
+
+    const loadSnapshots = useCallback(async () => {
+        try {
+            const res = await api.get(`/services/${serviceId}/snapshots/`);
+            setSnapshots(Array.isArray(res.data) ? res.data : res.data.results || []);
+        } catch (err) {
+            console.error(err);
+        } finally {
+            setSnapshotsLoading(false);
         }
     }, [serviceId]);
 
@@ -82,8 +104,9 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
 
     useEffect(() => {
         loadBackups();
+        loadSnapshots();
         loadSchedule();
-    }, [loadBackups, loadSchedule]);
+    }, [loadBackups, loadSnapshots, loadSchedule]);
 
     const handleCreateBackup = async () => {
         setCreating(true);
@@ -331,6 +354,91 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
         }
     };
 
+    const handleCreateSnapshot = async () => {
+        setCreatingSnapshot(true);
+        try {
+            await api.post(`/services/${serviceId}/snapshots/`, {
+                service: serviceId,
+                label: snapshotLabel,
+                trigger: 'MANUAL'
+            });
+            toast({ title: "Snapshot Created", description: "Config snapshot captured successfully." });
+            setSnapshotLabel('');
+            setShowCreateSnapshotDialog(false);
+            loadSnapshots();
+        } catch (err) {
+            toast({ title: "Error", description: "Failed to create snapshot.", variant: "destructive" });
+        } finally {
+            setCreatingSnapshot(false);
+        }
+    };
+
+    const handleDeleteSnapshot = async (id: string) => {
+        if (!await confirm({ title: 'Delete snapshot?', message: 'This snapshot will be permanently deleted.', variant: 'destructive', confirmText: 'Delete' })) return;
+        try {
+            await api.delete(`/snapshots/${id}/`);
+            toast({ title: "Snapshot deleted" });
+            loadSnapshots();
+        } catch (err) {
+            toast({ title: "Error", description: "Failed to delete snapshot.", variant: "destructive" });
+        }
+    };
+
+    const handleRestoreSnapshot = async (id: string) => {
+        if (!await confirm({
+            title: 'Restore Snapshot?',
+            message: 'Restore this configuration snapshot? This will overwrite the current configuration settings.',
+            variant: 'destructive',
+            confirmText: 'Restore'
+        })) return;
+
+        const redeploy = await confirm({
+            title: 'Redeploy Service?',
+            message: 'Would you like to trigger an immediate redeployment of the service with this restored configuration?',
+            variant: 'default',
+            confirmText: 'Yes, redeploy',
+            cancelText: 'No, just restore config'
+        });
+
+        try {
+            const res = await api.post(`/snapshots/${id}/restore/`, {
+                confirm: true,
+                redeploy: redeploy
+            });
+            toast({
+                title: "Snapshot Restored",
+                description: `Successfully restored configuration.${redeploy ? ' Redeployment triggered.' : ''}`
+            });
+            if (redeploy) {
+                monitorDeploymentAfterRestore(id);
+                setRestoringId(id);
+                setRestoreStatus('RESTORED');
+                setIsLiveDeploying(true);
+            }
+        } catch (err: any) {
+            const msg = err?.response?.data?.error || 'Failed to restore snapshot.';
+            toast({ title: "Error", description: msg, variant: "destructive" });
+        }
+    };
+
+    const handleDiffSnapshot = async (snapshotA: any, snapshotBId: string) => {
+        setDiffLoading(true);
+        try {
+            const res = await api.post(`/snapshots/${snapshotA.id}/diff/`, {
+                compare_with_id: snapshotBId
+            });
+            setDiffResults(res.data);
+        } catch (err: any) {
+            toast({
+                title: "Error",
+                description: err?.response?.data?.error || "Failed to compare snapshots.",
+                variant: "destructive"
+            });
+        } finally {
+            setDiffLoading(false);
+        }
+    };
+
     const formatBytes = (bytes: number) => {
         if (bytes < 1024) return `${bytes} B`;
         if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -482,6 +590,94 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                      </Table>
                  </CardContent>
              </Card>
+
+             <Card>
+                  <CardHeader>
+                      <div className="flex justify-between items-center">
+                          <div>
+                              <CardTitle>Configuration Snapshots</CardTitle>
+                              <CardDescription>Lightweight config-only captures of env vars, resources, domains, and settings.</CardDescription>
+                          </div>
+                          <Button onClick={() => setShowCreateSnapshotDialog(true)} disabled={creatingSnapshot}>
+                              <Plus className="mr-2 h-4 w-4" />
+                              Create Snapshot
+                          </Button>
+                      </div>
+                  </CardHeader>
+                  <CardContent>
+                      {snapshotsLoading ? (
+                          <div className="flex justify-center p-4"><Loader2 className="animate-spin" /></div>
+                      ) : (
+                          <Table>
+                              <TableHeader>
+                                  <TableRow>
+                                      <TableHead>Date</TableHead>
+                                      <TableHead>Trigger</TableHead>
+                                      <TableHead>Label</TableHead>
+                                      <TableHead className="text-right">Actions</TableHead>
+                                  </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                  {snapshots.map(snapshot => (
+                                      <TableRow key={snapshot.id}>
+                                          <TableCell>{new Date(snapshot.created_at).toLocaleString()}</TableCell>
+                                          <TableCell>
+                                              <span className={`text-xs font-semibold px-2 py-1 rounded ${
+                                                  snapshot.trigger === 'MANUAL' ? 'bg-blue-500/10 text-blue-500' :
+                                                  snapshot.trigger === 'PRE_DEPLOY' ? 'bg-purple-500/10 text-purple-500' :
+                                                  snapshot.trigger === 'PRE_ENV_CHANGE' ? 'bg-amber-500/10 text-amber-500' :
+                                                  'bg-slate-500/10 text-slate-500'
+                                              }`}>
+                                                  {snapshot.trigger}
+                                              </span>
+                                          </TableCell>
+                                          <TableCell className="max-w-[200px] truncate" title={snapshot.label || "No label"}>
+                                              {snapshot.label || <span className="text-muted-foreground italic">No label</span>}
+                                          </TableCell>
+                                          <TableCell className="text-right space-x-1">
+                                              <Button 
+                                                  variant="ghost" 
+                                                  size="sm" 
+                                                  onClick={() => handleRestoreSnapshot(snapshot.id)} 
+                                                  title="Restore config from snapshot"
+                                                  disabled={restoringId === snapshot.id}
+                                              >
+                                                  <RotateCcw className="w-4 h-4" />
+                                              </Button>
+                                              {snapshots.length > 1 && (
+                                                  <Button 
+                                                      variant="ghost" 
+                                                      size="sm" 
+                                                      onClick={() => { setDiffingSnapshot(snapshot); setCompareSnapshotId(''); }} 
+                                                      title="Compare with another snapshot"
+                                                  >
+                                                      <GitCompare className="w-4 h-4" />
+                                                  </Button>
+                                              )}
+                                              <Button 
+                                                  variant="ghost" 
+                                                  size="sm" 
+                                                  onClick={() => handleDeleteSnapshot(snapshot.id)} 
+                                                  title="Delete snapshot" 
+                                                  className="text-red-400 hover:text-red-500"
+                                              >
+                                                  <Trash2 className="w-4 h-4" />
+                                              </Button>
+                                          </TableCell>
+                                      </TableRow>
+                                  ))}
+                                  {snapshots.length === 0 && (
+                                      <TableRow>
+                                          <TableCell colSpan={4} className="text-center py-6 text-muted-foreground">
+                                              No snapshots found. Create your first snapshot to start tracking config history.
+                                          </TableCell>
+                                      </TableRow>
+                                  )}
+                              </TableBody>
+                          </Table>
+                      )}
+                  </CardContent>
+              </Card>
 
              {/* Restore Progress Section */}
              {restoringId && (
@@ -730,6 +926,157 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                  </div>
              </div>
          )}
-        </>
+
+          {showCreateSnapshotDialog && (
+              <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 animate-in fade-in duration-200">
+                  <div className="bg-background border border-border rounded-lg p-6 max-w-md w-full mx-4 shadow-lg">
+                      <h3 className="text-lg font-semibold mb-2">Create Config Snapshot</h3>
+                      <p className="text-xs text-muted-foreground mb-4">
+                          Capture the current configuration settings (env vars, domains, resources, etc.) as a lightweight rollback point.
+                      </p>
+                      <div className="space-y-2 mb-4">
+                          <label className="text-xs font-medium text-muted-foreground">Optional Label</label>
+                          <Input
+                              placeholder='e.g., "Before env var update"'
+                              value={snapshotLabel}
+                              onChange={(e) => setSnapshotLabel(e.target.value)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') handleCreateSnapshot(); }}
+                              autoFocus
+                          />
+                      </div>
+                      <div className="flex justify-end gap-2">
+                          <Button variant="outline" onClick={() => { setShowCreateSnapshotDialog(false); setSnapshotLabel(''); }}>
+                              Cancel
+                          </Button>
+                          <Button onClick={handleCreateSnapshot} disabled={creatingSnapshot}>
+                              {creatingSnapshot ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                              Create Snapshot
+                          </Button>
+                      </div>
+                  </div>
+              </div>
+          )}
+
+          {diffingSnapshot && !diffResults && (
+              <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 animate-in fade-in duration-200">
+                  <div className="bg-background border border-border rounded-lg p-6 max-w-md w-full mx-4 shadow-lg">
+                      <div className="flex items-center gap-2 mb-4">
+                          <GitCompare className="h-5 w-5 text-blue-500" />
+                          <h3 className="text-lg font-semibold">Compare Snapshot</h3>
+                      </div>
+                      <p className="text-sm text-muted-foreground mb-4">
+                          Select a snapshot to compare with the one from {new Date(diffingSnapshot.created_at).toLocaleString()}.
+                      </p>
+                      <div className="space-y-1 mb-4">
+                          <label className="text-xs font-medium text-muted-foreground">Compare against:</label>
+                          <select
+                              value={compareSnapshotId}
+                              onChange={(e) => setCompareSnapshotId(e.target.value)}
+                              className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm"
+                          >
+                              <option value="">-- Select a snapshot --</option>
+                              {snapshots
+                                  .filter(s => s.id !== diffingSnapshot.id)
+                                  .map(s => (
+                                      <option key={s.id} value={s.id}>
+                                          {new Date(s.created_at).toLocaleString()} ({s.trigger}) {s.label ? `- ${s.label}` : ''}
+                                      </option>
+                                  ))}
+                          </select>
+                      </div>
+                      <div className="flex justify-end gap-2">
+                          <Button variant="outline" onClick={() => { setDiffingSnapshot(null); setCompareSnapshotId(''); }}>
+                              Cancel
+                          </Button>
+                          <Button
+                              onClick={() => handleDiffSnapshot(diffingSnapshot, compareSnapshotId)}
+                              disabled={!compareSnapshotId || diffLoading}
+                          >
+                              {diffLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                              Compare
+                          </Button>
+                      </div>
+                  </div>
+              </div>
+          )}
+
+          {diffResults && (
+              <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 animate-in fade-in duration-200">
+                  <div className="bg-background border border-border rounded-lg p-6 max-w-2xl w-full mx-4 shadow-lg max-h-[85vh] flex flex-col">
+                      <div className="flex items-center gap-2 mb-2">
+                          <GitCompare className="h-5 w-5 text-blue-500" />
+                          <h3 className="text-lg font-semibold">Compare Configuration Snapshots</h3>
+                      </div>
+                      <p className="text-xs text-muted-foreground mb-4">
+                          Comparing snapshot A ({new Date(diffResults.snapshot_a.created_at).toLocaleString()}, {diffResults.snapshot_a.trigger}) 
+                          with snapshot B ({new Date(diffResults.snapshot_b.created_at).toLocaleString()}, {diffResults.snapshot_b.trigger})
+                      </p>
+                      
+                      <div className="flex-1 overflow-y-auto space-y-4 pr-1">
+                          {diffResults.diff.total_changes === 0 ? (
+                              <div className="text-center py-8 text-muted-foreground text-sm">
+                                  No changes detected. The configurations are identical.
+                              </div>
+                          ) : (
+                              <>
+                                  {Object.keys(diffResults.diff.added).length > 0 && (
+                                      <div className="space-y-1.5">
+                                          <h4 className="text-xs font-semibold text-emerald-500 uppercase tracking-wider">Added Keys</h4>
+                                          <div className="border border-emerald-500/20 bg-emerald-500/5 rounded-lg p-3 font-mono text-xs space-y-1">
+                                              {Object.entries(diffResults.diff.added).map(([key, val]) => (
+                                                  <div key={key} className="break-all">
+                                                      <span className="text-emerald-400 font-semibold">+ {key}:</span> <span className="text-muted-foreground">{JSON.stringify(val)}</span>
+                                                  </div>
+                                              ))}
+                                          </div>
+                                      </div>
+                                  )}
+                                  
+                                  {Object.keys(diffResults.diff.removed).length > 0 && (
+                                      <div className="space-y-1.5">
+                                          <h4 className="text-xs font-semibold text-red-500 uppercase tracking-wider">Removed Keys</h4>
+                                          <div className="border border-red-500/20 bg-red-500/5 rounded-lg p-3 font-mono text-xs space-y-1">
+                                              {Object.entries(diffResults.diff.removed).map(([key, val]) => (
+                                                  <div key={key} className="break-all">
+                                                      <span className="text-red-400 font-semibold">- {key}:</span> <span className="text-muted-foreground">{JSON.stringify(val)}</span>
+                                                  </div>
+                                              ))}
+                                          </div>
+                                      </div>
+                                  )}
+                                  
+                                  {Object.keys(diffResults.diff.changed).length > 0 && (
+                                      <div className="space-y-1.5">
+                                          <h4 className="text-xs font-semibold text-blue-500 uppercase tracking-wider">Modified Keys</h4>
+                                          <div className="border border-blue-500/20 bg-blue-500/5 rounded-lg p-3 font-mono text-xs space-y-2">
+                                              {Object.entries(diffResults.diff.changed).map(([key, diff]: [string, any]) => (
+                                                  <div key={key} className="border-b border-blue-500/10 last:border-0 pb-2 last:pb-0 break-all">
+                                                      <div className="font-semibold text-blue-400">{key}:</div>
+                                                      <div className="grid grid-cols-2 gap-2 mt-1">
+                                                          <div className="bg-red-500/5 p-2 rounded border border-red-500/10">
+                                                              <span className="text-red-400 font-semibold">Old:</span> <span className="text-muted-foreground text-[11px]">{JSON.stringify(diff.old)}</span>
+                                                          </div>
+                                                          <div className="bg-emerald-500/5 p-2 rounded border border-emerald-500/10">
+                                                              <span className="text-emerald-400 font-semibold">New:</span> <span className="text-muted-foreground text-[11px]">{JSON.stringify(diff.new)}</span>
+                                                          </div>
+                                                      </div>
+                                                  </div>
+                                              ))}
+                                          </div>
+                                      </div>
+                                  )}
+                              </>
+                          )}
+                      </div>
+                      
+                      <div className="flex justify-end gap-2 pt-4 border-t border-border mt-4">
+                          <Button variant="outline" onClick={() => { setDiffResults(null); setDiffingSnapshot(null); setCompareSnapshotId(''); }}>
+                              Close
+                          </Button>
+                      </div>
+                  </div>
+              </div>
+          )}
+         </>
     );
 }
