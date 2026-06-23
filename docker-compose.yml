@@ -696,36 +696,6 @@ services:
     - smsly-proxy
 
   # ============================================================
-  # Traefik watchdog — auto-restart Traefik if it gets stuck on
-  # slow socket-proxy calls (symptom: process alive but API silent).
-  # The metrics/ping endpoint is the cheapest liveness check.
-  # ============================================================
-  traefik-watchdog:
-    image: docker:cli
-    container_name: smsly-traefik-watchdog
-    restart: unless-stopped
-    command: ["sh", "/watchdog.sh"]
-    environment:
-      - TRAEFIK_CONTAINER=smsly-hosting-traefik-1
-      - CHECK_INTERVAL=30
-      - MAX_FAILURES=3
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./scripts/traefik-watchdog.sh:/watchdog.sh:ro
-    healthcheck:
-      # Check the watchdog's own script is running (it loops forever).
-      # The script doesn't expose a port, so we check the process.
-      test: ["CMD-SHELL", "ps aux | grep -E 'watchdog\\.sh' | grep -v grep > /dev/null || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    depends_on:
-      - traefik
-    networks:
-      - smsly-net
-
-  # ============================================================
   # Caddy (TLS termination + main routing)
   # Uses the auto-generated Caddyfile at /etc/caddy/Caddyfile
   # that the backend regenerates whenever services change.
