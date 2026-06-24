@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     Scan, Rocket, CheckCircle2, XCircle, AlertCircle, Loader2, Plus,
     Server, Database, Globe, GitBranch, Zap, ArrowRight, RefreshCw, Sparkles,
-    Code, CheckCircle, AlertTriangle, Variable
+    Code, CheckCircle, AlertTriangle, Variable, Terminal
 } from 'lucide-react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import Link from 'next/link';
@@ -122,6 +122,7 @@ export default function EcosystemPage() {
     const [deployResults, setDeployResults] = useState<DeployResult[]>([]);
     const [error, setError] = useState<string | null>(null);
     const [scanProgress, setScanProgress] = useState('Initializing scan...');
+    const [scanLogs, setScanLogs] = useState<string[]>([]);
     const [expandedEnv, setExpandedEnv] = useState<number | null>(null);
     const [servers, setServers] = useState<any[]>([]);
     const [availableRepos, setAvailableRepos] = useState<any[]>([]);
@@ -233,7 +234,12 @@ export default function EcosystemPage() {
                 } else {
                     // Still running - could update progress based on data if backend provides it
                     if (data.status === 'PROGRESS' || data.result?.state) {
-                         setScanProgress(data.result?.state || 'Scanning in progress...');
+                         const msg = data.result?.state || 'Scanning in progress...';
+                         setScanProgress(msg);
+                         setScanLogs(prev => {
+                             if (prev[prev.length - 1] !== msg) return [...prev, msg];
+                             return prev;
+                         });
                     }
                     setTimeout(poll, 2000);
                 }
@@ -272,6 +278,7 @@ export default function EcosystemPage() {
         setStep('scanning'); // Temporary state for loading
         setError(null);
         setScanProgress('Fetching your GitHub repositories...');
+        setScanLogs(['Fetching your GitHub repositories...']);
         
         try {
             const data = await apiGet('/api/v1/integrations/github/repos/?per_page=100');
@@ -291,6 +298,7 @@ export default function EcosystemPage() {
         setError(null);
         setPlan(null);
         setScanProgress('Initializing batch processing...');
+        setScanLogs(['Initializing batch processing...']);
 
         try {
             const data = await apiPost('/api/v1/cloud/ecosystem/scan/', { 
@@ -312,7 +320,12 @@ export default function EcosystemPage() {
             let i = 0;
             const interval = setInterval(() => {
                 if (i < messages.length) {
-                    setScanProgress(messages[i]);
+                    const msg = messages[i];
+                    setScanProgress(msg);
+                    setScanLogs(prev => {
+                        if (prev[prev.length - 1] !== msg) return [...prev, msg];
+                        return prev;
+                    });
                     i++;
                 }
             }, 5000);
@@ -711,23 +724,48 @@ export default function EcosystemPage() {
                     {/* Step: Scanning */}
                     {step === 'scanning' && (
                         <motion.div
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            className="text-center py-16"
+                            initial={{ opacity: 0, scale: 0.95 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            className="max-w-2xl mx-auto space-y-6"
                         >
-                            <div className="w-24 h-24 mx-auto mb-6 rounded-3xl bg-gradient-to-br from-blue-500/20 to-cyan-500/10 flex items-center justify-center border border-blue-500/20">
-                                <Loader2 className="text-blue-500 animate-spin" size={40} />
+                            <div className="text-center">
+                                <div className="w-20 h-20 mx-auto mb-4 rounded-3xl bg-gradient-to-br from-blue-500/20 to-cyan-500/10 flex items-center justify-center border border-blue-500/20">
+                                    <Loader2 className="text-blue-500 animate-spin" size={32} />
+                                </div>
+                                <h2 className="text-2xl font-bold mb-2">Scanning Your Repositories</h2>
+                                <p className="text-muted-foreground">{scanProgress}</p>
                             </div>
-                            <h2 className="text-2xl font-bold mb-3">Scanning Your Repositories</h2>
-                            <p className="text-muted-foreground">{scanProgress}</p>
-                            <div className="mt-6 flex justify-center">
-                                <div className="h-1 w-64 bg-muted rounded-full overflow-hidden">
-                                    <motion.div
-                                        className="h-full bg-gradient-to-r from-blue-500 to-cyan-500 rounded-full"
-                                        initial={{ width: '5%' }}
-                                        animate={{ width: '85%' }}
-                                        transition={{ duration: 30, ease: 'linear' }}
-                                    />
+
+                            <div className="bg-zinc-950 border border-zinc-800 rounded-xl overflow-hidden font-mono text-sm shadow-2xl">
+                                <div className="flex items-center gap-2 px-4 py-3 border-b border-zinc-800 bg-zinc-900/50">
+                                    <Terminal size={16} className="text-zinc-500" />
+                                    <span className="text-zinc-400 font-medium">System Output</span>
+                                    <div className="flex gap-1.5 ml-auto">
+                                        <div className="w-3 h-3 rounded-full bg-red-500/20 border border-red-500/50"></div>
+                                        <div className="w-3 h-3 rounded-full bg-yellow-500/20 border border-yellow-500/50"></div>
+                                        <div className="w-3 h-3 rounded-full bg-green-500/20 border border-green-500/50"></div>
+                                    </div>
+                                </div>
+                                <div className="p-4 h-64 overflow-y-auto flex flex-col justify-end">
+                                    <div className="space-y-2">
+                                        <AnimatePresence initial={false}>
+                                            {scanLogs.map((log, index) => (
+                                                <motion.div
+                                                    key={index}
+                                                    initial={{ opacity: 0, x: -10 }}
+                                                    animate={{ opacity: 1, x: 0 }}
+                                                    className="flex items-start gap-3"
+                                                >
+                                                    <span className="text-zinc-600 shrink-0">
+                                                        [{new Date().toLocaleTimeString([], { hour12: false })}]
+                                                    </span>
+                                                    <span className={`flex-1 ${index === scanLogs.length - 1 ? 'text-blue-400 animate-pulse' : 'text-zinc-300'}`}>
+                                                        {log}
+                                                    </span>
+                                                </motion.div>
+                                            ))}
+                                        </AnimatePresence>
+                                    </div>
                                 </div>
                             </div>
                         </motion.div>

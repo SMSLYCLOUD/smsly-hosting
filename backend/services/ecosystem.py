@@ -960,14 +960,55 @@ def analyze_ecosystem_chunked(repos_data: list[dict], github_token: str | None =
 
     # Final AI Synthesis Pass if there was more than one chunk
     if len(chunks) > 1:
+        # Re-build global summaries for the synthesis prompt
+        repo_summaries = []
+        for rd in repos_data:
+            summary = f"\n### REPO: {rd.get('repo', 'unknown')} (Name: {rd.get('repo_name_short', 'unknown')})\n"
+            summary += f"Stack: {rd.get('stack', 'unknown')}\n"
+            if rd.get('env_vars_context'):
+                summary += "Expected Env Vars (with Logic Hints):\n"
+                for var, ctxs in rd['env_vars_context'].items():
+                    ctx = ctxs[0] if ctxs else "No context"
+                    summary += f"- {var}: {ctx}\n"
+            repo_summaries.append(summary)
+
+        repo_names = [rd.get('repo_name_short') for rd in repos_data if rd.get('repo_name_short')]
+        cross_links = []
+        for rd in repos_data:
+            current_vars = _safe_set(rd.get('env_vars_context', {}).keys())
+            for other_rd in repos_data:
+                if other_rd['repo'] == rd['repo']: continue
+                other_vars = _safe_set(other_rd.get('env_vars_context', {}).keys())
+                common = current_vars.intersection(other_vars)
+                if common:
+                    cross_links.append(f"SHARED STATE: {rd['repo']} and {other_rd['repo']} share env keys: {list(common)}")
+            for other in repo_names:
+                if other == rd.get('repo_name_short'): continue
+                for path, content in rd.get('configs_summary', {}).items():
+                    if other in content.lower():
+                        cross_links.append(f"DEPENDENCY HINT: {rd['repo']} mentions {other} in {path}")
+                        
+        try:
+            cross_links_deduped = _safe_set(cross_links)
+            brief_header = "ECOSYSTEM DISCOVERY HINTS:\n" + "\n".join(cross_links_deduped) if cross_links_deduped else ""
+        except TypeError:
+            cross_links_deduped = _safe_set([str(x) for x in cross_links])
+            brief_header = "ECOSYSTEM DISCOVERY HINTS:\n" + "\n".join(cross_links_deduped) if cross_links_deduped else ""
+
         synthesis_prompt = f"""
         You are the Senate Architect performing a FINAL SYNTHESIS pass.
         We have processed a massive ecosystem in batches. Here is the combined JSON plan of all services and addons.
 
+        ### ECOSYSTEM ARCHITECTURAL BRIEF (GLOBAL)
+        {brief_header}
+
+        ### REPOSITORY DETAILS (GLOBAL)
+        {"".join(repo_summaries)}
+
         YOUR JOB:
         1. Resolve any cross-repo dependencies. If Service A needs the URL of Service B, ensure Service A's env vars use {{{{SERVICE:service-b}}}}.
         2. Consolidate addons (e.g. ensure only one POSTGRES if they should share).
-        3. Ensure 100% env var coverage.
+        3. Ensure 100% env var coverage by analyzing the "Expected Env Vars" in the REPOSITORY DETAILS.
         4. FULL DEPLOY ORDER AUTHORITY: You have complete power to restructure the "deploy_order" and "deploy_sequence" from scratch to ensure a successful deployment (e.g., Auth/Identity -> Core API -> Gateways -> Frontends).
 
         CURRENT COMBINED PLAN:

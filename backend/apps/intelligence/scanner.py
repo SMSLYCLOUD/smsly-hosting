@@ -228,11 +228,7 @@ class RepoScanner:
         for root, dirs, files in os.walk(self.source_dir):
             dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
 
-            # Limit depth to 3 levels
-            depth = root.replace(self.source_dir, '').count(os.sep)
-            if depth > 3:
-                dirs.clear()
-                continue
+            # No depth limit for config scanning
 
             for f in files:
                 if f in all_targets or f.endswith(('.env', '.toml', '.yaml', '.yml')):
@@ -276,10 +272,7 @@ class RepoScanner:
         # 1. Parse .env files for variable names
         for root, dirs, files in os.walk(self.source_dir):
             dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
-            depth = root.replace(self.source_dir, '').count(os.sep)
-            if depth > 2:
-                dirs.clear()
-                continue
+
 
             for f in files:
                 if f in ENV_FILES or f.startswith('.env'):
@@ -333,10 +326,7 @@ class RepoScanner:
 
         for root, dirs, files in os.walk(self.source_dir):
             dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
-            depth = root.replace(self.source_dir, '').count(os.sep)
-            if depth > 4:
-                dirs.clear()
-                continue
+
 
             for f in files:
                 _, ext = os.path.splitext(f)
