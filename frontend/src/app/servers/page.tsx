@@ -86,7 +86,12 @@ async function apiFetch(path: string, method = 'GET', body?: object) {
             const text = await res.text();
             try {
                 const data = JSON.parse(text);
-                message = data?.error?.message || data?.error || data?.detail || JSON.stringify(data);
+                let rawMsg = data?.error?.message || data?.error || data?.detail || data;
+                if (typeof rawMsg === 'object' && rawMsg !== null) {
+                    message = Object.values(rawMsg).flat().join(', ');
+                } else {
+                    message = String(rawMsg);
+                }
             } catch {
                 message = text || message;
             }
