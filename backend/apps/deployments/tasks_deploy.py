@@ -784,6 +784,47 @@ def _do_promote(deployment, provider):
         )
 
 
+def _sync_service_dns_to_node(deployment, service):
+    """
+    Auto-provision DNS records on Cloudflare to point to the remote node IP.
+    """
+    if not getattr(service, 'server', None) or not service.server.host:
+        return
+
+    node_ip = str(service.server.host).strip()
+    if not node_ip or node_ip in ("127.0.0.1", "localhost", "0.0.0.0"):
+        return
+
+    domains = []
+    if service.public_domain:
+        domains.append(service.public_domain.strip())
+    if service.custom_domains:
+        domains.extend([d.strip() for d in service.custom_domains.split(',') if d.strip()])
+
+    if not domains:
+        return
+
+    try:
+        from apps.deployments.models import PlatformConfig
+        from apps.deployments.services.dns import ensure_dns_records
+
+        config = PlatformConfig.objects.first()
+        if not config or not config.cloudflare_api_token:
+            return
+
+        append_log(deployment, f"[DNS] Syncing DNS records to Node IP ({node_ip})...\n")
+        dns_result = ensure_dns_records(domains, node_ip, config.cloudflare_api_token)
+        if not dns_result.get("ok"):
+            append_log(deployment, f"[DNS] Warning: {dns_result.get('errors')}\n")
+        else:
+            created = len(dns_result.get('created', []))
+            updated = len(dns_result.get('updated', []))
+            if created > 0 or updated > 0:
+                append_log(deployment, f"[DNS] Sync OK (Created: {created}, Updated: {updated})\n")
+    except Exception as dns_exc:
+        logger.warning("Service DNS sync failed: %s", dns_exc)
+        append_log(deployment, f"[DNS] Sync Error: {dns_exc}\n")
+
 
 def _deploy_container(deployment, provider, image_name):
     """Deploy the built image to the cloud provider."""
@@ -834,6 +875,8 @@ def _deploy_container(deployment, provider, image_name):
                 f"[OK] Compose deployment successful. "
                 f"Container: {container_name}\n"
             )
+
+            _sync_service_dns_to_node(deployment, service)
 
             _post_deploy_monitor.delay(
                 deployment_id=str(deployment.id), provider_id=str(provider.id),
@@ -1050,6 +1093,8 @@ def _deploy_container(deployment, provider, image_name):
             "[DEPLOY] ✅ Container live with Traefik routing enabled.\n"
             "Domain should be accessible immediately.\n"
         )
+
+        _sync_service_dns_to_node(deployment, service)
 
         # Post-deploy runtime monitor (watches for crashes)
         _post_deploy_monitor.delay(

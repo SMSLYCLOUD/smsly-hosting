@@ -102,6 +102,7 @@ EOF
     env_set_value "$env_file" "MODE" "agent"
     env_set_value "$env_file" "COMPOSE_FILE" "infrastructure/docker/docker-compose.agent-lite.yml"
     env_set_value "$env_file" "TRAEFIK_HTTP_BIND" "0.0.0.0:80"
+    env_set_value "$env_file" "TRAEFIK_ENABLE_WEBSECURE" "false"
     env_set_value "$env_file" "MASTER_IP" "$MASTER_IP"
     env_set_value "$env_file" "MASTER_MESH_IP" "$MASTER_MESH_IP"
     env_set_value "$env_file" "SMSLY_NODE_HOST" "$SMSLY_NODE_HOST"
