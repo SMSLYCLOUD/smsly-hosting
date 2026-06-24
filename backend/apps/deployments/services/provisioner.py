@@ -1105,6 +1105,29 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
             install_args.append("--mode=agent-lite")
         elif install_mode == "node":
             install_args.append("--mode=node")
+
+            # --- Node Provisioning & Automated TLS ---
+            from apps.deployments.models_core import PlatformConfig
+            from apps.deployments.services.dns import ensure_dns_records
+            config = PlatformConfig.get_config()
+            cf_token = config.cloudflare_api_token
+            root_domain = config.root_domain
+
+            if cf_token and root_domain:
+                node_slug = str(server.id).split('-')[0]
+                node_domain = f"node-{node_slug}.{root_domain}"
+                
+                _append_log(server, f"🌐 Automated TLS: Generating DNS record for node ({node_domain})...")
+                try:
+                    ensure_dns_records([node_domain], server.host, cf_token)
+                    _append_log(server, "✅ Automated TLS: DNS sync OK.")
+                    
+                    install_env["CLOUDFLARE_API_TOKEN"] = cf_token
+                    install_env["DOMAIN"] = node_domain
+                    install_env["USE_SSL"] = "true"
+                except Exception as e:
+                    logger.error("Failed to provision DNS/TLS for node %s: %s", server.name, e)
+                    _append_log(server, f"⚠️ Automated TLS: Failed to generate DNS record: {e}")
         # ─── Resume Check ──────────────────────────────────────────────────
         stdin, stdout, stderr = ssh.exec_command("test -f /opt/smsly-hosting/.smsly_install_state && echo 'RESUME' || echo 'FRESH'")
         remote_mode = stdout.read().decode().strip()
@@ -1246,8 +1269,8 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                 elif line.startswith(("API_TOKEN=", "ADMIN_TOKEN=", "AUTH_TOKEN=")):
                     api_token = line.split("=", 1)[1].strip().strip("'\"")
 
-        # -- Step 4b: Extract Lite Agent TLS Certificate --
-        if install_mode == "agent-lite":
+        # -- Step 4b: Extract TLS Certificate --
+        if install_mode in ("agent-lite", "node"):
             _append_log(server, "[cred] Fetching node TLS certificate automatically...")
             # The installer places the self-signed cert in the certs directory
             stdin, stdout, stderr = ssh.exec_command("cat /opt/smsly-hosting/certs/registry.crt 2>/dev/null || cat /opt/smsly-hosting/caddy-config/certs/ip.crt 2>/dev/null")
