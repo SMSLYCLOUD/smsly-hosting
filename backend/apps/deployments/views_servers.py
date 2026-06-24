@@ -953,15 +953,18 @@ class ManagedServerCreateSerializer(serializers.ModelSerializer):
                 # A valid user-registered node has a public IP
                 # (the operator's VPS), so anything in private
                 # ranges is an SSRF target.
-                if not ip.is_global or (
-                    ip.is_loopback or ip.is_link_local
-                    or ip.is_multicast or ip.is_reserved
-                    or ip.is_unspecified or ip.is_private
-                ):
-                    raise serializers.ValidationError(
-                        f"api_url IP {ip} is not a public address "
-                        f"(loopback / private / link-local / reserved)."
-                    )
+                from django.conf import settings
+                allow_local = getattr(settings, 'ALLOW_LOCAL_NODES', False)
+                if not allow_local:
+                    if not ip.is_global or (
+                        ip.is_loopback or ip.is_link_local
+                        or ip.is_multicast or ip.is_reserved
+                        or ip.is_unspecified or ip.is_private
+                    ):
+                        raise serializers.ValidationError(
+                            f"api_url IP {ip} is not a public address "
+                            f"(loopback / private / link-local / reserved)."
+                        )
             except ValueError:
                 pass  # hostname — allowed
         return value
