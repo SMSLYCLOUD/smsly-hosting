@@ -297,13 +297,16 @@ class RepoScanner:
             re.compile(r'environ\.get\(["\']([A-Z_][A-Z0-9_]*)["\']'),
             re.compile(r'environ\[["\']([A-Z_][A-Z0-9_]*)["\']'),
             re.compile(r'config\(["\']([A-Z_][A-Z0-9_]*)["\']'),
-            re.compile(r'BaseSettings\):.*?\n\s+([A-Z_][A-Z0-9_]*)', re.DOTALL), # Pydantic settings
-            re.compile(r'Field\(.*?, env=["\']([A-Z_][A-Z0-9_]*)["\']'),
+            re.compile(r'env\(["\']([A-Z_][A-Z0-9_]*)["\']\)?'),
+            re.compile(r'env\.[a-z]+\(["\']([A-Z_][A-Z0-9_]*)["\']\)?'),
+            re.compile(r'^\s*([A-Z_][A-Z0-9_]{3,})\s*:\s*(?:str|int|bool|float|list|dict|AnyHttpUrl|PostgresDsn|RedisDsn)'), # Pydantic settings
+            re.compile(r'Field\(.*?(?:env|alias)=["\']([A-Z_][A-Z0-9_]*)["\']'),
 
             # ── JavaScript / TypeScript ──
             re.compile(r'process\.env\.([A-Z_][A-Z0-9_]*)'),
             re.compile(r'process\.env\[["\']([A-Z_][A-Z0-9_]*)["\']'),
             re.compile(r'import\.meta\.env\.([A-Z_][A-Z0-9_]*)'),
+            re.compile(r'config\.get\(["\']([A-Z_][A-Z0-9_]*)["\']\)'), # Node config package
             re.compile(r'configService\.get(?:OrThrow)?\(["\']([A-Z_][A-Z0-9_]*)["\']'),
             re.compile(r'env: ["\']([A-Z_][A-Z0-9_]*)["\']'), # Next.js / Vite configs
             re.compile(r'RuntimeConfig.*?([A-Z_][A-Z0-9_]*)'),
