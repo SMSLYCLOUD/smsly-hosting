@@ -138,7 +138,7 @@ urlpatterns = [
     ),
     path(
         'services/<uuid:pk>/env-vars/<int:var_id>/',
-        ServiceViewSet.as_view({'delete': 'delete_env_var', 'patch': 'delete_env_var'}),
+        ServiceViewSet.as_view({'get': 'env_var_detail', 'delete': 'env_var_detail', 'patch': 'env_var_detail'}),
         name='service-env-var-detail-hyphen',
     ),
     # Non-router views
