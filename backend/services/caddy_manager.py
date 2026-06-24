@@ -1048,16 +1048,18 @@ def generate_caddyfile(config) -> str:
                             os.chmod(_f, 0o644)
                     except OSError:
                         pass
-        if os.path.exists(_crt_path) and os.path.exists(_key_path) and _server_ip:
-            # IP-specific HTTPS block using SNI routing.
-            # Caddy routes TLS by SNI hostname: domain requests go to domain
-            # blocks (Let's Encrypt), IP requests go here (self-signed + redirect).
-            sections.append(
-                f"""{_server_ip} {{
-    tls {_caddy_crt} {_caddy_key}
-    redir http://{_server_ip}{{uri}} 308
-}}"""
-            )
+        # if os.path.exists(_crt_path) and os.path.exists(_key_path) and _server_ip:
+        #     # IP-specific HTTPS block using SNI routing.
+        #     # Caddy routes TLS by SNI hostname: domain requests go to domain
+        #     # blocks (Let's Encrypt), IP requests go here (self-signed + redirect).
+        #     # WARNING: Defining an HTTPS block for the IP triggers Caddy's
+        #     # Automatic HTTPS to aggressively redirect HTTP to HTTPS for the IP!
+        #     sections.append(
+        #         f"""{_server_ip} {{
+        # tls {_caddy_crt} {_caddy_key}
+        # redir http://{_server_ip}{{uri}} 308
+        # }}"""
+        #     )
     except Exception as _exc:
         logger.warning("Could not generate self-signed cert for IP redirect: %s", _exc)
 
