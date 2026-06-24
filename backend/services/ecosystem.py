@@ -912,13 +912,17 @@ def analyze_ecosystem_chunked(repos_data: list[dict], github_token: str | None =
             pool.submit(_analyze_single_chunk, i, chunk, github_token, ai_provider): i
             for i, chunk in enumerate(chunks)
         }
-        for future in as_completed(futures, timeout=600):
-            try:
-                idx, plan = future.result(timeout=120)
-                results[idx] = plan
-            except Exception as exc:
-                idx = futures[future]
-                results[idx] = {"error": str(exc)}
+        from concurrent.futures import TimeoutError as FuturesTimeoutError
+        try:
+            for future in as_completed(futures, timeout=600):
+                try:
+                    idx, plan = future.result()
+                    results[idx] = plan
+                except Exception as exc:
+                    idx = futures[future]
+                    results[idx] = {"error": str(exc)}
+        except FuturesTimeoutError:
+            logger.error("AI Ecosystem chunk analysis timed out.")
 
     for i, plan in enumerate(results):
         if plan is None:
