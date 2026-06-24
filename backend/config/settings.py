@@ -696,18 +696,30 @@ SOCIALACCOUNT_PROVIDERS = {
             'repo',
             'read:org',
         ],
+        'APP': {
+            'client_id': config('GITHUB_CLIENT_ID', default=''),
+            'secret': config('GITHUB_CLIENT_SECRET', default=''),
+        }
     },
     'gitlab': {
         'SCOPE': [
             'read_user',
             'api',
         ],
+        'APP': {
+            'client_id': config('GITLAB_CLIENT_ID', default=''),
+            'secret': config('GITLAB_CLIENT_SECRET', default=''),
+        }
     },
     'bitbucket_oauth2': {
         'SCOPE': [
             'account',
             'repository',
         ],
+        'APP': {
+            'client_id': config('BITBUCKET_CLIENT_ID', default=''),
+            'secret': config('BITBUCKET_CLIENT_SECRET', default=''),
+        }
     },
     'google': {
         'SCOPE': [
@@ -716,6 +728,10 @@ SOCIALACCOUNT_PROVIDERS = {
         ],
         'AUTH_PARAMS': {
             'access_type': 'online',
+        },
+        'APP': {
+            'client_id': config('GOOGLE_CLIENT_ID', default=''),
+            'secret': config('GOOGLE_CLIENT_SECRET', default=''),
         }
     }
 }
