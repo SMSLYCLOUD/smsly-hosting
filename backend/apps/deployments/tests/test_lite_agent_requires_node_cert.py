@@ -67,7 +67,7 @@ class IsLiteAgentRequiresNodeCertificateTests(TestCase):
         })
         self.assertTrue(ser.is_valid(), f"Errors: {ser.errors}")
 
-    def test_provision_serializer_rejects_lite_agent_without_cert(self):
+    def test_provision_serializer_accepts_lite_agent_without_cert(self):
         ser = ManagedServerProvisionSerializer(data={
             "name": "EdgeProv",
             "host": "198.51.100.5",
@@ -75,8 +75,7 @@ class IsLiteAgentRequiresNodeCertificateTests(TestCase):
             "ssh_password": "secret",
             "is_lite_agent": True,
         })
-        self.assertFalse(ser.is_valid())
-        self.assertIn("node_certificate", ser.errors)
+        self.assertTrue(ser.is_valid(), f"Errors: {ser.errors}")
 
     def test_provision_serializer_accepts_lite_agent_with_cert(self):
         ser = ManagedServerProvisionSerializer(data={

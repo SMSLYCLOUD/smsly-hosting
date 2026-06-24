@@ -402,14 +402,6 @@ export default function ServersPage() {
 
     const addServerProvision = async () => {
         if (!provisionForm.name || !provisionForm.host) return;
-        if (provisionForm.is_lite_agent && !provisionForm.node_certificate.trim()) {
-            toast({
-                title: 'Node certificate required',
-                description: 'Lite agents need a TLS certificate for the WireGuard peer. Paste the certificate text or leave Lite Agent unchecked.',
-                variant: 'destructive',
-            });
-            return;
-        }
         setSubmitting(true);
         try {
             // Build payload — strip the non-model ssh_auth_method
@@ -423,6 +415,7 @@ export default function ServersPage() {
                 is_primary: provisionForm.is_primary,
                 allow_user_workloads: provisionForm.allow_user_workloads,
                 is_lite_agent: provisionForm.is_lite_agent,
+                ssh_auth_method: provisionForm.ssh_auth_method,
             };
             if (provisionForm.is_lite_agent && provisionForm.node_certificate.trim()) {
                 payload.node_certificate = provisionForm.node_certificate.trim();
@@ -886,12 +879,7 @@ function ProvisionForm({
                 onChange={v => setForm({ ...form, is_lite_agent: v })}
             />
 
-            {form.is_lite_agent && (
-                <NodeCertificateInput
-                    value={form.node_certificate}
-                    onChange={v => setForm({ ...form, node_certificate: v })}
-                />
-            )}
+            {/* Node Certificate is automatically fetched by the provisioner over SSH for new Lite Agents */}
 
             {/* Auth Method Toggle */}
             <div>
