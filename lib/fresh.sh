@@ -661,6 +661,8 @@ except Exception:
 
     echo -e "${GREEN}  ✓ All secrets generated successfully${NC}"
 
+
+
     # Agent-lite nodes must use the master's DB password, not a locally generated one.
     # SSH into the master to fetch the correct POSTGRES_PASSWORD.
     if is_agent_lite_mode && [ -n "${MASTER_IP:-}" ] && [ "$MASTER_IP" != "127.0.0.1" ]; then
@@ -681,6 +683,7 @@ except Exception:
     ENV_MODE_VALUE="$(mode_env_value)"
     ENV_NODE_TYPE="$INSTALL_MODE"
     ENV_TRAEFIK_HTTP_BIND="127.0.0.1:8081"
+    ENV_TRAEFIK_HTTPS_BIND="127.0.0.1:8443"
     ENV_STARTUP_CADDY_SYNC="true"
     if is_agent_lite_mode; then
         ENV_NODE_TYPE="agent-lite"
@@ -688,6 +691,7 @@ except Exception:
     elif is_node_mode; then
         ENV_NODE_TYPE="node"
         ENV_TRAEFIK_HTTP_BIND="0.0.0.0:80"
+        ENV_TRAEFIK_HTTPS_BIND="0.0.0.0:443"
         ENV_STARTUP_CADDY_SYNC="false"
     fi
     cat <<EOF > "$ENV_TMP"
@@ -799,6 +803,7 @@ SMSLY_RUN_ENTRYPOINT_TASKS=false
 # Edge/proxy sync is performed explicitly by the installer and watcher services.
 SMSLY_ENABLE_STARTUP_CADDY_SYNC=$ENV_STARTUP_CADDY_SYNC
 TRAEFIK_HTTP_BIND=$ENV_TRAEFIK_HTTP_BIND
+TRAEFIK_HTTPS_BIND=$ENV_TRAEFIK_HTTPS_BIND
 EOF
 
     # ─── Dynamic Build Resource Allocation ──────────────────────────────

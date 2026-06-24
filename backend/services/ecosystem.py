@@ -817,10 +817,7 @@ def analyze_ecosystem(repos_data: list[dict], github_token: str | None = None, a
             )
             response_text = response_text or ""
         except Exception as ai_exc:
-            logger.warning(
-                "AI analysis unavailable (%s); falling back to heuristic plan",
-                ai_exc,
-            )
+            logger.exception("AI analysis unavailable; falling back to heuristic plan")
             response_text = ""
             provider = None
 
