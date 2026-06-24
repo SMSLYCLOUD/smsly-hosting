@@ -967,7 +967,6 @@ function ProvisionForm({
                     onClick={onSubmit}
                     disabled={
                         submitting || !form.name || !form.host
-                        || (form.is_lite_agent && !form.node_certificate.trim())
                     }
                     className="px-4 py-2 text-sm rounded-lg bg-gradient-to-r from-blue-500 to-cyan-600 text-white font-semibold flex items-center gap-2 disabled:opacity-50"
                 >
