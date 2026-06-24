@@ -1246,6 +1246,19 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                 elif line.startswith(("API_TOKEN=", "ADMIN_TOKEN=", "AUTH_TOKEN=")):
                     api_token = line.split("=", 1)[1].strip().strip("'\"")
 
+        # -- Step 4b: Extract Lite Agent TLS Certificate --
+        if install_mode == "agent-lite":
+            _append_log(server, "[cred] Fetching node TLS certificate automatically...")
+            # The installer places the self-signed cert in the certs directory
+            stdin, stdout, stderr = ssh.exec_command("cat /opt/smsly-hosting/certs/registry.crt 2>/dev/null || cat /opt/smsly-hosting/caddy-config/certs/ip.crt 2>/dev/null")
+            tls_cert = stdout.read().decode("utf-8", errors="replace").strip()
+            if tls_cert and "-----BEGIN CERTIFICATE-----" in tls_cert:
+                server.node_certificate = tls_cert
+                server.save(update_fields=["node_certificate"])
+                _append_log(server, "✅ Node TLS certificate automatically fetched and saved!")
+            else:
+                _append_log(server, "⚠️ Warning: Could not automatically fetch node TLS certificate.")
+
         # -- Step 5: Determine API URL --
         # Check if SSL was set up (look for Caddy with domain)
         stdin, stdout, stderr = ssh.exec_command(

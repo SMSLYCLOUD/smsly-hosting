@@ -970,7 +970,7 @@ class ManagedServerCreateSerializer(serializers.ModelSerializer):
 class ManagedServerProvisionSerializer(serializers.ModelSerializer):
     """For 'Provision New' mode — user provides SSH credentials."""
     ssh_auth_method = serializers.ChoiceField(
-        choices=["password", "key"], write_only=True,
+        choices=["password", "key"], write_only=True, required=False, default="password"
     )
     node_certificate = serializers.CharField(
         write_only=True, required=False, allow_blank=True,
@@ -1013,13 +1013,9 @@ class ManagedServerProvisionSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {"ssh_key": "SSH private key is required for key auth."}
             )
-        is_lite = data.get("is_lite_agent", False)
-        if is_lite:
-            cert = (data.get("node_certificate") or "").strip()
-            if not cert:
-                raise serializers.ValidationError(
-                    {"node_certificate": "node_certificate is required when is_lite_agent=True."}
-                )
+        # If provisioning via SSH, we don't require the certificate upfront.
+        # The provisioner script will automatically fetch it from the remote node
+        # once the lite agent is installed.
         return data
 
 
