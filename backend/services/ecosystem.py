@@ -1994,7 +1994,42 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
                 # Backend doesn't depend on frontend for deploy order,
                 # but the var reference makes the runtime link.
 
-    # 5. Dependency Depth Sorting
+    # 5. Intelligent env var completion — fill empty vars with sensible
+    #    defaults or {{SERVICE:...}} placeholders inferred from var names.
+    _FRAMEWORK_DEFAULTS = {
+        "PORT": "8000",
+        "ALLOWED_HOSTS": "*",
+        "DEBUG": "false",
+        "LOG_LEVEL": "info",
+        "HOST": "0.0.0.0",
+        "NODE_ENV": "production",
+        "PYTHONUNBUFFERED": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    _SERVICE_URL_SUFFIXES = ("_URL", "_ENDPOINT", "_HOST", "_API", "_ADDRESS")
+
+    for svc in deployable:
+        env_map = svc.get("env_vars", {})
+        for key in list(env_map.keys()):
+            if env_map.get(key):
+                continue
+            if key in _FRAMEWORK_DEFAULTS:
+                env_map[key] = _FRAMEWORK_DEFAULTS[key]
+                continue
+            key_u = key.upper().strip()
+            for suffix in _SERVICE_URL_SUFFIXES:
+                if key_u.endswith(suffix):
+                    stem = key_u[:-len(suffix)].lower().replace("_", "-")
+                    for other in deployable:
+                        other_name = str(other.get("name", "")).lower()
+                        if other is svc:
+                            continue
+                        if stem in other_name or other_name in stem:
+                            env_map[key] = f"{{{{SERVICE:{other['name']}}}}}"
+                            break
+                    break
+
+    # 6. Dependency Depth Sorting
     # Auth (10) > Core (20) > Others (50)
     for svc in deployable:
         order = 50
@@ -2004,7 +2039,7 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
             order = 20
         svc["deploy_order"] = order
 
-    # 6. Elite 100% Exhaustive Sweep
+    # 7. Elite 100% Exhaustive Sweep
     _ensure_100_percent_env_coverage(deployable)
 
 
