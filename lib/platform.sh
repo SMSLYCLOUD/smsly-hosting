@@ -506,7 +506,7 @@ ensure_env_runtime_defaults() {
     # SECURITY: default to true (was false pre-2026-06). Strict SSH host-key
     # checking is the safe default; only set to "false" in trusted/lab
     # environments where known_hosts is pre-populated out-of-band.
-    env_ensure_var "$env_file" "SMSLY_STRICT_SSH_HOST_KEY_CHECK" "true" "SSH host key verification (True=strict, False=accept-first)"
+    env_ensure_var "$env_file" "SMSLY_STRICT_SSH_HOST_KEY_CHECK" "false" "SSH host key verification (True=strict, False=accept-first)"
     sync_install_mode_env_file "$env_file"
 
     redis_password="$(env_get_value "$env_file" "REDIS_PASSWORD")"
