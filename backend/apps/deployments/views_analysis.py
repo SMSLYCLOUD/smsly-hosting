@@ -330,7 +330,7 @@ class RepoAnalysisView(GenericAPIView):
     def _scan_env_example(self, owner: str, repo: str, token: str | None,
                           files: list) -> list:
         """Scan .env.example / .env.sample for app-specific env vars."""
-        env_files = ['.env.example', '.env.sample', '.env.template']
+        env_files = ['.env.example', '.env.sample', '.env.template', '.env']
         found_vars = []
 
         for env_file in env_files:
