@@ -1114,7 +1114,7 @@ def analyze_ecosystem_chunked(repos_data: list[dict], github_token: str | None =
         YOUR JOB:
         1. Resolve any cross-repo dependencies. If Service A needs the URL of Service B, ensure Service A's env vars use {{{{SERVICE:service-b}}}}.
         2. Consolidate addons (e.g. ensure only one POSTGRES if they should share).
-        3. EXHAUSTIVE ENV VARS (MANDATORY): You MUST include EVERY SINGLE variable listed under "Expected Env Vars" in the REPOSITORY DETAILS for each service. Do NOT omit any variables. Map them to the appropriate {{{{SERVICE:...}}}}, {{{{POSTGRES_URL}}}}, or {{{{SHARED_SECRET:...}}}} placeholder. If no link applies, use {{{{GENERATE}}}}.
+        3. EXHAUSTIVE ENV VARS (MANDATORY): You MUST include EVERY SINGLE variable listed under "Expected Env Vars" in the REPOSITORY DETAILS for each service. Do NOT omit any variables. Map them to the appropriate {{{{SERVICE:...}}}}, {{{{POSTGRES_URL}}}}, or {{{{SHARED_SECRET:...}}}} placeholder. For secrets that need random generation (API keys, tokens, passwords), set {"generate": true} in the env entry. For unknown non-secret vars, leave the value empty.
         4. FULL DEPLOY ORDER AUTHORITY: You have complete power to restructure the "deploy_order" and "deploy_sequence" from scratch to ensure a successful deployment (e.g., Auth/Identity -> Core API -> Gateways -> Frontends).
 
         CURRENT COMBINED PLAN:
@@ -1555,12 +1555,15 @@ def _env_plan_map(raw_env: Any) -> dict[str, str]:
                 continue
             if isinstance(value, dict):
                 entry = value
-                value = (
-                    entry.get("value")
-                    if entry.get("value") not in (None, "")
-                    else entry.get("default")
-                )
-                if value in (None, "") and (entry.get("generate") or entry.get("is_secret")):
+                raw_val = entry.get("value")
+                if raw_val in (None, "", "{{GENERATE}}", "{{FILL_ME}}") or str(raw_val).startswith("REPLACE_WITH_"):
+                    value = entry.get("default")
+                else:
+                    value = raw_val
+                if (
+                    value in (None, "", "{{GENERATE}}", "{{FILL_ME}}")
+                    and (entry.get("generate") or entry.get("is_secret"))
+                ):
                     value = secrets.token_urlsafe(48)
             env_map[key_text] = "" if value is None else str(value)
         return env_map
@@ -1577,7 +1580,7 @@ def _env_plan_map(raw_env: Any) -> dict[str, str]:
             continue
 
         default_val = entry.get("default")
-        if default_val not in (None, ""):
+        if default_val not in (None, "", "{{GENERATE}}", "{{FILL_ME}}") and not str(default_val or "").startswith("REPLACE_WITH_"):
             env_map[key] = str(default_val)
             continue
 
@@ -1937,7 +1940,7 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
             )
             if should_inject:
                 current = env_map.get(env_key)
-                if not current or str(current).startswith("REPLACE_WITH_"):
+                if not current or str(current).startswith("REPLACE_WITH_") or str(current) in ("{{FILL_ME}}", "{{GENERATE}}"):
                     env_map[env_key] = placeholder
 
         # 4.5 Intelligence Service Specialization
@@ -2011,7 +2014,8 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
     for svc in deployable:
         env_map = svc.get("env_vars", {})
         for key in list(env_map.keys()):
-            if env_map.get(key):
+            val = str(env_map.get(key, "")).strip() or ""
+            if val and val not in ("{{GENERATE}}", "{{FILL_ME}}") and not val.startswith("REPLACE_WITH_"):
                 continue
             if key in _FRAMEWORK_DEFAULTS:
                 env_map[key] = _FRAMEWORK_DEFAULTS[key]
@@ -2055,7 +2059,7 @@ def _ensure_100_percent_env_coverage(services: list[dict]):
 
         for key in list(env_map.keys()):
             val = env_map.get(key)
-            if not val or str(val).strip() == "":
+            if not val or str(val).strip() in ("", "{{GENERATE}}", "{{FILL_ME}}") or str(val).startswith("REPLACE_WITH_"):
                 if any(k in key.upper() for k in ["SECRET", "KEY", "TOKEN", "PASSWORD", "AUTH_HASH"]):
                     env_map[key] = secrets.token_urlsafe(48)
                 # Non-secret empty vars: leave empty — don't fabricate values
