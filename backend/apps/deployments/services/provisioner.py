@@ -291,27 +291,28 @@ def _restrict_ssh_key_to_master_ip(ssh, server: ManagedServer) -> None:
     key is stolen, it cannot be used from a different network location.
     """
     import io
-    import subprocess as _sp
-    import tempfile as _tf
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+    from cryptography.hazmat.primitives import serialization
 
     master_ip = os.environ.get("PUBLIC_IP") or "127.0.0.1"
     
-    _tmp = _tf.NamedTemporaryFile(delete=False, suffix='.key')
-    _tmp.close()
-    try:
-        # Always use Ed25519 to avoid ssh-rsa deprecation rejections on modern OpenSSH (>= 8.8)
-        _sp.run(['ssh-keygen', '-t', 'ed25519', '-f', _tmp.name, '-N', '', '-q'],
-                capture_output=True, timeout=30, check=True)
-        with open(f'{_tmp.name}.pub') as _pf:
-            _parts = _pf.read().strip().split(' ', 2)
-            pub_key_line = f"{_parts[0]} {_parts[1]}"
-        with open(_tmp.name) as _pf:
-            priv_key_pem = _pf.read()
-    finally:
-        with contextlib.suppress(Exception):
-            os.unlink(_tmp.name)
-        with contextlib.suppress(Exception):
-            os.unlink(f'{_tmp.name}.pub')
+    # Always use Ed25519 to avoid ssh-rsa deprecation rejections on modern OpenSSH (>= 8.8)
+    # Generate natively via cryptography to avoid dependency on ssh-keygen
+    private_key = ed25519.Ed25519PrivateKey.generate()
+    
+    priv_key_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.OpenSSH,
+        encryption_algorithm=serialization.NoEncryption()
+    ).decode("utf-8")
+    
+    pub_key_bytes = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.OpenSSH,
+        format=serialization.PublicFormat.OpenSSH
+    ).decode("utf-8")
+    
+    # pub_key_bytes is "ssh-ed25519 AAAAC3Nz..."
+    pub_key_line = pub_key_bytes.strip()
 
     # Add to authorized_keys with IP restriction
     restricted_line = f'from="{master_ip}" {pub_key_line} smsly-self-heal\n'
