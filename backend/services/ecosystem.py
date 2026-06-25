@@ -2010,26 +2010,20 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
 
 def _ensure_100_percent_env_coverage(services: list[dict]):
     """
-    Guarantees that NO environment variable is left empty.
-    All secrets are pre-generated with real random values (no placeholders).
-    Non-secret unknown vars use plain text placeholders so they don't
-    trigger _validate_resolved_env and block deployment.  The app may or
-    may not need them; the user can fill in the UI.
+    Fill only empty secrets with pre-generated random values.
+    Non-secret empty vars are left alone — if the AI intelligence
+    couldn't determine a value, we don't fabricate one.  The deploy
+    pipeline and runtime defaults handle missing values gracefully.
     """
     for svc in services:
         env_map = svc.get("env_vars", {})
 
-        # Scan for any null, empty, or missing values
         for key in list(env_map.keys()):
             val = env_map.get(key)
             if not val or str(val).strip() == "":
-                # Fallback Logic:
                 if any(k in key.upper() for k in ["SECRET", "KEY", "TOKEN", "PASSWORD", "AUTH_HASH"]):
                     env_map[key] = secrets.token_urlsafe(48)
-                elif any(k in key.upper() for k in ["URL", "HOST", "ENDPOINT"]):
-                    env_map[key] = f"REPLACE_WITH_PRODUCTION_URL_{key.upper()}"
-                else:
-                    env_map[key] = f"REPLACE_WITH_PRODUCTION_{key.upper()}"
+                # Non-secret empty vars: leave empty — don't fabricate values
 
         svc["env_vars"] = env_map
 
