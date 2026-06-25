@@ -13,6 +13,7 @@ import logging
 import os
 import re
 import shlex
+import ssl
 import time
 import uuid
 from typing import Any
@@ -211,7 +212,7 @@ def _detect_reachable_api_url(server) -> tuple[str | None, Any | None]:
                 _ = response.content
                 response.close()
 
-            except requests.RequestException:
+            except (requests.RequestException, ssl.SSLError):
                 continue
 
             # If it's 5xx, it's a server error but the server IS reachable.
