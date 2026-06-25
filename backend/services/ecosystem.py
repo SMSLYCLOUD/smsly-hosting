@@ -1114,7 +1114,7 @@ def analyze_ecosystem_chunked(repos_data: list[dict], github_token: str | None =
         YOUR JOB:
         1. Resolve any cross-repo dependencies. If Service A needs the URL of Service B, ensure Service A's env vars use {{{{SERVICE:service-b}}}}.
         2. Consolidate addons (e.g. ensure only one POSTGRES if they should share).
-        3. EXHAUSTIVE ENV VARS (MANDATORY): You MUST include EVERY SINGLE variable listed under "Expected Env Vars" in the REPOSITORY DETAILS for each service. Do NOT omit any variables. Map them to the appropriate {{{{SERVICE:...}}}}, {{{{POSTGRES_URL}}}}, or {{{{SHARED_SECRET:...}}}} placeholder. For secrets that need random generation (API keys, tokens, passwords), set {"generate": true} in the env entry. For unknown non-secret vars, leave the value empty.
+        3. EXHAUSTIVE ENV VARS (MANDATORY): You MUST include EVERY SINGLE variable listed under "Expected Env Vars" in the REPOSITORY DETAILS for each service. Do NOT omit any variables. Map them to the appropriate {{{{SERVICE:...}}}}, {{{{POSTGRES_URL}}}}, or {{{{SHARED_SECRET:...}}}} placeholder. For secrets that need random generation (API keys, tokens, passwords), set {{"generate": true}} in the env entry. For unknown non-secret vars, leave the value empty.
         4. FULL DEPLOY ORDER AUTHORITY: You have complete power to restructure the "deploy_order" and "deploy_sequence" from scratch to ensure a successful deployment (e.g., Auth/Identity -> Core API -> Gateways -> Frontends).
 
         CURRENT COMBINED PLAN:
