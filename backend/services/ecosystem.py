@@ -593,7 +593,7 @@ def _merge_deep_env(env_map: dict[str, str], deep_env: dict[str, list[str]]) -> 
             continue
         if not _is_well_known_env_var(upper_key):
             continue
-        fill = secrets.token_urlsafe(48) if any(
+        fill = "{{GENERATE}}" if any(
             w in upper_key for w in ("SECRET", "KEY", "TOKEN", "PASSWORD")
         ) else ""
         env_map[upper_key] = fill
@@ -1563,7 +1563,7 @@ def _env_plan_map(raw_env: Any) -> dict[str, str]:
                 if str(value or "").strip() in ("{{GENERATE}}", "{{FILL_ME}}") or str(value or "").startswith("REPLACE_WITH_"):
                     value = ""
                 if not value and (entry.get("generate") or entry.get("is_secret")):
-                    value = secrets.token_urlsafe(48)
+                    value = "{{GENERATE}}"
             else:
                 # Plain string value — treat placeholder strings as empty
                 if str(value).strip() in ("{{GENERATE}}", "{{FILL_ME}}") or str(value).startswith("REPLACE_WITH_"):
@@ -1588,7 +1588,7 @@ def _env_plan_map(raw_env: Any) -> dict[str, str]:
             continue
 
         if entry.get("generate") or entry.get("is_secret"):
-            env_map[key] = secrets.token_urlsafe(48)
+            env_map[key] = "{{GENERATE}}"
             continue
 
         env_map[key] = ""
@@ -2047,6 +2047,17 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
     # 7. Elite 100% Exhaustive Sweep
     _ensure_100_percent_env_coverage(deployable)
 
+    # 8. Final display pass — replace remaining {{GENERATE}} sentinels
+    # with real random values so the plan UI shows actual values
+    # instead of placeholders.  Addon injection and section 5 above
+    # have already replaced the important ones.
+    for svc in deployable:
+        env_map = svc.get("env_vars", {})
+        for key, val in env_map.items():
+            if val == "{{GENERATE}}":
+                env_map[key] = secrets.token_urlsafe(48)
+        svc["env_vars"] = env_map
+
 
 def _ensure_100_percent_env_coverage(services: list[dict]):
     """
@@ -2062,7 +2073,7 @@ def _ensure_100_percent_env_coverage(services: list[dict]):
             val = env_map.get(key)
             if not val or str(val).strip() in ("", "{{GENERATE}}", "{{FILL_ME}}") or str(val).startswith("REPLACE_WITH_"):
                 if any(k in key.upper() for k in ["SECRET", "KEY", "TOKEN", "PASSWORD", "AUTH_HASH"]):
-                    env_map[key] = secrets.token_urlsafe(48)
+                    env_map[key] = "{{GENERATE}}"
                 # Non-secret empty vars: leave empty — don't fabricate values
 
         svc["env_vars"] = env_map
