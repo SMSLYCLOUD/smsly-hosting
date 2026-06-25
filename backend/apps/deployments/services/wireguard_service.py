@@ -196,8 +196,8 @@ class WireGuardService:
         if not is_local:
             if not server:
                 raise ValueError("Remote mesh peers require a ManagedServer.")
-            if server.status not in (ManagedServer.Status.ONLINE, ManagedServer.Status.PROVISIONING):
-                raise ValueError(f"Server '{server.name}' is {server.status}; only ONLINE or PROVISIONING servers can join a mesh.")
+            if server.status != ManagedServer.Status.ONLINE and server.provision_status != ManagedServer.ProvisionStatus.PROVISIONING:
+                raise ValueError(f"Server '{server.name}' is {server.status} ({server.provision_status}); only ONLINE or PROVISIONING servers can join a mesh.")
             if not (server.ssh_key or server.ssh_password):
                 raise ValueError(f"Server '{server.name}' has no SSH credentials for mesh deployment.")
 
