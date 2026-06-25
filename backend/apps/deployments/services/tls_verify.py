@@ -69,18 +69,25 @@ def _check_pin_after_handshake(response, expected_fingerprint_hex: str) -> None:
     Raises ``ssl.SSLError`` on mismatch.
     """
     import hashlib
-    pool = response.raw._connection.pool  # type: ignore[attr-defined]
-    sock = pool.sock if hasattr(pool, "sock") else None
+    
+    connection = getattr(response.raw, "_connection", None)
+    if connection is None:
+        return
+        
+    pool = getattr(connection, "pool", None)
+    sock = getattr(pool, "sock", None) if pool else None
+    
     if sock is None:
         # Modern urllib3: cert is in pool.conn.cert_file / we need
         # to reach into a different attribute. Fall back to
         # the request's underlying urllib3 connection.
         try:
-            peer = response.raw._connection.sock.getpeercert(binary_form=True)
+            peer = connection.sock.getpeercert(binary_form=True)
         except Exception:
             return
     else:
         peer = sock.getpeercert(binary_form=True)
+        
     if peer is None:
         return
     digest = hashlib.sha256(peer).hexdigest()
