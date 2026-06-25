@@ -9,6 +9,7 @@ can be executed with zero manual configuration.
 import json
 import logging
 import os
+import secrets
 import subprocess
 import tempfile
 import time
@@ -592,7 +593,7 @@ def _merge_deep_env(env_map: dict[str, str], deep_env: dict[str, list[str]]) -> 
             continue
         if not _is_well_known_env_var(upper_key):
             continue
-        fill = "{{GENERATE}}" if any(
+        fill = secrets.token_urlsafe(48) if any(
             w in upper_key for w in ("SECRET", "KEY", "TOKEN", "PASSWORD")
         ) else ""
         env_map[upper_key] = fill
@@ -1560,7 +1561,7 @@ def _env_plan_map(raw_env: Any) -> dict[str, str]:
                     else entry.get("default")
                 )
                 if value in (None, "") and (entry.get("generate") or entry.get("is_secret")):
-                    value = "{{GENERATE}}"
+                    value = secrets.token_urlsafe(48)
             env_map[key_text] = "" if value is None else str(value)
         return env_map
 
@@ -1581,7 +1582,7 @@ def _env_plan_map(raw_env: Any) -> dict[str, str]:
             continue
 
         if entry.get("generate") or entry.get("is_secret"):
-            env_map[key] = "{{GENERATE}}"
+            env_map[key] = secrets.token_urlsafe(48)
             continue
 
         env_map[key] = ""
@@ -1916,9 +1917,9 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
                  env_map[key] = f"{{{{SHARED_SECRET:{key.lower()}}}}}"
 
         # 4. Standard Database Injection
-        # NOTE: must overwrite {{GENERATE}} / empty values so the deploy
-        # pipeline resolves {{POSTGRES_URL}} to the real provisioned URL
-        # instead of replacing {{GENERATE}} with a random 50-char string.
+        # Overwrite placeholder values so the deploy pipeline resolves
+        # {{POSTGRES_URL}} to the real provisioned URL instead of leaving
+        # a REPLACE_WITH_PRODUCTION_* string or empty value.
         _addon_url_vars = {
             "DATABASE_URL": "{{POSTGRES_URL}}",
             "REDIS_URL": "{{REDIS_URL}}",
@@ -1936,7 +1937,7 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
             )
             if should_inject:
                 current = env_map.get(env_key)
-                if not current or current == "{{GENERATE}}":
+                if not current or str(current).startswith("REPLACE_WITH_"):
                     env_map[env_key] = placeholder
 
         # 4.5 Intelligence Service Specialization
@@ -2010,10 +2011,9 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
 def _ensure_100_percent_env_coverage(services: list[dict]):
     """
     Guarantees that NO environment variable is left empty.
-    Only {{GENERATE}} uses braces (resolved at deploy time).  All other
-    fallbacks use plain text placeholders WITHOUT braces so they don't
-    trigger _validate_resolved_env and block deployment.  Unknown URL
-    vars pass through with a descriptive placeholder — the app may or
+    All secrets are pre-generated with real random values (no placeholders).
+    Non-secret unknown vars use plain text placeholders so they don't
+    trigger _validate_resolved_env and block deployment.  The app may or
     may not need them; the user can fill in the UI.
     """
     for svc in services:
@@ -2025,7 +2025,7 @@ def _ensure_100_percent_env_coverage(services: list[dict]):
             if not val or str(val).strip() == "":
                 # Fallback Logic:
                 if any(k in key.upper() for k in ["SECRET", "KEY", "TOKEN", "PASSWORD", "AUTH_HASH"]):
-                    env_map[key] = "{{GENERATE}}"
+                    env_map[key] = secrets.token_urlsafe(48)
                 elif any(k in key.upper() for k in ["URL", "HOST", "ENDPOINT"]):
                     env_map[key] = f"REPLACE_WITH_PRODUCTION_URL_{key.upper()}"
                 else:
