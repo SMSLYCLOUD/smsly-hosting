@@ -27,6 +27,9 @@ class EcosystemPlan(models.Model):
     ai_provider = models.CharField(max_length=50, blank=True, null=True)  # type: ignore[var-annotated]
     plan = models.JSONField(null=True, blank=True)  # type: ignore[var-annotated]
 
+    # Scan progress (persistent so resume shows where we left off)
+    scan_progress = models.TextField(blank=True, null=True)  # type: ignore[var-annotated]
+
     # Results
     services_created = models.JSONField(default=list, blank=True)  # type: ignore[var-annotated]
     error_message = models.TextField(blank=True, null=True)  # type: ignore[var-annotated]
