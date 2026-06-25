@@ -37,7 +37,6 @@ from apps.deployments.models_storage import Volume  # noqa: E402
 from apps.deployments.services.pipeline import PipelineError, PipelineManager  # noqa: E402
 from apps.deployments.services.remote_orchestrator import RemoteOrchestrator  # noqa: E402
 from apps.deployments.utils import append_log, broadcast_status, update_stage  # noqa: E402
-from apps.intelligence.models import AIProviderSettings  # noqa: E402
 
 from .tasks_ai_router import _cleanup_shared_ollama_if_unused  # noqa: E402
 from .tasks_build import _build_function, _build_uploaded_source  # noqa: E402
@@ -1376,6 +1375,11 @@ def _handle_failure(task, deployment, error_msg, reason):
             # Step 3: Jules auto-fix (async) — tries to fix and redeploy
             try:
                 from apps.intelligence.jules_fix import jules_fix_deployment_failure
+                try:
+                    from apps.intelligence.models import AIProviderSettings
+                except Exception:
+                    AIProviderSettings = None
+                
                 service = deployment.service
                 # Only trigger if Jules has an API key configured
                 if not AIProviderSettings:
