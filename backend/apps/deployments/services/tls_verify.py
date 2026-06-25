@@ -113,7 +113,7 @@ def resolve_tls_verify(managed_server) -> tuple[bool, str | None]:
     """
     fingerprint = (getattr(managed_server, "tls_cert_sha256", "") or "").strip()
     if fingerprint:
-        return True, fingerprint
+        return False, fingerprint
     if getattr(managed_server, "verify_tls", True):
         return True, None
     # Server wants to skip cert verification. Only honor that if the
@@ -149,7 +149,7 @@ def resolve_tls_verify_for_url(candidate_url: str) -> tuple[bool, str | None]:
         "SMSLY_MASTER_TLS_CERT_SHA256", ""
     ).strip()
     if fingerprint:
-        return True, fingerprint
+        return False, fingerprint
     if _allow_insecure_inter_node_tls():
         return False, None
     return True, None  # safe default
