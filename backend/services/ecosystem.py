@@ -548,6 +548,61 @@ def _detect_env_vars(files: list[str], stack: str, port: int,
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Deep-scan env var filter — prevents RepoScanner noise (2k+ vars) from
+# flooding heuristic/reconciliation service env_vars.
+# ──────────────────────────────────────────────────────────────────────────────
+
+_KNOWN_ENV_SUFFIXES = frozenset({
+    "_URL", "_HOST", "_PORT", "_KEY", "_SECRET", "_TOKEN", "_PASSWORD",
+    "_PASS", "_USER", "_USERNAME", "_DB", "_DATABASE", "_SCHEMA",
+    "_ENDPOINT", "_API_KEY", "_API_SECRET", "_CLIENT_ID", "_CLIENT_SECRET",
+    "_BUCKET", "_REGION", "_ZONE", "_DOMAIN", "_EMAIL", "_DSN",
+    "_PATH", "_DIR", "_FILE", "_DIRECTORY", "_ID", "_ARN",
+})
+
+_MAX_DEEP_ENV_VARS = 60
+
+def _is_well_known_env_var(name: str) -> bool:
+    upper = name.upper().strip()
+    if not upper:
+        return False
+    if upper in _ENV_HINTS:
+        return True
+    for suffix in _KNOWN_ENV_SUFFIXES:
+        if upper.endswith(suffix):
+            return True
+    if any(upper.startswith(p) for p in ("NEXT_PUBLIC_", "REACT_APP_", "VITE_", "NUXT_", "GATSBY_")):
+        return True
+    return False
+
+
+def _merge_deep_env(env_map: dict[str, str], deep_env: dict[str, list[str]]) -> dict[str, str]:
+    """Merge deep-scanned env vars into env_map, filtering to only well-known vars."""
+    added = 0
+    for var_name in deep_env:
+        if added >= _MAX_DEEP_ENV_VARS:
+            logger.warning(
+                "Deep-env merge capped at %d vars (repo has %d total detected). "
+                "Increase _MAX_DEEP_ENV_VARS if legitimate vars are missing.",
+                _MAX_DEEP_ENV_VARS, len(deep_env),
+            )
+            break
+        upper_key = var_name.upper()
+        if upper_key in env_map:
+            continue
+        if not _is_well_known_env_var(upper_key):
+            continue
+        fill = "{{GENERATE}}" if any(
+            w in upper_key for w in ("SECRET", "KEY", "TOKEN", "PASSWORD")
+        ) else ""
+        env_map[upper_key] = fill
+        added += 1
+    if added:
+        logger.debug("Merged %d deep-scanned env vars into heuristic env", added)
+    return env_map
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # AI-Powered Ecosystem Analysis
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -1150,13 +1205,7 @@ def analyze_ecosystem_chunked(repos_data: list[dict], github_token: str | None =
         env_map = _env_plan_map(h.get("env_vars", []))
         deep_env = rd.get("env_vars_context", {})
         if deep_env:
-            for var_name in deep_env:
-                upper_key = var_name.upper()
-                if upper_key not in env_map:
-                    fill = "{{GENERATE}}" if any(
-                        w in upper_key for w in ("SECRET", "KEY", "TOKEN", "PASSWORD")
-                    ) else ""
-                    env_map[upper_key] = fill
+            env_map = _merge_deep_env(env_map, deep_env)
         recon_svc = {
             "repo": repo_full,
             "name": name,
@@ -2041,14 +2090,7 @@ def _build_heuristic_plan(repos_data: list[dict], error: str = "") -> dict:
         env_map = _env_plan_map(env_vars_raw)
         deep_env = rd.get("env_vars_context", {})
         if deep_env:
-            # Merge deep-scanned vars into the env_map, filling in gaps
-            for var_name in deep_env:
-                upper_key = var_name.upper()
-                if upper_key not in env_map:
-                    fill = "{{GENERATE}}" if any(
-                        w in upper_key for w in ("SECRET", "KEY", "TOKEN", "PASSWORD")
-                    ) else ""
-                    env_map[upper_key] = fill
+            env_map = _merge_deep_env(env_map, deep_env)
 
         svc = {
             "repo": rd["repo"],
