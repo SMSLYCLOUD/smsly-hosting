@@ -1276,8 +1276,9 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
             stdin, stdout, stderr = ssh.exec_command("cat /opt/smsly-hosting/certs/registry.crt 2>/dev/null || cat /opt/smsly-hosting/caddy-config/certs/ip.crt 2>/dev/null")
             tls_cert = stdout.read().decode("utf-8", errors="replace").strip()
             if tls_cert and "-----BEGIN CERTIFICATE-----" in tls_cert:
-                server.node_certificate = tls_cert
-                server.save(update_fields=["node_certificate"])
+                import hashlib
+                server.tls_cert_sha256 = hashlib.sha256(tls_cert.strip().encode('utf-8')).hexdigest()
+                server.save(update_fields=["tls_cert_sha256"])
                 _append_log(server, "✅ Node TLS certificate automatically fetched and saved!")
             else:
                 _append_log(server, "⚠️ Warning: Could not automatically fetch node TLS certificate.")
