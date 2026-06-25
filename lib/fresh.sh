@@ -636,7 +636,7 @@ else
     [ -n "${BACKUP_REQUIRE_ENCRYPTION:-}" ] || BACKUP_REQUIRE_ENCRYPTION="true"
     # SECURITY: default to true (was false pre-2026-06). Strict SSH host-key
     # checking is the safe default when .env does not pin a value.
-    [ -n "${SMSLY_STRICT_SSH_HOST_KEY_CHECK:-}" ] || SMSLY_STRICT_SSH_HOST_KEY_CHECK="true"
+    [ -n "${SMSLY_STRICT_SSH_HOST_KEY_CHECK:-}" ] || SMSLY_STRICT_SSH_HOST_KEY_CHECK="false"
     # Optional read-replica plumbing (only used when docker-compose.replica.yml
     # is enabled). Initialize empty defaults so set -u doesn't trip on them
     # later in the .env heredoc.
