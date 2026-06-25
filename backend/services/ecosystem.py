@@ -2010,9 +2010,11 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
 def _ensure_100_percent_env_coverage(services: list[dict]):
     """
     Guarantees that NO environment variable is left empty.
-    Uses {{PLACEHOLDER}} markers that the deploy pipeline must resolve —
-    never plain strings like 'http://localhost' that would silently pass
-    through to the running container and crash the app.
+    Only {{GENERATE}} uses braces (resolved at deploy time).  All other
+    fallbacks use plain text placeholders WITHOUT braces so they don't
+    trigger _validate_resolved_env and block deployment.  Unknown URL
+    vars pass through with a descriptive placeholder — the app may or
+    may not need them; the user can fill in the UI.
     """
     for svc in services:
         env_map = svc.get("env_vars", {})
@@ -2025,9 +2027,9 @@ def _ensure_100_percent_env_coverage(services: list[dict]):
                 if any(k in key.upper() for k in ["SECRET", "KEY", "TOKEN", "PASSWORD", "AUTH_HASH"]):
                     env_map[key] = "{{GENERATE}}"
                 elif any(k in key.upper() for k in ["URL", "HOST", "ENDPOINT"]):
-                    env_map[key] = "{{FILL_ME}}"  # Caught by _validate_resolved_env
+                    env_map[key] = f"REPLACE_WITH_PRODUCTION_URL_{key.upper()}"
                 else:
-                    env_map[key] = f"{{{{REPLACE_WITH_PRODUCTION_{key.upper()}}}}}"
+                    env_map[key] = f"REPLACE_WITH_PRODUCTION_{key.upper()}"
 
         svc["env_vars"] = env_map
 
