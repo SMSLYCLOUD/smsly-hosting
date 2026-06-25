@@ -687,6 +687,17 @@ def _build_runtime_env(service: Service, image_name: str | None = None) -> dict:
                 env.key, service.name,
             )
             continue
+        # Safety net: skip env vars whose values are still placeholder tokens.
+        # This catches {{GENERATE}}, {{FILL_ME}}, {{REPLACE_WITH_PRODUCTION_X}},
+        # and any other {{...}} token that was never resolved (e.g. because a
+        # non-ecosystem deploy path bypassed _resolve_env_placeholders).
+        if isinstance(val, str) and re.search(r"\{\{.*?\}\}", val):
+            logger.warning(
+                "[PLACEHOLDER] Skipping unresoloved placeholder %s=%s for service %s "
+                "at runtime injection — addon may not be provisioned yet.",
+                env.key, val, service.name,
+            )
+            continue
         env_vars[env.key] = val
 
     # ── Locked keys: user has explicitly locked these — never override them ──
