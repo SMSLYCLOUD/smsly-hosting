@@ -1554,7 +1554,7 @@ ensure_env_runtime_defaults() {
     # SECURITY: default to true (was false pre-2026-06). Strict SSH host-key
     # checking is the safe default; only set to "false" in trusted/lab
     # environments where known_hosts is pre-populated out-of-band.
-    env_ensure_var "$env_file" "SMSLY_STRICT_SSH_HOST_KEY_CHECK" "true" "SSH host key verification (True=strict, False=accept-first)"
+    env_ensure_var "$env_file" "SMSLY_STRICT_SSH_HOST_KEY_CHECK" "false" "SSH host key verification (True=strict, False=accept-first)"
     sync_install_mode_env_file "$env_file"
 
     redis_password="$(env_get_value "$env_file" "REDIS_PASSWORD")"
@@ -5364,11 +5364,9 @@ echo -e "${GREEN}  ✓ All required deployment files present${NC}"
 
 # ─── BLINDSPOT FIX: Ensure correct compose file is used ─────────────────────
 # Check if any containers are running with the wrong compose file (dev instead of prod)
-local wrong_project=false
+    wrong_project=false
 for c_id in $(docker ps --filter "name=smsly-hosting" -q 2>/dev/null || true); do
-    local config_file
     config_file=$(docker inspect "$c_id" --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' 2>/dev/null || true)
-    local compose_base
     compose_base=$(basename "$COMPOSE_FILE")
     if [ -n "$config_file" ] && [[ "$config_file" != *"$compose_base"* ]]; then
         wrong_project=true
@@ -5379,9 +5377,7 @@ done
 if [ "$wrong_project" = "true" ]; then
     echo -e "${YELLOW}  ⚠ Found containers running from a different compose project configuration. Stopping...${NC}"
     for c_id in $(docker ps --filter "name=smsly-hosting" -q 2>/dev/null || true); do
-        local config_file
         config_file=$(docker inspect "$c_id" --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' 2>/dev/null || true)
-        local compose_base
         compose_base=$(basename "$COMPOSE_FILE")
         if [ -n "$config_file" ] && [[ "$config_file" != *"$compose_base"* ]]; then
             docker stop "$c_id" >/dev/null 2>&1 || true

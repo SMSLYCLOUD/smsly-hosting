@@ -934,7 +934,7 @@ REST_FRAMEWORK = {
         'server_heal': '10/minute',
         'server_proxy': '30/min',
         'server_check_all': '2/min',
-        'server_provision': '3/hour',
+        'server_provision': '30/hour',
         'caddy_ask': '60/min',
         'node_token_exchange': '5/minute',
         'attestation_challenge': '30/minute',
