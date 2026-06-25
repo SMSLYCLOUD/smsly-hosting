@@ -5209,7 +5209,7 @@ ensure_wireguard_mesh() {
     # The real mesh IP (e.g. 10.100.0.x) is assigned later by
     # WireGuardService.ensure_server_in_default_mesh(), but having the
     # interface ready prevents delays during provisioning.
-    if is_node_mode; then
+    if is_node_mode || is_agent_lite_mode; then
         mesh_ip="${NODE_MESH_IP:-10.100.0.2}"
         echo -e "${BLUE}  → Configuring WireGuard mesh on node ($wg_iface: $mesh_ip)...${NC}"
         if ! command -v wg >/dev/null 2>&1; then
@@ -5238,10 +5238,7 @@ WGCONF
         return 0
     fi
 
-    # Lite agents don't run WireGuard (they connect via master's mesh)
-    if is_agent_lite_mode; then
-        return 0
-    fi
+
     if ip link show "$wg_iface" >/dev/null 2>&1; then
         echo -e "${GREEN}  ✓ WireGuard mesh ($wg_iface) already configured${NC}"
         return 0
