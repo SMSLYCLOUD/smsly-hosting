@@ -1379,9 +1379,12 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                         },
                         timeout=20,
                         verify=verify,
+                        stream=True,
                     )
                     if fingerprint:
                         _check_pin_after_handshake(response, fingerprint)
+                    _ = response.content
+                    response.close()
                     if not response.ok:
                         token_errors.append(f"{candidate_url}:HTTP {response.status_code}")
                         continue
@@ -1423,9 +1426,12 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                         json={"username": admin_user, "password": admin_password},
                         timeout=20,
                         verify=verify,
+                        stream=True,
                     )
                     if fingerprint:
                         _check_pin_after_handshake(response, fingerprint)
+                    _ = response.content
+                    response.close()
                     if not response.ok:
                         token_errors.append(f"{candidate_url}:HTTP {response.status_code}")
                         continue
