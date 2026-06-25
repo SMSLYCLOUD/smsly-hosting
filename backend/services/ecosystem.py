@@ -698,7 +698,7 @@ ECOSYSTEM_PROMPT = """You are the Supreme DevOps Architect of the CloudNeuron AI
 
     ### CRITICAL RULES:
     1. EXHAUSTIVE RESOLUTION: Never leave an environment variable empty.
-    2. DETERMINISTIC LINKING: Use {{SERVICE:repo-name}} for service URLs, {{POSTGRES_URL}} for databases, and {{GENERATE}} for unique secrets.
+     2. DETERMINISTIC LINKING: Use {{SERVICE:repo-name}} for service URLs, {{POSTGRES_URL}} for databases. For secrets (API keys, tokens, passwords), set "generate": true in the env entry instead of using {{GENERATE}} as a literal value.
     3. DEPLOY ORDER: Rank services by dependency depth. Infrastructure -> Core APIs -> Background Workers -> Frontends.
     4. STRICT TYPE CONSTRAINTS — ALL array fields must contain ONLY strings, NEVER objects/dicts. Violating this will crash the deployment system.
 
@@ -1560,11 +1560,14 @@ def _env_plan_map(raw_env: Any) -> dict[str, str]:
                     value = entry.get("default")
                 else:
                     value = raw_val
-                if (
-                    value in (None, "", "{{GENERATE}}", "{{FILL_ME}}")
-                    and (entry.get("generate") or entry.get("is_secret"))
-                ):
+                if str(value or "").strip() in ("{{GENERATE}}", "{{FILL_ME}}") or str(value or "").startswith("REPLACE_WITH_"):
+                    value = ""
+                if not value and (entry.get("generate") or entry.get("is_secret")):
                     value = secrets.token_urlsafe(48)
+            else:
+                # Plain string value — treat placeholder strings as empty
+                if str(value).strip() in ("{{GENERATE}}", "{{FILL_ME}}") or str(value).startswith("REPLACE_WITH_"):
+                    value = ""
             env_map[key_text] = "" if value is None else str(value)
         return env_map
 
