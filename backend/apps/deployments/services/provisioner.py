@@ -291,33 +291,27 @@ def _restrict_ssh_key_to_master_ip(ssh, server: ManagedServer) -> None:
     key is stolen, it cannot be used from a different network location.
     """
     import io
+    import subprocess as _sp
+    import tempfile as _tf
+
     master_ip = os.environ.get("PUBLIC_IP") or "127.0.0.1"
-    key_buf = io.StringIO()
+    
+    _tmp = _tf.NamedTemporaryFile(delete=False, suffix='.key')
+    _tmp.close()
     try:
-        import paramiko.rsakey as _r
-        key = _r.RSAKey.generate(4096)
-        key.write_private_key(key_buf)
-        priv_key_pem = key_buf.getvalue()
-        pub_key_line = f"{key.get_name()} {key.get_base64()}"
-    except Exception:
-        # Fallback: generate via subprocess if paramiko key gen fails
-        import subprocess as _sp
-        import tempfile as _tf
-        _tmp = _tf.NamedTemporaryFile(delete=False, suffix='.key')
-        _tmp.close()
-        try:
-            _sp.run(['ssh-keygen', '-t', 'rsa', '-b', '4096', '-f', _tmp.name, '-N', '', '-q'],
-                    capture_output=True, timeout=30, check=True)
-            with open(f'{_tmp.name}.pub') as _pf:
-                _parts = _pf.read().strip().split(' ', 2)
-                pub_key_line = f"{_parts[0]} {_parts[1]}"
-            with open(_tmp.name) as _pf:
-                priv_key_pem = _pf.read()
-        finally:
-            with contextlib.suppress(Exception):
-                os.unlink(_tmp.name)
-            with contextlib.suppress(Exception):
-                os.unlink(f'{_tmp.name}.pub')
+        # Always use Ed25519 to avoid ssh-rsa deprecation rejections on modern OpenSSH (>= 8.8)
+        _sp.run(['ssh-keygen', '-t', 'ed25519', '-f', _tmp.name, '-N', '', '-q'],
+                capture_output=True, timeout=30, check=True)
+        with open(f'{_tmp.name}.pub') as _pf:
+            _parts = _pf.read().strip().split(' ', 2)
+            pub_key_line = f"{_parts[0]} {_parts[1]}"
+        with open(_tmp.name) as _pf:
+            priv_key_pem = _pf.read()
+    finally:
+        with contextlib.suppress(Exception):
+            os.unlink(_tmp.name)
+        with contextlib.suppress(Exception):
+            os.unlink(f'{_tmp.name}.pub')
 
     # Add to authorized_keys with IP restriction
     restricted_line = f'from="{master_ip}" {pub_key_line} smsly-self-heal\n'
