@@ -784,6 +784,33 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         from celery.result import AsyncResult
         result = AsyncResult(task_id)
 
+        # Stale detection: if the task isn't ready but the associated plan
+        # has been in SCANNING for >40 minutes, the worker likely died.
+        STALE_THRESHOLD_SECONDS = 2400  # 40 min (> Celery time_limit of 35 min)
+        if not result.ready():
+            stale_plan = EcosystemPlan.objects.filter(
+                scan_task_id=task_id,
+                status=EcosystemPlan.Status.SCANNING,
+                updated_at__lt=timezone.now() - timezone.timedelta(seconds=STALE_THRESHOLD_SECONDS),
+            ).first()
+            if stale_plan:
+                stale_plan.status = EcosystemPlan.Status.FAILED
+                stale_plan.error_message = (
+                    "Scan was interrupted (system shutdown or worker crash). "
+                    "Please start a new scan."
+                )
+                stale_plan.save(update_fields=['status', 'error_message', 'updated_at'])
+                try:
+                    result.revoke(terminate=False)
+                except Exception:
+                    pass
+                return Response({
+                    'task_id': task_id,
+                    'status': 'FAILURE',
+                    'error': stale_plan.error_message,
+                    'result': {'error': stale_plan.error_message},
+                })
+
         payload = None
         if result.ready():
             try:
@@ -813,9 +840,19 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             'task_id': task_id,
             'status': result.status,
             'result': payload,
+            'scan_progress': None,
         }
         if isinstance(payload, dict) and payload.get('error'):
             response_data['error'] = payload.get('error')
+
+        # Include persisted scan progress in responses so the frontend
+        # can show it when the user returns after navigating away.
+        if not result.ready():
+            plan_with_progress = EcosystemPlan.objects.filter(
+                scan_task_id=task_id,
+            ).values_list('scan_progress', flat=True).first()
+            if plan_with_progress:
+                response_data['scan_progress'] = plan_with_progress
 
         # Cache scan results and sync plan status
         if result.ready() and isinstance(payload, dict):
@@ -858,6 +895,8 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         """Return the user's most recent non-completed plan for resume."""
         from apps.deployments.models_ecosystem import EcosystemPlan
 
+        SCANNING_STALE_THRESHOLD = timezone.timedelta(minutes=40)
+
         plan = EcosystemPlan.objects.filter(
             user=request.user,
             status__in=['scanning', 'review', 'deploying'],
@@ -865,6 +904,20 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
 
         if not plan:
             return Response({'has_active_plan': False})
+
+        # If the plan has been SCANNING for >40 minutes, the worker likely
+        # died (shutdown, crash, etc.). Mark it FAILED so the frontend
+        # doesn't enter an infinite polling loop.
+        if plan.status == 'scanning' and plan.updated_at:
+            age = timezone.now() - plan.updated_at
+            if age > SCANNING_STALE_THRESHOLD:
+                plan.status = EcosystemPlan.Status.FAILED
+                plan.error_message = (
+                    "Previous scan was interrupted (system shutdown or worker crash). "
+                    "Please start a new scan."
+                )
+                plan.save(update_fields=['status', 'error_message', 'updated_at'])
+                return Response({'has_active_plan': False})
 
         return Response({
             'has_active_plan': True,
@@ -875,6 +928,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             'selected_repos': plan.selected_repos,
             'ai_provider': plan.ai_provider,
             'plan': plan.plan,
+            'scan_progress': plan.scan_progress,
         })
 
     @action(detail=False, methods=['post'])

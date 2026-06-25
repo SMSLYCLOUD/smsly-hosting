@@ -1130,6 +1130,18 @@ def _apply_service_profile(service, svc_plan: dict[str, Any], provider, port: in
     service.save()
 
 
+def _update_plan_progress(plan_id: str, msg: str) -> None:
+    """Persist scan progress so the frontend can show it on resume after page navigation."""
+    from apps.deployments.models_ecosystem import EcosystemPlan
+    try:
+        EcosystemPlan.objects.filter(id=plan_id).update(
+            scan_progress=msg,
+            updated_at=timezone.now(),
+        )
+    except Exception:
+        pass
+
+
 @shared_task(bind=True, queue='deploy', soft_time_limit=1800, time_limit=2100)
 def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provider: str | None = None, selected_repos: list | None = None, plan_id: str | None = None) -> dict:
     """
@@ -1155,6 +1167,11 @@ def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provi
 
     try:
         logger.info(f"Starting ecosystem scan for user {user_id} with selected_repos: {selected_repos}")
+
+        # Persist initial progress so the frontend can show it on resume
+        if plan_id:
+            _update_plan_progress(plan_id, "Fetching and analyzing repositories...")
+
         from apps.deployments.models import Service
         existing_services = list(
             Service.objects.filter(owner=user)
@@ -1168,8 +1185,9 @@ def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provi
             try:
                 plan_record = EcosystemPlan.objects.get(id=plan_id)
                 plan_record.plan = result
+                plan_record.scan_progress = "Scan complete!"
                 plan_record.status = EcosystemPlan.Status.REVIEW
-                plan_record.save(update_fields=['plan', 'status', 'updated_at'])
+                plan_record.save(update_fields=['plan', 'scan_progress', 'status', 'updated_at'])
             except Exception:
                 pass
 

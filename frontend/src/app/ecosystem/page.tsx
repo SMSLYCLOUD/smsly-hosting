@@ -167,20 +167,27 @@ export default function EcosystemPage() {
     useEffect(() => { saveState('selectedRepos', selectedRepos); }, [selectedRepos]);
     useEffect(() => { saveState('aiProvider', selectedProvider); }, [selectedProvider]);
 
-    // Check for active plan on mount
+    // Check for active plan on mount — always runs so that returning
+    // after page navigation properly resumes scanning/deploying.
     useEffect(() => {
         const checkActivePlan = async () => {
-            // The HttpOnly auth cookie is attached automatically by the
-            // browser via ``credentials: 'include'``. No client-side
-            // token check is needed.
-            if (step !== 'idle' || plan) return;
+            // Don't override 'review' or 'done' — we have all data locally
+            if (step === 'review' || step === 'done') return;
 
             try {
                 const res = await fetch('/api/v1/cloud/ecosystem/active-plan/', {
                     credentials: 'include',
                 });
                 const data = await res.json();
-                if (!data.has_active_plan) return;
+                if (!data.has_active_plan) {
+                    // Server has no record but our local session says we're
+                    // mid-flow — the plan was likely cleaned up or failed.
+                    if (step === 'scanning' || step === 'deploying') {
+                        setError('Previous scan was interrupted. Please start a new scan.');
+                        setStep('selection');
+                    }
+                    return;
+                }
 
                 setPlanId(data.plan_id);
                 setSelectedRepos(data.selected_repos || []);
@@ -189,6 +196,10 @@ export default function EcosystemPage() {
                 if (data.status === 'scanning' && data.scan_task_id) {
                     setScanTaskId(data.scan_task_id);
                     setStep('scanning');
+                    if (data.scan_progress) {
+                        setScanProgress(data.scan_progress);
+                        setScanLogs([data.scan_progress]);
+                    }
                     pollTask(data.scan_task_id, (result: any) => {
                         if (result.error) {
                             setError(result.error);
@@ -215,7 +226,9 @@ export default function EcosystemPage() {
                         }
                     });
                 }
-            } catch {}
+            } catch {
+                // Server unreachable — keep local state as-is
+            }
         };
         checkActivePlan();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -223,6 +236,8 @@ export default function EcosystemPage() {
 
     // Poll for scan task completion
     const pollTask = useCallback(async (taskId: string, onComplete: (result: any) => void) => {
+        let retries = 0;
+        const MAX_RETRIES = 900; // 900 * 2s ≈ 30 min (matches Celery soft_time_limit)
         const poll = async () => {
             try {
                 const data = await apiGet(`/api/v1/cloud/ecosystem/task_status/?task_id=${taskId}`);
@@ -230,10 +245,27 @@ export default function EcosystemPage() {
                     onComplete(data.result);
                 } else if (data.status === 'FAILURE') {
                     setError(data.error || data.result?.error || 'Task failed');
-                    setStep('selection'); // Go back to selection on failure
+                    setStep('selection');
                 } else {
-                    // Still running - could update progress based on data if backend provides it
-                    if (data.status === 'PROGRESS' || data.result?.state) {
+                    retries++;
+                    if (retries > MAX_RETRIES) {
+                        setError(
+                            'Scan is taking too long and may have been interrupted. '
+                            + 'Please start a new scan.'
+                        );
+                        setStep('selection');
+                        return;
+                    }
+                    // Show persisted progress (survives page navigation) if available
+                    if (data.scan_progress) {
+                        setScanProgress(data.scan_progress);
+                        setScanLogs(prev => {
+                            if (prev.length === 0 || prev[prev.length - 1] !== data.scan_progress) {
+                                return [...prev, data.scan_progress];
+                            }
+                            return prev;
+                        });
+                    } else if (data.status === 'PROGRESS' || data.result?.state) {
                          const msg = data.result?.state || 'Scanning in progress...';
                          setScanProgress(msg);
                          setScanLogs(prev => {
@@ -244,6 +276,15 @@ export default function EcosystemPage() {
                     setTimeout(poll, 2000);
                 }
             } catch {
+                retries++;
+                if (retries > MAX_RETRIES) {
+                    setError(
+                        'Scan is taking too long and may have been interrupted. '
+                        + 'Please start a new scan.'
+                    );
+                    setStep('selection');
+                    return;
+                }
                 setTimeout(poll, 3000);
             }
         };
