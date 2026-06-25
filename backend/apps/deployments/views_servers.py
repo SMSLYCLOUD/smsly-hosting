@@ -878,6 +878,20 @@ class ManagedServerCreateSerializer(serializers.ModelSerializer):
                 )
         return data
 
+    def create(self, validated_data):
+        cert = validated_data.pop("node_certificate", None)
+        if cert and cert.strip():
+            import hashlib
+            validated_data["tls_cert_sha256"] = hashlib.sha256(cert.strip().encode('utf-8')).hexdigest()
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        cert = validated_data.pop("node_certificate", None)
+        if cert and cert.strip():
+            import hashlib
+            validated_data["tls_cert_sha256"] = hashlib.sha256(cert.strip().encode('utf-8')).hexdigest()
+        return super().update(instance, validated_data)
+
     def validate_ssh_key(self, value):
         if value and value.strip():
             key = value.strip()
@@ -1144,6 +1158,7 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
         # Remove the non-model field before saving
         validated = serializer.validated_data.copy()
         validated.pop("ssh_auth_method", None)
+        validated.pop("node_certificate", None)
 
         server = ManagedServer.objects.create(
             owner=request.user,
