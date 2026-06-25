@@ -395,7 +395,7 @@ _ENV_HINTS: dict[str, dict] = {
     'JWT_SECRET':          {'hint': 'JWT signing secret',     'is_secret': True,  'required': True,  'generate': True},
     'SECRET_KEY_BASE':     {'hint': 'Rails secret key',       'is_secret': True,  'required': True,  'generate': True},
     'APP_KEY':             {'hint': 'Laravel app key',        'is_secret': True,  'required': True,  'generate': True},
-    'DATABASE_URL':        {'hint': 'postgres://user:pass@host:5432/db', 'is_secret': True, 'required': True},
+    'DATABASE_URL':        {'hint': 'postgres://user:pass@host:5432/db', 'is_secret': False, 'required': True},
     'REDIS_URL':           {'hint': 'redis://localhost:6379/0', 'required': False},
     'API_KEY':             {'hint': 'Your API key',           'is_secret': True,  'required': True,  'user_required': True},
     'OPENAI_API_KEY':      {'hint': 'sk-... from platform.openai.com', 'is_secret': True, 'required': True, 'user_required': True},
@@ -1942,9 +1942,7 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
                 or (env_key == "QDRANT_URL" and _is_intelligence_service(svc))
             )
             if should_inject:
-                current = env_map.get(env_key)
-                if not current or str(current).startswith("REPLACE_WITH_") or str(current) in ("{{FILL_ME}}", "{{GENERATE}}"):
-                    env_map[env_key] = placeholder
+                env_map[env_key] = placeholder
 
         # 4.5 Intelligence Service Specialization
         if _is_intelligence_service(svc):
