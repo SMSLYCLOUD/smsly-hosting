@@ -428,7 +428,7 @@ def _detect_env_vars(files: list[str], stack: str, port: int,
     # 2. Scan .env.example / .env.sample / .env.template from cloned files
     if clone_dir:
         env_example_files = [f for f in files
-                             if os.path.basename(f) in ('.env.example', '.env.sample', '.env.template')]
+                             if os.path.basename(f) in ('.env.example', '.env.sample', '.env.template', '.env')]
         for ef in env_example_files:
             try:
                 full_path = os.path.join(clone_dir, ef)
@@ -444,9 +444,39 @@ def _detect_env_vars(files: list[str], stack: str, port: int,
             except Exception:
                 pass
 
+        # NEW: Scan docker-compose files for environment variables
+        compose_files = [f for f in files if os.path.basename(f) in ('docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml')]
+        for cf in compose_files:
+            try:
+                import yaml
+                full_path = os.path.join(clone_dir, cf)
+                with open(full_path, errors='replace') as fh:
+                    compose_data = yaml.safe_load(fh)
+                if compose_data and isinstance(compose_data, dict):
+                    services = compose_data.get('services', {})
+                    if isinstance(services, dict):
+                        for svc_name, svc_def in services.items():
+                            if isinstance(svc_def, dict):
+                                env = svc_def.get('environment')
+                                if isinstance(env, dict):
+                                    for k in env.keys():
+                                        if k and _re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', str(k)):
+                                            var_keys.append(str(k))
+                                elif isinstance(env, list):
+                                    for item in env:
+                                        if isinstance(item, str) and '=' in item:
+                                            k = item.split('=', 1)[0].strip()
+                                            if k and _re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', k):
+                                                var_keys.append(k)
+                                        elif isinstance(item, str): # if it's just VAR meaning pass-through
+                                            if item and _re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', item):
+                                                var_keys.append(item)
+            except Exception:
+                pass
+
         # 3. Scan config.py / settings.py for os.environ / os.getenv patterns
         config_candidates = [f for f in files
-                             if os.path.basename(f) in ('config.py', 'settings.py', '.env')]
+                             if os.path.basename(f) in ('config.py', 'settings.py')]
         for cf in config_candidates:
             try:
                 full_path = os.path.join(clone_dir, cf)

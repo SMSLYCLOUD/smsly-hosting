@@ -379,6 +379,30 @@ class RepoScanner:
                         add_var(match.group(1), f"Found in {f} (ENV)")
                     for match in docker_arg_pattern.finditer(content):
                         add_var(match.group(1), f"Found in {f} (ARG)")
+                        
+                    # Scan for environment blocks in docker-compose YAML files
+                    if f.startswith('docker-compose') or f in ('compose.yml', 'compose.yaml'):
+                        import yaml
+                        try:
+                            compose_data = yaml.safe_load(content)
+                            if compose_data and isinstance(compose_data, dict):
+                                services = compose_data.get('services', {})
+                                if isinstance(services, dict):
+                                    for svc_name, svc_def in services.items():
+                                        if isinstance(svc_def, dict):
+                                            env = svc_def.get('environment')
+                                            if isinstance(env, dict):
+                                                for k in env.keys():
+                                                    add_var(str(k), f"Found in {f} ({svc_name} environment block)")
+                                            elif isinstance(env, list):
+                                                for item in env:
+                                                    if isinstance(item, str) and '=' in item:
+                                                        k = item.split('=', 1)[0].strip()
+                                                        add_var(k, f"Found in {f} ({svc_name} environment block)")
+                                                    elif isinstance(item, str):
+                                                        add_var(item, f"Found in {f} ({svc_name} environment block pass-through)")
+                        except Exception:
+                            pass
                 except Exception:
                     pass
 
