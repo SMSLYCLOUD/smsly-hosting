@@ -425,6 +425,25 @@ def _detect_env_vars(files: list[str], stack: str, port: int,
     # 1. Start with stack defaults
     var_keys: list[str] = list(_STACK_ENV_DEFAULTS.get(stack, []))
 
+    # ── File-name-based detection (works even without clone_dir) ─────────
+    # Recognise key config files by name and inject their well-known env vars.
+    basenames = {os.path.basename(f) for f in files}
+
+    if '.env.example' in basenames or '.env.sample' in basenames or '.env.template' in basenames:
+        var_keys.extend([
+            'DATABASE_URL', 'SECRET_KEY', 'REDIS_URL', 'API_KEY',
+            'OPENAI_API_KEY', 'GEMINI_API_KEY',
+        ])
+
+    if 'docker-compose.yml' in basenames or 'docker-compose.yaml' in basenames:
+        var_keys.extend(['COMPOSE_PROJECT_NAME', 'EXTERNAL_PORT'])
+
+    if 'settings.py' in basenames or 'config.py' in basenames:
+        var_keys.extend(['ALLOWED_HOSTS', 'CORS_ALLOWED_ORIGINS', 'CSRF_TRUSTED_ORIGINS'])
+
+    if 'next.config.js' in basenames or 'next.config.ts' in basenames or 'next.config.mjs' in basenames:
+        var_keys.extend(['NEXT_PUBLIC_API_URL', 'NEXTAUTH_URL', 'NEXTAUTH_SECRET'])
+
     # 2. Scan .env.example / .env.sample / .env.template from cloned files
     if clone_dir:
         env_example_files = [f for f in files
@@ -1112,6 +1131,57 @@ def analyze_ecosystem_chunked(repos_data: list[dict], github_token: str | None =
             logger.warning("Skipping unprocessable service %r: %s", svc.get("repo", "?"), exc)
     global_services = sanitized_services
 
+    # === RECONCILIATION: ensure every input repo has a corresponding service ===
+    # The AI may omit repos (clone failure, token limits, model truncation).
+    # Fill in missing repos with heuristic-based service entries so the user
+    # never sees silently-dropped repos.
+    recon_added = 0
+    covered_repos = set()
+    for svc in global_services:
+        r = str(svc.get("repo", "")).strip().lower()
+        if r:
+            covered_repos.add(r)
+    for rd in repos_data:
+        repo_full = str(rd.get("repo", "")).strip().lower()
+        if not repo_full or repo_full in covered_repos:
+            continue
+        h = rd.get("heuristic", {})
+        name = repo_full.split("/")[-1]
+        env_map = _env_plan_map(h.get("env_vars", []))
+        deep_env = rd.get("env_vars_context", {})
+        if deep_env:
+            for var_name in deep_env:
+                upper_key = var_name.upper()
+                if upper_key not in env_map:
+                    fill = "{{GENERATE}}" if any(
+                        w in upper_key for w in ("SECRET", "KEY", "TOKEN", "PASSWORD")
+                    ) else ""
+                    env_map[upper_key] = fill
+        recon_svc = {
+            "repo": repo_full,
+            "name": name,
+            "branch": str(rd.get("default_branch") or "main"),
+            "stack": h.get("stack", "unknown"),
+            "port": h.get("port", 3000),
+            "build": h.get("build", "nixpacks"),
+            "addons": h.get("addons", []),
+            "env_vars": env_map,
+            "depends_on": [],
+            "deploy_order": 99,
+        }
+        global_services.append(recon_svc)
+        covered_repos.add(repo_full)
+        recon_added += 1
+        logger.warning(
+            "Reconciliation: repo %s had no service in any chunk plan — "
+            "auto-created from heuristic data.", repo_full
+        )
+    if recon_added:
+        logger.info(
+            "Ecosystem reconciliation added %d service(s) that were "
+            "missing from AI output.", recon_added
+        )
+
     try:
         _apply_plan_repo_defaults(global_services, repos_data)
         _apply_generic_ecosystem_intelligence(global_services)
@@ -1417,53 +1487,6 @@ def _attempt_ai_revalidation(repos_data: list[dict], ai_provider: str, error_mes
         logger.error(f"Error message: {e!s}")
         logger.error(f"Error details: {e}")
         return _build_heuristic_plan(repos_data, f"AI revalidation failed: {e!s}")
-
-
-def _build_heuristic_plan(repos_data: list[dict], error_message: str | None = None) -> dict:
-    """
-    Build a fallback heuristic-based ecosystem plan when AI fails.
-    """
-    if error_message:
-        logger.warning("Building heuristic plan due to: %s", error_message)
-
-    services = []
-    for rd in repos_data:
-        repo = rd.get('repo', 'unknown')
-        stack = rd.get('stack', 'unknown')
-
-        # Create a basic service entry
-        service = {
-            "name": repo.split('/')[-1],
-            "repo": repo,
-            "stack": stack,
-            "env_vars": {
-                "DATABASE_URL": "{{POSTGRES_URL}}" if "postgres" in stack.lower() or "database" in stack.lower() else "",
-                "REDIS_URL": "{{REDIS_URL}}" if "redis" in stack.lower() else "",
-                "AI_PROVIDER": "auto"
-            },
-            "addons": [],
-            "depends_on": [],
-            "deploy_order": 50
-        }
-
-        # Basic addon detection
-        if "postgres" in stack.lower() or "database" in stack.lower():
-            service["addons"].append("POSTGRES")
-        if "redis" in stack.lower() or "cache" in stack.lower():
-            service["addons"].append("REDIS")
-        if "vector" in stack.lower() or "ai" in stack.lower():
-            service["addons"].append("QDRANT")
-
-        services.append(service)
-
-    return {
-        "ecosystem_name": "SMSLY Heuristic Ecosystem",
-        "services": services,
-        "addons": [],
-        "deploy_sequence": ["addons"] + [svc["name"] for svc in services],
-        "ai_provider": "auto",
-        "message": error_message or "Built heuristic plan when AI analysis failed"
-    }
 
 
 def _env_plan_map(raw_env: Any) -> dict[str, str]:
@@ -1858,6 +1881,54 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
 
         svc["env_vars"] = env_map
 
+    # 4.6 Heuristic Fallback Cross-Linking
+    # When the AI/heuristic didn't produce SERVICE: links, auto-wire frontends
+    # to backends so services are never isolated.
+    backend_stacks = {"django", "python", "rust", "go", "java", "ruby", "elixir", "php"}
+    frontend_stacks = {"nextjs", "node", "nuxt"}
+    backends = [s for s in deployable if s.get("stack") in backend_stacks]
+    frontends = [s for s in deployable if s.get("stack") in frontend_stacks]
+    if backends and frontends:
+        for svc in deployable:
+            env_map = svc.get("env_vars", {})
+            svc_name = str(svc.get("name") or _repo_short_name(svc)).strip()
+            stack = str(svc.get("stack") or "").lower()
+            # Check if this service already has any SERVICE: link or API_URL reference
+            has_cross_ref = any(
+                "{{SERVICE:" in str(v) or "API_URL" in k.upper()
+                for k, v in env_map.items()
+            )
+            if has_cross_ref:
+                continue
+            # Frontend → backend link
+            if stack in frontend_stacks and backends:
+                target = backends[0]
+                target_name = str(target.get("name") or _repo_short_name(target)).strip()
+                if not target_name:
+                    continue
+                env_map.setdefault(
+                    "NEXT_PUBLIC_API_URL",
+                    "{{SERVICE:%s}}" % target_name,
+                )
+                try:
+                    deps = set(_coerce_depends_on(svc.get("depends_on", []) or []))
+                    deps.add(target_name)
+                    svc["depends_on"] = sorted(deps)
+                except TypeError:
+                    pass
+            # Backend → frontend link (CORS)
+            if stack in backend_stacks and frontends:
+                target = frontends[0]
+                target_name = str(target.get("name") or _repo_short_name(target)).strip()
+                if not target_name:
+                    continue
+                env_map.setdefault(
+                    "CORS_ALLOWED_ORIGINS",
+                    "{{SERVICE:%s}}" % target_name,
+                )
+                # Backend doesn't depend on frontend for deploy order,
+                # but the var reference makes the runtime link.
+
     # 5. Dependency Depth Sorting
     # Auth (10) > Core (20) > Others (50)
     for svc in deployable:
@@ -1949,28 +2020,57 @@ def _build_heuristic_plan(repos_data: list[dict], error: str = "") -> dict:
     """Build a basic deploy plan from heuristics when AI fails."""
     services = []
     order = 1
+    skipped = 0
 
     for rd in repos_data:
         h = rd.get("heuristic", {})
-        if h.get("stack") == "unknown":
-            continue
+        stack = h.get("stack", "unknown")
+        if stack == "unknown":
+            logger.warning(
+                "Repo %s has unknown stack (no package.json, manage.py, etc. found). "
+                "Including with 'unknown' stack — deploy may need manual stack selection.",
+                rd.get("repo", "?"),
+            )
+            skipped += 1
 
         name = rd["repo"].split("/")[-1]
+
+        # Prefer deep-scan env_vars_context if available (from RepoScanner in analyze_ecosystem).
+        # Fall back to heuristic filename-based detection otherwise.
+        env_vars_raw = h.get("env_vars", [])
+        env_map = _env_plan_map(env_vars_raw)
+        deep_env = rd.get("env_vars_context", {})
+        if deep_env:
+            # Merge deep-scanned vars into the env_map, filling in gaps
+            for var_name in deep_env:
+                upper_key = var_name.upper()
+                if upper_key not in env_map:
+                    fill = "{{GENERATE}}" if any(
+                        w in upper_key for w in ("SECRET", "KEY", "TOKEN", "PASSWORD")
+                    ) else ""
+                    env_map[upper_key] = fill
+
         svc = {
             "repo": rd["repo"],
             "name": name,
             "branch": str(rd.get("default_branch") or "main"),
-            "stack": h.get("stack", "unknown"),
+            "stack": stack,
             "port": h.get("port", 3000),
             "build": h.get("build", "nixpacks"),
             "addons": h.get("addons", []),
-            "env_vars": _env_plan_map(h.get("env_vars", {})),
+            "env_vars": env_map,
             "depends_on": [],
             "deploy_order": order,
         }
 
         services.append(svc)
         order += 1
+
+    if skipped:
+        logger.info(
+            "%d repos had unknown stacks and were included as-is "
+            "(user should set stack manually in the dashboard).", skipped
+        )
 
     # Sort: backends before frontends
     backend_stacks = {"django", "python", "rust", "go", "java", "ruby", "elixir", "php"}
@@ -2052,6 +2152,9 @@ def _scan_and_analyze_impl(token: str, ai_provider: str | None = None, selected_
     logger.info("Step 2: Analyzing repositories...")
     repos_data = []
     scan_warnings = []
+    skipped_forks = 0
+    skipped_empty = 0
+    skipped_errors = 0
     for repo in all_repos:
         full_name = repo["full_name"]
         description = repo.get("description", "") or ""
@@ -2059,7 +2162,11 @@ def _scan_and_analyze_impl(token: str, ai_provider: str | None = None, selected_
         is_fork = repo.get("fork", False)
 
         # Skip forks and empty repos
-        if is_fork or repo.get("size", 0) == 0:
+        if is_fork:
+            skipped_forks += 1
+            continue
+        if repo.get("size", 0) == 0:
+            skipped_empty += 1
             continue
 
         # Fetch file tree. A single inaccessible repo should not fail the
@@ -2069,8 +2176,10 @@ def _scan_and_analyze_impl(token: str, ai_provider: str | None = None, selected_
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning("Skipping %s during ecosystem scan: %s", full_name, exc)
             scan_warnings.append(f"{full_name}: {exc}")
+            skipped_errors += 1
             continue
         if not files:
+            skipped_errors += 1
             continue
 
         # Quick heuristic analysis
@@ -2085,14 +2194,32 @@ def _scan_and_analyze_impl(token: str, ai_provider: str | None = None, selected_
             "private": repo.get("private", False),
         })
 
+    if skipped_forks or skipped_empty or skipped_errors:
+        logger.info(
+            "Repo filter summary: %d skipped (forks=%d, empty=%d, errors=%d), %d kept",
+            skipped_forks + skipped_empty + skipped_errors,
+            skipped_forks, skipped_empty, skipped_errors,
+            len(repos_data),
+        )
+
     if not repos_data:
         logger.info("No deployable repositories found")
+        message_parts = []
+        if skipped_forks:
+            message_parts.append(f"{skipped_forks} fork(s) excluded")
+        if skipped_empty:
+            message_parts.append(f"{skipped_empty} empty repos(s) excluded")
+        if skipped_errors:
+            message_parts.append(f"{skipped_errors} repo(s) inaccessible")
+        msg = "No deployable repositories found."
+        if message_parts:
+            msg += f" ({'; '.join(message_parts)})"
         return {
             "services": [],
             "addons": [],
             "deploy_sequence": [],
             "ai_provider": "None",
-            "message": "No deployable repositories found.",
+            "message": msg,
         }
 
     logger.info(f"Step 3: Analyzing {len(repos_data)} repos with AI...")
@@ -2195,12 +2322,19 @@ def _scan_and_analyze_impl(token: str, ai_provider: str | None = None, selected_
 
         # Safely extract and validate services
         logger.info(f"Processing {len(plan.get('services', []))} services...")
+
+        # Track which repos are covered by services in the plan.
+        covered_repos_in_plan = set()
+
         for i, service in enumerate(plan.get("services", [])):
             if isinstance(service, dict):
                 try:
                     # Check if already deployed
                     service_name = str(service.get("name", f"service-{i}")).lower()
                     service_repo = str(service.get("repo", "")).lower()
+
+                    if service_repo:
+                        covered_repos_in_plan.add(service_repo)
 
                     is_existing = False
                     if existing_services:
@@ -2230,6 +2364,26 @@ def _scan_and_analyze_impl(token: str, ai_provider: str | None = None, selected_
                     logger.warning(f"Error processing service {i}: {e}")
                     logger.warning(f"Problematic service data: {service}")
                     continue
+
+        # === DIFF CHECK: flag any input repo that has no matching service ===
+        orphan_repos = []
+        for rd in repos_data:
+            repo_full = str(rd.get("repo", "")).strip().lower()
+            if repo_full and repo_full not in covered_repos_in_plan:
+                orphan_repos.append(rd.get("repo", "?"))
+        if orphan_repos:
+            warning_msg = (
+                f"{len(orphan_repos)} repo(s) had no matching service in the final plan: "
+                f"{', '.join(orphan_repos[:10])}"
+            )
+            if len(orphan_repos) > 10:
+                warning_msg += f" ... and {len(orphan_repos) - 10} more"
+            logger.warning(warning_msg)
+            scan_warnings.append(warning_msg)
+            final_plan["scan_warning_count"] = len(scan_warnings)
+            if scan_warnings:
+                final_plan["scan_warnings"] = scan_warnings[:20]
+            final_plan["orphan_repos"] = orphan_repos
 
         # Safely extract and validate addons
         logger.info(f"Processing {len(plan.get('addons', []))} addons...")
