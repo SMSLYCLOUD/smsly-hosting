@@ -202,9 +202,15 @@ def _detect_reachable_api_url(server) -> tuple[str | None, Any | None]:
                     f"{base_url}{health_path}",
                     timeout=MANAGED_SERVER_HEALTH_TIMEOUT,
                     verify=verify,
+                    stream=True,
                 )
                 if fingerprint:
                     _check_pin_after_handshake(response, fingerprint)
+                
+                # Consume and close so connection returns to pool
+                _ = response.content
+                response.close()
+
             except requests.RequestException:
                 continue
 
@@ -338,9 +344,12 @@ def _try_auto_token_exchange(server, base_url: str) -> str | None:
                     },
                     timeout=15,
                     verify=verify,
+                    stream=True,
                 )
                 if fingerprint:
                     _check_pin_after_handshake(resp, fingerprint)
+                _ = resp.content
+                resp.close()
                 if resp.status_code == 200:
                     token = resp.json().get("token")
                     if token:
@@ -366,9 +375,12 @@ def _try_auto_token_exchange(server, base_url: str) -> str | None:
                         },
                         timeout=15,
                         verify=verify,
+                        stream=True,
                     )
                     if fingerprint:
                         _check_pin_after_handshake(resp, fingerprint)
+                    _ = resp.content
+                    resp.close()
                     if resp.status_code == 200:
                         token = resp.json().get("token")
                         if token:
@@ -392,9 +404,12 @@ def _try_auto_token_exchange(server, base_url: str) -> str | None:
                         json={"username": username, "password": ssh_password},
                         timeout=15,
                         verify=verify,
+                        stream=True,
                     )
                     if fingerprint:
                         _check_pin_after_handshake(resp, fingerprint)
+                    _ = resp.content
+                    resp.close()
                     if resp.status_code == 200:
                         token = resp.json().get("key") or resp.json().get("token")
                         if token:
