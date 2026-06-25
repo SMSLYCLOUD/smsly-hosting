@@ -2351,7 +2351,17 @@ class PipelineManager:
     def _build_with_nixpacks(self, context_dir: str):
         """Execute Nixpacks build."""
         append_log(self.deployment, "Building with Nixpacks...\n")
-        env_map = {env.key: env.value for env in self.service.env_vars.all()}
+        import re
+        env_map = {}
+        for env in self.service.env_vars.all():
+            if isinstance(env.value, str) and re.search(r"\{\{.*?\}\}", env.value):
+                append_log(
+                    self.deployment,
+                    f"SKIP: env var {env.key} has unresolved placeholder {env.value} — "
+                    "addon may not be provisioned yet.\n",
+                )
+                continue
+            env_map[env.key] = env.value
         start_cmd = self._resolve_nixpacks_start_command(context_dir)
         allow_missing_start = not bool(start_cmd)
 

@@ -1916,17 +1916,32 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
                  env_map[key] = f"{{{{SHARED_SECRET:{key.lower()}}}}}"
 
         # 4. Standard Database Injection
-        if any(k in str(svc.get("addons", [])).upper() for k in ["POSTGRES", "DATABASE"]):
-            env_map.setdefault("DATABASE_URL", "{{POSTGRES_URL}}")
-        if "REDIS" in str(svc.get("addons", [])).upper():
-            env_map.setdefault("REDIS_URL", "{{REDIS_URL}}")
+        # NOTE: must overwrite {{GENERATE}} / empty values so the deploy
+        # pipeline resolves {{POSTGRES_URL}} to the real provisioned URL
+        # instead of replacing {{GENERATE}} with a random 50-char string.
+        _addon_url_vars = {
+            "DATABASE_URL": "{{POSTGRES_URL}}",
+            "REDIS_URL": "{{REDIS_URL}}",
+            "QDRANT_URL": "{{QDRANT_URL}}",
+        }
+        has_postgres = any(k in str(svc.get("addons", [])).upper() for k in ["POSTGRES", "DATABASE"])
+        has_redis = "REDIS" in str(svc.get("addons", [])).upper()
+        has_qdrant = "QDRANT" in str(svc.get("addons", [])).upper() or "VECTOR" in str(svc.get("addons", [])).upper()
+        for env_key, placeholder in _addon_url_vars.items():
+            should_inject = (
+                (env_key == "DATABASE_URL" and has_postgres)
+                or (env_key == "REDIS_URL" and has_redis)
+                or (env_key == "QDRANT_URL" and has_qdrant)
+                or (env_key == "QDRANT_URL" and _is_intelligence_service(svc))
+            )
+            if should_inject:
+                current = env_map.get(env_key)
+                if not current or current == "{{GENERATE}}":
+                    env_map[env_key] = placeholder
 
         # 4.5 Intelligence Service Specialization
         if _is_intelligence_service(svc):
             env_map.setdefault("AI_PROVIDER", "auto")
-            # If it's an intelligence service, it almost certainly needs a vector DB or similar
-            if "QDRANT" in str(svc.get("addons", [])).upper() or "VECTOR" in str(svc.get("addons", [])).upper():
-                 env_map.setdefault("QDRANT_URL", "{{QDRANT_URL}}")
 
         svc["env_vars"] = env_map
 
@@ -1995,7 +2010,9 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
 def _ensure_100_percent_env_coverage(services: list[dict]):
     """
     Guarantees that NO environment variable is left empty.
-    Forces production-ready values or clear placeholders for every key.
+    Uses {{PLACEHOLDER}} markers that the deploy pipeline must resolve —
+    never plain strings like 'http://localhost' that would silently pass
+    through to the running container and crash the app.
     """
     for svc in services:
         env_map = svc.get("env_vars", {})
@@ -2008,9 +2025,9 @@ def _ensure_100_percent_env_coverage(services: list[dict]):
                 if any(k in key.upper() for k in ["SECRET", "KEY", "TOKEN", "PASSWORD", "AUTH_HASH"]):
                     env_map[key] = "{{GENERATE}}"
                 elif any(k in key.upper() for k in ["URL", "HOST", "ENDPOINT"]):
-                    env_map[key] = "http://localhost" # Safe fallback placeholder
+                    env_map[key] = "{{FILL_ME}}"  # Caught by _validate_resolved_env
                 else:
-                    env_map[key] = f"REPLACE_WITH_PRODUCTION_{key.upper()}"
+                    env_map[key] = f"{{{{REPLACE_WITH_PRODUCTION_{key.upper()}}}}}"
 
         svc["env_vars"] = env_map
 

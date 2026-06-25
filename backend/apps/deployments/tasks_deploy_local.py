@@ -207,6 +207,12 @@ def _build_runtime_env(service: Service, image_name: str | None = None) -> dict:
                 env.key, service.name,
             )
             continue
+        if isinstance(val, str) and re.search(r"\{\{.*?\}\}", val):
+            logger.warning(
+                "[PLACEHOLDER] Skipping unresoloved placeholder %s=%s for service %s",
+                env.key, val, service.name,
+            )
+            continue
         env_vars[env.key] = val
 
     # ── Locked keys: user has explicitly locked these — never override them ──
