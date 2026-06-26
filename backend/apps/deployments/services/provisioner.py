@@ -1478,6 +1478,9 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
             "api_url", "api_token", "provision_status", "status",
             "provider_metadata", "updated_at",
         ]
+        # wg_address may have been set by ensure_server_in_default_mesh or fallback
+        if getattr(server, "wg_address", None):
+            update_fields.append("wg_address")
         if remote_gateway_secret:
             server.gateway_secret = remote_gateway_secret
             update_fields.append("gateway_secret")
