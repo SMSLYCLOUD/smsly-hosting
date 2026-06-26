@@ -70,7 +70,10 @@ def get_team_q_filter(user) -> Q:
 
     Returns a filter that matches resources owned by *user* or
     belonging to a project whose team includes *user* (any role).
+    Superusers see all resources (no filtering).
     """
+    if user.is_superuser:
+        return Q()
     from .models import TeamMember
     team_ids = TeamMember.objects.filter(user=user).values_list('team_id', flat=True)
     return Q(owner=user) | Q(project__team_id__in=list(team_ids))
