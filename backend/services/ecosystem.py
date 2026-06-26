@@ -2367,7 +2367,13 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
     # 4.52 CORS & CSRF auto-fill
     # If a backend has CORS_ALLOWED_ORIGINS or CSRF_TRUSTED_ORIGINS empty
     # and there's a frontend in the ecosystem, point them to it.
-    _frontends = [s for s in deployable if s.get("stack") in ("nextjs", "node", "nuxt")]
+    # Search ALL services (including skipped) for a frontend by name first,
+    # then fall back to stack-based detection.
+    _frontends = [s for s in services if "frontend" in str(s.get("name", "")).lower()]
+    if not _frontends:
+        _frontends = [s for s in services if s.get("stack") in ("nextjs", "node", "nuxt") and not s.get("skip")]
+    if not _frontends:
+        _frontends = [s for s in deployable if s.get("stack") in ("nextjs", "node", "nuxt")]
     if _frontends:
         _fe_name = str(_frontends[0].get("name") or _repo_short_name(_frontends[0])).strip()
         _fe_placeholder = f"{{{{SERVICE:{_fe_name}}}}}"
@@ -2379,44 +2385,6 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
                 cur = str(env_map.get(cors_key, "")).strip()
                 if not cur or cur in ("{{GENERATE}}", "{{FILL_ME}}"):
                     env_map[cors_key] = _fe_placeholder
-
-    # 4.53 Clear hardcoded external API keys
-    # These are service-specific keys the scanner picked up from source code.
-    # They should be left empty for the user to fill post-scan.
-    _EXTERNAL_API_KEY_PATTERNS = [
-        "RESEND_API_KEY", "SMSMAN_API_KEY", "FIVESIM_API_KEY",
-        "COINBASE_API_KEY", "COINBASE_WEBHOOK_SECRET",
-        "NOWPAYMENTS_API_KEY", "NOWPAYMENTS_WEBHOOK_SECRET",
-        "PAYSTACK_PUBLIC_KEY", "PAYSTACK_SECRET_KEY",
-        "FLUTTERWAVE_PUBLIC_KEY", "FLUTTERWAVE_SECRET_KEY",
-        "STRIPE_PUBLISHABLE_KEY",
-        "EMAIL_HOST_PASSWORD", "INTERNAL_API_SECRET", "INTERNAL_API_KEY",
-        "SERVICE_API_KEY", "SMSLY_API_KEY",
-        "S3_ACCESS_KEY", "INFOBIP_API_KEY",
-        "MINIO_ACCESS_KEY", "META_ACCESS_TOKEN",
-        "ADMIN_API_KEY", "ADMIN_KEY",
-        "VAULT_TOKEN", "IPINFO_TOKEN",
-        "EVENT_STREAM_KEY", "JWT_PUBLIC_KEY_FILE", "JWT_PRIVATE_KEY_FILE",
-        "KEY_STORAGE_PATH", "SECURITY_DEBUG_KEY",
-        "TEST_KEY_ID", "TEST_SECRET", "VALID_KEY_ID", "VALID_SECRET",
-        "REVOKED_KEY_ID", "REVOKED_SECRET",
-    ]
-    for svc in deployable:
-        env_map = svc.get("env_vars", {})
-        if not isinstance(env_map, dict):
-            continue
-        for key in list(env_map.keys()):
-            if key.upper() in _EXTERNAL_API_KEY_PATTERNS:
-                val = str(env_map.get(key, ""))
-                if val and not val.startswith("{{") and val not in ("", "{{GENERATE}}"):
-                    env_map[key] = ""
-
-        # Also clear hardcoded PLATFORM_TO_* secrets (external service keys)
-        for key in list(env_map.keys()):
-            if key.upper().startswith("PLATFORM_TO_") and key.upper().endswith("_SECRET"):
-                val = str(env_map.get(key, ""))
-                if val and not val.startswith("{{") and val not in ("", "{{GENERATE}}"):
-                    env_map[key] = ""
 
     # 4.54 Fix STRIPE_SECRET_KEY collision
     # Step 3a may have assigned {{SHARED_SECRET:secret_key}} (generic)
@@ -2438,6 +2406,58 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
             env_map = svc.get("env_vars", {})
             if isinstance(env_map, dict) and "PLATFORM_SECRET" not in env_map:
                 env_map["PLATFORM_SECRET"] = "{{SHARED_SECRET:platform_secret}}"
+
+    # 4.53 Clear hardcoded external API keys (LAST mutation before cross-linking)
+    # The scanner picks up real production values from source code for service-
+    # specific external API keys.  Replace them with {{GENERATE}} so the final
+    # display pass generates mock random values that let services start.
+    # Uses suffix/prefix pattern matching instead of maintaining an ever-growing
+    # exact-name list.  Shared secrets ({{SHARED_SECRET:...}}) and addon URLs
+    # ({{SERVICE:...}}) are protected by the val.startswith("{{") guard.
+    _EXTERNAL_KEY_SUFFIXES = (
+        "_API_KEY", "_SECRET_KEY", "_WEBHOOK_SECRET", "_AUTH_TOKEN",
+        "_ACCESS_TOKEN", "_ACCESS_KEY", "_PUBLISHABLE_KEY",
+        "_PRIVATE_KEY", "_TOKEN", "_PASSWORD", "_SECRET", "_KEY",
+    )
+    _EXTERNAL_PREFIXES = (
+        "RESEND_", "SMSMAN_", "FIVESIM_", "COINBASE_", "NOWPAYMENTS_",
+        "PAYSTACK_", "FLUTTERWAVE_", "STRIPE_", "TWILIO_", "SMTP_",
+    )
+    # Keys that must NEVER be cleared (addon URLs, framework, shared infra)
+    _SKIP_CLEAR = {
+        "DATABASE_URL", "POSTGRES_URL", "POSTGRES_DSN", "PGHOST",
+        "REDIS_URL", "REDIS_HOST", "REDIS_PORT", "CACHE_URL", "CELERY_RESULT_BACKEND",
+        "RABBITMQ_URL", "BROKER_URL", "CELERY_BROKER_URL", "AMQP_URL", "RABBITMQ_HOST",
+        "QDRANT_URL", "QDRANT_HOST", "VECTOR_DB_URL",
+        "MYSQL_URL", "MYSQL_HOST", "MARIADB_URL", "MARIADB_HOST",
+        "MONGODB_URL", "MONGO_URL", "MONGO_URI", "MONGODB_HOST",
+        "ELASTICSEARCH_URL", "ELASTICSEARCH_HOST", "ELASTIC_URL", "ELASTIC_HOST", "OPENSEARCH_URL",
+        "MINIO_ENDPOINT", "MINIO_HOST", "S3_ENDPOINT_URL", "S3_HOST",
+        "MEMCACHED_URL", "MEMCACHED_HOST", "MEMCACHE_SERVERS",
+        "PORT", "HOST", "HOSTNAME", "NODE_ENV", "DEBUG", "LOG_LEVEL",
+        "PYTHONUNBUFFERED", "PYTHONDONTWRITEBYTECODE", "ALLOWED_HOSTS",
+        "SENTRY_DSN", "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS",
+        "SERVICE_PORT", "WEB_CONCURRENCY", "WORKERS",
+    }
+    for svc in deployable:
+        env_map = svc.get("env_vars", {})
+        if not isinstance(env_map, dict):
+            continue
+        for key in list(env_map.keys()):
+            if key in _SKIP_CLEAR:
+                continue
+            val = str(env_map.get(key, ""))
+            if not val or val.startswith("{{") or val in ("", "{{GENERATE}}"):
+                continue
+            ku = key.upper()
+            if any(ku.endswith(sfx) for sfx in _EXTERNAL_KEY_SUFFIXES):
+                env_map[key] = "{{GENERATE}}"
+                continue
+            if any(ku.startswith(pfx) for pfx in _EXTERNAL_PREFIXES):
+                env_map[key] = "{{GENERATE}}"
+                continue
+            if ku.startswith("PLATFORM_TO_") and ku.endswith("_SECRET"):
+                env_map[key] = "{{GENERATE}}"
 
     # 4.6 Heuristic Fallback Cross-Linking
     # When the AI/heuristic didn't produce SERVICE: links, auto-wire frontends
