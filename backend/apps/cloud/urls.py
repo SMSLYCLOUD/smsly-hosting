@@ -67,6 +67,11 @@ urlpatterns = [
         name='ecosystem-active-plan',
     ),
     path(
+        'ecosystem/download-env/',
+        IntelligenceViewSet.as_view({'get': 'download_env'}),
+        name='ecosystem-download-env',
+    ),
+    path(
         'ecosystem/deep_scan/',
         CodeIntelligenceView.as_view(),
         name='cloud-ecosystem-deep-scan',

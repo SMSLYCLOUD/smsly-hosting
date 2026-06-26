@@ -931,6 +931,53 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             'scan_progress': plan.scan_progress,
         })
 
+    @action(detail=False, methods=['get'])
+    def download_env(self, request):
+        """Download all env vars from the latest ecosystem plan as a JSON file."""
+        from apps.deployments.models_ecosystem import EcosystemPlan
+        from django.http import JsonResponse
+
+        plan = EcosystemPlan.objects.filter(
+            user=request.user,
+            status__in=['review', 'deploying', 'completed'],
+        ).order_by('-updated_at').first()
+
+        if not plan:
+            return Response(
+                {'error': 'No ecosystem plan found. Run a scan first.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        plan_data = plan.plan
+        if not plan_data or 'services' not in plan_data:
+            return Response(
+                {'error': 'Plan has no services data.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Extract env vars per service into a flat structure
+        env_export = {}
+        for service in plan_data['services']:
+            name = service.get('name', 'unknown')
+            env_vars = service.get('env_vars', {}) or {}
+            env_export[name] = env_vars
+
+        # Also include global/shared env if present
+        shared = plan_data.get('shared_env', {}) or {}
+        if shared:
+            env_export['_shared'] = shared
+
+        payload = {
+            'plan_id': str(plan.id),
+            'status': plan.status,
+            'generated_at': plan.updated_at.isoformat() if plan.updated_at else None,
+            'env': env_export,
+        }
+
+        response = JsonResponse(payload, json_dumps_params={'indent': 2})
+        response['Content-Disposition'] = 'attachment; filename="ecosystem-env.json"'
+        return response
+
     @action(detail=False, methods=['post'])
     def analyze_repo(self, request):
         """
