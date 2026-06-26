@@ -962,6 +962,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             services_export[name] = {
                 'env_vars': (service.get('env_vars', {}) or {}),
                 'addons': service.get('addons', []) or [],
+                'depends_on': service.get('depends_on', []) or [],
                 'port': service.get('port'),
                 'stack': service.get('stack'),
                 'build': service.get('build'),
