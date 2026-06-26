@@ -1934,6 +1934,18 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
         has_postgres = any(k in str(svc.get("addons", [])).upper() for k in ["POSTGRES", "DATABASE"])
         has_redis = "REDIS" in str(svc.get("addons", [])).upper()
         has_qdrant = "QDRANT" in str(svc.get("addons", [])).upper() or "VECTOR" in str(svc.get("addons", [])).upper()
+        _ecosystem_has_postgres = any(
+            any(k in str(o.get("addons", [])).upper() for k in ["POSTGRES", "DATABASE"])
+            for o in deployable
+        )
+        _ecosystem_has_redis = any(
+            "REDIS" in str(o.get("addons", [])).upper()
+            for o in deployable
+        )
+        _ecosystem_has_qdrant = any(
+            "QDRANT" in str(o.get("addons", [])).upper() or "VECTOR" in str(o.get("addons", [])).upper()
+            for o in deployable
+        )
         for env_key, placeholder in _addon_url_vars.items():
             should_inject = (
                 (env_key == "DATABASE_URL" and has_postgres)
@@ -1943,6 +1955,18 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
             )
             if should_inject:
                 env_map[env_key] = placeholder
+            elif (
+                (env_key == "DATABASE_URL" and _ecosystem_has_postgres)
+                or (env_key == "REDIS_URL" and _ecosystem_has_redis)
+                or (env_key == "QDRANT_URL" and (_ecosystem_has_qdrant or _is_intelligence_service(svc)))
+            ) and env_key in env_map:
+                # Fallback: if ANY service in the ecosystem declares this
+                # addon, inject the placeholder for every service that has
+                # the variable name in its env_map, even if this particular
+                # service didn't declare the addon itself.
+                cur = env_map.get(env_key)
+                if not cur or str(cur).strip() in ("", "{{GENERATE}}", "{{FILL_ME}}") or str(cur).startswith("REPLACE_WITH_"):
+                    env_map[env_key] = placeholder
 
         # 4.5 Intelligence Service Specialization
         if _is_intelligence_service(svc):
@@ -2012,6 +2036,12 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
     }
     _SERVICE_URL_SUFFIXES = ("_URL", "_ENDPOINT", "_HOST", "_API", "_ADDRESS")
 
+    def _stem_matches_service(stem: str, service_name: str) -> bool:
+        stem_parts = stem.split("-")
+        name_parts = service_name.split("-")
+        it = iter(name_parts)
+        return all(any(part == sp for part in it) for sp in stem_parts)
+
     for svc in deployable:
         env_map = svc.get("env_vars", {})
         for key in list(env_map.keys()):
@@ -2029,7 +2059,7 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
                         other_name = str(other.get("name", "")).lower()
                         if other is svc:
                             continue
-                        if stem in other_name or other_name in stem:
+                        if _stem_matches_service(stem, other_name):
                             env_map[key] = f"{{{{SERVICE:{other['name']}}}}}"
                             break
                     break
@@ -2052,6 +2082,20 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
     # instead of placeholders.  Vars with the SAME name across services
     # get the SAME value (e.g. PLATFORM_API_SECRET on backend + platform-api).
     # This mirrors what the AI would do via {{SHARED_SECRET:name}}.
+    # First, unify: if ANY service has {{GENERATE}} for a key, ALL services
+    # get {{GENERATE}} so the pool dedup works correctly.
+    _generate_keys: set[str] = set()
+    for svc in deployable:
+        env_map = svc.get("env_vars", {})
+        for key, val in env_map.items():
+            if val == "{{GENERATE}}":
+                _generate_keys.add(key)
+    if _generate_keys:
+        for svc in deployable:
+            env_map = svc.get("env_vars", {})
+            for key in list(env_map.keys()):
+                if key in _generate_keys:
+                    env_map[key] = "{{GENERATE}}"
     _generate_pool: dict[str, str] = {}
     for svc in deployable:
         env_map = svc.get("env_vars", {})
