@@ -106,12 +106,14 @@ class RepoScanner:
         - structure: directory tree summary
         - issues: potential deployment problems detected
         """
+        self._detected_prefixes: set[str] = set()
         env_context = self._detect_env_vars_with_context()
         result = {
             'stack': self._detect_stack(),
             'configs': self._read_config_files(),
             'env_vars': list(env_context.keys()),
             'env_vars_context': env_context,
+            'env_prefixes': list(self._detected_prefixes),
             'structure': self._directory_summary(),
             'issues': [],
         }
@@ -373,6 +375,7 @@ class RepoScanner:
                     pm = pydantic_prefix_pat.search(content)
                     if pm:
                         prefix = pm.group(1)
+                        self._detected_prefixes.add(prefix)
                     for m in pydantic_field_pat.finditer(content):
                         env_var = (prefix + m.group(1).upper()) if prefix else m.group(1).upper()
                         ctx_line = m.group(0).strip()

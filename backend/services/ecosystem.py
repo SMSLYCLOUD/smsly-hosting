@@ -792,6 +792,7 @@ def analyze_ecosystem(repos_data: list[dict], github_token: str | None = None, a
                 scanner = RepoScanner(clone_dir)
                 scan = scanner.scan()
                 rd['env_vars_context'] = scan.get('env_vars_context', {})
+                rd['env_prefixes'] = scan.get('env_prefixes', [])
                 rd['stack'] = scan.get('stack', rd.get('stack', 'unknown'))
 
                 # Intelligent Config Extraction (Context Size Optimization)
@@ -986,8 +987,17 @@ def analyze_ecosystem(repos_data: list[dict], github_token: str | None = None, a
                     sanitized_services.append(svc)
                 plan["services"] = sanitized_services
 
+                # Attach scanner-detected env_prefixes to each service
+                for svc in plan["services"]:
+                    repo = svc.get("repo", "")
+                    for rd in repos_data:
+                        if rd.get("repo") == repo:
+                            svc["_env_prefixes"] = list(rd.get("env_prefixes", []))
+                            break
+
                 _apply_plan_repo_defaults(plan["services"], repos_data)
                 _apply_generic_ecosystem_intelligence(plan["services"])
+                _ai_env_crosscheck(plan["services"], ai_provider)
                 plan["addons"] = _rebuild_addons_manifest(plan["services"], plan.get("addons", []))
                 plan["deploy_sequence"] = _build_deploy_sequence(plan["services"])
 
@@ -1261,6 +1271,7 @@ def analyze_ecosystem_chunked(repos_data: list[dict], github_token: str | None =
     try:
         _apply_plan_repo_defaults(global_services, repos_data)
         _apply_generic_ecosystem_intelligence(global_services)
+        _ai_env_crosscheck(global_services, ai_provider)
     except TypeError as exc:
         logger.warning("TypeError during ecosystem intelligence processing: %s", exc)
     except Exception as exc:
@@ -1860,6 +1871,79 @@ def _rebuild_addons_manifest(services: list[dict], existing_addons: Any) -> list
         return []
 
 
+def _ai_env_crosscheck(services: list[dict], ai_provider: str | None) -> None:
+    """
+    AI cross-check pass: analyzes the generated env vars and identifies
+    cross-service secret mismatches or missing vars that the initial
+    AI pass missed.  Runs after the main plan + heuristic corrections.
+    """
+    from apps.intelligence.providers import _cached_ask
+    import json
+
+    if not ai_provider:
+        return
+
+    lines = []
+    for svc in services:
+        name = _repo_short_name(svc)
+        env = svc.get("env_vars", {})
+        secrets = {k: v for k, v in env.items() if any(w in k.upper() for w in ["SECRET", "KEY", "TOKEN", "PASSWORD", "SALT"])}
+        urls = {k: v for k, v in env.items() if any(w in k.upper() for w in ["_URL", "_ENDPOINT", "_HOST", "_API"])}
+        lines.append(f"SERVICE: {name}")
+        for k, v in sorted(secrets.items()):
+            lines.append(f"  SECRET  {k}: {v}")
+        for k, v in sorted(urls.items()):
+            lines.append(f"  URL     {k}: {v}")
+        lines.append("")
+
+    prompt = f"""You are auditing a microservice deployment plan. Review the env vars below.
+
+Identify:
+1. Secrets with DIFFERENT names across services that must hold the SAME value
+   (e.g. POLICY_TO_AUDIT_SECRET on policy-service ↔ AUDIT_SERVICE_SECRET on audit-service)
+2. Prefixed secrets (e.g. RATE_LIMIT_GATEWAY_SECRET) that should match unprefixed
+   counterparts (GATEWAY_SECRET) on other services
+3. Empty required secrets that should use {{GENERATE}} or {{SHARED_SECRET:name}}
+4. Empty service URLs that should use {{SERVICE:name}}
+
+{''.join(lines)}
+
+Return ONLY valid JSON:
+{{"corrections": [
+  {{"service": "service-name", "var": "VAR", "new_value": "{{SHARED_SECRET:name}}"}}
+]}}"""
+
+    logger.info("=== AI ENV CROSS-CHECK ===")
+    try:
+        resp, provider = _cached_ask(
+            prompt, system_prompt="You are a DevOps auditor. Return ONLY valid JSON.", provider_id=ai_provider,
+        )
+        resp = resp or ""
+        start = resp.find('{')
+        end = resp.rfind('}')
+        if start == -1 or end == -1:
+            return
+        result = json.loads(resp[start:end+1])
+        corrections = result.get("corrections") or []
+        if not corrections:
+            logger.info("AI cross-check: no corrections needed")
+            return
+        logger.info(f"AI cross-check found {len(corrections)} corrections")
+        for corr in corrections:
+            svc_name = str(corr.get("service", ""))
+            var_name = str(corr.get("var", ""))
+            new_val = str(corr.get("new_value", ""))
+            if not svc_name or not var_name or not new_val:
+                continue
+            for svc in services:
+                if (_repo_short_name(svc) == svc_name) and var_name in svc.get("env_vars", {}):
+                    svc["env_vars"][var_name] = new_val
+                    logger.info(f"  Fixed {svc_name}/{var_name} → {new_val}")
+                    break
+    except Exception as e:
+        logger.warning(f"AI env cross-check failed: {e}")
+
+
 def _apply_generic_ecosystem_intelligence(services: list[dict]):
     """
     Elite Level 5: Zero-Hardcoding Service Discovery.
@@ -1947,6 +2031,32 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
 
             if any(k in key_u for k in ["OPENAI_API_KEY", "GEMINI_API_KEY", "CLAUDE_API_KEY", "GROK_API_KEY", "ANTHROPIC_API_KEY"]):
                  env_map[key] = f"{{{{SHARED_SECRET:{key.lower()}}}}}"
+
+        # 3b. Env prefix-based secret matching
+        # If a service uses env_prefix (e.g. RATE_LIMIT_) and has a var
+        # RATE_LIMIT_GATEWAY_SECRET, and another service has GATEWAY_SECRET,
+        # they refer to the same secret — unify them.
+        # Only match secret-type vars (contain SECRET, KEY, TOKEN, PASSWORD)
+        # to avoid conflating addon URLs (REDIS_URL → {{REDIS_URL}})
+        # with shared secrets.
+        _prefix_svc = [(svc, svc.get("_env_prefixes", [])) for svc in services]
+        for svc, prefixes in _prefix_svc:
+            env_map = svc.get("env_vars", {})
+            for prefix in prefixes:
+                for key in list(env_map.keys()):
+                    if not key.startswith(prefix) or len(key) <= len(prefix):
+                        continue
+                    if not any(kw in key.upper() for kw in ["SECRET", "KEY", "TOKEN", "PASSWORD"]):
+                        continue
+                    base_key = key[len(prefix):]
+                    for other_svc in services:
+                        if other_svc is svc:
+                            continue
+                        other_map = other_svc.get("env_vars", {})
+                        if base_key in other_map:
+                            shared_name = base_key.lower()
+                            env_map[key] = f"{{{{SHARED_SECRET:{shared_name}}}}}"
+                            other_map[base_key] = f"{{{{SHARED_SECRET:{shared_name}}}}}"
 
         # 4. Standard Database Injection
         # Overwrite placeholder values so the deploy pipeline resolves
