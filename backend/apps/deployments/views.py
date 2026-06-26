@@ -33,6 +33,7 @@ from django.utils import timezone
 from django.utils.http import content_disposition_header
 from rest_framework import (
     authentication,
+    filters,
     parsers,
     permissions,
     serializers,
@@ -743,6 +744,8 @@ class ServiceViewSet(viewsets.ModelViewSet):
     queryset = Service.objects.all().order_by('-updated_at')
     serializer_class = ServiceSerializer
     permission_classes = [permissions.IsAuthenticated]
+    filter_backends = [filters.SearchFilter]
+    search_fields = ['$name']
     # SECURITY (Batch H): throttles are applied PER ACTION below.
     # Class-level throttle_classes would cap *every* method (including
     # GETs that the dashboard fires when listing services, polling
