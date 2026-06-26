@@ -1911,7 +1911,7 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
         # 3. Global Secret Synchronization
         for key in list(env_map.keys()):
             key_u = key.upper()
-            if any(k in key_u for k in ["JWT_SECRET", "ENCRYPTION_KEY", "APP_SECRET", "GATEWAY_SECRET"]):
+            if any(k in key_u for k in ["JWT_SECRET", "ENCRYPTION_KEY", "APP_SECRET", "GATEWAY_SECRET", "SERVICE_SECRET"]):
                 # Assign a shared secret placeholder so they all get the same value across the cluster
                 env_map[key] = f"{{{{SHARED_SECRET:{key.lower()}}}}}"
 
@@ -2096,6 +2096,25 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
             for key in list(env_map.keys()):
                 if key in _generate_keys:
                     env_map[key] = "{{GENERATE}}"
+    # Also detect conflicting values for the same key across services.
+    # If a secret-like key has different real values on different services,
+    # unify them to a single generated value.
+    _key_values: dict[str, set[str]] = {}
+    for svc in deployable:
+        env_map = svc.get("env_vars", {})
+        for key, val in env_map.items():
+            val_str = str(val or "")
+            if val_str in ("", "{{GENERATE}}", "{{FILL_ME}}") or val_str.startswith("REPLACE_WITH_") or val_str.startswith("{{SERVICE:") or val_str.startswith("{{SHARED_SECRET:"):
+                continue
+            _key_values.setdefault(key, set()).add(val_str)
+    for svc in deployable:
+        env_map = svc.get("env_vars", {})
+        for key in list(env_map.keys()):
+            vals = _key_values.get(key)
+            if vals and len(vals) > 1:
+                if any(k in key.upper() for k in ["SECRET", "KEY", "TOKEN", "PASSWORD"]):
+                    env_map[key] = "{{GENERATE}}"
+                    _generate_keys.add(key)
     _generate_pool: dict[str, str] = {}
     for svc in deployable:
         env_map = svc.get("env_vars", {})
