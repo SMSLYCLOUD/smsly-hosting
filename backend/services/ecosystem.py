@@ -692,13 +692,32 @@ ECOSYSTEM_PROMPT = """You are the Supreme DevOps Architect of the CloudNeuron AI
 
     ### ADVANCED CONNECTIVITY REASONING:
     1. CIRCULAR RESOLUTION: If Service A needs Service B and vice-versa, use internal Docker DNS names (e.g., http://service-b:8000) for internal traffic and public placeholders for client-side traffic.
-    2. SHARED SECRET VAULT: Identify variables like JWT_SECRET, AUTH_KEY, or ENCRYPTION_TOKEN. If multiple services use them, assign the SAME {{SHARED_SECRET:name}} placeholder so they can communicate.
+    2. SHARED SECRET VAULT — HANDLE DIFFERENT-NAME SAME-VALUE SECRETS:
+       Inter-service auth secrets often have DIFFERENT env var names on each service but MUST hold the SAME value at runtime.
+       Examples of same-value pairs to detect:
+       - `POLICY_TO_AUDIT_SECRET` on policy-service IS THE SAME SECRET as `AUDIT_SERVICE_SECRET` on audit-service
+       - `RATELIMIT_SECRET` on a service IS THE SAME SECRET as `RATE_LIMIT_PLATFORM_API_SECRET` on rate-limit-service
+       - `PLATFORM_API_SECRET` IS THE SAME SECRET as `RATE_LIMIT_PLATFORM_API_SECRET` (rate-limit service prefixes its vars)
+       - `AUTH_KEY` / `GATEWAY_SECRET` often have different names on different services
+       How to detect: examine the "Critical Config Analysis" files — look at how each service references others
+       (e.g., policy-service's config.py has `POLICY_TO_AUDIT_SECRET` because it calls audit-service's API).
+       The receiving service's config will have a differently-named var for the same secret.
+       When you find such a pair, assign BOTH to the SAME {{SHARED_SECRET:name}} placeholder.
     3. CORS & OAUTH: Automatically detect if a backend needs a frontend's URL for `CORS_ALLOWED_ORIGINS` or `OAUTH_CALLBACK_URL`. Use {{SERVICE:frontend-repo}} to link them.
     4. DATABASE CONSOLIDATION: If multiple services need POSTGRES, prefer a single shared instance with unique database names ({{POSTGRES_URL}}/service_name) unless they are strictly isolated.
 
+    ### PYDANTIC / BASE SETTINGS DETECTION:
+    Many services use Pydantic BaseSettings classes. The "Expected Env Vars" section lists every variable
+    detected by static analysis — INCLUDE ALL OF THEM in your output. Do not filter or drop any.
+    - Pydantic snake_case field names are ALWAYS converted to UPPER_CASE env var names (e.g. `platform_api_secret` -> `PLATFORM_API_SECRET`).
+    - If a Config class or model_config sets `env_prefix`, that prefix is prepended to ALL field names (e.g. `env_prefix = "RATE_LIMIT_"` + field `platform_api_secret` -> `RATE_LIMIT_PLATFORM_API_SECRET`).
+    - The "Critical Config Analysis" section contains the full config file — use it to identify ALL pydantic fields and their types.
+    - Fields typed as `SecretStr`, `SecretBytes`, `stq`, `int`, `bool` without a default value are REQUIRED and MUST be included.
+    - Even unusual var names like `API_KEY_SALT`, `POLICY_TO_AUDIT_SECRET`, `GATEWAY_TO_PLATFORM_SECRET` are real vars used by the code — include them.
+
     ### CRITICAL RULES:
-    1. EXHAUSTIVE RESOLUTION: Never leave an environment variable empty.
-     2. DETERMINISTIC LINKING: Use {{SERVICE:repo-name}} for service URLs, {{POSTGRES_URL}} for databases. For secrets (API keys, tokens, passwords), set "generate": true in the env entry instead of using {{GENERATE}} as a literal value.
+    1. EXHAUSTIVE RESOLUTION: Never leave an environment variable empty. Include EVERY var from the "Expected Env Vars" list below.
+    2. DETERMINISTIC LINKING: Use {{SERVICE:repo-name}} for service URLs, {{POSTGRES_URL}} for databases. For secrets (API keys, tokens, passwords), set "generate": true in the env entry instead of using {{GENERATE}} as a literal value.
     3. DEPLOY ORDER: Rank services by dependency depth. Infrastructure -> Core APIs -> Background Workers -> Frontends.
     4. STRICT TYPE CONSTRAINTS — ALL array fields must contain ONLY strings, NEVER objects/dicts. Violating this will crash the deployment system.
 
@@ -777,7 +796,7 @@ def analyze_ecosystem(repos_data: list[dict], github_token: str | None = None, a
 
                 # Intelligent Config Extraction (Context Size Optimization)
                 configs_summary = {}
-                priority_files = ['docker-compose.yml', 'docker-compose.yaml', 'Dockerfile', 'package.json', 'requirements.txt', 'pyproject.toml', 'Cargo.toml', 'go.mod']
+                priority_files = ['docker-compose.yml', 'docker-compose.yaml', 'Dockerfile', 'package.json', 'requirements.txt', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'config.py', 'settings.py', 'main.py', 'app.py']
 
                 raw_configs = scan.get('configs', {})
                 critical_configs = [(k, v) for k, v in raw_configs.items() if any(p in os.path.basename(k) for p in priority_files)]
@@ -834,15 +853,17 @@ def analyze_ecosystem(repos_data: list[dict], github_token: str | None = None, a
             summary += f"Resource Intensity: {'HEAVY (Requires 2GB+ RAM)' if is_heavy else 'STANDARD'}\n"
 
             if rd.get('env_vars_context'):
-                summary += "Expected Env Vars (with Logic Hints):\n"
-                for var, ctxs in rd['env_vars_context'].items():
+                summary += "Expected Env Vars (with Logic Hints) — INCLUDE ALL OF THESE:\n"
+                for var, ctxs in sorted(rd['env_vars_context'].items()):
                     ctx = ctxs[0] if ctxs else "No context"
+                    if len(ctx) > 200:
+                        ctx = ctx[:200] + "..."
                     summary += f"- {var}: {ctx}\n"
 
             if rd.get('configs_summary'):
-                summary += "Critical Config Analysis:\n"
+                summary += "Critical Config Analysis (use to find ALL field declarations):\n"
                 for path, snippet in rd['configs_summary'].items():
-                    if any(p in path for p in ['Dockerfile', 'compose', 'package', 'requirements', 'settings', 'config', 'urls']):
+                    if any(p in path for p in ['Dockerfile', 'compose', 'package', 'requirements', 'settings', 'config', 'main', 'app', 'urls']):
                         summary += f"#### FILE: {path}\n```\n{snippet}\n```\n"
 
             repo_summaries.append(summary)
@@ -1114,8 +1135,13 @@ def analyze_ecosystem_chunked(repos_data: list[dict], github_token: str | None =
         YOUR JOB:
         1. Resolve any cross-repo dependencies. If Service A needs the URL of Service B, ensure Service A's env vars use {{{{SERVICE:service-b}}}}.
         2. Consolidate addons (e.g. ensure only one POSTGRES if they should share).
-        3. EXHAUSTIVE ENV VARS (MANDATORY): You MUST include EVERY SINGLE variable listed under "Expected Env Vars" in the REPOSITORY DETAILS for each service. Do NOT omit any variables. Map them to the appropriate {{{{SERVICE:...}}}}, {{{{POSTGRES_URL}}}}, or {{{{SHARED_SECRET:...}}}} placeholder. For secrets that need random generation (API keys, tokens, passwords), set {{"generate": true}} in the env entry. For unknown non-secret vars, leave the value empty.
-        4. FULL DEPLOY ORDER AUTHORITY: You have complete power to restructure the "deploy_order" and "deploy_sequence" from scratch to ensure a successful deployment (e.g., Auth/Identity -> Core API -> Gateways -> Frontends).
+        3. SHARED SECRET MATCHING (CRITICAL): Identify inter-service auth secrets that have DIFFERENT names on different services but MUST hold the SAME value. For example:
+           - `POLICY_TO_AUDIT_SECRET` on policy-service = `AUDIT_SERVICE_SECRET` on audit-service
+           - `RATELIMIT_SECRET` on any service = `RATE_LIMIT_*_SECRET` on rate-limit-service (which uses env_prefix="RATE_LIMIT_")
+           - `PLATFORM_API_SECRET` = `RATE_LIMIT_PLATFORM_API_SECRET`
+           When you find such pairs, assign them to the SAME {{{{SHARED_SECRET:common_name}}}} placeholder.
+        4. EXHAUSTIVE ENV VARS (MANDATORY): You MUST include EVERY SINGLE variable listed under "Expected Env Vars" in the REPOSITORY DETAILS for each service. Do NOT omit any variables. Map them to the appropriate {{{{SERVICE:...}}}}, {{{{POSTGRES_URL}}}}, or {{{{SHARED_SECRET:...}}}} placeholder. For secrets that need random generation (API keys, tokens, passwords), set {{"generate": true}} in the env entry. For unknown non-secret vars, leave the value empty.
+        5. FULL DEPLOY ORDER AUTHORITY: You have complete power to restructure the "deploy_order" and "deploy_sequence" from scratch to ensure a successful deployment (e.g., Auth/Identity -> Core API -> Gateways -> Frontends).
 
         CURRENT COMBINED PLAN:
         ```json

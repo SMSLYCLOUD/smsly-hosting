@@ -299,7 +299,7 @@ class RepoScanner:
             re.compile(r'config\(["\']([A-Z_][A-Z0-9_]*)["\']'),
             re.compile(r'env\(["\']([A-Z_][A-Z0-9_]*)["\']\)?'),
             re.compile(r'env\.[a-z]+\(["\']([A-Z_][A-Z0-9_]*)["\']\)?'),
-            re.compile(r'^\s*([A-Z_][A-Z0-9_]{3,})\s*:\s*(?:str|int|bool|float|list|dict|AnyHttpUrl|PostgresDsn|RedisDsn)'), # Pydantic settings
+            re.compile(r'^\s*([A-Z_][A-Z0-9_]{3,})\s*:\s*(?:str|int|bool|float|list|dict|AnyHttpUrl|PostgresDsn|RedisDsn|SecretStr|SecretBytes|EmailStr|AnyUrl|Field)'), # Pydantic settings
             re.compile(r'Field\(.*?(?:env|alias)=["\']([A-Z_][A-Z0-9_]*)["\']'),
 
             # ── JavaScript / TypeScript ──
@@ -357,7 +357,30 @@ class RepoScanner:
                 except Exception: # pylint: disable=broad-exception-caught
                     pass
 
-        # 3. Scan docker-compose files for ${VAR} interpolation
+        # 3. Post-processing: detect pydantic env_prefix and lowercase snake_case fields
+        pydantic_prefix_pat = re.compile(r'env_prefix\s*=\s*["\']([A-Z_][A-Z0-9_]*)["\']')
+        pydantic_field_pat = re.compile(r'^\s+([a-z_][a-z0-9_]+)\s*:\s*(?:str|int|bool|float|SecretStr|SecretBytes|AnyHttpUrl|PostgresDsn|RedisDsn|AnyUrl)\s*(?:[=,\n]|$)')
+
+        for root, dirs, files in os.walk(self.source_dir):
+            dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+            for f in files:
+                if not f.endswith('.py'):
+                    continue
+                filepath = os.path.join(root, f)
+                try:
+                    content = self._safe_read(filepath, MAX_FILE_READ)
+                    prefix = ""
+                    pm = pydantic_prefix_pat.search(content)
+                    if pm:
+                        prefix = pm.group(1)
+                    for m in pydantic_field_pat.finditer(content):
+                        env_var = (prefix + m.group(1).upper()) if prefix else m.group(1).upper()
+                        ctx_line = m.group(0).strip()
+                        add_var(env_var, f"Found in {f} (pydantic field): {ctx_line}")
+                except Exception:
+                    pass
+
+        # 4. Scan docker-compose files for ${VAR} interpolation
         compose_pattern = re.compile(r'\$\{([A-Z_][A-Z0-9_]*)(?::?[-?+])?[^}]*\}')
         docker_env_pattern = re.compile(r'ENV\s+([A-Z_][A-Z0-9_]*)')
         docker_arg_pattern = re.compile(r'ARG\s+([A-Z_][A-Z0-9_]*)')
