@@ -955,23 +955,28 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # Extract env vars per service into a flat structure
-        env_export = {}
+        # Extract env vars per service with addon/service metadata
+        services_export = {}
         for service in plan_data['services']:
             name = service.get('name', 'unknown')
-            env_vars = service.get('env_vars', {}) or {}
-            env_export[name] = env_vars
-
-        # Also include global/shared env if present
-        shared = plan_data.get('shared_env', {}) or {}
-        if shared:
-            env_export['_shared'] = shared
+            services_export[name] = {
+                'env_vars': (service.get('env_vars', {}) or {}),
+                'addons': service.get('addons', []) or [],
+                'port': service.get('port'),
+                'stack': service.get('stack'),
+                'build': service.get('build'),
+                'repo': service.get('repo'),
+                'skip': service.get('skip', False),
+            }
 
         payload = {
             'plan_id': str(plan.id),
             'status': plan.status,
             'generated_at': plan.updated_at.isoformat() if plan.updated_at else None,
-            'env': env_export,
+            'deploy_sequence': plan_data.get('deploy_sequence', []),
+            'addons': plan_data.get('addons', []),
+            'shared_env': plan_data.get('shared_env', {}) or {},
+            'services': services_export,
         }
 
         response = JsonResponse(payload, json_dumps_params={'indent': 2})
