@@ -264,7 +264,8 @@ class WireGuardService:
 
         if not server:
             raise ValueError("server is required")
-        if server.status not in (ManagedServer.Status.ONLINE, ManagedServer.Status.PROVISIONING, ManagedServer.Status.UNKNOWN):
+        if server.status not in (ManagedServer.Status.ONLINE, ManagedServer.Status.UNKNOWN) \
+           and server.provision_status != ManagedServer.ProvisionStatus.PROVISIONING:
             raise ValueError(f"Server '{server.name}' is {server.status}; only ONLINE/PROVISIONING servers can join a mesh.")
         if server.is_primary:
             return {"mesh": None, "peer": None, "queued": False, "reason": "primary server is local peer"}
