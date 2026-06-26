@@ -2049,13 +2049,21 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
 
     # 8. Final display pass — replace remaining {{GENERATE}} sentinels
     # with real random values so the plan UI shows actual values
-    # instead of placeholders.  Addon injection and section 5 above
-    # have already replaced the important ones.
+    # instead of placeholders.  Vars with the SAME name across services
+    # get the SAME value (e.g. PLATFORM_API_SECRET on backend + platform-api).
+    # This mirrors what the AI would do via {{SHARED_SECRET:name}}.
+    _generate_pool: dict[str, str] = {}
     for svc in deployable:
         env_map = svc.get("env_vars", {})
         for key, val in env_map.items():
             if val == "{{GENERATE}}":
-                env_map[key] = secrets.token_urlsafe(48)
+                if key not in _generate_pool:
+                    _generate_pool[key] = secrets.token_urlsafe(48)
+    for svc in deployable:
+        env_map = svc.get("env_vars", {})
+        for key in list(env_map.keys()):
+            if env_map[key] == "{{GENERATE}}":
+                env_map[key] = _generate_pool[key]
         svc["env_vars"] = env_map
 
 
