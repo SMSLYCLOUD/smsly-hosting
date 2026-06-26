@@ -2057,10 +2057,21 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
                 env_map[key] = f"{{{{SHARED_SECRET:{key.lower()}}}}}"
 
         # 3b. Env prefix secret matching
-        # If a service uses pydantic env_prefix, strip the prefix from
-        # secret-like vars to find the base name, then unify with any
-        # service that has the unprefixed version of the same secret.
+        # Strip known env_prefix from secret-like vars and unify with
+        # unprefixed counterparts on other services.  Prefixes come from
+        # the scanner, or are inferred from the var names themselves
+        # (e.g. RATE_LIMIT_ appearing on many vars).
         svc_prefixes = svc.get("_env_prefixes", [])
+        if not svc_prefixes:
+            # Fallback: infer prefix from var names that share a leading segment
+            keys = [k.upper() for k in env_map.keys()]
+            _counts: dict[str, int] = {}
+            for k in keys:
+                parts = k.split("_")
+                for i in range(1, len(parts)):
+                    p = "_".join(parts[:i]) + "_"
+                    _counts[p] = _counts.get(p, 0) + 1
+            svc_prefixes = [p for p, c in _counts.items() if c >= 3]
         if svc_prefixes:
             for key in list(env_map.keys()):
                 key_u = key.upper()
