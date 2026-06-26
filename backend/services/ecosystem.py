@@ -2344,7 +2344,10 @@ def _scan_and_analyze_impl(token: str, ai_provider: str | None = None, selected_
         plan = analyze_ecosystem_chunked(repos_data, github_token=token, ai_provider=ai_provider, existing_services=existing_services)
         logger.info("AI analysis completed successfully")
     except Exception as e:
-        logger.error(f"AI ecosystem analysis failed: {e}")
+        if ai_provider:
+            logger.error(f"AI ecosystem analysis failed with provider '{ai_provider}': {e}")
+            raise
+        logger.error(f"AI ecosystem analysis failed (no provider): {e}")
         return _build_heuristic_plan(repos_data, f"AI analysis failed: {e!s}")
 
     # 4. AI REVALIDATION: Validate and sanitize AI response before final submission
