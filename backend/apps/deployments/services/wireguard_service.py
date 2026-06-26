@@ -113,6 +113,100 @@ class WireGuardService:
             base64.b64encode(public_bytes).decode(),
         )
 
+    @classmethod
+    def _fetch_server_wg_public_key(cls, server) -> str | None:
+        """SSH into a server and read its existing WireGuard public key.
+
+        Returns the base64 public key string, or None if the key could not
+        be fetched (no SSH credentials, SSH auth failed, or file missing).
+        """
+        if not (getattr(server, "ssh_key", "") or getattr(server, "ssh_password", "")):
+            return None
+        try:
+            from apps.deployments.services.ssh_client import SSHClient
+
+            ssh = SSHClient(
+                host=server.host,
+                port=server.ssh_port,
+                username=server.ssh_user,
+                password=server.ssh_password,
+                private_key=server.ssh_key,
+            )
+            ssh.connect()
+            out, _err, code = ssh.exec_command(
+                "cat /etc/wireguard/public.key 2>/dev/null || true",
+                timeout=15,
+                raise_on_error=False,
+            )
+            ssh.close()
+            key = (out or "").strip()
+            # Valid WireGuard base64 public key is 44 chars ending with =
+            if key and len(key) == 44 and key.endswith("="):
+                return key
+        except Exception as exc:
+            logger.debug("Could not fetch WG public key from %s: %s", server.host, exc)
+        return None
+
+    @classmethod
+    def _ensure_peer_on_node_via_ssh(
+        cls,
+        server,
+        peer_pubkey: str,
+        peer_wg_ip: str,
+        peer_endpoint: str,
+    ) -> bool:
+        """SSH into a server and add/update a WireGuard peer on its wg0 interface.
+
+        This adds the peer both live (``wg set``) and persistently
+        (appends to ``/etc/wireguard/wg0.conf``).
+
+        Returns True if the peer was added successfully, False otherwise.
+        """
+        if not (getattr(server, "ssh_key", "") or getattr(server, "ssh_password", "")):
+            return False
+        try:
+            from apps.deployments.services.ssh_client import SSHClient
+
+            ssh = SSHClient(
+                host=server.host,
+                port=server.ssh_port,
+                username=server.ssh_user,
+                password=server.ssh_password,
+                private_key=server.ssh_key,
+            )
+            ssh.connect()
+
+            # 1. Add live peer (idempotent — wg set replaces existing peer with same key)
+            add_live = (
+                f"wg set wg0 peer {peer_pubkey} "
+                f"endpoint {peer_endpoint} "
+                f"allowed-ips {peer_wg_ip}/32 "
+                "persistent-keepalive 25"
+            )
+            ssh.exec_command(add_live, timeout=15, raise_on_error=False)
+
+            # 2. Persist to config file (skip if peer section already exists)
+            persist = (
+                f"grep -q '^PublicKey = {peer_pubkey}$' /etc/wireguard/wg0.conf 2>/dev/null "
+                f"|| printf '\\n[Peer]\\nPublicKey = {peer_pubkey}\\n"
+                f"AllowedIPs = {peer_wg_ip}/32\\n"
+                f"Endpoint = {peer_endpoint}\\n"
+                f"PersistentKeepalive = 25\\n' >> /etc/wireguard/wg0.conf"
+            )
+            ssh.exec_command(persist, timeout=15, raise_on_error=False)
+
+            ssh.close()
+            logger.info(
+                "Added peer %s (%s) to node %s via SSH",
+                peer_pubkey[:16], peer_wg_ip, server.host,
+            )
+            return True
+        except Exception as exc:
+            logger.warning(
+                "Could not add peer to node %s via SSH: %s", server.host, exc,
+            )
+            return False
+
     # ── Config Rendering ─────────────────────────────────────────────────
 
     @classmethod
@@ -124,6 +218,12 @@ class WireGuardService:
         and [Peer] sections for all OTHER peers in the same mesh.
         """
         from apps.deployments.models_mesh import WireGuardPeer
+
+        if not peer.private_key:
+            raise ValueError(
+                f"Cannot build config for {peer}: private key is empty "
+                "(server-managed key — config is not stored on master)"
+            )
 
         mesh = peer.mesh
         other_peers = WireGuardPeer.objects.filter(
@@ -205,6 +305,22 @@ class WireGuardService:
         private_key, public_key = cls.generate_keypair()
         wg_address = mesh.next_available_ip()
 
+        # For remote peers, try to use the node's existing WireGuard keypair
+        # instead of generating a new one.  When the node was installed via
+        # backend/install.sh or agent-lite bootstrap, it already generated its
+        # own keys on disk.  Using the existing key prevents a mismatch between
+        # the master's peer config and the node's actual wg0 interface.
+        fetched_key = None
+        if not is_local and server:
+            fetched_key = cls._fetch_server_wg_public_key(server)
+        if fetched_key:
+            public_key = fetched_key
+            private_key = ""  # server-managed, not stored on master
+            logger.info(
+                "Using existing WG public key from node %s: %s",
+                server.host, fetched_key[:16],
+            )
+
         # Build endpoint. Public host is the safe default for arbitrary VPS
         # fleets; private IP only works when the operator explicitly marks the
         # node as sharing a routable private network.
@@ -250,6 +366,23 @@ class WireGuardService:
             f"Added peer {peer.wg_address} to mesh {mesh.name} "
             f"(server: {server or 'local'})"
         )
+
+        # When we fetched the node's existing key via SSH, also add the master
+        # as a peer on the node immediately.  This makes the tunnel bidirectional
+        # without waiting for the async deploy_mesh_task, which may fail if the
+        # node has already regenerated keys or SSH credentials are stale.
+        if fetched_key:
+            local_peer = WireGuardPeer.objects.filter(
+                mesh=mesh, is_local=True,
+            ).first()
+            if local_peer and local_peer.public_key and local_peer.wg_address:
+                cls._ensure_peer_on_node_via_ssh(
+                    server,
+                    peer_pubkey=local_peer.public_key,
+                    peer_wg_ip=local_peer.wg_address,
+                    peer_endpoint=local_peer.endpoint,
+                )
+
         return peer
 
     @classmethod
@@ -316,6 +449,17 @@ class WireGuardService:
         if primary and getattr(primary, "wg_address", None) != local_peer.wg_address:
             primary.wg_address = local_peer.wg_address
             primary.save(update_fields=["wg_address", "updated_at"])
+
+        # Deploy the local (master) config synchronously so the master's wg0
+        # interface picks up the new peer immediately.  The remote peer is
+        # either already configured (via SSH in add_peer_to_mesh above) or
+        # will be deployed by the async task below.
+        try:
+            cls.deploy_config(local_peer)
+        except Exception as deploy_exc:
+            logger.warning(
+                "Local WG config deploy failed (will retry async): %s", deploy_exc,
+            )
 
         queued = False
         should_deploy = (
@@ -385,7 +529,18 @@ class WireGuardService:
         2. SSH into the server
         3. Write /etc/wireguard/wg0.conf
         4. Restart WireGuard interface
+
+        Peers whose private key is empty (server-managed) are skipped —
+        their key was fetched from the existing server install and the config
+        is managed locally on that server.
         """
+        if not peer.private_key:
+            logger.info(
+                "Skipping config deploy to %s (private key is server-managed)",
+                peer,
+            )
+            return
+
         config = cls.build_wg_config(peer)
         mesh = peer.mesh
         iface = cls.validate_interface_name(mesh.interface_name)
