@@ -2061,6 +2061,12 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
                             continue
                         if _stem_matches_service(stem, other_name):
                             env_map[key] = f"{{{{SERVICE:{other['name']}}}}}"
+                            try:
+                                deps = set(_coerce_depends_on(svc.get("depends_on", []) or []))
+                                deps.add(other['name'])
+                                svc["depends_on"] = sorted(deps)
+                            except TypeError:
+                                pass
                             break
                     break
 
