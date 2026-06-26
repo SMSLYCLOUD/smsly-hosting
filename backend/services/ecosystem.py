@@ -1279,6 +1279,14 @@ def analyze_ecosystem_chunked(repos_data: list[dict], github_token: str | None =
         )
 
     try:
+        # Attach scanner-detected env_prefixes to each service
+        for svc in global_services:
+            repo = svc.get("repo", "")
+            for rd in repos_data:
+                if rd.get("repo") == repo:
+                    svc["_env_prefixes"] = list(rd.get("env_prefixes", []))
+                    break
+
         _apply_plan_repo_defaults(global_services, repos_data)
         _apply_generic_ecosystem_intelligence(global_services)
         _ai_env_crosscheck(global_services, ai_provider)
@@ -2048,10 +2056,40 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
                 # Assign a shared secret placeholder so they all get the same value across the cluster
                 env_map[key] = f"{{{{SHARED_SECRET:{key.lower()}}}}}"
 
-            # AI Intelligence Inheritance
+        # 3b. Env prefix secret matching
+        # If a service uses pydantic env_prefix, strip the prefix from
+        # secret-like vars to find the base name, then unify with any
+        # service that has the unprefixed version of the same secret.
+        svc_prefixes = svc.get("_env_prefixes", [])
+        if svc_prefixes:
+            for key in list(env_map.keys()):
+                key_u = key.upper()
+                for prefix in svc_prefixes:
+                    pu = prefix.upper()
+                    if not key_u.startswith(pu):
+                        continue
+                    base_name = key_u[len(pu):]
+                    if not base_name or not any(w in base_name for w in ["SECRET", "KEY", "TOKEN", "PASSWORD", "SALT"]):
+                        continue
+                    for other in services:
+                        other_env = other.get("env_vars", {})
+                        if base_name in other_env:
+                            shared_key = f"{{{{SHARED_SECRET:{base_name.lower()}}}}}"
+                            env_map[key] = shared_key
+                            if not str(other_env[base_name]).startswith("{{SHARED_SECRET:"):
+                                other_env[base_name] = shared_key
+                            logger.info(
+                                "Step 3b: Unified %s (%s → %s) with %s on %s",
+                                key, svc.get("name", "?"), base_name,
+                                base_name, other.get("name", "?")
+                            )
+                            break
+
+        # 3c. AI Intelligence Inheritance (independent of other loops)
+        for key in list(env_map.keys()):
+            key_u = key.upper()
             if any(k in key_u for k in ["AI_PROVIDER", "LLM_PROVIDER"]):
                 env_map[key] = "auto"
-
             if any(k in key_u for k in ["OPENAI_API_KEY", "GEMINI_API_KEY", "CLAUDE_API_KEY", "GROK_API_KEY", "ANTHROPIC_API_KEY"]):
                  env_map[key] = f"{{{{SHARED_SECRET:{key.lower()}}}}}"
 
