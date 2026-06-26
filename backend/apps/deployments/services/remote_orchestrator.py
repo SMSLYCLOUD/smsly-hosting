@@ -762,13 +762,16 @@ class RemoteOrchestrator:
                         # IPs (when ALLOW_INSECURE_INTER_NODE_TLS is set) get
                         # ``verify=False``; HTTPS public URLs get ``verify=True``.
                         verify_ssl = should_verify(url)
+                        # Follow redirects (e.g. Traefik trailing-slash 308) so the
+                        # remote API is reachable even when the proxy normalises
+                        # paths before forwarding.
                         response = requests.request(
                             method_upper,
                             url,
                             data=body if payload is not None else None,
                             headers=headers,
                             timeout=self._timeout(timeout),
-                            allow_redirects=False,
+                            allow_redirects=True,
                             verify=verify_ssl,
                         )
                     except requests.RequestException as exc:
