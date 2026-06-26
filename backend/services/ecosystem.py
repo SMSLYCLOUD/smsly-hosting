@@ -717,9 +717,21 @@ ECOSYSTEM_PROMPT = """You are the Supreme DevOps Architect of the CloudNeuron AI
 
     ### CRITICAL RULES:
     1. EXHAUSTIVE RESOLUTION: Never leave an environment variable empty. Include EVERY var from the "Expected Env Vars" list below.
-    2. DETERMINISTIC LINKING: Use {{SERVICE:repo-name}} for service URLs, {{POSTGRES_URL}} for databases. For secrets (API keys, tokens, passwords), set "generate": true in the env entry instead of using {{GENERATE}} as a literal value.
+    2. DETERMINISTIC LINKING: Use {{SERVICE:repo-name}} for service URLs. For addons, use the appropriate placeholder: {{POSTGRES_URL}} for PostgreSQL, {{REDIS_URL}} for Redis, {{RABBITMQ_URL}} for RabbitMQ/AMQP, {{QDRANT_URL}} for Qdrant/vector DBs, {{MYSQL_URL}} for MySQL/MariaDB, {{MONGODB_URL}} for MongoDB, {{ELASTICSEARCH_URL}} for Elasticsearch/OpenSearch, {{MINIO_URL}} for MinIO/S3, {{MEMCACHED_URL}} for Memcached. For secrets, set "generate": true.
     3. DEPLOY ORDER: Rank services by dependency depth. Infrastructure -> Core APIs -> Background Workers -> Frontends.
     4. STRICT TYPE CONSTRAINTS — ALL array fields must contain ONLY strings, NEVER objects/dicts. Violating this will crash the deployment system.
+    5. ADDON DETECTION — declare the addon in the service's "addons" array AND set env vars to the placeholder:
+       - DATABASE_URL, POSTGRES_URL, POSTGRES_DSN, PGHOST present → declare "POSTGRES", set to {{POSTGRES_URL}}
+       - REDIS_URL, REDIS_HOST, CACHE_URL, CELERY_RESULT_BACKEND present → declare "REDIS", set to {{REDIS_URL}}
+       - BROKER_URL, RABBITMQ_URL, CELERY_BROKER_URL, AMQP_URL present → declare "RABBITMQ", set to {{RABBITMQ_URL}}
+       - QDRANT_URL, QDRANT_HOST, VECTOR_DB_URL present → declare "QDRANT", set to {{QDRANT_URL}}
+       - MYSQL_URL, MYSQL_HOST, MARIADB_URL present → declare "MYSQL", set to {{MYSQL_URL}}
+       - MONGODB_URL, MONGO_URL, MONGO_URI present → declare "MONGODB", set to {{MONGODB_URL}}
+       - ELASTICSEARCH_URL, ELASTICSEARCH_HOST, ELASTIC_URL present → declare "ELASTICSEARCH", set to {{ELASTICSEARCH_URL}}
+       - MINIO_ENDPOINT, MINIO_HOST, S3_ENDPOINT_URL present → declare "MINIO", set to {{MINIO_URL}}
+       - MEMCACHED_URL, MEMCACHED_HOST present → declare "MEMCACHED", set to {{MEMCACHED_URL}}
+    6. EXTERNAL API KEYS: For service-specific external API keys (RESEND_API_KEY, STRIPE_SECRET_KEY, PAYSTACK_SECRET_KEY, COINBASE_API_KEY, etc.), leave the value empty — the user will fill it post-scan. Do NOT use {{SHARED_SECRET:...}} for these.
+    7. PLATFORM_TO_*_SECRET: These are external service keys (PLATFORM_TO_AI_SECRET, PLATFORM_TO_CRM_SECRET, etc.) — leave them empty for the user to fill.
 
     ### STRICT TYPE RULES — VIOLATIONS WILL CRASH THE SYSTEM:
     - "depends_on" MUST be an array of strings ONLY. NEVER objects. WRONG: [{"name": "svc-a"}] RIGHT: ["svc-a"]
@@ -2127,6 +2139,66 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
     core_svc = next((s for s in deployable if _is_core_service(s)), None)
     auth_svc = next((s for s in deployable if _is_auth_service(s)), None)
 
+    # 0.1 Addon auto-detection pre-pass
+    # Detect addons from env var names BEFORE the main loop so has_* flags
+    # are accurate when computed per-service.
+    _ADDON_ENV_VARS: dict[str, list[str]] = {
+        "POSTGRES":      ["DATABASE_URL", "POSTGRES_URL", "POSTGRES_HOST", "POSTGRES_DSN", "PGHOST"],
+        "REDIS":         ["REDIS_URL", "REDIS_HOST", "CACHE_URL", "CELERY_RESULT_BACKEND"],
+        "RABBITMQ":      ["BROKER_URL", "RABBITMQ_URL", "CELERY_BROKER_URL", "AMQP_URL", "RABBITMQ_HOST"],
+        "QDRANT":        ["QDRANT_URL", "QDRANT_HOST", "VECTOR_DB_URL"],
+        "MYSQL":         ["MYSQL_URL", "MYSQL_HOST", "MARIADB_URL", "MARIADB_HOST"],
+        "MONGODB":       ["MONGODB_URL", "MONGO_URL", "MONGO_URI", "MONGODB_HOST"],
+        "ELASTICSEARCH": ["ELASTICSEARCH_URL", "ELASTICSEARCH_HOST", "ELASTIC_URL", "ELASTIC_HOST", "OPENSEARCH_URL"],
+        "MINIO":         ["MINIO_ENDPOINT", "MINIO_HOST", "S3_ENDPOINT_URL", "S3_HOST"],
+        "MEMCACHED":     ["MEMCACHED_URL", "MEMCACHED_HOST", "MEMCACHE_SERVERS"],
+    }
+    _ADDON_IMPORT_HINTS: dict[str, list[str]] = {
+        "POSTGRES":      ["psycopg2", "asyncpg", "sqlalchemy", "django.db", "databases", "pg", "sequelize", "prisma", "typeorm", "knex"],
+        "REDIS":         ["redis", "aioredis", "celery", "rq", "django_redis", "ioredis", "bull", "bullmq"],
+        "RABBITMQ":      ["pika", "aio_pika", "kombu", "amqplib"],
+        "QDRANT":        ["qdrant_client", "qdrant"],
+        "MYSQL":         ["mysql", "pymysql", "aiomysql"],
+        "MONGODB":       ["pymongo", "motor", "mongoengine", "mongoose", "mongodb"],
+        "ELASTICSEARCH": ["elasticsearch", "opensearchpy", "@elastic/elasticsearch"],
+        "MINIO":         ["minio", "boto3"],
+    }
+    for svc in deployable:
+        env_map = svc.get("env_vars", {})
+        if not isinstance(env_map, dict):
+            continue
+        _addons = svc.get("addons", []) or []
+        if not isinstance(_addons, list):
+            _addons = []
+        _env_upper = {k.upper() for k in env_map}
+        for addon_type, env_keys in _ADDON_ENV_VARS.items():
+            if addon_type in _addons:
+                continue
+            if any(ek in _env_upper for ek in env_keys):
+                _addons.append(addon_type)
+        _imports = set()
+        clone_dir = svc.get("clone_dir") or ""
+        if clone_dir and os.path.isdir(clone_dir):
+            for root, _dirs, files in os.walk(clone_dir):
+                for fname in files:
+                    if not fname.endswith((".py", ".js", ".ts", ".go", ".rs")):
+                        continue
+                    fpath = os.path.join(root, fname)
+                    try:
+                        with open(fpath, "r", errors="ignore") as f:
+                            content = f.read(8192)
+                    except Exception:
+                        continue
+                    for imp, atype in _ADDON_IMPORT_HINTS.items():
+                        for pattern in imp.split("|"):
+                            if pattern in content:
+                                _imports.add(atype)
+        for addon_type in _imports:
+            if addon_type not in _addons:
+                _addons.append(addon_type)
+        if _addons != (svc.get("addons") or []):
+            svc["addons"] = _addons
+
     for svc in deployable:
         env_map = svc.get("env_vars", {})
         if not isinstance(env_map, dict):
@@ -2254,50 +2326,36 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
             if any(k in key_u for k in ["OPENAI_API_KEY", "GEMINI_API_KEY", "CLAUDE_API_KEY", "GROK_API_KEY", "ANTHROPIC_API_KEY"]):
                  env_map[key] = f"{{{{SHARED_SECRET:{key.lower()}}}}}"
 
-        # 4. Standard Database Injection
-        # Overwrite placeholder values so the deploy pipeline resolves
-        # {{POSTGRES_URL}} to the real provisioned URL instead of leaving
-        # a REPLACE_WITH_PRODUCTION_* string or empty value.
-        _addon_url_vars = {
-            "DATABASE_URL": "{{POSTGRES_URL}}",
-            "REDIS_URL": "{{REDIS_URL}}",
-            "QDRANT_URL": "{{QDRANT_URL}}",
-        }
-        has_postgres = any(k in str(svc.get("addons", [])).upper() for k in ["POSTGRES", "DATABASE"])
-        has_redis = "REDIS" in str(svc.get("addons", [])).upper()
-        has_qdrant = "QDRANT" in str(svc.get("addons", [])).upper() or "VECTOR" in str(svc.get("addons", [])).upper()
-        _ecosystem_has_postgres = any(
-            any(k in str(o.get("addons", [])).upper() for k in ["POSTGRES", "DATABASE"])
-            for o in deployable
-        )
-        _ecosystem_has_redis = any(
-            "REDIS" in str(o.get("addons", [])).upper()
-            for o in deployable
-        )
-        _ecosystem_has_qdrant = any(
-            "QDRANT" in str(o.get("addons", [])).upper() or "VECTOR" in str(o.get("addons", [])).upper()
-            for o in deployable
-        )
-        for env_key, placeholder in _addon_url_vars.items():
-            should_inject = (
-                (env_key == "DATABASE_URL" and has_postgres)
-                or (env_key == "REDIS_URL" and has_redis)
-                or (env_key == "QDRANT_URL" and has_qdrant)
-                or (env_key == "QDRANT_URL" and _is_intelligence_service(svc))
-            )
-            if should_inject:
-                env_map[env_key] = placeholder
-            elif (
-                (env_key == "DATABASE_URL" and _ecosystem_has_postgres)
-                or (env_key == "REDIS_URL" and _ecosystem_has_redis)
-                or (env_key == "QDRANT_URL" and (_ecosystem_has_qdrant or _is_intelligence_service(svc)))
-            ) and env_key in env_map:
-                # Fallback: if ANY service in the ecosystem declares this
-                # addon, inject the placeholder for every service that has
-                # the variable name in its env_map, even if this particular
-                # service didn't declare the addon itself.
-                cur = env_map.get(env_key)
-                if not cur or str(cur).strip() in ("", "{{GENERATE}}", "{{FILL_ME}}") or str(cur).startswith("REPLACE_WITH_"):
+        # 4. Standard Addon URL Injection
+        # Map env var names to their addon placeholders.  When a service
+        # declares an addon, inject the placeholder for every matching var.
+        _ADDON_URL_MAP: list[tuple[str, str, list[str]]] = [
+            ("{{POSTGRES_URL}}",       "POSTGRES",      ["DATABASE_URL", "POSTGRES_URL", "POSTGRES_DSN", "PGHOST"]),
+            ("{{REDIS_URL}}",          "REDIS",         ["REDIS_URL", "REDIS_HOST", "CACHE_URL", "CELERY_RESULT_BACKEND"]),
+            ("{{RABBITMQ_URL}}",       "RABBITMQ",      ["RABBITMQ_URL", "BROKER_URL", "CELERY_BROKER_URL", "AMQP_URL", "RABBITMQ_HOST"]),
+            ("{{QDRANT_URL}}",         "QDRANT",        ["QDRANT_URL", "QDRANT_HOST", "VECTOR_DB_URL"]),
+            ("{{MYSQL_URL}}",          "MYSQL",         ["MYSQL_URL", "MYSQL_HOST", "MARIADB_URL", "MARIADB_HOST"]),
+            ("{{MONGODB_URL}}",        "MONGODB",       ["MONGODB_URL", "MONGO_URL", "MONGO_URI", "MONGODB_HOST"]),
+            ("{{ELASTICSEARCH_URL}}",  "ELASTICSEARCH", ["ELASTICSEARCH_URL", "ELASTICSEARCH_HOST", "ELASTIC_URL", "ELASTIC_HOST", "OPENSEARCH_URL"]),
+            ("{{MINIO_URL}}",          "MINIO",         ["MINIO_ENDPOINT", "MINIO_HOST", "S3_ENDPOINT_URL", "S3_HOST"]),
+            ("{{MEMCACHED_URL}}",      "MEMCACHED",     ["MEMCACHED_URL", "MEMCACHED_HOST", "MEMCACHE_SERVERS"]),
+        ]
+        _svc_addon_upper = set(str(a).upper() for a in (svc.get("addons") or []))
+        _ecosystem_addon_upper = set()
+        for o in deployable:
+            _ecosystem_addon_upper.update(str(a).upper() for a in (o.get("addons") or []))
+
+        for placeholder, addon_type, env_keys in _ADDON_URL_MAP:
+            addon_upper = addon_type.upper()
+            has_addon = addon_upper in _svc_addon_upper
+            ecosystem_has = addon_upper in _ecosystem_addon_upper
+            for env_key in env_keys:
+                if env_key not in env_map:
+                    continue
+                cur = str(env_map.get(env_key, "")).strip()
+                if has_addon:
+                    env_map[env_key] = placeholder
+                elif ecosystem_has and (not cur or cur in ("", "{{GENERATE}}", "{{FILL_ME}}") or cur.startswith("REPLACE_WITH_")):
                     env_map[env_key] = placeholder
 
         # 4.5 Intelligence Service Specialization
@@ -2305,6 +2363,81 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
             env_map.setdefault("AI_PROVIDER", "auto")
 
         svc["env_vars"] = env_map
+
+    # 4.52 CORS & CSRF auto-fill
+    # If a backend has CORS_ALLOWED_ORIGINS or CSRF_TRUSTED_ORIGINS empty
+    # and there's a frontend in the ecosystem, point them to it.
+    _frontends = [s for s in deployable if s.get("stack") in ("nextjs", "node", "nuxt")]
+    if _frontends:
+        _fe_name = str(_frontends[0].get("name") or _repo_short_name(_frontends[0])).strip()
+        _fe_placeholder = f"{{{{SERVICE:{_fe_name}}}}}"
+        for svc in deployable:
+            env_map = svc.get("env_vars", {})
+            if not isinstance(env_map, dict):
+                continue
+            for cors_key in ("CORS_ALLOWED_ORIGINS", "CSRF_TRUSTED_ORIGINS"):
+                cur = str(env_map.get(cors_key, "")).strip()
+                if not cur or cur in ("{{GENERATE}}", "{{FILL_ME}}"):
+                    env_map[cors_key] = _fe_placeholder
+
+    # 4.53 Clear hardcoded external API keys
+    # These are service-specific keys the scanner picked up from source code.
+    # They should be left empty for the user to fill post-scan.
+    _EXTERNAL_API_KEY_PATTERNS = [
+        "RESEND_API_KEY", "SMSMAN_API_KEY", "FIVESIM_API_KEY",
+        "COINBASE_API_KEY", "COINBASE_WEBHOOK_SECRET",
+        "NOWPAYMENTS_API_KEY", "NOWPAYMENTS_WEBHOOK_SECRET",
+        "PAYSTACK_PUBLIC_KEY", "PAYSTACK_SECRET_KEY",
+        "FLUTTERWAVE_PUBLIC_KEY", "FLUTTERWAVE_SECRET_KEY",
+        "STRIPE_PUBLISHABLE_KEY",
+        "EMAIL_HOST_PASSWORD", "INTERNAL_API_SECRET", "INTERNAL_API_KEY",
+        "SERVICE_API_KEY", "SMSLY_API_KEY",
+        "S3_ACCESS_KEY", "INFOBIP_API_KEY",
+        "MINIO_ACCESS_KEY", "META_ACCESS_TOKEN",
+        "ADMIN_API_KEY", "ADMIN_KEY",
+        "VAULT_TOKEN", "IPINFO_TOKEN",
+        "EVENT_STREAM_KEY", "JWT_PUBLIC_KEY_FILE", "JWT_PRIVATE_KEY_FILE",
+        "KEY_STORAGE_PATH", "SECURITY_DEBUG_KEY",
+        "TEST_KEY_ID", "TEST_SECRET", "VALID_KEY_ID", "VALID_SECRET",
+        "REVOKED_KEY_ID", "REVOKED_SECRET",
+    ]
+    for svc in deployable:
+        env_map = svc.get("env_vars", {})
+        if not isinstance(env_map, dict):
+            continue
+        for key in list(env_map.keys()):
+            if key.upper() in _EXTERNAL_API_KEY_PATTERNS:
+                val = str(env_map.get(key, ""))
+                if val and not val.startswith("{{") and val not in ("", "{{GENERATE}}"):
+                    env_map[key] = ""
+
+        # Also clear hardcoded PLATFORM_TO_* secrets (external service keys)
+        for key in list(env_map.keys()):
+            if key.upper().startswith("PLATFORM_TO_") and key.upper().endswith("_SECRET"):
+                val = str(env_map.get(key, ""))
+                if val and not val.startswith("{{") and val not in ("", "{{GENERATE}}"):
+                    env_map[key] = ""
+
+    # 4.54 Fix STRIPE_SECRET_KEY collision
+    # Step 3a may have assigned {{SHARED_SECRET:secret_key}} (generic)
+    # instead of a Stripe-specific shared key. Fix it.
+    for svc in deployable:
+        env_map = svc.get("env_vars", {})
+        if not isinstance(env_map, dict):
+            continue
+        if env_map.get("STRIPE_SECRET_KEY") == "{{SHARED_SECRET:secret_key}}":
+            env_map["STRIPE_SECRET_KEY"] = ""
+        if env_map.get("STRIPE_WEBHOOK_SECRET") == "{{SHARED_SECRET:webhook_secret}}":
+            env_map["STRIPE_WEBHOOK_SECRET"] = ""
+
+    # 4.55 platform_secret orphan fix
+    # GATEWAY_TO_PLATFORM_SECRET references {{SHARED_SECRET:platform_secret}}
+    # but platform-api has no PLATFORM_SECRET. Add it.
+    for svc in deployable:
+        if "platform" in str(svc.get("name", "")).lower():
+            env_map = svc.get("env_vars", {})
+            if isinstance(env_map, dict) and "PLATFORM_SECRET" not in env_map:
+                env_map["PLATFORM_SECRET"] = "{{SHARED_SECRET:platform_secret}}"
 
     # 4.6 Heuristic Fallback Cross-Linking
     # When the AI/heuristic didn't produce SERVICE: links, auto-wire frontends
@@ -2475,12 +2608,25 @@ def _ensure_100_percent_env_coverage(services: list[dict]):
     couldn't determine a value, we don't fabricate one.  The deploy
     pipeline and runtime defaults handle missing values gracefully.
     """
+    _ADDON_URL_KEYS = {
+        "DATABASE_URL", "POSTGRES_URL", "POSTGRES_DSN", "PGHOST",
+        "REDIS_URL", "REDIS_HOST", "CACHE_URL", "CELERY_RESULT_BACKEND",
+        "RABBITMQ_URL", "BROKER_URL", "CELERY_BROKER_URL", "AMQP_URL", "RABBITMQ_HOST",
+        "QDRANT_URL", "QDRANT_HOST", "VECTOR_DB_URL",
+        "MYSQL_URL", "MYSQL_HOST", "MARIADB_URL", "MARIADB_HOST",
+        "MONGODB_URL", "MONGO_URL", "MONGO_URI", "MONGODB_HOST",
+        "ELASTICSEARCH_URL", "ELASTICSEARCH_HOST", "ELASTIC_URL", "ELASTIC_HOST", "OPENSEARCH_URL",
+        "MINIO_ENDPOINT", "MINIO_HOST", "S3_ENDPOINT_URL", "S3_HOST",
+        "MEMCACHED_URL", "MEMCACHED_HOST", "MEMCACHE_SERVERS",
+    }
     for svc in services:
         env_map = svc.get("env_vars", {})
 
         for key in list(env_map.keys()):
             val = env_map.get(key)
             if not val or str(val).strip() in ("", "{{GENERATE}}", "{{FILL_ME}}") or str(val).startswith("REPLACE_WITH_"):
+                if key in _ADDON_URL_KEYS:
+                    continue
                 if any(k in key.upper() for k in ["SECRET", "KEY", "TOKEN", "PASSWORD", "AUTH_HASH"]):
                     env_map[key] = "{{GENERATE}}"
                 # Non-secret empty vars: leave empty — don't fabricate values
