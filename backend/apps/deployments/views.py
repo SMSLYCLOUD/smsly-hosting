@@ -745,7 +745,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
     serializer_class = ServiceSerializer
     permission_classes = [permissions.IsAuthenticated]
     filter_backends = [filters.SearchFilter]
-    search_fields = ['$name']
+    search_fields = ['=name']
     # SECURITY (Batch H): throttles are applied PER ACTION below.
     # Class-level throttle_classes would cap *every* method (including
     # GETs that the dashboard fires when listing services, polling
