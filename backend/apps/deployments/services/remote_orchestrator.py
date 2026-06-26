@@ -1025,44 +1025,59 @@ class RemoteOrchestrator:
             return None
 
     def _search_remote_service(self, service: Service, path: str) -> str | None:
-        resp = self._request("GET", path, params={"search": service.name}, timeout=15)
-        if resp is None:
-            logger.error(
-                "Failed to search service %s on remote %s: %s",
-                service.name,
-                self.server.host,
-                self.describe_last_error(),
-            )
-            return None
-
-        if resp.status_code != 200:
-            logger.error(
-                "Failed to search service %s on remote %s: %s",
-                service.name,
-                self.server.host,
-                self._response_error("service search failed", resp),
-            )
-            return None
-
-        results = self._parse_json_response(resp, "searching remote services")
-        if results is None:
-            return None
-        if isinstance(results, dict):
-            results = results.get("results", [])
-        if not isinstance(results, list):
-            self._set_last_error("Remote API returned an invalid services list.")
-            return None
-
-        for remote_svc in results:
-            if not isinstance(remote_svc, dict):
-                continue
-            if remote_svc.get("name") == service.name:
-                logger.info(
-                    "Found existing service %s on remote %s",
+        page = 1
+        while True:
+            resp = self._request("GET", path, params={"search": service.name, "page": page}, timeout=15)
+            if resp is None:
+                logger.error(
+                    "Failed to search service %s on remote %s: %s",
                     service.name,
                     self.server.host,
+                    self.describe_last_error(),
                 )
-                return remote_svc.get("id") or ""
+                return None
+
+            if resp.status_code != 200:
+                logger.error(
+                    "Failed to search service %s on remote %s: %s",
+                    service.name,
+                    self.server.host,
+                    self._response_error("service search failed", resp),
+                )
+                return None
+
+            data = self._parse_json_response(resp, "searching remote services")
+            if data is None:
+                return None
+
+            if isinstance(data, dict):
+                results = data.get("results", [])
+            else:
+                results = data
+
+            if not isinstance(results, list):
+                self._set_last_error("Remote API returned an invalid services list.")
+                return None
+
+            for remote_svc in results:
+                if not isinstance(remote_svc, dict):
+                    continue
+                if remote_svc.get("name") == service.name:
+                    logger.info(
+                        "Found existing service %s on remote %s",
+                        service.name,
+                        self.server.host,
+                    )
+                    return remote_svc.get("id") or ""
+
+            # Check if there are more pages
+            if isinstance(data, dict):
+                next_url = data.get("next")
+                if not next_url:
+                    break
+            else:
+                break
+            page += 1
 
         return ""
 
