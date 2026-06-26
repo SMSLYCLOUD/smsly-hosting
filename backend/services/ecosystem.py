@@ -860,6 +860,11 @@ def analyze_ecosystem(repos_data: list[dict], github_token: str | None = None, a
                     if len(ctx) > 200:
                         ctx = ctx[:200] + "..."
                     summary += f"- {var}: {ctx}\n"
+                # Show env_prefix info if detected
+                env_prefixes = rd.get('env_prefixes', [])
+                if env_prefixes:
+                    summary += f"  NOTE: This repo uses pydantic env_prefix: {', '.join(env_prefixes)} "
+                    summary += "— all fields are prefixed (e.g. PREFIX_VAR corresponds to VAR on other services).\n"
 
             if rd.get('configs_summary'):
                 summary += "Critical Config Analysis (use to find ALL field declarations):\n"
@@ -1103,10 +1108,15 @@ def analyze_ecosystem_chunked(repos_data: list[dict], github_token: str | None =
             summary = f"\n### REPO: {rd.get('repo', 'unknown')} (Name: {rd.get('repo_name_short', 'unknown')})\n"
             summary += f"Stack: {rd.get('stack', 'unknown')}\n"
             if rd.get('env_vars_context'):
-                summary += "Expected Env Vars (with Logic Hints):\n"
+                summary += "Expected Env Vars (with Logic Hints) — INCLUDE ALL OF THESE:\n"
                 for var, ctxs in rd['env_vars_context'].items():
                     ctx = ctxs[0] if ctxs else "No context"
+                    if len(ctx) > 200:
+                        ctx = ctx[:200] + "..."
                     summary += f"- {var}: {ctx}\n"
+                env_prefixes = rd.get('env_prefixes', [])
+                if env_prefixes:
+                    summary += f"  NOTE: This repo uses pydantic env_prefix: {', '.join(env_prefixes)} — all fields are prefixed.\n"
             repo_summaries.append(summary)
 
         repo_names = [rd.get('repo_name_short') for rd in repos_data if rd.get('repo_name_short')]
@@ -1883,7 +1893,20 @@ def _ai_env_crosscheck(services: list[dict], ai_provider: str | None) -> None:
     if not ai_provider:
         return
 
+    # Collect env_prefix info to help AI understand prefixed relations
+    _prefix_map: dict[str, list[str]] = {}
+    for svc in services:
+        prefixes = svc.get("_env_prefixes", [])
+        if prefixes:
+            _prefix_map[_repo_short_name(svc)] = prefixes
+
     lines = []
+    if _prefix_map:
+        lines.append("ENV PREFIX DETECTED (services using pydantic env_prefix):")
+        for svc_name, prefixes in _prefix_map.items():
+            lines.append(f"  {svc_name} prefixes: {', '.join(prefixes)}")
+        lines.append("")
+
     for svc in services:
         name = _repo_short_name(svc)
         env = svc.get("env_vars", {})
@@ -2031,32 +2054,6 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
 
             if any(k in key_u for k in ["OPENAI_API_KEY", "GEMINI_API_KEY", "CLAUDE_API_KEY", "GROK_API_KEY", "ANTHROPIC_API_KEY"]):
                  env_map[key] = f"{{{{SHARED_SECRET:{key.lower()}}}}}"
-
-        # 3b. Env prefix-based secret matching
-        # If a service uses env_prefix (e.g. RATE_LIMIT_) and has a var
-        # RATE_LIMIT_GATEWAY_SECRET, and another service has GATEWAY_SECRET,
-        # they refer to the same secret — unify them.
-        # Only match secret-type vars (contain SECRET, KEY, TOKEN, PASSWORD)
-        # to avoid conflating addon URLs (REDIS_URL → {{REDIS_URL}})
-        # with shared secrets.
-        _prefix_svc = [(svc, svc.get("_env_prefixes", [])) for svc in services]
-        for svc, prefixes in _prefix_svc:
-            env_map = svc.get("env_vars", {})
-            for prefix in prefixes:
-                for key in list(env_map.keys()):
-                    if not key.startswith(prefix) or len(key) <= len(prefix):
-                        continue
-                    if not any(kw in key.upper() for kw in ["SECRET", "KEY", "TOKEN", "PASSWORD"]):
-                        continue
-                    base_key = key[len(prefix):]
-                    for other_svc in services:
-                        if other_svc is svc:
-                            continue
-                        other_map = other_svc.get("env_vars", {})
-                        if base_key in other_map:
-                            shared_name = base_key.lower()
-                            env_map[key] = f"{{{{SHARED_SECRET:{shared_name}}}}}"
-                            other_map[base_key] = f"{{{{SHARED_SECRET:{shared_name}}}}}"
 
         # 4. Standard Database Injection
         # Overwrite placeholder values so the deploy pipeline resolves
