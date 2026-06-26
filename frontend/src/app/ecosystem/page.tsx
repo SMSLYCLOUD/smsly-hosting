@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     Scan, Rocket, CheckCircle2, XCircle, AlertCircle, Loader2, Plus,
     Server, Database, Globe, GitBranch, Zap, ArrowRight, RefreshCw, Sparkles,
-    Code, CheckCircle, AlertTriangle, Variable, Terminal
+    Code, CheckCircle, AlertTriangle, Variable, Terminal, Download
 } from 'lucide-react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import Link from 'next/link';
@@ -475,6 +475,26 @@ export default function EcosystemPage() {
     };
 
 
+    const downloadEnv = async () => {
+        try {
+            const res = await fetch('/api/v1/cloud/ecosystem/download-env/', {
+                credentials: 'include',
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'ecosystem-env.json';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        } catch (err: any) {
+            setError(err.message || 'Failed to download env vars');
+        }
+    };
+
     const [syncing, setSyncing] = useState(false);
     const syncHealth = async () => {
         setSyncing(true);
@@ -568,12 +588,20 @@ export default function EcosystemPage() {
                         {step !== 'idle' && step !== 'scanning' && (
                             <div className="flex items-center gap-2">
                                 {plan && (
-                                    <button
-                                        onClick={() => setBulkEnvOpen(true)}
-                                        className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1"
-                                    >
-                                        <Variable size={14} /> Bulk Env Update
-                                    </button>
+                                    <>
+                                        <button
+                                            onClick={downloadEnv}
+                                            className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1"
+                                        >
+                                            <Download size={14} /> Download .env.json
+                                        </button>
+                                        <button
+                                            onClick={() => setBulkEnvOpen(true)}
+                                            className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1"
+                                        >
+                                            <Variable size={14} /> Bulk Env Update
+                                        </button>
+                                    </>
                                 )}
                                 <button
                                     onClick={() => { clearState(); setStep('idle'); setPlan(null); setPlanId(''); setError(null); }}
@@ -1296,6 +1324,12 @@ export default function EcosystemPage() {
                                 >
                                     View Deployments
                                 </Link>
+                                <button
+                                    onClick={downloadEnv}
+                                    className="px-6 py-2.5 rounded-xl border border-border hover:border-foreground/20 text-muted-foreground hover:text-foreground font-semibold transition-colors flex items-center gap-2"
+                                >
+                                    <Download size={16} /> Download .env.json
+                                </button>
                                 <button
                                     onClick={() => {
                                         setStep('selection');
