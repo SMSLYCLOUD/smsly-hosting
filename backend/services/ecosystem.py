@@ -724,6 +724,36 @@ ECOSYSTEM_PROMPT = """You are the Supreme DevOps Architect of the CloudNeuron AI
     - For internal service-to-service URLs, use the TARGET service's detected port: `http://target-service-name:TARGET_PORT`.
     - NEVER guess ports. NEVER use random ports. Read the actual config files.
 
+    ### SERVICE URL DETECTION:
+    For EVERY env var ending in _URL, _SERVICE_URL, _ENDPOINT, _BACKEND_URL, _API_URL, _BASE_URL:
+    - Determine which service it points to by reading the code (how the URL is used).
+    - Use {{SERVICE:target-service-name}} for ALL inter-service URLs.
+    - Examples from the ecosystem:
+      * AUDIT_SERVICE_URL → {{SERVICE:smsly-audit-log-service}}
+      * IDENTITY_SERVICE_URL → {{SERVICE:smsly-identity-service}}
+      * SECURITY_GATEWAY_URL → {{SERVICE:smsly-security-gateway}}
+      * PLATFORM_API_URL → {{SERVICE:smsly-platform-api}}
+      * POLICY_SERVICE_URL → {{SERVICE:smsly-policy-service}}
+      * RATE_LIMIT_SERVICE_URL → {{SERVICE:smsly-rate-limit-service}}
+      * TRANSACTION_CHAIN_URL → {{SERVICE:smsly-transaction-chain}}
+      * BACKEND_URL → {{SERVICE:smsly-backend}}
+      * FRONTEND_URL → {{SERVICE:smsly-frontend}}
+    - If you cannot determine the target, use {{SERVICE:closest-match}} based on the URL var name.
+    - NEVER use {{GENERATE}} for service URLs — they MUST be {{SERVICE:...}} placeholders.
+
+    ### PORT VAR DETECTION:
+    For EVERY env var ending in _PORT, _SERVICE_PORT (e.g., AUDIT_SERVICE_PORT, PLATFORM_API_PORT):
+    - Determine which service it refers to.
+    - Set it to that service's actual port number as a string (e.g., "8080").
+    - NEVER use {{GENERATE}} for port vars — they MUST be actual numbers.
+
+    ### PLATFORM_TO_*_SECRET DETECTION:
+    For EVERY env var starting with PLATFORM_TO_ and ending with _SECRET:
+    - These are inter-service authentication secrets.
+    - Set them to {{SHARED_SECRET:platform_to_TARGET_secret}} where TARGET is the target service.
+    - Example: PLATFORM_TO_SMS_SECRET → {{SHARED_SECRET:platform_to_sms_secret}}
+    - NEVER use {{GENERATE}} for these — they MUST be {{SHARED_SECRET:...}} placeholders.
+
     ### CRITICAL RULES:
     1. EXHAUSTIVE RESOLUTION: NEVER leave an environment variable empty or without a concrete value. EVERY single var MUST have a real, meaningful value. You are a deep code analyst — read the Dockerfile, config files, settings, and source code to determine the correct value for EVERY variable.
     2. DETERMINISTIC LINKING: Use {{SERVICE:repo-name}} for service URLs. For addons, use the appropriate placeholder: {{POSTGRES_URL}} for PostgreSQL, {{REDIS_URL}} for Redis, {{RABBITMQ_URL}} for RabbitMQ/AMQP, {{QDRANT_URL}} for Qdrant/vector DBs, {{MYSQL_URL}} for MySQL/MariaDB, {{MONGODB_URL}} for MongoDB, {{ELASTICSEARCH_URL}} for Elasticsearch/OpenSearch, {{MINIO_URL}} for MinIO/S3, {{MEMCACHED_URL}} for Memcached. For secrets, set "generate": true.
@@ -740,7 +770,7 @@ ECOSYSTEM_PROMPT = """You are the Supreme DevOps Architect of the CloudNeuron AI
        - MINIO_ENDPOINT, MINIO_HOST, S3_ENDPOINT_URL present → declare "MINIO", set to {{MINIO_URL}}
        - MEMCACHED_URL, MEMCACHED_HOST present → declare "MEMCACHED", set to {{MEMCACHED_URL}}
     6. EXTERNAL API KEYS: For service-specific external API keys (RESEND_API_KEY, STRIPE_SECRET_KEY, PAYSTACK_SECRET_KEY, COINBASE_API_KEY, etc.), set them to {{GENERATE}} — a random placeholder will be provided at deploy time. Do NOT use {{SHARED_SECRET:...}} for these.
-    7. PLATFORM_TO_*_SECRET: These are external service keys (PLATFORM_TO_AI_SECRET, PLATFORM_TO_CRM_SECRET, etc.) — set them to {{GENERATE}} for random placeholders.
+    7. PLATFORM_TO_*_SECRET: These are inter-service auth secrets (PLATFORM_TO_AI_SECRET, PLATFORM_TO_CRM_SECRET, etc.) — set them to {{SHARED_SECRET:platform_to_TARGET_secret}}. NEVER use {{GENERATE}} for these.
     8. ZERO EMPTY VARS POLICY: You are a DEEP CODE ANALYST. For EVERY env var:
        - Read the service's actual config files, Dockerfile, docker-compose.yml, package.json, settings.py, .env.example to determine the REAL value.
        - PORT values MUST come from the actual config (Dockerfile EXPOSE, docker-compose ports, config files) — NEVER random.
@@ -2494,6 +2524,107 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
                 continue
             if ku.startswith("PLATFORM_TO_") and ku.endswith("_SECRET"):
                 env_map[key] = "{{GENERATE}}"
+
+    # 4.54 Auto-link service URLs and ports
+    # After the AI and external-key clearing, many _URL and _PORT vars are
+    # empty or {{GENERATE}}.  This step detects them by name pattern and
+    # links them to the correct service automatically.
+    _svc_by_name: dict[str, dict] = {}
+    for svc in deployable:
+        n = str(svc.get("name") or _repo_short_name(svc)).strip().lower()
+        if n:
+            _svc_by_name[n] = svc
+        # Also index by short name parts (e.g. "smsly-backend" → "backend")
+        parts = n.split("-")
+        for p in parts:
+            if p and p not in _svc_by_name:
+                _svc_by_name[p] = svc
+
+    _URL_SUFFIXES = ("_URL", "_SERVICE_URL", "_ENDPOINT", "_BACKEND_URL", "_API_URL", "_BASE_URL")
+    _PORT_SUFFIXES = ("_PORT", "_SERVICE_PORT")
+    _SECRET_SUFFIXES = ("_SECRET", "_SECRET_KEY")
+
+    for svc in deployable:
+        env_map = svc.get("env_vars", {})
+        if not isinstance(env_map, dict):
+            continue
+        svc_port = str(svc.get("port") or 3000)
+
+        for key in list(env_map.keys()):
+            val = str(env_map.get(key, "") or "").strip()
+            ku = key.upper()
+
+            # --- Service URL linking ---
+            if not val or val == "{{GENERATE}}" or val == "{{FILL_ME}}":
+                is_url = any(ku.endswith(sfx) for sfx in _URL_SUFFIXES)
+                if is_url:
+                    # Extract the target service name from the key
+                    # e.g. BACKEND_URL → backend, AUDIT_SERVICE_URL → audit
+                    stem = ku
+                    for sfx in sorted(_URL_SUFFIXES, key=len, reverse=True):
+                        if stem.endswith(sfx):
+                            stem = stem[:-len(sfx)]
+                            break
+                    # Remove common prefixes like PLATFORM_TO_, GATEWAY_TO_, etc.
+                    for pfx in ("PLATFORM_TO_", "GATEWAY_TO_", "RATE_LIMIT_", "IDENTITY_TO_", "POLICY_TO_"):
+                        if stem.startswith(pfx):
+                            stem = stem[len(pfx):]
+                            break
+                    # Try to match stem to a service name
+                    stem_lower = stem.lower().replace("_", "-")
+                    matched = None
+                    # Exact match first
+                    if stem_lower in _svc_by_name:
+                        matched = _svc_by_name[stem_lower]
+                    else:
+                        # Try partial match: stem parts must be subset of service name parts
+                        for sname, s in _svc_by_name.items():
+                            if stem_lower and set(stem_lower.split("-")).issubset(set(sname.split("-"))):
+                                matched = s
+                                break
+                    if matched:
+                        target_name = str(matched.get("name") or _repo_short_name(matched)).strip()
+                        target_port = str(matched.get("port") or 3000)
+                        # Determine if this is an internal URL (Docker DNS) or external
+                        env_map[key] = f"{{{{SERVICE:{target_name}}}}}"
+                        continue
+
+            # --- Port linking ---
+            if not val or val == "{{GENERATE}}" or val == "{{FILL_ME}}":
+                is_port = any(ku.endswith(sfx) for sfx in _PORT_SUFFIXES)
+                if is_port:
+                    stem = ku
+                    for sfx in sorted(_PORT_SUFFIXES, key=len, reverse=True):
+                        if stem.endswith(sfx):
+                            stem = stem[:-len(sfx)]
+                            break
+                    for pfx in ("PLATFORM_TO_", "GATEWAY_TO_", "RATE_LIMIT_", "IDENTITY_TO_", "POLICY_TO_"):
+                        if stem.startswith(pfx):
+                            stem = stem[len(pfx):]
+                            break
+                    stem_lower = stem.lower().replace("_", "-")
+                    matched = None
+                    if stem_lower in _svc_by_name:
+                        matched = _svc_by_name[stem_lower]
+                    else:
+                        for sname, s in _svc_by_name.items():
+                            if stem_lower and set(stem_lower.split("-")).issubset(set(sname.split("-"))):
+                                matched = s
+                                break
+                    if matched:
+                        env_map[key] = str(matched.get("port") or 3000)
+                        continue
+                    # If no match, use the service's own port
+                    env_map[key] = svc_port
+
+            # --- PLATFORM_TO_*_SECRET linking ---
+            if ku.startswith("PLATFORM_TO_") and ku.endswith("_SECRET"):
+                if not val or val == "{{GENERATE}}" or val == "{{FILL_ME}}":
+                    # Extract the target from the key name
+                    # PLATFORM_TO_SMS_SECRET → sms
+                    target = ku[len("PLATFORM_TO_"):-len("_SECRET")].lower()
+                    shared_key = f"platform_to_{target}_secret"
+                    env_map[key] = f"{{{{SHARED_SECRET:{shared_key}}}}}"
 
     # 4.6 Heuristic Fallback Cross-Linking
     # When the AI/heuristic didn't produce SERVICE: links, auto-wire frontends
