@@ -2555,76 +2555,71 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
             ku = key.upper()
 
             # --- Service URL linking ---
-            if not val or val == "{{GENERATE}}" or val == "{{FILL_ME}}":
-                is_url = any(ku.endswith(sfx) for sfx in _URL_SUFFIXES)
-                if is_url:
-                    # Extract the target service name from the key
-                    # e.g. BACKEND_URL → backend, AUDIT_SERVICE_URL → audit
-                    stem = ku
-                    for sfx in sorted(_URL_SUFFIXES, key=len, reverse=True):
-                        if stem.endswith(sfx):
-                            stem = stem[:-len(sfx)]
+            # Replace if: empty, placeholder, or doesn't look like a URL
+            # (no "://" and no "{{" prefix → likely a random string from code scan)
+            is_url = any(ku.endswith(sfx) for sfx in _URL_SUFFIXES)
+            if is_url and (not val or val == "{{GENERATE}}" or val == "{{FILL_ME}}"
+                           or ("://" not in val and not val.startswith("{{"))):
+                # Extract the target service name from the key
+                stem = ku
+                for sfx in sorted(_URL_SUFFIXES, key=len, reverse=True):
+                    if stem.endswith(sfx):
+                        stem = stem[:-len(sfx)]
+                        break
+                # Remove common prefixes
+                for pfx in ("PLATFORM_TO_", "GATEWAY_TO_", "RATE_LIMIT_", "IDENTITY_TO_", "POLICY_TO_"):
+                    if stem.startswith(pfx):
+                        stem = stem[len(pfx):]
+                        break
+                stem_lower = stem.lower().replace("_", "-")
+                matched = None
+                if stem_lower in _svc_by_name:
+                    matched = _svc_by_name[stem_lower]
+                else:
+                    for sname, s in _svc_by_name.items():
+                        if stem_lower and set(stem_lower.split("-")).issubset(set(sname.split("-"))):
+                            matched = s
                             break
-                    # Remove common prefixes like PLATFORM_TO_, GATEWAY_TO_, etc.
-                    for pfx in ("PLATFORM_TO_", "GATEWAY_TO_", "RATE_LIMIT_", "IDENTITY_TO_", "POLICY_TO_"):
-                        if stem.startswith(pfx):
-                            stem = stem[len(pfx):]
-                            break
-                    # Try to match stem to a service name
-                    stem_lower = stem.lower().replace("_", "-")
-                    matched = None
-                    # Exact match first
-                    if stem_lower in _svc_by_name:
-                        matched = _svc_by_name[stem_lower]
-                    else:
-                        # Try partial match: stem parts must be subset of service name parts
-                        for sname, s in _svc_by_name.items():
-                            if stem_lower and set(stem_lower.split("-")).issubset(set(sname.split("-"))):
-                                matched = s
-                                break
-                    if matched:
-                        target_name = str(matched.get("name") or _repo_short_name(matched)).strip()
-                        target_port = str(matched.get("port") or 3000)
-                        # Determine if this is an internal URL (Docker DNS) or external
-                        env_map[key] = f"{{{{SERVICE:{target_name}}}}}"
-                        continue
+                if matched:
+                    target_name = str(matched.get("name") or _repo_short_name(matched)).strip()
+                    env_map[key] = f"{{{{SERVICE:{target_name}}}}}"
+                    continue
 
             # --- Port linking ---
-            if not val or val == "{{GENERATE}}" or val == "{{FILL_ME}}":
-                is_port = any(ku.endswith(sfx) for sfx in _PORT_SUFFIXES)
-                if is_port:
-                    stem = ku
-                    for sfx in sorted(_PORT_SUFFIXES, key=len, reverse=True):
-                        if stem.endswith(sfx):
-                            stem = stem[:-len(sfx)]
+            is_port = any(ku.endswith(sfx) for sfx in _PORT_SUFFIXES)
+            if is_port and (not val or val == "{{GENERATE}}" or val == "{{FILL_ME}}"
+                            or (not val.isdigit() and not val.startswith("{{"))):
+                stem = ku
+                for sfx in sorted(_PORT_SUFFIXES, key=len, reverse=True):
+                    if stem.endswith(sfx):
+                        stem = stem[:-len(sfx)]
+                        break
+                for pfx in ("PLATFORM_TO_", "GATEWAY_TO_", "RATE_LIMIT_", "IDENTITY_TO_", "POLICY_TO_"):
+                    if stem.startswith(pfx):
+                        stem = stem[len(pfx):]
+                        break
+                stem_lower = stem.lower().replace("_", "-")
+                matched = None
+                if stem_lower in _svc_by_name:
+                    matched = _svc_by_name[stem_lower]
+                else:
+                    for sname, s in _svc_by_name.items():
+                        if stem_lower and set(stem_lower.split("-")).issubset(set(sname.split("-"))):
+                            matched = s
                             break
-                    for pfx in ("PLATFORM_TO_", "GATEWAY_TO_", "RATE_LIMIT_", "IDENTITY_TO_", "POLICY_TO_"):
-                        if stem.startswith(pfx):
-                            stem = stem[len(pfx):]
-                            break
-                    stem_lower = stem.lower().replace("_", "-")
-                    matched = None
-                    if stem_lower in _svc_by_name:
-                        matched = _svc_by_name[stem_lower]
-                    else:
-                        for sname, s in _svc_by_name.items():
-                            if stem_lower and set(stem_lower.split("-")).issubset(set(sname.split("-"))):
-                                matched = s
-                                break
-                    if matched:
-                        env_map[key] = str(matched.get("port") or 3000)
-                        continue
-                    # If no match, use the service's own port
-                    env_map[key] = svc_port
+                if matched:
+                    env_map[key] = str(matched.get("port") or 3000)
+                    continue
+                env_map[key] = svc_port
 
-            # --- PLATFORM_TO_*_SECRET linking ---
-            if ku.startswith("PLATFORM_TO_") and ku.endswith("_SECRET"):
-                if not val or val == "{{GENERATE}}" or val == "{{FILL_ME}}":
-                    # Extract the target from the key name
-                    # PLATFORM_TO_SMS_SECRET → sms
-                    target = ku[len("PLATFORM_TO_"):-len("_SECRET")].lower()
-                    shared_key = f"platform_to_{target}_secret"
-                    env_map[key] = f"{{{{SHARED_SECRET:{shared_key}}}}}"
+            # --- Cross-service secret linking (PLATFORM_TO, GATEWAY_TO, IDENTITY_TO, POLICY_TO) ---
+            for _pfx in ("PLATFORM_TO_", "GATEWAY_TO_", "IDENTITY_TO_", "POLICY_TO_"):
+                if ku.startswith(_pfx) and ku.endswith("_SECRET"):
+                    if not val or val == "{{GENERATE}}" or val == "{{FILL_ME}}" or "://" not in val:
+                        target = ku[len(_pfx):-len("_SECRET")].lower()
+                        shared_key = f"{_pfx.lower()}{target}_secret"
+                        env_map[key] = f"{{{{SHARED_SECRET:{shared_key}}}}}"
+                        break
 
     # 4.6 Heuristic Fallback Cross-Linking
     # When the AI/heuristic didn't produce SERVICE: links, auto-wire frontends
