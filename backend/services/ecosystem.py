@@ -2365,8 +2365,8 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
         svc["env_vars"] = env_map
 
     # 4.52 CORS & CSRF auto-fill
-    # If a backend has CORS_ALLOWED_ORIGINS or CSRF_TRUSTED_ORIGINS empty
-    # and there's a frontend in the ecosystem, point them to it.
+    # If a backend has CORS_ALLOWED_ORIGINS or CSRF_TRUSTED_ORIGINS pointing
+    # to a non-frontend service (or is empty), point them to the frontend.
     # Search ALL services (including skipped) for a frontend by name first,
     # then fall back to stack-based detection.
     _frontends = [s for s in services if "frontend" in str(s.get("name", "")).lower()]
@@ -2377,13 +2377,23 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
     if _frontends:
         _fe_name = str(_frontends[0].get("name") or _repo_short_name(_frontends[0])).strip()
         _fe_placeholder = f"{{{{SERVICE:{_fe_name}}}}}"
+        _fe_names = {str(s.get("name", "")).strip().lower() for s in _frontends}
         for svc in deployable:
             env_map = svc.get("env_vars", {})
             if not isinstance(env_map, dict):
                 continue
             for cors_key in ("CORS_ALLOWED_ORIGINS", "CSRF_TRUSTED_ORIGINS"):
                 cur = str(env_map.get(cors_key, "")).strip()
-                if not cur or cur in ("{{GENERATE}}", "{{FILL_ME}}"):
+                # Replace if empty, placeholder, or pointing to a non-frontend service
+                should_replace = (
+                    not cur
+                    or cur in ("{{GENERATE}}", "{{FILL_ME}}")
+                )
+                if not should_replace and cur.startswith("{{SERVICE:"):
+                    ref_name = cur[len("{{SERVICE:"):-2].strip().lower()
+                    if ref_name and ref_name not in _fe_names:
+                        should_replace = True
+                if should_replace:
                     env_map[cors_key] = _fe_placeholder
 
     # 4.54 Fix STRIPE_SECRET_KEY collision
