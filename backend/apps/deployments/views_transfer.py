@@ -267,6 +267,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         source_server_ip = payload.get('source_server_ip')
         source_ssh_key = (payload.get('source_ssh_key') or '').strip()
         source_ssh_password = (payload.get('source_ssh_password') or '').strip()
+        source_server = None
 
         if source_server_id:
             source_server = ManagedServer.objects.filter(id=source_server_id, owner=request.user).first()
