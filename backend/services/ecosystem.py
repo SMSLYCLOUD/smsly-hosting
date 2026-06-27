@@ -2488,6 +2488,8 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
     _EXTERNAL_PREFIXES = (
         "RESEND_", "SMSMAN_", "FIVESIM_", "COINBASE_", "NOWPAYMENTS_",
         "PAYSTACK_", "FLUTTERWAVE_", "STRIPE_", "TWILIO_", "SMTP_",
+        "SENTRY_", "OTEL_", "CAPROVER_", "AWS_", "VAULT_", "IPINFO_",
+        "MAXMIND_", "INFOBIP_", "META_", "VERCEL_",
     )
     # Keys that must NEVER be cleared (addon URLs, framework, shared infra)
     _SKIP_CLEAR = {
@@ -2502,8 +2504,8 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
         "MEMCACHED_URL", "MEMCACHED_HOST", "MEMCACHE_SERVERS",
         "PORT", "HOST", "HOSTNAME", "NODE_ENV", "DEBUG", "LOG_LEVEL",
         "PYTHONUNBUFFERED", "PYTHONDONTWRITEBYTECODE", "ALLOWED_HOSTS",
-        "SENTRY_DSN", "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS",
         "SERVICE_PORT", "WEB_CONCURRENCY", "WORKERS",
+        "AI_PROVIDER",
     }
     for svc in deployable:
         env_map = svc.get("env_vars", {})
@@ -2525,6 +2527,23 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
             if ku.startswith("PLATFORM_TO_") and ku.endswith("_SECRET"):
                 env_map[key] = "{{GENERATE}}"
 
+        # Catch-all: clear remaining long random-looking values (scanner artifacts)
+        for key in list(env_map.keys()):
+            if key in _SKIP_CLEAR:
+                continue
+            val = str(env_map.get(key, ""))
+            if not val or val.startswith("{{") or val in ("", "{{GENERATE}}"):
+                continue
+            ku = key.upper()
+            # Clear if value is a long random string (≥40 chars, no protocol)
+            # These are always scanner artifacts from source code analysis
+            if len(val) >= 40 and "://" not in val:
+                env_map[key] = "{{GENERATE}}"
+                continue
+            # Clear if value contains only base64-like chars and is long
+            if len(val) >= 30 and all(c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-" for c in val):
+                env_map[key] = "{{GENERATE}}"
+
     # 4.54 Auto-link service URLs and ports
     # After the AI and external-key clearing, many _URL and _PORT vars are
     # empty or {{GENERATE}}.  This step detects them by name pattern and
@@ -2540,7 +2559,7 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
             if p and p not in _svc_by_name:
                 _svc_by_name[p] = svc
 
-    _URL_SUFFIXES = ("_URL", "_SERVICE_URL", "_ENDPOINT", "_BACKEND_URL", "_API_URL", "_BASE_URL")
+    _URL_SUFFIXES = ("_URL", "_SERVICE_URL", "_ENDPOINT", "_BACKEND_URL", "_API_URL", "_BASE_URL", "_HEALTH_URL", "_INTERNAL_URL")
     _PORT_SUFFIXES = ("_PORT", "_SERVICE_PORT")
     _SECRET_SUFFIXES = ("_SECRET", "_SECRET_KEY")
 
@@ -2567,7 +2586,7 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
                         stem = stem[:-len(sfx)]
                         break
                 # Remove common prefixes
-                for pfx in ("PLATFORM_TO_", "GATEWAY_TO_", "RATE_LIMIT_", "IDENTITY_TO_", "POLICY_TO_"):
+                for pfx in ("PLATFORM_TO_", "GATEWAY_TO_", "RATE_LIMIT_", "IDENTITY_TO_", "POLICY_TO_", "NEXT_PUBLIC_"):
                     if stem.startswith(pfx):
                         stem = stem[len(pfx):]
                         break
@@ -2594,7 +2613,7 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
                     if stem.endswith(sfx):
                         stem = stem[:-len(sfx)]
                         break
-                for pfx in ("PLATFORM_TO_", "GATEWAY_TO_", "RATE_LIMIT_", "IDENTITY_TO_", "POLICY_TO_"):
+                for pfx in ("PLATFORM_TO_", "GATEWAY_TO_", "RATE_LIMIT_", "IDENTITY_TO_", "POLICY_TO_", "NEXT_PUBLIC_"):
                     if stem.startswith(pfx):
                         stem = stem[len(pfx):]
                         break
