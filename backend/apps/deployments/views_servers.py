@@ -1194,6 +1194,60 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
             status=status.HTTP_202_ACCEPTED,
         )
 
+    @action(detail=False, methods=["post"], url_path="provision-batch")
+    @throttle_classes([ServerProvisionThrottle])
+    def provision_batch(self, request):
+        """Provision multiple lite agent servers in parallel.
+
+        Accepts {"servers": [...]} where each item has the same fields as
+        the single provision endpoint (name, host, ssh_password, etc.).
+
+        Returns 202 with a list of created server records. Each server's
+        provisioning runs as an independent Celery task.
+        """
+        servers_data = request.data.get("servers")
+        if not servers_data or not isinstance(servers_data, list):
+            return Response(
+                {"error": "'servers' must be a non-empty list."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if len(servers_data) > 20:
+            return Response(
+                {"error": "Maximum 20 servers per batch."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        created = []
+        errors = []
+        from .services.provisioner import provision_server
+
+        for idx, item in enumerate(servers_data):
+            serializer = ManagedServerProvisionSerializer(data=item)
+            if not serializer.is_valid():
+                errors.append({"index": idx, "host": item.get("host", ""), "errors": serializer.errors})
+                continue
+
+            validated = serializer.validated_data.copy()
+            validated.pop("ssh_auth_method", None)
+            validated.pop("node_certificate", None)
+
+            # Force lite agent for batch provisioning
+            validated["is_lite_agent"] = True
+            validated["is_primary"] = False
+
+            server = ManagedServer.objects.create(
+                owner=request.user,
+                provision_status=ManagedServer.ProvisionStatus.PENDING,
+                **validated,
+            )
+            provision_server.delay(str(server.id))
+            created.append(ManagedServerSerializer(server).data)
+
+        return Response(
+            {"created": created, "errors": errors, "total": len(created)},
+            status=status.HTTP_202_ACCEPTED,
+        )
+
     @action(detail=True, methods=["get"], url_path="provision-logs")
     def provision_logs(self, request, pk=None):
         """Get the provisioning logs for a server."""
