@@ -285,20 +285,13 @@ def _deployment_target_for_server(server, provider) -> tuple[Any, bool]:
 
 def _validate_plan_structure(plan: dict) -> list[str]:
     """
-    SEC-ZT-007: Validate ecosystem plan structure against schema.
-
+    Validate ecosystem plan structure.
     Returns a list of validation errors (empty = valid).
     """
     errors: list[str] = []
 
     if not isinstance(plan, dict):
         return ["Plan must be a dict"]
-
-    # Check for unknown top-level keys
-    allowed_keys = _PLAN_REQUIRED_KEYS | _PLAN_OPTIONAL_KEYS
-    unknown = set(plan.keys()) - allowed_keys
-    if unknown:
-        errors.append(f"Unknown plan keys: {', '.join(sorted(unknown))}")
 
     # Check required keys
     for key in _PLAN_REQUIRED_KEYS:
@@ -314,11 +307,6 @@ def _validate_plan_structure(plan: dict) -> list[str]:
         if not isinstance(svc, dict):
             errors.append(f"services[{i}] must be a dict, got {type(svc).__name__}")
             continue
-
-        # Check unknown service keys
-        svc_unknown = set(svc.keys()) - _SERVICE_REQUIRED_KEYS - _SERVICE_OPTIONAL_KEYS
-        if svc_unknown:
-            errors.append(f"services[{i}] unknown keys: {', '.join(sorted(svc_unknown))}")
 
         # Check required service keys
         for key in _SERVICE_REQUIRED_KEYS:
