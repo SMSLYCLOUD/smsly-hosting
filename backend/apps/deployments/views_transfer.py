@@ -549,10 +549,30 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
     # operation locally via the Docker SDK (socket-proxy).
 
     def _incoming_auth_required(self, request, transfer):
-        """Verify HMAC signature for incoming transfer operations."""
+        """Verify HMAC signature for incoming transfer operations.
+
+        Checks both REMOTE_ADDR (actual TCP peer) and the transfer's
+        recorded source IP (in case of NAT/proxy).
+        """
         raw_body = request.body
-        source_ip = request.META.get('REMOTE_ADDR', '')
-        return _verify_transfer_sync_hmac(request, source_ip, raw_body)
+        remote_addr = request.META.get('REMOTE_ADDR', '')
+
+        # Try REMOTE_ADDR first (most reliable when direct)
+        if remote_addr and _verify_transfer_sync_hmac(request, remote_addr, raw_body):
+            return True
+
+        # Fallback: check the transfer's recorded source IPs (NAT/proxy case)
+        source_ip = str(getattr(transfer, 'source_server_ip', '') or '').strip()
+        if source_ip and source_ip != remote_addr:
+            if _verify_transfer_sync_hmac(request, source_ip, raw_body):
+                return True
+
+        source_node = str(getattr(transfer, 'source_node_id', '') or '').strip()
+        if source_node and source_node not in (remote_addr, source_ip):
+            if _verify_transfer_sync_hmac(request, source_node, raw_body):
+                return True
+
+        return False
 
     @action(detail=True, methods=['post'], url_path='incoming/pull-image')
     def incoming_pull_image(self, request, pk=None):
@@ -706,6 +726,51 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
             return Response({'docker_available': True})
         except Exception as e:
             return Response({'docker_available': False, 'error': str(e)})
+
+    @action(detail=True, methods=['post'], url_path='incoming/upload-file')
+    def incoming_upload_file(self, request, pk=None):
+        """Receive a file upload and write it to a path on this node.
+
+        Used by FULL transfers to ship the backup archive to the target.
+        Expects JSON body: {path, content_base64} or raw binary with
+        X-Transfer-Path header.
+        """
+        transfer = self.get_object()
+        if not self._incoming_auth_required(request, transfer):
+            return Response({'error': 'Invalid HMAC signature'}, status=status.HTTP_401_UNAUTHORIZED)
+
+        import base64
+        import tempfile
+
+        content_base64 = request.data.get('content_base64') if isinstance(request.data, dict) else None
+        dest_path = (request.data.get('path') if isinstance(request.data, dict) else None) or \
+                    request.headers.get('X-Transfer-Path', '')
+
+        if not dest_path:
+            return Response({'error': 'path is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Security: only allow writes to /tmp/
+        if not dest_path.startswith('/tmp/'):
+            return Response({'error': 'Only /tmp/ paths are allowed'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if content_base64:
+            try:
+                raw = base64.b64decode(content_base64)
+            except Exception:
+                return Response({'error': 'Invalid base64 content'}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            raw = request.body
+
+        if not raw or len(raw) < 10:
+            return Response({'error': 'Empty or invalid file data'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            os.makedirs(os.path.dirname(dest_path) or '/tmp', exist_ok=True)
+            with open(dest_path, 'wb') as f:
+                f.write(raw)
+            return Response({'status': 'written', 'path': dest_path, 'size': len(raw)})
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=False, methods=['post'], url_path='incoming/db-backup')
     def incoming_db_backup(self, request):
