@@ -2418,6 +2418,7 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
         "_API_KEY", "_SECRET_KEY", "_WEBHOOK_SECRET", "_AUTH_TOKEN",
         "_ACCESS_TOKEN", "_ACCESS_KEY", "_PUBLISHABLE_KEY",
         "_PRIVATE_KEY", "_TOKEN", "_PASSWORD", "_SECRET", "_KEY",
+        "_FILE", "_PATH", "_ID",
     )
     _EXTERNAL_PREFIXES = (
         "RESEND_", "SMSMAN_", "FIVESIM_", "COINBASE_", "NOWPAYMENTS_",
