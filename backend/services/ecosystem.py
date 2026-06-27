@@ -712,7 +712,7 @@ ECOSYSTEM_PROMPT = """You are the Supreme DevOps Architect of the CloudNeuron AI
     - Pydantic snake_case field names are ALWAYS converted to UPPER_CASE env var names (e.g. `platform_api_secret` -> `PLATFORM_API_SECRET`).
     - If a Config class or model_config sets `env_prefix`, that prefix is prepended to ALL field names (e.g. `env_prefix = "RATE_LIMIT_"` + field `platform_api_secret` -> `RATE_LIMIT_PLATFORM_API_SECRET`).
     - The "Critical Config Analysis" section contains the full config file — use it to identify ALL pydantic fields and their types.
-    - Fields typed as `SecretStr`, `SecretBytes`, `stq`, `int`, `bool` without a default value are REQUIRED and MUST be included.
+    - Fields typed as `SecretStr`, `SecretBytes`, `str`, `int`, `bool` without a default value are REQUIRED and MUST be included.
     - Even unusual var names like `API_KEY_SALT`, `POLICY_TO_AUDIT_SECRET`, `GATEWAY_TO_PLATFORM_SECRET` are real vars used by the code — include them.
 
     ### PORT AND HOST DETECTION:
@@ -1641,17 +1641,17 @@ def _env_plan_map(raw_env: Any) -> dict[str, str]:
             if isinstance(value, dict):
                 entry = value
                 raw_val = entry.get("value")
-                if raw_val in (None, "", "{{GENERATE}}", "{{FILL_ME}}") or str(raw_val).startswith("REPLACE_WITH_"):
+                if raw_val in (None, "", "{{FILL_ME}}") or str(raw_val).startswith("REPLACE_WITH_"):
                     value = entry.get("default")
                 else:
                     value = raw_val
-                if str(value or "").strip() in ("{{GENERATE}}", "{{FILL_ME}}") or str(value or "").startswith("REPLACE_WITH_"):
+                if str(value or "").strip() in ("{{FILL_ME}}") or str(value or "").startswith("REPLACE_WITH_"):
                     value = ""
                 if not value and (entry.get("generate") or entry.get("is_secret")):
                     value = "{{GENERATE}}"
             else:
-                # Plain string value — treat placeholder strings as empty
-                if str(value).strip() in ("{{GENERATE}}", "{{FILL_ME}}") or str(value).startswith("REPLACE_WITH_"):
+                # Plain string value — preserve {{GENERATE}} sentinel
+                if str(value).strip() in ("{{FILL_ME}}") or str(value).startswith("REPLACE_WITH_"):
                     value = ""
             env_map[key_text] = "" if value is None else str(value)
         return env_map
@@ -2207,10 +2207,10 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
                             content = f.read(8192)
                     except Exception:
                         continue
-                    for imp, atype in _ADDON_IMPORT_HINTS.items():
-                        for pattern in imp.split("|"):
+                    for addon_type, import_patterns in _ADDON_IMPORT_HINTS.items():
+                        for pattern in import_patterns:
                             if pattern in content:
-                                _imports.add(atype)
+                                _imports.add(addon_type)
         for addon_type in _imports:
             if addon_type not in _addons:
                 _addons.append(addon_type)
@@ -2333,9 +2333,6 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
                             )
                             break
 
-        # 3d. Unify same-name secrets across services
-        _unify_same_name_secrets(services)
-
         # 3c. AI Intelligence Inheritance (independent of other loops)
         for key in list(env_map.keys()):
             key_u = key.upper()
@@ -2381,6 +2378,9 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
             env_map.setdefault("AI_PROVIDER", "auto")
 
         svc["env_vars"] = env_map
+
+    # 3d. Unify same-name secrets across services (after per-service loop)
+    _unify_same_name_secrets(services)
 
     # 4.52 CORS & CSRF auto-fill
     # If a backend has CORS_ALLOWED_ORIGINS or CSRF_TRUSTED_ORIGINS pointing
@@ -2551,10 +2551,9 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
     _SERVICE_URL_SUFFIXES = ("_URL", "_ENDPOINT", "_HOST", "_API", "_ADDRESS")
 
     def _stem_matches_service(stem: str, service_name: str) -> bool:
-        stem_parts = stem.split("-")
-        name_parts = service_name.split("-")
-        it = iter(name_parts)
-        return all(any(part == sp for part in it) for sp in stem_parts)
+        stem_parts = set(stem.split("-"))
+        name_parts = set(service_name.split("-"))
+        return stem_parts.issubset(name_parts)
 
     for svc in deployable:
         env_map = svc.get("env_vars", {})
@@ -2687,17 +2686,6 @@ def _ensure_100_percent_env_coverage(services: list[dict]):
                     env_map[key] = "{{GENERATE}}"
 
         svc["env_vars"] = env_map
-
-    # Final sorting for deploy sequence
-    ordered = sorted(
-        services,
-        key=lambda s: (
-            _safe_order(s.get("deploy_order"), 99),
-            str(s.get("name") or _repo_short_name(s)),
-        ),
-    )
-    for index, service in enumerate(ordered, 1):
-        service["deploy_order"] = index
 
 
 def _apply_plan_repo_defaults(services: list[dict], repos_data: list[dict]):
@@ -3066,6 +3054,16 @@ def _scan_and_analyze_impl(token: str, ai_provider: str | None = None, selected_
                         "deploy_order": _safe_order(service.get("deploy_order"), 50),
                         "skip": bool(service.get("skip", False))
                     }
+                    # Preserve ALL additional fields from the AI plan
+                    _PASSTHROUGH_KEYS = {
+                        "branch", "port", "build", "description", "dockerfile",
+                        "cmd", "entrypoint", "volumes", "networks", "restart",
+                        "deploy", "labels", "healthcheck", "resources",
+                        "config", "env_file", "compose", "env_prefix",
+                    }
+                    for k in _PASSTHROUGH_KEYS:
+                        if k in service and k not in safe_service:
+                            safe_service[k] = service[k]
                     final_plan["services"].append(safe_service)
                     logger.info(f"Successfully processed service: {safe_service['name']} (skip={safe_service['skip']})")
                 except Exception as e:
