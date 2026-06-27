@@ -989,6 +989,8 @@ EOF
     env_set_value "$env_file" "TRAEFIK_HTTP_BIND" "0.0.0.0:80"
     env_set_value "$env_file" "MASTER_IP" "$MASTER_IP"
     env_set_value "$env_file" "MASTER_MESH_IP" "$MASTER_MESH_IP"
+    env_set_value "$env_file" "MASTER_DB_USER" "$MASTER_DB_USER"
+    env_set_value "$env_file" "MASTER_DB_PASSWORD" "$MASTER_DB_PASSWORD"
     env_set_value "$env_file" "SMSLY_NODE_HOST" "$SMSLY_NODE_HOST"
     env_set_value "$env_file" "SMSLY_NODE_ID" "$SMSLY_NODE_ID"
     env_set_value "$env_file" "SMSLY_NODE_QUEUE" "$SMSLY_NODE_QUEUE"
