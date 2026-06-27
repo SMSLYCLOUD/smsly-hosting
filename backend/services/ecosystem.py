@@ -730,8 +730,9 @@ ECOSYSTEM_PROMPT = """You are the Supreme DevOps Architect of the CloudNeuron AI
        - ELASTICSEARCH_URL, ELASTICSEARCH_HOST, ELASTIC_URL present → declare "ELASTICSEARCH", set to {{ELASTICSEARCH_URL}}
        - MINIO_ENDPOINT, MINIO_HOST, S3_ENDPOINT_URL present → declare "MINIO", set to {{MINIO_URL}}
        - MEMCACHED_URL, MEMCACHED_HOST present → declare "MEMCACHED", set to {{MEMCACHED_URL}}
-    6. EXTERNAL API KEYS: For service-specific external API keys (RESEND_API_KEY, STRIPE_SECRET_KEY, PAYSTACK_SECRET_KEY, COINBASE_API_KEY, etc.), leave the value empty — the user will fill it post-scan. Do NOT use {{SHARED_SECRET:...}} for these.
-    7. PLATFORM_TO_*_SECRET: These are external service keys (PLATFORM_TO_AI_SECRET, PLATFORM_TO_CRM_SECRET, etc.) — leave them empty for the user to fill.
+    6. EXTERNAL API KEYS: For service-specific external API keys (RESEND_API_KEY, STRIPE_SECRET_KEY, PAYSTACK_SECRET_KEY, COINBASE_API_KEY, etc.), set them to {{GENERATE}} — a random placeholder will be provided at deploy time. Do NOT use {{SHARED_SECRET:...}} for these.
+    7. PLATFORM_TO_*_SECRET: These are external service keys (PLATFORM_TO_AI_SECRET, PLATFORM_TO_CRM_SECRET, etc.) — set them to {{GENERATE}} for random placeholders.
+    8. ALL VARS MUST HAVE VALUES: NEVER leave any environment variable empty or without a value. Every single var MUST be filled with a real value, placeholder, or sentinel. If you cannot determine the value, use {{GENERATE}} for secrets/keys, {{SERVICE:repo-name}} for URLs, {{SHARED_SECRET:name}} for shared secrets, or a sensible default (e.g. "localhost", "3000", "false", "info").
 
     ### STRICT TYPE RULES — VIOLATIONS WILL CRASH THE SYSTEM:
     - "depends_on" MUST be an array of strings ONLY. NEVER objects. WRONG: [{"name": "svc-a"}] RIGHT: ["svc-a"]
@@ -2634,10 +2635,9 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
 
 def _ensure_100_percent_env_coverage(services: list[dict]):
     """
-    Fill only empty secrets with pre-generated random values.
-    Non-secret empty vars are left alone — if the AI intelligence
-    couldn't determine a value, we don't fabricate one.  The deploy
-    pipeline and runtime defaults handle missing values gracefully.
+    Ensure every env var has a value. Empty secrets get random values.
+    Empty non-secret vars get realistic placeholder values based on
+    their name (e.g. PORT→3000, HOST→localhost, URL→placeholder).
     """
     _ADDON_URL_KEYS = {
         "DATABASE_URL", "POSTGRES_URL", "POSTGRES_DSN", "PGHOST",
@@ -2650,6 +2650,10 @@ def _ensure_100_percent_env_coverage(services: list[dict]):
         "MINIO_ENDPOINT", "MINIO_HOST", "S3_ENDPOINT_URL", "S3_HOST",
         "MEMCACHED_URL", "MEMCACHED_HOST", "MEMCACHE_SERVERS",
     }
+    _PORT_KEYS = {"PORT", "SERVER_PORT", "APP_PORT", "WORKER_PORT", "LISTEN_PORT"}
+    _HOST_KEYS = {"HOST", "SERVER_HOST", "APP_HOST", "BIND_HOST", "LISTEN_HOST", "REDIS_HOST", "PGHOST", "MYSQL_HOST", "MONGODB_HOST", "ELASTICSEARCH_HOST", "ELASTIC_HOST", "RABBITMQ_HOST", "MINIO_HOST", "MEMCACHED_HOST", "OPENSEARCH_HOST"}
+    _URL_KEYS = {"URL", "API_URL", "BASE_URL", "BACKEND_URL", "FRONTEND_URL", "SERVICE_URL", "CALLBACK_URL", "WEBHOOK_URL", "HEALTH_URL"}
+
     for svc in services:
         env_map = svc.get("env_vars", {})
 
@@ -2658,9 +2662,58 @@ def _ensure_100_percent_env_coverage(services: list[dict]):
             if not val or str(val).strip() in ("", "{{GENERATE}}", "{{FILL_ME}}") or str(val).startswith("REPLACE_WITH_"):
                 if key in _ADDON_URL_KEYS:
                     continue
-                if any(k in key.upper() for k in ["SECRET", "KEY", "TOKEN", "PASSWORD", "AUTH_HASH"]):
+
+                key_upper = key.upper()
+                if any(k in key_upper for k in ["SECRET", "KEY", "TOKEN", "PASSWORD", "AUTH_HASH"]):
                     env_map[key] = "{{GENERATE}}"
-                # Non-secret empty vars: leave empty — don't fabricate values
+                elif key_upper in _PORT_KEYS:
+                    env_map[key] = "3000"
+                elif key_upper in _HOST_KEYS:
+                    env_map[key] = "localhost"
+                elif key_upper in _URL_KEYS:
+                    env_map[key] = f"http://localhost:3000"
+                elif key_upper == "DEBUG":
+                    env_map[key] = "false"
+                elif key_upper == "NODE_ENV":
+                    env_map[key] = "production"
+                elif key_upper == "ENV":
+                    env_map[key] = "production"
+                elif key_upper == "LOG_LEVEL":
+                    env_map[key] = "info"
+                elif key_upper == "WORKERS":
+                    env_map[key] = "2"
+                elif key_upper == "TIMEOUT":
+                    env_map[key] = "30"
+                elif key_upper == "MAX_RETRIES":
+                    env_map[key] = "3"
+                elif "NAME" in key_upper:
+                    env_map[key] = "default"
+                elif "PATH" in key_upper:
+                    env_map[key] = "/data"
+                elif "ID" in key_upper:
+                    env_map[key] = "1"
+                elif "SCHEMA" in key_upper:
+                    env_map[key] = "public"
+                elif "REGION" in key_upper:
+                    env_map[key] = "us-east-1"
+                elif "FORMAT" in key_upper:
+                    env_map[key] = "json"
+                elif "MODE" in key_upper:
+                    env_map[key] = "production"
+                elif "LEVEL" in key_upper:
+                    env_map[key] = "info"
+                elif "TYPE" in key_upper:
+                    env_map[key] = "default"
+                elif "PROTOCOL" in key_upper:
+                    env_map[key] = "https"
+                elif "FROM" in key_upper or "TO" in key_upper:
+                    env_map[key] = "noreply@example.com"
+                elif "CORS" in key_upper:
+                    env_map[key] = "*"
+                elif "ORIGIN" in key_upper:
+                    env_map[key] = "http://localhost:3000"
+                else:
+                    env_map[key] = "{{GENERATE}}"
 
         svc["env_vars"] = env_map
 
