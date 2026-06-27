@@ -205,19 +205,69 @@ class ServerTransferService:
         ip = self.transfer.target_server_ip or '127.0.0.1'
         return f"http://{ip}"
 
+    def _candidate_node_urls(self) -> list[str]:
+        """Return candidate base URLs for the target node, trying multiple
+        transports in priority order (mirrors RemoteOrchestrator pattern).
+
+        Priority:
+          1. WireGuard mesh VPN IP (internal, fast)
+          2. Public IP / domain (fallback)
+        """
+        urls: list[str] = []
+        target_ip = (self.transfer.target_server_ip or '').strip()
+        if not target_ip:
+            return urls
+
+        server = self._target_server_record()
+        wg_ip = str(getattr(server, 'wg_address', '') or '').strip() if server else ''
+        is_lite = getattr(server, 'is_lite_agent', False) if server else False
+        host = str(getattr(server, 'host', '') or '').strip() if server else ''
+
+        def add(url: str):
+            url = url.rstrip('/')
+            if url and url not in urls:
+                urls.append(url)
+
+        # Priority 1: WireGuard mesh VPN (internal, fast)
+        if wg_ip and wg_ip != target_ip:
+            if is_lite:
+                add(f"http://{wg_ip}")
+                add(f"http://{wg_ip}:8090")
+            else:
+                add(f"http://{wg_ip}:8090")
+                add(f"http://{wg_ip}")
+
+        # Priority 2: Target IP directly
+        if is_lite:
+            add(f"http://{target_ip}")
+            add(f"http://{target_ip}:8090")
+        else:
+            add(f"http://{target_ip}:8090")
+            add(f"http://{target_ip}")
+
+        # Priority 3: Public host (if different from target_ip)
+        if host and host != target_ip:
+            if is_lite:
+                add(f"http://{host}")
+                add(f"http://{host}:8090")
+            else:
+                add(f"http://{host}:8090")
+                add(f"http://{host}")
+
+        return urls
+
     def _node_api_request(self, action, method='POST', json=None, params=None, timeout=120):
         """Call an incoming REST endpoint on the target node.
 
         Replaces SSH-based operations. Uses HMAC V2 auth.
-        The node runs the same Django codebase, so these endpoints
-        exist on every backend instance.
+        Tries multiple candidate URLs (WireGuard, port 8090, public IP)
+        until one succeeds.
         """
         target_ip = self.transfer.target_server_ip
         if not target_ip:
             raise RuntimeError("target_server_ip not set on transfer")
         transfer_id = self.transfer.id
         path = f"/api/v1/transfers/{transfer_id}/{action}/"
-        url = f"{self._node_api_url()}{path}"
 
         # Build the exact path the server will see (with query params)
         # so HMAC signatures match on both sides.
@@ -242,13 +292,24 @@ class ServerTransferService:
             'Content-Type': 'application/json',
         }
 
-        self._log(f"REST {method} {path}")
-        try:
-            resp = requests.request(method, url, headers=headers, json=json, params=params, timeout=timeout)
-            resp.raise_for_status()
-            return resp.json()
-        except requests.RequestException as e:
-            raise RuntimeError(f"Node API call to {path} failed: {e}")
+        candidate_urls = self._candidate_node_urls()
+        if not candidate_urls:
+            candidate_urls = [f"http://{target_ip}"]
+
+        last_error = None
+        self._log(f"REST {method} {path} (trying {len(candidate_urls)} URL(s))")
+        for base_url in candidate_urls:
+            url = f"{base_url.rstrip('/')}{path}"
+            try:
+                resp = requests.request(method, url, headers=headers, json=json, params=params, timeout=timeout)
+                resp.raise_for_status()
+                return resp.json()
+            except requests.RequestException as e:
+                last_error = e
+                self._log(f"  -> {base_url} failed: {e}")
+                continue
+
+        raise RuntimeError(f"Node API call to {path} failed on all candidate URLs: {last_error}")
 
 
 
@@ -511,10 +572,7 @@ class ServerTransferService:
         if self.transfer.transfer_type == 'SERVICE':
             self._restore_single_service(remote_backup_path)
         else:
-            raise RuntimeError(
-                "FULL server transfers are not yet supported via the REST API. "
-                "Use SERVICE transfer for individual services."
-            )
+            self._restore_full_server_rest(remote_backup_path)
 
     def _restore_single_service(self, remote_backup_path):
         """Restore a single service on target via REST API (no SSH)."""
@@ -1257,6 +1315,267 @@ if os.path.exists(services_dir):
 
         self.ssh.exec_command(f"rm -rf {remote_temp_dir} {remote_backup_path} {script_path} /tmp/.env.restore")
 
+    def _restore_full_server_rest(self, remote_backup_path):
+        """Restore full server via REST API (no SSH required).
+
+        Uploads the backup to the target, extracts it, restores the
+        database, and starts the platform — all via incoming REST endpoints.
+        """
+        import base64
+        import tempfile
+
+        backup = self.transfer.source_backup or self.transfer.source_server_backup
+        if not backup or not backup.file_path:
+            raise ValueError("Backup file not found for FULL transfer.")
+
+        local_path = backup.file_path
+        self._update(62, 'Uploading backup to target server...')
+
+        # Step 1: Upload the backup archive to target /tmp/
+        remote_backup = f"/tmp/transfer_backup_{self.transfer.id}.tar.gz"
+        file_size = os.path.getsize(local_path)
+        self._log(f"Uploading {file_size} bytes to {remote_backup}")
+
+        # For large files, upload in chunks via base64
+        CHUNK_SIZE = 4 * 1024 * 1024  # 4MB chunks (base64 expands ~33%)
+        with open(local_path, 'rb') as f:
+            offset = 0
+            while True:
+                chunk = f.read(CHUNK_SIZE)
+                if not chunk:
+                    break
+                b64 = base64.b64encode(chunk).decode('ascii')
+                self._node_api_request('incoming/upload-file', json={
+                    'path': remote_backup,
+                    'content_base64': b64,
+                })
+                offset += len(chunk)
+                self._log(f"  Uploaded {offset}/{file_size} bytes")
+
+        self._update(65, 'Extracting backup on target...')
+
+        # Step 2: Extract the backup and read .env
+        extract_dir = f"/tmp/restore_{self.transfer.id}"
+        extract_script = f"""
+import os, json, subprocess, glob
+
+EXTRACT_DIR = "{extract_dir}"
+BACKUP = "{remote_backup}"
+
+os.makedirs(EXTRACT_DIR, exist_ok=True)
+subprocess.run(["tar", "-xzf", BACKUP, "-C", EXTRACT_DIR], check=True)
+
+# List extracted contents
+for root, dirs, files in os.walk(EXTRACT_DIR):
+    for f in files:
+        print(os.path.join(root, f))
+"""
+        self._exec_on_target(extract_script)
+
+        self._update(68, 'Restoring .env on target...')
+
+        # Step 3: Read .env from extracted backup and push to target
+        env_script = f"""
+import os, json
+
+EXTRACT_DIR = "{extract_dir}"
+env_path = os.path.join(EXTRACT_DIR, ".env")
+if os.path.exists(env_path):
+    with open(env_path) as f:
+        print("ENV_CONTENT_START")
+        print(f.read())
+        print("ENV_CONTENT_END")
+else:
+    print("NO_ENV_FILE")
+"""
+        env_result = self._exec_on_target(env_script)
+        env_output = env_result.get('stdout', '')
+
+        # Parse env content from output
+        env_content = ''
+        if 'ENV_CONTENT_START' in env_output and 'ENV_CONTENT_END' in env_output:
+            start = env_output.index('ENV_CONTENT_START') + len('ENV_CONTENT_START')
+            end = env_output.index('ENV_CONTENT_END')
+            env_content = env_output[start:end].strip()
+
+        if env_content:
+            # Write .env to target via upload-file
+            b64_env = base64.b64encode(env_content.encode()).decode('ascii')
+            self._node_api_request('incoming/upload-file', json={
+                'path': '/tmp/.env.restore',
+                'content_base64': b64_env,
+            })
+
+            # Copy .env to hosting path
+            write_env = """
+import subprocess
+subprocess.run(["cp", "/tmp/.env.restore", "/opt/smsly-hosting/.env"], check=True)
+print("ENV_WRITTEN")
+"""
+            self._exec_on_target(write_env)
+
+        self._update(72, 'Restoring database on target...')
+
+        # Step 4: Restore database
+        restore_db_script = f"""
+import os, subprocess, re, json
+
+EXTRACT_DIR = "{extract_dir}"
+db_dump = os.path.join(EXTRACT_DIR, "db_dump.sql")
+
+if not os.path.exists(db_dump):
+    print("NO_DB_DUMP")
+else:
+    # Read DB credentials from .env
+    env_path = "/opt/smsly-hosting/.env"
+    db_user = "smsly"
+    db_name = "smsly"
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("POSTGRES_USER="):
+                    db_user = line.split("=", 1)[1].strip().strip('"').strip("'")
+                elif line.startswith("POSTGRES_DB="):
+                    db_name = line.split("=", 1)[1].strip().strip('"').strip("'")
+
+    # Validate identifiers
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{{0,62}}", db_user):
+        db_user = "smsly"
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{{0,62}}", db_name):
+        db_name = "smsly"
+
+    # Drop and recreate database
+    drop_sql = f'DROP DATABASE IF EXISTS "{{db_name}}"; CREATE DATABASE "{{db_name}}";'
+    try:
+        subprocess.run(
+            ["docker", "exec", "smsly-hosting-db-1", "psql", "-U", db_user, "-d", "postgres", "-c", drop_sql],
+            check=True, capture_output=True, text=True
+        )
+    except Exception:
+        # Try alternative container name
+        subprocess.run(
+            ["docker", "exec", "smsly-db", "psql", "-U", db_user, "-d", "postgres", "-c", drop_sql],
+            check=True, capture_output=True, text=True
+        )
+
+    # Copy dump to DB container and restore
+    subprocess.run(["docker", "cp", db_dump, "smsly-hosting-db-1:/tmp/dump.sql"], check=True)
+    restore_result = subprocess.run(
+        ["docker", "exec", "smsly-hosting-db-1", "psql", "-U", db_user, "-d", db_name, "-f", "/tmp/dump.sql"],
+        capture_output=True, text=True
+    )
+    if restore_result.returncode != 0:
+        # Try alternative container name
+        subprocess.run(["docker", "cp", db_dump, "smsly-db:/tmp/dump.sql"], check=True)
+        subprocess.run(
+            ["docker", "exec", "smsly-db", "psql", "-U", db_user, "-d", db_name, "-f", "/tmp/dump.sql"],
+            check=True
+        )
+    print("DB_RESTORED")
+"""
+        db_result = self._exec_on_target(restore_db_script)
+        if 'DB_RESTORED' not in db_result.get('stdout', ''):
+            self._log(f"DB restore warning: {db_result.get('stdout', '')[:300]}")
+
+        self._update(80, 'Restoring service data on target...')
+
+        # Step 5: Restore service images and volumes
+        restore_services_script = f"""
+import os, json, subprocess, glob
+
+EXTRACT_DIR = "{extract_dir}"
+services_dir = os.path.join(EXTRACT_DIR, "services")
+
+if not os.path.exists(services_dir):
+    print("NO_SERVICES_DIR")
+else:
+    restored = 0
+    for tar_file in glob.glob(os.path.join(services_dir, "*.tar.gz")):
+        print(f"Restoring {{tar_file}}...")
+        svc_tmp = os.path.join(EXTRACT_DIR, "svc_tmp")
+        os.makedirs(svc_tmp, exist_ok=True)
+        subprocess.run(["tar", "-xzf", tar_file, "-C", svc_tmp], check=True)
+
+        # Load Docker image
+        image_tar = os.path.join(svc_tmp, "image.tar")
+        if os.path.exists(image_tar):
+            subprocess.run(["docker", "load", "-i", image_tar], check=True)
+
+        # Restore volumes
+        meta_path = os.path.join(svc_tmp, "metadata.json")
+        if os.path.exists(meta_path):
+            with open(meta_path) as f:
+                data = json.load(f)
+            for vol in data.get("volumes", []):
+                vname = vol["name"]
+                vfile = vol["filename"]
+                vfile_path = os.path.join(svc_tmp, vfile)
+                if os.path.exists(vfile_path):
+                    try:
+                        subprocess.run(["docker", "volume", "create", vname], check=True)
+                    except Exception:
+                        pass
+                    subprocess.run([
+                        "docker", "run", "--rm", "-i",
+                        "-v", f"{{vname}}:/dest",
+                        "-v", f"{{svc_tmp}}:/src",
+                        "alpine", "tar", "-xzf", f"/src/{{vfile}}", "-C", "/dest"
+                    ], check=True)
+
+        subprocess.run(["rm", "-rf", svc_tmp], check=True)
+        restored += 1
+
+    print(f"SERVICES_RESTORED:{{restored}}")
+"""
+        self._exec_on_target(restore_services_script)
+
+        self._update(88, 'Starting platform on target...')
+
+        # Step 6: Start the platform
+        start_script = """
+import subprocess, os
+
+hosting_path = "/opt/smsly-hosting"
+os.chdir(hosting_path)
+
+# Create required directories
+os.makedirs("caddy-config", exist_ok=True)
+os.makedirs("/opt/smsly-cache", exist_ok=True)
+
+# Ensure networks exist
+subprocess.run(["docker", "network", "inspect", "smsly-net"], capture_output=True)
+subprocess.run(["docker", "network", "create", "smsly-net"], capture_output=True)
+subprocess.run(["docker", "network", "inspect", "smsly-proxy"], capture_output=True)
+subprocess.run(["docker", "network", "create", "smsly-proxy"], capture_output=True)
+
+# Detect compose file
+compose_file = None
+for candidate in [
+    "infrastructure/docker/docker-compose.agent-lite.yml",
+    "docker-compose.prod.yml",
+    "docker-compose.yml",
+]:
+    if os.path.exists(candidate):
+        compose_file = candidate
+        break
+
+if compose_file:
+    subprocess.run(["docker", "compose", "-f", compose_file, "up", "-d", "--build"], check=True)
+else:
+    subprocess.run(["docker", "compose", "up", "-d", "--build"], check=True)
+
+print("PLATFORM_STARTED")
+"""
+        self._exec_on_target(start_script)
+
+        # Step 7: Cleanup
+        self._exec_on_target(f"""
+import subprocess, os
+subprocess.run(["rm", "-rf", "{extract_dir}", "{remote_backup}", "/tmp/.env.restore"], check=False)
+print("CLEANUP_DONE")
+""")
+
     def _import_backup_key_on_target(self, remote_temp_dir: str) -> None:
         """Import the source's BACKUP_ENCRYPTION_KEY on the target.
 
@@ -1580,54 +1899,30 @@ if __name__ == '__main__':
     def _verify_between_servers(self):
         """
         Verify connectivity between source and target servers.
-        For SERVICE transfers, uses the REST API on the target.
-        For FULL transfers, checks TCP/22.
+        Both SERVICE and FULL transfers now use the REST API.
         """
         source_ip = str(getattr(self.transfer, 'source_server_ip', '') or '').strip()
         target_ip = str(getattr(self.transfer, 'target_server_ip', '') or '').strip()
         if not source_ip or not target_ip:
             return
 
-        if self.transfer.transfer_type == 'SERVICE':
-            # SERVICE transfers use REST API — verify target is reachable via API
-            try:
-                result = self._node_api_request('incoming/ensure-docker', timeout=10)
-                if result.get('docker_available'):
-                    logger.info("Connectivity check passed: controller -> %s (API reachable)", target_ip)
-                    return
-            except Exception as exc:
-                logger.warning("Connectivity check failed: controller -> %s (API unreachable: %s)", target_ip, exc)
-            return
-
-        # FULL transfers: check TCP/22
+        # Both SERVICE and FULL transfers use REST API — verify target is reachable
         try:
-            with socket.create_connection((target_ip, 22), timeout=5):
-                logger.info("Connectivity check passed: controller -> %s:22", target_ip)
-        except OSError as exc:
-            logger.warning("Connectivity check failed: controller -> %s:22 (%s)", target_ip, exc)
-
-        # Target -> source TCP reachability via REST exec on target
-        reach_script = (
-            f"import socket; "
-            f"result = socket.create_connection(('{source_ip}', 22), timeout=5); "
-            f"result.close(); "
-            f"print('REACHABLE')"
-        )
-        try:
-            exec_result = self._exec_on_target(reach_script)
-            if "REACHABLE" in exec_result.get('stdout', ''):
-                logger.info("Connectivity check passed: target -> %s:22", source_ip)
+            result = self._node_api_request('incoming/ensure-docker', timeout=10)
+            if result.get('docker_available'):
+                logger.info("Connectivity check passed: controller -> %s (API reachable)", target_ip)
                 return
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Connectivity check failed: controller -> %s (API unreachable: %s)", target_ip, exc)
 
-        message = (
-            f"Target server cannot reach source server on TCP/22 ({source_ip}). "
-            "Verify firewall/security-group rules between both servers."
-        )
-        if bool(getattr(settings, "TRANSFER_REQUIRE_BIDIRECTIONAL_SSH", False)):
-            raise RuntimeError(message)
-        logger.warning(message)
+        # Fallback: check TCP/22 for FULL transfers (SSH may be needed for emergency)
+        if self.transfer.transfer_type == 'FULL':
+            try:
+                with socket.create_connection((target_ip, 22), timeout=5):
+                    logger.info("Connectivity check passed: controller -> %s:22 (SSH fallback)", target_ip)
+                    return
+            except OSError as exc:
+                logger.warning("SSH fallback also failed: controller -> %s:22 (%s)", target_ip, exc)
 
     def _regenerate_master_caddyfile(self):
         """Regenerate and reload the Caddyfile on the master node.
