@@ -126,13 +126,16 @@ class ServerTransferCreateSerializer(serializers.Serializer):
                     {'target_server_id': f"Target server '{target_server.name}' is currently {target_server.status}. Transfers are only allowed to ONLINE nodes."}
                 )
 
-        if not target_is_local and not has_key and not has_password and not target_server:
+        # SERVICE transfers use the REST API — no SSH needed
+        if transfer_type == 'SERVICE':
+            pass
+        elif not target_is_local and not has_key and not has_password and not target_server:
             raise serializers.ValidationError(
                 "No SSH credentials available for target server. Provide target_ssh_key, target_ssh_password, or select a target server with saved SSH credentials."
             )
 
-        # Validate source SSH when source is a known remote server
-        if source_server_id:
+        # Validate source SSH when source is a known remote server (FULL transfers only)
+        if transfer_type != 'SERVICE' and source_server_id:
             from .models_servers import ManagedServer
             source_server = ManagedServer.objects.filter(id=source_server_id).first()
             if source_server:

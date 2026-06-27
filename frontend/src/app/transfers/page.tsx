@@ -4,12 +4,16 @@ import React, { useCallback, useState, useEffect } from 'react';
 import { PageHeader } from '@/components/ui/page-header';
 import api, { servicesApi, addonsApi, serversApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
-import { Database, LayoutTemplate, Box, Server, ServerCog, MessagesSquare, Orbit, Globe } from 'lucide-react';
+import { Database, LayoutTemplate, Box, Server, ServerCog, MessagesSquare, Orbit, Globe, ArrowRightLeft, Eye, EyeOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { featureFlags, featureDisabledReason } from '@/lib/featureFlags';
 import { shouldShowAllNav } from '@/lib/nav-visibility';
 import { parseApiError } from '@/lib/apiError';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 
 export default function TransfersPage() {
     const [servers, setServers] = useState<any[]>([]);
@@ -20,6 +24,15 @@ export default function TransfersPage() {
     const [transfersLoading, setTransfersLoading] = useState(false);
     const [targetDomain, setTargetDomain] = useState('');
     const confirm = useConfirm();
+
+    // Full Server Transfer dialog state
+    const [fullTransferOpen, setFullTransferOpen] = useState(false);
+    const [fullTransferTargetIp, setFullTransferTargetIp] = useState('');
+    const [fullTransferSshKey, setFullTransferSshKey] = useState('');
+    const [fullTransferSshPassword, setFullTransferSshPassword] = useState('');
+    const [fullTransferPublicDomain, setFullTransferPublicDomain] = useState('');
+    const [fullTransferSending, setFullTransferSending] = useState(false);
+    const [fullTransferShowKey, setFullTransferShowKey] = useState(false);
 
     // Grouping structure for DnD
     const [groupedServices, setGroupedServices] = useState<Record<string, any[]>>({});
@@ -233,6 +246,54 @@ export default function TransfersPage() {
         }
     };
 
+    const handleFullTransfer = async () => {
+        if (!fullTransferTargetIp.trim()) {
+            toast.error('Target server IP is required');
+            return;
+        }
+        if (!fullTransferSshKey.trim() && !fullTransferSshPassword.trim()) {
+            toast.error('SSH key or password is required for FULL server transfer');
+            return;
+        }
+
+        const ok = await confirm({
+            title: 'Start Full Server Transfer?',
+            message: `This will transfer the entire platform to ${fullTransferTargetIp}. The source server will be decommissioned after completion. This action is irreversible within the rollback window.`,
+            variant: 'destructive',
+            confirmText: 'Start Full Transfer',
+        });
+        if (!ok) return;
+
+        setFullTransferSending(true);
+        try {
+            const payload: any = {
+                transfer_type: 'FULL',
+                target_server_ip: fullTransferTargetIp.trim(),
+            };
+            if (fullTransferSshKey.trim()) payload.target_ssh_key = fullTransferSshKey.trim();
+            if (fullTransferSshPassword.trim()) payload.target_ssh_password = fullTransferSshPassword.trim();
+            if (fullTransferPublicDomain.trim()) payload.target_public_domain = fullTransferPublicDomain.trim();
+
+            await api.post('/transfers/', payload);
+            toast.success(`Full server transfer initiated to ${fullTransferTargetIp}`);
+            setFullTransferOpen(false);
+            resetFullTransferForm();
+            fetchTransfers();
+        } catch (error: any) {
+            toast.error(parseApiError(error, 'Full transfer request failed'));
+        } finally {
+            setFullTransferSending(false);
+        }
+    };
+
+    const resetFullTransferForm = () => {
+        setFullTransferTargetIp('');
+        setFullTransferSshKey('');
+        setFullTransferSshPassword('');
+        setFullTransferPublicDomain('');
+        setFullTransferShowKey(false);
+    };
+
     const renderItemIcon = (type: string, itemType: string) => {
         if (itemType === 'addon') return <Database className="w-4 h-4 text-blue-500" />;
         if (type === 'template') return <LayoutTemplate className="w-4 h-4 text-emerald-500" />;
@@ -273,6 +334,15 @@ export default function TransfersPage() {
                                 className="bg-transparent text-[11px] text-violet-300 placeholder:text-zinc-600 outline-none w-40"
                             />
                         </div>
+                        <Button 
+                            variant="outline" 
+                            size="sm"
+                            className="h-8 rounded-full border-amber-500/30 bg-amber-500/10 text-xs font-semibold text-amber-400 hover:bg-amber-500/20"
+                            onClick={() => setFullTransferOpen(true)}
+                        >
+                            <ArrowRightLeft className="w-3.5 h-3.5 mr-1.5" />
+                            Full Server Transfer
+                        </Button>
                         <Button 
                             variant="outline" 
                             size="sm"
@@ -447,6 +517,91 @@ export default function TransfersPage() {
                     </div>
                 )}
             </div>
+
+            {/* Full Server Transfer Dialog */}
+            <Dialog open={fullTransferOpen} onOpenChange={(open) => { setFullTransferOpen(open); if (!open) resetFullTransferForm(); }}>
+                <DialogContent className="sm:max-w-[520px]">
+                    <DialogHeader>
+                        <DialogTitle className="flex items-center gap-2">
+                            <ArrowRightLeft className="w-5 h-5 text-amber-400" />
+                            Full Server Transfer
+                        </DialogTitle>
+                        <DialogDescription>
+                            Transfer the entire platform to another master node. The source server will be decommissioned after completion.
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    <div className="space-y-4 py-2">
+                        <div className="space-y-2">
+                            <Label htmlFor="ft-target-ip">Target Server IP <span className="text-red-400">*</span></Label>
+                            <Input
+                                id="ft-target-ip"
+                                placeholder="e.g. 203.0.113.50"
+                                value={fullTransferTargetIp}
+                                onChange={(e) => setFullTransferTargetIp(e.target.value)}
+                            />
+                            <p className="text-[11px] text-zinc-500">Public or private IP of the new master node.</p>
+                        </div>
+
+                        <div className="space-y-2">
+                            <Label htmlFor="ft-ssh-key">SSH Private Key</Label>
+                            <div className="relative">
+                                <Textarea
+                                    id="ft-ssh-key"
+                                    placeholder="-----BEGIN RSA PRIVATE KEY-----&#10;...&#10;-----END RSA PRIVATE KEY-----"
+                                    value={fullTransferSshKey}
+                                    onChange={(e) => setFullTransferSshKey(e.target.value)}
+                                    rows={4}
+                                    className="font-mono text-[11px] pr-10"
+                                />
+                                <button
+                                    type="button"
+                                    onClick={() => setFullTransferShowKey(!fullTransferShowKey)}
+                                    className="absolute right-3 top-3 text-zinc-500 hover:text-zinc-300"
+                                >
+                                    {fullTransferShowKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                                </button>
+                            </div>
+                            <p className="text-[11px] text-zinc-500">PEM-encoded private key for SSH access to the target.</p>
+                        </div>
+
+                        <div className="space-y-2">
+                            <Label htmlFor="ft-ssh-password">SSH Password</Label>
+                            <Input
+                                id="ft-ssh-password"
+                                type="password"
+                                placeholder="Leave blank if using key-based auth"
+                                value={fullTransferSshPassword}
+                                onChange={(e) => setFullTransferSshPassword(e.target.value)}
+                            />
+                        </div>
+
+                        <div className="space-y-2">
+                            <Label htmlFor="ft-public-domain">Target Platform Domain (optional)</Label>
+                            <Input
+                                id="ft-public-domain"
+                                placeholder="e.g. new-platform.example.com"
+                                value={fullTransferPublicDomain}
+                                onChange={(e) => setFullTransferPublicDomain(e.target.value)}
+                            />
+                            <p className="text-[11px] text-zinc-500">If set, service domains will be remapped to this base domain on the target.</p>
+                        </div>
+                    </div>
+
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setFullTransferOpen(false)} disabled={fullTransferSending}>
+                            Cancel
+                        </Button>
+                        <Button
+                            variant="destructive"
+                            onClick={handleFullTransfer}
+                            disabled={fullTransferSending || !fullTransferTargetIp.trim()}
+                        >
+                            {fullTransferSending ? 'Starting...' : 'Start Full Transfer'}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </main>
     );
 }

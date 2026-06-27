@@ -20,6 +20,7 @@ import { OAuthTab } from "@/components/settings/OAuthTab";
 import { GitHubIntegrationCard } from "@/components/settings/GitHubIntegrationCard";
 import { GitLabIntegrationCard } from "@/components/settings/GitLabIntegrationCard";
 import { BitbucketIntegrationCard } from "@/components/settings/BitbucketIntegrationCard";
+import { WebhookConfigCard } from "@/components/settings/WebhookConfigCard";
 import { CloudStorageTab } from "@/components/settings/CloudStorageTab";
 import BackupKeysTab from "@/components/settings/BackupKeysTab";
 import { Switch } from "@/components/ui/switch";
@@ -1313,6 +1314,7 @@ export default function SettingsPage() {
               <GitHubIntegrationCard />
               <GitLabIntegrationCard />
               <BitbucketIntegrationCard />
+              <WebhookConfigCard />
               <OAuthTab />
           </div>
         </TabsContent>
