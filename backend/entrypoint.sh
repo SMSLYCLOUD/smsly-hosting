@@ -132,7 +132,9 @@ setup_social_apps_nonfatal() {
 
 ensure_caddy_config_writable() {
     if [ -d /caddy-config ]; then
-        # Try chmod first (fast path, works if uid 1000 already owns it).
+        # Try chown first (works if container runs with --privileged or as root).
+        chown -R 1000:1000 /caddy-config 2>/dev/null || true
+        # Try chmod (fast path, works if uid 1000 already owns it).
         chmod -R u+rwX,g+rwX /caddy-config 2>/dev/null || true
         find /caddy-config -type d -exec chmod 2775 {} + 2>/dev/null || true
         # Verify write access with a probe file. If it fails, the host
