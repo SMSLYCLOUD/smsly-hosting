@@ -333,8 +333,8 @@ def _restrict_ssh_key_to_master_ip(ssh, server: ManagedServer) -> None:
         server.ssh_key = priv_key_pem
         server.save(update_fields=['ssh_key', 'updated_at'])
         _append_log(server, f"🔒 IP-restricted SSH key added (from=\"{master_ip}\")")
-        except Exception as exc:
-            _append_log(server, f"⚠ IP-restricted SSH key skipped: {exc}")
+    except Exception as exc:
+        _append_log(server, f"⚠ IP-restricted SSH key skipped: {exc}")
 
 
 def _harden_node_ssh(ssh, server: ManagedServer) -> None:
