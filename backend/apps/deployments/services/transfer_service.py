@@ -336,6 +336,7 @@ class ServerTransferService:
         if not reachable and urls:
             reachable = urls
         return reachable
+
     def _local_exec(self, command, timeout=60, raise_on_error=True):
         """Execute a command locally when the target is the local machine."""
         import subprocess as sp
