@@ -170,6 +170,7 @@ class ServerTransferService:
         self.transfer = transfer
         self.ssh = None
         self._uploaded_remote_backup_path = None
+        self._target_transfer_id = None
 
     def _log(self, message):
         """Append a timestamped message to the transfer logs."""
@@ -230,43 +231,36 @@ class ServerTransferService:
 
         # Priority 1: WireGuard mesh VPN (internal, fast)
         if wg_ip and wg_ip != target_ip:
-            if is_lite:
-                add(f"http://{wg_ip}")
-                add(f"http://{wg_ip}:8090")
-            else:
-                add(f"http://{wg_ip}:8090")
-                add(f"http://{wg_ip}")
+            add(f"http://{wg_ip}")
+            add(f"http://{wg_ip}:8090")
 
         # Priority 2: Target IP directly
-        if is_lite:
-            add(f"http://{target_ip}")
-            add(f"http://{target_ip}:8090")
-        else:
-            add(f"http://{target_ip}:8090")
-            add(f"http://{target_ip}")
+        add(f"http://{target_ip}")
+        add(f"http://{target_ip}:8090")
 
         # Priority 3: Public host (if different from target_ip)
         if host and host != target_ip:
-            if is_lite:
-                add(f"http://{host}")
-                add(f"http://{host}:8090")
-            else:
-                add(f"http://{host}:8090")
-                add(f"http://{host}")
+            add(f"http://{host}")
+            add(f"http://{host}:8090")
 
         return urls
 
     def _node_api_request(self, action, method='POST', json=None, params=None, timeout=120):
         """Call an incoming REST endpoint on the target node.
 
-        Replaces SSH-based operations. Uses HMAC V2 auth.
-        Tries multiple candidate URLs (WireGuard, port 8090, public IP)
-        until one succeeds.
+        Replaces SSH-based operations. Uses HMAC V2 auth signed with the
+        TARGET's gateway_secret (matching what the target's middleware verifies).
+        Adds X-SMSLY-Remote-Sync: 1 to bypass middleware HMAC and trigger
+        RemoteSyncHMACAuthentication.
+        Tries multiple candidate URLs with a fast TCP pre-filter.
         """
         target_ip = self.transfer.target_server_ip
         if not target_ip:
             raise RuntimeError("target_server_ip not set on transfer")
-        transfer_id = self.transfer.id
+
+        # Use the target transfer ID if captured from register_incoming,
+        # otherwise fall back to the source transfer ID.
+        transfer_id = self._target_transfer_id or str(self.transfer.id)
         path = f"/api/v1/transfers/{transfer_id}/{action}/"
 
         # Build the exact path the server will see (with query params)
@@ -277,12 +271,18 @@ class ServerTransferService:
             qs = urlencode(params)
             sig_path = f"{path}?{qs}"
 
-        body_str = json.dumps(json).encode() if json else b''
+        body_bytes = json.dumps(json).encode() if json else b''
+
+        # Sign with the TARGET's gateway_secret (not our own).
+        server = self._target_server_record()
+        secret = str(getattr(server, 'gateway_secret', '') or '').strip() if server else ''
+        if not secret:
+            secret = str(getattr(settings, 'GATEWAY_SECRET', '') or getattr(settings, 'SECRET_KEY', '')).strip()
+
         timestamp = str(int(time.time()))
         nonce = secrets.token_hex(16)
-        body_hash = hashlib.sha256(body_str).hexdigest()
+        body_hash = hashlib.sha256(body_bytes).hexdigest()
         raw_sig = f"{method}|{sig_path}|{timestamp}|{nonce}|{body_hash}"
-        secret = str(getattr(settings, 'GATEWAY_SECRET', '') or getattr(settings, 'SECRET_KEY', '')).strip()
         signature = hmac.new(secret.encode(), raw_sig.encode(), hashlib.sha256).hexdigest()
 
         headers = {
@@ -290,11 +290,15 @@ class ServerTransferService:
             'X-Request-Timestamp': timestamp,
             'X-Request-Nonce': nonce,
             'Content-Type': 'application/json',
+            'X-SMSLY-Remote-Sync': '1',
         }
 
         candidate_urls = self._candidate_node_urls()
         if not candidate_urls:
             candidate_urls = [f"http://{target_ip}"]
+
+        # Fast TCP pre-filter to skip dead ports
+        candidate_urls = self._filter_reachable(candidate_urls)
 
         last_error = None
         self._log(f"REST {method} {path} (trying {len(candidate_urls)} URL(s))")
@@ -311,8 +315,27 @@ class ServerTransferService:
 
         raise RuntimeError(f"Node API call to {path} failed on all candidate URLs: {last_error}")
 
-
-
+    @staticmethod
+    def _filter_reachable(urls: list[str], probe_timeout: float = 1.0) -> list[str]:
+        """Pre-filter candidate URLs by fast TCP connect probe. Skip dead endpoints."""
+        import socket as sock_module
+        reachable: list[str] = []
+        for url in urls:
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            host = parsed.hostname or ""
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            if not host:
+                reachable.append(url)
+                continue
+            try:
+                with sock_module.create_connection((host, port), timeout=probe_timeout):
+                    reachable.append(url)
+            except (TimeoutError, OSError):
+                pass
+        if not reachable and urls:
+            reachable = urls
+        return reachable
     def _local_exec(self, command, timeout=60, raise_on_error=True):
         """Execute a command locally when the target is the local machine."""
         import subprocess as sp
@@ -395,11 +418,19 @@ class ServerTransferService:
                 'service_name': self.transfer.service.name if self.transfer.service else None
             }
 
-            # RemoteOrchestrator._request handles Token/HMAC auth and auto-auth via SSH
             resp = orch._request("POST", path, payload=payload, timeout=10)
 
             if resp and resp.status_code in (200, 201):
-                self._log("Target dashboard synchronized successfully.")
+                try:
+                    data = resp.json()
+                    target_id = data.get('id')
+                    if target_id:
+                        self._target_transfer_id = target_id
+                        self._log(f"Target dashboard synchronized (target transfer ID: {target_id}).")
+                    else:
+                        self._log("Target dashboard synchronized (no ID returned).")
+                except Exception:
+                    self._log("Target dashboard synchronized.")
             else:
                 code = resp.status_code if resp else "timeout"
                 self._log(f"Warning: Could not sync target dashboard (HTTP {code}).")
