@@ -394,11 +394,10 @@ services:
     image: registry:2.8.3
     restart: unless-stopped
     ports:
-      # Bind on all interfaces so nodes on the VPN (wg0) can reach it.
-      # The 0.0.0.0 bind also covers the public NIC for Traefik to
-      # terminate the public route. Restrict at the firewall if
-      # additional isolation is needed.
-      - "5000:5000"
+      # Localhost for master's own builds, VPN mesh for nodes.
+      # NOT exposed to the public internet.
+      - "127.0.0.1:5000:5000"
+      - "10.100.0.1:5000:5000"
     environment:
       # No REGISTRY_AUTH — anonymous pulls are fine inside the VPN.
       # Remove the env vars and the auth/htpasswd volume mount.

@@ -92,9 +92,10 @@ services:
     image: registry:2.8.3
     restart: unless-stopped
     ports:
-    # Bind on all interfaces so nodes on the VPN (wg0) can pull images
-    # via the WireGuard mesh IP (e.g. 10.100.0.1:5000).
-    - "5000:5000"
+    # Localhost for master's own builds, VPN mesh for nodes.
+    # NOT exposed to the public internet.
+    - "127.0.0.1:5000:5000"
+    - "10.100.0.1:5000:5000"
     environment:
       REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /var/lib/registry
       REGISTRY_STORAGE_DELETE_ENABLED: "true"
