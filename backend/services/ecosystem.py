@@ -230,7 +230,7 @@ def _detect_addons_from_imports(clone_dir: str) -> dict:
     # Import → addon mapping
     IMPORT_ADDON_MAP = {
         # Python imports
-        "psycopg2": "POSTGRES", "asyncpg": "POSTGRES", "sqlalchemy": "POSTGRES",
+        "psycopg2": "POSTGRES", "asyncpg": "POSTGRES",
         "django.db": "POSTGRES", "databases": "POSTGRES",
         "redis": "REDIS", "aioredis": "REDIS", "celery": "REDIS",
         "rq": "REDIS", "django_redis": "REDIS",
@@ -238,7 +238,7 @@ def _detect_addons_from_imports(clone_dir: str) -> dict:
         "elasticsearch": "ELASTICSEARCH", "opensearchpy": "ELASTICSEARCH",
         "pika": "RABBITMQ", "aio_pika": "RABBITMQ", "kombu": "RABBITMQ",
         "qdrant_client": "QDRANT", "qdrant": "QDRANT",
-        "minio": "MINIO", "boto3": "MINIO",
+        "minio": "MINIO",
         "mysql": "MYSQL", "pymysql": "MYSQL", "aiomysql": "MYSQL",
         # JS/TS imports
         "pg": "POSTGRES", "sequelize": "POSTGRES", "prisma": "POSTGRES",
@@ -2169,14 +2169,14 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
         "MEMCACHED":     ["MEMCACHED_URL", "MEMCACHED_HOST", "MEMCACHE_SERVERS"],
     }
     _ADDON_IMPORT_HINTS: dict[str, list[str]] = {
-        "POSTGRES":      ["psycopg2", "asyncpg", "sqlalchemy", "django.db", "databases", "pg", "sequelize", "prisma", "typeorm", "knex"],
+        "POSTGRES":      ["psycopg2", "asyncpg", "django.db", "databases", "pg", "sequelize", "prisma", "typeorm", "knex"],
         "REDIS":         ["redis", "aioredis", "celery", "rq", "django_redis", "ioredis", "bull", "bullmq"],
         "RABBITMQ":      ["pika", "aio_pika", "kombu", "amqplib"],
         "QDRANT":        ["qdrant_client", "qdrant"],
         "MYSQL":         ["mysql", "pymysql", "aiomysql"],
         "MONGODB":       ["pymongo", "motor", "mongoengine", "mongoose", "mongodb"],
         "ELASTICSEARCH": ["elasticsearch", "opensearchpy", "@elastic/elasticsearch"],
-        "MINIO":         ["minio", "boto3"],
+        "MINIO":         ["minio"],
     }
     for svc in deployable:
         env_map = svc.get("env_vars", {})
@@ -2194,7 +2194,9 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
         _imports = set()
         clone_dir = svc.get("clone_dir") or ""
         if clone_dir and os.path.isdir(clone_dir):
-            for root, _dirs, files in os.walk(clone_dir):
+            _SKIP_DIRS = {"node_modules", ".git", "__pycache__", "venv", ".venv", "dist", "build", ".tox", ".eggs", "vendor", "target"}
+            for root, dirs, files in os.walk(clone_dir):
+                dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
                 for fname in files:
                     if not fname.endswith((".py", ".js", ".ts", ".go", ".rs")):
                         continue
@@ -2213,6 +2215,9 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
                 _addons.append(addon_type)
         if _addons != (svc.get("addons") or []):
             svc["addons"] = _addons
+
+    # 3. Cross-service secret mapping (before per-service loop)
+    _unify_cross_service_secrets(services)
 
     for svc in deployable:
         env_map = svc.get("env_vars", {})
@@ -2277,9 +2282,6 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
                         deps = set()
                     deps.add(auth_name)
                     svc["depends_on"] = sorted(deps)
-
-        # 3. Cross-service secret mapping (specific patterns first)
-        _unify_cross_service_secrets(services) if svc == services[0] else None
 
         # 3a. Global Secret Synchronization
         for key in list(env_map.keys()):
@@ -2452,7 +2454,6 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
         "_API_KEY", "_SECRET_KEY", "_WEBHOOK_SECRET", "_AUTH_TOKEN",
         "_ACCESS_TOKEN", "_ACCESS_KEY", "_PUBLISHABLE_KEY",
         "_PRIVATE_KEY", "_TOKEN", "_PASSWORD", "_SECRET", "_KEY",
-        "_FILE", "_PATH", "_ID",
     )
     _EXTERNAL_PREFIXES = (
         "RESEND_", "SMSMAN_", "FIVESIM_", "COINBASE_", "NOWPAYMENTS_",

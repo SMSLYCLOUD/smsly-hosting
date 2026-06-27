@@ -1215,6 +1215,24 @@ def ecosystem_release_wave_task(
     if not waves or wave_index >= len(waves):
         return {"status": "completed", "waves": len(waves or [])}
 
+    # Wave 0 has no previous wave to check — handle memory gating directly
+    if wave_index == 0:
+        if not _has_enough_memory():
+            self.app.send_task(
+                "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
+                args=[provider_id, waves, 0, recheck_count, max_rechecks, dependencies, deployment_by_repo_key],
+                countdown=_env_int("ECOSYSTEM_WAVE_RECHECK_SECONDS", _WAVE_RECHECK_SECONDS, minimum=5, maximum=30),
+            )
+            return {"status": "deferred", "wave": 0, "reason": "low_memory"}
+        queued = _queue_wave(self.app, waves[0], provider_id, wave_index=0)
+        if len(waves) > 1:
+            self.app.send_task(
+                "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
+                args=[provider_id, waves, 1, 0, max_rechecks, dependencies, deployment_by_repo_key],
+                countdown=_env_int("ECOSYSTEM_WAVE_RECHECK_SECONDS", _WAVE_RECHECK_SECONDS, minimum=5, maximum=120),
+            )
+        return {"status": "released", "wave": 1, "queued": queued}
+
     previous_wave = [str(dep_id) for dep_id in waves[wave_index - 1]]
     deployments = list(Deployment.objects.filter(id__in=previous_wave).values("id", "status"))
     statuses = [dep["status"] for dep in deployments]
