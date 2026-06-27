@@ -955,9 +955,6 @@ def analyze_ecosystem(repos_data: list[dict], github_token: str | None = None, a
         # Log the system prompt
         _log_ecosystem_prompt()
 
-        full_prompt = f"### ECOSYSTEM ARCHITECTURAL BRIEF\n{brief_header}\n\n"
-        full_prompt += "### REPOSITORY DETAILS\n" + "\n".join(repo_summaries)
-
         logger.info("=== INITIAL ANALYSIS PROMPT ===")
         logger.info(f"Prompt length: {len(full_prompt)} characters")
         logger.info("Prompt preview:")
@@ -2386,12 +2383,10 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
     # If a backend has CORS_ALLOWED_ORIGINS or CSRF_TRUSTED_ORIGINS pointing
     # to a non-frontend service (or is empty), point them to the frontend.
     # Search ALL services (including skipped) for a frontend by name first,
-    # then fall back to stack-based detection.
+    # then fall back to stack-based detection (only non-skipped).
     _frontends = [s for s in services if "frontend" in str(s.get("name", "")).lower()]
     if not _frontends:
-        _frontends = [s for s in services if s.get("stack") in ("nextjs", "node", "nuxt") and not s.get("skip")]
-    if not _frontends:
-        _frontends = [s for s in deployable if s.get("stack") in ("nextjs", "node", "nuxt")]
+        _frontends = [s for s in services if s.get("stack") in ("nextjs", "nuxt") and not s.get("skip")]
     if _frontends:
         _fe_name = str(_frontends[0].get("name") or _repo_short_name(_frontends[0])).strip()
         _fe_placeholder = f"{{{{SERVICE:{_fe_name}}}}}"
@@ -2413,6 +2408,17 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
                         should_replace = True
                 if should_replace:
                     env_map[cors_key] = _fe_placeholder
+    else:
+        # No frontend detected — set CORS to wildcard so backends don't
+        # deny all cross-origin requests at runtime.
+        for svc in deployable:
+            env_map = svc.get("env_vars", {})
+            if not isinstance(env_map, dict):
+                continue
+            for cors_key in ("CORS_ALLOWED_ORIGINS", "CSRF_TRUSTED_ORIGINS"):
+                cur = str(env_map.get(cors_key, "")).strip()
+                if not cur or cur in ("{{GENERATE}}", "{{FILL_ME}}"):
+                    env_map[cors_key] = "*"
 
     # 4.54 Fix STRIPE_SECRET_KEY collision
     # Step 3a may have assigned {{SHARED_SECRET:secret_key}} (generic)
@@ -2583,9 +2589,12 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
                             break
                     break
 
-    # 6. Dependency Depth Sorting
+    # 6. Dependency Depth Sorting — only set if AI didn't provide a specific order
     # Auth (10) > Core (20) > Others (50)
     for svc in deployable:
+        current_order = svc.get("deploy_order")
+        if current_order is not None and current_order != 99:
+            continue  # AI set a specific order, respect it
         order = 50
         if _is_auth_service(svc):
             order = 10

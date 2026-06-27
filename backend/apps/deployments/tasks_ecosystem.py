@@ -46,7 +46,7 @@ _PLAN_OPTIONAL_KEYS = frozenset({"wave_size", "manifest", "name", "description",
 
 _SERVICE_REQUIRED_KEYS = frozenset({"name"})
 _SERVICE_OPTIONAL_KEYS = frozenset({"build", "port", "depends_on", "skip", "env", "env_vars", "repo", "branch", "image", "addons", "stack", "deploy_order", "dockerfile", "cmd", "entrypoint", "volumes", "networks", "restart", "deploy", "labels"})
-_SERVICE_VALID_BUILDS = frozenset({"nixpacks", "dockerfile", "image", "static"})
+_SERVICE_VALID_BUILDS = frozenset({"nixpacks", "dockerfile", "image", "static", "docker-compose"})
 
 _SMSLY_CORE_HINTS = frozenset({
     "smsly-core",
