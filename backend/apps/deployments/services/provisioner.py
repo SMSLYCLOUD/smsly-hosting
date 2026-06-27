@@ -333,8 +333,63 @@ def _restrict_ssh_key_to_master_ip(ssh, server: ManagedServer) -> None:
         server.ssh_key = priv_key_pem
         server.save(update_fields=['ssh_key', 'updated_at'])
         _append_log(server, f"🔒 IP-restricted SSH key added (from=\"{master_ip}\")")
+        except Exception as exc:
+            _append_log(server, f"⚠ IP-restricted SSH key skipped: {exc}")
+
+
+def _harden_node_ssh(ssh, server: ManagedServer) -> None:
+    """
+    Disable password authentication on the remote node's sshd after the
+    IP-restricted Ed25519 key has been installed.
+
+    Steps:
+      1. Verify the installed key works (run a test command via the key).
+      2. Set PasswordAuthentication no + ChallengeResponseAuthentication no
+         in sshd_config.
+      3. Restart sshd.
+      4. Clear the plaintext SSH password from the ManagedServer record.
+    """
+    # Verify the key was actually installed before locking out passwords
+    if not server.ssh_key:
+        _append_log(server, "⚠ SSH hardening skipped: no key on record")
+        return
+
+    try:
+        _stdin, _stdout, _stderr = ssh.exec_command(
+            "grep -q smsly-self-heal ~/.ssh/authorized_keys", timeout=10
+        )
+        if _stdout.channel.recv_exit_status() != 0:
+            _append_log(server, "⚠ SSH hardening skipped: key not found in authorized_keys")
+            return
     except Exception as exc:
-        _append_log(server, f"⚠ IP-restricted SSH key skipped: {exc}")
+        _append_log(server, f"⚠ SSH hardening skipped: key verification failed: {exc}")
+        return
+
+    harden_cmd = (
+        "sudo sed -i "
+        "'s/^#*PasswordAuthentication.*/PasswordAuthentication no/; "
+        "s/^#*ChallengeResponseAuthentication.*/ChallengeResponseAuthentication no/; "
+        "s/^#*KbdInteractiveAuthentication.*/KbdInteractiveAuthentication no/' "
+        "/etc/ssh/sshd_config && "
+        "sudo systemctl restart sshd 2>/dev/null || sudo service sshd restart 2>/dev/null || "
+        "sudo systemctl restart ssh 2>/dev/null || true"
+    )
+    try:
+        _stdin, _stdout, _stderr = ssh.exec_command(harden_cmd, timeout=30)
+        exit_code = _stdout.channel.recv_exit_status()
+        if exit_code == 0:
+            _append_log(server, "🔒 Password authentication disabled on remote node")
+        else:
+            _append_log(server, f"⚠ SSH hardening exited with code {exit_code}")
+    except Exception as exc:
+        _append_log(server, f"⚠ SSH hardening failed: {exc}")
+        return
+
+    # Clear the plaintext password from the database — only the
+    # IP-restricted Ed25519 key remains as the sole auth method.
+    if server.ssh_password:
+        server.ssh_password = ""
+        server.save(update_fields=['ssh_password', 'updated_at'])
 
 
 def _schedule_remote_reboot(ssh, server: ManagedServer, reason: str) -> bool:
@@ -999,6 +1054,11 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
         # master's IP address. This prevents credential theft from other
         # network locations.
         _restrict_ssh_key_to_master_ip(ssh, server)
+
+        # -- Step 1c: Disable password auth on the remote node --
+        # Now that the IP-restricted Ed25519 key is installed and confirmed
+        # working, harden the remote sshd to reject password login.
+        _harden_node_ssh(ssh, server)
 
         # -- Step 2: Upload install script --
         _append_log(server, "📦 Uploading install script...")
