@@ -1579,14 +1579,27 @@ if __name__ == '__main__':
 
     def _verify_between_servers(self):
         """
-        Verify basic TCP reachability between source and target servers via REST API.
+        Verify connectivity between source and target servers.
+        For SERVICE transfers, uses the REST API on the target.
+        For FULL transfers, checks TCP/22.
         """
         source_ip = str(getattr(self.transfer, 'source_server_ip', '') or '').strip()
         target_ip = str(getattr(self.transfer, 'target_server_ip', '') or '').strip()
         if not source_ip or not target_ip:
             return
 
-        # Local controller -> target TCP reachability
+        if self.transfer.transfer_type == 'SERVICE':
+            # SERVICE transfers use REST API — verify target is reachable via API
+            try:
+                result = self._node_api_request('incoming/ensure-docker', timeout=10)
+                if result.get('docker_available'):
+                    logger.info("Connectivity check passed: controller -> %s (API reachable)", target_ip)
+                    return
+            except Exception as exc:
+                logger.warning("Connectivity check failed: controller -> %s (API unreachable: %s)", target_ip, exc)
+            return
+
+        # FULL transfers: check TCP/22
         try:
             with socket.create_connection((target_ip, 22), timeout=5):
                 logger.info("Connectivity check passed: controller -> %s:22", target_ip)

@@ -409,7 +409,9 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
             and target_server_ip in local_ips
         )
 
-        if not target_is_local and not target_ssh_key and not target_ssh_password:
+        if transfer_type == 'SERVICE':
+            pass  # SERVICE transfers use the REST API — no SSH needed
+        elif not target_is_local and not target_ssh_key and not target_ssh_password:
             logger.warning(f"Transfer failed: No SSH credentials found for target {target_server_ip}")
             return Response(
                 {
