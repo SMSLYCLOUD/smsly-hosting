@@ -42,10 +42,10 @@ _ADDON_ENV_ALIASES = {
 }
 
 _PLAN_REQUIRED_KEYS = frozenset({"services"})
-_PLAN_OPTIONAL_KEYS = frozenset({"wave_size", "manifest", "name", "description"})
+_PLAN_OPTIONAL_KEYS = frozenset({"wave_size", "manifest", "name", "description", "addons", "deploy_order", "deploy_sequence", "metadata", "version"})
 
 _SERVICE_REQUIRED_KEYS = frozenset({"name"})
-_SERVICE_OPTIONAL_KEYS = frozenset({"build", "port", "depends_on", "skip", "env", "repo", "branch", "image"})
+_SERVICE_OPTIONAL_KEYS = frozenset({"build", "port", "depends_on", "skip", "env", "env_vars", "repo", "branch", "image", "addons", "stack", "deploy_order", "dockerfile", "cmd", "entrypoint", "volumes", "networks", "restart", "deploy", "labels"})
 _SERVICE_VALID_BUILDS = frozenset({"nixpacks", "dockerfile", "image", "static"})
 
 _SMSLY_CORE_HINTS = frozenset({
