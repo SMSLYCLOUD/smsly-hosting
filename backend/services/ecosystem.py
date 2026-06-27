@@ -715,8 +715,17 @@ ECOSYSTEM_PROMPT = """You are the Supreme DevOps Architect of the CloudNeuron AI
     - Fields typed as `SecretStr`, `SecretBytes`, `stq`, `int`, `bool` without a default value are REQUIRED and MUST be included.
     - Even unusual var names like `API_KEY_SALT`, `POLICY_TO_AUDIT_SECRET`, `GATEWAY_TO_PLATFORM_SECRET` are real vars used by the code — include them.
 
+    ### PORT AND HOST DETECTION:
+    You MUST read each service's Dockerfile, docker-compose.yml, package.json, or settings to determine the CORRECT port.
+    - If Dockerfile has `EXPOSE 8080`, the port is 8080.
+    - If package.json has `"start": "node server.js"` and config.js has `PORT=4000`, the port is 4000.
+    - If settings.py has `PORT = 8000`, the port is 8000.
+    - If docker-compose.yml has `ports: ["5000:5000"]`, the port is 5000.
+    - For internal service-to-service URLs, use the TARGET service's detected port: `http://target-service-name:TARGET_PORT`.
+    - NEVER guess ports. NEVER use random ports. Read the actual config files.
+
     ### CRITICAL RULES:
-    1. EXHAUSTIVE RESOLUTION: Never leave an environment variable empty. Include EVERY var from the "Expected Env Vars" list below.
+    1. EXHAUSTIVE RESOLUTION: NEVER leave an environment variable empty or without a concrete value. EVERY single var MUST have a real, meaningful value. You are a deep code analyst — read the Dockerfile, config files, settings, and source code to determine the correct value for EVERY variable.
     2. DETERMINISTIC LINKING: Use {{SERVICE:repo-name}} for service URLs. For addons, use the appropriate placeholder: {{POSTGRES_URL}} for PostgreSQL, {{REDIS_URL}} for Redis, {{RABBITMQ_URL}} for RabbitMQ/AMQP, {{QDRANT_URL}} for Qdrant/vector DBs, {{MYSQL_URL}} for MySQL/MariaDB, {{MONGODB_URL}} for MongoDB, {{ELASTICSEARCH_URL}} for Elasticsearch/OpenSearch, {{MINIO_URL}} for MinIO/S3, {{MEMCACHED_URL}} for Memcached. For secrets, set "generate": true.
     3. DEPLOY ORDER: Rank services by dependency depth. Infrastructure -> Core APIs -> Background Workers -> Frontends.
     4. STRICT TYPE CONSTRAINTS — ALL array fields must contain ONLY strings, NEVER objects/dicts. Violating this will crash the deployment system.
@@ -732,7 +741,15 @@ ECOSYSTEM_PROMPT = """You are the Supreme DevOps Architect of the CloudNeuron AI
        - MEMCACHED_URL, MEMCACHED_HOST present → declare "MEMCACHED", set to {{MEMCACHED_URL}}
     6. EXTERNAL API KEYS: For service-specific external API keys (RESEND_API_KEY, STRIPE_SECRET_KEY, PAYSTACK_SECRET_KEY, COINBASE_API_KEY, etc.), set them to {{GENERATE}} — a random placeholder will be provided at deploy time. Do NOT use {{SHARED_SECRET:...}} for these.
     7. PLATFORM_TO_*_SECRET: These are external service keys (PLATFORM_TO_AI_SECRET, PLATFORM_TO_CRM_SECRET, etc.) — set them to {{GENERATE}} for random placeholders.
-    8. ALL VARS MUST HAVE VALUES: NEVER leave any environment variable empty or without a value. Every single var MUST be filled with a real value, placeholder, or sentinel. If you cannot determine the value, use {{GENERATE}} for secrets/keys, {{SERVICE:repo-name}} for URLs, {{SHARED_SECRET:name}} for shared secrets, or a sensible default (e.g. "localhost", "3000", "false", "info").
+    8. ZERO EMPTY VARS POLICY: You are a DEEP CODE ANALYST. For EVERY env var:
+       - Read the service's actual config files, Dockerfile, docker-compose.yml, package.json, settings.py, .env.example to determine the REAL value.
+       - PORT values MUST come from the actual config (Dockerfile EXPOSE, docker-compose ports, config files) — NEVER random.
+       - HOST values MUST be the actual service name for internal communication (e.g., "postgres", "redis", "smsly-core-api") — NOT "localhost".
+       - URL values MUST use the correct service name and port (e.g., http://smsly-core-api:8000) — NOT placeholders.
+       - DATABASE names MUST be specific to the service (e.g., smsly_core_db, smsly_policy_db) — NOT generic "default".
+       - LOG_LEVEL, NODE_ENV, DEBUG etc. MUST match what the config files show (e.g., if settings.py has DEBUG=False, use "false").
+       - ONLY use {{GENERATE}} for EXTERNAL API keys where you truly have no source code to read. NEVER use {{GENERATE}} for internal infra values.
+       - If a var has a default in the code (e.g., `port: int = 3000`), use that default value as a string.
 
     ### STRICT TYPE RULES — VIOLATIONS WILL CRASH THE SYSTEM:
     - "depends_on" MUST be an array of strings ONLY. NEVER objects. WRONG: [{"name": "svc-a"}] RIGHT: ["svc-a"]
@@ -2635,9 +2652,9 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
 
 def _ensure_100_percent_env_coverage(services: list[dict]):
     """
-    Ensure every env var has a value. Empty secrets get random values.
-    Empty non-secret vars get realistic placeholder values based on
-    their name (e.g. PORT→3000, HOST→localhost, URL→placeholder).
+    Ensure every env var has a value. This is the LAST RESORT fallback.
+    The AI should have filled everything intelligently from code analysis.
+    Only external API keys get {{GENERATE}}.
     """
     _ADDON_URL_KEYS = {
         "DATABASE_URL", "POSTGRES_URL", "POSTGRES_DSN", "PGHOST",
@@ -2650,12 +2667,10 @@ def _ensure_100_percent_env_coverage(services: list[dict]):
         "MINIO_ENDPOINT", "MINIO_HOST", "S3_ENDPOINT_URL", "S3_HOST",
         "MEMCACHED_URL", "MEMCACHED_HOST", "MEMCACHE_SERVERS",
     }
-    _PORT_KEYS = {"PORT", "SERVER_PORT", "APP_PORT", "WORKER_PORT", "LISTEN_PORT"}
-    _HOST_KEYS = {"HOST", "SERVER_HOST", "APP_HOST", "BIND_HOST", "LISTEN_HOST", "REDIS_HOST", "PGHOST", "MYSQL_HOST", "MONGODB_HOST", "ELASTICSEARCH_HOST", "ELASTIC_HOST", "RABBITMQ_HOST", "MINIO_HOST", "MEMCACHED_HOST", "OPENSEARCH_HOST"}
-    _URL_KEYS = {"URL", "API_URL", "BASE_URL", "BACKEND_URL", "FRONTEND_URL", "SERVICE_URL", "CALLBACK_URL", "WEBHOOK_URL", "HEALTH_URL"}
-
     for svc in services:
         env_map = svc.get("env_vars", {})
+        svc_port = str(svc.get("port") or 3000)
+        svc_name = str(svc.get("name") or "service")
 
         for key in list(env_map.keys()):
             val = env_map.get(key)
@@ -2664,54 +2679,10 @@ def _ensure_100_percent_env_coverage(services: list[dict]):
                     continue
 
                 key_upper = key.upper()
-                if any(k in key_upper for k in ["SECRET", "KEY", "TOKEN", "PASSWORD", "AUTH_HASH"]):
+                if any(k in key_upper for k in ["SECRET", "KEY", "TOKEN", "PASSWORD", "AUTH_HASH", "SALT"]):
                     env_map[key] = "{{GENERATE}}"
-                elif key_upper in _PORT_KEYS:
-                    env_map[key] = "3000"
-                elif key_upper in _HOST_KEYS:
-                    env_map[key] = "localhost"
-                elif key_upper in _URL_KEYS:
-                    env_map[key] = f"http://localhost:3000"
-                elif key_upper == "DEBUG":
-                    env_map[key] = "false"
-                elif key_upper == "NODE_ENV":
-                    env_map[key] = "production"
-                elif key_upper == "ENV":
-                    env_map[key] = "production"
-                elif key_upper == "LOG_LEVEL":
-                    env_map[key] = "info"
-                elif key_upper == "WORKERS":
-                    env_map[key] = "2"
-                elif key_upper == "TIMEOUT":
-                    env_map[key] = "30"
-                elif key_upper == "MAX_RETRIES":
-                    env_map[key] = "3"
-                elif "NAME" in key_upper:
-                    env_map[key] = "default"
-                elif "PATH" in key_upper:
-                    env_map[key] = "/data"
-                elif "ID" in key_upper:
-                    env_map[key] = "1"
-                elif "SCHEMA" in key_upper:
-                    env_map[key] = "public"
-                elif "REGION" in key_upper:
-                    env_map[key] = "us-east-1"
-                elif "FORMAT" in key_upper:
-                    env_map[key] = "json"
-                elif "MODE" in key_upper:
-                    env_map[key] = "production"
-                elif "LEVEL" in key_upper:
-                    env_map[key] = "info"
-                elif "TYPE" in key_upper:
-                    env_map[key] = "default"
-                elif "PROTOCOL" in key_upper:
-                    env_map[key] = "https"
-                elif "FROM" in key_upper or "TO" in key_upper:
-                    env_map[key] = "noreply@example.com"
-                elif "CORS" in key_upper:
-                    env_map[key] = "*"
-                elif "ORIGIN" in key_upper:
-                    env_map[key] = "http://localhost:3000"
+                elif "CORS" in key_upper or "ORIGIN" in key_upper:
+                    env_map[key] = f"http://localhost:{svc_port}"
                 else:
                     env_map[key] = "{{GENERATE}}"
 
