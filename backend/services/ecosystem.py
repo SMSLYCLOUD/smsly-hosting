@@ -3031,17 +3031,6 @@ def _scan_and_analyze_impl(token: str, ai_provider: str | None = None, selected_
                     if service_repo:
                         covered_repos_in_plan.add(service_repo)
 
-                    is_existing = False
-                    if existing_services:
-                        for s in existing_services:
-                            if s.get('name', '').lower() == service_name:
-                                is_existing = True
-                                break
-                            s_repo = (s.get('repository_url') or '').lower()
-                            if s_repo and (service_repo in s_repo or s_repo in service_repo):
-                                is_existing = True
-                                break
-
                     # Ensure all critical fields are strings or can be converted to strings
                     safe_service = {
                         "name": str(service.get("name", f"service-{i}")),
@@ -3051,7 +3040,7 @@ def _scan_and_analyze_impl(token: str, ai_provider: str | None = None, selected_
                         "addons": [str(a) for a in service.get("addons", [])],
                         "depends_on": [str(d) for d in service.get("depends_on", [])],
                         "deploy_order": _safe_order(service.get("deploy_order"), 50),
-                        "skip": is_existing or bool(service.get("skip", False))
+                        "skip": bool(service.get("skip", False))
                     }
                     final_plan["services"].append(safe_service)
                     logger.info(f"Successfully processed service: {safe_service['name']} (skip={safe_service['skip']})")
