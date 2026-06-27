@@ -135,7 +135,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_permissions(self):
-        if self.action == 'register_incoming':
+        if self.action == 'register_incoming' or self.action.startswith('incoming_'):
             return [permissions.AllowAny()]
         return super().get_permissions()
 
