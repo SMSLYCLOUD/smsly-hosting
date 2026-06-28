@@ -299,6 +299,20 @@ class WireGuardService:
             mesh=mesh, server=server, is_local=is_local,
         ).first()
         if existing:
+            # For remote peers, verify the public key is still current.
+            # Re-provisioning generates new WG keys on disk — if we don't
+            # refresh, the master's peer config holds a stale key and the
+            # handshake will fail silently (0 bytes received, 0 handshakes).
+            if not is_local and server:
+                current_key = cls._fetch_server_wg_public_key(server)
+                if current_key and current_key != existing.public_key:
+                    logger.warning(
+                        "WG public key changed for %s: %s → %s (re-provisioned?)",
+                        server.host, existing.public_key[:16], current_key[:16],
+                    )
+                    existing.public_key = current_key
+                    existing.private_key = ""  # server-managed
+                    existing.save(update_fields=["public_key", "private_key", "updated_at"])
             logger.info(f"Peer already exists for server {server or 'local'}")
             return existing
 
