@@ -147,7 +147,6 @@ def _get_master_mesh_ip() -> str:
     Lite agents must use the mesh IP for database, RabbitMQ, and Redis
     connections because the public IP is typically firewalled.
     """
-    # 1. Try environment variable fallback first
     env_mesh = os.environ.get("MASTER_MESH_IP")
     if env_mesh:
         return env_mesh.strip()
@@ -155,10 +154,8 @@ def _get_master_mesh_ip() -> str:
     from apps.deployments.models_core import ManagedServer
     primary = ManagedServer.get_primary()
     if not primary:
-        # Fallback to standard 10.100.0.1 if no primary server exists yet in DB (e.g. bootstrapping or tests)
         return "10.100.0.1"
 
-    # Try "default" mesh first to be extremely robust
     try:
         peer = primary.wg_peers.filter(mesh__name="default", is_active=True).first()
         if peer and peer.wg_address:
@@ -176,11 +173,47 @@ def _get_master_mesh_ip() -> str:
     except Exception:
         pass
 
-    # Fallback to standard 10.100.0.1 if is_primary and we don't have a database mesh IP yet
     if primary.is_primary:
         return "10.100.0.1"
-
     return "10.100.0.1"
+
+
+def _get_master_wg_pubkey() -> str:
+    """Return the WireGuard public key of the primary/master server.
+
+    This key is injected into node install scripts so the node can add the
+    master as a WireGuard peer immediately (before the async deploy_mesh_task
+    runs), enabling the handshake to reach 10.100.0.1:5432 for migrations.
+    """
+    env_pubkey = os.environ.get("MASTER_WG_PUBKEY")
+    if env_pubkey:
+        return env_pubkey.strip()
+
+    try:
+        from apps.deployments.models_core import ManagedServer
+        primary = ManagedServer.get_primary()
+        if primary:
+            peer = primary.wg_peers.filter(mesh__name="default", is_active=True).first()
+            if peer and peer.public_key:
+                return str(peer.public_key).strip()
+    except Exception:
+        pass
+
+    # Fallback: read from the host's WireGuard public key file
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["cat", "/etc/wireguard/public.key"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            key = result.stdout.strip()
+            if key:
+                return key
+    except Exception:
+        pass
+
+    return ""
 
 
 
@@ -262,10 +295,13 @@ def build_agent_lite_install_env(
         server.save(update_fields=["gateway_secret"])
         logger.info("Generated unique GATEWAY_SECRET for agent %s", server.id)
 
+    master_wg_pubkey = _get_master_wg_pubkey()
+
     return (
         {
             "MASTER_IP": resolved_master_ip,
             "MASTER_MESH_IP": master_mesh_ip,
+            "MASTER_WG_PUBKEY": master_wg_pubkey,
             "MASTER_DB_USER": master_db_user,
             "MASTER_DB_PASSWORD": master_db_pass,
             "MASTER_MQ_PASSWORD": master_mq_pass,
@@ -314,17 +350,19 @@ def _restrict_ssh_key_to_master_ip(ssh, server: ManagedServer) -> None:
     # pub_key_bytes is "ssh-ed25519 AAAAC3Nz..."
     pub_key_line = pub_key_bytes.strip()
 
-    # Add to authorized_keys with IP restriction
+    # Always replace any existing smsly-self-heal key to guarantee the key on
+    # the node matches the fresh private key we are about to store in the DB.
+    # The old approach (skip if any smsly-self-heal exists) caused a mismatch
+    # after re-provisioning: a stale RSA key with the same comment tag would
+    # prevent the new Ed25519 key from being deployed.
     restricted_line = f'from="{master_ip}" {pub_key_line} smsly-self-heal\n'
     cmd = (
         f'mkdir -p ~/.ssh && chmod 700 ~/.ssh && '
-        f'grep -qF "smsly-self-heal" ~/.ssh/authorized_keys 2>/dev/null || '
+        f'sed -i "/smsly-self-heal/d" ~/.ssh/authorized_keys 2>/dev/null; '
         f'echo {shlex.quote(restricted_line)} >> ~/.ssh/authorized_keys && '
         f'chmod 600 ~/.ssh/authorized_keys'
     )
     try:
-        # Paramiko's exec_command doesn't accept raise_on_error; use
-        # timeout alone and check exit status manually.
         _stdin, _stdout, _stderr = ssh.exec_command(cmd, timeout=15)
         _exit = _stdout.channel.recv_exit_status()
         if _exit != 0:
