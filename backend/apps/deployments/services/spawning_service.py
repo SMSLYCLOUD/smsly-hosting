@@ -80,7 +80,15 @@ class SpawningService:
         for ev in service.env_vars.all():
             env_args += f" -e {shlex.quote(ev.key)}={shlex.quote(ev.value)}"
 
+        login_cmd = ""
+        if getattr(service, 'registry_credential_id', None) and service.registry_credential.is_active:
+            user = shlex.quote(service.registry_credential.username)
+            password = shlex.quote(service.registry_credential.password)
+            reg_url = shlex.quote(service.registry_credential.registry_url.replace("https://", "").replace("http://", "").split("/")[0])
+            login_cmd = f"echo {password} | docker login --username {user} --password-stdin {reg_url}; "
+
         cmd = (
+            f"{login_cmd}"
             f"docker pull {shlex.quote(image)} 2>/dev/null; "
             f"docker rm -f {shlex.quote(name)} 2>/dev/null; "
             f"docker run -d --name {shlex.quote(name)} "
@@ -174,6 +182,16 @@ class SpawningService:
         if config.use_ssl:
             labels[f"traefik.http.routers.{router}.entrypoints"] = "websecure,web"
             labels[f"traefik.http.routers.{router}.tls"] = "true"
+
+        if getattr(service, 'registry_credential_id', None) and service.registry_credential.is_active:
+            try:
+                client.login(
+                    username=service.registry_credential.username,
+                    password=service.registry_credential.password,
+                    registry=service.registry_credential.registry_url.replace("https://", "").replace("http://", "").split("/")[0],
+                )
+            except Exception as e:
+                logger.warning("Local docker login failed: %s", e)
 
         env_vars = {ev.key: ev.value for ev in service.env_vars.all()}
         container = client.containers.run(

@@ -18,6 +18,7 @@ from .views import (
     ServiceViewSet,
     SessionTokenView,
     SystemConfigView,
+    RegistryCredentialViewSet,
 )
 from .views_addons import AddonViewSet
 from .views_analysis import RepoAnalysisView
@@ -94,6 +95,7 @@ router.register(r'scaling', ScalingViewSet, basename='scaling')
 router.register(r'cloud-storage', CloudStorageViewSet, basename='cloud-storage')
 router.register(r'slow-queries', SlowQueryViewSet, basename='slow-query')
 router.register(r'database-replicas', DatabaseReplicaViewSet, basename='database-replica')
+router.register(r'registry-credentials', RegistryCredentialViewSet, basename='registry-credential')
 
 # Nested Router
 # /api/v1/services/{service_pk}/metrics/

@@ -82,6 +82,17 @@ def _validate_docker_image(image: str) -> str:
     return image
 
 
+from apps.deployments.models_registry import RegistryCredential
+
+class RegistryCredentialSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = RegistryCredential
+        fields = ['id', 'name', 'provider', 'registry_url', 'username', 'password', 'is_active', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+        extra_kwargs = {
+            'password': {'write_only': True},
+        }
+
 class RegionSerializer(serializers.ModelSerializer):
     """Serializer for Regions."""
     class Meta:
@@ -136,6 +147,9 @@ class ServiceSerializer(serializers.ModelSerializer):
     server_id = serializers.SerializerMethodField()
     repository_url = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     docker_image = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    registry_credential = serializers.PrimaryKeyRelatedField(
+        queryset=RegistryCredential.objects.all(), required=False, allow_null=True
+    )
     latest_deployment = serializers.SerializerMethodField()
     service_url = serializers.SerializerMethodField()
     project_name = serializers.CharField(
@@ -149,7 +163,22 @@ class ServiceSerializer(serializers.ModelSerializer):
     domain_instances = serializers.SerializerMethodField()
 
     def validate_docker_image(self, value):
-        return _validate_docker_image(value)
+        if not value:
+            return value
+        from apps.deployments.services.registry_validation import validate_image_registry
+        try:
+            user = None
+            if self.instance and self.instance.owner:
+                user = self.instance.owner
+            elif 'request' in self.context and self.context['request'].user.is_authenticated:
+                user = self.context['request'].user
+            
+            class MockService:
+                owner_id = user.id if user else None
+                
+            return validate_image_registry(value, service=MockService())
+        except ValueError as e:
+            raise serializers.ValidationError(str(e))
 
     def validate_name(self, value):
         # SECURITY: Service.name flows into docker container names,

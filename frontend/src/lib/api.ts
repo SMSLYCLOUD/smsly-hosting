@@ -2257,3 +2257,26 @@ export const notificationsApi = {
 };
 
 export const aiAdminApi = { getProviders: async () => { const response = await api.get('/ai/providers/'); return response.data; }, updateProvider: async (provider: string, data: any) => { const response = await api.post('/ai/providers/update/', { provider, ...data }); return response.data; } };
+
+export const registryCredentialsApi = {
+  list: async () => {
+    const response = await api.get('/registry-credentials/');
+    const data = response.data;
+    return Array.isArray(data) ? data : (data?.results || []);
+  },
+  create: async (data: Record<string, unknown>) => {
+    const response = await api.post('/registry-credentials/', data);
+    return response.data;
+  },
+  update: async (id: string, data: Record<string, unknown>) => {
+    const response = await api.patch(`/registry-credentials/${id}/`, data);
+    return response.data;
+  },
+  delete: async (id: string) => {
+    await api.delete(`/registry-credentials/${id}/`);
+  },
+  testConnection: async (id: string) => {
+    const response = await api.post(`/registry-credentials/${id}/test_connection/`);
+    return response.data;
+  }
+};

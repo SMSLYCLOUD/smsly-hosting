@@ -6295,3 +6295,5 @@ class RemoteTriggerView(GenericAPIView):
         except Exception as e:
             logger.exception("Remote trigger failed")
             return Response({"error": str(e)}, status=500)
+ 
+ 

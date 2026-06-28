@@ -2013,11 +2013,19 @@ class PipelineManager:
         # docker-py so this works without the ``docker`` CLI binary.
         _reg_user = PlatformConfig.get_config_value('registry_user') or getattr(settings, 'REGISTRY_USER', '')
         _reg_pass = PlatformConfig.get_config_value('registry_password') or getattr(settings, 'REGISTRY_PASSWORD', '')
+        registry_url = (
+            PlatformConfig.get_config_value('container_registry_url')
+            or getattr(settings, 'CONTAINER_REGISTRY_URL', '') or "registry.smsly.cloud"
+        ).split("://")[-1]
+
+        # Use per-service registry credential if available and active
+        if getattr(self.service, 'registry_credential_id', None) and self.service.registry_credential.is_active:
+            _reg_user = self.service.registry_credential.username
+            _reg_pass = self.service.registry_credential.password
+            if self.service.registry_credential.registry_url:
+                registry_url = self.service.registry_credential.registry_url.replace("https://", "").replace("http://", "").split("/")[0]
+
         if _reg_user and _reg_pass:
-            registry_url = (
-                PlatformConfig.get_config_value('container_registry_url')
-                or getattr(settings, 'CONTAINER_REGISTRY_URL', '') or "registry.smsly.cloud"
-            ).split("://")[-1]
             try:
                 from apps.cloud.docker_client import get_docker_client
                 client = get_docker_client()
