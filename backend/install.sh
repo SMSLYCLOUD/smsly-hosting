@@ -5261,6 +5261,8 @@ ensure_wireguard_mesh() {
 PrivateKey = ${privkey}
 Address = ${mesh_ip}/24
 ListenPort = 51820
+PostUp = sysctl -w net.ipv4.conf.%i.rp_filter=2 net.ipv4.conf.all.rp_filter=2
+PostDown = sysctl -w net.ipv4.conf.all.rp_filter=1
 
 WGCONF
             # If MASTER_WG_PUBKEY is available, add master as a peer immediately.
@@ -5308,6 +5310,8 @@ WGCONF
 PrivateKey = ${privkey}
 Address = ${mesh_ip}/24
 ListenPort = 51820
+PostUp = sysctl -w net.ipv4.conf.%i.rp_filter=2 net.ipv4.conf.all.rp_filter=2
+PostDown = sysctl -w net.ipv4.conf.all.rp_filter=1
 WGCONF
     fi
     systemctl enable --now "wg-quick@${wg_iface}" 2>/dev/null || true
