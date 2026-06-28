@@ -9,6 +9,7 @@ import http.server
 import json
 import os
 import socket
+import socketserver
 import sys
 import time
 import threading
@@ -233,10 +234,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.path == "/health":
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
+            self.send_header("Cache-Control", "no-cache")
             self.end_headers()
-            with _lock:
-                ts = _metrics_cache["ts"]
-                count = _metrics_cache["container_count"]
+            # Read without lock — atomic enough for a health probe.
+            # Avoids blocking when the background collector holds _lock
+            # for 30-60s across 200+ containers.
+            ts = _metrics_cache.get("ts", 0)
+            count = _metrics_cache.get("container_count", 0)
             self.wfile.write(
                 f"OK container_count={count} last_update={int(ts)}\n".encode())
             return
@@ -258,6 +262,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         pass
 
 
+class _ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
+    """Handle each request in a new thread so health checks are never
+    blocked by a slow /metrics write."""
+    daemon_threads = True
+
+
 if __name__ == "__main__":
     t = threading.Thread(target=_background_collector, daemon=True)
     t.start()
@@ -267,7 +277,7 @@ if __name__ == "__main__":
     # HTTP server with auto-restart on failure (port conflict, OOM, etc.)
     while True:
         try:
-            server = http.server.HTTPServer(("0.0.0.0", LISTEN_PORT), Handler)
+            server = _ThreadedHTTPServer(("0.0.0.0", LISTEN_PORT), Handler)
             server.serve_forever()
         except KeyboardInterrupt:
             raise
