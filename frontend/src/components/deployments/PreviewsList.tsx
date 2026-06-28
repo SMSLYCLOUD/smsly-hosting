@@ -3,51 +3,35 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { SafeDeployPanel } from "./SafeDeployPanel";
+import { servicesApi, PreviewEnvironment } from "@/lib/api";
+import { toast } from "@/components/ui/use-toast";
+import { Loader2 } from "lucide-react";
 
 export function PreviewsList({ serviceId }: { serviceId: string }) {
-    const [previews, setPreviews] = useState<any[]>([]);
+    const [previews, setPreviews] = useState<PreviewEnvironment[]>([]);
     const [loading, setLoading] = useState(true);
-    const [selectedPreview, setSelectedPreview] = useState<any | null>(null);
+    const [selectedPreview, setSelectedPreview] = useState<PreviewEnvironment | null>(null);
 
     useEffect(() => {
-        setTimeout(() => {
-            setPreviews([
-                {
-                    id: '123',
-                    branch_name: 'feature/new-billing',
-                    commit_sha: 'a1b2c3d',
-                    status: 'READY',
-                    preview_url: 'https://feature-new-billing--myapp.preview.domain.com',
-                    migration_validation: {
-                        risk_level: 'HIGH',
-                        risk_score: 85,
-                        summary: 'Migration contains destructive operations.',
-                        reasons: ['Contains RemoveField for users.legacy_email', 'Contains RunPython'],
-                        recommendations: ['Separate destructive changes into a contract deployment.', 'Requires manual approval before production merge.'],
-                        requires_manual_approval: true
-                    }
-                },
-                {
-                    id: '124',
-                    branch_name: 'bugfix/header-typo',
-                    commit_sha: 'e4f5g6h',
-                    status: 'READY',
-                    preview_url: 'https://bugfix-header-typo--myapp.preview.domain.com',
-                    migration_validation: {
-                        risk_level: 'LOW',
-                        risk_score: 0,
-                        summary: 'No database schema changes detected.',
-                        reasons: [],
-                        recommendations: [],
-                        requires_manual_approval: false
-                    }
-                }
-            ]);
-            setLoading(false);
-        }, 500);
+        const fetchPreviews = async () => {
+            try {
+                const data = await servicesApi.getPreviews(serviceId);
+                setPreviews(data);
+            } catch (err) {
+                console.error("Failed to load previews:", err);
+                toast({
+                    title: "Error",
+                    description: "Failed to load preview environments",
+                    variant: "destructive",
+                });
+            } finally {
+                setLoading(false);
+            }
+        };
+        fetchPreviews();
     }, [serviceId]);
 
-    if (loading) return <div>Loading previews...</div>;
+    if (loading) return <div className="flex justify-center p-8"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /></div>;
 
     if (selectedPreview) {
         return (
