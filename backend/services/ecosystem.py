@@ -764,7 +764,9 @@ ECOSYSTEM_PROMPT = """You are the Supreme DevOps Architect of the CloudNeuron AI
     - Pydantic snake_case field names are ALWAYS converted to UPPER_CASE env var names (e.g. `platform_api_secret` -> `PLATFORM_API_SECRET`).
     - If a Config class or model_config sets `env_prefix`, that prefix is prepended to ALL field names (e.g. `env_prefix = "RATE_LIMIT_"` + field `platform_api_secret` -> `RATE_LIMIT_PLATFORM_API_SECRET`).
     - The "Critical Config Analysis" section contains the full config file — use it to identify ALL pydantic fields and their types.
-    - Fields typed as `SecretStr`, `SecretBytes`, `str`, `int`, `bool` without a default value are REQUIRED and MUST be included.
+    - Fields typed as `SecretStr`, `SecretBytes`, `str`, `int`, `bool` are REQUIRED.
+    - DO NOT OMIT ANY VARIABLES. You must output EVERY variable detected in the code, EVEN IF it has a default value in the code.
+    - DO NOT OVERRIDE DEVELOPER DEFAULTS. If a Dockerfile, docker-compose.yml, or code file specifies a default value (e.g., `ENV WEB_CONCURRENCY=4`), YOU MUST USE THAT EXACT VALUE (`"4"`). Do not substitute it with what you think is better.
     - Even unusual var names like `API_KEY_SALT`, `POLICY_TO_AUDIT_SECRET`, `GATEWAY_TO_PLATFORM_SECRET` are real vars used by the code — include them.
 
     ### PORT AND HOST DETECTION:
@@ -2986,7 +2988,9 @@ def _ensure_100_percent_env_coverage(services: list[dict]):
                 elif "CORS" in key_upper or "ORIGIN" in key_upper:
                     env_map[key] = f"http://localhost:{svc_port}"
                 else:
-                    env_map[key] = "{{GENERATE}}"
+                    # Do not generate random strings for non-secrets to prevent crashing
+                    # typed configs (like numbers/ints). Leave empty to allow app defaults.
+                    env_map[key] = ""
 
         svc["env_vars"] = env_map
 
