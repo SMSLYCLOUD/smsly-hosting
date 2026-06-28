@@ -2376,10 +2376,14 @@ def _get_s3_client(endpoint='', region='us-east-1',
                    access_key='', secret_key=''):
     """Build a boto3 S3 client with the given credentials."""
     import boto3
+    from botocore.client import Config
     kwargs = {'aws_access_key_id': access_key,
               'aws_secret_access_key': secret_key,
-              'region_name': region}
+              'region_name': region,
+              'config': Config(signature_version='s3v4')}
     if endpoint:
+        if not endpoint.startswith(('http://', 'https://')):
+            endpoint = 'https://' + endpoint
         kwargs['endpoint_url'] = endpoint
     return boto3.client('s3', **kwargs)
 
