@@ -60,7 +60,7 @@ def deep_scan_and_verify_task(self, user_id, repos_data, deploy_plan, ai_provide
                     if normalized in owned_repo_urls:
                         owned = True
                 if not owned:
-                    logger.warning(
+                    logger.debug(
                         "Repo %s not in user's deployed services; proceeding anyway (will be cloned from GitHub)",
                         repo_id or repo_url,
                     )
