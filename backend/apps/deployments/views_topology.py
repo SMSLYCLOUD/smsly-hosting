@@ -315,6 +315,15 @@ class TopologyViewSet(viewsets.GenericViewSet):
                         match_type = "API"
                         evidence = f"Name match: {other.name}"
 
+                    # 1b. Match by {{SERVICE:name}} placeholder (ecosystem plan format)
+                    if not is_match:
+                        pattern = (r'\{\{SERVICE\s*:\s*' + re.escape(other.name)
+                                   + r'\s*\}\}')
+                        if re.search(pattern, val, re.IGNORECASE):
+                            is_match = True
+                            match_type = "API"
+                            evidence = f"SERVICE ref: {other.name}"
+
                     # 2. Match by Mesh IP (10.10.0.x)
                     if not is_match:
                         # Find other's mesh IP if exists

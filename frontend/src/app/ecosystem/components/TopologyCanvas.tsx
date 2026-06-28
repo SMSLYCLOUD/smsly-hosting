@@ -93,18 +93,45 @@ export function TopologyCanvas({ plan, servers, callbacks }: any) {
       // Dependencies as edges
       if (svc.depends_on && svc.depends_on.length > 0) {
         svc.depends_on.forEach((dep: string) => {
-          // Find the target repo matching the dependency string
           const targetSvc = plan.services.find((s: any) => s.repo.includes(dep));
           if (targetSvc) {
             initialEdges.push({
               id: `e-${targetSvc.repo}-${svc.repo}`,
-              source: targetSvc.repo, // Dependency is source
-              target: svc.repo,       // This service depends on it
+              source: targetSvc.repo,
+              target: svc.repo,
               type: 'smoothstep',
               animated: true,
               style: { stroke: '#3b82f6', strokeWidth: 2 },
               markerEnd: { type: MarkerType.ArrowClosed, color: '#3b82f6' },
             });
+          }
+        });
+      }
+
+      // Service-to-service edges from {{SERVICE:name}} env var references
+      if (svc.env_vars) {
+        const serviceRefRe = /\{\{SERVICE\s*:\s*(.+?)\s*\}\}/i;
+        Object.entries(svc.env_vars).forEach(([key, val]: [string, any]) => {
+          const valStr = String(val || '');
+          const match = valStr.match(serviceRefRe);
+          if (match) {
+            const targetName = match[1].trim();
+            const targetSvc = plan.services.find((s: any) => s.repo.includes(targetName) || s.name === targetName);
+            if (targetSvc && targetSvc.repo !== svc.repo) {
+              const edgeId = `e-svc-${svc.repo}-${targetSvc.repo}`;
+              if (!initialEdges.some((e: any) => e.id === edgeId)) {
+                initialEdges.push({
+                  id: edgeId,
+                  source: svc.repo,
+                  target: targetSvc.repo,
+                  type: 'smoothstep',
+                  animated: true,
+                  style: { stroke: '#10b981', strokeWidth: 2 },
+                  markerEnd: { type: MarkerType.ArrowClosed, color: '#10b981' },
+                  label: key,
+                });
+              }
+            }
           }
         });
       }
