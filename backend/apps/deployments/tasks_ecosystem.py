@@ -28,14 +28,14 @@ from apps.deployments.models_addons import Addon  # noqa: E402
 
 # Module-level constants (ecosystem scanning thresholds)
 _MIN_FREE_MEMORY_MB = 256
-_WAVE_RECHECK_SECONDS = 600       # 10 minutes between wave rechecks
-_MAX_WAVE_RECHECKS = 20           # up to ~3 hours of patience
+_WAVE_RECHECK_SECONDS = 1800      # 30 minutes between wave rechecks
+_MAX_WAVE_RECHECKS = 30           # up to ~15 hours of patience
 _MAX_WAVE_SIZE = 5
 _DEFAULT_WAVE_SIZE = 3            # slightly larger default waves
 _VALID_PORT_RANGE = (1, 65535)
 _MAX_CONCURRENT_BUILDS = 3        # allow one more concurrent build
 _ACTIVE_BUILDS_CACHE_KEY = "smsly:ecosystem:active_builds"
-_BUILD_DEFER_SECONDS = 120        # 2 minutes deferral
+_BUILD_DEFER_SECONDS = 300        # 5 minutes deferral
 _DEFERRED_TASK_MAX_RETRIES = 5    # max retries per deferred build
 
 _ADDON_ENV_ALIASES = {
@@ -1321,10 +1321,10 @@ def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provi
 
 @shared_task(
     bind=True, queue='fast',
-    soft_time_limit=900,   # 15 minutes soft
-    time_limit=1200,       # 20 minutes hard
+    soft_time_limit=3600,   # 1 hour soft
+    time_limit=4200,        # 1h 10m hard
     max_retries=_DEFERRED_TASK_MAX_RETRIES,
-    default_retry_delay=120,
+    default_retry_delay=300,
     autoretry_for=(Exception,),
 )
 def ecosystem_deferred_build_task(self, deployment_id: str, provider_id: str, wave_index: int) -> dict:
@@ -1341,7 +1341,7 @@ def ecosystem_deferred_build_task(self, deployment_id: str, provider_id: str, wa
     if active >= max_concurrent:
         # Exponential backoff: base defer × retry count
         retry_count = getattr(self, 'request', {}).get('retries', 0)
-        backoff = min(_BUILD_DEFER_SECONDS * (2 ** retry_count), 1800)
+        backoff = min(_BUILD_DEFER_SECONDS * (2 ** retry_count), 3600)
         self.app.send_task(
             "apps.deployments.tasks_ecosystem.ecosystem_deferred_build_task",
             args=[deployment_id, provider_id, wave_index],
@@ -1364,7 +1364,7 @@ def ecosystem_deferred_build_task(self, deployment_id: str, provider_id: str, wa
     return {"status": "dispatched", "deployment_id": deployment_id}
 
 
-@shared_task(bind=True, queue='fast', soft_time_limit=600, time_limit=900)
+@shared_task(bind=True, queue='fast', soft_time_limit=1800, time_limit=2400)
 def ecosystem_release_wave_task(
     self,
     provider_id: str,
@@ -1529,8 +1529,8 @@ def ecosystem_release_wave_task(
 
 @shared_task(
     bind=True, queue='deploy',
-    soft_time_limit=1800, time_limit=2100,
-    max_retries=3, default_retry_delay=30,
+    soft_time_limit=3600, time_limit=4200,
+    max_retries=3, default_retry_delay=60,
     autoretry_for=(Exception,),
 )
 def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = None) -> dict:
