@@ -5304,32 +5304,29 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
                 # No local key and no key supplied in the request —
                 # check if an imported key matches the backup's key_id.
                 try:
-                    with open(backup.file_path, 'rb') as _probe:
-                        magic = _probe.read(8)
-                    if magic == b'CHUNKEDV2':
-                        _probe.seek(8)
-                        header_key_id = _probe.read(16).hex()
-                        if not BackupService.lookup_key_by_id(header_key_id):
-                            return Response(
-                                {
-                                    'error': (
-                                        'Encryption key required. This backup '
-                                                        'was encrypted on a different '
-                                                        'master. Import the key or '
-                                                        'provide it in the request.'
-                                                    ),
-                                    'error_code': 'ENCRYPTION_KEY_REQUIRED',
-                                    'key_id': header_key_id,
-                                    'remediation': (
-                                        'POST /api/v1/backups/import-key/ with '
-                                                        'key_id and key_material from '
-                                                        'the source master, or send '
-                                                        '"encryption_key" in the '
-                                                        'restore request body.'
-                                                    ),
-                                },
-                                status=status.HTTP_400_BAD_REQUEST,
-                            )
+                    header = BackupService.read_v2_header(backup.file_path)
+                    header_key_id = header['key_id']
+                    if not BackupService.lookup_key_by_id(header_key_id):
+                        return Response(
+                            {
+                                'error': (
+                                    'Encryption key required. This backup '
+                                    'was encrypted on a different '
+                                    'master. Import the key or '
+                                    'provide it in the request.'
+                                ),
+                                'error_code': 'ENCRYPTION_KEY_REQUIRED',
+                                'key_id': header_key_id,
+                                'remediation': (
+                                    'POST /api/v1/backups/import-key/ with '
+                                    'key_id and key_material from '
+                                    'the source master, or send '
+                                    '"encryption_key" in the '
+                                    'restore request body.'
+                                ),
+                            },
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
                 except (OSError, ValueError):
                     pass
 
@@ -5697,29 +5694,26 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
             env_key = os.environ.get('BACKUP_ENCRYPTION_KEY', '').strip()
             if not env_key and not key_provided:
                 try:
-                    with open(backup.file_path, 'rb') as _probe:
-                        magic = _probe.read(8)
-                    if magic == b'CHUNKEDV2':
-                        _probe.seek(8)
-                        header_key_id = _probe.read(16).hex()
-                        if not BackupService.lookup_key_by_id(header_key_id):
-                            return Response(
-                                {
-                                    'error': (
-                                        'Encryption key required. This backup '
-                                        'was encrypted on a different master. '
-                                        'Import the key or provide it in the request.'
-                                    ),
-                                    'error_code': 'ENCRYPTION_KEY_REQUIRED',
-                                    'key_id': header_key_id,
-                                    'remediation': (
-                                        'POST /api/v1/backups/import-key/ with '
-                                        'key_id and key_material from the source master, '
-                                        'or send "encryption_key" in the restore request body.'
-                                    ),
-                                },
-                                status=status.HTTP_400_BAD_REQUEST,
-                            )
+                    header = BackupService.read_v2_header(backup.file_path)
+                    header_key_id = header['key_id']
+                    if not BackupService.lookup_key_by_id(header_key_id):
+                        return Response(
+                            {
+                                'error': (
+                                    'Encryption key required. This backup '
+                                    'was encrypted on a different master. '
+                                    'Import the key or provide it in the request.'
+                                ),
+                                'error_code': 'ENCRYPTION_KEY_REQUIRED',
+                                'key_id': header_key_id,
+                                'remediation': (
+                                    'POST /api/v1/server/backups/import-key/ with '
+                                    'key_id and key_material from the source master, '
+                                    'or send "encryption_key" in the restore request body.'
+                                ),
+                            },
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
                 except (OSError, ValueError):
                     pass
 
@@ -5849,9 +5843,16 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
             error_message=f'Uploaded restore from: {uploaded.name}',
         )
 
+        # Accept optional encryption key for cross-master restore
+        encryption_key = request.data.get('encryption_key', '').strip() or None
+
         # Trigger async restore
         from apps.deployments.tasks import restore_server_backup_task
-        restore_server_backup_task.delay(backup_id=str(backup.id), requesting_user_id=request.user.id)
+        restore_server_backup_task.delay(
+            backup_id=str(backup.id),
+            encryption_key=encryption_key,
+            requesting_user_id=request.user.id,
+        )
 
         return Response({
             'status': 'Restore started from uploaded backup.',
