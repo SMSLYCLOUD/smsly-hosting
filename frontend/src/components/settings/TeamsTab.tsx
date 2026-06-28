@@ -44,10 +44,12 @@ export function TeamsTab() {
     }
   };
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     fetchTeams();
   }, []);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (activeTeamId) {
       fetchMembers(activeTeamId);

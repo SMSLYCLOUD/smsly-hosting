@@ -1728,6 +1728,8 @@ export const backupsApi = {
 };
 
 export const addonsApi = {
+  togglePublicBucket: async (id: string) => { const response = await api.post(`/addons/${id}/toggle_bucket_public/`); return response.data; },
+
     list: async (): Promise<Addon[]> => {
         const res = await api.get('/addons/');
         const data = res.data;
@@ -2191,3 +2193,64 @@ export const databaseReplicasApi = {
   },
 };
 
+
+
+export const organizationsApi = {
+  list: async () => {
+    const response = await api.get('/organizations/');
+    return Array.isArray(response.data) ? response.data : (response.data?.results || []);
+  },
+  create: async (name: string) => {
+    const response = await api.post('/organizations/', { name });
+    return response.data;
+  },
+  update: async (id: string, data: any) => {
+    const response = await api.patch(`/organizations/${id}/`, data);
+    return response.data;
+  },
+  members: async (id: string) => {
+    const response = await api.get(`/organizations/${id}/members/`);
+    return response.data;
+  },
+  invite: async (id: string, email: string, role: string) => {
+    const response = await api.post(`/organizations/${id}/invite/`, { email, role });
+    return response.data;
+  },
+  getSSO: async () => {
+    const response = await api.get('/organizations/sso/');
+    return Array.isArray(response.data) ? response.data : (response.data?.results || []);
+  },
+  createSSO: async (data: any) => {
+    const response = await api.post('/organizations/sso/', data);
+    return response.data;
+  },
+  updateSSO: async (id: string, data: any) => {
+    const response = await api.patch(`/organizations/sso/${id}/`, data);
+    return response.data;
+  },
+  deleteSSO: async (id: string) => {
+    const response = await api.delete(`/organizations/sso/${id}/`);
+    return response.data;
+  }
+};
+
+export const notificationsApi = {
+  list: async () => {
+    const response = await api.get('/notifications/');
+    return Array.isArray(response.data) ? response.data : (response.data?.results || []);
+  },
+  markRead: async (id: string) => {
+    const response = await api.post(`/notifications/${id}/mark_read/`);
+    return response.data;
+  },
+  preferences: async () => {
+    const response = await api.get('/preferences/');
+    return Array.isArray(response.data) ? response.data : (response.data?.results || []);
+  },
+  updatePreference: async (id: string, data: any) => {
+    const response = await api.patch(`/preferences/${id}/`, data);
+    return response.data;
+  }
+};
+
+export const aiAdminApi = { getProviders: async () => { const response = await api.get('/ai/providers/'); return response.data; }, updateProvider: async (provider: string, data: any) => { const response = await api.post('/ai/providers/update/', { provider, ...data }); return response.data; } };

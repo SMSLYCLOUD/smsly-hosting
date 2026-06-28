@@ -9,6 +9,7 @@ import { Settings, Menu, X, Home, LogOut, Rocket, CreditCard, Sparkles, Monitor,
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { ModeToggle } from '@/components/ui/mode-toggle';
+import { NotificationsDropdown } from './NotificationsDropdown';
 import { motion, AnimatePresence } from 'framer-motion';
 import { api } from '@/lib/api';
 import { logout as performLogout } from '@/lib/auth';

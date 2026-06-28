@@ -7,10 +7,13 @@ import { addonsApi, Addon } from '@/lib/api';
 import { ADDON_TYPES } from '@/lib/addonConstants';
 import { MaintenanceTabs } from '@/components/addons/MaintenanceTabs';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useToast } from '@/components/ui/use-toast';
+import { Button } from '@/components/ui/button';
 import { ArrowLeft, Database, Loader2, Globe, Server, ExternalLink } from 'lucide-react';
 import Link from 'next/link';
 
 export default function AddonDetailPage() {
+  const { toast } = useToast();
   const params = useParams();
   const router = useRouter();
   const id = params.id as string;
@@ -50,6 +53,30 @@ export default function AddonDetailPage() {
   }
 
   if (!addon) return null;
+
+  const handleTogglePublic = async () => {
+    try {
+      await addonsApi.togglePublicBucket(addon.id);
+      toast({ title: 'Toggled bucket public access' });
+      // reload
+      const updated = await addonsApi.get(addon.id);
+      setAddon(updated);
+    } catch (e: any) {
+      toast({ title: 'Error', description: e.message, variant: 'destructive' });
+    }
+  };
+
+  const handleDeprovision = async () => {
+    if (!confirm('Are you sure you want to deprovision this addon? This cannot be undone.')) return;
+    try {
+      await addonsApi.deprovision(addon.id);
+      toast({ title: 'Deprovisioning started' });
+      router.push('/dashboard');
+    } catch (e: any) {
+      toast({ title: 'Error', description: e.message, variant: 'destructive' });
+    }
+  };
+
 
   const meta = ADDON_TYPES.find(t => t.value === addon.addon_type);
   const statusColor = (s: string) => {
