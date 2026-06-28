@@ -973,6 +973,7 @@ apply_agent_lite_env_overrides() {
 # Generated on $(date)
 MASTER_IP="$MASTER_IP"
 MASTER_MESH_IP="$MASTER_MESH_IP"
+MASTER_WG_PUBKEY="${MASTER_WG_PUBKEY:-}"
 MASTER_DB_USER="$MASTER_DB_USER"
 MASTER_DB_PASSWORD="$MASTER_DB_PASSWORD"
 MASTER_MQ_PASSWORD="$MASTER_MQ_PASSWORD"
@@ -989,6 +990,7 @@ EOF
     env_set_value "$env_file" "TRAEFIK_HTTP_BIND" "0.0.0.0:80"
     env_set_value "$env_file" "MASTER_IP" "$MASTER_IP"
     env_set_value "$env_file" "MASTER_MESH_IP" "$MASTER_MESH_IP"
+    env_set_value "$env_file" "MASTER_WG_PUBKEY" "${MASTER_WG_PUBKEY:-}"
     env_set_value "$env_file" "MASTER_DB_USER" "$MASTER_DB_USER"
     env_set_value "$env_file" "MASTER_DB_PASSWORD" "$MASTER_DB_PASSWORD"
     env_set_value "$env_file" "SMSLY_NODE_HOST" "$SMSLY_NODE_HOST"
@@ -1539,6 +1541,18 @@ ensure_env_runtime_defaults() {
             fi
             if [ -z "${MASTER_MQ_PASSWORD:-}" ] && [ -f "/opt/smsly-hosting/.agent_lite_seed" ]; then
                 MASTER_MQ_PASSWORD="$(env_get_value "/opt/smsly-hosting/.agent_lite_seed" "MASTER_MQ_PASSWORD" 2>/dev/null || true)"
+            fi
+        fi
+
+        if [ -z "${MASTER_WG_PUBKEY:-}" ]; then
+            if [ -f "$env_file" ]; then
+                MASTER_WG_PUBKEY="$(env_get_value "$env_file" "MASTER_WG_PUBKEY" 2>/dev/null || true)"
+            fi
+            if [ -z "${MASTER_WG_PUBKEY:-}" ] && [ -f "/opt/smsly-hosting/.agent_lite_seed" ]; then
+                MASTER_WG_PUBKEY="$(env_get_value "/opt/smsly-hosting/.agent_lite_seed" "MASTER_WG_PUBKEY" 2>/dev/null || true)"
+            fi
+            if [ -z "${MASTER_WG_PUBKEY:-}" ] && [ -f "/etc/wireguard/public.key" ]; then
+                MASTER_WG_PUBKEY="$(cat /etc/wireguard/public.key 2>/dev/null || true)"
             fi
         fi
     fi
@@ -5223,13 +5237,30 @@ ensure_wireguard_mesh() {
         fi
         local privkey
         privkey="$(cat /etc/wireguard/private.key)"
+        local master_pubkey="${MASTER_WG_PUBKEY:-}"
+        local master_public_ip="${MASTER_IP:-}"
         if [ ! -f "/etc/wireguard/${wg_iface}.conf" ]; then
             cat > "/etc/wireguard/${wg_iface}.conf" <<WGCONF
 [Interface]
 PrivateKey = ${privkey}
 Address = ${mesh_ip}/24
 ListenPort = 51820
+
 WGCONF
+            # If MASTER_WG_PUBKEY is available, add master as a peer immediately.
+            # This ensures the node can reach 10.100.0.1 (master DB) before the
+            # handshake runs, without waiting for the async deploy_mesh_task.
+            if [ -n "$master_pubkey" ] && [ -n "$master_public_ip" ]; then
+                cat >> "/etc/wireguard/${wg_iface}.conf" <<WGCONF
+[Peer]
+# master
+PublicKey = ${master_pubkey}
+Endpoint = ${master_public_ip}:51820
+AllowedIPs = ${MASTER_MESH_IP:-10.100.0.1}/32
+PersistentKeepalive = 25
+WGCONF
+                echo -e "${GREEN}  ✓ Master peer (${master_public_ip}) added to WG config for DB connectivity${NC}"
+            fi
         fi
         systemctl enable --now "wg-quick@${wg_iface}" 2>/dev/null || true
         if ip link show "$wg_iface" >/dev/null 2>&1; then
