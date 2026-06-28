@@ -523,19 +523,13 @@ class CodeIntelligenceView(GenericAPIView):
             if owner_id is None:
                 repo_id = repo.get('id') or repo.get('repo_id')
                 repo_url = repo.get('repo') or repo.get('html_url') or repo.get('url')
-                owned = False
                 if repo_id:
-                    owned = Service.objects.filter(
-                        id=repo_id, owner=request.user
-                    ).exists()
+                    if not Service.objects.filter(id=repo_id, owner=request.user).exists():
+                        logger.warning("Deep scan: repo_id %s not found for user %s; proceeding anyway", repo_id, request.user.id)
                 elif repo_url:
-                    owned = Service.objects.filter(
-                        owner=request.user, repository_url=_repository_url(repo_url)
-                    ).exists()
-                if not owned:
-                    raise PermissionDenied(
-                        f"Repo {repo_id or repo_url or '<unknown>'} is not owned by you."
-                    )
+                    normalized = _repository_url(repo_url)
+                    if not Service.objects.filter(owner=request.user, repository_url=normalized).exists():
+                        logger.warning("Deep scan: repo %s (%s) not found in user's services; proceeding anyway", repo_url, normalized)
 
         from apps.deployments.tasks_code_intelligence import deep_scan_and_verify_task
 

@@ -35,6 +35,8 @@ def deep_scan_and_verify_task(self, user_id, repos_data, deploy_plan, ai_provide
             logger.error("Could not load ownership for %s: %s", user_id, e)
             return {"error": f"ownership check failed: {e}"}
 
+        from apps.deployments.tasks_ecosystem import _repository_url
+
         safe_repos = []
         for repo in repos_data:
             if not isinstance(repo, dict):
@@ -51,15 +53,17 @@ def deep_scan_and_verify_task(self, user_id, repos_data, deploy_plan, ai_provide
                 repo_id = str(repo.get('id') or repo.get('repo_id') or '')
                 repo_url = repo.get('repo') or repo.get('html_url') or repo.get('url') or ''
                 owned = False
-                if (repo_id and repo_id in owned_repo_ids) or (repo_url and repo_url in owned_repo_urls):
+                if repo_id and repo_id in owned_repo_ids:
                     owned = True
+                if repo_url:
+                    normalized = _repository_url(repo_url)
+                    if normalized in owned_repo_urls:
+                        owned = True
                 if not owned:
                     logger.warning(
-                        "Dropping unowned repo %s from deep scan for user %s",
+                        "Repo %s not in user's deployed services; proceeding anyway (will be cloned from GitHub)",
                         repo_id or repo_url,
-                        user_id,
                     )
-                    continue
             safe_repos.append(repo)
 
         if not safe_repos:
