@@ -883,6 +883,7 @@ def _provision_node_db_credentials(server: ManagedServer):
         logger.info("Provisioned Master DB credentials for node %s: %s (new_user=%s)", server.name, username, is_new_user)
         if not isinstance(server.provider_metadata, dict):
             server.provider_metadata = {}
+        server.provider_metadata["node_db_user"] = username
         server.provider_metadata["node_db_password"] = password
         server.save(update_fields=["provider_metadata"])
 

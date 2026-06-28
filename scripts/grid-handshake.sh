@@ -23,8 +23,16 @@ fi
 
 BACKEND_CONTAINER=$(docker ps --filter "name=backend" --format "{{.Names}}" | head -n 1)
 
+# Agent-lite nodes don't have a backend service; use celery-worker instead.
 if [ -z "$BACKEND_CONTAINER" ]; then
-    echo -e "${RED}ERROR: Backend container not running. Handshake aborted.${NC}"
+    BACKEND_CONTAINER=$(docker ps --filter "name=celery-worker" --format "{{.Names}}" | head -n 1)
+    if [ -n "$BACKEND_CONTAINER" ]; then
+        echo -e "  → Detected Agent-Lite mode: ${GREEN}${BACKEND_CONTAINER}${NC}"
+    fi
+fi
+
+if [ -z "$BACKEND_CONTAINER" ]; then
+    echo -e "${RED}ERROR: Neither backend nor celery-worker container found. Handshake aborted.${NC}"
     exit 1
 fi
 
