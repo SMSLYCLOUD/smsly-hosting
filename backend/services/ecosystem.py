@@ -13,6 +13,7 @@ import secrets
 import subprocess
 import tempfile
 import time
+from collections import defaultdict
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
@@ -605,12 +606,14 @@ def _force_merge_scanner_env_vars(services: list[dict], repos_data: list[dict]):
     RepoScanner.  This function runs BEFORE _apply_generic_ecosystem_intelligence
     so that cross-service secret mapping (e.g. GATEWAY_SECRET ->
     {{SHARED_SECRET:gateway_secret}}) fires for vars the AI omitted.
-    It uses the SAME well-known filter as _merge_deep_env but WITHOUT any cap,
-    because .env files are developer-curated — every var in them is legitimate.
 
-    Only vars already in the plan (with SERVICE/SHARED_SECRET placeholders) are
-    preserved; missing vars get a ``{{GENERATE}}`` placeholder so the user can
-    fill them in the dashboard.
+    Unlike _merge_deep_env, this function does NOT filter by _is_well_known_env_var.
+    EVERY variable the RepoScanner found in .env files, Dockerfiles, docker-compose,
+    or code analysis survives into the deploy plan.  No exceptions.
+
+    Missing vars get a ``{{GENERATE}}`` placeholder so the user can fill them
+    in the dashboard, unless they look like secrets in which case a shared
+    secret placeholder is preferred.
     """
     repo_to_deep: dict[str, dict[str, list[str]]] = {}
     for rd in repos_data:
@@ -638,8 +641,6 @@ def _force_merge_scanner_env_vars(services: list[dict], repos_data: list[dict]):
             if not upper_key:
                 continue
             if upper_key in env_map:
-                continue
-            if not _is_well_known_env_var(upper_key):
                 continue
             fill = "{{GENERATE}}" if any(
                 w in upper_key for w in ("SECRET", "KEY", "TOKEN", "PASSWORD")
@@ -1813,6 +1814,22 @@ def _normalize_service_plan_fields(service: dict) -> None:
     service["env_vars"] = _env_plan_map(service.get("env_vars", {}))
     service["addons"] = _coerce_addons(service.get("addons", []))
     service["depends_on"] = _coerce_depends_on(service.get("depends_on", []))
+    # Normalize port — AI sometimes sends null or omits it
+    try:
+        port_val = service.get("port")
+        if port_val is None:
+            port_val = 3000
+        else:
+            port_val = int(port_val)
+        port_val = max(1, min(65535, port_val))
+    except (TypeError, ValueError):
+        port_val = 3000
+    service["port"] = port_val
+    # Normalize build — null/empty defaults to dockerfile strategy
+    build_val = str(service.get("build") or "").strip().lower()
+    if not build_val or build_val in ("none", "null"):
+        build_val = "dockerfile"
+    service["build"] = build_val
 
 
 def _safe_order(value: Any, default: int = 99) -> int:
@@ -1921,27 +1938,61 @@ def _coerce_addons(raw_addons: Any) -> list[str]:
 
 
 def _build_deploy_sequence(services: list[dict]) -> list[str]:
-    """Build deploy sequence names from ordered, non-skipped services."""
+    """Build deploy sequence from dependency-aware topological sort.
+
+    Respects both ``deploy_order`` and ``depends_on`` so the sequence
+    shown in the plan UI matches the actual build order.  Services with
+    no dependencies deploy first; cyclic dependencies are appended last.
+    """
     try:
-        ordered = []
+        name_map: dict[str, dict] = {}
         for svc in services:
             if isinstance(svc, dict) and not svc.get("skip"):
-                try:
-                    order = _safe_order(svc.get("deploy_order"), 99)
-                    name = str(svc.get("name") or _repo_short_name(svc))
-                    ordered.append((order, name))
-                except Exception as e:
-                    logger.warning("Error processing service for deploy sequence: %s", e)
+                name = str(svc.get("name") or _repo_short_name(svc))
+                name_map[name] = svc
+
+        # Build adjacency + in-degree
+        deps: dict[str, set[str]] = {}
+        for name, svc in name_map.items():
+            raw = _coerce_depends_on(svc.get("depends_on", []) or [])
+            resolved = set()
+            for d in raw:
+                if d in name_map:
+                    resolved.add(d)
+            deps[name] = resolved
+
+        indegree: dict[str, int] = {n: len(deps[n]) for n in name_map}
+        dependents: dict[str, list[str]] = defaultdict(list)
+        for name, dep_set in deps.items():
+            for d in dep_set:
+                dependents[d].append(name)
+
+        ready = sorted(
+            [n for n, deg in indegree.items() if deg == 0],
+            key=lambda n: (_safe_order(name_map[n].get("deploy_order"), 99), n),
+        )
+        ordered: list[str] = []
+        processed: set[str] = set()
+
+        while ready:
+            node = ready.pop(0)
+            ordered.append(node)
+            processed.add(node)
+            for dependent in dependents.get(node, []):
+                if dependent in processed:
                     continue
+                indegree[dependent] = max(0, indegree[dependent] - 1)
+                if indegree[dependent] == 0:
+                    ready.append(dependent)
+            ready.sort(key=lambda n: (_safe_order(name_map[n].get("deploy_order"), 99), n))
 
-        # Sort by order, then by name (both are now strings, so no unhashable issues)
-        ordered.sort(key=lambda x: (x[0], x[1]))
+        unresolved = [n for n in name_map if n not in processed]
+        ordered.extend(unresolved)
 
-        return ["addons"] + [name for order, name in ordered]
+        return ["addons"] + ordered
 
     except Exception as e:
         logger.warning("Deploy sequence build failed: %s", e)
-        # Fallback: just use service names in order
         try:
             return ["addons"] + [
                 str(svc.get("name") or _repo_short_name(svc))
@@ -2807,6 +2858,14 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
                                 pass
                             break
                     break
+
+    # 5b. Align PORT env var with the plan port field.
+    # The plan's `port` field is the authoritative runtime port.  Ensure
+    # the `PORT` env var (which the app actually reads) matches it.
+    for svc in deployable:
+        env_map = svc.get("env_vars", {})
+        svc_port = str(svc.get("port") or 3000)
+        env_map["PORT"] = svc_port
 
     # 6. Dependency Depth Sorting — only set if AI didn't provide a specific order
     # Auth (10) > Core (20) > Others (50)

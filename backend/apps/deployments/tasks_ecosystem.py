@@ -28,14 +28,15 @@ from apps.deployments.models_addons import Addon  # noqa: E402
 
 # Module-level constants (ecosystem scanning thresholds)
 _MIN_FREE_MEMORY_MB = 256
-_WAVE_RECHECK_SECONDS = 300
-_MAX_WAVE_RECHECKS = 10
+_WAVE_RECHECK_SECONDS = 600       # 10 minutes between wave rechecks
+_MAX_WAVE_RECHECKS = 20           # up to ~3 hours of patience
 _MAX_WAVE_SIZE = 5
-_DEFAULT_WAVE_SIZE = 2
+_DEFAULT_WAVE_SIZE = 3            # slightly larger default waves
 _VALID_PORT_RANGE = (1, 65535)
-_MAX_CONCURRENT_BUILDS = 2
+_MAX_CONCURRENT_BUILDS = 3        # allow one more concurrent build
 _ACTIVE_BUILDS_CACHE_KEY = "smsly:ecosystem:active_builds"
-_BUILD_DEFER_SECONDS = 60
+_BUILD_DEFER_SECONDS = 120        # 2 minutes deferral
+_DEFERRED_TASK_MAX_RETRIES = 5    # max retries per deferred build
 
 _ADDON_ENV_ALIASES = {
     "POSTGRES": ("POSTGRESQL_URL", "PG_URL", "POSTGRES_URL"),
@@ -1318,7 +1319,14 @@ def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provi
         return {"error": f"Scan failed: {exc!s}"}
 
 
-@shared_task(bind=True, queue='fast', soft_time_limit=120, time_limit=180)
+@shared_task(
+    bind=True, queue='fast',
+    soft_time_limit=900,   # 15 minutes soft
+    time_limit=1200,       # 20 minutes hard
+    max_retries=_DEFERRED_TASK_MAX_RETRIES,
+    default_retry_delay=120,
+    autoretry_for=(Exception,),
+)
 def ecosystem_deferred_build_task(self, deployment_id: str, provider_id: str, wave_index: int) -> dict:
     """Retry a deployment that was deferred due to concurrency limits."""
     deployment = Deployment.objects.filter(id=deployment_id).first()
@@ -1331,10 +1339,13 @@ def ecosystem_deferred_build_task(self, deployment_id: str, provider_id: str, wa
     max_concurrent = _env_int("ECOSYSTEM_MAX_CONCURRENT_BUILDS", _MAX_CONCURRENT_BUILDS, minimum=1, maximum=10)
 
     if active >= max_concurrent:
+        # Exponential backoff: base defer × retry count
+        retry_count = getattr(self, 'request', {}).get('retries', 0)
+        backoff = min(_BUILD_DEFER_SECONDS * (2 ** retry_count), 1800)
         self.app.send_task(
             "apps.deployments.tasks_ecosystem.ecosystem_deferred_build_task",
             args=[deployment_id, provider_id, wave_index],
-            countdown=_BUILD_DEFER_SECONDS,
+            countdown=backoff,
         )
         return {"status": "deferred", "active": active, "max": max_concurrent}
 
@@ -1353,7 +1364,7 @@ def ecosystem_deferred_build_task(self, deployment_id: str, provider_id: str, wa
     return {"status": "dispatched", "deployment_id": deployment_id}
 
 
-@shared_task(bind=True, queue='fast', soft_time_limit=120, time_limit=180)
+@shared_task(bind=True, queue='fast', soft_time_limit=600, time_limit=900)
 def ecosystem_release_wave_task(
     self,
     provider_id: str,
@@ -1516,7 +1527,12 @@ def ecosystem_release_wave_task(
     }
 
 
-@shared_task(bind=True, queue='deploy', soft_time_limit=1800, time_limit=2100)
+@shared_task(
+    bind=True, queue='deploy',
+    soft_time_limit=1800, time_limit=2100,
+    max_retries=3, default_retry_delay=30,
+    autoretry_for=(Exception,),
+)
 def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = None) -> dict:
     """
     Deploy all services in the plan using dependency-aware waves.
