@@ -108,12 +108,15 @@ def trigger_cron_job(self, job_id):
                     path = f.name
                 
                 try:
-                    upload_backup_to_s3(
+                    success = upload_backup_to_s3(
                         path, dest.bucket, s3_key,
                         endpoint=dest.endpoint, region=dest.region,
                         access_key=dest.access_key, secret_key=dest.secret_key,
                     )
-                    logger.info("Uploaded cron log to %s/%s", dest.bucket, s3_key)
+                    if success:
+                        logger.info("Uploaded cron log to %s/%s", dest.bucket, s3_key)
+                    else:
+                        logger.error("Failed to upload cron log for %s: upload_backup_to_s3 returned False", job.name)
                 finally:
                     os.unlink(path)
             except Exception as up_exc:
