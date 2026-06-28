@@ -510,6 +510,7 @@ class CodeIntelligenceView(GenericAPIView):
         from rest_framework.exceptions import PermissionDenied
 
         from apps.deployments.models import Service
+        from apps.deployments.tasks_ecosystem import _repository_url
 
         for repo in repos_data:
             if not isinstance(repo, dict):
@@ -529,7 +530,7 @@ class CodeIntelligenceView(GenericAPIView):
                     ).exists()
                 elif repo_url:
                     owned = Service.objects.filter(
-                        owner=request.user, repository_url=repo_url
+                        owner=request.user, repository_url=_repository_url(repo_url)
                     ).exists()
                 if not owned:
                     raise PermissionDenied(
