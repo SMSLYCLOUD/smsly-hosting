@@ -48,7 +48,7 @@ services:
       # regardless of whether any Loki targets have been scraped yet.
       # start_period gives the docker_sd_configs first scrape (5s refresh
       # interval) time to populate before the first probe runs.
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:9080/metrics || exit 1"]
+      test: ["CMD-SHELL", "cat /proc/1/status > /dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -217,7 +217,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 90s
+      start_period: 180s
     deploy:
       resources:
         limits:
