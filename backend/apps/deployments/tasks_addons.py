@@ -114,6 +114,34 @@ def backup_addon_task(self, addon_id: str):
         backup.file_path = path
         backup.status = Backup.Status.COMPLETED
         backup.save()
+
+        # Attempt to upload to cloud storage if a schedule exists
+        try:
+            from apps.deployments.models_backup import BackupSchedule
+            from apps.deployments.services.backup_service import upload_backup_to_s3
+            import os
+
+            sched = BackupSchedule.objects.filter(
+                service_id=addon.service_id, enabled=True, storage_backend='s3'
+            ).first()
+            if not sched:
+                sched = BackupSchedule.objects.filter(
+                    is_server_wide=True, enabled=True, storage_backend='s3'
+                ).first()
+
+            if sched and sched.s3_bucket and sched.s3_access_key:
+                s3_key = f"smsly-backups/{addon.service.name}/addons/{os.path.basename(path)}"
+                success = upload_backup_to_s3(
+                    path, sched.s3_bucket, s3_key,
+                    endpoint=sched.s3_endpoint, region=sched.s3_region,
+                    access_key=sched.s3_access_key, secret_key=sched.s3_secret_key,
+                )
+                if success:
+                    logger.info("Uploaded addon backup %s to %s/%s", addon_id, sched.s3_bucket, s3_key)
+                else:
+                    logger.error("Failed to upload addon backup %s: upload_backup_to_s3 returned False", addon_id)
+        except Exception as up_exc:
+            logger.error("Cloud upload skipped for addon %s: %s", addon_id, up_exc)
     except Exception as e:
         logger.error("Backup failed for addon %s: %s", addon_id, e)
         if self.request.retries >= self.max_retries:
