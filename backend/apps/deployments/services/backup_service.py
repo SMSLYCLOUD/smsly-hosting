@@ -2218,7 +2218,10 @@ def _dump_container_database(container_name, image_tag, temp_dir):
                     logger.info("pg_dumpall fallback successful for %s", container_name)
         elif 'mysql' in image_lower or 'mariadb' in image_lower:
             dump_file = os.path.join(temp_dir, 'db_dump.sql')
-            password = os.environ.get('MYSQL_ROOT_PASSWORD', os.environ.get('MYSQL_PASSWORD', ''))
+            c_env = {e.split('=', 1)[0]: e.split('=', 1)[1]
+                     for e in (ctr.attrs.get('Config', {}).get('Env', []))
+                     if '=' in e}
+            password = c_env.get('MYSQL_ROOT_PASSWORD', c_env.get('MYSQL_PASSWORD', ''))
             result = ctr.exec_run(['mysqldump', '--all-databases', '-u', 'root', f'-p{password}'])
             if result.exit_code == 0:
                 with open(dump_file, 'wb') as f:
