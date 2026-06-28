@@ -173,7 +173,7 @@ fi
 # itself runs unprivileged.
 if [ "$(id -u)" = "0" ]; then
     echo "Starting: $* (as smsly)"
-    exec su -s /bin/sh -c 'exec "$@"' smsly -- "$@"
+    exec su -s /bin/sh -c 'exec "$0" "$@"' smsly -- "$@"
 fi
 
 echo "Starting: $*"
