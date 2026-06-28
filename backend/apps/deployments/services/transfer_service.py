@@ -245,7 +245,7 @@ class ServerTransferService:
 
         return urls
 
-    def _node_api_request(self, action, method='POST', json=None, params=None, timeout=120):
+    def _node_api_request(self, action, method='POST', body=None, params=None, timeout=120):
         """Call an incoming REST endpoint on the target node.
 
         Replaces SSH-based operations. Uses HMAC V2 auth signed with the
@@ -271,7 +271,7 @@ class ServerTransferService:
             qs = urlencode(params)
             sig_path = f"{path}?{qs}"
 
-        body_bytes = json.dumps(json).encode() if json else b''
+        body_bytes = json.dumps(body).encode() if body else b''
 
         # Sign with the TARGET's gateway_secret (not our own).
         server = self._target_server_record()
@@ -305,7 +305,7 @@ class ServerTransferService:
         for base_url in candidate_urls:
             url = f"{base_url.rstrip('/')}{path}"
             try:
-                resp = requests.request(method, url, headers=headers, json=json, params=params, timeout=timeout)
+                resp = requests.request(method, url, headers=headers, json=body, params=params, timeout=timeout)
                 resp.raise_for_status()
                 return resp.json()
             except requests.RequestException as e:
@@ -621,7 +621,7 @@ class ServerTransferService:
         self._update(75, 'Hydrating Service on target via REST API...')
         owner_email = self.transfer.service.owner.email if self.transfer.service and self.transfer.service.owner else None
         restore_script = self._build_restore_trigger_script(owner_email, remote_backup_path)
-        exec_result = self._node_api_request('incoming/exec', json={
+        exec_result = self._node_api_request('incoming/exec', body={
             'script': restore_script,
             'container': 'backend',
         })
@@ -633,7 +633,7 @@ class ServerTransferService:
         image = metadata.get('docker_image') or self.transfer.service.docker_image
         if image:
             self._update(85, 'Pulling service image on target...')
-            self._node_api_request('incoming/pull-image', json={'image': image})
+            self._node_api_request('incoming/pull-image', body={'image': image})
 
         # Remap env vars for the target platform
         self._remap_target_platform_env()
@@ -654,7 +654,7 @@ class ServerTransferService:
             'managed_by': 'smsly-hosting',
         }
 
-        self._node_api_request('incoming/deploy', json={
+        self._node_api_request('incoming/deploy', body={
             'image': image,
             'container_name': name,
             'env': env_dict,
@@ -673,7 +673,7 @@ class ServerTransferService:
         # Pull the image on the lite agent
         if image:
             self._update(75, 'Pulling service image on lite agent...')
-            self._node_api_request('incoming/pull-image', json={'image': image})
+            self._node_api_request('incoming/pull-image', body={'image': image})
 
         # Start service container via REST
         self._update(90, 'Starting service container on lite agent...')
@@ -691,7 +691,7 @@ class ServerTransferService:
             'managed_by': 'smsly-hosting',
         }
 
-        self._node_api_request('incoming/deploy', json={
+        self._node_api_request('incoming/deploy', body={
             'image': image,
             'container_name': name,
             'env': env_dict,
@@ -701,7 +701,7 @@ class ServerTransferService:
 
     def _exec_on_target(self, script, container='backend', timeout=120):
         """Execute a Python script on the target node via REST API."""
-        return self._node_api_request('incoming/exec', json={
+        return self._node_api_request('incoming/exec', body={
             'script': script,
             'container': container,
         }, timeout=timeout)
@@ -1377,7 +1377,7 @@ if os.path.exists(services_dir):
                 if not chunk:
                     break
                 b64 = base64.b64encode(chunk).decode('ascii')
-                self._node_api_request('incoming/upload-file', json={
+self._node_api_request('incoming/upload-file', body={
                     'path': remote_backup,
                     'content_base64': b64,
                 })
@@ -1433,7 +1433,8 @@ else:
         if env_content:
             # Write .env to target via upload-file
             b64_env = base64.b64encode(env_content.encode()).decode('ascii')
-            self._node_api_request('incoming/upload-file', json={
+            self._node_api_request('incoming/upload-file', 
+body={
                 'path': '/tmp/.env.restore',
                 'content_base64': b64_env,
             })
@@ -2103,7 +2104,7 @@ if __name__ == '__main__':
         if self.transfer.transfer_type != 'SERVICE' or not self.transfer.service:
             return
         try:
-            self._node_api_request('incoming/stop-container', json={
+            self._node_api_request('incoming/stop-container', body={
                 'container_name': self.transfer.service.name,
             })
         except Exception as exc:
