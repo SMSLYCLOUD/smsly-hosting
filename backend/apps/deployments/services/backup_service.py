@@ -645,6 +645,49 @@ class BackupService:
                         finally:
                             helper.remove(force=True)
 
+            # 5. Restore database from SQL dump if present (safety net for services that run a DB)
+            db_dump = os.path.join(temp_dir, 'db_dump.sql')
+            if os.path.exists(db_dump) and os.path.getsize(db_dump) > 0 and restored_image:
+                logger.info("Restoring database from SQL dump...")
+                try:
+                    db_user = 'postgres'
+                    db_name = 'postgres'
+                    for ev in metadata.get('env_vars', []):
+                        if ev['key'] == 'POSTGRES_USER':
+                            db_user = ev['value']
+                        elif ev['key'] == 'POSTGRES_DB':
+                            db_name = ev['value']
+                    vol_binds = {}
+                    for vol_meta in metadata.get('volumes', []):
+                        vol_obj = Volume.objects.filter(
+                            service=target_service, mount_path=vol_meta['mount_path']
+                        ).first()
+                        if vol_obj:
+                            vol_binds[vol_obj.name] = {'bind': vol_meta['mount_path'], 'mode': 'rw'}
+                    temp_ctr = self.docker_client.containers.run(
+                        restored_image,
+                        command=['sleep', '60'],
+                        volumes=vol_binds,
+                        detach=True,
+                        remove=True,
+                    )
+                    try:
+                        import subprocess as _sp
+                        _sp.run(
+                            ['docker', 'cp', db_dump, f'{temp_ctr.name}:/tmp/db_dump.sql'],
+                            check=True, timeout=30,
+                        )
+                        temp_ctr.exec_run(
+                            ['psql', '-U', db_user, '-d', db_name, '-f', '/tmp/db_dump.sql'],
+                            environment={'PGPASSWORD': os.environ.get('POSTGRES_PASSWORD', '')},
+                        )
+                        temp_ctr.exec_run(['rm', '/tmp/db_dump.sql'])
+                        logger.info("Database SQL dump restored successfully.")
+                    finally:
+                        temp_ctr.remove(force=True)
+                except Exception as db_restore_err:
+                    logger.warning("Database SQL dump restore failed (non-fatal): %s", db_restore_err)
+
             logger.info("Restore complete. Queueing deployment.")
             from apps.deployments.models import Deployment
             from apps.deployments.tasks_deploy import (
@@ -1088,8 +1131,8 @@ class BackupService:
                     pg_user = c_env.get('POSTGRES_USER', user)
                     pg_db = c_env.get('POSTGRES_DB', name)
 
-                    cmd = ["pg_dump", "-U", pg_user, pg_db]
-                    res = pg_container.exec_run(cmd)
+                    cmd = ["pg_dump", "-U", pg_user, "-d", pg_db, "--lock-wait-timeout=5000"]
+                    res = pg_container.exec_run(cmd, environment={'PGPASSWORD': password})
                     if res.exit_code == 0:
                         with open(db_file, 'wb') as f:
                             f.write(res.output)
@@ -1220,7 +1263,7 @@ class BackupService:
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
 
-    def restore_server(self, backup_id, requesting_user_id=None):
+    def restore_server(self, backup_id, requesting_user_id=None, raise_on_snapshot_failure=False):
         """
         Restore full server from backup.
         NOTE: This typically runs on a fresh server or replaces current state.
@@ -1264,6 +1307,22 @@ class BackupService:
             platform_config_path = os.path.join(temp_dir, "platform_config.json")
             if os.path.exists(platform_config_path):
                 self._restore_platform_config(platform_config_path)
+
+            # Create pre-restore safety snapshots for each existing service
+            # (only on a running server — skip for fresh restore targets)
+            if not requesting_user_id:
+                from apps.deployments.models import Service
+                for service in Service.objects.all():
+                    try:
+                        self.backup_service(service.id, backup_type='PRE_TRANSFER')
+                        logger.info("Pre-restore snapshot created for service %s", service.name)
+                    except Exception as e:
+                        logger.warning("Pre-restore snapshot failed for service %s: %s", service.name, e)
+                        if raise_on_snapshot_failure:
+                            raise RuntimeError(
+                                f"Pre-restore snapshot failed for {service.name}: {e}. "
+                                "Refusing to restore."
+                            ) from e
 
             # Check if this is a full server backup (services/ dir) or a single service backup
             services_dir = os.path.join(temp_dir, "services")
@@ -2084,14 +2143,33 @@ def _dump_container_database(container_name, image_tag, temp_dir):
 
         if 'postgres' in image_lower:
             dump_file = os.path.join(temp_dir, 'db_dump.sql')
+            c_env = {e.split('=', 1)[0]: e.split('=', 1)[1]
+                     for e in (ctr.attrs.get('Config', {}).get('Env', []))
+                     if '=' in e}
+            pg_user = c_env.get('POSTGRES_USER', os.environ.get('POSTGRES_USER', 'smsly_admin'))
+            pg_db = c_env.get('POSTGRES_DB', 'postgres')
+            pg_password = c_env.get('POSTGRES_PASSWORD', os.environ.get('POSTGRES_PASSWORD', ''))
             result = ctr.exec_run(
-                ['pg_dumpall', '-U', os.environ.get('POSTGRES_USER', 'smsly_admin'), '-c'],
-                environment={'PGPASSWORD': os.environ.get('POSTGRES_PASSWORD', '')},
+                ['pg_dump', '-U', pg_user, '-d', pg_db, '--lock-wait-timeout=5000', '-c'],
+                environment={'PGPASSWORD': pg_password},
             )
             if result.exit_code == 0:
                 with open(dump_file, 'wb') as f:
                     f.write(result.output)
-                logger.info("pg_dumpall successful for %s", container_name)
+                logger.info("pg_dump successful for %s (db: %s)", container_name, pg_db)
+            else:
+                logger.warning(
+                    "pg_dump failed for %s (exit %s). Falling back to pg_dumpall.",
+                    container_name, result.exit_code,
+                )
+                result = ctr.exec_run(
+                    ['pg_dumpall', '-U', pg_user, '-c', '--lock-wait-timeout=5000'],
+                    environment={'PGPASSWORD': pg_password},
+                )
+                if result.exit_code == 0:
+                    with open(dump_file, 'wb') as f:
+                        f.write(result.output)
+                    logger.info("pg_dumpall fallback successful for %s", container_name)
         elif 'mysql' in image_lower or 'mariadb' in image_lower:
             dump_file = os.path.join(temp_dir, 'db_dump.sql')
             password = os.environ.get('MYSQL_ROOT_PASSWORD', os.environ.get('MYSQL_PASSWORD', ''))
@@ -2115,7 +2193,7 @@ def _dump_container_database(container_name, image_tag, temp_dir):
 
 
 def _stop_service_for_restore(service, is_remote):
-    """Gracefully stop a running container before restoring volumes."""
+    """Gracefully stop a running container before restoring volumes. Waits for full stop."""
     container_name = service.name
     try:
         if is_remote:
@@ -2128,6 +2206,13 @@ def _stop_service_for_restore(service, is_remote):
             )
             client.connect()
             client.exec_command(f"docker stop {container_name} 2>/dev/null || true", raise_on_error=False)
+            client.exec_command(
+                f"for i in $(seq 1 15); do "
+                f"  docker inspect -f '{{{{.State.Status}}}}' {container_name} 2>/dev/null | grep -q exited && break; "
+                f"  sleep 1; "
+                f"done",
+                raise_on_error=False,
+            )
             client.close()
         else:
             import docker as _docker
@@ -2135,6 +2220,7 @@ def _stop_service_for_restore(service, is_remote):
             try:
                 ctr = client.containers.get(container_name)
                 ctr.stop(timeout=30)
+                ctr.wait(condition='not-running', timeout=30)
             except Exception:
                 pass
         logger.info("Stopped service %s before restore", service.name)
@@ -2152,24 +2238,46 @@ def backup_addon(addon_id: str) -> str | None:
         addon = Addon.objects.get(id=addon_id, status='ACTIVE')
         ctr = client.containers.get(addon.container_name or addon.name)
         atype = (addon.addon_type or '').lower()
-        temp_dir = tempfile.mkdtemp(prefix=f"addon_backup_{addon_id}_")
+        backup_dir = os.path.join('/app', 'backups', 'addons', str(addon.service.id))
+        os.makedirs(backup_dir, exist_ok=True)
 
         if 'postgres' in atype:
-            dump_file = os.path.join(temp_dir, 'db_dump.sql')
-            result = ctr.exec_run(['pg_dumpall', '-U', 'postgres', '-c'])
+            dump_file = os.path.join(backup_dir, 'db_dump.sql')
+            c_env = {e.split('=', 1)[0]: e.split('=', 1)[1]
+                     for e in (ctr.attrs.get('Config', {}).get('Env', []))
+                     if '=' in e}
+            pg_user = c_env.get('POSTGRES_USER', 'postgres')
+            pg_db = c_env.get('POSTGRES_DB', 'postgres')
+            pg_password = c_env.get('POSTGRES_PASSWORD', '')
+            result = ctr.exec_run(
+                ['pg_dump', '-U', pg_user, '-d', pg_db, '--lock-wait-timeout=5000', '-c'],
+                environment={'PGPASSWORD': pg_password},
+            )
+            if result.exit_code == 0:
+                with open(dump_file, 'wb') as f:
+                    f.write(result.output)
+                return dump_file
+            logger.warning(
+                "pg_dump failed for addon %s (exit %s). Falling back to pg_dumpall.",
+                addon_id, result.exit_code,
+            )
+            result = ctr.exec_run(
+                ['pg_dumpall', '-U', pg_user, '-c', '--lock-wait-timeout=5000'],
+                environment={'PGPASSWORD': pg_password},
+            )
             if result.exit_code == 0:
                 with open(dump_file, 'wb') as f:
                     f.write(result.output)
                 return dump_file
         elif 'mysql' in atype or 'mariadb' in atype:
-            dump_file = os.path.join(temp_dir, 'db_dump.sql')
+            dump_file = os.path.join(backup_dir, 'db_dump.sql')
             result = ctr.exec_run(['mysqldump', '--all-databases', '-u', 'root'])
             if result.exit_code == 0:
                 with open(dump_file, 'wb') as f:
                     f.write(result.output)
                 return dump_file
         elif 'redis' in atype:
-            dump_file = os.path.join(temp_dir, 'redis_dump.rdb')
+            dump_file = os.path.join(backup_dir, 'redis_dump.rdb')
             ctr.exec_run(['redis-cli', 'SAVE'])
             time.sleep(1)
             bits, _ = ctr.get_archive('/data/dump.rdb')
@@ -2179,7 +2287,7 @@ def backup_addon(addon_id: str) -> str | None:
                         f.write(chunk)
                 return dump_file
         elif 'mongo' in atype:
-            dump_file = os.path.join(temp_dir, 'mongo_dump.archive')
+            dump_file = os.path.join(backup_dir, 'mongo_dump.archive')
             result = ctr.exec_run(['mongodump', '--archive=/tmp/mongo.archive', '--gzip'])
             if result.exit_code == 0:
                 bits, _ = ctr.get_archive('/tmp/mongo.archive')

@@ -1503,9 +1503,11 @@ class AddonProvisioner:
             raise ValueError("backup_path is required")
 
         real_path = os.path.realpath(backup_path)
-        allowed_root = os.path.realpath(os.path.join("/tmp", "backups"))
+        allowed_roots = [
+            os.path.realpath(os.path.join("/app", "backups", "addons")),
+        ]
 
-        if not real_path.startswith(allowed_root + os.sep):
+        if not any(real_path.startswith(root + os.sep) for root in allowed_roots):
             raise ValueError("Invalid backup path outside allowed backup directory")
 
         if not os.path.isfile(real_path):
@@ -1538,7 +1540,7 @@ class AddonProvisioner:
 
         container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_dir = os.path.join("/tmp", "backups", str(addon.service.id))
+        backup_dir = os.path.join("/app", "backups", "addons", str(addon.service.id))
         os.makedirs(backup_dir, exist_ok=True)
 
         filename = f"{addon.addon_type.lower()}_{addon.id}_{timestamp}.dump"
