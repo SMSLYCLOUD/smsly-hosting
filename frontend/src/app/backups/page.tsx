@@ -5,9 +5,10 @@ import { DashboardShell } from '@/components/layout/DashboardShell';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Loader2, Download, RotateCcw, Archive, Trash2, Upload, Key } from 'lucide-react';
+import { Loader2, Download, RotateCcw, Archive, Trash2, Upload, Key, FileKey } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { Input } from '@/components/ui/input';
 import api from '@/lib/api';
 
 export default function ServerBackupsPage() {
@@ -19,6 +20,20 @@ export default function ServerBackupsPage() {
     const [restoringId, setRestoringId] = useState<string | null>(null);
     const [uploading, setUploading] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const jsonKeyInputRef = useRef<HTMLInputElement>(null);
+
+    // Encryption key prompt modal state
+    const [keyPromptOpen, setKeyPromptOpen] = useState(false);
+    const [keyPromptValue, setKeyPromptValue] = useState('');
+    const [keyPromptBackupId, setKeyPromptBackupId] = useState<string | null>(null);
+    const [keyPromptError, setKeyPromptError] = useState('');
+    const [keyPromptSubmitting, setKeyPromptSubmitting] = useState(false);
+
+    // Upload key prompt modal state
+    const [uploadKeyPromptOpen, setUploadKeyPromptOpen] = useState(false);
+    const [uploadKeyValue, setUploadKeyValue] = useState('');
+    const [uploadKeyFile, setUploadKeyFile] = useState<File | null>(null);
+    const [pendingUploadFile, setPendingUploadFile] = useState<File | null>(null);
 
     useEffect(() => {
         loadBackups();
@@ -58,12 +73,11 @@ export default function ServerBackupsPage() {
         } catch (err: any) {
             const data = err?.response?.data;
             if (data?.error_code === 'ENCRYPTION_KEY_REQUIRED') {
-                const key = window.prompt(
-                    `${data.error}\n\nEnter the backup encryption key:`,
-                );
-                if (key && key.trim()) {
-                    return handleRestore(backupId, key.trim());
-                }
+                setKeyPromptBackupId(backupId);
+                setKeyPromptValue('');
+                setKeyPromptError(data?.error || 'Encryption key required');
+                setKeyPromptOpen(true);
+                setRestoringId(null);
                 return;
             }
             const msg = data?.error || "Failed to trigger restore.";
@@ -71,6 +85,92 @@ export default function ServerBackupsPage() {
         } finally {
             setRestoringId(null);
         }
+    };
+
+    const submitEncryptionKey = async () => {
+        if (!keyPromptBackupId || !keyPromptValue.trim()) {
+            setKeyPromptError('Please enter the encryption key.');
+            return;
+        }
+        setKeyPromptSubmitting(true);
+        setKeyPromptError('');
+        try {
+            await handleRestore(keyPromptBackupId, keyPromptValue.trim());
+            setKeyPromptOpen(false);
+            setKeyPromptSubmitting(false);
+        } catch {
+            setKeyPromptSubmitting(false);
+        }
+    };
+
+    const handleFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        if (!file.name.endsWith('.tar.gz') && !file.name.endsWith('.tgz')) {
+            toast({ title: "Invalid File", description: "Please select a .tar.gz or .tgz backup file.", variant: "destructive" });
+            e.target.value = '';
+            return;
+        }
+        setPendingUploadFile(file);
+        setUploadKeyValue('');
+        setUploadKeyFile(null);
+        setUploadKeyPromptOpen(true);
+        e.target.value = '';
+    };
+
+    const handleUploadRestore = async (encryptionKey?: string) => {
+        const file = pendingUploadFile;
+        if (!file) return;
+
+        if (!await confirm({ title: 'Restore from file?', message: `Restore from "${file.name}"? This will overwrite current server state.`, variant: 'destructive', confirmText: 'Restore' })) {
+            setPendingUploadFile(null);
+            setUploadKeyPromptOpen(false);
+            return;
+        }
+
+        setUploading(true);
+        setUploadKeyPromptOpen(false);
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+            if (encryptionKey) {
+                formData.append('encryption_key', encryptionKey);
+            }
+            await api.post('/server/backups/upload-restore/', formData, {
+                headers: { 'Content-Type': 'multipart/form-data' },
+                timeout: 600000,
+            });
+            toast({ title: "Restore Started", description: `Restoring from uploaded file "${file.name}". This may take several minutes.` });
+            loadBackups();
+        } catch (err: any) {
+            const msg = err?.response?.data?.error || "Failed to upload and restore backup.";
+            toast({ title: "Upload Failed", description: msg, variant: "destructive" });
+        } finally {
+            setUploading(false);
+            setPendingUploadFile(null);
+        }
+    };
+
+    const handleJsonKeyFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        setUploadKeyFile(file);
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+            try {
+                const json = JSON.parse(ev.target?.result as string);
+                const key = json.key_material || json.key || json.encryption_key || json.BACKUP_ENCRYPTION_KEY || '';
+                if (key) {
+                    setUploadKeyValue(key);
+                } else {
+                    toast({ title: "Invalid Key File", description: "JSON file must contain a 'key_material', 'key', or 'encryption_key' field.", variant: "destructive" });
+                }
+            } catch {
+                toast({ title: "Invalid JSON", description: "Could not parse the selected file as JSON.", variant: "destructive" });
+            }
+        };
+        reader.readAsText(file);
+        e.target.value = '';
     };
 
     const handleDeleteBackup = async (id: string) => {
@@ -81,36 +181,6 @@ export default function ServerBackupsPage() {
             loadBackups();
         } catch (err) {
             toast({ title: "Error", description: "Failed to delete backup.", variant: "destructive" });
-        }
-    };
-
-    const handleUploadRestore = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
-        if (!file.name.endsWith('.tar.gz') && !file.name.endsWith('.tgz')) {
-            toast({ title: "Invalid File", description: "Please select a .tar.gz or .tgz backup file.", variant: "destructive" });
-            return;
-        }
-        if (!await confirm({ title: 'Restore from file?', message: `Restore from "${file.name}"? This will overwrite current server state.`, variant: 'destructive', confirmText: 'Restore' })) {
-            e.target.value = '';
-            return;
-        }
-        setUploading(true);
-        try {
-            const formData = new FormData();
-            formData.append('file', file);
-            await api.post('/server/backups/upload-restore/', formData, {
-                headers: { 'Content-Type': 'multipart/form-data' },
-                timeout: 600000, // 10 minute timeout for large files
-            });
-            toast({ title: "Restore Started", description: `Restoring from uploaded file "${file.name}". This may take several minutes.` });
-            loadBackups();
-        } catch (err: any) {
-            const msg = err?.response?.data?.error || "Failed to upload and restore backup.";
-            toast({ title: "Upload Failed", description: msg, variant: "destructive" });
-        } finally {
-            setUploading(false);
-            e.target.value = '';
         }
     };
 
@@ -138,7 +208,7 @@ export default function ServerBackupsPage() {
                             ref={fileInputRef}
                             accept=".tar.gz,.tgz"
                             className="hidden"
-                            onChange={handleUploadRestore}
+                            onChange={handleFileSelected}
                         />
                         <Button
                             variant="outline"
@@ -255,6 +325,138 @@ export default function ServerBackupsPage() {
                     </CardContent>
                 </Card>
             </div>
+
+            {/* Encryption key prompt modal (for existing backup restore) */}
+            {keyPromptOpen && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 animate-in fade-in duration-200">
+                    <div className="bg-background border border-border rounded-lg p-6 max-w-md w-full mx-4 shadow-lg">
+                        <div className="flex items-center gap-2 mb-4">
+                            <Key className="h-5 w-5 text-amber-500" />
+                            <h3 className="text-lg font-semibold">Encryption Key Required</h3>
+                        </div>
+                        <p className="text-sm text-muted-foreground mb-2">
+                            {keyPromptError}
+                        </p>
+                        <p className="text-xs text-muted-foreground mb-4">
+                            This backup was encrypted on a different master. Enter the source master&apos;s
+                            backup encryption key to decrypt and restore it.
+                        </p>
+                        <Input
+                            type="password"
+                            placeholder="Backup encryption key"
+                            value={keyPromptValue}
+                            onChange={(e) => setKeyPromptValue(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') submitEncryptionKey(); }}
+                            autoFocus
+                            className="mb-4"
+                        />
+                        <div className="flex justify-end gap-2">
+                            <Button
+                                variant="outline"
+                                onClick={() => { setKeyPromptOpen(false); setKeyPromptValue(''); }}
+                                disabled={keyPromptSubmitting}
+                            >
+                                Cancel
+                            </Button>
+                            <Button
+                                onClick={submitEncryptionKey}
+                                disabled={keyPromptSubmitting || !keyPromptValue.trim()}
+                            >
+                                {keyPromptSubmitting ? (
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                ) : (
+                                    <Key className="mr-2 h-4 w-4" />
+                                )}
+                                Restore
+                            </Button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Upload key prompt modal (for file upload restore) */}
+            {uploadKeyPromptOpen && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 animate-in fade-in duration-200">
+                    <div className="bg-background border border-border rounded-lg p-6 max-w-md w-full mx-4 shadow-lg">
+                        <div className="flex items-center gap-2 mb-4">
+                            <FileKey className="h-5 w-5 text-amber-500" />
+                            <h3 className="text-lg font-semibold">Encryption Key (Optional)</h3>
+                        </div>
+                        <p className="text-sm text-muted-foreground mb-4">
+                            If this backup was encrypted on a different server, enter or upload
+                            the source backup encryption key. Skip if the backup is from the same server.
+                        </p>
+
+                        {/* Text input */}
+                        <Input
+                            type="password"
+                            placeholder="Backup encryption key (or leave blank to skip)"
+                            value={uploadKeyValue}
+                            onChange={(e) => setUploadKeyValue(e.target.value)}
+                            className="mb-3"
+                        />
+
+                        {/* JSON file upload */}
+                        <div className="flex items-center gap-2 mb-4">
+                            <input
+                                type="file"
+                                ref={jsonKeyInputRef}
+                                accept=".json"
+                                className="hidden"
+                                onChange={handleJsonKeyFile}
+                            />
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => jsonKeyInputRef.current?.click()}
+                            >
+                                <FileKey className="mr-2 h-4 w-4" />
+                                {uploadKeyFile ? uploadKeyFile.name : 'Upload Key JSON'}
+                            </Button>
+                            {uploadKeyFile && (
+                                <span className="text-xs text-muted-foreground truncate max-w-[180px]">
+                                    {uploadKeyFile.name}
+                                </span>
+                            )}
+                        </div>
+
+                        <p className="text-xs text-muted-foreground mb-4">
+                            JSON format: {`{ "key_material": "...", "key_id": "..." }`}
+                        </p>
+
+                        <div className="flex justify-end gap-2">
+                            <Button
+                                variant="outline"
+                                onClick={() => {
+                                    setUploadKeyPromptOpen(false);
+                                    setPendingUploadFile(null);
+                                }}
+                                disabled={uploading}
+                            >
+                                Cancel
+                            </Button>
+                            <Button
+                                variant="secondary"
+                                onClick={() => handleUploadRestore(undefined)}
+                                disabled={uploading}
+                            >
+                                Skip — Use Server Key
+                            </Button>
+                            <Button
+                                onClick={() => handleUploadRestore(uploadKeyValue.trim() || undefined)}
+                                disabled={uploading || !uploadKeyValue.trim()}
+                            >
+                                {uploading ? (
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                ) : (
+                                    <Upload className="mr-2 h-4 w-4" />
+                                )}
+                                {uploadKeyValue.trim() ? 'Upload & Restore' : 'Skip & Restore'}
+                            </Button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </DashboardShell>
     );
 }
