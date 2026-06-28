@@ -115,7 +115,7 @@ export default function AISettingsPage() {
       </Alert>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {data?.providers.map((provider: AIProviderInfo) => (
+        {data?.providers?.map((provider: AIProviderInfo) => (
           <Card key={provider.id} className={`${!provider.configured ? 'opacity-70' : ''}`}>
             <CardHeader className="pb-3 flex flex-row items-start justify-between space-y-0">
               <div>
