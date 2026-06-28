@@ -2208,6 +2208,21 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
         "ELASTICSEARCH": ["elasticsearch", "opensearchpy", "@elastic/elasticsearch"],
         "MINIO":         ["minio"],
     }
+    # Frontend services (Next.js, Nuxt, or named "frontend") should NOT
+    # have database/Redis/infra addons — they talk to backends via HTTP APIs.
+    # Strip addon-specific env vars BEFORE detection so addons aren't assigned.
+    _FRONTEND_STACKS = frozenset({"nextjs", "nuxt"})
+    _ADDON_ALL_KEYS = {k.upper() for keys in _ADDON_ENV_VARS.values() for k in keys}
+    for svc in deployable:
+        stack = str(svc.get("stack") or "").lower().strip()
+        name = str(svc.get("name") or "").lower()
+        if stack in _FRONTEND_STACKS or "frontend" in name:
+            env_map = svc.get("env_vars", {})
+            if isinstance(env_map, dict):
+                for ek in list(env_map.keys()):
+                    if ek.upper() in _ADDON_ALL_KEYS:
+                        del env_map[ek]
+
     for svc in deployable:
         env_map = svc.get("env_vars", {})
         if not isinstance(env_map, dict):
