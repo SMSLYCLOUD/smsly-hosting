@@ -76,22 +76,26 @@ export function useGraphData(pollInterval: number = 0): UseGraphDataResult {
     try {
       const [userResp, ecosystemGraph] = await Promise.all([
         api.get('/topology/'),
-        fetchEcosystem(),
+        fetchEcosystem().catch(() => null),
       ]);
 
       const userGraph: TopologyGraph = userResp.data || { nodes: [], edges: [] };
 
-      const ecoNodes = ecosystemGraph.nodes.map(ecosystemNodeToTopologyNode);
-      const ecoEdges = ecosystemGraph.edges.map(ecosystemEdgeToTopologyEdge);
+      if (ecosystemGraph) {
+        const ecoNodes = ecosystemGraph.nodes.map(ecosystemNodeToTopologyNode);
+        const ecoEdges = ecosystemGraph.edges.map(ecosystemEdgeToTopologyEdge);
 
-      const mergedEdges = [...ecoEdges, ...userGraph.edges];
-      const existingNodeIds = new Set(ecoNodes.map(n => n.id));
-      const mergedNodes = [
-        ...ecoNodes,
-        ...userGraph.nodes.filter(n => !existingNodeIds.has(n.id)),
-      ];
+        const mergedEdges = [...ecoEdges, ...userGraph.edges];
+        const existingNodeIds = new Set(ecoNodes.map(n => n.id));
+        const mergedNodes = [
+          ...ecoNodes,
+          ...userGraph.nodes.filter(n => !existingNodeIds.has(n.id)),
+        ];
 
-      setData({ nodes: mergedNodes, edges: mergedEdges });
+        setData({ nodes: mergedNodes, edges: mergedEdges });
+      } else {
+        setData(userGraph);
+      }
       setError(null);
     } catch (err: any) {
       setError(err);
