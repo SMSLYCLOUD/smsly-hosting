@@ -1,0 +1,19 @@
+services:
+  falco:
+    image: falcosecurity/falco:latest
+    container_name: smsly-falco
+    privileged: true
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/host/var/run/docker.sock:ro,z
+      - /dev:/host/dev:ro,z
+      - /proc:/host/proc:ro,z
+      - /boot:/host/boot:ro,z
+      - /lib/modules:/host/lib/modules:ro,z
+      - /usr:/host/usr:ro,z
+      - /etc:/host/etc:ro,z
+    environment:
+      - FALCO_BPF_PROBE=
+    command: ["/usr/bin/falco", "-K", "/host/var/run/docker.sock", "-o", "json_output=true"]
+    labels:
+      - managed_by=smsly-hosting
