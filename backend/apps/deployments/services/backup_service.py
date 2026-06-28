@@ -1262,6 +1262,10 @@ class BackupService:
             backup.completed_at = timezone.now()
             backup.save()
             self._prune_old_backups(ServerBackup)
+
+            # Upload to S3 if a cloud destination is configured
+            _upload_backup_to_cloud(backup, filepath, 'server')
+
             return backup
 
         except Exception as e:
@@ -2467,10 +2471,15 @@ def _upload_backup_to_cloud(backup, filepath, service_name):
     """
     try:
         from apps.deployments.models_backup import BackupSchedule
-        sched = BackupSchedule.objects.filter(
-            service_id=getattr(backup, 'service_id', None),
-            enabled=True, storage_backend='s3',
-        ).first() if hasattr(backup, 'service_id') else None
+        service_id = getattr(backup, 'service_id', None)
+        if service_id:
+            sched = BackupSchedule.objects.filter(
+                service_id=service_id, enabled=True, storage_backend='s3',
+            ).first()
+        else:
+            sched = BackupSchedule.objects.filter(
+                is_server_wide=True, enabled=True, storage_backend='s3',
+            ).first()
         if not sched or not sched.s3_bucket or not sched.s3_access_key:
             return False
         s3_key = f"smsly-backups/{service_name}/{os.path.basename(filepath)}"
@@ -2510,6 +2519,14 @@ def _resolve_cloud_config(backup):
         if sched and sched.s3_bucket and sched.s3_access_key:
             service_name = getattr(getattr(backup, 'service', None), 'name', 'unknown')
             derived_key = f"smsly-backups/{service_name}/{os.path.basename(backup.file_path or 'unknown')}"
+            return (sched.s3_bucket, derived_key, sched.s3_endpoint,
+                    sched.s3_region, sched.s3_access_key, sched.s3_secret_key)
+    else:
+        sched = BackupSchedule.objects.filter(
+            is_server_wide=True, enabled=True, storage_backend='s3',
+        ).first()
+        if sched and sched.s3_bucket and sched.s3_access_key:
+            derived_key = f"smsly-backups/server/{os.path.basename(backup.file_path or 'unknown')}"
             return (sched.s3_bucket, derived_key, sched.s3_endpoint,
                     sched.s3_region, sched.s3_access_key, sched.s3_secret_key)
     return None, None, None, None, None, None
@@ -2627,6 +2644,15 @@ def purge_user_backups(user_id) -> dict:
                     "GDPR: failed to delete server backup file %s: %s",
                     backup.file_path, exc,
                 )
+        # Also remove cloud object if server backup was uploaded
+        if getattr(backup, 'cloud_uploaded', False):
+            bucket, key, endpoint, region, access_key, secret_key = _resolve_cloud_config(backup)
+            if bucket and key:
+                if delete_cloud_backup_object(
+                    bucket, key, endpoint=endpoint, region=region,
+                    access_key=access_key, secret_key=secret_key,
+                ):
+                    counters['cloud_objects_deleted'] += 1
     if server_backups:
         ServerBackup.objects.filter(
             id__in=[sb.id for sb in server_backups]
