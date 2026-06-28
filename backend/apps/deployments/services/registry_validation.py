@@ -68,9 +68,9 @@ def _registry_prefix_for(image: str) -> str:
     return image[:first_slash]
 
 
-def validate_image_registry(image: str) -> str:
+def validate_image_registry(image: str, service=None) -> str:
     """Restrict ``image`` to a Docker-safe reference whose registry
-    host is on the platform allowlist.
+    host is on the platform allowlist or user's custom credentials.
 
     Returns the cleaned image string. Raises ``ValueError`` if the
     image is malformed, contains shell metacharacters, or points at
@@ -88,13 +88,23 @@ def validate_image_registry(image: str) -> str:
             "image must not contain whitespace or shell metacharacters."
         )
     prefix = _registry_prefix_for(image)
+    
+    allowed_hosts = list(ALLOWED_IMAGE_REGISTRY_HOSTS)
+    if service and getattr(service, 'owner_id', None):
+        from apps.deployments.models_registry import RegistryCredential
+        custom_creds = RegistryCredential.objects.filter(owner_id=service.owner_id, is_active=True)
+        for cred in custom_creds:
+            if cred.registry_url:
+                clean_url = cred.registry_url.replace("https://", "").replace("http://", "").split("/")[0]
+                allowed_hosts.append(clean_url)
+
     if not any(
         prefix == allowed or prefix.startswith(allowed + "/")
-        for allowed in ALLOWED_IMAGE_REGISTRY_HOSTS
+        for allowed in allowed_hosts
     ):
         raise ValueError(
             f"image registry {prefix!r} is not on the platform allowlist. "
-            f"Allowed: {', '.join(ALLOWED_IMAGE_REGISTRY_HOSTS)}."
+            f"Allowed: {', '.join(allowed_hosts)}."
         )
     return image
 

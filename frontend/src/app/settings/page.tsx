@@ -26,7 +26,7 @@ import { PlatformSettingsTab } from "@/components/settings/PlatformSettingsTab";
 import { SecurityTab } from "@/components/settings/SecurityTab";
 import { TeamsTab } from "@/components/settings/TeamsTab";
 import { AlertsTab } from "@/components/settings/AlertsTab";
-
+import { RegistryCredentialsTab } from "@/components/settings/RegistryCredentialsTab";
 import BackupKeysTab from "@/components/settings/BackupKeysTab";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
@@ -112,7 +112,8 @@ const SETTINGS_SECTIONS = [
   { value: "backups", label: "Backups", icon: Cloud },
   { value: "infra", label: "Infra", icon: Server },
   { value: "platform", label: "Platform", icon: Globe },
-    { value: "maintenance", label: "Maintenance", icon: Server },
+  { value: "registry", label: "Registry", icon: Cloud },
+  { value: "maintenance", label: "Maintenance", icon: Server },
 ] as const;
 
 export default function SettingsPage() {
@@ -1483,6 +1484,10 @@ export default function SettingsPage() {
           ) : (
             <div className="flex items-center justify-center py-8"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
           )}
+        </TabsContent>
+
+        <TabsContent value="registry">
+          <RegistryCredentialsTab />
         </TabsContent>
 
         <TabsContent value="maintenance">

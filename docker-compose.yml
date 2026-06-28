@@ -700,6 +700,35 @@ services:
       retries: 3
 
   # ============================================================
+  # CrowdSec (WAF & IPS)
+  # ============================================================
+  crowdsec:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
+    image: crowdsecurity/crowdsec:latest
+    container_name: smsly-crowdsec
+    restart: unless-stopped
+    environment:
+      COLLECTIONS: "crowdsecurity/traefik crowdsecurity/http-cve crowdsecurity/base-http-scenarios"
+    volumes:
+      - crowdsec_data:/var/lib/crowdsec/data
+      - crowdsec_config:/etc/crowdsec
+      - ./infrastructure/crowdsec/acquis.yaml:/etc/crowdsec/acquis.yaml:ro,z
+      - ./infrastructure/crowdsec/profiles.yaml:/etc/crowdsec/profiles.yaml:ro,z
+      - traefik_logs:/var/log/traefik:ro
+    networks:
+      - smsly-net
+    healthcheck:
+      test: ["CMD-SHELL", "cscli version || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - managed_by=smsly-hosting
+
+  # ============================================================
   # Traefik (reverse proxy for wildcard subdomains)
   # Routes *.grid.smsly.cloud to deployed service containers via
   # Docker labels. Reads Docker API through the socket-proxy.
@@ -732,16 +761,22 @@ services:
     - --api.insecure=true
     - --log.level=WARN
     - --ping=true
-    - --accesslog=false
+    - --accesslog=true
+    - --accesslog.filepath=/var/log/traefik/access.log
     - --providers.docker.allowEmptyServices=true
+    - --experimental.plugins.crowdsec-bouncer.modulename=github.com/maxmcd/traefik-crowdsec-bouncer
+    - --experimental.plugins.crowdsec-bouncer.version=v1.3.3
     ports:
     - "127.0.0.1:8081:80"
     - "127.0.0.1:8443:443"
     - 127.0.0.1:8082:8082
     volumes:
     - letsencrypt_data:/letsencrypt
+    - traefik_logs:/var/log/traefik
     depends_on:
       socket-proxy:
+        condition: service_healthy
+      crowdsec:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "traefik", "healthcheck", "--ping"]
@@ -840,3 +875,6 @@ volumes:
   letsencrypt_data:
   static_volume:
   media_volume:
+  traefik_logs:
+  crowdsec_data:
+  crowdsec_config:

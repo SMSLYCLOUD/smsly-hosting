@@ -599,6 +599,39 @@ services:
       resources:
         limits:
           memory: ${ROUTE_FALLBACK_MEMORY_LIMIT:-128M}
+  crowdsec:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
+    image: crowdsecurity/crowdsec:latest
+    container_name: smsly-crowdsec
+    restart: unless-stopped
+    environment:
+      COLLECTIONS: "crowdsecurity/traefik crowdsecurity/http-cve crowdsecurity/base-http-scenarios"
+      ENROLL_KEY: "${CROWDSEC_ENROLL_KEY:-}"
+      ENROLL_INSTANCE_NAME: "${DOMAIN:-smsly-hosting}"
+    volumes:
+      - crowdsec_data:/var/lib/crowdsec/data
+      - crowdsec_config:/etc/crowdsec
+      - ./infrastructure/crowdsec/acquis.yaml:/etc/crowdsec/acquis.yaml:ro,z
+      - ./infrastructure/crowdsec/profiles.yaml:/etc/crowdsec/profiles.yaml:ro,z
+      - traefik_logs:/var/log/traefik:ro
+    networks:
+      - smsly-net
+    healthcheck:
+      test: ["CMD-SHELL", "cscli version || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - managed_by=smsly-hosting
+    deploy:
+      resources:
+        limits:
+          cpus: '${CROWDSEC_CPU_LIMIT:-0.50}'
+          memory: ${CROWDSEC_MEMORY_LIMIT:-512M}
+
   traefik:
     image: traefik:v3.6
     restart: unless-stopped
@@ -626,14 +659,21 @@ services:
     - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
     - --log.level=WARN
     - --ping=true
+    - --accesslog=true
+    - --accesslog.filepath=/var/log/traefik/access.log
+    - --experimental.plugins.crowdsec-bouncer.modulename=github.com/maxmcd/traefik-crowdsec-bouncer
+    - --experimental.plugins.crowdsec-bouncer.version=v1.3.3
     ports:
     - "${TRAEFIK_HTTP_BIND:-127.0.0.1:8081}:80"
     - "${TRAEFIK_HTTPS_BIND:-127.0.0.1:8443}:443"
     - 127.0.0.1:8082:8082
     volumes:
     - letsencrypt_data:/letsencrypt
+    - traefik_logs:/var/log/traefik
     depends_on:
       socket-proxy:
+        condition: service_healthy
+      crowdsec:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "traefik", "healthcheck", "--ping"]
@@ -820,3 +860,6 @@ volumes:
   apt_log: null
   verdaccio_data: null
   buildkit_data: null
+  traefik_logs: null
+  crowdsec_data: null
+  crowdsec_config: null

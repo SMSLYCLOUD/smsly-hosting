@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { EnvVarEditor, type EnvVar } from "@/components/dashboard/env-var-editor"
 import { useToast } from "@/components/ui/use-toast"
 import { BuildpackSelector, BuildpackType } from "@/components/deployments/BuildpackSelector"
-import api, { serversApi, servicesApi, deployApi, projectsApi, ManagedServer, Project } from "@/lib/api"
+import api, { serversApi, servicesApi, deployApi, projectsApi, registryCredentialsApi, ManagedServer, Project } from "@/lib/api"
 import { templatesApi } from "@/lib/api"
 import { slugify } from "@/lib/utils"
 import { motion, AnimatePresence } from "framer-motion"
@@ -62,6 +62,8 @@ export default function NewServicePage() {
   const [repoUrl, setRepoUrl] = React.useState("")
   const [selectedTemplate, setSelectedTemplate] = React.useState<string | null>(null)
   const [dockerImage, setDockerImage] = React.useState("")
+  const [registryCredentials, setRegistryCredentials] = React.useState<any[]>([])
+  const [registryCredentialId, setRegistryCredentialId] = React.useState<string>("none")
 
   // Config state
   const [name, setName] = React.useState("")
@@ -126,6 +128,8 @@ export default function NewServicePage() {
     templatesApi.list().then(setTemplates).catch(() => {})
     // Load projects for the project selector
     projectsApi.list().then(setProjectsList).catch(() => {})
+    // Load registry credentials
+    registryCredentialsApi.list().then(setRegistryCredentials).catch(() => {})
   }, [])
 
   const filteredRepos = gitRepos.filter(r => {
@@ -308,7 +312,8 @@ export default function NewServicePage() {
           cpu_cores: cpuCores,
           memory_mb: memoryMb,
           regions: [],
-          ...(selectedProject && selectedProject !== "none" ? { project: selectedProject } : {})
+          ...(selectedProject && selectedProject !== "none" ? { project: selectedProject } : {}),
+          ...(sourceType === "docker" && registryCredentialId !== "none" ? { registry_credential: registryCredentialId } : {})
       }, localOnlyRequest)
 
       // Set Env Vars
@@ -615,13 +620,33 @@ export default function NewServicePage() {
                 )}
 
                 {sourceType === "docker" && (
-                  <div className="space-y-2">
-                    <Label>Docker Image</Label>
-                    <Input
-                      placeholder="ghcr.io/org/app:latest"
-                      value={dockerImage}
-                      onChange={(e) => setDockerImage(e.target.value)}
-                    />
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <Label>Docker Image</Label>
+                      <Input
+                        placeholder="ghcr.io/org/app:latest"
+                        value={dockerImage}
+                        onChange={(e) => setDockerImage(e.target.value)}
+                      />
+                    </div>
+                    {registryCredentials.length > 0 && (
+                      <div className="space-y-2">
+                        <Label>Registry Credential (Optional)</Label>
+                        <Select value={registryCredentialId} onValueChange={setRegistryCredentialId}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select credential..." />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="none">No credential (public image)</SelectItem>
+                            {registryCredentials.map(cred => (
+                              <SelectItem key={cred.id} value={cred.id}>
+                                {cred.name} ({cred.provider})
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
                   </div>
                 )}
               </motion.div>

@@ -325,7 +325,11 @@ class Service(TimeStampedModel):
         help_text="Runtime environment (e.g. nodejs18, python3.9)")
 
     docker_image = models.CharField(max_length=255, blank=True, null=True)  # type: ignore[var-annotated]
-
+    registry_credential = models.ForeignKey(  # type: ignore[var-annotated]
+        'deployments.RegistryCredential', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='services',
+        help_text='Private registry credentials for image pulls'
+    )
     owner = models.ForeignKey(  # type: ignore[var-annotated]
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
