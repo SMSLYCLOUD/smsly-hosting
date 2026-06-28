@@ -430,7 +430,7 @@ def _detect_env_vars(files: list[str], stack: str, port: int,
     # Recognise key config files by name and inject their well-known env vars.
     basenames = {os.path.basename(f) for f in files}
 
-    if '.env.example' in basenames or '.env.sample' in basenames or '.env.template' in basenames:
+    if '.env.example' in basenames or '.env.sample' in basenames or '.env.template' in basenames or '.env.production' in basenames:
         var_keys.extend([
             'DATABASE_URL', 'SECRET_KEY', 'REDIS_URL', 'API_KEY',
             'OPENAI_API_KEY', 'GEMINI_API_KEY',
@@ -448,7 +448,11 @@ def _detect_env_vars(files: list[str], stack: str, port: int,
     # 2. Scan .env.example / .env.sample / .env.template from cloned files
     if clone_dir:
         env_example_files = [f for f in files
-                             if os.path.basename(f) in ('.env.example', '.env.sample', '.env.template', '.env')]
+                             if os.path.basename(f) in (
+                                 '.env.example', '.env.sample', '.env.template', '.env',
+                                 '.env.production', '.env.local', '.env.development',
+                                 '.env.staging', '.env.test',
+                             )]
         for ef in env_example_files:
             try:
                 full_path = os.path.join(clone_dir, ef)
@@ -561,8 +565,6 @@ _KNOWN_ENV_SUFFIXES = frozenset({
     "_PATH", "_DIR", "_FILE", "_DIRECTORY", "_ID", "_ARN",
 })
 
-_MAX_DEEP_ENV_VARS = 60
-
 def _is_well_known_env_var(name: str) -> bool:
     upper = name.upper().strip()
     if not upper:
@@ -581,13 +583,6 @@ def _merge_deep_env(env_map: dict[str, str], deep_env: dict[str, list[str]]) -> 
     """Merge deep-scanned env vars into env_map, filtering to only well-known vars."""
     added = 0
     for var_name in deep_env:
-        if added >= _MAX_DEEP_ENV_VARS:
-            logger.warning(
-                "Deep-env merge capped at %d vars (repo has %d total detected). "
-                "Increase _MAX_DEEP_ENV_VARS if legitimate vars are missing.",
-                _MAX_DEEP_ENV_VARS, len(deep_env),
-            )
-            break
         upper_key = var_name.upper()
         if upper_key in env_map:
             continue
@@ -601,6 +596,61 @@ def _merge_deep_env(env_map: dict[str, str], deep_env: dict[str, list[str]]) -> 
     if added:
         logger.debug("Merged %d deep-scanned env vars into heuristic env", added)
     return env_map
+
+
+def _force_merge_scanner_env_vars(services: list[dict], repos_data: list[dict]):
+    """Post-AI safety net: merge EVERY scanner-detected env var into the plan.
+
+    The AI is strictly forbidden from dropping any env var found by the
+    RepoScanner.  This function runs after _apply_generic_ecosystem_intelligence
+    and adds any vars that the AI omitted.  It uses the SAME well-known filter
+    as _merge_deep_env but WITHOUT the hard cap, because .env files are
+    developer-curated — every var in them is legitimate.
+
+    Only vars that are already in the plan (with SERVICE/SHARED_SECRET
+    placeholders) are preserved; missing vars get a ``{{GENERATE}}`` placeholder
+    or an empty value so the user can fill them in the dashboard.
+    """
+    repo_to_deep: dict[str, dict[str, list[str]]] = {}
+    for rd in repos_data:
+        repo = str(rd.get("repo") or "").strip().lower()
+        deep = rd.get("env_vars_context")
+        if repo and isinstance(deep, dict):
+            repo_to_deep[repo] = deep
+
+    for svc in services:
+        if not isinstance(svc, dict):
+            continue
+        repo = str(svc.get("repo") or "").strip().lower()
+        deep_env = repo_to_deep.get(repo)
+        if not deep_env:
+            continue
+
+        env_map = svc.get("env_vars")
+        if not isinstance(env_map, dict):
+            env_map = {}
+            svc["env_vars"] = env_map
+
+        added = 0
+        for var_name, contexts in deep_env.items():
+            upper_key = var_name.upper().strip()
+            if not upper_key:
+                continue
+            if upper_key in env_map:
+                continue
+            if not _is_well_known_env_var(upper_key):
+                continue
+            fill = "{{GENERATE}}" if any(
+                w in upper_key for w in ("SECRET", "KEY", "TOKEN", "PASSWORD")
+            ) else ""
+            env_map[upper_key] = fill
+            added += 1
+
+        if added:
+            logger.info(
+                "Post-AI env-var merge: added %d scanner-detected var(s) "
+                "that AI dropped for %s", added, repo,
+            )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1058,6 +1108,10 @@ def analyze_ecosystem(repos_data: list[dict], github_token: str | None = None, a
                             break
 
                 _apply_plan_repo_defaults(plan["services"], repos_data)
+                # Force-merge scanner-detected env vars that the AI dropped.
+                # This MUST happen before _apply_generic_ecosystem_intelligence
+                # so cross-service secret mapping can find vars like GATEWAY_SECRET.
+                _force_merge_scanner_env_vars(plan["services"], repos_data)
                 _apply_generic_ecosystem_intelligence(plan["services"])
                 _ai_env_crosscheck(plan["services"], ai_provider)
                 plan["addons"] = _rebuild_addons_manifest(plan["services"], plan.get("addons", []))
@@ -1345,6 +1399,7 @@ def analyze_ecosystem_chunked(repos_data: list[dict], github_token: str | None =
                     break
 
         _apply_plan_repo_defaults(global_services, repos_data)
+        _force_merge_scanner_env_vars(global_services, repos_data)
         _apply_generic_ecosystem_intelligence(global_services)
         _ai_env_crosscheck(global_services, ai_provider)
     except TypeError as exc:
