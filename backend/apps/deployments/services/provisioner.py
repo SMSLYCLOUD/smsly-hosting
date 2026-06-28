@@ -809,15 +809,38 @@ def _get_ssh_client(server: ManagedServer) -> paramiko.SSHClient:
             pkey = paramiko.RSAKey.from_private_key(key_file)
         except paramiko.SSHException:
             key_file.seek(0)
-            pkey = paramiko.Ed25519Key.from_private_key(key_file)
+            try:
+                pkey = paramiko.Ed25519Key.from_private_key(key_file)
+            except paramiko.SSHException:
+                pkey = None
         if pkey is not None:
             connect_kwargs["pkey"] = pkey
+        elif server.ssh_password:
+            # Key couldn't be parsed — fall back to password
+            connect_kwargs["password"] = server.ssh_password
+        else:
+            raise ValueError("SSH key is present but could not be parsed, and no password fallback available.")
     elif server.ssh_password:
         connect_kwargs["password"] = server.ssh_password
     else:
         raise ValueError("No SSH credentials provided (need password or key)")
 
-    client.connect(**connect_kwargs)
+    # Try key auth first; if it fails (e.g. stale key from prior provision
+    # on a re-provisioned VPS), fall back to password auth.
+    try:
+        client.connect(**connect_kwargs)
+    except paramiko.AuthenticationException:
+        if "pkey" in connect_kwargs and server.ssh_password:
+            logger.warning(
+                "SSH key auth failed for %s — falling back to password "
+                "(key may be stale from prior provisioning).",
+                server.host,
+            )
+            connect_kwargs.pop("pkey")
+            connect_kwargs["password"] = server.ssh_password
+            client.connect(**connect_kwargs)
+        else:
+            raise
     return client
 
 
