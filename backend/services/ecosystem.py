@@ -602,14 +602,15 @@ def _force_merge_scanner_env_vars(services: list[dict], repos_data: list[dict]):
     """Post-AI safety net: merge EVERY scanner-detected env var into the plan.
 
     The AI is strictly forbidden from dropping any env var found by the
-    RepoScanner.  This function runs after _apply_generic_ecosystem_intelligence
-    and adds any vars that the AI omitted.  It uses the SAME well-known filter
-    as _merge_deep_env but WITHOUT the hard cap, because .env files are
-    developer-curated — every var in them is legitimate.
+    RepoScanner.  This function runs BEFORE _apply_generic_ecosystem_intelligence
+    so that cross-service secret mapping (e.g. GATEWAY_SECRET ->
+    {{SHARED_SECRET:gateway_secret}}) fires for vars the AI omitted.
+    It uses the SAME well-known filter as _merge_deep_env but WITHOUT any cap,
+    because .env files are developer-curated — every var in them is legitimate.
 
-    Only vars that are already in the plan (with SERVICE/SHARED_SECRET
-    placeholders) are preserved; missing vars get a ``{{GENERATE}}`` placeholder
-    or an empty value so the user can fill them in the dashboard.
+    Only vars already in the plan (with SERVICE/SHARED_SECRET placeholders) are
+    preserved; missing vars get a ``{{GENERATE}}`` placeholder so the user can
+    fill them in the dashboard.
     """
     repo_to_deep: dict[str, dict[str, list[str]]] = {}
     for rd in repos_data:
