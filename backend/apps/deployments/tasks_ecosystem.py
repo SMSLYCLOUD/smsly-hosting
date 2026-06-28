@@ -1870,15 +1870,23 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                         EnvironmentIntelligenceService,
                     )
 
-                    senate_suggestions = EnvironmentIntelligenceService.resolve_environment(
-                        {},  # No detailed context; the service will generate defaults.
-                        stack,
-                        service.name,
-                    )
-                    # Merge suggestions without overwriting explicit values.
-                    for k, v in senate_suggestions.items():
-                        if k not in resolved_env:
-                            resolved_env[k] = v
+                    # Only pass existing env vars as context — Senate fills
+                    # values for vars the user already has, not inject new ones.
+                    _empty_vars = {
+                        k: v for k, v in resolved_env.items()
+                        if not v or v in ("", "{{GENERATE}}", "{{FILL_ME}}")
+                        or str(v).startswith("REPLACE_WITH_")
+                    }
+                    if _empty_vars:
+                        senate_suggestions = EnvironmentIntelligenceService.resolve_environment(
+                            _empty_vars,
+                            stack,
+                            service.name,
+                        )
+                        # Only fill existing vars with empty values — never add new ones.
+                        for k, v in senate_suggestions.items():
+                            if k in resolved_env and (not resolved_env[k] or resolved_env[k] in ("", "{{GENERATE}}", "{{FILL_ME}}")):
+                                resolved_env[k] = v
                 except Exception as exc:
                     logger.warning("AI Senate enrichment failed for %s: %s", service.name, exc)
 
