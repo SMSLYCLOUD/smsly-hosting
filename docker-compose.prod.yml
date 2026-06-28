@@ -100,8 +100,15 @@ services:
       REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /var/lib/registry
       REGISTRY_STORAGE_DELETE_ENABLED: "true"
       REGISTRY_HTTP_ADDR: ":5000"
+      REGISTRY_HTTP_SECRET: ${REGISTRY_HTTP_SECRET:-}
+      REGISTRY_HTTP_TLS_CERTIFICATE: /certs/registry.crt
+      REGISTRY_HTTP_TLS_KEY: /certs/registry.key
+      REGISTRY_AUTH_HTPASSWD_REALM: registry-realm
+      REGISTRY_AUTH_HTPASSWD_PATH: /auth/htpasswd
     volumes:
       - registry_data:/var/lib/registry
+      - ./certs:/certs:ro
+      - ./auth:/auth:ro
     healthcheck:
       test:
       - CMD-SHELL
