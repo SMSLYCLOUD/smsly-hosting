@@ -5,16 +5,25 @@ import { DashboardShell } from '@/components/layout/DashboardShell';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Loader2, Download, RotateCcw, Archive, Trash2, Upload, Key, FileKey } from 'lucide-react';
+import { Loader2, Download, RotateCcw, Archive, Trash2, Upload, Key, FileKey, Cloud, Clock } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { Input } from '@/components/ui/input';
 import api from '@/lib/api';
 
+interface CloudDestination {
+    id: string;
+    name: string;
+    provider_display: string;
+    bucket: string;
+}
+
 export default function ServerBackupsPage() {
     const { toast } = useToast();
     const confirm = useConfirm();
     const [backups, setBackups] = useState<any[]>([]);
+    const [destinations, setDestinations] = useState<CloudDestination[]>([]);
+    const [selectedDestination, setSelectedDestination] = useState<string>('');
     const [loading, setLoading] = useState(true);
     const [creating, setCreating] = useState(false);
     const [restoringId, setRestoringId] = useState<string | null>(null);
@@ -35,14 +44,65 @@ export default function ServerBackupsPage() {
     const [uploadKeyFile, setUploadKeyFile] = useState<File | null>(null);
     const [pendingUploadFile, setPendingUploadFile] = useState<File | null>(null);
 
+    // Cloud Restore Modal State
+    const [cloudRestorePromptOpen, setCloudRestorePromptOpen] = useState(false);
+    const [cloudRestoreForm, setCloudRestoreForm] = useState({
+        s3_bucket: '',
+        s3_key: '',
+        s3_endpoint: '',
+        s3_region: 'us-east-1',
+        s3_access_key: '',
+        s3_secret_key: '',
+        encryption_key: ''
+    });
+
+    // Schedule state
+    const [schedule, setSchedule] = useState<any | null>(null);
+    const [cronExpression, setCronExpression] = useState('0 3 * * *');
+    const [retentionDays, setRetentionDays] = useState(7);
+    const [scheduleEnabled, setScheduleEnabled] = useState(true);
+    const [scheduleCloudDest, setScheduleCloudDest] = useState('');
+    const [savingSchedule, setSavingSchedule] = useState(false);
+    const [scheduleLoading, setScheduleLoading] = useState(true);
+
     useEffect(() => {
         loadBackups();
+        loadSchedule();
     }, []);
+
+    const loadSchedule = async () => {
+        try {
+            const res = await api.get('/backup-schedules/', { params: { is_server_wide: true } });
+            const schedules = Array.isArray(res.data) ? res.data : res.data.results || [];
+            const sched = schedules.find((s: any) => s.is_server_wide);
+            if (sched) {
+                setSchedule(sched);
+                setCronExpression(sched.cron_expression);
+                setRetentionDays(sched.retention_days);
+                setScheduleEnabled(sched.enabled);
+                if (sched.cloud_destination) {
+                    setScheduleCloudDest(sched.cloud_destination);
+                }
+            }
+        } catch (err) {
+            console.error('Failed to load server backup schedule', err);
+        } finally {
+            setScheduleLoading(false);
+        }
+    };
 
     const loadBackups = async () => {
         try {
-            const res = await api.get('/server/backups/');
-            setBackups(Array.isArray(res.data) ? res.data : res.data.results || []);
+            const [backupsRes, destsRes] = await Promise.all([
+                api.get('/server/backups/'),
+                api.get('/cloud-storage/')
+            ]);
+            setBackups(Array.isArray(backupsRes.data) ? backupsRes.data : backupsRes.data.results || []);
+            
+            const allDestinations = Array.isArray(destsRes.data) ? destsRes.data : destsRes.data.results || [];
+            // For server backups, we want platform-wide destinations (service=null)
+            const relevant = allDestinations.filter((d: any) => !d.service);
+            setDestinations(relevant);
         } catch (err) {
             console.error(err);
         } finally {
@@ -50,10 +110,41 @@ export default function ServerBackupsPage() {
         }
     };
 
+    const handleSaveSchedule = async () => {
+        setSavingSchedule(true);
+        try {
+            const payload: any = {
+                is_server_wide: true,
+                cron_expression: cronExpression,
+                retention_days: retentionDays,
+                enabled: scheduleEnabled,
+            };
+            
+            if (scheduleCloudDest) {
+                payload.cloud_destination_id = scheduleCloudDest;
+            } else {
+                payload.cloud_destination_id = null;
+                payload.storage_backend = 'local';
+            }
+            if (schedule?.id) {
+                await api.patch(`/backup-schedules/${schedule.id}/`, payload);
+            } else {
+                await api.post('/backup-schedules/', payload);
+            }
+            toast({ title: "Schedule saved", description: "Server backup schedule has been updated." });
+            loadSchedule();
+        } catch (err) {
+            toast({ title: "Error", description: "Failed to save schedule.", variant: "destructive" });
+        } finally {
+            setSavingSchedule(false);
+        }
+    };
+
     const handleCreateBackup = async () => {
         setCreating(true);
         try {
-            await api.post('/server/backups/');
+            const payload = selectedDestination ? { cloud_destination: selectedDestination } : {};
+            await api.post('/server/backups/', payload);
             toast({ title: "Server Backup Started", description: "This captures all services and configuration." });
             loadBackups();
         } catch (err: any) {
@@ -151,6 +242,34 @@ export default function ServerBackupsPage() {
         }
     };
 
+    const handleCloudRestoreSubmit = async () => {
+        if (!cloudRestoreForm.s3_bucket || !cloudRestoreForm.s3_key || !cloudRestoreForm.s3_access_key || !cloudRestoreForm.s3_secret_key) {
+            toast({ title: 'Missing Fields', description: 'Please fill in all required S3 fields.', variant: 'destructive' });
+            return;
+        }
+
+        if (!await confirm({ title: 'Restore from Cloud?', message: `Restore from ${cloudRestoreForm.s3_bucket}/${cloudRestoreForm.s3_key}? This will overwrite current server state.`, variant: 'destructive', confirmText: 'Restore' })) {
+            return;
+        }
+
+        setUploading(true);
+        setCloudRestorePromptOpen(false);
+        try {
+            await api.post('/server/backups/restore-from-cloud/', cloudRestoreForm);
+            toast({ title: "Restore Started", description: `Restoring from cloud backup.` });
+            loadBackups();
+        } catch (err: any) {
+            const msg = err?.response?.data?.error || "Failed to download and restore backup.";
+            toast({ title: "Restore Failed", description: msg, variant: "destructive" });
+        } finally {
+            setUploading(false);
+            setCloudRestoreForm({
+                s3_bucket: '', s3_key: '', s3_endpoint: '', s3_region: 'us-east-1',
+                s3_access_key: '', s3_secret_key: '', encryption_key: ''
+            });
+        }
+    };
+
     const handleJsonKeyFile = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
@@ -210,14 +329,36 @@ export default function ServerBackupsPage() {
                             className="hidden"
                             onChange={handleFileSelected}
                         />
-                        <Button
-                            variant="outline"
-                            onClick={() => fileInputRef.current?.click()}
-                            disabled={uploading}
+                        <div className="flex gap-2">
+                            <Button
+                                variant="outline"
+                                onClick={() => fileInputRef.current?.click()}
+                                disabled={uploading}
+                            >
+                                {uploading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
+                                Restore from File
+                            </Button>
+                            <Button
+                                variant="outline"
+                                onClick={() => setCloudRestorePromptOpen(true)}
+                                disabled={uploading}
+                            >
+                                {uploading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Cloud className="mr-2 h-4 w-4" />}
+                                Restore from Cloud
+                            </Button>
+                        </div>
+                        <select
+                            value={selectedDestination}
+                            onChange={(e) => setSelectedDestination(e.target.value)}
+                            className="px-3 py-2 rounded-lg bg-background border border-border text-sm h-[40px]"
                         >
-                            {uploading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
-                            Restore from File
-                        </Button>
+                            <option value="">Store Locally</option>
+                            {destinations.map(d => (
+                                <option key={d.id} value={d.id}>
+                                    Save to {d.name} ({d.provider_display})
+                                </option>
+                            ))}
+                        </select>
                         <Button onClick={handleCreateBackup} disabled={creating}>
                             {creating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Archive className="mr-2 h-4 w-4" />}
                             Create Full Backup
@@ -248,6 +389,12 @@ export default function ServerBackupsPage() {
                                                 <span className={`text-xs font-semibold px-2 py-1 rounded ${getStatusBadge(backup.status)}`}>
                                                     {backup.status}
                                                 </span>
+                                                {backup.cloud_uploaded && (
+                                                    <span className="flex items-center gap-1 text-[11px] text-blue-400 font-medium ml-2" title="Backed up to Cloud Storage">
+                                                        <Cloud className="w-3 h-3" />
+                                                        Cloud
+                                                    </span>
+                                                )}
                                                 {backup.status === 'FAILED' && backup.error_message && (
                                                     <p className="text-[11px] text-red-400 max-w-[260px] truncate" title={backup.error_message}>
                                                         {backup.error_message}
@@ -452,6 +599,85 @@ export default function ServerBackupsPage() {
                                     <Upload className="mr-2 h-4 w-4" />
                                 )}
                                 {uploadKeyValue.trim() ? 'Upload & Restore' : 'Skip & Restore'}
+                            </Button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Cloud Restore Modal */}
+            {cloudRestorePromptOpen && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 animate-in fade-in duration-200">
+                    <div className="bg-background border border-border rounded-lg p-6 max-w-md w-full mx-4 shadow-lg">
+                        <div className="flex items-center gap-2 mb-4">
+                            <Cloud className="h-5 w-5 text-blue-500" />
+                            <h3 className="text-lg font-semibold">Restore from Cloud</h3>
+                        </div>
+                        <p className="text-sm text-muted-foreground mb-4">
+                            Enter the details of the S3-compatible cloud storage where your backup is located.
+                        </p>
+
+                        <div className="space-y-3 mb-4">
+                            <Input
+                                placeholder="Bucket Name"
+                                value={cloudRestoreForm.s3_bucket}
+                                onChange={(e) => setCloudRestoreForm({ ...cloudRestoreForm, s3_bucket: e.target.value })}
+                            />
+                            <Input
+                                placeholder="Object Key (e.g., smsly-backups/server/backup.tar.gz)"
+                                value={cloudRestoreForm.s3_key}
+                                onChange={(e) => setCloudRestoreForm({ ...cloudRestoreForm, s3_key: e.target.value })}
+                            />
+                            <Input
+                                placeholder="Endpoint URL (e.g., https://s3.eu-west-1.amazonaws.com)"
+                                value={cloudRestoreForm.s3_endpoint}
+                                onChange={(e) => setCloudRestoreForm({ ...cloudRestoreForm, s3_endpoint: e.target.value })}
+                            />
+                            <Input
+                                placeholder="Region (default: us-east-1)"
+                                value={cloudRestoreForm.s3_region}
+                                onChange={(e) => setCloudRestoreForm({ ...cloudRestoreForm, s3_region: e.target.value })}
+                            />
+                            <Input
+                                placeholder="Access Key ID"
+                                value={cloudRestoreForm.s3_access_key}
+                                onChange={(e) => setCloudRestoreForm({ ...cloudRestoreForm, s3_access_key: e.target.value })}
+                            />
+                            <Input
+                                type="password"
+                                placeholder="Secret Access Key"
+                                value={cloudRestoreForm.s3_secret_key}
+                                onChange={(e) => setCloudRestoreForm({ ...cloudRestoreForm, s3_secret_key: e.target.value })}
+                            />
+                            <div className="pt-2 border-t border-border mt-2">
+                                <label className="text-xs font-semibold mb-1 block">Backup Encryption Key (Optional)</label>
+                                <Input
+                                    type="password"
+                                    placeholder="Leave blank if backup isn't encrypted"
+                                    value={cloudRestoreForm.encryption_key}
+                                    onChange={(e) => setCloudRestoreForm({ ...cloudRestoreForm, encryption_key: e.target.value })}
+                                />
+                            </div>
+                        </div>
+
+                        <div className="flex justify-end gap-2">
+                            <Button
+                                variant="outline"
+                                onClick={() => setCloudRestorePromptOpen(false)}
+                                disabled={uploading}
+                            >
+                                Cancel
+                            </Button>
+                            <Button
+                                onClick={handleCloudRestoreSubmit}
+                                disabled={uploading || !cloudRestoreForm.s3_bucket || !cloudRestoreForm.s3_key || !cloudRestoreForm.s3_access_key || !cloudRestoreForm.s3_secret_key}
+                            >
+                                {uploading ? (
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                ) : (
+                                    <Cloud className="mr-2 h-4 w-4" />
+                                )}
+                                Start Restore
                             </Button>
                         </div>
                     </div>

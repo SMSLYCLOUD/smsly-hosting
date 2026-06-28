@@ -882,6 +882,13 @@ def analyze_ecosystem(repos_data: list[dict], github_token: str | None = None, a
 
         # 2. Clone all repos into the workspace
         for rd in repos_data:
+            local_path = rd.get('local_path')
+            if local_path and os.path.exists(local_path):
+                logger.info(f"Bypassing clone, using local path directly: {local_path}")
+                rd['clone_dir'] = local_path
+                rd['repo_name_short'] = os.path.basename(local_path)
+                continue
+
             repo_full = rd.get('repo')
             if not repo_full:
                 continue

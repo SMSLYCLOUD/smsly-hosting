@@ -235,6 +235,12 @@ app.conf.beat_schedule = {
         'schedule': 900.0,
         'options': {'expires': 900.0},
     },
+    # Run scheduled snapshots every 15 minutes
+    'run-scheduled-snapshots-every-15m': {
+        'task': 'apps.deployments.tasks_backup.run_scheduled_snapshots_task',
+        'schedule': 900.0,
+        'options': {'expires': 900.0},
+    },
     # Clean up expired backups every 6 hours
     'cleanup-old-backups-every-6h': {
         'task': 'apps.deployments.tasks_backup.cleanup_old_backups_task',

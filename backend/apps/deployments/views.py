@@ -66,10 +66,11 @@ from .ai_router import (
 from .domain_utils import normalize_domain
 from .models import Deployment, EnvironmentVariable, PlatformConfig, Service  # type: ignore[attr-defined]    # models.py hub no longer re-exports; classes live in models_core.py.
 from .models_audit import AuditLog
-from .models_backup import BackupSchedule, ServerBackup, ServiceBackup, ServiceSnapshot
+from .models_backup import BackupSchedule, ServerBackup, ServiceBackup, ServiceSnapshot, SnapshotSchedule
 from .rate_limiting import BurstRateThrottle, DeploymentRateThrottle
 from .serializers import (
     BackupScheduleSerializer,
+    SnapshotScheduleSerializer,
     DeploymentApproveSerializer,
     DeploymentSerializer,
     DeploymentTimelineSerializer,
@@ -216,6 +217,18 @@ def _check_tier_gates_disabled() -> bool:
     return enabled
 
 MAINTENANCE_ACTIONS = {
+    "registry_gc": {
+        "flag": "--gc",
+        "label": "Garbage Collect Private Registry",
+        "queued_message": "Registry GC queued. Unused layers will be deleted.",
+        "lock_ttl": 3600,
+    },
+    "build_cache": {
+        "flag": "--clear-build-cache",
+        "label": "Clear BuildKit Caches",
+        "queued_message": "Build cache cleanup queued.",
+        "lock_ttl": 900,
+    },
     "clear": {
         "flag": "--clear",
         "label": "Clear orphaned containers",
@@ -4649,7 +4662,7 @@ class SystemConfigView(GenericAPIView):
         action_spec = MAINTENANCE_ACTIONS.get(action)
         if not action_spec:
             return Response(
-                {"error": "Invalid maintenance action specified. Use clear, update, or refresh."},
+                {"error": "Invalid maintenance action specified. Use clear, update, refresh, registry_gc, or build_cache."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -5990,6 +6003,124 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
             'backup_id': str(backup.id),
             'file_size': file_size,
         })
+
+    @action(detail=False, methods=['post'], url_path='restore-from-cloud')
+    def restore_from_cloud(self, request):
+        """Restore a server backup directly from cloud storage."""
+        s3_bucket = request.data.get('s3_bucket', '').strip()
+        s3_key = request.data.get('s3_key', '').strip()
+        endpoint = request.data.get('s3_endpoint', '').strip()
+        region = request.data.get('s3_region', 'us-east-1').strip()
+        access_key = request.data.get('s3_access_key', '').strip()
+        secret_key = request.data.get('s3_secret_key', '').strip()
+
+        if not s3_bucket or not s3_key or not access_key or not secret_key:
+            return Response({'error': 'Missing required S3 configuration fields.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        from .services.backup_service import download_from_s3, BackupService
+        dest_filename = f"cloud_restore_{_uuid.uuid4().hex[:8]}.tar.gz"
+        backups_dir = os.path.join('/app', 'backups', 'server')
+        os.makedirs(backups_dir, exist_ok=True)
+        dest_path = os.path.join(backups_dir, dest_filename)
+
+        if not download_from_s3(s3_bucket, s3_key, dest_path, endpoint=endpoint, region=region, access_key=access_key, secret_key=secret_key):
+            return Response({'error': 'Failed to download backup from cloud storage. Check credentials and key.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        svc = BackupService()
+        try:
+            dest_path = svc._maybe_encrypt(dest_path)
+        except Exception as exc:
+            with contextlib.suppress(OSError):
+                os.remove(dest_path)
+            return Response({'error': f'Failed to encrypt downloaded backup: {exc}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        file_size = os.path.getsize(dest_path)
+        backup = ServerBackup.objects.create(
+            status='COMPLETED',
+            file_path=dest_path,
+            size_bytes=file_size,
+            error_message=f'Restored from cloud: {s3_bucket}/{s3_key}',
+        )
+
+        encryption_key = request.data.get('encryption_key', '').strip() or None
+        from apps.deployments.tasks import restore_server_backup_task
+        restore_server_backup_task.delay(
+            backup_id=str(backup.id),
+            encryption_key=encryption_key,
+            requesting_user_id=request.user.id,
+        )
+
+        return Response({
+            'status': 'Restore started from cloud backup.',
+            'backup_id': str(backup.id),
+            'file_size': file_size,
+        })
+
+class SnapshotScheduleViewSet(viewsets.ModelViewSet):
+    queryset = SnapshotSchedule.objects.all().order_by('id')
+    serializer_class = SnapshotScheduleSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
+
+    def create(self, request, *args, **kwargs):
+        return super().create(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):
+        return super().update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        return super().partial_update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        return super().destroy(request, *args, **kwargs)
+
+    def perform_destroy(self, instance):
+        if instance.is_server_wide and not self.request.user.is_superuser:
+            raise PermissionDenied("Only admins can delete server-wide snapshot schedules.")
+        if instance.service:
+            from apps.deployments.views import ServiceBackupViewSet
+            if not ServiceBackupViewSet._user_can_access_service(self.request.user, instance.service):
+                raise PermissionDenied("You do not have access to this service.")
+        super().perform_destroy(instance)
+
+    def get_queryset(self):
+        qs = self.queryset
+        if not self.request.user.is_superuser:
+            qs = qs.filter(
+                Q(service__owner=self.request.user) |
+                Q(service__project__team__members__user=self.request.user)
+            ).distinct()
+        service_id = self.request.query_params.get('service')
+        if service_id:
+            qs = qs.filter(service_id=service_id)
+        return qs
+
+    def _validate_schedule_access(self, serializer):
+        service = serializer.validated_data.get(
+            'service',
+            getattr(serializer.instance, 'service', None),
+        )
+        is_server_wide = serializer.validated_data.get(
+            'is_server_wide',
+            getattr(serializer.instance, 'is_server_wide', False),
+        )
+        if is_server_wide and not self.request.user.is_superuser:
+            raise PermissionDenied("Only admins can manage server-wide snapshot schedules.")
+        if not service and not is_server_wide:
+            raise PermissionDenied("A service is required for non-server-wide snapshot schedules.")
+        if service and not ServiceBackupViewSet._user_can_access_service(self.request.user, service):
+            raise PermissionDenied("You do not have access to this service.")
+
+    def perform_create(self, serializer):
+        self._validate_schedule_access(serializer)
+        serializer.save()
+
+    def perform_update(self, serializer):
+        self._validate_schedule_access(serializer)
+        serializer.save()
+
 
 class BackupScheduleViewSet(viewsets.ModelViewSet):
     queryset = BackupSchedule.objects.all().order_by('id')
