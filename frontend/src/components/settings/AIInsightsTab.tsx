@@ -31,18 +31,21 @@ interface ScalingAnalysis {
 export function AIInsightsTab({ serviceId }: { serviceId: string }) {
   const [julesData, setJulesData] = useState<{ entries: JulesEntry[] } | null>(null);
   const [scaleAnalysis, setScaleAnalysis] = useState<ScalingAnalysis | null>(null);
+  const [anomalies, setAnomalies] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [julesRes, scaleRes] = await Promise.allSettled([
+      const [julesRes, scaleRes, anomalyRes] = await Promise.allSettled([
         api.get(`/ai/jules-history/${serviceId}/`),
         api.post(`/scaling/${serviceId}/analyze/`),
+        api.get(`/ai/anomalies/`, { params: { service_id: serviceId } })
       ]);
       if (julesRes.status === "fulfilled") setJulesData(julesRes.value.data);
       if (scaleRes.status === "fulfilled") setScaleAnalysis(scaleRes.value.data);
+      if (anomalyRes.status === "fulfilled") setAnomalies(Array.isArray(anomalyRes.value.data) ? anomalyRes.value.data : (anomalyRes.value.data?.results || []));
     } catch (err: any) {
       setError(err?.message || "Failed to load insights");
     } finally {
@@ -200,6 +203,27 @@ export function AIInsightsTab({ serviceId }: { serviceId: string }) {
               )}
             </div>
           ))}
+        </div>
+      )}
+
+      {/* ── Anomalies Timeline ────────────────────────────────── */}
+      {anomalies.length > 0 && (
+        <div className="mt-8">
+          <h3 className="text-sm font-bold mb-4 flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-500" />
+            Detected Anomalies
+          </h3>
+          <div className="space-y-3">
+            {anomalies.map((anomaly) => (
+              <div key={anomaly.id} className="p-3 rounded-lg border border-border bg-card">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-semibold">{anomaly.metric_name}</span>
+                  <span className="text-xs text-muted-foreground">{new Date(anomaly.timestamp).toLocaleString()}</span>
+                </div>
+                <p className="text-xs text-muted-foreground">{anomaly.description || `Severity: ${anomaly.severity}`}</p>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>

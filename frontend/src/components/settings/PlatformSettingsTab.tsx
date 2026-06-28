@@ -28,6 +28,7 @@ export function PlatformSettingsTab() {
     }
   };
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     fetchConfig();
   }, []);
