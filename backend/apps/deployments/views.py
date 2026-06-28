@@ -5385,7 +5385,16 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
         file_path = backup.file_path
 
         if not file_path or not os.path.exists(file_path):
-            return Response({'error': 'File not found'}, status=status.HTTP_404_NOT_FOUND)
+            # File missing locally — try to download from cloud storage
+            from .services.backup_service import _download_backup_from_cloud
+            if getattr(backup, 'cloud_uploaded', False):
+                os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                if _download_backup_from_cloud(backup, file_path):
+                    logger.info("Downloaded backup %s from cloud to %s", backup.id, file_path)
+                else:
+                    return Response({'error': 'Backup file not found locally and cloud download failed.'}, status=status.HTTP_404_NOT_FOUND)
+            else:
+                return Response({'error': 'File not found'}, status=status.HTTP_404_NOT_FOUND)
 
         from .services.backup_service import BackupService, UnknownBackupKeyIdError
         key = os.environ.get("BACKUP_ENCRYPTION_KEY", "").strip()
@@ -5750,7 +5759,16 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
         file_path = backup.file_path
 
         if not file_path or not os.path.exists(file_path):
-            return Response({'error': 'Backup file not found on disk.'}, status=status.HTTP_404_NOT_FOUND)
+            # File missing locally — try to download from cloud storage
+            from .services.backup_service import _download_backup_from_cloud
+            if getattr(backup, 'cloud_uploaded', False):
+                os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                if _download_backup_from_cloud(backup, file_path):
+                    logger.info("Downloaded server backup %s from cloud to %s", backup.id, file_path)
+                else:
+                    return Response({'error': 'Backup file not found on disk and cloud download failed.'}, status=status.HTTP_404_NOT_FOUND)
+            else:
+                return Response({'error': 'Backup file not found on disk.'}, status=status.HTTP_404_NOT_FOUND)
 
         from .services.backup_service import BackupService, UnknownBackupKeyIdError
         key = os.environ.get("BACKUP_ENCRYPTION_KEY", "").strip()

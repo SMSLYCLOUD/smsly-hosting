@@ -167,7 +167,18 @@ class BackupService:
             expected_hash = (getattr(backup, 'metadata', None) or {}).get('checksum_sha256', '')
             expected_size = getattr(backup, 'size_bytes', 0) or 0
         if not path or not os.path.exists(path):
-            raise FileNotFoundError("Backup archive file not found.")
+            # File missing locally — try to download from cloud storage
+            if not isinstance(backup, str) and getattr(backup, 'cloud_uploaded', False):
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                if _download_backup_from_cloud(backup, path):
+                    logger.info("Downloaded backup %s from cloud to %s", backup.id, path)
+                else:
+                    raise FileNotFoundError(
+                        f"Backup file not found locally and cloud download failed. "
+                        f"backup_id={backup.id}"
+                    )
+            else:
+                raise FileNotFoundError("Backup archive file not found.")
         if expected_size and os.path.getsize(path) != expected_size:
             raise ValueError(f"Size mismatch: expected {expected_size}, got {os.path.getsize(path)}")
         if expected_hash:
@@ -412,7 +423,7 @@ class BackupService:
             self._prune_old_backups(ServiceBackup, service_id=service.id)
 
             # Upload to S3 if a cloud destination is configured
-            _upload_to_cloud_if_configured(service, filepath)
+            _upload_backup_to_cloud(backup, filepath, service.name)
 
             # Clean up temp image if we created one
             if image_tag and image_tag.startswith("backup/"):
@@ -2326,39 +2337,83 @@ def _remap_domain_on_restore(service, metadata):
         pass
 
 
-def _upload_to_cloud_if_configured(service, filepath):
-    """If the service has a BackupSchedule with S3 config, upload the backup."""
-    try:
-        from apps.deployments.models_backup import BackupSchedule
-        sched = BackupSchedule.objects.filter(
-            service=service, enabled=True, storage_backend='s3',
-        ).first()
-        if not sched or not sched.s3_bucket or not sched.s3_access_key:
-            return
-        s3_key = f"smsly-backups/{service.name}/{os.path.basename(filepath)}"
-        upload_backup_to_s3(
-            filepath, sched.s3_bucket, s3_key,
-            endpoint=sched.s3_endpoint, region=sched.s3_region,
-            access_key=sched.s3_access_key, secret_key=sched.s3_secret_key,
-        )
-    except Exception as exc:
-        logger.warning("Cloud upload skipped for %s: %s", service.name, exc)
+def _get_s3_client(endpoint='', region='us-east-1',
+                   access_key='', secret_key=''):
+    """Build a boto3 S3 client with the given credentials."""
+    import boto3
+    kwargs = {'aws_access_key_id': access_key,
+              'aws_secret_access_key': secret_key,
+              'region_name': region}
+    if endpoint:
+        kwargs['endpoint_url'] = endpoint
+    return boto3.client('s3', **kwargs)
+
+
+def _s3_upload_with_retry(client, local_path, s3_bucket, s3_key,
+                          max_retries=3) -> bool:
+    """Upload a file to S3 with exponential backoff retry."""
+    import time
+    for attempt in range(1, max_retries + 1):
+        try:
+            client.upload_file(local_path, s3_bucket, s3_key)
+            return True
+        except Exception as exc:
+            logger.warning(
+                "S3 upload attempt %d/%d failed for %s/%s: %s",
+                attempt, max_retries, s3_bucket, s3_key, exc,
+            )
+            if attempt < max_retries:
+                time.sleep(2 ** attempt)
+    return False
+
+
+def _s3_delete_with_retry(client, s3_bucket, s3_key, max_retries=3) -> bool:
+    """Delete an S3 object with exponential backoff retry."""
+    import time
+    for attempt in range(1, max_retries + 1):
+        try:
+            client.delete_object(Bucket=s3_bucket, Key=s3_key)
+            return True
+        except Exception as exc:
+            logger.warning(
+                "S3 delete attempt %d/%d failed for %s/%s: %s",
+                attempt, max_retries, s3_bucket, s3_key, exc,
+            )
+            if attempt < max_retries:
+                time.sleep(2 ** attempt)
+    return False
+
+
+def _s3_download_with_retry(client, s3_bucket, s3_key, local_path,
+                            max_retries=3) -> bool:
+    """Download a file from S3 with exponential backoff retry."""
+    import time
+    for attempt in range(1, max_retries + 1):
+        try:
+            client.download_file(s3_bucket, s3_key, local_path)
+            return True
+        except Exception as exc:
+            logger.warning(
+                "S3 download attempt %d/%d failed for %s/%s: %s",
+                attempt, max_retries, s3_bucket, s3_key, exc,
+            )
+            if attempt < max_retries:
+                time.sleep(2 ** attempt)
+    return False
 
 
 def upload_backup_to_s3(local_path: str, s3_bucket: str, s3_key: str,
                         endpoint: str = '', region: str = 'us-east-1',
                         access_key: str = '', secret_key: str = '') -> bool:
-    """Upload a backup file to S3 (or R2/MinIO via custom endpoint)."""
+    """Upload a backup file to S3 (or R2/MinIO via custom endpoint) with retry."""
     try:
-        import boto3
-        kwargs = {'aws_access_key_id': access_key, 'aws_secret_access_key': secret_key,
-                  'region_name': region}
-        if endpoint:
-            kwargs['endpoint_url'] = endpoint
-        s3 = boto3.client('s3', **kwargs)
-        s3.upload_file(local_path, s3_bucket, s3_key)
-        logger.info("Backup uploaded to s3://%s/%s", s3_bucket, s3_key)
-        return True
+        client = _get_s3_client(endpoint, region, access_key, secret_key)
+        ok = _s3_upload_with_retry(client, local_path, s3_bucket, s3_key)
+        if ok:
+            logger.info("Backup uploaded to s3://%s/%s", s3_bucket, s3_key)
+        else:
+            logger.error("S3 upload failed after retries for s3://%s/%s", s3_bucket, s3_key)
+        return ok
     except ImportError:
         logger.warning("boto3 not available — S3 upload skipped")
     except Exception as exc:
@@ -2366,25 +2421,115 @@ def upload_backup_to_s3(local_path: str, s3_bucket: str, s3_key: str,
     return False
 
 
+def download_from_s3(s3_bucket: str, s3_key: str, local_path: str,
+                     endpoint: str = '', region: str = 'us-east-1',
+                     access_key: str = '', secret_key: str = '') -> bool:
+    """Download a backup file from S3 (or R2/MinIO) to local path with retry."""
+    try:
+        client = _get_s3_client(endpoint, region, access_key, secret_key)
+        ok = _s3_download_with_retry(client, s3_bucket, s3_key, local_path)
+        if ok:
+            logger.info("Backup downloaded from s3://%s/%s to %s", s3_bucket, s3_key, local_path)
+        else:
+            logger.error("S3 download failed after retries for s3://%s/%s", s3_bucket, s3_key)
+        return ok
+    except ImportError:
+        logger.warning("boto3 not available — S3 download skipped")
+    except Exception as exc:
+        logger.error("S3 download failed: %s", exc)
+    return False
+
+
 def delete_cloud_backup_object(s3_bucket: str, s3_key: str,
                                endpoint: str = '', region: str = 'us-east-1',
                                access_key: str = '', secret_key: str = '') -> bool:
-    """Delete a previously-uploaded backup object from S3 (or R2/MinIO)."""
+    """Delete a previously-uploaded backup object from S3 (or R2/MinIO) with retry."""
     try:
-        import boto3
-        kwargs = {'aws_access_key_id': access_key, 'aws_secret_access_key': secret_key,
-                  'region_name': region}
-        if endpoint:
-            kwargs['endpoint_url'] = endpoint
-        s3 = boto3.client('s3', **kwargs)
-        s3.delete_object(Bucket=s3_bucket, Key=s3_key)
-        logger.info("Deleted s3://%s/%s", s3_bucket, s3_key)
-        return True
+        client = _get_s3_client(endpoint, region, access_key, secret_key)
+        ok = _s3_delete_with_retry(client, s3_bucket, s3_key)
+        if ok:
+            logger.info("Deleted s3://%s/%s", s3_bucket, s3_key)
+        else:
+            logger.error("S3 delete failed after retries for %s/%s", s3_bucket, s3_key)
+        return ok
     except ImportError:
         logger.warning("boto3 not available — S3 delete skipped")
     except Exception as exc:
         logger.error("S3 delete failed for %s/%s: %s", s3_bucket, s3_key, exc)
     return False
+
+
+def _upload_backup_to_cloud(backup, filepath, service_name):
+    """Upload a backup to cloud storage and track metadata on the backup record.
+    
+    Accepts either a ServiceBackup or ServerBackup instance. Updates cloud_*
+    fields on success. Returns True if uploaded, False if skipped or failed.
+    """
+    try:
+        from apps.deployments.models_backup import BackupSchedule
+        sched = BackupSchedule.objects.filter(
+            service_id=getattr(backup, 'service_id', None),
+            enabled=True, storage_backend='s3',
+        ).first() if hasattr(backup, 'service_id') else None
+        if not sched or not sched.s3_bucket or not sched.s3_access_key:
+            return False
+        s3_key = f"smsly-backups/{service_name}/{os.path.basename(filepath)}"
+        ok = upload_backup_to_s3(
+            filepath, sched.s3_bucket, s3_key,
+            endpoint=sched.s3_endpoint, region=sched.s3_region,
+            access_key=sched.s3_access_key, secret_key=sched.s3_secret_key,
+        )
+        if ok:
+            backup.cloud_uploaded = True
+            backup.cloud_bucket = sched.s3_bucket
+            backup.cloud_key = s3_key
+            backup.save(update_fields=['cloud_uploaded', 'cloud_bucket', 'cloud_key'])
+        return ok
+    except Exception as exc:
+        logger.warning("Cloud upload skipped for %s: %s", service_name, exc)
+    return False
+
+
+def _resolve_cloud_config(backup):
+    """Resolve cloud bucket + key + credentials for a backup record.
+    
+    Priority: 1) stored cloud fields on backup, 2) BackupSchedule lookup.
+    Returns (bucket, key, endpoint, region, access_key, secret_key) or
+    (None, None, None, None, None, None) if nothing found.
+    """
+    bucket = getattr(backup, 'cloud_bucket', '') or ''
+    key = getattr(backup, 'cloud_key', '') or ''
+    if bucket and key:
+        return bucket, key, '', 'us-east-1', '', ''
+    from apps.deployments.models_backup import BackupSchedule
+    service_id = getattr(backup, 'service_id', None)
+    if service_id:
+        sched = BackupSchedule.objects.filter(
+            service_id=service_id, enabled=True, storage_backend='s3',
+        ).first()
+        if sched and sched.s3_bucket and sched.s3_access_key:
+            service_name = getattr(getattr(backup, 'service', None), 'name', 'unknown')
+            derived_key = f"smsly-backups/{service_name}/{os.path.basename(backup.file_path or 'unknown')}"
+            return (sched.s3_bucket, derived_key, sched.s3_endpoint,
+                    sched.s3_region, sched.s3_access_key, sched.s3_secret_key)
+    return None, None, None, None, None, None
+
+
+def _download_backup_from_cloud(backup, local_path) -> bool:
+    """Download a backup from cloud storage to local path.
+    
+    Uses stored cloud_* fields on the backup record first, then falls
+    back to BackupSchedule lookup. Returns True on success.
+    """
+    bucket, key, endpoint, region, access_key, secret_key = _resolve_cloud_config(backup)
+    if not bucket or not key:
+        logger.warning("No cloud config found to download backup %s", backup.id)
+        return False
+    return download_from_s3(
+        bucket, key, local_path,
+        endpoint=endpoint, region=region,
+        access_key=access_key, secret_key=secret_key,
+    )
 
 
 def purge_user_backups(user_id) -> dict:
@@ -2403,7 +2548,6 @@ def purge_user_backups(user_id) -> dict:
     Returns a dict of counters that callers can use for audit logging.
     """
     from apps.deployments.models_backup import (
-        BackupSchedule,
         ServerBackup,
         ServiceBackup,
     )
@@ -2427,16 +2571,6 @@ def purge_user_backups(user_id) -> dict:
         )
     )
 
-    schedules = {
-        sched.service_id: sched
-        for sched in BackupSchedule.objects.filter(
-            service__owner_id=user_id,
-            storage_backend='s3',
-            service__isnull=False,
-        )
-        if sched.service_id is not None
-    }
-
     for backup in service_backups:
         backup_service_id = getattr(backup, 'service_id', None)
         if backup.file_path and os.path.exists(backup.file_path):
@@ -2454,18 +2588,12 @@ def purge_user_backups(user_id) -> dict:
                     backup.file_path, exc,
                 )
 
-        sched = schedules.get(backup_service_id) if backup_service_id else None
-        if (sched and sched.s3_bucket and sched.s3_access_key
-                and backup.file_path):
-            service_name = getattr(backup.service, 'name', 'service')
-            s3_key = (
-                f"smsly-backups/{service_name}/"
-                f"{os.path.basename(backup.file_path)}"
-            )
+        # Use stored cloud_key if available, otherwise fall back to schedule lookup
+        bucket, key, endpoint, region, access_key, secret_key = _resolve_cloud_config(backup)
+        if bucket and key:
             if delete_cloud_backup_object(
-                sched.s3_bucket, s3_key,
-                endpoint=sched.s3_endpoint, region=sched.s3_region,
-                access_key=sched.s3_access_key, secret_key=sched.s3_secret_key,
+                bucket, key, endpoint=endpoint, region=region,
+                access_key=access_key, secret_key=secret_key,
             ):
                 counters['cloud_objects_deleted'] += 1
 
