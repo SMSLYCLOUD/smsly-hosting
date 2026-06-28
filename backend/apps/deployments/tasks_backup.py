@@ -272,12 +272,12 @@ def run_scheduled_backups_task():
         try:
             cron = croniter.croniter(sched.cron_expression, now)
             next_run = cron.get_next(datetime)
-            if sched.last_run and sched.last_run >= timezone.make_aware(datetime.fromtimestamp(next_run), timezone.get_current_timezone()):
+            if sched.last_run and sched.last_run >= timezone.make_aware(next_run, timezone.get_current_timezone()):
                 continue
             # Compute next_run now but defer last_run — the Celery task
             # updates it AFTER the backup completes to prevent the race
             # where a failed task leaves the schedule thinking it ran.
-            sched.next_run = timezone.make_aware(datetime.fromtimestamp(cron.get_next(datetime)))
+            sched.next_run = timezone.make_aware(cron.get_next(datetime), timezone.get_current_timezone())
             sched.save(update_fields=['next_run'])
 
             if sched.is_server_wide:
@@ -304,10 +304,10 @@ def run_scheduled_snapshots_task():
         try:
             cron = croniter.croniter(sched.cron_expression, now)
             next_run = cron.get_next(datetime)
-            if sched.last_run and sched.last_run >= timezone.make_aware(datetime.fromtimestamp(next_run), timezone.get_current_timezone()):
+            if sched.last_run and sched.last_run >= timezone.make_aware(next_run, timezone.get_current_timezone()):
                 continue
             
-            sched.next_run = timezone.make_aware(datetime.fromtimestamp(cron.get_next(datetime)))
+            sched.next_run = timezone.make_aware(cron.get_next(datetime), timezone.get_current_timezone())
             sched.save(update_fields=['next_run'])
 
             if sched.service:

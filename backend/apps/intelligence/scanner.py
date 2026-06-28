@@ -396,8 +396,8 @@ class RepoScanner:
 
         # 4. Scan docker-compose files for ${VAR} interpolation
         compose_pattern = re.compile(r'\$\{([A-Z_][A-Z0-9_]*)(?::?[-?+])?[^}]*\}')
-        docker_env_pattern = re.compile(r'ENV\s+([A-Z_][A-Z0-9_]*)')
-        docker_arg_pattern = re.compile(r'ARG\s+([A-Z_][A-Z0-9_]*)')
+        docker_env_pattern = re.compile(r'ENV\s+([A-Z_][A-Z0-9_]*)(.*)')
+        docker_arg_pattern = re.compile(r'ARG\s+([A-Z_][A-Z0-9_]*)(.*)')
 
         for root, dirs, files in os.walk(self.source_dir):
             dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
@@ -413,9 +413,11 @@ class RepoScanner:
 
                     # Scan for Docker ENV/ARG
                     for match in docker_env_pattern.finditer(content):
-                        add_var(match.group(1), f"Found in {f} (ENV)")
+                        val = match.group(2).strip()
+                        add_var(match.group(1), f"Found in {f} (ENV: {val})")
                     for match in docker_arg_pattern.finditer(content):
-                        add_var(match.group(1), f"Found in {f} (ARG)")
+                        val = match.group(2).strip()
+                        add_var(match.group(1), f"Found in {f} (ARG: {val})")
                         
                     # Scan for environment blocks in docker-compose YAML files
                     if f.startswith('docker-compose') or f in ('compose.yml', 'compose.yaml'):
