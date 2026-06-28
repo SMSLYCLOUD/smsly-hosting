@@ -3325,14 +3325,30 @@ recover_runtime_stack() {
     echo -e "${BLUE}    -> Starting dependency services...${NC}"
 
     # Ensure registry TLS cert + htpasswd exist before starting the registry.
-    # The registry container will crash-loop without these files.
+    # The registry container will crash-loop without these files. Also
+    # regenerate if the existing key/cert don't match (e.g. one was rotated
+    # independently). openssl req produces a matched pair in one shot, so a
+    # mismatch means one file was replaced without the other.
     mkdir -p "$INSTALL_DIR/auth" "$INSTALL_DIR/certs"
-    if [ ! -f "$INSTALL_DIR/certs/registry.key" ] || [ ! -f "$INSTALL_DIR/certs/registry.crt" ]; then
+    _registry_certs_ok() {
+        [ -f "$INSTALL_DIR/certs/registry.key" ] || return 1
+        [ -f "$INSTALL_DIR/certs/registry.crt" ] || return 1
+        local _cmod _kmod
+        _cmod="$(openssl x509 -in "$INSTALL_DIR/certs/registry.crt" -noout -modulus 2>/dev/null | openssl sha256)" || return 1
+        _kmod="$(openssl rsa  -in "$INSTALL_DIR/certs/registry.key" -noout -modulus 2>/dev/null | openssl sha256)" || return 1
+        [ "$_cmod" = "$_kmod" ]
+    }
+    if ! _registry_certs_ok; then
         echo -e "${BLUE}      Generating self-signed TLS cert for registry...${NC}"
+        _tmp_dir="$(mktemp -d)"
         openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
-            -keyout "$INSTALL_DIR/certs/registry.key" \
-            -out "$INSTALL_DIR/certs/registry.crt" \
+            -keyout "${_tmp_dir}/registry.key" \
+            -out    "${_tmp_dir}/registry.crt" \
             -subj "/CN=registry" 2>/dev/null || true
+        mv "${_tmp_dir}/registry.key" "$INSTALL_DIR/certs/registry.key" 2>/dev/null || true
+        mv "${_tmp_dir}/registry.crt" "$INSTALL_DIR/certs/registry.crt" 2>/dev/null || true
+        rm -rf "$_tmp_dir" 2>/dev/null || true
+        chmod 644 "$INSTALL_DIR/certs/registry.crt" "$INSTALL_DIR/certs/registry.key" 2>/dev/null || true
     fi
     if [ ! -f "$INSTALL_DIR/auth/htpasswd" ] || [ -z "${REGISTRY_PASSWORD:-}" ] || [ -z "${REGISTRY_USER:-}" ]; then
         REGISTRY_PASS="${REGISTRY_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_urlsafe(18))" 2>/dev/null || openssl rand -hex 12 2>/dev/null || echo 'auto-generated-change-me')}"
@@ -5744,13 +5760,26 @@ docker network create smsly-proxy 2>/dev/null || true
 # Generate registry TLS cert + htpasswd if missing (required for auth-enabled registry)
 echo -e "${BLUE}  → Configuring Docker registry auth and TLS...${NC}"
 mkdir -p "$INSTALL_DIR/auth" "$INSTALL_DIR/certs"
-if [ ! -f "$INSTALL_DIR/certs/registry.key" ] || [ ! -f "$INSTALL_DIR/certs/registry.crt" ]; then
+_registry_certs_ok() {
+    [ -f "$INSTALL_DIR/certs/registry.key" ] || return 1
+    [ -f "$INSTALL_DIR/certs/registry.crt" ] || return 1
+    local _cmod _kmod
+    _cmod="$(openssl x509 -in "$INSTALL_DIR/certs/registry.crt" -noout -modulus 2>/dev/null | openssl sha256)" || return 1
+    _kmod="$(openssl rsa  -in "$INSTALL_DIR/certs/registry.key" -noout -modulus 2>/dev/null | openssl sha256)" || return 1
+    [ "$_cmod" = "$_kmod" ]
+}
+if ! _registry_certs_ok; then
     echo -e "${BLUE}    Generating self-signed TLS cert for registry...${NC}"
+    _tmp_dir="$(mktemp -d)"
     openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
-        -keyout "$INSTALL_DIR/certs/registry.key" \
-        -out "$INSTALL_DIR/certs/registry.crt" \
+        -keyout "${_tmp_dir}/registry.key" \
+        -out    "${_tmp_dir}/registry.crt" \
         -subj "/CN=registry" 2>/dev/null || \
         echo -e "${YELLOW}    ⚠ Failed to generate registry cert (openssl missing?)${NC}"
+    mv "${_tmp_dir}/registry.key" "$INSTALL_DIR/certs/registry.key" 2>/dev/null || true
+    mv "${_tmp_dir}/registry.crt" "$INSTALL_DIR/certs/registry.crt" 2>/dev/null || true
+    rm -rf "$_tmp_dir" 2>/dev/null || true
+    chmod 644 "$INSTALL_DIR/certs/registry.crt" "$INSTALL_DIR/certs/registry.key" 2>/dev/null || true
 fi
 if [ ! -f "$INSTALL_DIR/auth/htpasswd" ] || [ -z "${REGISTRY_PASSWORD:-}" ] || [ -z "${REGISTRY_USER:-}" ]; then
     REGISTRY_PASS="${REGISTRY_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_urlsafe(18))" 2>/dev/null || openssl rand -hex 12 2>/dev/null || echo 'auto-generated-change-me')}"
