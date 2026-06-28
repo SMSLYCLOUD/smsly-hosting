@@ -4783,6 +4783,7 @@ class DomainConfigView(GenericAPIView):
             'smsly_disable_tier_gates': config.smsly_disable_tier_gates,
             'enable_legacy_tunnel_api': config.enable_legacy_tunnel_api,
             'smsly_strict_ssh_host_key_check': config.smsly_strict_ssh_host_key_check,
+            'enable_crowdsec_waf': config.enable_crowdsec_waf,
             'updated_at': config.updated_at,
         })
 
@@ -4859,6 +4860,8 @@ class DomainConfigView(GenericAPIView):
                 config.use_ssl = _parse_bool(data.get('use_ssl'))
             if 'wildcard_subdomains' in data:
                 config.wildcard_subdomains = _parse_bool(data.get('wildcard_subdomains'))
+            if 'enable_crowdsec_waf' in data:
+                config.enable_crowdsec_waf = _parse_bool(data.get('enable_crowdsec_waf'))
             if 'cloudflare_api_token' in data:
                 # Allow explicit clear by sending an empty string.
                 config.cloudflare_api_token = str(

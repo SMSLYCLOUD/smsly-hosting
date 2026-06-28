@@ -610,6 +610,7 @@ services:
       COLLECTIONS: "crowdsecurity/traefik crowdsecurity/http-cve crowdsecurity/base-http-scenarios"
       ENROLL_KEY: "${CROWDSEC_ENROLL_KEY:-}"
       ENROLL_INSTANCE_NAME: "${DOMAIN:-smsly-hosting}"
+      BOUNCER_KEY_traefik_bouncer: "${CROWDSEC_BOUNCER_KEY:-}"
     volumes:
       - crowdsec_data:/var/lib/crowdsec/data
       - crowdsec_config:/etc/crowdsec
@@ -685,6 +686,11 @@ services:
     - no-new-privileges:true
     labels:
     - managed_by=smsly-hosting
+    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.enabled=true"
+    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.CrowdsecMode=live"
+    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.CrowdsecLapiScheme=http"
+    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.CrowdsecLapiHost=crowdsec:8080"
+    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.CrowdsecLapiKey=$${CROWDSEC_BOUNCER_KEY:-}"
     networks:
     - smsly-net
     - socket-proxy

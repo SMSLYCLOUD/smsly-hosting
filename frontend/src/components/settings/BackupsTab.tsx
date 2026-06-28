@@ -1028,6 +1028,7 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                                     />
                                     <div className="flex flex-wrap gap-1.5 mt-1.5">
                                         {[
+                                            { label: 'Every 5 min', expr: '*/5 * * * *' },
                                             { label: 'Every 30 min', expr: '*/30 * * * *' },
                                             { label: 'Hourly', expr: '0 * * * *' },
                                             { label: 'Every 6h', expr: '0 */6 * * *' },
@@ -1132,6 +1133,7 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                                 />
                                 <div className="flex flex-wrap gap-1.5 mt-1.5">
                                     {[
+                                        { label: 'Every 5 min', expr: '*/5 * * * *' },
                                         { label: 'Hourly', expr: '0 * * * *' },
                                         { label: 'Every 6h', expr: '0 */6 * * *' },
                                         { label: 'Daily 12 AM', expr: '0 0 * * *' },

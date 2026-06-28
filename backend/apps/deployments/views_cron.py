@@ -25,6 +25,13 @@ class CronJobSerializer(serializers.ModelSerializer):
             'next_run_at',
             'service']
 
+    def update(self, instance, validated_data):
+        # Reset next_run_at if the schedule changes so it gets recalculated immediately
+        if 'schedule' in validated_data and validated_data['schedule'] != instance.schedule:
+            instance.next_run_at = None
+            # Do not need to save here, super().update will save the instance
+        return super().update(instance, validated_data)
+
 
 class CronJobViewSet(viewsets.ModelViewSet):
     serializer_class = CronJobSerializer

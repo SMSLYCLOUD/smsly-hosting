@@ -31,20 +31,30 @@ def check_cron_jobs(self):
     dispatched = 0
     for job in CronJob.objects.filter(is_active=True).select_related('service'):
         try:
-            cron = croniter.croniter(job.schedule, now)
-            next_ts = cron.get_next(datetime)
-            next_due = timezone.make_aware(
-                datetime.fromtimestamp(next_ts),
-                timezone.get_current_timezone(),
-            )
+            if not job.next_run_at:
+                cron = croniter.croniter(job.schedule, now)
+                next_dt = cron.get_next(datetime)
+                if timezone.is_naive(next_dt):
+                    next_dt = timezone.make_aware(next_dt, timezone.get_current_timezone())
+                job.next_run_at = next_dt
+                job.save(update_fields=['next_run_at', 'updated_at'])
 
             # Not due yet — skip
-            if job.last_run_at and next_due > now:
+            if job.next_run_at > now:
                 continue
 
             # Enforce a minimum interval to prevent tight-schedule abuse
             if job.last_run_at and (now - job.last_run_at).total_seconds() < _CRON_MIN_INTERVAL:
                 continue
+
+            # Job is due! Calculate the NEXT time it should run and save it before dispatching
+            # to prevent multiple dispatches if the worker is slow.
+            cron = croniter.croniter(job.schedule, now)
+            next_dt = cron.get_next(datetime)
+            if timezone.is_naive(next_dt):
+                next_dt = timezone.make_aware(next_dt, timezone.get_current_timezone())
+            job.next_run_at = next_dt
+            job.save(update_fields=['next_run_at', 'updated_at'])
 
             trigger_cron_job.delay(job_id=str(job.id))
             dispatched += 1

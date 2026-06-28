@@ -1537,8 +1537,10 @@ class PipelineManager:
         try:
             config_obj = PlatformConfig.load()
             use_ssl = bool(config_obj.use_ssl)
+            enable_crowdsec_waf = bool(getattr(config_obj, 'enable_crowdsec_waf', False))
         except Exception:  # pylint: disable=broad-exception-caught
             use_ssl = False
+            enable_crowdsec_waf = False
 
         enable_traefik_tls = (
             str(os.getenv("TRAEFIK_ENABLE_WEBSECURE", "false")).strip().lower()
@@ -1546,11 +1548,15 @@ class PipelineManager:
         )
 
         if use_ssl and enable_traefik_tls:
+            middlewares = f"{router}-redirect"
+            if enable_crowdsec_waf:
+                middlewares += ",crowdsec-bouncer"
+                
             labels.update(
                 {
                     f"traefik.http.routers.{router}-http.rule": host_rule,
                     f"traefik.http.routers.{router}-http.entrypoints": "web",
-                    f"traefik.http.routers.{router}-http.middlewares": f"{router}-redirect",
+                    f"traefik.http.routers.{router}-http.middlewares": middlewares,
                     f"traefik.http.middlewares.{router}-redirect.redirectscheme.scheme": "https",
                     f"traefik.http.middlewares.{router}-redirect.redirectscheme.permanent": "true",
                     f"traefik.http.routers.{router}.rule": host_rule,
@@ -1559,6 +1565,8 @@ class PipelineManager:
                     f"traefik.http.routers.{router}.tls.certresolver": "letsencrypt",
                 }
             )
+            if enable_crowdsec_waf:
+                labels[f"traefik.http.routers.{router}.middlewares"] = "crowdsec-bouncer"
             return labels
 
         labels.update(
@@ -1567,11 +1575,19 @@ class PipelineManager:
                 f"traefik.http.routers.{router}.entrypoints": "web",
             }
         )
+        if enable_crowdsec_waf:
+            labels[f"traefik.http.routers.{router}.middlewares"] = "crowdsec-bouncer"
+
         if use_ssl:
             middleware_name = f"{router}-forwarded-https"
+            current_middlewares = labels.get(f"traefik.http.routers.{router}.middlewares", "")
+            if current_middlewares:
+                labels[f"traefik.http.routers.{router}.middlewares"] = f"{current_middlewares},{middleware_name}"
+            else:
+                labels[f"traefik.http.routers.{router}.middlewares"] = middleware_name
+                
             labels.update(
                 {
-                    f"traefik.http.routers.{router}.middlewares": middleware_name,
                     f"traefik.http.middlewares.{middleware_name}.headers.customrequestheaders.X-Forwarded-Proto": "https",
                     f"traefik.http.middlewares.{middleware_name}.headers.customrequestheaders.X-Forwarded-Port": "443",
                     f"traefik.http.middlewares.{middleware_name}.headers.customrequestheaders.X-Forwarded-Ssl": "on",

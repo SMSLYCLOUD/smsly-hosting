@@ -711,6 +711,7 @@ services:
     restart: unless-stopped
     environment:
       COLLECTIONS: "crowdsecurity/traefik crowdsecurity/http-cve crowdsecurity/base-http-scenarios"
+      BOUNCER_KEY_traefik_bouncer: "${CROWDSEC_BOUNCER_KEY:-}"
     volumes:
       - crowdsec_data:/var/lib/crowdsec/data
       - crowdsec_config:/etc/crowdsec
@@ -788,6 +789,12 @@ services:
     - smsly-net
     - socket-proxy
     - smsly-proxy
+    labels:
+    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.enabled=true"
+    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.CrowdsecMode=live"
+    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.CrowdsecLapiScheme=http"
+    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.CrowdsecLapiHost=crowdsec:8080"
+    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.CrowdsecLapiKey=$${CROWDSEC_BOUNCER_KEY:-}"
 
   # ============================================================
   # Caddy (TLS termination + main routing)
