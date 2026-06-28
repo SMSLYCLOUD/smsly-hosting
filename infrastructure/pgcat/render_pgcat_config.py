@@ -32,27 +32,38 @@ def _fetch_node_agent_users():
         )
         conn.set_session(autocommit=True)
         cur = conn.cursor()
+        # Query both the app metadata and the actual Postgres roles.
+        # Using pg_roles as the source of truth avoids mismatches between
+        # Django's server.id and the stored node_id in provider_metadata.
+        cur.execute(
+            "SELECT rolname FROM pg_roles WHERE rolname LIKE 'node_agent_%'"
+        )
+        node_role_names = {row[0] for row in cur.fetchall()}
         cur.execute(
             "SELECT provider_metadata FROM deployments_managedserver "
             "WHERE provision_status = 'DONE' AND is_lite_agent = true"
         )
-        users = []
+        user_map = {}
         for row in cur.fetchall():
             meta = row[0] or {}
-            node_user = meta.get("node_db_user")
             node_pass = meta.get("node_db_password")
-            if not node_pass:
-                continue
+            node_user = meta.get("node_db_user")
             if not node_user:
                 node_id = meta.get("node_id", "")
                 prefix = node_id.split("-")[0] if node_id else ""
                 if prefix:
                     node_user = f"node_agent_{prefix}"
             if node_user and node_pass:
-                users.append((node_user, node_pass))
+                user_map[node_user] = node_pass
+        # Add any node_agent_* roles in Postgres that don't have a metadata
+        # entry yet (e.g. stale provisioning).  They'll work with the main
+        # pool password as fallback.
+        for role in node_role_names:
+            if role not in user_map:
+                user_map[role] = db_pass
         cur.close()
         conn.close()
-        return users
+        return list(user_map.items())
     except Exception as exc:
         print(f"WARNING: Could not query node agent users: {exc}", file=sys.stderr)
         return []
@@ -108,11 +119,13 @@ def main():
 
     # PgCat expects users as a map keyed by username under the pool section
     lines.append(f'[pools.smsly_hosting.users.{db_user}]')
+    lines.append(f'username = "{db_user}"')
     lines.append(f'pool_size = {app_pool_size}')
     lines.append(f'password = "{db_password}"')
 
     for node_user, node_pass in node_users:
         lines.append(f'[pools.smsly_hosting.users.{node_user}]')
+        lines.append(f'username = "{node_user}"')
         lines.append(f'pool_size = 5')
         lines.append(f'password = "{node_pass}"')
 
@@ -125,12 +138,14 @@ def main():
         f'servers = [["{db_host}", {db_port}, "primary"]]',
         f'database = "{db_name}"',
         f'[pools.smsly_hosting_session.users.{db_user}]',
+        f'username = "{db_user}"',
         f'pool_size = {worker_pool_size}',
         f'password = "{db_password}"',
     ]
 
     for node_user, node_pass in node_users:
         lines.append(f'[pools.smsly_hosting_session.users.{node_user}]')
+        lines.append(f'username = "{node_user}"')
         lines.append(f'pool_size = 3')
         lines.append(f'password = "{node_pass}"')
 
