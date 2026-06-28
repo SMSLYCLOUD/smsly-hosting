@@ -232,17 +232,16 @@ def _background_collector():
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
+            ts = _metrics_cache.get("ts", 0)
+            count = _metrics_cache.get("container_count", 0)
+            body = f"OK container_count={count} last_update={int(ts)}\n".encode()
+
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
             self.send_header("Cache-Control", "no-cache")
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            # Read without lock — atomic enough for a health probe.
-            # Avoids blocking when the background collector holds _lock
-            # for 30-60s across 200+ containers.
-            ts = _metrics_cache.get("ts", 0)
-            count = _metrics_cache.get("container_count", 0)
-            self.wfile.write(
-                f"OK container_count={count} last_update={int(ts)}\n".encode())
+            self.wfile.write(body)
             return
 
         if self.path != "/metrics":
@@ -253,10 +252,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         with _lock:
             data = _metrics_cache["data"]
 
+        body = data.encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; version=0.0.4")
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(data.encode())
+        self.wfile.write(body)
 
     def log_message(self, format, *args):
         pass
