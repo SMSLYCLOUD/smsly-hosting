@@ -331,6 +331,8 @@ def _restrict_ssh_key_to_master_ip(ssh, server: ManagedServer) -> None:
     from cryptography.hazmat.primitives import serialization
 
     master_ip = os.environ.get("PUBLIC_IP") or "127.0.0.1"
+    mesh_ip = _get_master_mesh_ip()
+    allowed_ips = f"{master_ip},{mesh_ip}" if mesh_ip else master_ip
     
     # Always use Ed25519 to avoid ssh-rsa deprecation rejections on modern OpenSSH (>= 8.8)
     # Generate natively via cryptography to avoid dependency on ssh-keygen
@@ -355,7 +357,7 @@ def _restrict_ssh_key_to_master_ip(ssh, server: ManagedServer) -> None:
     # The old approach (skip if any smsly-self-heal exists) caused a mismatch
     # after re-provisioning: a stale RSA key with the same comment tag would
     # prevent the new Ed25519 key from being deployed.
-    restricted_line = f'from="{master_ip}" {pub_key_line} smsly-self-heal\n'
+    restricted_line = f'from="{allowed_ips}" {pub_key_line} smsly-self-heal\n'
     cmd = (
         f'mkdir -p ~/.ssh && chmod 700 ~/.ssh && '
         f'sed -i "/smsly-self-heal/d" ~/.ssh/authorized_keys 2>/dev/null; '
@@ -370,7 +372,7 @@ def _restrict_ssh_key_to_master_ip(ssh, server: ManagedServer) -> None:
         # Store the private key (IP-restricted, encrypted at rest)
         server.ssh_key = priv_key_pem
         server.save(update_fields=['ssh_key', 'updated_at'])
-        _append_log(server, f"🔒 IP-restricted SSH key added (from=\"{master_ip}\")")
+        _append_log(server, f"🔒 IP-restricted SSH key added (from=\"{allowed_ips}\")")
     except Exception as exc:
         _append_log(server, f"⚠ IP-restricted SSH key skipped: {exc}")
 
@@ -396,6 +398,25 @@ def _harden_node_ssh(ssh, server: ManagedServer) -> None:
             return
     except Exception as exc:
         _append_log(server, f"⚠ SSH cleanup skipped: key verification failed: {exc}")
+        return
+
+    # Verify the key actually works by attempting a test connection
+    try:
+        import paramiko
+        import io
+        test_ssh = paramiko.SSHClient()
+        test_ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        pkey = paramiko.Ed25519Key.from_private_key(io.StringIO(server.ssh_key))
+        test_ssh.connect(
+            hostname=server.host,
+            port=server.ssh_port,
+            username=server.ssh_user,
+            pkey=pkey,
+            timeout=10,
+        )
+        test_ssh.close()
+    except Exception as exc:
+        _append_log(server, f"⚠ SSH cleanup skipped: test connection using restricted key failed: {exc}")
         return
 
     # Key is confirmed working — clear the stored password.
@@ -1336,16 +1357,18 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
             # Fallback: extract from .env file
             stdin, stdout, stderr = ssh.exec_command(
                 "grep -E '^(ADMIN_TOKEN|API_TOKEN|AUTH_TOKEN|DJANGO_SUPERUSER_PASSWORD)=' "
-                "/opt/smsly-hosting/.env 2>/dev/null | head -1"
+                "/opt/smsly-hosting/.env 2>/dev/null"
             )
-            token_line = stdout.read().decode("utf-8").strip()
-            if "=" in token_line:
-                value = token_line.split("=", 1)[1].strip().strip("'\"")
-                if token_line.startswith("DJANGO_SUPERUSER_PASSWORD="):
-                    admin_user = "admin"
-                    admin_password = value
-                else:
-                    api_token = value
+            for token_line in stdout.read().decode("utf-8").strip().splitlines():
+                if "=" in token_line:
+                    key, value = token_line.split("=", 1)
+                    key = key.strip()
+                    value = value.strip().strip("'\"")
+                    if key == "DJANGO_SUPERUSER_PASSWORD":
+                        admin_user = "admin"
+                        admin_password = value
+                    elif key in ("ADMIN_TOKEN", "API_TOKEN", "AUTH_TOKEN"):
+                        api_token = value
         else:
             # Parse credentials file
             for line in credentials_file_content.split("\n"):

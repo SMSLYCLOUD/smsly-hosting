@@ -660,6 +660,11 @@ fi
         fi
         echo -e "${GREEN}  ✓ Observability stack updated${NC}"
     fi
+    if [ -n "$CROWDSEC_BOUNCER_KEY" ]; then
+        echo -e "${BLUE}  → Registering CrowdSec Bouncer...${NC}"
+        docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "$CROWDSEC_BOUNCER_KEY" >/dev/null 2>&1 || true
+    fi
+
     set_checkpoint "update_containers_rebuilt"
 fi
 

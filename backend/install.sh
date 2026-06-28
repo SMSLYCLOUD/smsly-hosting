@@ -6340,8 +6340,17 @@ if command -v ufw >/dev/null 2>&1; then
     fi
     # Fallback: allow SSH from any (in case MASTER_IP is empty)
     ufw allow ssh >/dev/null 2>&1 || true
-    ufw allow 80/tcp >/dev/null 2>&1 || true
-    ufw allow 443/tcp >/dev/null 2>&1 || true
+    
+    if [ "${INSTALL_MODE:-}" = "agent-lite" ]; then
+        if [ -n "$_master_ip" ] && [ "$_master_ip" != "127.0.0.1" ] && ! echo "$_master_ip" | grep -qE '^(0\.0\.0\.0|localhost)$'; then
+            ufw allow from "$_master_ip" to any port 80 >/dev/null 2>&1 || true
+        else
+            echo -e "${YELLOW}  ⚠ Warning: Agent-Lite missing Master IP. Port 80 not exposed.${NC}"
+        fi
+    else
+        ufw allow 80/tcp >/dev/null 2>&1 || true
+        ufw allow 443/tcp >/dev/null 2>&1 || true
+    fi
     # Allow FRP if active
     if [ -f "$INSTALL_DIR/.env" ] && grep -q "FRP_AUTH_TOKEN" "$INSTALL_DIR/.env"; then
         ufw allow 7000/tcp >/dev/null 2>&1 || true

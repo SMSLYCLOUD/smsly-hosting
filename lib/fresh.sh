@@ -651,6 +651,7 @@ else
     [ -n "${PGCAT_ADMIN_PASSWORD:-}" ] || PGCAT_ADMIN_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(24))" 2>/dev/null || true)"
     [ -n "${GRAFANA_PASSWORD:-}" ] || GRAFANA_PASSWORD="$(python3 -c "import secrets,string; print(''.join(secrets.choice(string.ascii_letters+string.digits+'-_') for _ in range(40)))" 2>/dev/null || openssl rand -base64 30 | tr -d '+/=' )"
     [ -n "${BACKUP_ENCRYPTION_KEY:-}" ] || BACKUP_ENCRYPTION_KEY="$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null || openssl rand -base64 32)"
+    [ -n "${CROWDSEC_BOUNCER_KEY:-}" ] || CROWDSEC_BOUNCER_KEY="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
     [ -n "${BACKUP_REQUIRE_ENCRYPTION:-}" ] || BACKUP_REQUIRE_ENCRYPTION="true"
     # SECURITY: default to true (was false pre-2026-06). Strict SSH host-key
     # checking is the safe default when .env does not pin a value.
@@ -763,6 +764,9 @@ USE_SSL=$USE_SSL
 
 # Inter-service HMAC authentication secret
 GATEWAY_SECRET=$GATEWAY_SECRET
+
+# CrowdSec Bouncer Key
+CROWDSEC_BOUNCER_KEY=$CROWDSEC_BOUNCER_KEY
 
 # GitHub webhook signature verification
 GITHUB_WEBHOOK_SECRET=$GITHUB_WEBHOOK_SECRET
@@ -1596,8 +1600,17 @@ if command -v ufw >/dev/null 2>&1; then
     fi
     # Fallback: allow SSH from any (in case MASTER_IP is empty)
     ufw allow ssh >/dev/null 2>&1 || true
-    ufw allow 80/tcp >/dev/null 2>&1 || true
-    ufw allow 443/tcp >/dev/null 2>&1 || true
+    
+    if [ "${INSTALL_MODE:-}" = "agent-lite" ]; then
+        if [ -n "$_master_ip" ] && [ "$_master_ip" != "127.0.0.1" ] && ! echo "$_master_ip" | grep -qE '^(0\.0\.0\.0|localhost)$'; then
+            ufw allow from "$_master_ip" to any port 80 >/dev/null 2>&1 || true
+        else
+            echo -e "${YELLOW}  ⚠ Warning: Agent-Lite missing Master IP. Port 80 not exposed.${NC}"
+        fi
+    else
+        ufw allow 80/tcp >/dev/null 2>&1 || true
+        ufw allow 443/tcp >/dev/null 2>&1 || true
+    fi
     # Allow FRP if active
     if [ -f "$INSTALL_DIR/.env" ] && grep -q "FRP_AUTH_TOKEN" "$INSTALL_DIR/.env"; then
         ufw allow 7000/tcp >/dev/null 2>&1 || true

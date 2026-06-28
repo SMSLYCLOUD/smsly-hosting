@@ -905,6 +905,9 @@ class PlatformConfig(models.Model):
     caddy_status = models.CharField(  # type: ignore[var-annotated]
         max_length=20, default='unknown',
         help_text="Last known Caddy status")
+    enable_crowdsec_waf = models.BooleanField(  # type: ignore[var-annotated]
+        default=False,
+        help_text="Enable CrowdSec WAF to block malicious traffic automatically")
     max_concurrent_builds = models.PositiveIntegerField(  # type: ignore[var-annotated]
         default=1,
         help_text="Maximum concurrent builds across the entire node fleet (to prevent OOM)")

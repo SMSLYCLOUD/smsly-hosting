@@ -167,6 +167,7 @@ export default function SettingsPage() {
   const [domainForm, setDomainForm] = useState({
     domain: '',
     use_ssl: false,
+    enable_crowdsec_waf: false,
     wildcard_subdomains: true,
     cloudflare_api_token: '',
     server_ip: '',
@@ -227,6 +228,7 @@ export default function SettingsPage() {
       setDomainForm({
         domain: data.domain || '',
         use_ssl: data.use_ssl || false,
+        enable_crowdsec_waf: data.enable_crowdsec_waf || false,
         wildcard_subdomains: data.wildcard_subdomains ?? true,
         cloudflare_api_token: '',
         server_ip: data.server_ip || '',
@@ -1282,6 +1284,16 @@ export default function SettingsPage() {
                         disabled={!domainForm.use_ssl}
                       >
                         {domainForm.wildcard_subdomains ? "Wildcard Subdomains Enabled" : "Wildcard Subdomains Disabled"}
+                      </Button>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant={domainForm.enable_crowdsec_waf ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => setDomainForm(prev => ({ ...prev, enable_crowdsec_waf: !prev.enable_crowdsec_waf }))}
+                      >
+                        <Shield className="h-3 w-3 mr-1" />
+                        {domainForm.enable_crowdsec_waf ? "CrowdSec WAF Enabled" : "CrowdSec WAF Disabled"}
                       </Button>
                     </div>
                     {domainConfig && (
