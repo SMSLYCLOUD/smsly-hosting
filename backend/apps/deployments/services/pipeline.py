@@ -1595,13 +1595,39 @@ class PipelineManager:
             routing_dir,
             f".smsly-routing-{self.deployment.id}.yml",
         )
-        override_payload = {
-            "services": {
-                main_service: {
-                    "labels": self._compose_traefik_labels(project_name),
-                }
-            }
+        override_payload = {"services": {}}
+
+        # Add routing labels to the main service
+        override_payload["services"][main_service] = {
+            "labels": self._compose_traefik_labels(project_name),
         }
+
+        # Apply security_opt to ALL services in the compose file
+        compose_path = os.path.join(routing_dir, self.service.compose_file)
+        if os.path.isfile(compose_path):
+            try:
+                with open(compose_path, "r", encoding="utf-8") as f:
+                    user_compose = yaml.safe_load(f) or {}
+                    if "services" in user_compose and isinstance(user_compose["services"], dict):
+                        for svc_name in user_compose["services"].keys():
+                            if svc_name not in override_payload["services"]:
+                                override_payload["services"][svc_name] = {}
+                            override_payload["services"][svc_name]["security_opt"] = [
+                                "no-new-privileges:true",
+                                "apparmor:docker-default"
+                            ]
+            except Exception as e:
+                # Fallback to just securing the main service if parsing fails
+                override_payload["services"][main_service]["security_opt"] = [
+                    "no-new-privileges:true",
+                    "apparmor:docker-default"
+                ]
+        else:
+            override_payload["services"][main_service]["security_opt"] = [
+                "no-new-privileges:true",
+                "apparmor:docker-default"
+            ]
+
         with open(override_path, "w", encoding="utf-8") as handle:
             yaml.safe_dump(override_payload, handle, sort_keys=False)
         return override_path

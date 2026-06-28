@@ -859,6 +859,7 @@ class SelfHealingOrchestrator:
         port = getattr(deployment.service, "port", 8000) or 8000
         run_cmd = (
             f"docker run -d --name {shlex.quote(service_name)} "
+            f"--security-opt no-new-privileges:true --security-opt apparmor=docker-default "
             f"--network smsly-net --restart unless-stopped "
             f"-p {port}:{port} "
             f"{shlex.quote(docker_image)}"

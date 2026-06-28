@@ -3,6 +3,9 @@ services:
   # Docker Socket Proxy (CRITICAL: Never expose raw Docker socket)
   # ============================================================
   socket-proxy:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
     # TODO: pin to digest via dependabot/renovate (Renovate: digest-update).
     image: tecnativa/docker-socket-proxy:0.1.2
     restart: unless-stopped
@@ -25,7 +28,7 @@ services:
       PUT: 1
       DELETE: 1
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro,z
     networks:
       - socket-proxy
     healthcheck:
@@ -41,6 +44,9 @@ services:
 
   # APT package cache (Debian/Ubuntu)
   apt-cacher:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
     image: sameersbn/apt-cacher-ng:latest
     container_name: smsly-apt-cacher
     restart: unless-stopped
@@ -59,6 +65,9 @@ services:
 
   # npm registry cache
   verdaccio:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
     image: verdaccio/verdaccio:latest
     container_name: smsly-verdaccio
     restart: unless-stopped
@@ -78,6 +87,9 @@ services:
 
   # Fast worker (Heartbeats, Metrics) - Low latency, high frequency
   celery-fast:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -85,8 +97,8 @@ services:
     environment:
       - DOCKER_HOST=tcp://socket-proxy:2375
     volumes:
-      - ./backend:/app
-      - ./caddy-config:/caddy-config
+      - ./backend:/app:z
+      - ./caddy-config:/caddy-config:z
       - backups_data:/app/backups
 
     depends_on:
@@ -108,6 +120,9 @@ services:
 
   # Deploy worker (Builds, Cleanup) - High latency, low frequency
   celery-deploy:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -122,9 +137,9 @@ services:
     # the deploy worker used under /platform-src must be packaged into the
     # backend image or referenced through explicit, scoped mounts.
     volumes:
-      - ./backend:/app
-      - ./install.sh:/app/install.sh:ro
-      - ./caddy-config:/caddy-config
+      - ./backend:/app:z
+      - ./install.sh:/app/install.sh:ro,z
+      - ./caddy-config:/caddy-config:z
       - backups_data:/app/backups
 
     depends_on:
@@ -146,6 +161,9 @@ services:
 
   # Default worker (Everything else)
   celery:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -153,8 +171,8 @@ services:
     environment:
       - DOCKER_HOST=tcp://socket-proxy:2375
     volumes:
-      - ./backend:/app
-      - ./caddy-config:/caddy-config
+      - ./backend:/app:z
+      - ./caddy-config:/caddy-config:z
       - backups_data:/app/backups
 
     depends_on:
@@ -178,6 +196,9 @@ services:
   # Database
   # ============================================================
   db:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
     image: postgres:16-alpine
     restart: unless-stopped
     command: postgres -c max_connections=200
@@ -203,6 +224,9 @@ services:
   # Redis
   # ============================================================
   redis:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
     image: redis:7-alpine
     command: redis-server ${REDIS_PASSWORD:+--requirepass ${REDIS_PASSWORD}}
     restart: unless-stopped
@@ -218,6 +242,9 @@ services:
   # RabbitMQ (Message broker for Celery workers)
   # ============================================================
   rabbitmq:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
     image: rabbitmq:3-management-alpine
     restart: unless-stopped
     ports:
@@ -242,19 +269,22 @@ services:
   # Backend API
   # ============================================================
   backend:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
     build: ./backend
     restart: unless-stopped
     volumes:
-      - ./backend:/app
-      - ./install.sh:/app/install.sh:ro
+      - ./backend:/app:z
+      - ./install.sh:/app/install.sh:ro,z
       - backups_data:/app/backups
 
-      - ./caddy-config:/caddy-config
+      - ./caddy-config:/caddy-config:z
       # Backend writes Prometheus file_sd targets here (see
       # apps/deployments/services/prometheus_targets.py). The `prometheus`
       # service below mounts the same host directory read-only at its own
       # /etc/prometheus/docker-labels-targets path and reloads on change.
-      - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets
+      - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets:z
     # SECURITY: removed `./:/platform-src:ro` — see celery-deploy comment above.
     ports:
       - "8000:8000"
@@ -296,11 +326,14 @@ services:
   # Celery Beat (Scheduler)
   # ============================================================
   celery-beat:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
     build: ./backend
     restart: unless-stopped
     command: celery -A config beat -l info --pidfile=/tmp/celerybeat.pid --schedule=/tmp/celerybeat-schedule
     volumes:
-      - ./backend:/app
+      - ./backend:/app:z
 
     env_file:
       - .env
@@ -346,6 +379,9 @@ services:
   # Frontend
   # ============================================================
   frontend:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
     init: true  # Fix: Next.js spawns child workers that become zombies without a proper init
     build:
       context: ./frontend
@@ -390,6 +426,9 @@ services:
   # raw port 5000 over the VPN.
   # ============================================================
   registry:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
     # TODO: pin to digest via dependabot/renovate (Renovate: digest-update).
     image: registry:2.8.3
     restart: unless-stopped
@@ -405,7 +444,7 @@ services:
       REGISTRY_HTTP_TLS_KEY: /certs/registry.key
     volumes:
       - registry_data:/var/lib/registry
-      - ./certs:/certs:ro
+      - ./certs:/certs:ro,z
     healthcheck:
       # The registry:2.8.3 image is scratch-based with no shell and no
       # 'health' subcommand. The actual registry process health is
@@ -454,6 +493,9 @@ services:
 
   # Loki - Log aggregation system
   loki:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
     image: grafana/loki:2.9.3
     container_name: smsly-loki
     restart: unless-stopped
@@ -462,7 +504,7 @@ services:
       - "127.0.0.1:3100:3100"
     volumes:
       - loki_data:/loki
-      - ./infrastructure/monitoring/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - ./infrastructure/monitoring/loki-config.yml:/etc/loki/local-config.yaml:ro,z
     command: -config.file=/etc/loki/local-config.yaml
     networks:
       - smsly-net
@@ -476,14 +518,17 @@ services:
 
   # Promtail - Log collector
   promtail:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
     image: grafana/promtail:2.9.3
     container_name: smsly-promtail
     restart: unless-stopped
     volumes:
-      - /var/log:/var/log:ro
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./infrastructure/monitoring/promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/log:/var/log:ro,z
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro,z
+      - /var/run/docker.sock:/var/run/docker.sock:ro,z
+      - ./infrastructure/monitoring/promtail-config.yml:/etc/promtail/config.yml:ro,z
       - promtail_positions:/tmp
     command: -config.file=/etc/promtail/config.yml
     networks:
@@ -501,6 +546,9 @@ services:
 
   # Prometheus - Metrics collection
   prometheus:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
     image: prom/prometheus:v2.48.0
     container_name: smsly-prometheus
     restart: unless-stopped
@@ -509,10 +557,10 @@ services:
       # an authenticated reverse proxy.
       - "127.0.0.1:9090:9090"
     volumes:
-      - ./infrastructure/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infrastructure/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro,z
       - prometheus_data:/prometheus
-      - /opt/smsly-hosting/prometheus-targets:/etc/prometheus/docker-labels-targets:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /opt/smsly-hosting/prometheus-targets:/etc/prometheus/docker-labels-targets:ro,z
+      - /var/run/docker.sock:/var/run/docker.sock:ro,z
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
@@ -546,13 +594,13 @@ services:
     command:
       - --containerd=unix:///var/run/containerd/containerd.sock
     volumes:
-      - /:/rootfs:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /var/run/containerd/containerd.sock:/var/run/containerd/containerd.sock:ro
-      - /sys:/sys:ro
-      - /var/lib/docker/:/var/lib/docker:ro
-      - /dev/disk/:/dev/disk:ro
-      - /sys/fs/cgroup:/sys/fs/cgroup:ro
+      - /:/rootfs:ro,z
+      - /var/run/docker.sock:/var/run/docker.sock:ro,z
+      - /var/run/containerd/containerd.sock:/var/run/containerd/containerd.sock:ro,z
+      - /sys:/sys:ro,z
+      - /var/lib/docker/:/var/lib/docker:ro,z
+      - /dev/disk/:/dev/disk:ro,z
+      - /sys/fs/cgroup:/sys/fs/cgroup:ro,z
     labels:
       - managed_by=smsly-hosting
     networks:
@@ -565,13 +613,16 @@ services:
 
   # Node Exporter - Host system metrics
   node-exporter:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
     image: prom/node-exporter:v1.6.1
     container_name: smsly-node-exporter
     restart: unless-stopped
     volumes:
-      - /proc:/host/proc:ro
-      - /sys:/host/sys:ro
-      - /:/rootfs:ro
+      - /proc:/host/proc:ro,z
+      - /sys:/host/sys:ro,z
+      - /:/rootfs:ro,z
     command:
       - '--path.procfs=/host/proc'
       - '--path.rootfs=/rootfs'
@@ -589,6 +640,9 @@ services:
 
   # Docker Labels Exporter - maps container IDs to service names for Prometheus
   docker-labels:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
     image: python:3.12-alpine
     container_name: smsly-docker-labels
     restart: unless-stopped
@@ -596,8 +650,8 @@ services:
     environment:
       - NODE_NAME=local
     volumes:
-      - ./infrastructure/monitoring/docker-labels-exporter.py:/app/exporter.py:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./infrastructure/monitoring/docker-labels-exporter.py:/app/exporter.py:ro,z
+      - /var/run/docker.sock:/var/run/docker.sock:ro,z
     labels:
       - managed_by=smsly-hosting
     networks:
@@ -611,6 +665,9 @@ services:
 
   # Grafana - Dashboards and visualization
   grafana:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
     image: grafana/grafana:11.0.0
     container_name: smsly-grafana
     restart: unless-stopped
@@ -649,6 +706,9 @@ services:
   # Required by the Caddyfile's wildcard block (reverse_proxy traefik:80).
   # ============================================================
   traefik:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
     image: traefik:v3.6
     restart: unless-stopped
     command:
@@ -700,6 +760,9 @@ services:
   # that the backend regenerates whenever services change.
   # ============================================================
   caddy:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
     build:
       context: .
       dockerfile: infrastructure/caddy/Dockerfile
@@ -714,7 +777,7 @@ services:
     # Caddyfile — written by the backend into the bind-mounted
     # ./caddy-config/Caddyfile at runtime, plus the safety seed
     # written by the installer.
-    - ./caddy-config:/etc/caddy
+    - ./caddy-config:/etc/caddy:z
     # Cert storage. Previously this was a separate `caddy_config`
     # named volume, which created a path mismatch: the backend wrote
     # the IP self-signed cert to /caddy-config/certs/ip.crt (bind
@@ -724,7 +787,7 @@ services:
     #         no such file or directory
     # Mounting the same host dir at /config fixes the path mismatch
     # — both sides now share storage transparently.
-    - ./caddy-config:/config
+    - ./caddy-config:/config:z
     - caddy_data:/data
     - static_volume:/app/staticfiles:ro
     - media_volume:/app/media:ro

@@ -830,7 +830,9 @@ class BackupService:
 
                 # Compress remote volume using alpine helper container
                 compress_cmd = (
-                    f"docker run --rm -v {vol.name}:/volume_data:ro "
+                    f"docker run --rm "
+                    f"--security-opt no-new-privileges:true --security-opt apparmor=docker-default "
+                    f"-v {vol.name}:/volume_data:ro "
                     f"-v {remote_temp_dir}:/backup alpine:latest "
                     f"tar -czf /backup/{vol_filename} -C /volume_data ."
                 )
@@ -1009,7 +1011,9 @@ class BackupService:
                         logger.info(f"Extracting volume {vol_obj.name} remotely...")
                         # Run helper container remotely to extract
                         extract_cmd = (
-                            f"docker run --rm -v {vol_obj.name}:/dest "
+                            f"docker run --rm "
+                            f"--security-opt no-new-privileges:true --security-opt apparmor=docker-default "
+                            f"-v {vol_obj.name}:/dest "
                             f"-v /tmp:/src alpine:latest "
                             f"tar -xzf /src/{vol_meta['filename']} -C /dest"
                         )

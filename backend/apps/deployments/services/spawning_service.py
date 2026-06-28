@@ -84,6 +84,7 @@ class SpawningService:
             f"docker pull {shlex.quote(image)} 2>/dev/null; "
             f"docker rm -f {shlex.quote(name)} 2>/dev/null; "
             f"docker run -d --name {shlex.quote(name)} "
+            f"--security-opt no-new-privileges:true --security-opt apparmor=docker-default "
             f"--restart unless-stopped --network {shlex.quote(net)} "
             f"{label_args} {env_args} "
             f"{shlex.quote(image)}"

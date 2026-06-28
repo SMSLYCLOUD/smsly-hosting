@@ -190,6 +190,7 @@ def deploy_docker_labels_exporter_on_node(server, force: bool = False):
         # isn't fully up yet (docker run rejects the bind).
         cmd = (
             f"docker run -d --name smsly-docker-labels --restart unless-stopped "
+            f"--security-opt no-new-privileges:true --security-opt apparmor=docker-default "
             f"-v /var/run/docker.sock:/var/run/docker.sock:ro "
             f"-p {DOCKER_LABELS_PORT}:{DOCKER_LABELS_PORT} "
             f"-e NODE_NAME={shlex.quote(server.name)} "
@@ -238,6 +239,7 @@ def deploy_cadvisor_on_node(server, force: bool = False):
         client.exec_command(
             f"docker rm -f smsly-cadvisor 2>/dev/null; "
             f"docker run -d --name smsly-cadvisor --restart unless-stopped "
+            f"--security-opt no-new-privileges:true --security-opt apparmor=docker-default "
             f"--privileged "
             f"-v /:/rootfs:ro -v /var/run/docker.sock:/var/run/docker.sock:ro "
             f"-v /sys:/sys:ro -v /var/lib/docker/:/var/lib/docker:ro "
@@ -269,6 +271,7 @@ def deploy_node_exporter_on_node(server, force: bool = False):
         client.exec_command(
             f"docker rm -f smsly-node-exporter 2>/dev/null; "
             f"docker run -d --name smsly-node-exporter --restart unless-stopped "
+            f"--security-opt no-new-privileges:true --security-opt apparmor=docker-default "
             f"-v /proc:/host/proc:ro -v /sys:/host/sys:ro -v /:/rootfs:ro "
             f"-p {NODE_EXPORTER_PORT}:{NODE_EXPORTER_PORT} "
             f"prom/node-exporter:v1.6.1 "
@@ -364,6 +367,7 @@ def deploy_promtail_on_node(server, force: bool = False):
 
         cmd = (
             f"docker run -d --name smsly-promtail --restart unless-stopped "
+            f"--security-opt no-new-privileges:true --security-opt apparmor=docker-default "
             f"-v /var/log:/var/log:ro "
             f"-v /var/lib/docker/containers:/var/lib/docker/containers:ro "
             f"-v /var/run/docker.sock:/var/run/docker.sock:ro "

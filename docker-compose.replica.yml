@@ -46,6 +46,9 @@ services:
   # from scratch; subsequent starts re-attach using the persisted
   # primary_conninfo in /var/lib/postgresql/data.
   db-replica:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
     image: postgres:16-alpine
     restart: unless-stopped
     container_name: smsly-hosting-db-replica-1
