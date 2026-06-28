@@ -43,8 +43,6 @@ def _fetch_node_agent_users():
             node_pass = meta.get("node_db_password")
             if not node_pass:
                 continue
-            # Fallback: if node_db_user wasn't stored (previously provisioned
-            # nodes), derive it from the node_id in metadata.
             if not node_user:
                 node_id = meta.get("node_id", "")
                 prefix = node_id.split("-")[0] if node_id else ""
@@ -89,11 +87,6 @@ def main():
 
     node_users = _fetch_node_agent_users()
 
-    # Build user list: main user + node agent users
-    all_users = [(db_user, db_password, app_pool_size)] + [
-        (nu, np, 5) for nu, np in node_users
-    ]
-
     lines = [
         '[general]',
         f'host = "0.0.0.0"',
@@ -113,14 +106,15 @@ def main():
         f'database = "{db_name}"',
     ]
 
-    for uname, upass, usize in all_users:
-        lines += [
-            '',
-            f'[[pools.smsly_hosting.users]]',
-            f'username = "{uname}"',
-            f'password = "{upass}"',
-            f'pool_size = {usize}',
-        ]
+    # PgCat expects users as a map keyed by username under the pool section
+    lines.append(f'[pools.smsly_hosting.users.{db_user}]')
+    lines.append(f'pool_size = {app_pool_size}')
+    lines.append(f'password = "{db_password}"')
+
+    for node_user, node_pass in node_users:
+        lines.append(f'[pools.smsly_hosting.users.{node_user}]')
+        lines.append(f'pool_size = 5')
+        lines.append(f'password = "{node_pass}"')
 
     lines += [
         '',
@@ -130,16 +124,15 @@ def main():
         '[pools.smsly_hosting_session.shards.0]',
         f'servers = [["{db_host}", {db_port}, "primary"]]',
         f'database = "{db_name}"',
+        f'[pools.smsly_hosting_session.users.{db_user}]',
+        f'pool_size = {worker_pool_size}',
+        f'password = "{db_password}"',
     ]
 
-    for uname, upass, _usize in all_users:
-        lines += [
-            '',
-            f'[[pools.smsly_hosting_session.users]]',
-            f'username = "{uname}"',
-            f'password = "{upass}"',
-            f'pool_size = 3',
-        ]
+    for node_user, node_pass in node_users:
+        lines.append(f'[pools.smsly_hosting_session.users.{node_user}]')
+        lines.append(f'pool_size = 3')
+        lines.append(f'password = "{node_pass}"')
 
     toml_content = "\n".join(lines) + "\n"
 
