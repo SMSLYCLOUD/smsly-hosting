@@ -167,5 +167,14 @@ if [ "${1:-}" = "celery" ] && [ "${4:-}" = "beat" ] || echo "$*" | grep -q "cele
     rm -f /app/celerybeat.pid
 fi
 
+# Drop from root to the smsly (UID 1000) non-privileged user.
+# This allows the setup above (chown/chmod on bind-mounted volumes,
+# migrations, static collect) to run as root while the application
+# itself runs unprivileged.
+if [ "$(id -u)" = "0" ]; then
+    echo "Starting: $* (as smsly)"
+    exec su -s /bin/sh -c 'exec "$@"' smsly -- "$@"
+fi
+
 echo "Starting: $*"
 exec "$@"

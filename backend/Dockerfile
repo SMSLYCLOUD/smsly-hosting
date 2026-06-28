@@ -43,12 +43,15 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Security: Run as non-root user
+# Security: Run as non-root user.
+# NOTE: The container starts as root so the entrypoint can chown bind-mounted
+# volumes (/caddy-config, prometheus-targets). It drops to the smsly user
+# before exec'ing the application (see entrypoint.sh).
 RUN chmod +x entrypoint.sh && \
     mkdir -p /app/staticfiles /app/backups/services /app/backups/server /caddy-config && \
     useradd -m -u 1000 smsly && \
-    chown -R smsly:smsly /app
-USER smsly
+    chown -R smsly:smsly /app && \
+    chown smsly:smsly /caddy-config
 
 # Use Entrypoint (handles migrations + static files)
 ENTRYPOINT ["./entrypoint.sh"]
