@@ -69,6 +69,11 @@ class ServiceBackup(models.Model):
     error_message = models.TextField(blank=True)  # type: ignore[var-annotated]
     created_at = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
     completed_at = models.DateTimeField(null=True, blank=True)  # type: ignore[var-annotated]
+    # ── Cloud/object storage tracking ────────────────────────────────────
+    cloud_uploaded = models.BooleanField(default=False)  # type: ignore[var-annotated]
+    cloud_bucket = models.CharField(max_length=255, blank=True, default='')  # type: ignore[var-annotated]
+    cloud_key = models.CharField(max_length=1024, blank=True, default='',  # type: ignore[var-annotated]
+                                 help_text='S3 object key, e.g. smsly-backups/<service>/<filename>')
 
 class ServerBackup(models.Model):
     """Full server export: all services + platform config + Traefik + SSL certs."""
@@ -80,6 +85,11 @@ class ServerBackup(models.Model):
     error_message = models.TextField(blank=True, default='')  # type: ignore[var-annotated]
     created_at = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
     completed_at = models.DateTimeField(null=True, blank=True)  # type: ignore[var-annotated]
+    # ── Cloud/object storage tracking ────────────────────────────────────
+    cloud_uploaded = models.BooleanField(default=False)  # type: ignore[var-annotated]
+    cloud_bucket = models.CharField(max_length=255, blank=True, default='')  # type: ignore[var-annotated]
+    cloud_key = models.CharField(max_length=1024, blank=True, default='',  # type: ignore[var-annotated]
+                                 help_text='S3 object key, e.g. smsly-backups/<scope>/<filename>')
 
 class BackupSchedule(models.Model):
     """Cron-based backup schedule per service or server-wide."""
