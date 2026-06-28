@@ -138,14 +138,17 @@ class EnvironmentIntelligenceService:
             for var in env_context:
                 var_upper = var.upper()
                 if any(p in var_upper for p in _CONFIG_PATTERNS_FB):
-                    fallback[var] = "8000"
+                    if "PORT" in var_upper:
+                        fallback[var] = "3000"
+                    else:
+                        fallback[var] = "8000"
                 elif any(k in var_upper for k in ["SECRET", "KEY", "TOKEN", "PASSWORD", "SALT"]):
                     if "ENCRYPTION_KEY" in var_upper:
                         fallback[var] = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode('utf-8')
                     else:
                         fallback[var] = secrets.token_hex(32)
                 elif "PORT" in var_upper:
-                    fallback[var] = "8000"
+                    fallback[var] = "3000"
             return fallback
 
     @classmethod
