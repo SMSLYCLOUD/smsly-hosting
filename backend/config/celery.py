@@ -98,6 +98,7 @@ app.conf.task_routes = {
     'apps.deployments.tasks_ecosystem.ecosystem_scan_task': {'queue': 'deploy'},
     'apps.deployments.tasks_ecosystem.ecosystem_deploy_task': {'queue': 'deploy'},
     'apps.deployments.tasks_ecosystem.ecosystem_release_wave_task': {'queue': 'fast'},
+    'apps.deployments.tasks_ecosystem.ecosystem_deferred_build_task': {'queue': 'fast'},
     'apps.deployments.tasks_safedeploy.create_preview_environment_job': {'queue': 'deploy'},
     'apps.deployments.tasks_safedeploy.create_database_clone_job': {'queue': 'deploy'},
     'apps.deployments.tasks_safedeploy.run_migration_validation_job': {'queue': 'deploy'},

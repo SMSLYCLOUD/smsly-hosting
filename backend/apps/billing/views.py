@@ -110,11 +110,12 @@ def _choose_provider(provider_in: str | None) -> str:
 
 def _pro_amount_currency() -> tuple[Decimal, str]:
     """Get the pro plan amount and currency."""
+    from apps.deployments.models_core import PlatformConfig
     try:
-        amount = Decimal(str(getattr(settings, "BILLING_PRO_AMOUNT", "29.00")))
+        amount = Decimal(PlatformConfig.get_config_value('billing_pro_amount', '29.00'))
     except Exception as e:
-        raise ValueError("Invalid BILLING_PRO_AMOUNT") from e
-    currency = (getattr(settings, "BILLING_CURRENCY", "USD") or "USD").upper().strip()
+        raise ValueError("Invalid billing_pro_amount") from e
+    currency = PlatformConfig.get_config_value('billing_currency', 'USD').upper().strip()
     return amount, currency
 
 
@@ -158,7 +159,7 @@ class BillingSummaryView(GenericAPIView):
 
         return Response(
             {
-                "currency": (getattr(settings, "BILLING_CURRENCY", "USD") or "USD").upper(),
+                "currency": PlatformConfig.get_config_value('billing_currency', 'USD').upper(),
                 "stripe_configured": StripeService.is_configured(),
                 "flutterwave_configured": FlutterwaveService.is_configured(),
                 "cryptomus_configured": CryptomusService.is_configured(),
