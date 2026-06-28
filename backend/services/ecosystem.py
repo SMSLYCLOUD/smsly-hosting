@@ -1106,6 +1106,7 @@ def analyze_ecosystem(repos_data: list[dict], github_token: str | None = None, a
                     for rd in repos_data:
                         if rd.get("repo") == repo:
                             svc["_env_prefixes"] = list(rd.get("env_prefixes", []))
+                            svc["_is_heavy"] = rd.get("is_heavy", False)
                             break
 
                 _apply_plan_repo_defaults(plan["services"], repos_data)
@@ -1397,6 +1398,7 @@ def analyze_ecosystem_chunked(repos_data: list[dict], github_token: str | None =
             for rd in repos_data:
                 if rd.get("repo") == repo:
                     svc["_env_prefixes"] = list(rd.get("env_prefixes", []))
+                    svc["_is_heavy"] = rd.get("is_heavy", False)
                     break
 
         _apply_plan_repo_defaults(global_services, repos_data)
@@ -2874,6 +2876,15 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
                 env_map[key] = _generate_pool[key]
         svc["env_vars"] = env_map
 
+    # 9. Resource allocation based on detected intensity
+    for svc in deployable:
+        if svc.get("_is_heavy"):
+            svc["cpu_cores"] = 2.0
+            svc["memory_mb"] = 4096
+        else:
+            svc["cpu_cores"] = 1.0
+            svc["memory_mb"] = 1024
+
 
 def _ensure_100_percent_env_coverage(services: list[dict]):
     """
@@ -2991,6 +3002,7 @@ def _build_heuristic_plan(repos_data: list[dict], error: str = "") -> dict:
             "env_vars": env_map,
             "depends_on": [],
             "deploy_order": order,
+            "_is_heavy": rd.get("is_heavy", False),
         }
 
         services.append(svc)

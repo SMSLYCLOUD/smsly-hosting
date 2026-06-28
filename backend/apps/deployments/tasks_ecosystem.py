@@ -12,7 +12,9 @@ from urllib.parse import urlparse, urlunparse  # noqa: E402
 
 from celery import shared_task  # noqa: E402
 from celery.exceptions import SoftTimeLimitExceeded  # noqa: E402
+from decimal import Decimal  # noqa: E402
 from django.conf import settings  # noqa: E402
+from django.core.cache import cache  # noqa: E402
 from django.utils import timezone  # noqa: E402
 from services.addon_provisioner import addon_provisioner  # noqa: E402
 
@@ -29,8 +31,11 @@ _MIN_FREE_MEMORY_MB = 256
 _WAVE_RECHECK_SECONDS = 300
 _MAX_WAVE_RECHECKS = 10
 _MAX_WAVE_SIZE = 5
-_DEFAULT_WAVE_SIZE = 3
+_DEFAULT_WAVE_SIZE = 2
 _VALID_PORT_RANGE = (1, 65535)
+_MAX_CONCURRENT_BUILDS = 2
+_ACTIVE_BUILDS_CACHE_KEY = "smsly:ecosystem:active_builds"
+_BUILD_DEFER_SECONDS = 60
 
 _ADDON_ENV_ALIASES = {
     "POSTGRES": ("POSTGRESQL_URL", "PG_URL", "POSTGRES_URL"),
@@ -404,6 +409,81 @@ def _env_int(name: str, default: int, minimum: int = 1, maximum: int = 500) -> i
     except (TypeError, ValueError):
         parsed = default
     return max(minimum, min(maximum, parsed))
+
+
+def _count_active_ecosystem_builds() -> int:
+    """Count ecosystem deployments currently being built (from cache counter)."""
+    try:
+        return int(cache.get(_ACTIVE_BUILDS_CACHE_KEY, 0))
+    except Exception:
+        return 0
+
+
+def _increment_active_ecosystem_builds() -> None:
+    """Increment the active build counter (1-hour TTL safety net)."""
+    try:
+        try:
+            cache.incr(_ACTIVE_BUILDS_CACHE_KEY)
+        except (ValueError, ConnectionError):
+            cache.add(_ACTIVE_BUILDS_CACHE_KEY, 1, timeout=3600)
+    except Exception:
+        pass
+
+
+def _decrement_active_ecosystem_builds() -> None:
+    """Decrement the active build counter."""
+    try:
+        current = int(cache.get(_ACTIVE_BUILDS_CACHE_KEY, 0))
+        if current > 0:
+            cache.set(_ACTIVE_BUILDS_CACHE_KEY, current - 1, timeout=3600)
+    except Exception:
+        pass
+
+
+def _rebuild_ecosystem_build_counter() -> None:
+    """Recalculate the build counter from actual deployment statuses.
+    Called periodically to prevent drift from stale cache entries."""
+    try:
+        active_statuses = {
+            Deployment.Status.QUEUED,
+            Deployment.Status.BUILDING,
+            Deployment.Status.DEPLOYING,
+            Deployment.Status.HEALTH_CHECK,
+        }
+        count = Deployment.objects.filter(
+            commit_hash="ecosystem-deploy",
+            status__in=active_statuses,
+        ).count()
+        cache.set(_ACTIVE_BUILDS_CACHE_KEY, count, timeout=3600)
+    except Exception:
+        pass
+
+
+def _get_ecosystem_build_config() -> dict:
+    """Read ecosystem build settings from PlatformConfig with env var fallback."""
+    try:
+        from apps.deployments.models_core import PlatformConfig
+        cfg = PlatformConfig.load()
+        max_concurrent = cfg.ecosystem_max_concurrent_builds or _MAX_CONCURRENT_BUILDS
+        stagger = cfg.ecosystem_build_stagger_seconds or 30
+        wave_size = cfg.ecosystem_default_wave_size or _DEFAULT_WAVE_SIZE
+        recheck = cfg.ecosystem_wave_recheck_seconds or _WAVE_RECHECK_SECONDS
+    except Exception:
+        max_concurrent = _MAX_CONCURRENT_BUILDS
+        stagger = 30
+        wave_size = _DEFAULT_WAVE_SIZE
+        recheck = _WAVE_RECHECK_SECONDS
+    return {
+        "max_concurrent_builds": max_concurrent,
+        "build_stagger_seconds": stagger,
+        "wave_size": wave_size,
+        "wave_recheck_seconds": recheck,
+    }
+
+
+def _wave_recheck_countdown() -> int:
+    """Return wave recheck countdown in seconds from PlatformConfig."""
+    return _get_ecosystem_build_config()["wave_recheck_seconds"]
 
 
 def _generate_secret(length: int = 50) -> str:
@@ -965,19 +1045,41 @@ def _resolve_dependency_map(
 
 
 def _queue_wave(app, deployment_ids: list[str], provider_id: str, wave_index: int) -> int:
-    """Queue all QUEUED deployments in this wave."""
+    """Queue QUEUED deployments in this wave with concurrency control."""
 
     queued = 0
-    for deployment_id in deployment_ids:
+    build_cfg = _get_ecosystem_build_config()
+    max_concurrent = build_cfg["max_concurrent_builds"]
+    stagger = build_cfg["build_stagger_seconds"]
+
+    for i, deployment_id in enumerate(deployment_ids):
         deployment = Deployment.objects.filter(id=deployment_id).first()
         if not deployment:
             continue
         if deployment.status != Deployment.Status.QUEUED:
             continue
 
+        # Check concurrency limit
+        active = _count_active_ecosystem_builds()
+        if active >= max_concurrent:
+            deployment.build_logs = (
+                f"{deployment.build_logs or ''}"
+                f"\n[Ecosystem] Build concurrency limit reached — deferred in wave {wave_index + 1}.\n"
+            )
+            deployment.save(update_fields=["build_logs"])
+            app.send_task(
+                "apps.deployments.tasks_ecosystem.ecosystem_deferred_build_task",
+                args=[str(deployment.id), str(provider_id), wave_index],
+                countdown=_BUILD_DEFER_SECONDS,
+            )
+            continue
+
+        _increment_active_ecosystem_builds()
+
+        countdown = i * stagger
         deployment.build_logs = (
             f"{deployment.build_logs or ''}"
-            f"\n[Ecosystem] Queued in wave {wave_index + 1}.\n"
+            f"\n[Ecosystem] Queued in wave {wave_index + 1} (stagger +{countdown}s).\n"
         )
         deployment.save(update_fields=["build_logs"])
 
@@ -985,6 +1087,7 @@ def _queue_wave(app, deployment_ids: list[str], provider_id: str, wave_index: in
             "apps.deployments.tasks.smart_deploy_task",
             args=[str(deployment.id), str(provider_id)],
             kwargs={"skip_review": True},
+            countdown=countdown,
         )
         queued += 1
 
@@ -1115,6 +1218,22 @@ def _apply_service_profile(service, svc_plan: dict[str, Any], provider, port: in
         except Exception:
             pass
 
+    # Only set cpu_cores/memory_mb from plan if still at model defaults.
+    if not service.cpu_cores or float(service.cpu_cores) == 1.0:
+        cpu = svc_plan.get("cpu_cores")
+        if cpu:
+            try:
+                service.cpu_cores = Decimal(str(cpu))
+            except Exception:
+                pass
+    if not service.memory_mb or service.memory_mb == 2048:
+        mem = svc_plan.get("memory_mb")
+        if mem:
+            try:
+                service.memory_mb = int(mem)
+            except Exception:
+                pass
+
     service.save()
 
 
@@ -1200,6 +1319,41 @@ def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provi
 
 
 @shared_task(bind=True, queue='fast', soft_time_limit=120, time_limit=180)
+def ecosystem_deferred_build_task(self, deployment_id: str, provider_id: str, wave_index: int) -> dict:
+    """Retry a deployment that was deferred due to concurrency limits."""
+    deployment = Deployment.objects.filter(id=deployment_id).first()
+    if not deployment:
+        return {"status": "skipped", "reason": "deployment not found"}
+    if deployment.status != Deployment.Status.QUEUED:
+        return {"status": "skipped", "reason": f"status is {deployment.status}"}
+
+    active = _count_active_ecosystem_builds()
+    max_concurrent = _env_int("ECOSYSTEM_MAX_CONCURRENT_BUILDS", _MAX_CONCURRENT_BUILDS, minimum=1, maximum=10)
+
+    if active >= max_concurrent:
+        self.app.send_task(
+            "apps.deployments.tasks_ecosystem.ecosystem_deferred_build_task",
+            args=[deployment_id, provider_id, wave_index],
+            countdown=_BUILD_DEFER_SECONDS,
+        )
+        return {"status": "deferred", "active": active, "max": max_concurrent}
+
+    _increment_active_ecosystem_builds()
+    deployment.build_logs = (
+        f"{deployment.build_logs or ''}"
+        f"\n[Ecosystem] Deferred build slot acquired — dispatching.\n"
+    )
+    deployment.save(update_fields=["build_logs"])
+
+    self.app.send_task(
+        "apps.deployments.tasks.smart_deploy_task",
+        args=[deployment_id, provider_id],
+        kwargs={"skip_review": True},
+    )
+    return {"status": "dispatched", "deployment_id": deployment_id}
+
+
+@shared_task(bind=True, queue='fast', soft_time_limit=120, time_limit=180)
 def ecosystem_release_wave_task(
     self,
     provider_id: str,
@@ -1212,6 +1366,9 @@ def ecosystem_release_wave_task(
 ) -> dict:
     """Release next wave, continuing successful branches and cancelling failed branches."""
 
+    # Rebuild build counter from actual deployment statuses to prevent drift
+    _rebuild_ecosystem_build_counter()
+
     if not waves or wave_index >= len(waves):
         return {"status": "completed", "waves": len(waves or [])}
 
@@ -1221,7 +1378,7 @@ def ecosystem_release_wave_task(
             self.app.send_task(
                 "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
                 args=[provider_id, waves, 0, recheck_count, max_rechecks, dependencies, deployment_by_repo_key],
-                countdown=_env_int("ECOSYSTEM_WAVE_RECHECK_SECONDS", _WAVE_RECHECK_SECONDS, minimum=5, maximum=30),
+                countdown=_wave_recheck_countdown(),
             )
             return {"status": "deferred", "wave": 0, "reason": "low_memory"}
         queued = _queue_wave(self.app, waves[0], provider_id, wave_index=0)
@@ -1229,7 +1386,7 @@ def ecosystem_release_wave_task(
             self.app.send_task(
                 "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
                 args=[provider_id, waves, 1, 0, max_rechecks, dependencies, deployment_by_repo_key],
-                countdown=_env_int("ECOSYSTEM_WAVE_RECHECK_SECONDS", _WAVE_RECHECK_SECONDS, minimum=5, maximum=120),
+                countdown=_wave_recheck_countdown(),
             )
         return {"status": "released", "wave": 1, "queued": queued}
 
@@ -1314,12 +1471,7 @@ def ecosystem_release_wave_task(
         self.app.send_task(
             "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
             args=[provider_id, waves, wave_index, recheck_count + 1, max_rechecks, dependencies, deployment_by_repo_key],
-            countdown=_env_int(
-                "ECOSYSTEM_WAVE_RECHECK_SECONDS",
-                _WAVE_RECHECK_SECONDS,
-                minimum=5,
-                maximum=120,
-            ),
+            countdown=_wave_recheck_countdown(),
         )
         return {
             "status": "waiting",
@@ -1344,7 +1496,7 @@ def ecosystem_release_wave_task(
         self.app.send_task(
             "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
             args=[provider_id, waves, wave_index, 0, max_rechecks, dependencies, deployment_by_repo_key],
-            countdown=_env_int("ECOSYSTEM_WAVE_RECHECK_SECONDS", _WAVE_RECHECK_SECONDS, minimum=5, maximum=30),
+            countdown=_wave_recheck_countdown(),
         )
         return {"status": "deferred", "wave": wave_index, "reason": "low_memory"}
 
@@ -1354,12 +1506,7 @@ def ecosystem_release_wave_task(
         self.app.send_task(
             "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
             args=[provider_id, waves, wave_index + 1, 0, max_rechecks, dependencies, deployment_by_repo_key],
-            countdown=_env_int(
-                "ECOSYSTEM_WAVE_RECHECK_SECONDS",
-                _WAVE_RECHECK_SECONDS,
-                minimum=5,
-                maximum=120,
-            ),
+            countdown=_wave_recheck_countdown(),
         )
     return {
         "status": "released",
@@ -1415,13 +1562,13 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
     _rollback_env_vars: list[str] = []
     _rollback_addons: list[str] = []
 
-    requested_wave_size = plan.get("wave_size", _DEFAULT_WAVE_SIZE)
+    build_cfg = _get_ecosystem_build_config()
+    requested_wave_size = plan.get("wave_size", build_cfg["wave_size"])
     try:
         requested_wave_size = int(requested_wave_size)
     except (TypeError, ValueError):
-        requested_wave_size = _DEFAULT_WAVE_SIZE
+        requested_wave_size = build_cfg["wave_size"]
     wave_size = max(1, min(_MAX_WAVE_SIZE, requested_wave_size))
-    wave_size = _env_int("ECOSYSTEM_DEPLOY_WAVE_SIZE", wave_size, minimum=1, maximum=_MAX_WAVE_SIZE)
 
     # 1. Parse and validate manifest if provided, bulk verify env before continuing
     manifest_content = plan.get("manifest")
@@ -1854,7 +2001,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             self.app.send_task(
                 "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
                 args=[str(provider.id), waves, 0, 0, _MAX_WAVE_RECHECKS, safe_dependencies, deployment_by_repo_key],
-                countdown=_env_int("ECOSYSTEM_WAVE_RECHECK_SECONDS", _WAVE_RECHECK_SECONDS, minimum=5, maximum=30),
+                countdown=_wave_recheck_countdown(),
             )
         else:
             queued_now = _queue_wave(self.app, waves[0], str(provider.id), wave_index=0)
@@ -1862,12 +2009,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             self.app.send_task(
                 "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
                 args=[str(provider.id), waves, 1, 0, _MAX_WAVE_RECHECKS, safe_dependencies, deployment_by_repo_key],
-                countdown=_env_int(
-                    "ECOSYSTEM_WAVE_RECHECK_SECONDS",
-                    _WAVE_RECHECK_SECONDS,
-                    minimum=5,
-                    maximum=120,
-                ),
+                countdown=_wave_recheck_countdown(),
             )
 
     deploy_result = {

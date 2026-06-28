@@ -374,7 +374,8 @@ class PipelineManager:
         self.deployment.pipeline_stages = []
         update_stage(self.deployment, 'Clone', 'pending')
         update_stage(self.deployment, 'Build', 'pending')
-        if getattr(settings, 'CONTAINER_REGISTRY_URL', None):
+        _registry_url = PlatformConfig.get_config_value('container_registry_url') or getattr(settings, 'CONTAINER_REGISTRY_URL', None)
+        if _registry_url:
             update_stage(self.deployment, 'Push', 'pending')
 
         # Load secrets for redaction
@@ -1984,16 +1985,19 @@ class PipelineManager:
         # Docker daemon can pull base images (FROM lines in Dockerfile)
         # from an auth-enabled registry without 403 errors.  Uses
         # docker-py so this works without the ``docker`` CLI binary.
-        if settings.REGISTRY_USER and settings.REGISTRY_PASSWORD:
+        _reg_user = PlatformConfig.get_config_value('registry_user') or getattr(settings, 'REGISTRY_USER', '')
+        _reg_pass = PlatformConfig.get_config_value('registry_password') or getattr(settings, 'REGISTRY_PASSWORD', '')
+        if _reg_user and _reg_pass:
             registry_url = (
-                settings.CONTAINER_REGISTRY_URL or "registry.smsly.cloud"
+                PlatformConfig.get_config_value('container_registry_url')
+                or getattr(settings, 'CONTAINER_REGISTRY_URL', '') or "registry.smsly.cloud"
             ).split("://")[-1]
             try:
                 from apps.cloud.docker_client import get_docker_client
                 client = get_docker_client()
                 client.login(
-                    username=settings.REGISTRY_USER,
-                    password=settings.REGISTRY_PASSWORD,
+                    username=_reg_user,
+                    password=_reg_pass,
                     registry=registry_url,
                 )
             except Exception as exc:
@@ -2465,7 +2469,7 @@ class PipelineManager:
         if self.service.deploy_type == 'DOCKER' and self.service.docker_image:
             return
 
-        registry_url = getattr(settings, 'CONTAINER_REGISTRY_URL', None)
+        registry_url = PlatformConfig.get_config_value('container_registry_url') or getattr(settings, 'CONTAINER_REGISTRY_URL', None)
         is_local = is_deployment_local(self.deployment)
         if not registry_url:
             if not is_local:
@@ -2486,7 +2490,7 @@ class PipelineManager:
 
             # If push_image returned the original name (registry unreachable),
             # log a warning but don't fail — the deploy will use the local image.
-            registry_prefix = getattr(settings, 'CONTAINER_REGISTRY_URL', None)
+            registry_prefix = PlatformConfig.get_config_value('container_registry_url') or getattr(settings, 'CONTAINER_REGISTRY_URL', None)
             pushed_to_registry = bool(registry_prefix and remote_tag.startswith(registry_prefix))
 
             if pushed_to_registry:

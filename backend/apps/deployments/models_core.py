@@ -904,6 +904,18 @@ class PlatformConfig(models.Model):
     max_concurrent_builds = models.PositiveIntegerField(  # type: ignore[var-annotated]
         default=1,
         help_text="Maximum concurrent builds across the entire node fleet (to prevent OOM)")
+    ecosystem_max_concurrent_builds = models.PositiveIntegerField(  # type: ignore[var-annotated]
+        default=2,
+        help_text="Maximum concurrent ecosystem builds")
+    ecosystem_build_stagger_seconds = models.PositiveIntegerField(  # type: ignore[var-annotated]
+        default=30,
+        help_text="Seconds between each build start within an ecosystem wave")
+    ecosystem_default_wave_size = models.PositiveSmallIntegerField(  # type: ignore[var-annotated]
+        default=10,
+        help_text="Default number of services per ecosystem deploy wave")
+    ecosystem_wave_recheck_seconds = models.PositiveIntegerField(  # type: ignore[var-annotated]
+        default=15,
+        help_text="Seconds between wave completion rechecks")
     caddy_ask_secret = EncryptedCharField(
         max_length=512, blank=True, default='',
         help_text="Caddy on_demand_tls ask shared secret. Set via UI — if empty, "
@@ -923,6 +935,79 @@ class PlatformConfig(models.Model):
         help_text="SHA-256 hash of the 12-word recovery phrase (salted). "
                   "Used as last-resort admin account access if all trusted devices are lost.",
     )
+
+    # ── Billing ──────────────────────────────────────────────────────────
+    billing_currency = models.CharField(
+        max_length=10, blank=True, default='USD',
+        help_text="Billing currency code (e.g. USD, NGN)")
+    billing_pro_amount = models.CharField(
+        max_length=20, blank=True, default='29.00',
+        help_text="Pro plan amount (e.g. 29.00)")
+    billing_pro_period_days = models.PositiveIntegerField(
+        default=30, help_text="Pro plan billing period in days")
+
+    # ── AI Provider Models ───────────────────────────────────────────────
+    # (AI model/key settings are managed via the intelligence.AIProviderSettings model)
+
+    # ── SMSLY Platform Integration ───────────────────────────────────────
+    smsly_sms_api_url = models.URLField(
+        max_length=300, blank=True, default='http://smsly-sms:8000/api/v1',
+        help_text="SMSLY SMS API internal URL")
+    smsly_voice_api_url = models.URLField(
+        max_length=300, blank=True, default='http://smsly-voice:8000/api/v1',
+        help_text="SMSLY Voice API internal URL")
+    smsly_platform_api_url = models.URLField(
+        max_length=300, blank=True, default='http://smsly-platform-api:8000/api/v1',
+        help_text="SMSLY Platform API internal URL")
+    smsly_internal_api_key = EncryptedCharField(
+        max_length=512, blank=True, default='',
+        help_text="Internal service-to-service API key")
+
+    # ── Alerting ─────────────────────────────────────────────────────────
+    alert_phone_number = models.CharField(
+        max_length=20, blank=True, default='',
+        help_text="Phone number for deployment failure alerts (E.164 format)")
+    critical_alert_phone = models.CharField(
+        max_length=20, blank=True, default='',
+        help_text="Phone number for critical/P0 voice call alerts")
+    notify_on_success = models.BooleanField(
+        default=False,
+        help_text="Enable SMS on successful deployments")
+
+    # ── Container Registry ───────────────────────────────────────────────
+    container_registry_url = models.CharField(
+        max_length=255, blank=True, default='127.0.0.1:5000',
+        help_text="Container registry URL")
+    registry_user = models.CharField(
+        max_length=255, blank=True, default='smsly-registry',
+        help_text="Container registry username")
+    registry_password = EncryptedCharField(
+        max_length=512, blank=True, default='',
+        help_text="Container registry password")
+
+    # ── Observability ────────────────────────────────────────────────────
+    sentry_dsn = models.CharField(
+        max_length=300, blank=True, default='',
+        help_text="Sentry DSN for error tracking")
+    sentry_traces_sample_rate = models.FloatField(
+        default=0.0, help_text="Sentry traces sample rate (0.0-1.0)")
+    sentry_profiles_sample_rate = models.FloatField(
+        default=0.0, help_text="Sentry profiles sample rate (0.0-1.0)")
+    sentry_environment = models.CharField(
+        max_length=50, blank=True, default='production',
+        help_text="Sentry environment name")
+
+    # ── Feature Flags ────────────────────────────────────────────────────
+    smsly_disable_tier_gates = models.BooleanField(
+        default=True,
+        help_text="Disable billing tier gates (allow all features)")
+    enable_legacy_tunnel_api = models.BooleanField(
+        default=False,
+        help_text="Enable legacy function-based tunnel API")
+    smsly_strict_ssh_host_key_check = models.BooleanField(
+        default=False,
+        help_text="Strict SSH host-key verification for provisioner")
+
     updated_at = models.DateTimeField(auto_now=True)  # type: ignore[var-annotated]
 
     class Meta:
@@ -974,6 +1059,43 @@ class PlatformConfig(models.Model):
             return db_val
         import os
         return os.environ.get(env_key, '')
+
+    # Mapping: (PlatformConfig field name, env var name, default)
+    _CONFIG_MAP = {
+        'billing_currency': ('BILLING_CURRENCY', 'USD'),
+        'billing_pro_amount': ('BILLING_PRO_AMOUNT', '29.00'),
+        'billing_pro_period_days': ('BILLING_PRO_PERIOD_DAYS', '30'),
+        'container_registry_url': ('CONTAINER_REGISTRY_URL', '127.0.0.1:5000'),
+        'registry_user': ('REGISTRY_USER', 'smsly-registry'),
+        'registry_password': ('REGISTRY_PASSWORD', ''),
+        'smsly_sms_api_url': ('SMSLY_SMS_API_URL', 'http://smsly-sms:8000/api/v1'),
+        'smsly_voice_api_url': ('SMSLY_VOICE_API_URL', 'http://smsly-voice:8000/api/v1'),
+        'smsly_platform_api_url': ('SMSLY_PLATFORM_API_URL', 'http://smsly-platform-api:8000/api/v1'),
+        'smsly_internal_api_key': ('SMSLY_INTERNAL_API_KEY', ''),
+        'alert_phone_number': ('ALERT_PHONE_NUMBER', ''),
+        'critical_alert_phone': ('CRITICAL_ALERT_PHONE', ''),
+        'sentry_dsn': ('SENTRY_DSN', ''),
+        'sentry_environment': ('SENTRY_ENVIRONMENT', 'production'),
+        'sentry_traces_sample_rate': ('SENTRY_TRACES_SAMPLE_RATE', '0.0'),
+        'sentry_profiles_sample_rate': ('SENTRY_PROFILES_SAMPLE_RATE', '0.0'),
+    }
+
+    @classmethod
+    def get_config_value(cls, field: str, default: str = '') -> str:
+        """Return effective config value: PlatformConfig DB first, env var fallback."""
+        import os
+        mapping = cls._CONFIG_MAP.get(field)
+        if not mapping:
+            return default
+        env_key, env_default = mapping
+        try:
+            cfg = cls.load()
+            db_val = getattr(cfg, field, None)
+            if db_val is not None and str(db_val) != '':
+                return str(db_val)
+        except Exception:
+            pass
+        return os.environ.get(env_key, env_default or default)
 
     @classmethod
     def load(cls):

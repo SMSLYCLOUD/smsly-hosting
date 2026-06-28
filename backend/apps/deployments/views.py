@@ -180,12 +180,21 @@ def _check_tier_gates_disabled() -> bool:
 
     On the first consult in a given process where the flag is on,
     record an immutable AuditLog entry so the bypass is never silent.
+    Checks PlatformConfig DB first, then env var fallback.
     """
     global _TIER_GATES_LOGGED
-    raw = str(
-        getattr(settings, "SMSLY_DISABLE_TIER_GATES", False)
-        or os.environ.get("SMSLY_DISABLE_TIER_GATES", "")
-    ).strip().lower()
+    try:
+        from .models_core import PlatformConfig
+        db_val = PlatformConfig.load().smsly_disable_tier_gates
+    except Exception:
+        db_val = None
+    if db_val is not None and db_val:
+        raw = str(db_val)
+    else:
+        raw = str(
+            getattr(settings, "SMSLY_DISABLE_TIER_GATES", False)
+            or os.environ.get("SMSLY_DISABLE_TIER_GATES", "")
+        ).strip().lower()
     enabled = raw in ("1", "true", "yes", "on")
     if enabled and not _TIER_GATES_LOGGED:
         try:
@@ -4730,6 +4739,37 @@ class DomainConfigView(GenericAPIView):
             'bitbucket_webhook_secret_set': bool(config.bitbucket_webhook_secret) or bool(os.environ.get('BITBUCKET_WEBHOOK_SECRET', '')),
             'server_ip': config.server_ip or '',
             'caddy_status': config.caddy_status,
+            'max_concurrent_builds': config.max_concurrent_builds,
+            'ecosystem_max_concurrent_builds': config.ecosystem_max_concurrent_builds,
+            'ecosystem_build_stagger_seconds': config.ecosystem_build_stagger_seconds,
+            'ecosystem_default_wave_size': config.ecosystem_default_wave_size,
+            'ecosystem_wave_recheck_seconds': config.ecosystem_wave_recheck_seconds,
+            # Billing
+            'billing_currency': config.billing_currency,
+            'billing_pro_amount': config.billing_pro_amount,
+            'billing_pro_period_days': config.billing_pro_period_days,
+            # SMSLY Platform
+            'smsly_sms_api_url': config.smsly_sms_api_url,
+            'smsly_voice_api_url': config.smsly_voice_api_url,
+            'smsly_platform_api_url': config.smsly_platform_api_url,
+            'smsly_internal_api_key_set': bool(config.smsly_internal_api_key),
+            # Alerting
+            'alert_phone_number': config.alert_phone_number,
+            'critical_alert_phone': config.critical_alert_phone,
+            'notify_on_success': config.notify_on_success,
+            # Container Registry
+            'container_registry_url': config.container_registry_url,
+            'registry_user': config.registry_user,
+            'registry_password_set': bool(config.registry_password),
+            # Observability
+            'sentry_dsn_set': bool(config.sentry_dsn),
+            'sentry_traces_sample_rate': config.sentry_traces_sample_rate,
+            'sentry_profiles_sample_rate': config.sentry_profiles_sample_rate,
+            'sentry_environment': config.sentry_environment,
+            # Feature Flags
+            'smsly_disable_tier_gates': config.smsly_disable_tier_gates,
+            'enable_legacy_tunnel_api': config.enable_legacy_tunnel_api,
+            'smsly_strict_ssh_host_key_check': config.smsly_strict_ssh_host_key_check,
             'updated_at': config.updated_at,
         })
 
@@ -4818,6 +4858,79 @@ class DomainConfigView(GenericAPIView):
                     setattr(config, _secret_field, val)
             if 'server_ip' in data:
                 config.server_ip = str(data.get('server_ip') or '').strip() or None
+            if 'max_concurrent_builds' in data:
+                try:
+                    config.max_concurrent_builds = max(1, min(10, int(data['max_concurrent_builds'])))
+                except (TypeError, ValueError):
+                    pass
+            if 'ecosystem_max_concurrent_builds' in data:
+                try:
+                    config.ecosystem_max_concurrent_builds = max(1, min(10, int(data['ecosystem_max_concurrent_builds'])))
+                except (TypeError, ValueError):
+                    pass
+            if 'ecosystem_build_stagger_seconds' in data:
+                try:
+                    config.ecosystem_build_stagger_seconds = max(0, min(300, int(data['ecosystem_build_stagger_seconds'])))
+                except (TypeError, ValueError):
+                    pass
+            if 'ecosystem_default_wave_size' in data:
+                try:
+                    config.ecosystem_default_wave_size = max(1, min(5, int(data['ecosystem_default_wave_size'])))
+                except (TypeError, ValueError):
+                    pass
+            if 'ecosystem_wave_recheck_seconds' in data:
+                try:
+                    config.ecosystem_wave_recheck_seconds = max(5, min(300, int(data['ecosystem_wave_recheck_seconds'])))
+                except (TypeError, ValueError):
+                    pass
+            # Billing
+            if 'billing_currency' in data:
+                config.billing_currency = str(data.get('billing_currency') or 'USD').strip()[:10]
+            if 'billing_pro_amount' in data:
+                config.billing_pro_amount = str(data.get('billing_pro_amount') or '29.00').strip()[:20]
+            if 'billing_pro_period_days' in data:
+                try:
+                    config.billing_pro_period_days = max(1, int(data['billing_pro_period_days']))
+                except (TypeError, ValueError):
+                    pass
+            # SMSLY Platform
+            for _field in ('smsly_sms_api_url', 'smsly_voice_api_url', 'smsly_platform_api_url'):
+                if _field in data:
+                    setattr(config, _field, str(data.get(_field) or '').strip()[:300])
+            if 'smsly_internal_api_key' in data:
+                config.smsly_internal_api_key = str(data.get('smsly_internal_api_key') or '').strip()
+            # Alerting
+            for _field in ('alert_phone_number', 'critical_alert_phone'):
+                if _field in data:
+                    setattr(config, _field, str(data.get(_field) or '').strip()[:20])
+            if 'notify_on_success' in data:
+                config.notify_on_success = _parse_bool(data.get('notify_on_success'))
+            # Container Registry
+            if 'container_registry_url' in data:
+                config.container_registry_url = str(data.get('container_registry_url') or '').strip()[:255]
+            if 'registry_user' in data:
+                config.registry_user = str(data.get('registry_user') or '').strip()[:255]
+            if 'registry_password' in data:
+                config.registry_password = str(data.get('registry_password') or '').strip()
+            # Observability
+            if 'sentry_dsn' in data:
+                config.sentry_dsn = str(data.get('sentry_dsn') or '').strip()[:300]
+            if 'sentry_traces_sample_rate' in data:
+                try:
+                    config.sentry_traces_sample_rate = max(0.0, min(1.0, float(data['sentry_traces_sample_rate'])))
+                except (TypeError, ValueError):
+                    pass
+            if 'sentry_profiles_sample_rate' in data:
+                try:
+                    config.sentry_profiles_sample_rate = max(0.0, min(1.0, float(data['sentry_profiles_sample_rate'])))
+                except (TypeError, ValueError):
+                    pass
+            if 'sentry_environment' in data:
+                config.sentry_environment = str(data.get('sentry_environment') or 'production').strip()[:50]
+            # Feature Flags
+            for _field in ('smsly_disable_tier_gates', 'enable_legacy_tunnel_api', 'smsly_strict_ssh_host_key_check'):
+                if _field in data:
+                    setattr(config, _field, _parse_bool(data.get(_field)))
 
             # Validate: wildcard requires Cloudflare token
             if config.wildcard_subdomains and config.use_ssl and not config.cloudflare_api_token:
