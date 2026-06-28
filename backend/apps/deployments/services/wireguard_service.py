@@ -245,10 +245,13 @@ class WireGuardService:
                 # PrivateKey is server-managed (not stored on master)
             """)
 
-        # PostUp/PostDown for firewall rules
+        # PostUp/PostDown for firewall rules and rp_filter fix.
+        # Strict rp_filter (=1) drops WireGuard handshake packets because the
+        # kernel cannot reverse-path-validate the decapsulated tunnel source IP
+        # before the interface is fully established.  Loose mode (=2) fixes this.
         config += textwrap.dedent(f"""\
-            PostUp = iptables -A INPUT -p udp --dport {mesh.listen_port} -j ACCEPT
-            PostDown = iptables -D INPUT -p udp --dport {mesh.listen_port} -j ACCEPT
+            PostUp = sysctl -w net.ipv4.conf.%i.rp_filter=2 net.ipv4.conf.all.rp_filter=2; iptables -A INPUT -p udp --dport {mesh.listen_port} -j ACCEPT
+            PostDown = iptables -D INPUT -p udp --dport {mesh.listen_port} -j ACCEPT; sysctl -w net.ipv4.conf.all.rp_filter=1
         """)
 
         # Peer sections
