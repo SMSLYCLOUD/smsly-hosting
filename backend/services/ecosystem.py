@@ -3522,10 +3522,17 @@ def _sanitize_git_output(text: str, token: str | None = None) -> str:
 def _clone_repo(repo_full: str, target_dir: str, token: str | None = None) -> bool:
     """Clone a repository into a target directory using Git."""
     try:
-        # Construct clone URL with token if provided
-        clone_url = f"https://github.com/{repo_full}.git"
-        if token:
-            clone_url = f"https://x-access-token:{token}@github.com/{repo_full}.git"
+        # Check if a provider domain is already included
+        provider = "github.com"
+        if repo_full.startswith(("github.com/", "gitlab.com/", "bitbucket.org/")):
+            provider, repo_full = repo_full.split("/", 1)
+            
+        # Construct clone URL
+        clone_url = f"https://{provider}/{repo_full}.git"
+        
+        # Inject token for GitHub specifically (GitLab/Bitbucket would need their own token formats if provided)
+        if token and provider == "github.com":
+            clone_url = f"https://x-access-token:{token}@{provider}/{repo_full}.git"
 
         # Run git clone --depth 1 for speed
         result = subprocess.run(

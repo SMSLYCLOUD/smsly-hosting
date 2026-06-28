@@ -312,6 +312,7 @@ class RepoScanner:
             re.compile(r'configService\.get(?:OrThrow)?\(["\']([A-Z_][A-Z0-9_]*)["\']'),
             re.compile(r'env: ["\']([A-Z_][A-Z0-9_]*)["\']'), # Next.js / Vite configs
             re.compile(r'RuntimeConfig.*?([A-Z_][A-Z0-9_]*)'),
+            re.compile(r'(?:const|let|var)\s*\{\s*[^}]*\b([A-Z_][A-Z0-9_]*)\b[^}]*\}\s*=\s*process\.env'),
 
             # ── Go ──
             re.compile(r'os\.Getenv\(["\']([A-Z_][A-Z0-9_]*)["\']'),
@@ -322,9 +323,19 @@ class RepoScanner:
             re.compile(r'env::var\(["\']([A-Z_][A-Z0-9_]*)["\']'),
             re.compile(r'dotenv!\(["\']([A-Z_][A-Z0-9_]*)["\']'),
 
-            # ── General Config Grep (Aggressive) ──
-            # Look for lines that look like: VAR_NAME = or VAR_NAME: in config files
-            re.compile(r'^\s*([A-Z_][A-Z0-9_]{3,})\s*[:=]'),
+            # ── PHP ──
+            re.compile(r'getenv\(["\']([A-Z_][A-Z0-9_]*)["\']\)'),
+            re.compile(r'\$_(?:ENV|SERVER)\[["\']([A-Z_][A-Z0-9_]*)["\']\]'),
+
+            # ── Ruby ──
+            re.compile(r'ENV\[["\']([A-Z_][A-Z0-9_]*)["\']\]'),
+            re.compile(r'ENV\.fetch\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+
+            # ── Java / Kotlin ──
+            re.compile(r'System\.getenv\(["\']([A-Z_][A-Z0-9_]*)["\']\)'),
+
+            # ── C# / .NET ──
+            re.compile(r'Environment\.GetEnvironmentVariable\(["\']([A-Z_][A-Z0-9_]*)["\']\)'),
         ]
 
         code_extensions = {'.py', '.js', '.ts', '.jsx', '.tsx', '.go', '.rs', '.rb', '.php', '.java', '.kt', '.cs', '.yaml', '.yml', '.toml', '.json'}
