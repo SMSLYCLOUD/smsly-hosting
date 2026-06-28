@@ -1100,7 +1100,10 @@ export const teamsApi = {
   },
   members: async (id: string): Promise<TeamMember[]> => {
     const response = await api.get(`/teams/${id}/members/`);
-    return response.data;
+    const data = response.data;
+    if (Array.isArray(data)) return data;
+    if (data && Array.isArray(data.results)) return data.results;
+    return [];
   },
   inviteMember: async (teamId: string, email: string, role: string): Promise<any> => {
     const response = await api.post(`/teams/${teamId}/invite_member/`, { email, role });
