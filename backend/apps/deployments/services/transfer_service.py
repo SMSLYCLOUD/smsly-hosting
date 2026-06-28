@@ -1377,7 +1377,7 @@ if os.path.exists(services_dir):
                 if not chunk:
                     break
                 b64 = base64.b64encode(chunk).decode('ascii')
-self._node_api_request('incoming/upload-file', body={
+                self._node_api_request('incoming/upload-file', body={
                     'path': remote_backup,
                     'content_base64': b64,
                 })
