@@ -80,7 +80,7 @@ def _upsert_preview_environment_variables(preview: PreviewEnvironment, target: S
 def _inject_addon_credentials(addon: Addon) -> None:
     creds = addon.parsed_credentials
     for key, value in creds.items():
-        EnvironmentVariable.objects.get_or_create(
+        EnvironmentVariable.objects.update_or_create(
             service=addon.service,
             key=key,
             defaults={
@@ -91,13 +91,13 @@ def _inject_addon_credentials(addon: Addon) -> None:
         )
 
     if addon.addon_type == Addon.Type.POSTGRES and addon.connection_url:
-        EnvironmentVariable.objects.get_or_create(
+        EnvironmentVariable.objects.update_or_create(
             service=addon.service,
             key='DATABASE_URL',
             defaults={'value': addon.connection_url, 'is_secret': True, 'source': 'ADDON'},
         )
     elif addon.addon_type == Addon.Type.REDIS and addon.connection_url:
-        EnvironmentVariable.objects.get_or_create(
+        EnvironmentVariable.objects.update_or_create(
             service=addon.service,
             key='REDIS_URL',
             defaults={'value': addon.connection_url, 'is_secret': True, 'source': 'ADDON'},

@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Loader2, Download, RotateCcw, Trash2, Plus, Clock, Save, AlertCircle, CheckCircle, FileKey, Key, GitCompare, Cloud } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import api from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 
@@ -35,6 +36,19 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
     const [backups, setBackups] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [creating, setCreating] = useState(false);
+    
+    // Cloud Restore Modal State
+    const [cloudRestorePromptOpen, setCloudRestorePromptOpen] = useState(false);
+    const [cloudRestoreForm, setCloudRestoreForm] = useState({
+        cloud_storage_id: '',
+        s3_bucket: '',
+        s3_key: '',
+        s3_endpoint: '',
+        s3_region: 'us-east-1',
+        s3_access_key: '',
+        s3_secret_key: '',
+        encryption_key: ''
+    });
 
     // Encryption key prompt (shown when restoring a cross-master backup)
     const [keyPromptOpen, setKeyPromptOpen] = useState(false);
@@ -59,7 +73,9 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
     const [cronExpression, setCronExpression] = useState('0 3 * * *');
     const [retentionDays, setRetentionDays] = useState(7);
     const [scheduleEnabled, setScheduleEnabled] = useState(true);
+    const [scheduleDbOnly, setScheduleDbOnly] = useState(false);
     const [savingSchedule, setSavingSchedule] = useState(false);
+    const [dbOnly, setDbOnly] = useState(false);
     
     // Cloud storage state
     const [destinations, setDestinations] = useState<CloudDestination[]>([]);
@@ -115,6 +131,7 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                 setCronExpression(sched.cron_expression);
                 setRetentionDays(sched.retention_days);
                 setScheduleEnabled(sched.enabled);
+                setScheduleDbOnly(sched.db_only || false);
                 if (sched.cloud_destination) {
                     setSelectedDestination(sched.cloud_destination);
                 }
@@ -164,13 +181,57 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
     const handleCreateBackup = async () => {
         setCreating(true);
         try {
-            await api.post('/backups/', { service: serviceId });
+            await api.post('/backups/', { service: serviceId, db_only: dbOnly });
             toast({ title: "Backup Started", description: "This may take a few minutes." });
             loadBackups();
         } catch (err) {
             toast({ title: "Error", description: "Failed to start backup.", variant: "destructive" });
         } finally {
             setCreating(false);
+        }
+    };
+
+    const handleCloudRestoreSubmit = async () => {
+        const isCustom = !cloudRestoreForm.cloud_storage_id || cloudRestoreForm.cloud_storage_id === 'custom';
+        if (isCustom && (!cloudRestoreForm.s3_bucket || !cloudRestoreForm.s3_key || !cloudRestoreForm.s3_access_key || !cloudRestoreForm.s3_secret_key)) {
+            toast({ title: 'Missing Fields', description: 'Please fill in all required S3 fields.', variant: 'destructive' });
+            return;
+        }
+        if (!isCustom && !cloudRestoreForm.s3_key) {
+            toast({ title: 'Missing Fields', description: 'Please provide the Object Key.', variant: 'destructive' });
+            return;
+        }
+
+        const bucketStr = isCustom ? cloudRestoreForm.s3_bucket : (destinations.find(d => d.id === cloudRestoreForm.cloud_storage_id)?.bucket || 'Cloud Storage');
+
+        if (!await confirm({ title: 'Restore from Cloud?', message: `Restore from ${bucketStr}/${cloudRestoreForm.s3_key}? This will overwrite the current service state.`, variant: 'destructive', confirmText: 'Restore' })) {
+            return;
+        }
+
+        setCreating(true);
+        setCloudRestorePromptOpen(false);
+        try {
+            const res = await api.post('/backups/restore-from-cloud/', { ...cloudRestoreForm, service_id: serviceId });
+            toast({ title: "Restore Started", description: `Restoring from cloud backup.` });
+            
+            // Connect WebSocket for real-time updates and monitor status
+            if (res.data?.backup_id) {
+                setRestoringId(res.data.backup_id);
+                setRestoreStatus('RESTORING');
+                monitorDeploymentAfterRestore(res.data.backup_id);
+                connectWebSocket(res.data.backup_id);
+            } else {
+                loadBackups();
+            }
+        } catch (err: any) {
+            const msg = err?.response?.data?.error || "Failed to download and restore backup.";
+            toast({ title: "Restore Failed", description: msg, variant: "destructive" });
+        } finally {
+            setCreating(false);
+            setCloudRestoreForm({
+                cloud_storage_id: '', s3_bucket: '', s3_key: '', s3_endpoint: '', s3_region: 'us-east-1',
+                s3_access_key: '', s3_secret_key: '', encryption_key: ''
+            });
         }
     };
 
@@ -392,6 +453,7 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                 cron_expression: cronExpression,
                 retention_days: retentionDays,
                 enabled: scheduleEnabled,
+                db_only: scheduleDbOnly,
             };
             
             if (selectedDestination !== 'local') {
@@ -550,10 +612,26 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                             <CardTitle>Backups</CardTitle>
                             <CardDescription>Snapshots of your service container, volumes, and configuration.</CardDescription>
                         </div>
-                        <Button onClick={handleCreateBackup} disabled={creating}>
-                            {creating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4" />}
-                            Create Backup
-                        </Button>
+                        <div className="flex items-center gap-4">
+                            <label className="flex items-center space-x-2 text-sm font-medium cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={dbOnly}
+                                    onChange={(e) => setDbOnly(e.target.checked)}
+                                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                    disabled={creating}
+                                />
+                                <span>Database Only</span>
+                            </label>
+                            <Button variant="outline" onClick={() => setCloudRestorePromptOpen(true)} disabled={creating}>
+                                <Cloud className="mr-2 h-4 w-4" />
+                                Restore from Cloud
+                            </Button>
+                            <Button onClick={handleCreateBackup} disabled={creating}>
+                                {creating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4" />}
+                                Create Backup
+                            </Button>
+                        </div>
                     </div>
                 </CardHeader>
                 <CardContent>
@@ -571,7 +649,12 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                             {backups.map(backup => (
                                 <TableRow key={backup.id}>
                                     <TableCell>{new Date(backup.created_at).toLocaleString()}</TableCell>
-                                    <TableCell><span className="text-xs font-mono bg-muted px-2 py-1 rounded">{backup.backup_type}</span></TableCell>
+                                    <TableCell>
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-xs font-mono bg-muted px-2 py-1 rounded">{backup.backup_type}</span>
+                                            {backup.db_only && <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded border border-blue-200">DB Only</span>}
+                                        </div>
+                                    </TableCell>
                                     <TableCell>{formatBytes(backup.size_bytes)}</TableCell>
                                     <TableCell>
                                         <div className="space-y-1">
@@ -925,6 +1008,16 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                         <div className="space-y-4">
                             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                                 <div className="space-y-1">
+                                    <label className="flex items-center space-x-2 text-sm font-medium mb-2 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={scheduleDbOnly}
+                                            onChange={(e) => setScheduleDbOnly(e.target.checked)}
+                                            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                            disabled={savingSchedule}
+                                        />
+                                        <span>Database Only Backup</span>
+                                    </label>
                                     <label className="text-sm font-medium">Cron Expression</label>
                                     <input
                                         type="text"
@@ -1302,6 +1395,92 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                       <div className="flex justify-end gap-2 pt-4 border-t border-border mt-4">
                           <Button variant="outline" onClick={() => { setDiffResults(null); setDiffingSnapshot(null); setCompareSnapshotId(''); }}>
                               Close
+                          </Button>
+                      </div>
+                  </div>
+              </div>
+          )}
+
+          {cloudRestorePromptOpen && (
+              <div className="fixed inset-0 bg-black/50 z-50 flex flex-col items-center justify-center p-4">
+                  <div className="bg-background max-w-md w-full rounded-xl border border-border shadow-2xl overflow-hidden flex flex-col max-h-screen">
+                      <div className="p-6 pb-0 mb-4 shrink-0">
+                          <h3 className="text-lg font-bold">Restore Backup from Cloud</h3>
+                          <p className="text-sm text-muted-foreground mt-1">
+                              Download a tarball from an S3-compatible bucket and restore it to this service.
+                          </p>
+                      </div>
+
+                      <div className="p-6 pt-0 space-y-3 overflow-y-auto">
+                          <Select
+                              value={cloudRestoreForm.cloud_storage_id || 'custom'}
+                              onValueChange={(val) => setCloudRestoreForm({ ...cloudRestoreForm, cloud_storage_id: val })}
+                          >
+                              <SelectTrigger>
+                                  <SelectValue placeholder="Select Cloud Storage" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                  <SelectItem value="custom">Custom Credentials</SelectItem>
+                                  {destinations.map(d => (
+                                      <SelectItem key={d.id} value={d.id}>
+                                          {d.name} ({d.provider_display})
+                                      </SelectItem>
+                                  ))}
+                              </SelectContent>
+                          </Select>
+
+                          <Input
+                              placeholder="Object Key (e.g., smsly-backups/service_123/backup.tar.gz)"
+                              value={cloudRestoreForm.s3_key}
+                              onChange={(e) => setCloudRestoreForm({ ...cloudRestoreForm, s3_key: e.target.value })}
+                          />
+
+                          {(!cloudRestoreForm.cloud_storage_id || cloudRestoreForm.cloud_storage_id === 'custom') && (
+                              <>
+                                  <Input
+                                      placeholder="Bucket Name"
+                                      value={cloudRestoreForm.s3_bucket}
+                                      onChange={(e) => setCloudRestoreForm({ ...cloudRestoreForm, s3_bucket: e.target.value })}
+                                  />
+                                  <Input
+                                      placeholder="Endpoint URL (e.g., https://s3.eu-west-1.amazonaws.com)"
+                                      value={cloudRestoreForm.s3_endpoint}
+                                      onChange={(e) => setCloudRestoreForm({ ...cloudRestoreForm, s3_endpoint: e.target.value })}
+                                  />
+                                  <Input
+                                      placeholder="Region (default: us-east-1)"
+                                      value={cloudRestoreForm.s3_region}
+                                      onChange={(e) => setCloudRestoreForm({ ...cloudRestoreForm, s3_region: e.target.value })}
+                                  />
+                                  <Input
+                                      placeholder="Access Key ID"
+                                      value={cloudRestoreForm.s3_access_key}
+                                      onChange={(e) => setCloudRestoreForm({ ...cloudRestoreForm, s3_access_key: e.target.value })}
+                                  />
+                                  <Input
+                                      type="password"
+                                      placeholder="Secret Access Key"
+                                      value={cloudRestoreForm.s3_secret_key}
+                                      onChange={(e) => setCloudRestoreForm({ ...cloudRestoreForm, s3_secret_key: e.target.value })}
+                                  />
+                              </>
+                          )}
+                          <div className="pt-2 border-t border-border mt-2">
+                              <label className="text-xs font-semibold mb-1 block">Backup Encryption Key (Optional)</label>
+                              <Input
+                                  type="password"
+                                  placeholder="Leave blank if backup is not encrypted"
+                                  value={cloudRestoreForm.encryption_key}
+                                  onChange={(e) => setCloudRestoreForm({ ...cloudRestoreForm, encryption_key: e.target.value })}
+                              />
+                          </div>
+                      </div>
+
+                      <div className="p-6 pt-4 border-t border-border flex justify-end gap-2 shrink-0">
+                          <Button variant="outline" onClick={() => setCloudRestorePromptOpen(false)}>Cancel</Button>
+                          <Button onClick={handleCloudRestoreSubmit} disabled={creating}>
+                              {creating ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                              Restore from Cloud
                           </Button>
                       </div>
                   </div>

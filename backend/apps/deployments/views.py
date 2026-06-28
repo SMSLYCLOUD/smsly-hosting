@@ -5491,6 +5491,88 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
         )
         return Response({'status': 'restore_started'})
 
+    @action(detail=False, methods=['post'], url_path='restore-from-cloud')
+    def restore_from_cloud(self, request):
+        """Restore a service backup directly from cloud storage."""
+        cloud_storage_id = request.data.get('cloud_storage_id')
+        s3_key = request.data.get('s3_key', '').strip()
+        service_id = request.data.get('service_id')
+
+        if not service_id:
+            return Response({'error': 'Missing required service_id.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            target_service = Service.objects.get(id=service_id)
+            if not self._user_can_access_service(request.user, target_service):
+                return Response({'error': 'Target service not found or access denied.'}, status=status.HTTP_404_NOT_FOUND)
+        except Service.DoesNotExist:
+            return Response({'error': 'Target service not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if cloud_storage_id:
+            from apps.deployments.models_cloud_storage import CloudStorageDestination
+            try:
+                dest = CloudStorageDestination.objects.get(id=cloud_storage_id)
+                s3_bucket = dest.bucket
+                endpoint = dest.endpoint
+                region = dest.region
+                access_key = dest.access_key
+                secret_key = dest.secret_key
+            except CloudStorageDestination.DoesNotExist:
+                return Response({'error': 'Cloud storage destination not found.'}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            s3_bucket = request.data.get('s3_bucket', '').strip()
+            endpoint = request.data.get('s3_endpoint', '').strip()
+            region = request.data.get('s3_region', 'us-east-1').strip()
+            access_key = request.data.get('s3_access_key', '').strip()
+            secret_key = request.data.get('s3_secret_key', '').strip()
+
+        if not s3_bucket or not s3_key or not access_key or not secret_key:
+            return Response({'error': 'Missing required S3 configuration fields or cloud_storage_id.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        from .services.backup_service import download_from_s3, BackupService
+        import uuid as _uuid
+        dest_filename = f"cloud_restore_{_uuid.uuid4().hex[:8]}.tar.gz"
+        backups_dir = os.path.join('/app', 'backups', 'services', str(service_id))
+        os.makedirs(backups_dir, exist_ok=True)
+        dest_path = os.path.join(backups_dir, dest_filename)
+
+        if not download_from_s3(s3_bucket, s3_key, dest_path, endpoint=endpoint, region=region, access_key=access_key, secret_key=secret_key):
+            return Response({'error': 'Failed to download backup from cloud storage. Check credentials and key.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        svc = BackupService()
+        try:
+            dest_path = svc._maybe_encrypt(dest_path)
+        except Exception as exc:
+            with contextlib.suppress(OSError):
+                os.remove(dest_path)
+            return Response({'error': f'Failed to encrypt downloaded backup: {exc}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        file_size = os.path.getsize(dest_path)
+        backup = ServiceBackup.objects.create(
+            service=target_service,
+            status='COMPLETED',
+            file_path=dest_path,
+            size_bytes=file_size,
+            backup_type='MANUAL',
+            error_message=f'Restored from cloud: {s3_bucket}/{s3_key}',
+        )
+
+        encryption_key = request.data.get('encryption_key', '').strip() or None
+        from apps.deployments.tasks import restore_service_backup_task
+        restore_service_backup_task.delay(
+            backup_id=str(backup.id),
+            target_service_id=str(service_id),
+            requesting_user_id=request.user.id,
+            encryption_key=encryption_key,
+            raise_on_snapshot_failure=False,
+        )
+
+        return Response({
+            'status': 'Restore started from cloud backup.',
+            'backup_id': str(backup.id),
+            'file_size': file_size,
+        })
+
     @action(detail=True, methods=['get'], permission_classes=[permissions.AllowAny], authentication_classes=[])
     def download(self, request, pk=None):
         signed_value = request.query_params.get('signed')
@@ -6007,15 +6089,29 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['post'], url_path='restore-from-cloud')
     def restore_from_cloud(self, request):
         """Restore a server backup directly from cloud storage."""
-        s3_bucket = request.data.get('s3_bucket', '').strip()
+        cloud_storage_id = request.data.get('cloud_storage_id')
         s3_key = request.data.get('s3_key', '').strip()
-        endpoint = request.data.get('s3_endpoint', '').strip()
-        region = request.data.get('s3_region', 'us-east-1').strip()
-        access_key = request.data.get('s3_access_key', '').strip()
-        secret_key = request.data.get('s3_secret_key', '').strip()
+
+        if cloud_storage_id:
+            from apps.deployments.models_cloud_storage import CloudStorageDestination
+            try:
+                dest = CloudStorageDestination.objects.get(id=cloud_storage_id)
+                s3_bucket = dest.bucket
+                endpoint = dest.endpoint
+                region = dest.region
+                access_key = dest.access_key
+                secret_key = dest.secret_key
+            except CloudStorageDestination.DoesNotExist:
+                return Response({'error': 'Cloud storage destination not found.'}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            s3_bucket = request.data.get('s3_bucket', '').strip()
+            endpoint = request.data.get('s3_endpoint', '').strip()
+            region = request.data.get('s3_region', 'us-east-1').strip()
+            access_key = request.data.get('s3_access_key', '').strip()
+            secret_key = request.data.get('s3_secret_key', '').strip()
 
         if not s3_bucket or not s3_key or not access_key or not secret_key:
-            return Response({'error': 'Missing required S3 configuration fields.'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'Missing required S3 configuration fields or cloud_storage_id.'}, status=status.HTTP_400_BAD_REQUEST)
 
         from .services.backup_service import download_from_s3, BackupService
         dest_filename = f"cloud_restore_{_uuid.uuid4().hex[:8]}.tar.gz"
@@ -6295,5 +6391,33 @@ class RemoteTriggerView(GenericAPIView):
         except Exception as e:
             logger.exception("Remote trigger failed")
             return Response({"error": str(e)}, status=500)
- 
- 
+
+
+
+from apps.deployments.models_registry import RegistryCredential
+from apps.deployments.serializers import RegistryCredentialSerializer
+
+class RegistryCredentialViewSet(viewsets.ModelViewSet):
+    serializer_class = RegistryCredentialSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return RegistryCredential.objects.filter(owner=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(owner=self.request.user)
+
+    @action(detail=True, methods=['post'])
+    def test_connection(self, request, pk=None):
+        credential = self.get_object()
+        try:
+            import docker
+            client = docker.from_env()
+            result = client.login(
+                username=credential.username,
+                password=credential.password,
+                registry=credential.registry_url,
+            )
+            return Response({'status': 'success', 'message': result.get('Status', 'Login succeeded')})
+        except Exception as e:
+            return Response({'status': 'error', 'message': str(e)}, status=400)

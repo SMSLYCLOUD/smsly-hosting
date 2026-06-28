@@ -25,6 +25,7 @@ import { FilesTab } from '@/components/settings/FilesTab';
 import { AiRouterTab } from '@/components/settings/AiRouterTab';
 import BackupsTab from '@/components/settings/BackupsTab';
 import { CloudStorageTab } from '@/components/settings/CloudStorageTab';
+import { PreviewsList } from '@/components/deployments/PreviewsList';
 import { SafeDeployPanel } from '@/components/deployments/SafeDeployPanel';
 import { DeploymentApprovalsPanel } from '@/components/deployments/DeploymentApprovalsPanel';
 import { toast } from '@/components/ui/use-toast';
@@ -684,6 +685,12 @@ export default function ServiceDetailPage() {
             {activeTab === 'deployments' && <DeploymentsTab serviceId={service.id} />}
 
             {activeTab === 'metrics' && <MetricsTab serviceId={service.id} />}
+
+            {activeTab === 'previews' && (
+                <div className="animate-in fade-in slide-in-from-bottom-4">
+                    <PreviewsList serviceId={service.id} />
+                </div>
+            )}
 
             {activeTab === 'container-logs' && (
                 <div className="animate-in fade-in slide-in-from-bottom-4">

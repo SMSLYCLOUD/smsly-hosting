@@ -9,6 +9,7 @@ import { Loader2, Download, RotateCcw, Archive, Trash2, Upload, Key, FileKey, Cl
 import { useToast } from '@/components/ui/use-toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import api from '@/lib/api';
 
 interface CloudDestination {
@@ -47,6 +48,7 @@ export default function ServerBackupsPage() {
     // Cloud Restore Modal State
     const [cloudRestorePromptOpen, setCloudRestorePromptOpen] = useState(false);
     const [cloudRestoreForm, setCloudRestoreForm] = useState({
+        cloud_storage_id: '',
         s3_bucket: '',
         s3_key: '',
         s3_endpoint: '',
@@ -64,6 +66,8 @@ export default function ServerBackupsPage() {
     const [scheduleCloudDest, setScheduleCloudDest] = useState('');
     const [savingSchedule, setSavingSchedule] = useState(false);
     const [scheduleLoading, setScheduleLoading] = useState(true);
+    const [scheduleDbOnly, setScheduleDbOnly] = useState(false);
+    const [dbOnly, setDbOnly] = useState(false);
 
     useEffect(() => {
         loadBackups();
@@ -80,6 +84,7 @@ export default function ServerBackupsPage() {
                 setCronExpression(sched.cron_expression);
                 setRetentionDays(sched.retention_days);
                 setScheduleEnabled(sched.enabled);
+                setScheduleDbOnly(sched.db_only || false);
                 if (sched.cloud_destination) {
                     setScheduleCloudDest(sched.cloud_destination);
                 }
@@ -118,6 +123,7 @@ export default function ServerBackupsPage() {
                 cron_expression: cronExpression,
                 retention_days: retentionDays,
                 enabled: scheduleEnabled,
+                db_only: scheduleDbOnly,
             };
             
             if (scheduleCloudDest) {
@@ -143,7 +149,7 @@ export default function ServerBackupsPage() {
     const handleCreateBackup = async () => {
         setCreating(true);
         try {
-            const payload = selectedDestination ? { cloud_destination: selectedDestination } : {};
+            const payload = selectedDestination ? { cloud_destination: selectedDestination, db_only: dbOnly } : { db_only: dbOnly };
             await api.post('/server/backups/', payload);
             toast({ title: "Server Backup Started", description: "This captures all services and configuration." });
             loadBackups();
@@ -243,12 +249,19 @@ export default function ServerBackupsPage() {
     };
 
     const handleCloudRestoreSubmit = async () => {
-        if (!cloudRestoreForm.s3_bucket || !cloudRestoreForm.s3_key || !cloudRestoreForm.s3_access_key || !cloudRestoreForm.s3_secret_key) {
+        const isCustom = !cloudRestoreForm.cloud_storage_id || cloudRestoreForm.cloud_storage_id === 'custom';
+        if (isCustom && (!cloudRestoreForm.s3_bucket || !cloudRestoreForm.s3_key || !cloudRestoreForm.s3_access_key || !cloudRestoreForm.s3_secret_key)) {
             toast({ title: 'Missing Fields', description: 'Please fill in all required S3 fields.', variant: 'destructive' });
             return;
         }
+        if (!isCustom && !cloudRestoreForm.s3_key) {
+            toast({ title: 'Missing Fields', description: 'Please provide the Object Key.', variant: 'destructive' });
+            return;
+        }
 
-        if (!await confirm({ title: 'Restore from Cloud?', message: `Restore from ${cloudRestoreForm.s3_bucket}/${cloudRestoreForm.s3_key}? This will overwrite current server state.`, variant: 'destructive', confirmText: 'Restore' })) {
+        const bucketStr = isCustom ? cloudRestoreForm.s3_bucket : (destinations.find(d => d.id === cloudRestoreForm.cloud_storage_id)?.bucket || 'Cloud Storage');
+
+        if (!await confirm({ title: 'Restore from Cloud?', message: `Restore from ${bucketStr}/${cloudRestoreForm.s3_key}? This will overwrite current server state.`, variant: 'destructive', confirmText: 'Restore' })) {
             return;
         }
 
@@ -264,7 +277,7 @@ export default function ServerBackupsPage() {
         } finally {
             setUploading(false);
             setCloudRestoreForm({
-                s3_bucket: '', s3_key: '', s3_endpoint: '', s3_region: 'us-east-1',
+                cloud_storage_id: '', s3_bucket: '', s3_key: '', s3_endpoint: '', s3_region: 'us-east-1',
                 s3_access_key: '', s3_secret_key: '', encryption_key: ''
             });
         }
@@ -359,10 +372,22 @@ export default function ServerBackupsPage() {
                                 </option>
                             ))}
                         </select>
-                        <Button onClick={handleCreateBackup} disabled={creating}>
-                            {creating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Archive className="mr-2 h-4 w-4" />}
-                            Create Full Backup
-                        </Button>
+                        <div className="flex items-center gap-4">
+                            <label className="flex items-center space-x-2 text-sm font-medium cursor-pointer bg-background border px-3 py-2 rounded-lg h-[40px]">
+                                <input
+                                    type="checkbox"
+                                    checked={dbOnly}
+                                    onChange={(e) => setDbOnly(e.target.checked)}
+                                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                    disabled={creating}
+                                />
+                                <span>DB Only</span>
+                            </label>
+                            <Button onClick={handleCreateBackup} disabled={creating}>
+                                {creating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Archive className="mr-2 h-4 w-4" />}
+                                {dbOnly ? 'Create DB Backup' : 'Create Full Backup'}
+                            </Button>
+                        </div>
                     </div>
                 </div>
 
@@ -385,10 +410,11 @@ export default function ServerBackupsPage() {
                                         <TableCell>{backup.services_included?.length || 0}</TableCell>
                                         <TableCell>{(backup.size_bytes / 1024 / 1024).toFixed(2)} MB</TableCell>
                                         <TableCell>
-                                            <div className="space-y-1">
-                                                <span className={`text-xs font-semibold px-2 py-1 rounded ${getStatusBadge(backup.status)}`}>
+                                            <div className="space-y-1 flex flex-col">
+                                                <span className={`text-xs font-semibold px-2 py-1 rounded w-fit ${getStatusBadge(backup.status)}`}>
                                                     {backup.status}
                                                 </span>
+                                                {backup.db_only && <span className="text-[11px] bg-blue-100 text-blue-800 px-2 py-0.5 rounded border border-blue-200 w-fit">DB Only</span>}
                                                 {backup.cloud_uploaded && (
                                                     <span className="flex items-center gap-1 text-[11px] text-blue-400 font-medium ml-2" title="Backed up to Cloud Storage">
                                                         <Cloud className="w-3 h-3" />
@@ -618,37 +644,59 @@ export default function ServerBackupsPage() {
                         </p>
 
                         <div className="space-y-3 mb-4">
-                            <Input
-                                placeholder="Bucket Name"
-                                value={cloudRestoreForm.s3_bucket}
-                                onChange={(e) => setCloudRestoreForm({ ...cloudRestoreForm, s3_bucket: e.target.value })}
-                            />
+                            <Select
+                                value={cloudRestoreForm.cloud_storage_id || 'custom'}
+                                onValueChange={(val) => setCloudRestoreForm({ ...cloudRestoreForm, cloud_storage_id: val })}
+                            >
+                                <SelectTrigger>
+                                    <SelectValue placeholder="Select Cloud Storage" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="custom">Custom Credentials</SelectItem>
+                                    {destinations.map(d => (
+                                        <SelectItem key={d.id} value={d.id}>
+                                            {d.name} ({d.provider_display})
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+
                             <Input
                                 placeholder="Object Key (e.g., smsly-backups/server/backup.tar.gz)"
                                 value={cloudRestoreForm.s3_key}
                                 onChange={(e) => setCloudRestoreForm({ ...cloudRestoreForm, s3_key: e.target.value })}
                             />
-                            <Input
-                                placeholder="Endpoint URL (e.g., https://s3.eu-west-1.amazonaws.com)"
-                                value={cloudRestoreForm.s3_endpoint}
-                                onChange={(e) => setCloudRestoreForm({ ...cloudRestoreForm, s3_endpoint: e.target.value })}
-                            />
-                            <Input
-                                placeholder="Region (default: us-east-1)"
-                                value={cloudRestoreForm.s3_region}
-                                onChange={(e) => setCloudRestoreForm({ ...cloudRestoreForm, s3_region: e.target.value })}
-                            />
-                            <Input
-                                placeholder="Access Key ID"
-                                value={cloudRestoreForm.s3_access_key}
-                                onChange={(e) => setCloudRestoreForm({ ...cloudRestoreForm, s3_access_key: e.target.value })}
-                            />
-                            <Input
-                                type="password"
-                                placeholder="Secret Access Key"
-                                value={cloudRestoreForm.s3_secret_key}
-                                onChange={(e) => setCloudRestoreForm({ ...cloudRestoreForm, s3_secret_key: e.target.value })}
-                            />
+
+                            {(!cloudRestoreForm.cloud_storage_id || cloudRestoreForm.cloud_storage_id === 'custom') && (
+                                <>
+                                    <Input
+                                        placeholder="Bucket Name"
+                                        value={cloudRestoreForm.s3_bucket}
+                                        onChange={(e) => setCloudRestoreForm({ ...cloudRestoreForm, s3_bucket: e.target.value })}
+                                    />
+                                    <Input
+                                        placeholder="Endpoint URL (e.g., https://s3.eu-west-1.amazonaws.com)"
+                                        value={cloudRestoreForm.s3_endpoint}
+                                        onChange={(e) => setCloudRestoreForm({ ...cloudRestoreForm, s3_endpoint: e.target.value })}
+                                    />
+                                    <Input
+                                        placeholder="Region (default: us-east-1)"
+                                        value={cloudRestoreForm.s3_region}
+                                        onChange={(e) => setCloudRestoreForm({ ...cloudRestoreForm, s3_region: e.target.value })}
+                                    />
+                                    <Input
+                                        placeholder="Access Key ID"
+                                        value={cloudRestoreForm.s3_access_key}
+                                        onChange={(e) => setCloudRestoreForm({ ...cloudRestoreForm, s3_access_key: e.target.value })}
+                                    />
+                                    <Input
+                                        type="password"
+                                        placeholder="Secret Access Key"
+                                        value={cloudRestoreForm.s3_secret_key}
+                                        onChange={(e) => setCloudRestoreForm({ ...cloudRestoreForm, s3_secret_key: e.target.value })}
+                                    />
+                                </>
+                            )}
                             <div className="pt-2 border-t border-border mt-2">
                                 <label className="text-xs font-semibold mb-1 block">Backup Encryption Key (Optional)</label>
                                 <Input

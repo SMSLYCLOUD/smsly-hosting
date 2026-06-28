@@ -559,6 +559,13 @@ export const servicesApi = {
     if (data && Array.isArray(data.results)) return data.results;
     return [];
   },
+  getPreviews: async (serviceId: string): Promise<PreviewEnvironment[]> => {
+    const response = await api.get(`/services/${serviceId}/previews/`);
+    const data = response.data;
+    if (Array.isArray(data)) return data;
+    if (data && Array.isArray(data.results)) return data.results;
+    return [];
+  },
   createEnvVar: async (serviceId: string, data: Partial<EnvVar>): Promise<EnvVar> => {
     const response = await api.post(`/services/${serviceId}/env_vars/`, data);
     return response.data;
@@ -1028,13 +1035,19 @@ export const codeAnalysisApi = {
 
 export interface PreviewEnvironment {
   id: string;
-  name: string;
-  branch: string;
-  pr_number: number | null;
-  preview_url: string;
-  health_status: string;
+  service?: string;
+  name?: string;
+  branch?: string;
+  branch_name?: string;
+  commit_sha?: string;
+  pr_number?: number | null;
+  preview_url?: string;
+  health_status?: string;
+  status?: string;
+  migration_validation?: Record<string, any>;
   created_at: string;
-  latest_deployment: {
+  updated_at?: string;
+  latest_deployment?: {
     id: string;
     status: string;
     created_at: string;
