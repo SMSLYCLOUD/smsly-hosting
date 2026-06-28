@@ -41,7 +41,7 @@ def _fetch_node_agent_users():
         node_role_names = {row[0] for row in cur.fetchall()}
         cur.execute(
             "SELECT provider_metadata FROM deployments_managedserver "
-            "WHERE provision_status = 'DONE' AND is_lite_agent = true"
+            "WHERE is_lite_agent = true AND provision_status IN ('DONE', 'PROVISIONING', 'FAILED')"
         )
         user_map = {}
         for row in cur.fetchall():
