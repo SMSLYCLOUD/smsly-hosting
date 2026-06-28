@@ -216,14 +216,11 @@ class WireGuardService:
 
         The config includes the [Interface] section for this peer
         and [Peer] sections for all OTHER peers in the same mesh.
+
+        If the peer has a server-managed key (private_key is empty), the
+        [Interface] section omits PrivateKey so the node keeps its own key.
         """
         from apps.deployments.models_mesh import WireGuardPeer
-
-        if not peer.private_key:
-            raise ValueError(
-                f"Cannot build config for {peer}: private key is empty "
-                "(server-managed key — config is not stored on master)"
-            )
 
         mesh = peer.mesh
         other_peers = WireGuardPeer.objects.filter(
@@ -231,13 +228,22 @@ class WireGuardService:
         ).exclude(id=peer.id)
 
         # Interface section
-        config = textwrap.dedent(f"""\
-            [Interface]
-            PrivateKey = {peer.private_key}
-            Address = {peer.wg_address}/24
-            ListenPort = {mesh.listen_port}
-            # SaveConfig = false
-        """)
+        if peer.private_key:
+            config = textwrap.dedent(f"""\
+                [Interface]
+                PrivateKey = {peer.private_key}
+                Address = {peer.wg_address}/24
+                ListenPort = {mesh.listen_port}
+                # SaveConfig = false
+            """)
+        else:
+            config = textwrap.dedent(f"""\
+                [Interface]
+                Address = {peer.wg_address}/24
+                ListenPort = {mesh.listen_port}
+                # SaveConfig = false
+                # PrivateKey is server-managed (not stored on master)
+            """)
 
         # PostUp/PostDown for firewall rules
         config += textwrap.dedent(f"""\
@@ -533,17 +539,9 @@ class WireGuardService:
         3. Write /etc/wireguard/wg0.conf
         4. Restart WireGuard interface
 
-        Peers whose private key is empty (server-managed) are skipped —
-        their key was fetched from the existing server install and the config
-        is managed locally on that server.
+        Server-managed peers (empty private key) still get deployed — the
+        [Interface] section simply omits PrivateKey so the node keeps its own.
         """
-        if not peer.private_key:
-            logger.info(
-                "Skipping config deploy to %s (private key is server-managed)",
-                peer,
-            )
-            return
-
         config = cls.build_wg_config(peer)
         mesh = peer.mesh
         iface = cls.validate_interface_name(mesh.interface_name)
