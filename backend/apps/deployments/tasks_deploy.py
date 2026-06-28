@@ -798,7 +798,7 @@ def _sync_service_dns_to_node(deployment, service):
     if service.public_domain:
         domains.append(service.public_domain.strip())
     if service.custom_domains:
-        domains.extend([d.strip() for d in service.custom_domains.split(',') if d.strip()])
+        domains.extend([d.strip() for d in (service.custom_domains or []) if d])
 
     if not domains:
         return
