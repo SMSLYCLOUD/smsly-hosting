@@ -22,6 +22,11 @@ import { GitLabIntegrationCard } from "@/components/settings/GitLabIntegrationCa
 import { BitbucketIntegrationCard } from "@/components/settings/BitbucketIntegrationCard";
 import { WebhookConfigCard } from "@/components/settings/WebhookConfigCard";
 import { CloudStorageTab } from "@/components/settings/CloudStorageTab";
+import { PlatformSettingsTab } from "@/components/settings/PlatformSettingsTab";
+import { SecurityTab } from "@/components/settings/SecurityTab";
+import { TeamsTab } from "@/components/settings/TeamsTab";
+import { AlertsTab } from "@/components/settings/AlertsTab";
+
 import BackupKeysTab from "@/components/settings/BackupKeysTab";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
@@ -35,7 +40,7 @@ interface CloudProvider {
   created_at: string;
 }
 
-type MaintenanceAction = "clear" | "refresh" | "update";
+type MaintenanceAction = "clear" | "refresh" | "update" | "registry_gc" | "build_cache";
 type MaintenanceState = "idle" | "queued" | "running" | "success" | "error";
 
 interface MaintenanceTaskState {
@@ -47,6 +52,8 @@ interface MaintenanceTaskState {
 const INITIAL_MAINTENANCE_STATE: Record<MaintenanceAction, MaintenanceTaskState> = {
   clear: { status: "idle" },
   refresh: { status: "idle" },
+  registry_gc: { status: "idle" },
+  build_cache: { status: "idle" },
   update: { status: "idle" },
 };
 
@@ -57,15 +64,24 @@ const MAINTENANCE_COPY: Record<MaintenanceAction, {
   variant?: "default" | "destructive";
 }> = {
   clear: {
-    title: "Clear Orphaned Containers?",
-    message: "This removes stopped orphaned platform containers and clears build caches. Running services and databases are left alone.",
-    confirmText: "Clear System",
-    variant: "destructive",
+    title: "Clear all system caches?",
+    message: "This will force a refresh of all internal caches. It's safe but might cause a temporary spike in database load.",
+    confirmText: "Clear Caches",
   },
   refresh: {
     title: "Sync Proxy Routing?",
     message: "This regenerates the proxy configuration and asks the host watcher to reload Caddy.",
     confirmText: "Sync Proxy",
+  },
+  registry_gc: {
+    title: "Garbage Collect Registry?",
+    message: "This removes unused layers from the private registry. This cannot be undone.",
+    confirmText: "Run GC",
+  },
+  build_cache: {
+    title: "Clear Build Caches?",
+    message: "This clears BuildKit and language caches. Next builds might take longer.",
+    confirmText: "Clear Caches",
   },
   update: {
     title: "Update Platform?",
@@ -95,7 +111,8 @@ const SETTINGS_SECTIONS = [
   { value: "cloud-storage", label: "Cloud Storage", icon: Cloud },
   { value: "backups", label: "Backups", icon: Cloud },
   { value: "infra", label: "Infra", icon: Server },
-  { value: "maintenance", label: "Maintenance", icon: Server },
+  { value: "platform", label: "Platform", icon: Globe },
+    { value: "maintenance", label: "Maintenance", icon: Server },
 ] as const;
 
 export default function SettingsPage() {
@@ -838,132 +855,21 @@ export default function SettingsPage() {
                 </CardContent>
             </Card>
         </TabsContent>
-
-        <TabsContent value="team">
-            <Card>
-                <CardHeader>
-                    <CardTitle>Team Members</CardTitle>
-                    <CardDescription>Manage your team and their access levels.</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-6">
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-                        <div className="space-y-2 flex-1">
-                            <Label>Email Address</Label>
-                            <Input type="email" value={inviteEmail} onChange={e => setInviteEmail(e.target.value)} placeholder="colleague@company.com" />
-                        </div>
-                        <div className="space-y-2 sm:w-32">
-                            <Label>Role</Label>
-                            <select
-                                className="w-full h-10 px-3 border rounded-md bg-background"
-                                value={inviteRole}
-                                onChange={e => setInviteRole(e.target.value)}
-                            >
-                                <option value="ADMIN">Admin</option>
-                                <option value="MEMBER">Member</option>
-                                <option value="VIEWER">Viewer</option>
-                            </select>
-                        </div>
-                        <Button onClick={handleInvite}>Invite</Button>
-                    </div>
-
-                    <Table>
-                        <TableHeader>
-                            <TableRow>
-                                <TableHead>User</TableHead>
-                                <TableHead>Email</TableHead>
-                                <TableHead>Role</TableHead>
-                                <TableHead>Actions</TableHead>
-                            </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                            {teamMembers.map(member => (
-                                <TableRow key={member.id}>
-                                    <TableCell>{member.username}</TableCell>
-                                    <TableCell>{member.email}</TableCell>
-                                    <TableCell><Badge variant="outline">{member.role}</Badge></TableCell>
-                                    <TableCell>
-                                        <Button variant="ghost" size="sm" className="text-red-500 hover:text-red-600">
-                                            <Trash2 className="w-4 h-4" />
-                                        </Button>
-                                    </TableCell>
-                                </TableRow>
-                            ))}
-                            {teamMembers.length === 0 && (
-                                <TableRow>
-                                    <TableCell colSpan={4} className="text-center py-6 text-muted-foreground">No team members found.</TableCell>
-                                </TableRow>
-                            )}
-                        </TableBody>
-                    </Table>
-                </CardContent>
-            </Card>
-        </TabsContent>
-
         <TabsContent value="notifications">
-          <Card>
-            <CardHeader>
-              <CardTitle>Notification Preferences</CardTitle>
-              <CardDescription>Choose how you want to be notified.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <Table>
-                  <TableHeader>
-                      <TableRow>
-                          <TableHead>Event</TableHead>
-                          <TableHead>Email</TableHead>
-                          <TableHead>In-App</TableHead>
-                      </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                      {['deploy_success', 'deploy_failed', 'health_alert', 'billing_due'].map(type => (
-                          <TableRow key={type}>
-                              <TableCell className="capitalize">{type.replace('_', ' ')}</TableCell>
-                              <TableCell>
-                                  <Switch defaultChecked />
-                              </TableCell>
-                              <TableCell>
-                                  <Switch defaultChecked />
-                              </TableCell>
-                          </TableRow>
-                      ))}
-                  </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
+          <AlertsTab />
         </TabsContent>
 
+
+                <TabsContent value="team">
+          <TeamsTab />
+        </TabsContent>
         <TabsContent value="security">
-          <Card>
-            <CardHeader>
-              <CardTitle>Security Settings</CardTitle>
-              <CardDescription>Manage your account security.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label>Current Password</Label>
-                <Input type="password" placeholder="********" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} />
-              </div>
-              <div className="space-y-2">
-                <Label>New Password</Label>
-                <Input type="password" placeholder="********" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
-              </div>
-              <div className="space-y-2">
-                <Label>Confirm New Password</Label>
-                <Input type="password" placeholder="********" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
-              </div>
-              <div className="flex gap-2">
-                <Button onClick={handleChangePassword} disabled={changingPassword}>
-                  {changingPassword ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Changing...</> : "Change Password"}
-                </Button>
-                <Link href="/dashboard">
-                  <Button variant="ghost">Cancel</Button>
-                </Link>
-              </div>
-            </CardContent>
-          </Card>
+          <SecurityTab />
         </TabsContent>
-
-        <TabsContent value="providers">
+        <TabsContent value="platform">
+          <PlatformSettingsTab />
+        </TabsContent>
+<TabsContent value="providers">
           <div className="space-y-6">
             {/* Add New Provider */}
             <Card>

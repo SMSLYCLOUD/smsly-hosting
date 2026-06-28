@@ -1,7 +1,14 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { servicesApi, CronJob } from '@/lib/api';
+import api, { servicesApi, CronJob } from '@/lib/api';
+
+interface CloudDestination {
+    id: string;
+    name: string;
+    provider_display: string;
+    bucket: string;
+}
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
@@ -17,6 +24,19 @@ export function CronTab({ serviceId }: { serviceId: string }) {
     const [newName, setNewName] = useState('');
     const [newSchedule, setNewSchedule] = useState('*/15 * * * *');
     const [newCommand, setNewCommand] = useState('');
+    const [destinations, setDestinations] = useState<CloudDestination[]>([]);
+    const [selectedDestination, setSelectedDestination] = useState<string>('');
+
+    const loadDestinations = useCallback(async () => {
+        try {
+            const res = await api.get('/cloud-storage/');
+            const allDestinations = Array.isArray(res.data) ? res.data : res.data.results || [];
+            const relevant = allDestinations.filter((d: any) => !d.service || String(d.service) === serviceId);
+            setDestinations(relevant);
+        } catch (err) {
+            console.error('Failed to load cloud destinations', err);
+        }
+    }, [serviceId]);
 
     const loadJobs = useCallback(async () => {
         try {
@@ -31,9 +51,10 @@ export function CronTab({ serviceId }: { serviceId: string }) {
 
     useEffect(() => {
         void loadJobs();
+        void loadDestinations();
         const interval = setInterval(loadJobs, 10000);
         return () => clearInterval(interval);
-    }, [loadJobs]);
+    }, [loadJobs, loadDestinations]);
 
     const handleAdd = async () => {
         if (!newName || !newSchedule || !newCommand) return;
@@ -41,7 +62,8 @@ export function CronTab({ serviceId }: { serviceId: string }) {
             await servicesApi.createCronJob(serviceId, {
                 name: newName,
                 schedule: newSchedule,
-                command: newCommand
+                command: newCommand,
+                ...(selectedDestination ? { cloud_destination: selectedDestination } : {})
             });
             setNewName('');
             setNewCommand('');
@@ -95,16 +117,30 @@ export function CronTab({ serviceId }: { serviceId: string }) {
                             onChange={(e) => setNewSchedule(e.target.value)}
                         />
                     </div>
-                    <div className="col-span-1 md:col-span-2 flex gap-2">
+                    <div className="col-span-1 md:col-span-2 flex flex-col gap-2">
                         <Input
                             placeholder="Command (e.g. python manage.py clear_cache)"
                             className="font-mono flex-1"
                             value={newCommand}
                             onChange={(e) => setNewCommand(e.target.value)}
                         />
-                        <Button onClick={handleAdd}>
-                            <Plus className="w-4 h-4 mr-2" /> Add
-                        </Button>
+                        <div className="flex gap-2 w-full">
+                            <select
+                                value={selectedDestination}
+                                onChange={(e) => setSelectedDestination(e.target.value)}
+                                className="flex-1 px-3 py-2 rounded-lg bg-background border border-border text-sm h-[40px]"
+                            >
+                                <option value="">Log to Console Only</option>
+                                {destinations.map(d => (
+                                    <option key={d.id} value={d.id}>
+                                        Save logs to {d.name} ({d.provider_display})
+                                    </option>
+                                ))}
+                            </select>
+                            <Button onClick={handleAdd}>
+                                <Plus className="w-4 h-4 mr-2" /> Add
+                            </Button>
+                        </div>
                     </div>
                 </div>
 

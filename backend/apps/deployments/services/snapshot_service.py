@@ -171,6 +171,36 @@ class SnapshotService:
             "Snapshot %s created for service %s (trigger=%s)",
             snapshot.id, service.name, trigger,
         )
+
+        # Upload to cloud storage if scheduled with cloud destination
+        from apps.deployments.models_backup import SnapshotSchedule
+        sched = SnapshotSchedule.objects.filter(service=service).first()
+        if sched and sched.storage_backend == 's3' and sched.s3_bucket:
+            import json
+            import tempfile
+            from apps.deployments.services.backup_service import upload_backup_to_s3
+            try:
+                timestamp = snapshot.created_at.strftime('%Y%m%d_%H%M%S')
+                s3_key = f"smsly-snapshots/service-{service.id}/snapshot-{timestamp}.json"
+                with tempfile.NamedTemporaryFile(mode='w', delete=False) as f:
+                    json.dump(config_data, f, indent=2)
+                    path = f.name
+                
+                upload_backup_to_s3(
+                    path, sched.s3_bucket, s3_key,
+                    endpoint=sched.s3_endpoint, region=sched.s3_region,
+                    access_key=sched.s3_access_key, secret_key=sched.s3_secret_key,
+                )
+                import os
+                os.unlink(path)
+                snapshot.cloud_uploaded = True
+                snapshot.cloud_bucket = sched.s3_bucket
+                snapshot.cloud_key = s3_key
+                snapshot.save(update_fields=['cloud_uploaded', 'cloud_bucket', 'cloud_key'])
+                logger.info("Uploaded snapshot %s to %s/%s", snapshot.id, sched.s3_bucket, s3_key)
+            except Exception as up_exc:
+                logger.error("Failed to upload snapshot %s: %s", snapshot.id, up_exc)
+
         return snapshot
 
     # ── Restore ──────────────────────────────────────────────────────

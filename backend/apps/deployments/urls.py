@@ -14,6 +14,7 @@ from .views import (
     ServerBackupViewSet,
     ServiceBackupViewSet,
     ServiceSnapshotViewSet,
+    SnapshotScheduleViewSet,
     ServiceViewSet,
     SessionTokenView,
     SystemConfigView,
@@ -82,6 +83,7 @@ router.register(r'backups', ServiceBackupViewSet, basename='backup')
 router.register(r'snapshots', ServiceSnapshotViewSet, basename='snapshot')
 router.register(r'server/backups', ServerBackupViewSet, basename='server-backup')
 router.register(r'backup-schedules', BackupScheduleViewSet, basename='backup-schedule')
+router.register(r'snapshot-schedules', SnapshotScheduleViewSet, basename='snapshot-schedule')
 router.register(r'transfers', ServerTransferViewSet, basename='transfer')
 router.register(r'projects', ProjectViewSet, basename='project')
 router.register(r'mesh', MeshNetworkViewSet, basename='mesh')

@@ -849,7 +849,7 @@ export const systemApi = {
     const response = await api.get('/system/config/');
     return response.data;
   },
-  runMaintenance: async (action: 'clear' | 'refresh' | 'update'): Promise<any> => {
+  runMaintenance: async (action: 'clear' | 'refresh' | 'update' | 'registry_gc' | 'build_cache'): Promise<any> => {
     const response = await api.post('/system/config/', { action });
     return response.data;
   },

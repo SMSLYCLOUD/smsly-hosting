@@ -26,9 +26,17 @@ def create_service_backup_task(self, service_id, backup_type='MANUAL', backup_id
             'backup_type': backup_type,
         },
     )
+    db_only = False
+    if schedule_id:
+        try:
+            sched = BackupSchedule.objects.get(id=schedule_id)
+            db_only = sched.db_only
+        except BackupSchedule.DoesNotExist:
+            pass
+
     try:
         backup_service = BackupService()
-        backup_service.backup_service(service_id, backup_id=backup_id, backup_type=backup_type)
+        backup_service.backup_service(service_id, backup_id=backup_id, backup_type=backup_type, db_only=db_only)
     except Exception as exc:
         if self.request.retries < self.max_retries:
             raise self.retry(exc=exc)
@@ -62,8 +70,17 @@ def create_server_backup_task(self, backup_id=None, schedule_id=None):
             'scope': 'server',
         },
     )
+    db_only = False
+    if schedule_id:
+        from apps.deployments.models_backup import BackupSchedule
+        try:
+            sched = BackupSchedule.objects.get(id=schedule_id)
+            db_only = sched.db_only
+        except BackupSchedule.DoesNotExist:
+            pass
+
     backup_service = BackupService()
-    backup_service.backup_server(backup_id=backup_id)
+    backup_service.backup_server(backup_id=backup_id, db_only=db_only)
     if schedule_id:
         _touch_schedule_last_run(schedule_id)
 
@@ -218,6 +235,23 @@ def cleanup_old_backups_task():
                     cleaned += 1
         except Exception as exc:
             logger.warning("Backup cleanup failed for schedule %s: %s", sched.id, exc)
+
+    from .models_backup import SnapshotSchedule, ServiceSnapshot
+    snapshot_schedules = SnapshotSchedule.objects.filter(enabled=True)
+    for sched in snapshot_schedules:
+        try:
+            cutoff = timezone.now() - timedelta(days=sched.retention_days)
+            if sched.service:
+                old = ServiceSnapshot.objects.filter(service=sched.service, created_at__lt=cutoff)
+                for snap in old:
+                    if snap.cloud_uploaded and snap.cloud_key:
+                        # Optional: delete from cloud storage if needed, but not implemented for snapshots yet
+                        pass
+                    snap.delete()
+                    cleaned += 1
+        except Exception as exc:
+            logger.warning("Snapshot cleanup failed for schedule %s: %s", sched.id, exc)
+
     return cleaned
 
 
@@ -253,6 +287,39 @@ def run_scheduled_backups_task():
             ran += 1
         except Exception as exc:
             logger.warning("Scheduled backup failed for schedule %s: %s", sched.id, exc)
+    return ran
+
+
+@shared_task
+def run_scheduled_snapshots_task():
+    """Execute all due SnapshotSchedule entries."""
+    from datetime import datetime
+    import croniter  # type: ignore[import-untyped]
+    from .models_backup import SnapshotSchedule
+
+    now = timezone.now()
+    schedules = SnapshotSchedule.objects.filter(enabled=True)
+    ran = 0
+    for sched in schedules:
+        try:
+            cron = croniter.croniter(sched.cron_expression, now)
+            next_run = cron.get_next(datetime)
+            if sched.last_run and sched.last_run >= timezone.make_aware(datetime.fromtimestamp(next_run), timezone.get_current_timezone()):
+                continue
+            
+            sched.next_run = timezone.make_aware(datetime.fromtimestamp(cron.get_next(datetime)))
+            sched.save(update_fields=['next_run'])
+
+            if sched.service:
+                # Currently snapshots are only per-service
+                create_snapshot_task.delay(
+                    service_id=str(sched.service.id),
+                    trigger='SCHEDULED',
+                    label='Automated Snapshot',
+                )
+            ran += 1
+        except Exception as exc:
+            logger.warning("Scheduled snapshot failed for schedule %s: %s", sched.id, exc)
     return ran
 
 

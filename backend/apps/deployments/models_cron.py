@@ -12,6 +12,15 @@ class CronJob(models.Model):
         on_delete=models.CASCADE,
         related_name='cron_jobs')
 
+    cloud_destination = models.ForeignKey(  # type: ignore[var-annotated]
+        'deployments.CloudStorageDestination',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='cron_jobs',
+        help_text="Optional cloud storage destination to upload cron execution logs"
+    )
+
     name = models.CharField(max_length=255)  # type: ignore[var-annotated]
     schedule = models.CharField(max_length=100,  # type: ignore[var-annotated]
                                 help_text="Cron schedule e.g. '*/5 * * * *'")

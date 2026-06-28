@@ -5,7 +5,7 @@ import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/com
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Loader2, Download, RotateCcw, Trash2, Plus, Clock, Save, AlertCircle, CheckCircle, FileKey, Key, GitCompare } from 'lucide-react';
+import { Loader2, Download, RotateCcw, Trash2, Plus, Clock, Save, AlertCircle, CheckCircle, FileKey, Key, GitCompare, Cloud } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import api from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
@@ -17,6 +17,16 @@ interface Schedule {
     enabled: boolean;
     last_run: string | null;
     next_run: string | null;
+    storage_backend: string;
+    s3_bucket?: string;
+    cloud_destination_id?: string;
+}
+
+interface CloudDestination {
+    id: string;
+    name: string;
+    provider_display: string;
+    bucket: string;
 }
 
 export default function BackupsTab({ serviceId }: { serviceId: string }) {
@@ -50,6 +60,10 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
     const [retentionDays, setRetentionDays] = useState(7);
     const [scheduleEnabled, setScheduleEnabled] = useState(true);
     const [savingSchedule, setSavingSchedule] = useState(false);
+    
+    // Cloud storage state
+    const [destinations, setDestinations] = useState<CloudDestination[]>([]);
+    const [selectedDestination, setSelectedDestination] = useState<string>('local');
 
     // Snapshot state
     const [snapshots, setSnapshots] = useState<any[]>([]);
@@ -61,6 +75,13 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
     const [diffResults, setDiffResults] = useState<any | null>(null);
     const [diffLoading, setDiffLoading] = useState(false);
     const [compareSnapshotId, setCompareSnapshotId] = useState('');
+
+    // Snapshot Schedule state
+    const [snapCronExpression, setSnapCronExpression] = useState('0 3 * * *');
+    const [snapRetentionDays, setSnapRetentionDays] = useState(30);
+    const [snapScheduleCloudDest, setSnapScheduleCloudDest] = useState('');
+    const [snapScheduleEnabled, setSnapScheduleEnabled] = useState(true);
+    const [savingSnapSchedule, setSavingSnapSchedule] = useState(false);
 
     const loadBackups = useCallback(async () => {
         try {
@@ -94,6 +115,9 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                 setCronExpression(sched.cron_expression);
                 setRetentionDays(sched.retention_days);
                 setScheduleEnabled(sched.enabled);
+                if (sched.cloud_destination) {
+                    setSelectedDestination(sched.cloud_destination);
+                }
             }
         } catch (err) {
             console.error(err);
@@ -102,11 +126,40 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
         }
     }, [serviceId]);
 
+    const loadSnapSchedule = useCallback(async () => {
+        try {
+            const res = await api.get('/snapshot-schedules/', { params: { service: serviceId } });
+            const schedules = Array.isArray(res.data) ? res.data : res.data.results || [];
+            const sched = schedules.find((s: any) => String(s.service) === serviceId);
+            if (sched) {
+                setSnapCronExpression(sched.cron_expression);
+                setSnapRetentionDays(sched.retention_days);
+                setSnapScheduleEnabled(sched.enabled);
+            }
+        } catch (err) {
+            console.error('Failed to load snapshot schedule', err);
+        }
+    }, [serviceId]);
+
+    const loadDestinations = useCallback(async () => {
+        try {
+            const res = await api.get('/cloud-storage/');
+            const allDestinations = Array.isArray(res.data) ? res.data : res.data.results || [];
+            // Filter to show platform-wide (service=null) or specifically for this service
+            const relevant = allDestinations.filter((d: any) => !d.service || String(d.service) === serviceId);
+            setDestinations(relevant);
+        } catch (err) {
+            console.error('Failed to load cloud destinations', err);
+        }
+    }, [serviceId]);
+
     useEffect(() => {
-        loadBackups();
-        loadSnapshots();
-        loadSchedule();
-    }, [loadBackups, loadSnapshots, loadSchedule]);
+        void loadBackups();
+        void loadSchedule();
+        void loadSnapSchedule();
+        void loadSnapshots();
+        void loadDestinations();
+    }, [loadBackups, loadSchedule, loadSnapSchedule, loadSnapshots, loadDestinations]);
 
     const handleCreateBackup = async () => {
         setCreating(true);
@@ -334,14 +387,21 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
     const handleSaveSchedule = async () => {
         setSavingSchedule(true);
         try {
-            const payload = {
+            const payload: any = {
                 service: serviceId,
                 cron_expression: cronExpression,
                 retention_days: retentionDays,
                 enabled: scheduleEnabled,
             };
-            if (schedule) {
-                await api.put(`/backup-schedules/${schedule.id}/`, payload);
+            
+            if (selectedDestination !== 'local') {
+                payload.cloud_destination_id = selectedDestination;
+            } else {
+                payload.storage_backend = 'local';
+                payload.cloud_destination_id = null;
+            }
+            if (schedule?.id) {
+                await api.patch(`/backup-schedules/${schedule.id}/`, payload);
             } else {
                 await api.post('/backup-schedules/', payload);
             }
@@ -351,6 +411,39 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
             toast({ title: "Error", description: "Failed to save schedule.", variant: "destructive" });
         } finally {
             setSavingSchedule(false);
+        }
+    };
+
+    const handleSaveSnapSchedule = async () => {
+        setSavingSnapSchedule(true);
+        try {
+            const payload: any = {
+                service: serviceId,
+                cron_expression: snapCronExpression,
+                retention_days: snapRetentionDays,
+                enabled: snapScheduleEnabled
+            };
+            if (snapScheduleCloudDest) {
+                payload.cloud_destination_id = snapScheduleCloudDest;
+            } else {
+                payload.cloud_destination_id = null;
+            }
+            // check if schedule exists
+            const res = await api.get('/snapshot-schedules/', { params: { service: serviceId } });
+            const schedules = Array.isArray(res.data) ? res.data : res.data.results || [];
+            const sched = schedules.find((s: any) => String(s.service) === serviceId);
+
+            if (sched?.id) {
+                await api.patch(`/snapshot-schedules/${sched.id}/`, payload);
+            } else {
+                await api.post('/snapshot-schedules/', payload);
+            }
+            toast({ title: "Schedule saved", description: "Snapshot schedule has been updated." });
+            loadSnapSchedule();
+        } catch (err) {
+            toast({ title: "Error", description: "Failed to save snapshot schedule.", variant: "destructive" });
+        } finally {
+            setSavingSnapSchedule(false);
         }
     };
 
@@ -490,6 +583,12 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                                             }`}>
                                                 {backup.status}
                                             </span>
+                                            {backup.cloud_uploaded && (
+                                                <span className="flex items-center gap-1 text-[11px] text-blue-400 font-medium ml-2" title="Backed up to Cloud Storage">
+                                                    <Cloud className="w-3 h-3" />
+                                                    Cloud
+                                                </span>
+                                            )}
                                             {backup.status === 'FAILED' && backup.error_message && (
                                                 <p className="text-[11px] text-red-400 max-w-[260px] truncate" title={backup.error_message}>
                                                     {backup.error_message}
@@ -824,7 +923,7 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                         <div className="flex justify-center p-4"><Loader2 className="animate-spin h-5 w-5 text-muted-foreground" /></div>
                     ) : (
                         <div className="space-y-4">
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                                 <div className="space-y-1">
                                     <label className="text-sm font-medium">Cron Expression</label>
                                     <input
@@ -874,16 +973,33 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                                     <p className="text-[10px] text-muted-foreground">Backups older than this are auto-deleted</p>
                                 </div>
                                 <div className="space-y-1">
-                                    <label className="text-sm font-medium">Status</label>
-                                    <label className="flex items-center gap-3 rounded-lg border border-border p-2.5 cursor-pointer">
-                                        <input
-                                            type="checkbox"
-                                            checked={scheduleEnabled}
-                                            onChange={(e) => setScheduleEnabled(e.target.checked)}
-                                        />
-                                        <span className="text-sm">{scheduleEnabled ? 'Enabled' : 'Disabled'}</span>
-                                    </label>
-                                </div>
+                                      <label className="text-sm font-medium">Status</label>
+                                      <label className="flex items-center gap-3 rounded-lg border border-border p-2.5 cursor-pointer">
+                                          <input
+                                              type="checkbox"
+                                              checked={scheduleEnabled}
+                                              onChange={(e) => setScheduleEnabled(e.target.checked)}
+                                              className="w-4 h-4 rounded border-border text-foreground focus:ring-foreground"
+                                          />
+                                          <span className="text-sm font-medium">{scheduleEnabled ? 'Enabled' : 'Paused'}</span>
+                                      </label>
+                                  </div>
+                                  <div className="space-y-1">
+                                      <label className="text-sm font-medium">Storage Destination</label>
+                                      <select
+                                          value={selectedDestination}
+                                          onChange={(e) => setSelectedDestination(e.target.value)}
+                                          className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm h-[42px]"
+                                      >
+                                          <option value="local">Local Server</option>
+                                          {destinations.map(d => (
+                                              <option key={d.id} value={d.id}>
+                                                  {d.name} ({d.provider_display})
+                                              </option>
+                                          ))}
+                                      </select>
+                                      <p className="text-[10px] text-muted-foreground">Offload backups to S3/MinIO</p>
+                                  </div>
                             </div>
 
                             {schedule && (
@@ -904,6 +1020,95 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                 </CardContent>
             </Card>
         </div>
+            <Card>
+                <CardHeader>
+                    <CardTitle>Snapshot Schedule</CardTitle>
+                    <CardDescription>Configure automated configuration snapshot frequency.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                    <div className="space-y-4">
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                            <div className="space-y-1">
+                                <label className="text-sm font-medium">Cron Expression</label>
+                                <input
+                                    type="text"
+                                    value={snapCronExpression}
+                                    onChange={(e) => setSnapCronExpression(e.target.value)}
+                                    className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm font-mono"
+                                    placeholder="0 3 * * *"
+                                />
+                                <div className="flex flex-wrap gap-1.5 mt-1.5">
+                                    {[
+                                        { label: 'Hourly', expr: '0 * * * *' },
+                                        { label: 'Every 6h', expr: '0 */6 * * *' },
+                                        { label: 'Daily 12 AM', expr: '0 0 * * *' },
+                                        { label: 'Weekly', expr: '0 3 * * 0' },
+                                    ].map(p => (
+                                        <button
+                                            key={p.expr}
+                                            type="button"
+                                            onClick={() => setSnapCronExpression(p.expr)}
+                                            className={`text-[11px] px-2 py-0.5 rounded-full border transition-colors ${
+                                                snapCronExpression === p.expr
+                                                    ? 'bg-primary/10 border-primary text-primary'
+                                                    : 'bg-background border-border text-muted-foreground hover:border-primary/50'
+                                            }`}
+                                        >
+                                            {p.label}
+                                        </button>
+                                    ))}
+                                </div>
+                                <p className="text-[10px] text-muted-foreground">Click a preset or type a custom cron expression</p>
+                            </div>
+                            <div className="space-y-1">
+                                <label className="text-sm font-medium">Retention (days)</label>
+                                <input
+                                    type="number"
+                                    value={snapRetentionDays}
+                                    onChange={(e) => setSnapRetentionDays(parseInt(e.target.value) || 30)}
+                                    min={1}
+                                    max={365}
+                                    className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm"
+                                />
+                                <p className="text-[10px] text-muted-foreground">Snapshots older than this are auto-deleted</p>
+                            </div>
+                            <div className="space-y-1">
+                                  <label className="text-sm font-medium">Status</label>
+                                  <label className="flex items-center gap-3 rounded-lg border border-border p-2.5 cursor-pointer">
+                                      <input
+                                          type="checkbox"
+                                          checked={snapScheduleEnabled}
+                                          onChange={(e) => setSnapScheduleEnabled(e.target.checked)}
+                                          className="w-4 h-4 rounded border-border text-foreground focus:ring-foreground"
+                                      />
+                                      <span className="text-sm font-medium">{snapScheduleEnabled ? 'Enabled' : 'Paused'}</span>
+                                  </label>
+                              </div>
+                              <div className="space-y-1">
+                                  <label className="text-sm font-medium">Cloud Destination</label>
+                                  <select
+                                      value={snapScheduleCloudDest}
+                                      onChange={(e) => setSnapScheduleCloudDest(e.target.value)}
+                                      className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm h-[42px]"
+                                  >
+                                      <option value="">Do not upload</option>
+                                      {destinations.map(d => (
+                                          <option key={d.id} value={d.id}>
+                                              {d.name} ({d.provider_display})
+                                          </option>
+                                      ))}
+                                  </select>
+                                  <p className="text-[10px] text-muted-foreground">Upload snapshots to S3/MinIO</p>
+                              </div>
+                        </div>
+
+                        <Button onClick={handleSaveSnapSchedule} disabled={savingSnapSchedule}>
+                            {savingSnapSchedule ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                            Update Snapshot Schedule
+                        </Button>
+                    </div>
+                </CardContent>
+            </Card>
 
         {keyPromptOpen && (
             <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">

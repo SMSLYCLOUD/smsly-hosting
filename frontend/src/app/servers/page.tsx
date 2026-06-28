@@ -13,6 +13,7 @@ import {
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { toast } from '@/components/ui/use-toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { Button } from '@/components/ui/button';
 
 // Local types — kept in sync with the backend's ManagedServer model
 // in backend/apps/deployments/models_core.py.
@@ -245,7 +246,7 @@ export default function ServersPage() {
     const [showAdd, setShowAdd] = useState(false);
     const [checking, setChecking] = useState(false);
     const [serverChecking, setServerChecking] = useState<Record<string, boolean>>({});
-    const [addMode, setAddMode] = useState<'connect' | 'provision'>('provision');
+    const [addMode, setAddMode] = useState<'connect' | 'provision' | 'batch'>('provision');
     const [submitting, setSubmitting] = useState(false);
     const [testing, setTesting] = useState(false);
     const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
@@ -596,9 +597,43 @@ export default function ServersPage() {
                                         <Link2 size={14} />
                                         Connect Existing
                                     </button>
+                                    <button
+                                        onClick={() => { setAddMode('batch'); setTestResult(null); }}
+                                        className={`px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 transition-all ${
+                                            addMode === 'batch'
+                                                ? 'bg-gradient-to-r from-blue-500 to-cyan-600 text-white shadow-md'
+                                                : 'text-muted-foreground hover:text-foreground'
+                                        }`}
+                                    >
+                                        <Server size={14} />
+                                        Batch Provision
+                                    </button>
                                 </div>
 
-                                {addMode === 'provision' ? (
+                                {addMode === 'batch' ? (
+                                    <div className="space-y-4">
+                                        <p className="text-sm text-muted-foreground">Enter a list of IPs and passwords to provision multiple Lite Agents in parallel.</p>
+                                        <textarea
+                                            placeholder="192.168.1.10, root, mypassword\n192.168.1.11, root, mypassword"
+                                            className="w-full h-32 px-3 py-2 rounded-lg bg-background border border-border text-sm font-mono"
+                                            id="batch-provision-input"
+                                        />
+                                        <div className="flex justify-end gap-2">
+                                            <Button variant="outline" onClick={() => setAddMode('provision')}>Cancel</Button>
+                                            <Button onClick={() => {
+                                                const val = (document.getElementById('batch-provision-input') as HTMLTextAreaElement).value;
+                                                const lines = val.split('\n').filter(l => l.trim());
+                                                const nodes = lines.map(l => {
+                                                    const [host, user, pass] = l.split(',').map(s => s.trim());
+                                                    return { host, ssh_user: user, ssh_password: pass, is_lite_agent: true };
+                                                });
+                                                apiFetch('/api/v1/servers/provision-batch/', 'POST', { nodes }).then(() => {
+                                                    setAddMode('provision');
+                                                }).catch((e: any) => alert(e.message));
+                                            }}>Provision Batch</Button>
+                                        </div>
+                                    </div>
+                                ) : addMode === 'provision' ? (
                                     <ProvisionForm
                                         form={provisionForm}
                                         setForm={setProvisionForm}

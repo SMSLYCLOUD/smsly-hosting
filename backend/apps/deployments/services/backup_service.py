@@ -197,7 +197,7 @@ class BackupService:
         decrypted_path = BackupService.decrypt_backup(path, key)
         return decrypted_path, decrypted_path
 
-    def backup_service(self, service_id, backup_id=None, backup_type='MANUAL') -> ServiceBackup:
+    def backup_service(self, service_id, backup_id=None, backup_type='MANUAL', db_only=False) -> ServiceBackup:
         service = Service.objects.get(id=service_id)
 
         if backup_id:
@@ -210,13 +210,15 @@ class BackupService:
                 backup = ServiceBackup.objects.create(
                     service=service,
                     status='IN_PROGRESS',
-                    backup_type=backup_type
+                    backup_type=backup_type,
+                    db_only=db_only
                 )
         else:
             backup = ServiceBackup.objects.create(
                 service=service,
                 status='IN_PROGRESS',
-                backup_type=backup_type
+                backup_type=backup_type,
+                db_only=db_only
             )
 
         try:
@@ -288,7 +290,7 @@ class BackupService:
             temp_dir = os.path.join(backups_dir, f"tmp_{uuid.uuid4().hex}")
             os.makedirs(temp_dir, exist_ok=True)
 
-            # 1. Backup Docker Image
+            # 1. Backup Docker Image (Skip if db_only)
             image_filename = "image.tar"
             image_path = os.path.join(temp_dir, image_filename)
 
@@ -300,8 +302,9 @@ class BackupService:
                 repo = f"backup/{slugify(service.name)}"
                 tag = f"{uuid.uuid4().hex[:8]}"
                 image_tag = f"{repo}:{tag}"
-                container.commit(repository=repo, tag=tag)
-                logger.info(f"Committed container {service.name} to {image_tag}")
+                if not backup.db_only:
+                    container.commit(repository=repo, tag=tag)
+                    logger.info(f"Committed container {service.name} to {image_tag}")
             except docker.errors.NotFound:
                 # If not running, fall back to the service's configured image
                 if service.docker_image:
@@ -319,7 +322,7 @@ class BackupService:
                 else:
                     logger.warning(f"Service {service.name} has no running container and no docker_image set.")
 
-            if image_tag:
+            if image_tag and not backup.db_only:
                 metadata['docker_image'] = image_tag
                 logger.info(f"Saving image {image_tag} to {image_filename}...")
                 try:
@@ -338,9 +341,11 @@ class BackupService:
             container_name = service.name
             _dump_container_database(container_name, image_tag, temp_dir)
 
-            # 3. Backup Volumes
+            # 3. Backup Volumes (Skip if db_only)
             volumes = Volume.objects.filter(service=service)
             for vol in volumes:
+                if backup.db_only:
+                    continue
                 vol_filename = f"volume_{vol.name}.tar.gz"
                 vol_path = os.path.join(temp_dir, vol_filename)
 
@@ -1071,7 +1076,7 @@ class BackupService:
             return image_ref.rsplit(':', 1)
         return image_ref, 'latest'
 
-    def backup_server(self, backup_id=None):
+    def backup_server(self, backup_id=None, db_only=False):
         """
         Full server backup:
         1. PG_DUMP of the database.
@@ -1088,9 +1093,9 @@ class BackupService:
                 backup.status = 'IN_PROGRESS'
                 backup.save(update_fields=['status'])
             except ServerBackup.DoesNotExist:
-                backup = ServerBackup.objects.create(status='IN_PROGRESS')
+                backup = ServerBackup.objects.create(status='IN_PROGRESS', db_only=db_only)
         else:
-            backup = ServerBackup.objects.create(status='IN_PROGRESS')
+            backup = ServerBackup.objects.create(status='IN_PROGRESS', db_only=db_only)
         temp_dir = None
         try:
             backups_dir = self._get_backups_dir('server')
@@ -1205,13 +1210,35 @@ class BackupService:
 
             for service in services:
                 try:
-                    sb = self.backup_service(service.id)
+                    sb = self.backup_service(service.id, db_only=backup.db_only)
                     included.append(str(sb.id))
                     # Move/Copy the service backup to our bundle
                     if sb.file_path and os.path.exists(sb.file_path):
                         shutil.copy2(sb.file_path, os.path.join(services_dir, os.path.basename(sb.file_path)))
                 except Exception as e:
                     logger.error(f"Failed to backup service {service.name} during server backup: {e}")
+
+            # 2.5 Addons Backup
+            addons_dir = os.path.join(temp_dir, "addons")
+            os.makedirs(addons_dir, exist_ok=True)
+            from apps.deployments.models_addons import Addon
+            addons = Addon.objects.filter(status='ACTIVE')
+            for addon in addons:
+                # The user preference: "add addons that are persistent like s3, minio etc and leave other like redis, rabbitmq etc"
+                if backup.db_only:
+                    persistent_types = [
+                        'POSTGRES', 'MYSQL', 'MARIADB', 'COCKROACHDB', 'TIMESCALEDB',
+                        'PERCONA', 'VITESS', 'MONGODB', 'COUCHDB', 'RETHINKDB',
+                        'ARANGODB', 'FERRETDB', 'SURREALDB', 'MINIO', 'SEAWEEDFS'
+                    ]
+                    if addon.addon_type not in persistent_types:
+                        continue
+                try:
+                    dump_path = backup_addon(str(addon.id))
+                    if dump_path and os.path.exists(dump_path):
+                        shutil.copy2(dump_path, os.path.join(addons_dir, f"{addon.name}_{os.path.basename(dump_path)}"))
+                except Exception as e:
+                    logger.error(f"Failed to backup addon {addon.name} during server backup: {e}")
 
             # 3. Platform Config
             # SECURITY (Batch G): never include the Cloudflare API
@@ -2472,25 +2499,40 @@ def _upload_backup_to_cloud(backup, filepath, service_name):
     try:
         from apps.deployments.models_backup import BackupSchedule
         service_id = getattr(backup, 'service_id', None)
-        if service_id:
-            sched = BackupSchedule.objects.filter(
-                service_id=service_id, enabled=True, storage_backend='s3',
-            ).first()
+        dest = getattr(backup, 'cloud_destination', None)
+        
+        if dest:
+            s3_bucket = dest.bucket
+            s3_endpoint = dest.endpoint_url
+            s3_region = dest.region
+            s3_access_key = dest.access_key
+            s3_secret_key = dest.secret_key
         else:
-            sched = BackupSchedule.objects.filter(
-                is_server_wide=True, enabled=True, storage_backend='s3',
-            ).first()
-        if not sched or not sched.s3_bucket or not sched.s3_access_key:
-            return False
+            if service_id:
+                sched = BackupSchedule.objects.filter(
+                    service_id=service_id, enabled=True, storage_backend='s3',
+                ).first()
+            else:
+                sched = BackupSchedule.objects.filter(
+                    is_server_wide=True, enabled=True, storage_backend='s3',
+                ).first()
+            if not sched or not sched.s3_bucket or not sched.s3_access_key:
+                return False
+            s3_bucket = sched.s3_bucket
+            s3_endpoint = sched.s3_endpoint
+            s3_region = sched.s3_region
+            s3_access_key = sched.s3_access_key
+            s3_secret_key = sched.s3_secret_key
+
         s3_key = f"smsly-backups/{service_name}/{os.path.basename(filepath)}"
         ok = upload_backup_to_s3(
-            filepath, sched.s3_bucket, s3_key,
-            endpoint=sched.s3_endpoint, region=sched.s3_region,
-            access_key=sched.s3_access_key, secret_key=sched.s3_secret_key,
+            filepath, s3_bucket, s3_key,
+            endpoint=s3_endpoint, region=s3_region,
+            access_key=s3_access_key, secret_key=s3_secret_key,
         )
         if ok:
             backup.cloud_uploaded = True
-            backup.cloud_bucket = sched.s3_bucket
+            backup.cloud_bucket = s3_bucket
             backup.cloud_key = s3_key
             backup.save(update_fields=['cloud_uploaded', 'cloud_bucket', 'cloud_key'])
         return ok
@@ -2509,6 +2551,9 @@ def _resolve_cloud_config(backup):
     bucket = getattr(backup, 'cloud_bucket', '') or ''
     key = getattr(backup, 'cloud_key', '') or ''
     if bucket and key:
+        dest = getattr(backup, 'cloud_destination', None)
+        if dest:
+            return bucket, key, dest.endpoint, dest.region, dest.access_key, dest.secret_key
         return bucket, key, '', 'us-east-1', '', ''
     from apps.deployments.models_backup import BackupSchedule
     service_id = getattr(backup, 'service_id', None)

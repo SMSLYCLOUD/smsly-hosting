@@ -92,6 +92,33 @@ def trigger_cron_job(self, job_id):
             job.name, service.name, exit_code,
             (output or b'').decode('utf-8', errors='replace'),
         )
+
+        if job.cloud_destination_id:
+            dest = job.cloud_destination
+            try:
+                from apps.deployments.services.backup_service import upload_backup_to_s3
+                import tempfile
+                import os
+
+                timestamp = now.strftime('%Y%m%d_%H%M%S')
+                s3_key = f"cron-logs/service-{service.id}/job-{job.name.replace(' ', '_')}/{timestamp}.log"
+                
+                with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
+                    f.write(output or b'')
+                    path = f.name
+                
+                try:
+                    upload_backup_to_s3(
+                        path, dest.bucket, s3_key,
+                        endpoint=dest.endpoint, region=dest.region,
+                        access_key=dest.access_key, secret_key=dest.secret_key,
+                    )
+                    logger.info("Uploaded cron log to %s/%s", dest.bucket, s3_key)
+                finally:
+                    os.unlink(path)
+            except Exception as up_exc:
+                logger.error("Failed to upload cron log for %s: %s", job.name, up_exc)
+
     except Exception as exc:
         logger.error("Failed to run cron job %s: %s", job.name, exc)
         if self.request.retries < self.max_retries:
