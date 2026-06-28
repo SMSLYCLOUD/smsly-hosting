@@ -868,7 +868,7 @@ django.setup()
 
 from apps.deployments.models import Service, EnvironmentVariable
 
-payload = json.loads({json.dumps(json.dumps(payload))})
+payload = json.loads({json.dumps(payload)})
 svc = Service.objects.filter(name=payload['service_name']).first()
 if svc:
     for key, value in payload['pre_transfer'].items():
