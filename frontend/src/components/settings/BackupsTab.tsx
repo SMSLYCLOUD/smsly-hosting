@@ -834,7 +834,32 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                                         className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm font-mono"
                                         placeholder="0 3 * * *"
                                     />
-                                    <p className="text-[10px] text-muted-foreground">e.g. &quot;0 3 * * *&quot; = daily at 3 AM</p>
+                                    <div className="flex flex-wrap gap-1.5 mt-1.5">
+                                        {[
+                                            { label: 'Every 30 min', expr: '*/30 * * * *' },
+                                            { label: 'Hourly', expr: '0 * * * *' },
+                                            { label: 'Every 6h', expr: '0 */6 * * *' },
+                                            { label: 'Every 12h', expr: '0 */12 * * *' },
+                                            { label: 'Daily 12 AM', expr: '0 0 * * *' },
+                                            { label: 'Daily 3 AM', expr: '0 3 * * *' },
+                                            { label: 'Twice daily', expr: '0 8,20 * * *' },
+                                            { label: 'Weekly Sun', expr: '0 3 * * 0' },
+                                        ].map(p => (
+                                            <button
+                                                key={p.expr}
+                                                type="button"
+                                                onClick={() => setCronExpression(p.expr)}
+                                                className={`text-[11px] px-2 py-0.5 rounded-full border transition-colors ${
+                                                    cronExpression === p.expr
+                                                        ? 'bg-primary/10 border-primary text-primary'
+                                                        : 'bg-background border-border text-muted-foreground hover:border-primary/50'
+                                                }`}
+                                            >
+                                                {p.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                    <p className="text-[10px] text-muted-foreground">Click a preset or type a custom cron expression</p>
                                 </div>
                                 <div className="space-y-1">
                                     <label className="text-sm font-medium">Retention (days)</label>
