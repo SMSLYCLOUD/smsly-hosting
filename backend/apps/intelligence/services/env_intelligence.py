@@ -20,12 +20,17 @@ class EnvironmentIntelligenceService:
         "RULES:\n"
         "1. EXHAUSTIVENESS: Every variable detected must have a value. Never return null or empty.\n"
         "2. SECRETS: Use 'GENERATE' for keys/tokens/passwords. We will generate high-entropy hex strings.\n"
-        "3. LINKING: Use internal service names (e.g., http://service-name:8000) for cross-service dependencies.\n"
-        "4. CATEGORIES:\n"
+        "3. LINKING: Use internal service names (e.g., http://service-name:PORT) for cross-service dependencies.\n"
+        "4. NEVER set PORT — the platform manages it.\n"
+        "5. STACK AWARENESS:\n"
+        "   - For Next.js/Nuxt/frontend: only set NEXT_PUBLIC_*, NODE_ENV, and framework vars.\n"
+        "     Do NOT set Django vars (ALLOWED_HOSTS, DJANGO_*, SECRET_KEY, ADMIN_EMAIL, etc.).\n"
+        "   - For Django/Python: set Django-specific vars.\n"
+        "   - For Node.js APIs: set NODE_ENV, HOSTNAME, framework vars.\n"
+        "6. CATEGORIES:\n"
         "   - SECRET: JWT_SECRET, API_KEY, etc.\n"
         "   - SERVICE_URL: db, redis, rabbitmq, and sibling microservices.\n"
         "   - CONFIG_FLAG: DEBUG=False, ENVIRONMENT=production.\n"
-        "   - CONSTANT: PORT=8000, LOG_LEVEL=info.\n"
         "Return valid JSON only."
     )
 
@@ -52,6 +57,8 @@ class EnvironmentIntelligenceService:
             "REQUIREMENT: 100% coverage. Do not skip any variable.\n"
             "For SECRETS: state 'GENERATE'.\n"
             "For INTERNAL URLs: use service names.\n"
+            "NEVER set PORT — the platform manages it.\n"
+            f"STACK: {stack}. Only set vars appropriate for this stack.\n"
             "For standard settings: use production-safe defaults.\n\n"
             "Return a JSON object: { \"VAR_NAME\": \"value\" }\n\n"
             + "\n".join(brief_lines)
@@ -91,13 +98,16 @@ class EnvironmentIntelligenceService:
             # match secret keyword patterns (e.g. AI_MAX_TOKENS, SD_x_TTL_DAYS).
             _CONFIG_PATTERNS = {
                 "TTL", "TIMEOUT", "SECONDS", "DAYS", "HOURS", "MINUTES",
-                "MAX_", "MIN_", "LIMIT", "PORT", "COUNT", "COOLDOWN",
+                "MAX_", "MIN_", "LIMIT", "COUNT", "COOLDOWN",
                 "CACHE_TTL", "ROTATION_", "INTERVAL", "RETRIES", "SIZE",
             }
             final_env = {}
             for var, val in suggestions.items():
                 var_upper = var.upper()
-                # Skip config vars — they should keep AI values or sensible defaults
+                # Skip PORT entirely — platform manages it
+                if var_upper == "PORT" or var_upper.endswith("_PORT"):
+                    continue
+                # Config vars keep AI values
                 if any(p in var_upper for p in _CONFIG_PATTERNS):
                     final_env[var] = str(val)
                     continue
@@ -130,25 +140,23 @@ class EnvironmentIntelligenceService:
             logger.error("AI Senate failed to resolve environment for %s: %s", service_name, e)
             _CONFIG_PATTERNS_FB = {
                 "TTL", "TIMEOUT", "SECONDS", "DAYS", "HOURS", "MINUTES",
-                "MAX_", "MIN_", "LIMIT", "PORT", "COUNT", "COOLDOWN",
+                "MAX_", "MIN_", "LIMIT", "COUNT", "COOLDOWN",
                 "CACHE_TTL", "ROTATION_", "INTERVAL", "RETRIES", "SIZE",
             }
             fallback = {}
             import base64
             for var in env_context:
                 var_upper = var.upper()
+                # Skip PORT entirely — platform manages it
+                if "PORT" in var_upper:
+                    continue
                 if any(p in var_upper for p in _CONFIG_PATTERNS_FB):
-                    if "PORT" in var_upper:
-                        fallback[var] = "3000"
-                    else:
-                        fallback[var] = "8000"
+                    fallback[var] = "8000"
                 elif any(k in var_upper for k in ["SECRET", "KEY", "TOKEN", "PASSWORD", "SALT"]):
                     if "ENCRYPTION_KEY" in var_upper:
                         fallback[var] = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode('utf-8')
                     else:
                         fallback[var] = secrets.token_hex(32)
-                elif "PORT" in var_upper:
-                    fallback[var] = "3000"
             return fallback
 
     @classmethod
@@ -196,10 +204,14 @@ class EnvironmentIntelligenceService:
                 name = svc.get('name')
                 if name in all_suggestions:
                     suggestions = all_suggestions[name]
-                    _CONFIG_ECO = {"TTL", "TIMEOUT", "SECONDS", "DAYS", "HOURS", "MINUTES", "MAX_", "MIN_", "LIMIT", "PORT", "COUNT", "COOLDOWN", "CACHE_TTL", "ROTATION_", "INTERVAL", "RETRIES"}
+                    _CONFIG_ECO = {"TTL", "TIMEOUT", "SECONDS", "DAYS", "HOURS", "MINUTES", "MAX_", "MIN_", "LIMIT", "COUNT", "COOLDOWN", "CACHE_TTL", "ROTATION_", "INTERVAL", "RETRIES"}
                     final_env = {}
                     for var, val in suggestions.items():
-                        if any(p in var.upper() for p in _CONFIG_ECO):
+                        var_u = var.upper()
+                        # Skip PORT entirely — platform manages it
+                        if var_u == "PORT" or var_u.endswith("_PORT"):
+                            continue
+                        if any(p in var_u for p in _CONFIG_ECO):
                             final_env[var] = str(val)
                         elif val == "GENERATE" or any(k in var.upper() for k in ["SECRET", "KEY", "TOKEN"]):
                             final_env[var] = secrets.token_hex(32)
