@@ -1860,8 +1860,11 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             # -----------------------------------------------------------------
             # AI Senate integration – optionally enrich env vars using the
             # intelligence service when the feature flag is enabled.
+            # Skip for frontend stacks (nextjs/nuxt/node-frontend) — the
+            # Senate injects Django-specific vars that break frontends.
             # -----------------------------------------------------------------
-            if getattr(settings, "SENATE_ENABLED", True):
+            _is_frontend = stack in {"nextjs", "nuxt"} or "frontend" in service.name.lower()
+            if getattr(settings, "SENATE_ENABLED", True) and not _is_frontend:
                 try:
                     from apps.intelligence.services.env_intelligence import (
                         EnvironmentIntelligenceService,
@@ -1879,8 +1882,23 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                 except Exception as exc:
                     logger.warning("AI Senate enrichment failed for %s: %s", service.name, exc)
 
-            for key, value in _stack_runtime_defaults(stack, port).items():
-                resolved_env.setdefault(key, value)
+            # Filter out Django/framework-specific vars from non-Django services.
+            if stack not in {"django", "python"}:
+                _DJANGO_ONLY_VARS = {
+                    "ADMIN_EMAIL", "DJANGO_ALLOWED_HOSTS", "MARKETER_ALLOWED_HOSTS",
+                    "ALLOWED_HOSTS", "FERNET_KEY", "SECRET_KEY", "HOSTNAME",
+                    "DJANGO_SETTINGS_MODULE", "DJANGO_SECRET_KEY", "CSRF_TRUSTED_ORIGINS",
+                }
+                for dv in _DJANGO_ONLY_VARS:
+                    resolved_env.pop(dv, None)
+
+            # Stack runtime defaults — PORT must override any AI-injected value.
+            _stack_defs = _stack_runtime_defaults(stack, port)
+            for key, value in _stack_defs.items():
+                if key == "PORT":
+                    resolved_env[key] = value  # Always override PORT
+                else:
+                    resolved_env.setdefault(key, value)
             for key, value in _runtime_watch_defaults(user).items():
                 resolved_env.setdefault(key, value)
 
