@@ -5529,6 +5529,11 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
             access_key = request.data.get('s3_access_key', '').strip()
             secret_key = request.data.get('s3_secret_key', '').strip()
 
+        # Strip bucket prefix if user copied full path from R2 dashboard
+        # (e.g. key="my-bucket/smsly-backups/..." but should be "smsly-backups/...")
+        while s3_bucket and s3_key.startswith(s3_bucket + '/'):
+            s3_key = s3_key[len(s3_bucket) + 1:]
+
         if not s3_bucket or not s3_key or not access_key or not secret_key:
             return Response({'error': 'Missing required S3 configuration fields or cloud_storage_id.'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -6112,6 +6117,10 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
             region = request.data.get('s3_region', 'us-east-1').strip()
             access_key = request.data.get('s3_access_key', '').strip()
             secret_key = request.data.get('s3_secret_key', '').strip()
+
+        # Strip bucket prefix if user copied full path from R2 dashboard
+        while s3_bucket and s3_key.startswith(s3_bucket + '/'):
+            s3_key = s3_key[len(s3_bucket) + 1:]
 
         if not s3_bucket or not s3_key or not access_key or not secret_key:
             return Response({'error': 'Missing required S3 configuration fields or cloud_storage_id.'}, status=status.HTTP_400_BAD_REQUEST)
