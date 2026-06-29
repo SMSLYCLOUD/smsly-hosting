@@ -366,6 +366,18 @@ def cleanup_old_backups_task():
             if sched.service:
                 old = ServiceSnapshot.objects.filter(service=sched.service, created_at__lt=cutoff)
                 for snap in old:
+                    # Clean up DB clone if one exists
+                    db_clone = (snap.config_data or {}).get('_db_clone')
+                    if db_clone:
+                        try:
+                            from apps.deployments.services.snapshot_service import SnapshotService
+                            SnapshotService.cleanup_db_clone(db_clone)
+                        except Exception as clone_exc:
+                            logger.warning(
+                                "Failed to clean up DB clone %s for snapshot %s: %s",
+                                db_clone, snap.id, clone_exc,
+                            )
+
                     if snap.cloud_uploaded and snap.cloud_key:
                         # Optional: delete from cloud storage if needed, but not implemented for snapshots yet
                         pass

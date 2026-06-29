@@ -9,7 +9,7 @@ from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
-_VALID_DB_NAME_RE = re.compile(r'^[a-zA-Z0-9_]+$')
+_VALID_DB_NAME_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
 
 def _validate_db_name(name: str) -> None:
     if not _VALID_DB_NAME_RE.match(name):

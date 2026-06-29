@@ -5513,6 +5513,45 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
         )
         return Response({'status': 'restore_started'})
 
+    @action(detail=False, methods=['post'], url_path='list-backups')
+    def list_cloud_backups(self, request):
+        """List available backup files in a cloud storage bucket.
+
+        Returns a list of {key, size, last_modified} objects that can be
+        selected from a dropdown instead of typing the key manually.
+        """
+        cloud_storage_id = request.data.get('cloud_storage_id', '').strip()
+        prefix = request.data.get('prefix', 'smsly-backups/').strip()
+
+        if not cloud_storage_id:
+            return Response(
+                {'error': 'cloud_storage_id is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        from apps.deployments.models_cloud_storage import CloudStorageDestination
+
+        try:
+            dest = CloudStorageDestination.objects.get(id=cloud_storage_id)
+        except CloudStorageDestination.DoesNotExist:
+            return Response(
+                {'error': 'Cloud storage destination not found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        from .services.backup_service import list_s3_objects
+
+        objects = list_s3_objects(
+            bucket=dest.bucket,
+            prefix=prefix,
+            endpoint=dest.endpoint,
+            region=dest.region,
+            access_key=dest.access_key,
+            secret_key=dest.secret_key,
+        )
+
+        return Response({'objects': objects, 'bucket': dest.bucket})
+
     @action(detail=False, methods=['post'], url_path='restore-from-cloud')
     def restore_from_cloud(self, request):
         """Restore a service backup directly from cloud storage."""
@@ -5548,12 +5587,11 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
             access_key = request.data.get('s3_access_key', '').strip()
             secret_key = request.data.get('s3_secret_key', '').strip()
 
+        from .services.backup_service import download_from_s3, normalize_s3_key, BackupService
         s3_key = normalize_s3_key(s3_key, s3_bucket)
 
         if not s3_bucket or not s3_key or not access_key or not secret_key:
             return Response({'error': 'Missing required S3 configuration fields or cloud_storage_id.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        from .services.backup_service import download_from_s3, normalize_s3_key, BackupService
         import uuid as _uuid
         dest_filename = f"cloud_restore_{_uuid.uuid4().hex[:8]}.tar.gz"
         backups_dir = os.path.join('/app', 'backups', 'services', str(service_id))
@@ -6106,6 +6144,41 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
             'backup_id': str(backup.id),
             'file_size': file_size,
         })
+
+    @action(detail=False, methods=['post'], url_path='list-backups')
+    def list_cloud_backups(self, request):
+        """List available backup files in a cloud storage bucket (server scope)."""
+        cloud_storage_id = request.data.get('cloud_storage_id', '').strip()
+        prefix = request.data.get('prefix', 'smsly-backups/').strip()
+
+        if not cloud_storage_id:
+            return Response(
+                {'error': 'cloud_storage_id is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        from apps.deployments.models_cloud_storage import CloudStorageDestination
+
+        try:
+            dest = CloudStorageDestination.objects.get(id=cloud_storage_id)
+        except CloudStorageDestination.DoesNotExist:
+            return Response(
+                {'error': 'Cloud storage destination not found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        from .services.backup_service import list_s3_objects
+
+        objects = list_s3_objects(
+            bucket=dest.bucket,
+            prefix=prefix,
+            endpoint=dest.endpoint,
+            region=dest.region,
+            access_key=dest.access_key,
+            secret_key=dest.secret_key,
+        )
+
+        return Response({'objects': objects, 'bucket': dest.bucket})
 
     @action(detail=False, methods=['post'], url_path='restore-from-cloud')
     def restore_from_cloud(self, request):

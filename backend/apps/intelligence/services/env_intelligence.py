@@ -226,20 +226,30 @@ class EnvironmentIntelligenceService:
             return services_data
 
     @classmethod
-    def apply_intelligence_to_service(cls, service, scan_results: dict[str, Any]):
+    def apply_intelligence_to_service(
+        cls,
+        service,
+        scan_results: dict[str, Any],
+        source_dir: str | None = None,
+    ):
         """
         Applies intelligence to a specific service model instance.
+
+        When source_dir is provided, uses the manifest-backed resolver
+        (reading actual .env.example files) instead of the AI Senate.
+        This eliminates hallucinated env vars.
         """
         from apps.deployments.models import EnvironmentVariable  # type: ignore[attr-defined]  # noqa: F401
+
+        # Prefer manifest-backed resolution when source files are available
+        if source_dir:
+            return cls.apply_manifest_to_service(service, source_dir)
 
         env_context = scan_results.get('env_vars_context', {})
         stack = scan_results.get('stack', '')
         service_name = service.name
 
         suggestions = cls.resolve_environment(env_context, stack, service_name)
-
-        # In SMSLY-HOSTING, env vars are stored in a separate table/relation
-        # We need to update or create them.
 
         injected = []
         for key, val in suggestions.items():
@@ -256,7 +266,6 @@ class EnvironmentIntelligenceService:
                 }
             )
 
-            # If the variable already exists, only update it if NOT locked and (empty or placeholder)
             if not created:
                 if getattr(ev, 'is_locked', False):
                     continue
@@ -269,3 +278,82 @@ class EnvironmentIntelligenceService:
                 injected.append(key)
 
         return suggestions, injected
+
+    @classmethod
+    def apply_manifest_to_service(
+        cls,
+        service,
+        source_dir: str,
+    ) -> tuple[dict[str, str], list[str]]:
+        """
+        Resolve env vars using the manifest-backed resolver.
+        Reads actual .env.example, SECRETS-MANIFEST.yaml, and stack markers.
+
+        Returns (resolved_env, injected_keys_list).
+        """
+        from apps.deployments.models import EnvironmentVariable  # type: ignore[attr-defined]
+
+        try:
+            from apps.deployments.services.manifest_env_resolver import (
+                ManifestEnvResolver,
+            )
+
+            resolver = ManifestEnvResolver(
+                source_dir=source_dir,
+                service_name=service.name,
+            )
+            resolved_env = resolver.resolve_all()
+
+            injected = []
+            for key, val in resolved_env.items():
+                if not val:
+                    continue  # Skip unresolved vars
+
+                # Sanitize key
+                key_upper = key.strip().upper()
+                if not re.match(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$", key_upper):
+                    logger.warning("Skipping invalid env var key: %s", key_upper)
+                    continue
+
+                is_secret = bool(
+                    re.search(
+                        r"(SECRET|TOKEN|PASSWORD|PRIVATE_KEY|API_KEY|"
+                        r"ENCRYPTION_KEY|SIGNING_KEY)",
+                        key_upper,
+                    )
+                )
+
+                ev, created = EnvironmentVariable.objects.get_or_create(
+                    service=service,
+                    key=key_upper,
+                    defaults={
+                        "value": val,
+                        "is_secret": is_secret,
+                        "source": "MANIFEST",
+                    },
+                )
+
+                if not created:
+                    if getattr(ev, "is_locked", False):
+                        continue
+                    if not ev.value or "<CHANGE_ME" in str(ev.value):
+                        ev.value = val
+                        ev.save()
+                        injected.append(key_upper)
+                else:
+                    injected.append(key_upper)
+
+            if resolver.unresolved_vars:
+                logger.warning(
+                    "Unresolved manifest vars for %s: %s",
+                    service.name,
+                    ", ".join(resolver.unresolved_vars),
+                )
+
+            return resolved_env, injected
+
+        except Exception as e:
+            logger.error(
+                "Manifest env resolution failed for %s: %s", service.name, e
+            )
+            return {}, []

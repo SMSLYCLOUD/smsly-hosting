@@ -1,46 +1,131 @@
 import json
 import logging
+import os
 from typing import Any
 
 from apps.intelligence.providers import _cached_ask
 
 logger = logging.getLogger(__name__)
 
+
 class EcosystemDeploymentSenate:
+    """Proposes environment variable resolutions for an ecosystem deployment.
+
+    Uses the manifest-backed resolver (reading actual .env.example and
+    SECRETS-MANIFEST.yaml files) rather than AI hallucination. Falls back
+    to AI only when no source files are available.
+    """
+
     @classmethod
-    def propose_env_resolution(cls, graph) -> dict[str, Any] | None:
-        if not hasattr(graph, 'services'):
+    def propose_env_resolution(
+        cls,
+        graph,
+        source_dirs: dict[str, str] | None = None,
+    ) -> dict[str, Any] | None:
+        """
+        Propose env resolutions for all services in the ecosystem graph.
+
+        Args:
+            graph: EcosystemGraph instance with service definitions
+            source_dirs: Optional dict of service_key -> local source_dir path.
+                         When provided, reads actual .env.example files for ground truth.
+
+        Returns:
+            dict with "resolutions" key containing {service_key: {env_var: value}}
+        """
+        from .manifest_env_resolver import ManifestEnvResolver
+        from .cross_service_secret_map import build_cross_service_map, generate_secrets_for_map, get_secret_for_service
+
+        if not hasattr(graph, "services") or not graph.services:
             return None
 
-        manifest_summary = {
-            "mode": graph.manifest.get("mode", "production"),
-            "services": {k: v.get("type", "unknown") for k, v in graph.services.items()},
-            "addons": list(graph.addons.keys())
-        }
+        # Step 1: If we have source_dirs, build cross-service secret map
+        cross_service_map = None
+        if source_dirs:
+            try:
+                secret_map = build_cross_service_map(source_dirs)
+                secret_map = generate_secrets_for_map(secret_map)
+                cross_service_map = secret_map
+            except Exception as e:
+                logger.warning("Failed to build cross-service secret map: %s", e)
 
-        prompt = (
-            "You are the CloudNeuron Ecosystem Senate.\n"
-            "Analyze the following ecosystem manifest summary and propose environment configurations.\n"
-            "Return valid JSON ONLY matching the following schema:\n"
-            "{\n"
-            "  \"resolutions\": {\n"
-            "    \"service_key\": {\n"
-            "      \"env_var_name\": \"suggested_value\"\n"
-            "    }\n"
-            "  }\n"
-            "}\n"
-            f"Manifest Summary: {json.dumps(manifest_summary)}\n"
-        )
+        # Step 2: Resolve each service's env from its actual files
+        resolutions: dict[str, dict[str, str]] = {}
+        all_unresolved: list[str] = []
 
-        try:
-            response_text, _provider = _cached_ask(prompt)
-            if response_text:
-                import re
-                json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-                if json_match:
-                    structured = json.loads(json_match.group(0))
-                    if "resolutions" in structured and isinstance(structured["resolutions"], dict):
-                        return structured
-        except Exception as e:
-            logger.error(f"Ecosystem Senate failed to propose resolution: {e}")
-        return None
+        for service_key in graph.services:
+            env_resolution: dict[str, str] = {}
+
+            # Get source_dir for this service
+            src_dir = (source_dirs or {}).get(service_key)
+
+            if src_dir and os.path.isdir(src_dir):
+                # Use manifest-backed resolver
+                resolver = ManifestEnvResolver(
+                    source_dir=src_dir,
+                    service_name=service_key,
+                )
+                resolved = resolver.resolve_all()
+
+                # Fill in cross-service secrets from the map
+                for var_name, var_value in resolved.items():
+                    if not var_value and cross_service_map:
+                        secret_val = get_secret_for_service(
+                            cross_service_map, service_key, var_name
+                        )
+                        if secret_val:
+                            var_value = secret_val
+                    env_resolution[var_name] = var_value or ""
+
+                if resolver.unresolved_vars:
+                    all_unresolved.extend(
+                        f"{service_key}.{v}" for v in resolver.unresolved_vars
+                    )
+            else:
+                # No source dir — fall back to lightweight heuristic
+                service_def = graph.services.get(service_key, {})
+                env_resolution = cls._heuristic_env_for_service(
+                    service_key, service_def
+                )
+
+            resolutions[service_key] = env_resolution
+
+        # Step 3: Log unresolved vars
+        if all_unresolved:
+            logger.warning(
+                "Unresolved required vars: %s",
+                ", ".join(all_unresolved[:20]),
+            )
+
+        return {"resolutions": resolutions, "unresolved": all_unresolved}
+
+    @classmethod
+    def _heuristic_env_for_service(
+        cls, service_key: str, service_def: dict[str, Any]
+    ) -> dict[str, str]:
+        """Lightweight heuristic when no source_dir is available."""
+        env: dict[str, str] = {}
+        stack = str(service_def.get("type", "")).lower()
+        port = str(service_def.get("port", "8000"))
+
+        env["PORT"] = port
+        env["ENVIRONMENT"] = "production"
+        env["LOG_LEVEL"] = "info"
+
+        if "node" in stack or service_key.endswith("-web") or service_key.endswith("-frontend"):
+            env["NODE_ENV"] = "production"
+        else:
+            env["PYTHONUNBUFFERED"] = "1"
+
+        # Add addon placeholders
+        for addon in service_def.get("addons", []):
+            if addon == "POSTGRES":
+                env["DATABASE_URL"] = "{{POSTGRES_URL}}"
+            elif addon == "REDIS":
+                env["REDIS_URL"] = "{{REDIS_URL}}"
+            elif addon == "RABBITMQ":
+                env["RABBITMQ_URL"] = "{{RABBITMQ_URL}}"
+            elif addon == "MINIO":
+                env["MINIO_ENDPOINT"] = "{{MINIO_URL}}"
+
+        return env

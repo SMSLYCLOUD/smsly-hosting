@@ -57,6 +57,28 @@ export default function ServerBackupsPage() {
         s3_secret_key: '',
         encryption_key: ''
     });
+    const [cloudBackupList, setCloudBackupList] = useState<any[]>([]);
+    const [cloudBackupListLoading, setCloudBackupListLoading] = useState(false);
+    const [cloudBackupPrefix, setCloudBackupPrefix] = useState('smsly-backups/');
+
+    // Fetch cloud backup list when destination changes
+    useEffect(() => {
+        if (cloudRestorePromptOpen && cloudRestoreForm.cloud_storage_id && cloudRestoreForm.cloud_storage_id !== 'custom') {
+            setCloudBackupListLoading(true);
+            api.post('/server/backups/list-backups/', {
+                cloud_storage_id: cloudRestoreForm.cloud_storage_id,
+                prefix: cloudBackupPrefix,
+            }).then(res => {
+                setCloudBackupList(res.data?.objects || []);
+            }).catch(() => {
+                setCloudBackupList([]);
+            }).finally(() => {
+                setCloudBackupListLoading(false);
+            });
+        } else {
+            setCloudBackupList([]);
+        }
+    }, [cloudRestorePromptOpen, cloudRestoreForm.cloud_storage_id, cloudBackupPrefix]);
 
     // Schedule state
     const [schedule, setSchedule] = useState<any | null>(null);
@@ -665,14 +687,71 @@ export default function ServerBackupsPage() {
                                 </SelectContent>
                             </Select>
 
-                            <Input
-                                placeholder="Object Key (e.g., smsly-backups/server/backup.tar.gz)"
-                                value={cloudRestoreForm.s3_key}
-                                onChange={(e) => setCloudRestoreForm({ ...cloudRestoreForm, s3_key: e.target.value })}
-                            />
-
-                            {(!cloudRestoreForm.cloud_storage_id || cloudRestoreForm.cloud_storage_id === 'custom') && (
+                            {cloudRestoreForm.cloud_storage_id && cloudRestoreForm.cloud_storage_id !== 'custom' ? (
                                 <>
+                                    <div className="space-y-1">
+                                        <label className="text-xs font-medium text-muted-foreground">Backup File</label>
+                                        {cloudBackupListLoading ? (
+                                            <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
+                                                <Loader2 className="h-4 w-4 animate-spin" /> Loading backups...
+                                            </div>
+                                        ) : cloudBackupList.length > 0 ? (
+                                            <>
+                                                <Select
+                                                    value={cloudRestoreForm.s3_key}
+                                                    onValueChange={(val) => setCloudRestoreForm({ ...cloudRestoreForm, s3_key: val })}
+                                                >
+                                                    <SelectTrigger>
+                                                        <SelectValue placeholder="Select a backup file..." />
+                                                    </SelectTrigger>
+                                                    <SelectContent className="max-h-[300px]">
+                                                        {cloudBackupList.map((obj: any) => (
+                                                            <SelectItem key={obj.key} value={obj.key}>
+                                                                <span className="font-mono text-xs">{obj.key}</span>
+                                                                <span className="ml-2 text-[10px] text-muted-foreground">
+                                                                    ({(obj.size / 1024 / 1024).toFixed(1)} MB)
+                                                                </span>
+                                                            </SelectItem>
+                                                        ))}
+                                                    </SelectContent>
+                                                </Select>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setCloudBackupList([])}
+                                                    className="text-xs text-blue-500 hover:underline"
+                                                >
+                                                    Or type the key manually
+                                                </button>
+                                            </>
+                                        ) : (
+                                            <p className="text-xs text-amber-500">No backups found. Try a different prefix or type manually below.</p>
+                                        )}
+                                    </div>
+
+                                    {cloudBackupList.length === 0 && (
+                                        <Input
+                                            placeholder="Object Key (e.g., smsly-backups/server/backup.tar.gz)"
+                                            value={cloudRestoreForm.s3_key}
+                                            onChange={(e) => setCloudRestoreForm({ ...cloudRestoreForm, s3_key: e.target.value })}
+                                        />
+                                    )}
+
+                                    <div className="flex gap-2">
+                                        <Input
+                                            placeholder="Prefix filter (e.g., smsly-backups/)"
+                                            value={cloudBackupPrefix}
+                                            onChange={(e) => setCloudBackupPrefix(e.target.value)}
+                                            className="flex-1"
+                                        />
+                                    </div>
+                                </>
+                            ) : (
+                                <>
+                                    <Input
+                                        placeholder="Object Key (e.g., smsly-backups/server/backup.tar.gz)"
+                                        value={cloudRestoreForm.s3_key}
+                                        onChange={(e) => setCloudRestoreForm({ ...cloudRestoreForm, s3_key: e.target.value })}
+                                    />
                                     <Input
                                         placeholder="Bucket Name"
                                         value={cloudRestoreForm.s3_bucket}

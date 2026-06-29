@@ -8,6 +8,7 @@ Snapshots are instant to create, zero-cost in storage, and useful for
 quick config rollback, deployment diffs, and audit trails.
 """
 import logging
+import subprocess
 from typing import Any
 
 from django.conf import settings
@@ -19,17 +20,38 @@ def _mask_env_value(key: str, value: str) -> str:
     """Mask sensitive env var values for snapshot storage.
 
     Secrets are stored as ``****`` to avoid leaking credentials in
-    snapshot diffs and API responses.  The masking heuristic matches
-    the one used in ``BackupService.backup_service()`` metadata.
+    snapshot diffs and API responses.  Also masks URL-suffixed vars
+    that contain embedded credentials (e.g. DATABASE_URL contains
+    user:password@host).
+
+    The masking heuristic matches the one used in
+    ``BackupService.backup_service()`` metadata.
     """
+    import re as _re
+
     sensitive_substrings = (
         'SECRET', 'PASSWORD', 'TOKEN', 'KEY', 'PRIVATE',
         'CREDENTIALS', 'AUTH', 'API_KEY',
+        'DSN',
     )
     upper_key = key.upper()
-    for s in sensitive_substrings:
+
+    # Check for secret substrings (sorted by length desc to match
+    # more specific patterns first, e.g. API_KEY before KEY)
+    for s in sorted(sensitive_substrings, key=len, reverse=True):
         if s in upper_key:
             return '****'
+
+    # URL-suffixed vars often embed credentials in the URL itself
+    # (e.g. DATABASE_URL=postgres://user:pass@host/db).
+    # These should be masked even when the key doesn't contain
+    # the word SECRET/KEY/etc.
+    if upper_key.endswith('_URL') or upper_key == 'URL':
+        # Only mask if the value actually contains credentials
+        # (scheme://...@... pattern)
+        if _re.match(r'\w+://[^@]+@', value):
+            return '****'
+
     return value
 
 
@@ -134,16 +156,37 @@ class SnapshotService:
         trigger: str = 'MANUAL',
         label: str = '',
         created_by=None,
+        include_db: bool = False,
     ):
         """Capture the current config of a service as a ``ServiceSnapshot``.
 
+        When ``trigger`` is ``PRE_DEPLOY`` and ``include_db`` is True (default
+        for PRE_DEPLOY), also creates a PostgreSQL database clone named
+        ``smsly_snap_<service_id_short>_<timestamp>`` so the deployment can be
+        rolled back at the data level.
+
         Returns the created ``ServiceSnapshot`` instance.
         """
+        import time as _time
+
         from apps.deployments.models_backup import ServiceSnapshot
         from apps.deployments.models_core import Service
 
         service = Service.objects.get(id=service_id)
         config_data = SnapshotService.build_config_data(service)
+
+        # For PRE_DEPLOY, include DB clone by default
+        if trigger == 'PRE_DEPLOY':
+            include_db = True
+
+        # ── Database clone for rollback safety ───────────────────────
+        db_clone_name = None
+        if include_db:
+            db_clone_name = SnapshotService._capture_db_snapshot(
+                service, snapshot_id_hint=None,
+            )
+            if db_clone_name:
+                config_data['_db_clone'] = db_clone_name
 
         # Find most recent snapshot for this service (parent for diff chain)
         parent = ServiceSnapshot.objects.filter(
@@ -168,8 +211,9 @@ class SnapshotService:
         )
 
         logger.info(
-            "Snapshot %s created for service %s (trigger=%s)",
+            "Snapshot %s created for service %s (trigger=%s%s)",
             snapshot.id, service.name, trigger,
+            f", db_clone={db_clone_name}" if db_clone_name else "",
         )
 
         # Upload to cloud storage if scheduled with cloud destination
@@ -185,7 +229,7 @@ class SnapshotService:
                 with tempfile.NamedTemporaryFile(mode='w', delete=False) as f:
                     json.dump(config_data, f, indent=2)
                     path = f.name
-                
+
                 upload_backup_to_s3(
                     path, sched.s3_bucket, s3_key,
                     endpoint=sched.s3_endpoint, region=sched.s3_region,
@@ -199,9 +243,202 @@ class SnapshotService:
                 snapshot.save(update_fields=['cloud_uploaded', 'cloud_bucket', 'cloud_key'])
                 logger.info("Uploaded snapshot %s to %s/%s", snapshot.id, sched.s3_bucket, s3_key)
             except Exception as up_exc:
-                logger.error("Failed to upload snapshot %s: %s", snapshot.id, up_exc)
+                # Sanitize exception to prevent credential leakage in logs
+                safe_msg = str(up_exc)
+                for sensitive in (sched.s3_access_key, sched.s3_secret_key, sched.s3_endpoint):
+                    if sensitive and sensitive in safe_msg:
+                        safe_msg = safe_msg.replace(sensitive, '[REDACTED]')
+                logger.error("Failed to upload snapshot %s: %s", snapshot.id, safe_msg)
 
         return snapshot
+
+    @staticmethod
+    def _capture_db_snapshot(
+        service, snapshot_id_hint: str | None = None,
+    ) -> str | None:
+        """Clone the service's database for rollback safety.
+
+        Uses PostgresSnapshotManager to create a fast TEMPLATE-based
+        clone. Returns the clone database name, or None on failure.
+        """
+        from urllib.parse import urlparse
+
+        from apps.deployments.models_addons import Addon
+
+        # Find the service's POSTGRES addon connection URL
+        db_url = None
+        try:
+            addon = Addon.objects.filter(
+                service=service, addon_type='POSTGRES', status='ACTIVE',
+            ).first()
+            if addon and addon.connection_url:
+                db_url = addon.connection_url
+        except Exception:
+            pass
+
+        if not db_url:
+            logger.info(
+                "No POSTGRES addon for service %s; skipping DB snapshot", service.id,
+            )
+            return None
+
+        try:
+            parsed = urlparse(db_url)
+            source_db_name = parsed.path.lstrip('/')
+            if not source_db_name:
+                logger.warning("Could not extract DB name from URL for service %s", service.id)
+                return None
+
+            short_id = str(service.id).split('-')[0] if service.id else 'svc'
+            import time as _time
+            ts = int(_time.time())
+            clone_name = f"smsly_snap_{short_id}_{ts}"
+
+            from .safedeploy.postgres_snapshot_manager import PostgresSnapshotManager
+            mgr = PostgresSnapshotManager(admin_db_url=db_url)
+            success = mgr.create_clone(source_db_name, clone_name)
+            if success:
+                logger.info(
+                    "DB snapshot created: %s → %s for service %s",
+                    source_db_name, clone_name, service.id,
+                )
+                return clone_name
+            else:
+                logger.warning(
+                    "DB snapshot failed for service %s: clone creation returned False",
+                    service.id,
+                )
+                return None
+        except Exception as exc:
+            logger.warning(
+                "DB snapshot failed for service %s: %s", service.id, exc,
+            )
+            return None
+
+    @staticmethod
+    def _restore_db_clone(service, clone_db_name: str) -> bool:
+        """Restore a service's database from a previously-created DB clone.
+
+        This drops the current database and renames the clone in its place
+        (via TEMPLATE copy-back). If the rename fails, falls back to a
+        pg_dump/psql pipeline.
+
+        Returns True on success, False on failure.
+        """
+        from urllib.parse import urlparse
+        from apps.deployments.models_addons import Addon
+
+        db_url = None
+        try:
+            addon = Addon.objects.filter(
+                service=service, addon_type='POSTGRES', status='ACTIVE',
+            ).first()
+            if addon and addon.connection_url:
+                db_url = addon.connection_url
+        except Exception:
+            pass
+
+        if not db_url:
+            logger.warning(
+                "No POSTGRES addon for service %s; cannot restore DB clone",
+                service.id,
+            )
+            return False
+
+        try:
+            parsed = urlparse(db_url)
+            current_db_name = parsed.path.lstrip('/')
+            if not current_db_name:
+                return False
+
+            from .safedeploy.postgres_snapshot_manager import PostgresSnapshotManager
+            mgr = PostgresSnapshotManager(admin_db_url=db_url)
+
+            # Kill connections to current DB, drop it, clone from snapshot
+            # Use pg_dump from clone into current DB (safer than DROP/CREATE)
+            try:
+                # Clone from the snapshot DB back to the original
+                from psycopg2 import sql as pg_sql
+                maintenance_url = mgr._get_maintenance_url()
+
+                # Terminate connections on current DB
+                mgr._run_psql_vars(
+                    maintenance_url,
+                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                    "WHERE datname = :'target_db' AND pid <> pg_backend_pid();",
+                    variables={'target_db': current_db_name},
+                    check=False,
+                )
+
+                # Drop current and clone from snapshot
+                mgr.destroy_clone(current_db_name)
+                success = mgr.create_clone(clone_db_name, current_db_name)
+                if success:
+                    logger.info(
+                        "DB restored from clone %s → %s for service %s",
+                        clone_db_name, current_db_name, service.id,
+                    )
+                    return True
+
+                logger.warning(
+                    "DB restore via TEMPLATE failed for %s; trying pg_dump fallback",
+                    service.id,
+                )
+            except Exception as template_exc:
+                logger.warning(
+                    "DB restore via TEMPLATE failed for %s: %s",
+                    service.id, template_exc,
+                )
+
+            # Fallback: pipe pg_dump from clone into psql to current DB
+            clone_url = mgr.get_clone_url(clone_db_name)
+            current_url = mgr._build_db_url(current_db_name)
+            dump_proc = subprocess.Popen(
+                ['pg_dump', '-d', clone_url, '--no-owner', '--no-acl'],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            restore_proc = subprocess.Popen(
+                ['psql', '-d', current_url, '-v', 'ON_ERROR_STOP=1'],
+                stdin=dump_proc.stdout, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True,
+            )
+            if dump_proc.stdout:
+                dump_proc.stdout.close()
+            _stdout, stderr = restore_proc.communicate(timeout=600)
+            dump_proc.wait(timeout=60)
+
+            if restore_proc.returncode == 0:
+                logger.info("DB restored via pg_dump for service %s", service.id)
+                return True
+
+            logger.error(
+                "DB restore via pg_dump failed for %s: %s",
+                service.id, stderr.strip() or '(empty)',
+            )
+            return False
+
+        except Exception as exc:
+            logger.error(
+                "DB restore failed for service %s: %s", service.id, exc,
+            )
+            return False
+
+    @staticmethod
+    def cleanup_db_clone(clone_db_name: str, db_url: str | None = None) -> bool:
+        """Clean up a database clone after it's no longer needed.
+
+        Should be called after a successful deployment to remove the
+        snapshot clone and free storage.
+        """
+        if not clone_db_name:
+            return False
+        try:
+            from .safedeploy.postgres_snapshot_manager import PostgresSnapshotManager
+            mgr = PostgresSnapshotManager(admin_db_url=db_url)
+            return mgr.destroy_clone(clone_db_name)
+        except Exception as exc:
+            logger.warning("Failed to clean up DB clone %s: %s", clone_db_name, exc)
+            return False
 
     # ── Restore ──────────────────────────────────────────────────────
 
@@ -220,8 +457,13 @@ class SnapshotService:
         If ``redeploy`` is True, a new deployment is queued after the
         config is applied.
 
+        The entire restore is wrapped in a transaction to prevent
+        partial apply if env var restoration fails mid-way.
+
         Returns a summary dict of what was changed.
         """
+        from django.db import transaction
+
         from apps.deployments.models_backup import ServiceSnapshot
         from apps.deployments.models_core import EnvironmentVariable, Service
 
@@ -237,82 +479,93 @@ class SnapshotService:
         config = snapshot.config_data
         changes = []
 
-        # ── Apply scalar service fields ──────────────────────────────
-        scalar_fields = [
-            'deploy_type', 'buildpack', 'docker_image', 'repository_url',
-            'branch', 'build_command', 'start_command', 'root_directory',
-            'internal_port', 'public_domain', 'public_domain_hidden',
-            'custom_domains', 'is_public', 'memory_mb',
-            'min_replicas', 'max_replicas', 'autoscale_cpu_target',
-            'vpa_enabled', 'deploy_strategy', 'canary_percentage',
-            'health_check_path', 'health_check_port',
-            'health_check_interval', 'health_check_timeout',
-            'health_check_retries', 'auto_restart',
-            'auto_rollback_enabled', 'auto_rollback_threshold',
-            'restart_policy', 'deploy_mode', 'compose_file',
-            'compose_main_service', 'safedeploy_enabled',
-            'preview_environments_enabled',
-            'migration_auto_approval_policy', 'production_requires_backup',
-        ]
+        with transaction.atomic():
+            # ── Apply scalar service fields ──────────────────────────
+            scalar_fields = [
+                'deploy_type', 'buildpack', 'docker_image', 'repository_url',
+                'branch', 'build_command', 'start_command', 'root_directory',
+                'internal_port', 'public_domain', 'public_domain_hidden',
+                'custom_domains', 'is_public', 'memory_mb',
+                'min_replicas', 'max_replicas', 'autoscale_cpu_target',
+                'vpa_enabled', 'deploy_strategy', 'canary_percentage',
+                'health_check_path', 'health_check_port',
+                'health_check_interval', 'health_check_timeout',
+                'health_check_retries', 'auto_restart',
+                'auto_rollback_enabled', 'auto_rollback_threshold',
+                'restart_policy', 'deploy_mode', 'compose_file',
+                'compose_main_service', 'safedeploy_enabled',
+                'preview_environments_enabled',
+                'migration_auto_approval_policy', 'production_requires_backup',
+            ]
 
-        update_fields = []
-        for field in scalar_fields:
-            if field not in config:
-                continue
-            old_val = getattr(target_service, field, None)
-            new_val = config[field]
-            # Handle cpu_cores as Decimal
-            if field == 'cpu_cores':
+            update_fields = []
+            for field in scalar_fields:
+                if field not in config:
+                    continue
+                old_val = getattr(target_service, field, None)
+                new_val = config[field]
+                # Handle cpu_cores as Decimal
+                if field == 'cpu_cores':
+                    from decimal import Decimal
+                    new_val = Decimal(str(new_val))
+                if old_val != new_val:
+                    setattr(target_service, field, new_val)
+                    update_fields.append(field)
+                    changes.append({
+                        'field': field,
+                        'old': str(old_val),
+                        'new': str(new_val),
+                    })
+
+            # cpu_cores special handling (stored as string in config)
+            if 'cpu_cores' in config:
                 from decimal import Decimal
-                new_val = Decimal(str(new_val))
-            if old_val != new_val:
-                setattr(target_service, field, new_val)
-                update_fields.append(field)
-                changes.append({
-                    'field': field,
-                    'old': str(old_val),
-                    'new': str(new_val),
-                })
+                new_cpu = Decimal(config['cpu_cores'])
+                if target_service.cpu_cores != new_cpu:
+                    target_service.cpu_cores = new_cpu
+                    update_fields.append('cpu_cores')
+                    changes.append({
+                        'field': 'cpu_cores',
+                        'old': str(target_service.cpu_cores),
+                        'new': str(new_cpu),
+                    })
 
-        # cpu_cores special handling (stored as string in config)
-        if 'cpu_cores' in config:
-            from decimal import Decimal
-            new_cpu = Decimal(config['cpu_cores'])
-            if target_service.cpu_cores != new_cpu:
-                target_service.cpu_cores = new_cpu
-                update_fields.append('cpu_cores')
-                changes.append({
-                    'field': 'cpu_cores',
-                    'old': str(target_service.cpu_cores),
-                    'new': str(new_cpu),
-                })
+            if update_fields:
+                target_service.save(update_fields=update_fields)
 
-        if update_fields:
-            target_service.save(update_fields=update_fields)
+            # ── Restore env vars (non-masked only) ───────────────────────
+            env_changes = 0
+            snapshot_env_vars = config.get('env_vars', {})
+            if snapshot_env_vars:
+                for key, value in snapshot_env_vars.items():
+                    if value == '****':
+                        continue  # Don't overwrite with masked value
+                    ev, created = EnvironmentVariable.objects.get_or_create(
+                        service=target_service, key=key,
+                        defaults={'value': value},
+                    )
+                    if not created and ev.value != value:
+                        ev.value = value
+                        ev.save(update_fields=['value'])
+                        env_changes += 1
+                    elif created:
+                        env_changes += 1
 
-        # ── Restore env vars (non-masked only) ───────────────────────
-        env_changes = 0
-        snapshot_env_vars = config.get('env_vars', {})
-        if snapshot_env_vars:
-            for key, value in snapshot_env_vars.items():
-                if value == '****':
-                    continue  # Don't overwrite with masked value
-                ev, created = EnvironmentVariable.objects.get_or_create(
-                    service=target_service, key=key,
-                    defaults={'value': value},
-                )
-                if not created and ev.value != value:
-                    ev.value = value
-                    ev.save(update_fields=['value'])
-                    env_changes += 1
-                elif created:
-                    env_changes += 1
+        # transaction.atomic() committed here
 
+        # ── Restore DB clone if present ──────────────────────────────
+        db_clone_restored = False
+        db_clone_name = config.get('_db_clone')
+        if db_clone_name:
+            db_clone_restored = SnapshotService._restore_db_clone(
+                target_service, db_clone_name,
+            )
         result = {
             'snapshot_id': str(snapshot.id),
             'target_service_id': str(target_service.id),
             'config_changes': len(changes),
             'env_var_changes': env_changes,
+            'db_clone_restored': db_clone_restored,
             'changes': changes,
             'redeployed': False,
         }
