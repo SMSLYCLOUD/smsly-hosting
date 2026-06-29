@@ -278,7 +278,10 @@ def run_scheduled_backups_task():
             # updates it AFTER the backup completes to prevent the race
             # where a failed task leaves the schedule thinking it ran.
             cron = croniter.croniter(sched.cron_expression, now)
-            sched.next_run = cron.get_next(datetime)
+            next_dt = cron.get_next(datetime)
+            if timezone.is_aware(next_dt):
+                next_dt = timezone.make_naive(next_dt, timezone.utc)
+            sched.next_run = next_dt
             sched.save(update_fields=['next_run'])
 
             if sched.is_server_wide:
@@ -309,7 +312,10 @@ def run_scheduled_snapshots_task():
                 continue
             
             cron = croniter.croniter(sched.cron_expression, now)
-            sched.next_run = cron.get_next(datetime)
+            next_dt = cron.get_next(datetime)
+            if timezone.is_aware(next_dt):
+                next_dt = timezone.make_naive(next_dt, timezone.utc)
+            sched.next_run = next_dt
             sched.save(update_fields=['next_run'])
 
             if sched.service:
