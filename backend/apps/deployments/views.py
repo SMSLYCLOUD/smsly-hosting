@@ -96,6 +96,24 @@ from .tasks import (
 from .utils import validate_and_sanitize_path
 
 
+def _resolve_encryption_key(request):
+    """Extract encryption key from request data or uploaded JSON file."""
+    key = request.data.get('encryption_key', '').strip()
+    if key:
+        return key
+    key_file = request.FILES.get('key_file')
+    if key_file:
+        import json
+        try:
+            payload = json.loads(key_file.read())
+            if isinstance(payload, dict):
+                return payload.get('encryption_key', '').strip() or None
+            return str(payload).strip() or None
+        except (json.JSONDecodeError, AttributeError, OSError):
+            pass
+    return None
+
+
 class ZeroTrustHMACAuthentication(authentication.BaseAuthentication):
     """
     Authenticate requests from peer nodes using HMAC V2.
@@ -5422,7 +5440,7 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
         # the task. Without this, the task would fail silently inside
         # the Celery worker (UnknownBackupKeyIdError), and the user
         # would see 'restore_started' followed by no progress.
-        key_provided = request.data.get('encryption_key', '').strip()
+        key_provided = _resolve_encryption_key(request)
         if backup.file_path and backup.file_path.endswith('.enc'):
             from .services.backup_service import (
                 BackupService,
@@ -5451,7 +5469,8 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
                                     'key_id and key_material from '
                                     'the source master, or send '
                                     '"encryption_key" in the '
-                                    'restore request body.'
+                                    'restore request body, or '
+                                    'upload a key_file JSON.'
                                 ),
                             },
                             status=status.HTTP_400_BAD_REQUEST,
@@ -5562,7 +5581,7 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
             error_message=f'Restored from cloud: {s3_bucket}/{s3_key}',
         )
 
-        encryption_key = request.data.get('encryption_key', '').strip() or None
+        encryption_key = _resolve_encryption_key(request)
         from apps.deployments.tasks import restore_service_backup_task
         restore_service_backup_task.delay(
             backup_id=str(backup.id),
@@ -5907,7 +5926,7 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Only COMPLETED backups can be restored.'}, status=status.HTTP_400_BAD_REQUEST)
 
         # Pre-flight: verify encryption key is available for cross-master restores
-        key_provided = request.data.get('encryption_key', '').strip()
+        key_provided = _resolve_encryption_key(request)
         if backup.file_path and backup.file_path.endswith('.enc'):
             from .services.backup_service import (
                 BackupService,
@@ -5931,7 +5950,8 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
                                 'remediation': (
                                     'POST /api/v1/server/backups/import-key/ with '
                                     'key_id and key_material from the source master, '
-                                    'or send "encryption_key" in the restore request body.'
+                                    'or send "encryption_key" in the restore request body, '
+                                    'or upload a key_file JSON.'
                                 ),
                             },
                             status=status.HTTP_400_BAD_REQUEST,
@@ -6075,7 +6095,7 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
         )
 
         # Accept optional encryption key for cross-master restore
-        encryption_key = request.data.get('encryption_key', '').strip() or None
+        encryption_key = _resolve_encryption_key(request)
 
         # Trigger async restore
         from apps.deployments.tasks import restore_server_backup_task
@@ -6145,7 +6165,7 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
             error_message=f'Restored from cloud: {s3_bucket}/{s3_key}',
         )
 
-        encryption_key = request.data.get('encryption_key', '').strip() or None
+        encryption_key = _resolve_encryption_key(request)
         from apps.deployments.tasks import restore_server_backup_task
         restore_server_backup_task.delay(
             backup_id=str(backup.id),
