@@ -287,7 +287,7 @@ def run_scheduled_backups_task():
                 create_service_backup_task.delay(str(sched.service.id), backup_type='SCHEDULED', schedule_id=sched.id)
             ran += 1
         except Exception as exc:
-            logger.warning("Scheduled backup failed for schedule %s: %s", sched.id, exc)
+            logger.exception("Scheduled backup failed for schedule %s: %s", sched.id, exc)
     return ran
 
 
@@ -321,7 +321,7 @@ def run_scheduled_snapshots_task():
                 )
             ran += 1
         except Exception as exc:
-            logger.warning("Scheduled snapshot failed for schedule %s: %s", sched.id, exc)
+            logger.exception("Scheduled snapshot failed for schedule %s: %s", sched.id, exc)
     return ran
 
 
