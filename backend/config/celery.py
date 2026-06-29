@@ -200,7 +200,7 @@ app.conf.beat_schedule = {
     },
     # Auto-repair inter-node auth every 5 minutes
     'auto-auth-nodes-every-5m': {
-        'task': 'apps.deployments.tasks_health.auto_authenticate_nodes_task',
+        'task': 'apps.deployments.tasks.auto_authenticate_nodes_task',
         'schedule': 300.0,
         'options': {'expires': 300.0},
     },
@@ -209,19 +209,19 @@ app.conf.beat_schedule = {
     # still passing (e.g. the agent's gunicorn is up but its
     # celery worker is wedged).
     'check-agent-heartbeats-every-60s': {
-        'task': 'apps.deployments.tasks_health.check_agent_heartbeats_task',
+        'task': 'apps.deployments.tasks.check_agent_heartbeats_task',
         'schedule': 60.0,
         'options': {'expires': 60.0},
     },
     # Check health of all managed servers every 5 minutes
     'check-managed-servers-health-every-5m': {
-        'task': 'apps.deployments.tasks_health.check_managed_servers_health_task',
+        'task': 'apps.deployments.tasks.check_managed_servers_health_task',
         'schedule': 300.0,
         'options': {'expires': 300.0},
     },
     # Node watchdog — checks all remote servers and auto-heals every 5 minutes
     'node-watchdog-every-5m': {
-        'task': 'apps.deployments.tasks_health.node_watchdog_task',
+        'task': 'apps.deployments.tasks.node_watchdog_task',
         'schedule': 300.0,
         'options': {'expires': 300.0},
     },
