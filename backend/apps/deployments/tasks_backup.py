@@ -391,10 +391,23 @@ def cleanup_old_backups_task():
 
 
 @shared_task
+def _make_aware(dt):
+    """Convert a timezone-naive datetime to aware using the current timezone.
+
+    croniter.get_prev() / get_next() return naive datetimes, but Django's
+    ORM returns aware datetimes (USE_TZ=True).  Comparing them raises::
+
+        TypeError: can't compare offset-naive and offset-aware datetimes
+
+    This helper makes croniter's output aware so the comparison works.
+    """
+    if dt is not None and timezone.is_naive(dt):
+        return timezone.make_aware(dt)
+    return dt
+
+
 def run_scheduled_backups_task():
     """Execute all due BackupSchedule entries."""
-    from datetime import datetime
-
     import croniter  # type: ignore[import-untyped]
 
     from .models_backup import BackupSchedule
@@ -405,14 +418,14 @@ def run_scheduled_backups_task():
     for sched in schedules:
         try:
             cron = croniter.croniter(sched.cron_expression, now)
-            prev_run = cron.get_prev(datetime)
+            prev_run = _make_aware(cron.get_prev(timezone.datetime))
             if sched.last_run and sched.last_run >= prev_run:
                 continue
             # Compute next_run now but defer last_run — the Celery task
             # updates it AFTER the backup completes to prevent the race
             # where a failed task leaves the schedule thinking it ran.
             cron = croniter.croniter(sched.cron_expression, now)
-            next_dt = cron.get_next(datetime)
+            next_dt = _make_aware(cron.get_next(timezone.datetime))
             sched.next_run = next_dt
             sched.save(update_fields=['next_run'])
 
@@ -429,7 +442,6 @@ def run_scheduled_backups_task():
 @shared_task
 def run_scheduled_snapshots_task():
     """Execute all due SnapshotSchedule entries."""
-    from datetime import datetime
     import croniter  # type: ignore[import-untyped]
     from .models_backup import SnapshotSchedule
 
@@ -439,12 +451,12 @@ def run_scheduled_snapshots_task():
     for sched in schedules:
         try:
             cron = croniter.croniter(sched.cron_expression, now)
-            prev_run = cron.get_prev(datetime)
+            prev_run = _make_aware(cron.get_prev(timezone.datetime))
             if sched.last_run and sched.last_run >= prev_run:
                 continue
-            
+
             cron = croniter.croniter(sched.cron_expression, now)
-            next_dt = cron.get_next(datetime)
+            next_dt = _make_aware(cron.get_next(timezone.datetime))
             sched.next_run = next_dt
             sched.save(update_fields=['next_run'])
 

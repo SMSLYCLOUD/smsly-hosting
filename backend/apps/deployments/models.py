@@ -55,5 +55,6 @@ from .models_transfer import ServerTransfer  # noqa: F401
 from .models_tunnels import Tunnel, TunnelRequest, ReservedSubdomain  # noqa: F401
 from .models_updates import PlatformUpdate  # noqa: F401
 from .models_registry import RegistryCredential  # noqa: F401
+from .models_registry_scope import ScopedRegistry  # noqa: F401
 
 # pylint: enable=unused-import, wrong-import-position

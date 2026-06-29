@@ -4006,7 +4006,19 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         Trigger a new deployment.
         POST /api/v1/deployments/trigger/
         Body: { "service_id": "uuid", "provider_id": "uuid" }
+
+        Optional custom registry fields:
+            registry_url, registry_username, registry_password
+
+        If ``registry_url`` is provided, a new ephemeral Project is
+        auto-created and the registry is scoped to that project. The
+        service is moved to the new project and the registry override
+        is stored on the Deployment for audit trail.
         """
+        from django.utils import timezone
+        from .models_project import Project
+        from .models_registry_scope import ScopedRegistry
+
         serializer = DeploymentTriggerSerializer(data=request.data)
         if serializer.is_valid():
             service_id = serializer.validated_data['service_id']
@@ -4019,7 +4031,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             skip_review = False
 
             try:
-                # ZH-011 FIX: Verify service ownership before triggering deployment
+                # Verify service ownership before triggering deployment
                 service = Service.objects.get(id=service_id, owner=request.user)
 
                 guard = ServerGuard.check_user_workload_allowed(getattr(service, 'server', None))
@@ -4036,11 +4048,49 @@ class DeploymentViewSet(viewsets.ModelViewSet):
                         'existing_deployment': DeploymentSerializer(existing).data,
                     }, status=status.HTTP_409_CONFLICT)
 
+                # ── Custom registry → auto-create ephemeral project ──
+                registry_override = None
+                registry_url = serializer.validated_data.get('registry_url', '')
+
+                if registry_url:
+                    now_str = timezone.now().strftime('%Y%m%d-%H%M%S')
+                    new_project = Project.objects.create(
+                        owner=request.user,
+                        name=f"Deploy-{service.name}-{now_str}",
+                        description=f"Auto-created for custom registry deployment of {service.name}",
+                        is_ephemeral=True,
+                    )
+
+                    # Create scoped registry for the new project
+                    from django.contrib.contenttypes.models import ContentType
+                    ct = ContentType.objects.get_for_model(Project)
+                    ScopedRegistry.objects.create(
+                        content_type=ct,
+                        object_id=new_project.id,
+                        registry_url=registry_url,
+                        username=serializer.validated_data.get('registry_username', ''),
+                        password=serializer.validated_data.get('registry_password', ''),
+                    )
+
+                    # Move service to the new project
+                    old_project_id = str(service.project_id) if service.project_id else None
+                    service.project = new_project
+                    service.save(update_fields=['project', 'updated_at'])
+
+                    # Store registry override on deployment for audit trail
+                    registry_override = {
+                        'url': registry_url,
+                        'project_id': str(new_project.id),
+                        'project_name': new_project.name,
+                        'old_project_id': old_project_id,
+                    }
+
                 deployment = Deployment.objects.create(
                     service=service,
                     status=Deployment.Status.QUEUED,
                     commit_hash=serializer.validated_data.get(
-                        'commit_hash', 'latest')
+                        'commit_hash', 'latest'),
+                    registry_override=registry_override,
                 )
 
                 smart_deploy_task.delay(
@@ -4052,7 +4102,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
                 return Response({
                     'message': 'Deployment triggered successfully',
                     'deployment_id': deployment.id,
-                    'status': deployment.status
+                    'status': deployment.status,
                 }, status=status.HTTP_201_CREATED)
 
             except (Service.DoesNotExist, CloudProvider.DoesNotExist):
@@ -5708,6 +5758,122 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
     def download_url(self, request, pk=None):
         backup = self.get_object()
         return Response({'url': _generate_signed_download_url(request, str(backup.id), 'backup-download', path_params={'pk': str(backup.id)})})
+
+    # ── Verify integrity ────────────────────────────────────────────
+    @action(detail=True, methods=['post'], url_path='verify')
+    def verify(self, request, pk=None):
+        """POST /api/v1/backups/{id}/verify/
+
+        Runs integrity verification (checksum + archive validity) on
+        this backup asynchronously. Returns a task ID for polling.
+        """
+        backup = self.get_object()
+        from .tasks_backup import verify_backup_integrity_task
+        task = verify_backup_integrity_task.delay(backup_ids=[str(backup.id)])
+        return Response({
+            'status': 'verification_started',
+            'task_id': task.id,
+            'backup_id': str(backup.id),
+        })
+
+    # ── Restore from local file upload ──────────────────────────────
+    @action(detail=False, methods=['post'], url_path='upload-restore')
+    def upload_restore(self, request):
+        """POST /api/v1/backups/upload-restore/
+
+        Upload a backup tar.gz file and restore it to a service.
+        Body: multipart/form-data with ``file`` and ``service_id``.
+        """
+        file = request.FILES.get('file')
+        service_id = request.data.get('service_id')
+        if not file or not service_id:
+            return Response({'error': 'file and service_id are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            target_service = Service.objects.get(id=service_id)
+            if not self._user_can_access_service(request.user, target_service):
+                return Response({'error': 'Service not found or access denied.'}, status=status.HTTP_404_NOT_FOUND)
+        except Service.DoesNotExist:
+            return Response({'error': 'Service not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        import uuid as _uuid
+        dest_filename = f"local_restore_{_uuid.uuid4().hex[:8]}.tar.gz"
+        backups_dir = os.path.join('/app', 'backups', 'services', str(service_id))
+        os.makedirs(backups_dir, exist_ok=True)
+        dest_path = os.path.join(backups_dir, dest_filename)
+
+        with open(dest_path, 'wb+') as f:
+            for chunk in file.chunks():
+                f.write(chunk)
+
+        file_size = os.path.getsize(dest_path)
+        from .services.backup_service import BackupService
+        svc = BackupService()
+        try:
+            dest_path = svc._maybe_encrypt(dest_path)
+        except Exception as exc:
+            with contextlib.suppress(OSError):
+                os.remove(dest_path)
+            return Response({'error': f'Failed to process uploaded backup: {exc}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        backup = ServiceBackup.objects.create(
+            service=target_service,
+            status='COMPLETED',
+            file_path=dest_path,
+            size_bytes=file_size,
+            backup_type='MANUAL',
+            error_message=f'Restored from local upload: {file.name}',
+        )
+
+        encryption_key = _resolve_encryption_key(request)
+        from apps.deployments.tasks import restore_service_backup_task
+        restore_service_backup_task.delay(
+            backup_id=str(backup.id),
+            target_service_id=str(service_id),
+            requesting_user_id=request.user.id,
+            encryption_key=encryption_key,
+            raise_on_snapshot_failure=False,
+        )
+
+        return Response({
+            'status': 'restore_started',
+            'backup_id': str(backup.id),
+            'file_name': file.name,
+        })
+
+    # ── Restoration history ─────────────────────────────────────────
+    @action(detail=False, methods=['get'], url_path='restore-history')
+    def restore_history(self, request):
+        """GET /api/v1/backups/restore-history/
+
+        Returns backups that were used in a restore (have restore
+        metadata in error_message), plus their associated deployment
+        status.  Useful for showing a "Restoration Activity" timeline.
+        """
+        from django.db.models import Q
+        qs = ServiceBackup.objects.filter(
+            Q(service__owner=request.user) | Q(service__project__team__members__user=request.user)
+        ).filter(
+            # Restore-related backups have specific markers in error_message
+            error_message__icontains='restored'
+        ).order_by('-created_at')[:20]
+
+        results = []
+        for b in qs:
+            deployment = b.service.deployments.filter(
+                created_at__gte=b.created_at
+            ).order_by('created_at').first() if b.service_id else None
+
+            results.append({
+                'backup_id': str(b.id),
+                'service_id': str(b.service_id) if b.service_id else None,
+                'service_name': b.service.name if b.service else None,
+                'restored_at': b.created_at.isoformat() if b.created_at else None,
+                'restore_type': b.error_message or 'Unknown',
+                'deployment_status': deployment.status if deployment else None,
+                'deployment_id': str(deployment.id) if deployment else None,
+            })
+        return Response(results)
 
 
 class ServiceSnapshotViewSet(viewsets.ModelViewSet):

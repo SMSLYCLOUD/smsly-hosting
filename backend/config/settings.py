@@ -196,15 +196,15 @@ CONTAINER_REGISTRY_URL = config(
     'CONTAINER_REGISTRY_URL',
     default='127.0.0.1:5000')
 
-# If the registry URL is a local loopback, it will fail when communicating across
-# the VPN (mesh) or even when the backend container tries to reach the registry.
-# Auto-correct to use the mesh IP if available, so that workers can pull the image
-# and the docker SDK can authenticate properly.
-if CONTAINER_REGISTRY_URL and ("127.0.0.1" in CONTAINER_REGISTRY_URL or "localhost" in CONTAINER_REGISTRY_URL):
-    import os
-    _mesh_ip = os.environ.get("MASTER_MESH_IP")
-    if _mesh_ip:
-        CONTAINER_REGISTRY_URL = CONTAINER_REGISTRY_URL.replace("127.0.0.1", _mesh_ip).replace("localhost", _mesh_ip)
+# NOTE: The old auto-correction that replaced 127.0.0.1/localhost with
+# MASTER_MESH_IP unconditionally has been removed.  It caused silent push
+# failures when the mesh IP (e.g. 10.100.0.1) was not locally routable —
+# the Docker daemon could reach 127.0.0.1:5000 just fine, but after the
+# replacement it tried 10.100.0.1:5000 which failed.
+#
+# Mesh-IP substitution is now handled per-operation in the deployment
+# pipeline (_push_image), where the caller knows whether the target
+# is a remote node (mesh IP) or local (Docker DNS / loopback).
 
 
 def _validate_registry_url():

@@ -50,7 +50,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
             model = Project
             fields = [
                 'id', 'name', 'slug', 'description',
-                'icon_emoji', 'color', 'is_default',
+                'icon_emoji', 'color', 'is_default', 'is_ephemeral',
                 'services_count', 'latest_deploy_status', 'latest_deploy_at',
                 'created_at', 'updated_at',
             ]
@@ -88,14 +88,26 @@ class ProjectViewSet(viewsets.ModelViewSet):
     serializer_class = ProjectSerializer
 
     def get_queryset(self):
-        """Owner and Team scoped: users see their own projects and team projects."""
+        """Owner and Team scoped: users see their own projects and team projects.
+
+        Ephemeral projects (auto-created for custom-registry deploys) are
+        hidden from the default listing unless the user is a superuser or
+        explicitly requests ``?include_ephemeral=true``.
+        """
         qs = Project.objects.all().order_by('id')
         if self.request.user.is_superuser:
             return qs
-        return qs.filter(
+        qs = qs.filter(
             Q(owner=self.request.user) |
             Q(team__members__user=self.request.user)
         ).distinct().order_by('id')
+
+        # Hide ephemeral projects by default
+        include_ephemeral = self.request.query_params.get('include_ephemeral', '').lower() in ('true', '1', 'yes')
+        if not include_ephemeral:
+            qs = qs.filter(is_ephemeral=False)
+
+        return qs
 
     def perform_create(self, serializer):
         serializer.save(owner=self.request.user)
@@ -220,6 +232,71 @@ class ProjectViewSet(viewsets.ModelViewSet):
             'service_id': str(service.id),
             'project_id': str(project.id),
             'replacement_project_id': str(replacement_project_id),
+        })
+
+    @action(detail=True, methods=['get', 'post'], url_path='registry')
+    def registry(self, request, pk=None):
+        """
+        GET  /api/v1/projects/{id}/registry/  — get project's scoped registry
+        POST /api/v1/projects/{id}/registry/ — set project's scoped registry
+
+        POST body::
+            {
+                "registry_url": "my-registry.internal:5000",
+                "username": "admin",
+                "password": "...",
+                "allowed_registry_hosts": ["my-registry.internal:5000"]
+            }
+
+        Returns the effective registry config (walks hierarchy if none set).
+        """
+        from django.contrib.contenttypes.models import ContentType
+        from .models_registry_scope import ScopedRegistry
+        from .serializers_registry_scope import (
+            ScopedRegistryReadSerializer,
+            ScopedRegistrySerializer,
+        )
+
+        project = self.get_object()
+
+        if request.method == 'POST':
+            data = {**request.data, 'scope_type': 'project', 'scope_id': str(project.id)}
+            serializer = ScopedRegistrySerializer(data=data)
+            if not serializer.is_valid():
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+            ct = ContentType.objects.get_for_model(project)
+
+            # Update or create
+            existing = ScopedRegistry.objects.filter(
+                content_type=ct, object_id=project.id
+            ).first()
+
+            if existing:
+                for field, value in serializer.validated_data.items():
+                    if field not in ('scope_type', 'scope_id', 'content_type', 'object_id'):
+                        setattr(existing, field, value)
+                existing.save()
+                logger.info("Updated scoped registry for project %s", project.id)
+                return Response({'status': 'updated', 'id': str(existing.id)})
+            else:
+                instance = serializer.save()
+                logger.info("Created scoped registry for project %s", project.id)
+                return Response({'status': 'created', 'id': str(instance.id)},
+                                status=status.HTTP_201_CREATED)
+
+        # GET: return effective registry config (walks hierarchy)
+        creds = ScopedRegistry.resolve_registry_credentials(project)
+        scoped = ScopedRegistry.get_for_object(project)
+        read_ser = ScopedRegistryReadSerializer(scoped) if scoped else None
+
+        return Response({
+            'effective_url': creds.get('url', ''),
+            'has_username': bool(creds.get('username')),
+            'has_password': bool(creds.get('password')),
+            'is_scoped': scoped is not None,
+            'scoped_config': read_ser.data if read_ser else None,
+            'hierarchy': ['project', 'team', 'organization', 'platform'],
         })
 
     @action(detail=True, methods=['post'], url_path='sync-envs')

@@ -88,15 +88,37 @@ def validate_image_registry(image: str, service=None) -> str:
             "image must not contain whitespace or shell metacharacters."
         )
     prefix = _registry_prefix_for(image)
-    
+
     allowed_hosts = list(ALLOWED_IMAGE_REGISTRY_HOSTS)
-    if service and getattr(service, 'owner_id', None):
+
+    # Per-scope allowlist: append hosts from Project → Team → Organization chain
+    if service and getattr(service, "project_id", None):
+        try:
+            from apps.deployments.models_registry_scope import ScopedRegistry
+
+            scoped_hosts = ScopedRegistry.resolve_allowed_hosts(service.project)
+            for h in scoped_hosts:
+                if h not in allowed_hosts:
+                    allowed_hosts.append(h)
+        except Exception:  # noqa: BLE001
+            pass
+
+    # User's custom RegistryCredential hosts (existing behaviour)
+    if service and getattr(service, "owner_id", None):
         from apps.deployments.models_registry import RegistryCredential
-        custom_creds = RegistryCredential.objects.filter(owner_id=service.owner_id, is_active=True)
+
+        custom_creds = RegistryCredential.objects.filter(
+            owner_id=service.owner_id, is_active=True
+        )
         for cred in custom_creds:
             if cred.registry_url:
-                clean_url = cred.registry_url.replace("https://", "").replace("http://", "").split("/")[0]
-                allowed_hosts.append(clean_url)
+                clean_url = (
+                    cred.registry_url.replace("https://", "")
+                    .replace("http://", "")
+                    .split("/")[0]
+                )
+                if clean_url not in allowed_hosts:
+                    allowed_hosts.append(clean_url)
 
     if not any(
         prefix == allowed or prefix.startswith(allowed + "/")
@@ -114,26 +136,39 @@ def safe_registry_host_for_internal_fallback() -> str:
     use as the internal fallback when constructing an image ref
     for a service that doesn't have an explicit ``docker_image``.
 
-    - If ``CONTAINER_REGISTRY_URL`` is the loopback default, the
-      answer is the master's WireGuard mesh IP (so a remote node
-      can pull across the mesh) with the registry port.
-    - Otherwise the answer is the configured registry's netloc
-      (validated at startup to be on the allowlist).
+    Resolution priority:
+      1. If ``CONTAINER_REGISTRY_URL`` is a loopback or Docker DNS
+         name (``registry:5000``), return the master's WireGuard
+         mesh IP so both local and remote nodes can pull the image.
+      2. If ``MASTER_MESH_IP`` is set, prefer it over the configured
+         URL for cross-node reachability.
+      3. Otherwise return the configured registry's netloc.
 
     Used by ``self_healing_orchestrator`` and any other code path
-    that needs to construct an internal-registry image ref.
+    that needs to construct an internal-registry image ref that
+    works across nodes.
     """
     from urllib.parse import urlparse
 
     from django.conf import settings
 
     registry_url = getattr(settings, "CONTAINER_REGISTRY_URL", "") or ""
-    if registry_url.startswith(("127.0.0.1", "localhost")):
-        from apps.deployments.services.provisioner import (
-            _get_master_mesh_ip,
-        )
-        master_ip = _get_master_mesh_ip() or "127.0.0.1"
+
+    # Always prefer mesh IP when available — it works for both local
+    # (host has the WireGuard interface) and remote nodes.
+    from apps.deployments.services.provisioner import _get_master_mesh_ip
+    master_ip = _get_master_mesh_ip()
+    if master_ip:
         return f"{master_ip}:5000"
+
+    if registry_url.startswith(("127.0.0.1", "localhost")):
+        return "127.0.0.1:5000"
+
+    # For Docker DNS names (registry:5000), keep as-is — it resolves
+    # inside the smsly-net overlay for local containers.
+    if registry_url.startswith("registry:"):
+        return registry_url
+
     parsed = urlparse(registry_url)
     return (parsed.netloc or parsed.path).rstrip("/")
 

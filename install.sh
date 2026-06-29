@@ -131,6 +131,71 @@ case "$INSTALL_MODE" in
 esac
 export INSTALL_MODE MODE NODE_TYPE
 
+# ─── Registry Self-Healing ──────────────────────────────────────────────────
+# Verify the container registry URL in .env is actually reachable.  If not,
+# try the Docker overlay DNS name (registry:5000) or the host loopback
+# (127.0.0.1:5000) and update .env automatically.
+# This prevents deploy failures when the .env has a stale or unreachable URL.
+_registry_self_heal() {
+    local env_file="${1:-/opt/smsly-hosting/.env}"
+    [ -f "$env_file" ] || return 0
+
+    local configured_url
+    configured_url="$(env_get_value "$env_file" "CONTAINER_REGISTRY_URL")"
+    [ -n "$configured_url" ] || configured_url="127.0.0.1:5000"
+
+    # If docker isn't available, skip
+    command -v docker >/dev/null 2>&1 || return 0
+
+    _test_registry() {
+        local url="$1"
+        local host="${url%%:*}"
+        local port="${url##*:}"
+        # Try HEAD /v2/ — if it returns anything (even 401/403), the registry is reachable
+        timeout 5 curl -sfk -o /dev/null -w "%{http_code}" "https://${url}/v2/" 2>/dev/null | grep -qE '^(200|401|403)' && return 0
+        timeout 5 curl -sfk -o /dev/null -w "%{http_code}" "http://${url}/v2/" 2>/dev/null | grep -qE '^(200|401|403)' && return 0
+        # Fallback: try docker pull from localhost (checks daemon→registry connectivity)
+        timeout 10 docker pull "127.0.0.1:5000/alpine:latest" 2>/dev/null | grep -q "Pulled\|up to date\|Image is up to date" && return 0
+        timeout 10 docker pull "${url}/alpine:latest" 2>/dev/null | grep -q "Pulled\|up to date\|Image is up to date" && return 0
+        return 1
+    }
+
+    local candidates=()
+    # Build a deduplicated list of candidates
+    for candidate in "$configured_url" "registry:5000" "127.0.0.1:5000"; do
+        local already=false
+        for c in "${candidates[@]}"; do
+            [ "$c" = "$candidate" ] && already=true && break
+        done
+        $already || candidates+=("$candidate")
+    done
+
+    local working_url=""
+    for url in "${candidates[@]}"; do
+        if _test_registry "$url"; then
+            working_url="$url"
+            break
+        fi
+    done
+
+    if [ -z "$working_url" ]; then
+        echo -e "\033[0;33m⚠ Registry self-heal: no reachable registry found (all candidates unreachable).\033[0m"
+        return 0
+    fi
+
+    if [ "$working_url" != "$configured_url" ]; then
+        echo -e "\033[0;33m⚠ Registry self-heal: CONTAINER_REGISTRY_URL=$configured_url is unreachable.\033[0m"
+        echo -e "\033[0;33m  → Updating to $working_url (verified reachable).\033[0m"
+        env_set_value "$env_file" "CONTAINER_REGISTRY_URL" "$working_url"
+    fi
+}
+
+# Run self-heal if we're in non-interactive mode (install/update path)
+if [ -f "/opt/smsly-hosting/.env" ]; then
+    _registry_self_heal
+fi
+unset -f _registry_self_heal _test_registry
+
 # ─── Resolve script path ─────────────────────────────────────────────────────
 SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || echo "$0")"
 SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"

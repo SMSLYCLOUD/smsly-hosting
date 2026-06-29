@@ -123,6 +123,68 @@ class OrganizationViewSet(viewsets.ModelViewSet):
         return Response(OrganizationMembershipSerializer(membership).data)
 
 
+    @action(detail=True, methods=['get', 'post'], url_path='registry')
+    def registry(self, request, pk=None):
+        """
+        GET  /api/v1/organizations/{id}/registry/  — get org's scoped registry config
+        POST /api/v1/organizations/{id}/registry/ — set org's scoped registry config
+
+        POST body::
+            {
+                "registry_url": "my-registry.internal:5000",
+                "username": "admin",
+                "password": "...",
+                "allowed_registry_hosts": ["my-registry.internal:5000"]
+            }
+        """
+        from django.contrib.contenttypes.models import ContentType
+        from apps.deployments.models_registry_scope import ScopedRegistry
+        from apps.deployments.serializers_registry_scope import (
+            ScopedRegistryReadSerializer,
+            ScopedRegistrySerializer,
+        )
+
+        org = self.get_object()
+
+        if request.method == 'POST':
+            data = {**request.data, 'scope_type': 'organization', 'scope_id': str(org.id)}
+            serializer = ScopedRegistrySerializer(data=data)
+            if not serializer.is_valid():
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+            ct = ContentType.objects.get_for_model(org)
+            existing = ScopedRegistry.objects.filter(
+                content_type=ct, object_id=org.id
+            ).first()
+
+            if existing:
+                for field, value in serializer.validated_data.items():
+                    if field not in ('scope_type', 'scope_id', 'content_type', 'object_id'):
+                        setattr(existing, field, value)
+                existing.save()
+                logger.info("Updated scoped registry for organization %s", org.id)
+                return Response({'status': 'updated', 'id': str(existing.id)})
+            else:
+                instance = serializer.save()
+                logger.info("Created scoped registry for organization %s", org.id)
+                return Response({'status': 'created', 'id': str(instance.id)},
+                                status=status.HTTP_201_CREATED)
+
+        # GET: return effective registry config
+        creds = ScopedRegistry.resolve_registry_credentials(org)
+        scoped = ScopedRegistry.get_for_object(org)
+        read_ser = ScopedRegistryReadSerializer(scoped) if scoped else None
+
+        return Response({
+            'effective_url': creds.get('url', ''),
+            'has_username': bool(creds.get('username')),
+            'has_password': bool(creds.get('password')),
+            'is_scoped': scoped is not None,
+            'scoped_config': read_ser.data if read_ser else None,
+            'hierarchy': ['organization', 'platform'],
+        })
+
+
 class OrganizationSSOViewSet(viewsets.ModelViewSet):
     queryset = OrganizationSSO.objects.all()
     serializer_class = OrganizationSSOSerializer

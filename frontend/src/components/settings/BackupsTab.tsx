@@ -5,7 +5,7 @@ import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/com
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Loader2, Download, RotateCcw, Trash2, Plus, Clock, Save, AlertCircle, CheckCircle, FileKey, Key, GitCompare, Cloud } from 'lucide-react';
+import { Loader2, Download, RotateCcw, Trash2, Plus, Clock, Save, AlertCircle, CheckCircle, FileKey, Key, GitCompare, Cloud, ShieldCheck, Upload, History } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import api from '@/lib/api';
@@ -88,6 +88,19 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
     const [isLiveDeploying, setIsLiveDeploying] = useState(false);
     const wsRef = useRef<WebSocket | null>(null);
     const reconnectTimer = useRef<NodeJS.Timeout | null>(null);
+
+    // Verify state
+    const [verifying, setVerifying] = useState<string | null>(null);
+
+    // Restoration history
+    const [restoreHistory, setRestoreHistory] = useState<any[]>([]);
+    const [showRestoreHistory, setShowRestoreHistory] = useState(false);
+    const [restoreHistoryLoading, setRestoreHistoryLoading] = useState(false);
+
+    // Local file upload restore
+    const [uploadRestoreOpen, setUploadRestoreOpen] = useState(false);
+    const [uploadRestoreFile, setUploadRestoreFile] = useState<File | null>(null);
+    const [uploadRestoreLoading, setUploadRestoreLoading] = useState(false);
 
     // Schedule state
     const [schedule, setSchedule] = useState<Schedule | null>(null);
@@ -467,6 +480,75 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
         }
     };
 
+    const handleVerifyBackup = async (id: string) => {
+        setVerifying(id);
+        try {
+            const res = await api.post(`/backups/${id}/verify/`);
+            toast({ title: "Verification Started", description: `Task ID: ${res.data?.task_id?.slice(0, 8)}...` });
+        } catch (err: any) {
+            toast({ title: "Verification Failed", description: err?.response?.data?.error || 'Could not start verification.', variant: "destructive" });
+        } finally {
+            setVerifying(null);
+        }
+    };
+
+    const handleDownloadSnapshot = async (snapshot: any) => {
+        try {
+            const res = await api.get(`/snapshots/${snapshot.id}/download/`);
+            const blob = new Blob([JSON.stringify(res.data, null, 2)], { type: 'application/json' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `snapshot-${snapshot.id?.slice(0, 8) || 'config'}-${new Date(snapshot.created_at).toISOString().split('T')[0]}.json`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.URL.revokeObjectURL(url);
+            toast({ title: "Snapshot downloaded" });
+        } catch (err: any) {
+            toast({ title: "Download failed", description: err?.response?.data?.error || 'Could not download snapshot.', variant: "destructive" });
+        }
+    };
+
+    const handleUploadRestoreSubmit = async () => {
+        if (!uploadRestoreFile) return;
+        setUploadRestoreLoading(true);
+        try {
+            const formData = new FormData();
+            formData.append('file', uploadRestoreFile);
+            formData.append('service_id', serviceId);
+            const res = await api.post('/backups/upload-restore/', formData, {
+                headers: { 'Content-Type': 'multipart/form-data' },
+            });
+            toast({ title: "Restore Started", description: `Restoring from ${uploadRestoreFile.name}.` });
+            setUploadRestoreOpen(false);
+            setUploadRestoreFile(null);
+            if (res.data?.backup_id) {
+                setRestoringId(res.data.backup_id);
+                setRestoreStatus('RESTORING');
+                monitorDeploymentAfterRestore(res.data.backup_id);
+                connectWebSocket(res.data.backup_id);
+            }
+        } catch (err: any) {
+            toast({ title: "Upload Restore Failed", description: err?.response?.data?.error || 'Failed to process uploaded backup.', variant: "destructive" });
+        } finally {
+            setUploadRestoreLoading(false);
+        }
+    };
+
+    const loadRestoreHistory = async () => {
+        setRestoreHistoryLoading(true);
+        setShowRestoreHistory(true);
+        try {
+            const res = await api.get('/backups/restore-history/', { params: { limit: 20 } });
+            setRestoreHistory(Array.isArray(res.data) ? res.data : res.data?.results || []);
+        } catch {
+            setRestoreHistory([]);
+        } finally {
+            setRestoreHistoryLoading(false);
+        }
+    };
+
     const handleSaveSchedule = async () => {
         setSavingSchedule(true);
         try {
@@ -772,6 +854,9 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                                                 }} title="Download encryption key info (for cross-master restore)">
                                                     <Key className="w-4 h-4" />
                                                 </Button>
+                                                <Button variant="ghost" size="sm" onClick={() => handleVerifyBackup(backup.id)} title="Verify integrity" disabled={verifying === backup.id}>
+                                                    {verifying === backup.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
+                                                </Button>
                                                 <Button variant="ghost" size="sm" onClick={() => handleDeleteBackup(backup.id)} title="Delete" className="text-red-400 hover:text-red-500">
                                                     <Trash2 className="w-4 h-4" />
                                                 </Button>
@@ -858,6 +943,14 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                                                       <GitCompare className="w-4 h-4" />
                                                   </Button>
                                               )}
+                                              <Button 
+                                                  variant="ghost" 
+                                                  size="sm" 
+                                                  onClick={() => handleDownloadSnapshot(snapshot)} 
+                                                  title="Download snapshot as JSON"
+                                              >
+                                                  <Download className="w-4 h-4" />
+                                              </Button>
                                               <Button 
                                                   variant="ghost" 
                                                   size="sm" 
@@ -1564,6 +1657,108 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                   </div>
               </div>
           )}
-         </>
+           {uploadRestoreOpen && (
+              <div className="fixed inset-0 bg-black/50 z-50 flex flex-col items-center justify-center p-4">
+                  <div className="bg-background max-w-md w-full rounded-xl border border-border shadow-2xl p-6">
+                      <h3 className="text-lg font-bold mb-2">Restore Backup from Local File</h3>
+                      <p className="text-sm text-muted-foreground mb-4">
+                          Upload a backup .tar.gz or .tgz file to restore this service to a previous state.
+                      </p>
+                      <div className="space-y-3">
+                          <div className="border-2 border-dashed border-border rounded-lg p-6 text-center hover:border-blue-500/50 transition-colors cursor-pointer"
+                              onClick={() => document.getElementById('restore-file-input')?.click()}
+                              onDragOver={(e) => e.preventDefault()}
+                              onDrop={(e) => {
+                                  e.preventDefault();
+                                  const file = e.dataTransfer.files?.[0];
+                                  if (file) setUploadRestoreFile(file);
+                              }}
+                          >
+                              {uploadRestoreFile ? (
+                                  <div className="text-sm">
+                                      <CheckCircle className="h-8 w-8 mx-auto mb-2 text-emerald-500" />
+                                      <p className="font-medium">{uploadRestoreFile.name}</p>
+                                      <p className="text-muted-foreground text-xs mt-1">{(uploadRestoreFile.size / 1024 / 1024).toFixed(1)} MB</p>
+                                  </div>
+                              ) : (
+                                  <div className="text-sm text-muted-foreground">
+                                      <Upload className="h-8 w-8 mx-auto mb-2" />
+                                      <p>Click or drag a backup file here</p>
+                                      <p className="text-xs mt-1">.tar.gz or .tgz</p>
+                                  </div>
+                              )}
+                              <input id="restore-file-input" type="file" accept=".tar.gz,.tgz,.gz,.enc" className="hidden"
+                                  onChange={(e) => setUploadRestoreFile(e.target.files?.[0] || null)} />
+                          </div>
+                      </div>
+                      <div className="flex justify-end gap-2 mt-4">
+                          <Button variant="outline" onClick={() => { setUploadRestoreOpen(false); setUploadRestoreFile(null); }}>
+                              Cancel
+                          </Button>
+                          <Button onClick={handleUploadRestoreSubmit} disabled={!uploadRestoreFile || uploadRestoreLoading}>
+                              {uploadRestoreLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
+                              Upload & Restore
+                          </Button>
+                      </div>
+                  </div>
+              </div>
+          )}
+
+          {showRestoreHistory && (
+              <Card>
+                  <CardHeader className="pb-3">
+                      <div className="flex justify-between items-center">
+                          <div>
+                              <CardTitle>Restoration Activity</CardTitle>
+                              <CardDescription>Recent backup restores and their deployment status.</CardDescription>
+                          </div>
+                          <Button variant="ghost" size="sm" onClick={() => setShowRestoreHistory(false)}>
+                              <span className="text-muted-foreground">Close</span>
+                          </Button>
+                      </div>
+                  </CardHeader>
+                  <CardContent>
+                      {restoreHistoryLoading ? (
+                          <div className="flex justify-center p-4"><Loader2 className="animate-spin h-5 w-5 text-muted-foreground" /></div>
+                      ) : restoreHistory.length === 0 ? (
+                          <div className="text-center py-6 text-muted-foreground text-sm">
+                              <History className="h-8 w-8 mx-auto mb-2 opacity-40" />
+                              No restoration activity found.
+                          </div>
+                      ) : (
+                          <Table>
+                              <TableHeader>
+                                  <TableRow>
+                                      <TableHead>Date</TableHead>
+                                      <TableHead>Service</TableHead>
+                                      <TableHead>Source</TableHead>
+                                      <TableHead>Deploy Status</TableHead>
+                                  </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                  {restoreHistory.map((r: any) => (
+                                      <TableRow key={r.backup_id}>
+                                          <TableCell className="text-xs">{r.restored_at ? new Date(r.restored_at).toLocaleString() : '-'}</TableCell>
+                                          <TableCell className="text-xs font-medium">{r.service_name || r.service_id?.slice(0, 8) || '-'}</TableCell>
+                                          <TableCell className="text-xs max-w-[200px] truncate" title={r.restore_type}>{r.restore_type}</TableCell>
+                                          <TableCell>
+                                              <span className={`text-xs font-semibold px-2 py-1 rounded ${
+                                                  r.deployment_status === 'ACTIVE' ? 'bg-emerald-500/10 text-emerald-500' :
+                                                  r.deployment_status === 'FAILED' ? 'bg-red-500/10 text-red-500' :
+                                                  r.deployment_status ? 'bg-blue-500/10 text-blue-500' :
+                                                  'bg-slate-500/10 text-slate-500'
+                                              }`}>
+                                                  {r.deployment_status || 'Pending'}
+                                              </span>
+                                          </TableCell>
+                                      </TableRow>
+                                  ))}
+                              </TableBody>
+                          </Table>
+                      )}
+                  </CardContent>
+              </Card>
+          )}
+        </>
     );
 }
