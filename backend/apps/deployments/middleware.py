@@ -25,13 +25,27 @@ class DynamicAllowedHostsMiddleware:
                 if is_valid_host(host):
                     settings.ALLOWED_HOSTS.append(host)
                     logger.info("DynamicAllowedHostsMiddleware: instantly whitelisted valid domain %s", host)
+                    _patch_cors_origin(request, host)
                 else:
-                    # Still run the standard sync for origin patching just in case
                     patch_runtime_settings()
+                    _patch_cors_origin(request, host)
             except Exception as e:
                 logger.warning("Dynamic host patching failed: %s", e)
+        else:
+            _patch_cors_origin(request, host)
 
         return self.get_response(request)
+
+def _patch_cors_origin(request, host):
+    origin = request.META.get('HTTP_ORIGIN', '')
+    if origin and origin not in settings.CORS_ALLOWED_ORIGINS:
+        settings.CORS_ALLOWED_ORIGINS.append(origin)
+        logger.info("DynamicAllowedHostsMiddleware: added origin %s to CORS_ALLOWED_ORIGINS", origin)
+    scheme = 'https' if request.is_secure() else 'http'
+    implied = f'{scheme}://{host}'
+    if implied not in settings.CORS_ALLOWED_ORIGINS:
+        settings.CORS_ALLOWED_ORIGINS.append(implied)
+        logger.info("DynamicAllowedHostsMiddleware: added origin %s to CORS_ALLOWED_ORIGINS", implied)
 
 import hashlib  # noqa: E402
 from urllib.parse import parse_qs  # noqa: E402
