@@ -2784,6 +2784,40 @@ def normalize_s3_key(s3_key, bucket=None):
     return key
 
 
+def list_s3_objects(
+    bucket: str,
+    prefix: str = '',
+    endpoint: str = '',
+    region: str = 'us-east-1',
+    access_key: str = '',
+    secret_key: str = '',
+    max_keys: int = 200,
+) -> list[dict]:
+    """List objects in an S3 bucket with the given prefix.
+
+    Returns a list of dicts with 'key', 'size', 'last_modified'.
+    Returns empty list on any error (connection, auth, etc).
+    """
+    try:
+        client = _get_s3_client(endpoint, region, access_key, secret_key)
+        kwargs = {'Bucket': bucket, 'MaxKeys': max_keys}
+        if prefix:
+            kwargs['Prefix'] = prefix
+        response = client.list_objects_v2(**kwargs)
+        contents = response.get('Contents', [])
+        return [
+            {
+                'key': obj['Key'],
+                'size': obj['Size'],
+                'last_modified': obj['LastModified'].isoformat(),
+            }
+            for obj in contents
+        ]
+    except Exception as exc:
+        logger.warning("Failed to list S3 objects in %s/%s: %s", bucket, prefix, exc)
+        return []
+
+
 def _get_s3_client(endpoint='', region='us-east-1',
                    access_key='', secret_key=''):
     """Build a boto3 S3 client with the given credentials."""

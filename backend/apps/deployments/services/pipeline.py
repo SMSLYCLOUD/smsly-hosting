@@ -137,6 +137,7 @@ class PipelineManager:
         """
         try:
             self._setup()
+            self._capture_pre_deploy_snapshot()
             is_docker_type = self.service.deploy_type == 'DOCKER' and self.service.docker_image
             if not is_docker_type:
                 self._clone_repo()
@@ -165,6 +166,7 @@ class PipelineManager:
         """
         try:
             self._setup()
+            self._capture_pre_deploy_snapshot()
             self._clone_repo()
             self._run_ai_analysis()
             self._inject_env_vars()
@@ -214,6 +216,7 @@ class PipelineManager:
         try:
             # Re-attach to existing build dir from the analysis phase
             self._setup_for_resume()
+            self._capture_pre_deploy_snapshot()
 
             self._build_image()
             self._push_image()
@@ -696,16 +699,45 @@ class PipelineManager:
                 for issue in recommendation.get('issues', []):
                     append_log(self.deployment, f"  ⚠️ {issue}\n")
 
-            # Step D: EXHAUSTIVE ENV FILLING via AI Senate
-            append_log(self.deployment, "🧠 Convening AI Senate for exhaustive environment filling...\n")
-            _suggestions, injected = EnvironmentIntelligenceService.apply_intelligence_to_service(
-                self.service, scan_result
-            )
+            # Step D: GROUNDED env resolution from actual repo files
+            # Replaces the AI Senate approach which hallucinated vars
+            append_log(self.deployment, "📋 Resolving environment from repo manifest files...\n")
+            try:
+                from .manifest_env_resolver import ManifestEnvResolver
+                resolver = ManifestEnvResolver(
+                    source_dir=self.source_dir,
+                    service_name=self.service.name,
+                )
+                resolved_env = resolver.resolve_all()
+                injected = self._inject_manifest_env_vars(resolved_env, resolver)
 
-            if injected:
-                append_log(self.deployment, f"  ✅ AI Senate auto-filled {len(injected)} variables: {', '.join(injected[:10])}...\n")
-            else:
-                append_log(self.deployment, "  ℹ️ All detected variables are already configured.\n")
+                if resolver.unresolved_vars:
+                    append_log(
+                        self.deployment,
+                        f"  ⚠️ {len(resolver.unresolved_vars)} unresolved required var(s): "
+                        f"{', '.join(resolver.unresolved_vars[:10])}\n"
+                    )
+
+                if resolver.is_frontend:
+                    append_log(
+                        self.deployment,
+                        f"  ℹ️ Detected as frontend-only service — only {injected} frontend-friendly vars injected.\n"
+                    )
+                elif injected:
+                    append_log(
+                        self.deployment,
+                        f"  ✅ Manifest resolver auto-filled {injected} variables.\n"
+                    )
+                else:
+                    append_log(self.deployment, "  ℹ️ All detected variables are already configured.\n")
+            except Exception as e:
+                logger.warning("Manifest env resolution failed: %s", e)
+                append_log(self.deployment, f"\n⚠️ Manifest env resolution failed: {e!s}. Falling back to AI Senate.\n")
+                _suggestions, injected = EnvironmentIntelligenceService.apply_intelligence_to_service(
+                    self.service, scan_result
+                )
+                if injected:
+                    append_log(self.deployment, f"  ✅ AI Senate auto-filled {len(injected)} variables: {', '.join(injected[:10])}...\n")
 
         except Exception as e:
             logger.warning("AI analysis failed: %s", e)
@@ -919,6 +951,106 @@ class PipelineManager:
                 self.deployment,
                 f"  🔴 {warned} env var(s) need manual setup!\n"
             )
+
+    def _capture_pre_deploy_snapshot(self) -> None:
+        """Capture a PRE_DEPLOY snapshot before the build starts.
+
+        This creates a lightweight config snapshot that can be used
+        to roll back to the pre-deploy state if the deployment fails.
+        Snapshot failures are non-fatal (logged but not raised).
+        """
+        try:
+            from .snapshot_service import SnapshotService
+            SnapshotService.capture_snapshot(
+                service_id=str(self.service.id),
+                trigger='PRE_DEPLOY',
+                label=f'Pre-deploy: {self.deployment.id!s}',
+            )
+            append_log(
+                self.deployment,
+                "  📸 Pre-deploy config snapshot captured.\n",
+            )
+        except Exception as exc:
+            logger.warning(
+                "Pre-deploy snapshot failed for service %s: %s",
+                self.service.id, exc,
+            )
+            # Non-fatal — the deploy should proceed
+            append_log(
+                self.deployment,
+                f"  ⚠️ Pre-deploy snapshot failed (non-fatal): {exc}\n",
+            )
+
+    def _inject_manifest_env_vars(
+        self,
+        resolved_env: dict[str, str],
+        resolver: "ManifestEnvResolver",
+    ) -> int:
+        """Inject env vars from ManifestEnvResolver into the database.
+
+        Respects user-set vars (get_or_create), detects secret vs. non-secret,
+        and logs everything clearly.
+        """
+        # pylint: disable=import-outside-toplevel
+        from apps.deployments.models import EnvironmentVariable
+
+        # Security patterns for auto-detecting secret vars
+        _SECRET_PATTERNS = re.compile(
+            r"(SECRET|TOKEN|PASSWORD|PRIVATE_KEY|API_KEY|DSN|CREDENTIAL|"
+            r"ENCRYPTION_KEY|SIGNING_KEY)",
+            re.IGNORECASE,
+        )
+
+        injected = 0
+        skipped = 0
+        deferred = 0
+
+        for key, value in resolved_env.items():
+            key_upper = key.strip().upper()
+            if not key_upper:
+                continue
+
+            # Skip if already set by the user via UI/API
+            if EnvironmentVariable.objects.filter(
+                service=self.service, key=key_upper
+            ).exists():
+                skipped += 1
+                continue
+
+            # Skip vars with placeholder patterns (will be resolved at deploy time)
+            if value.startswith("{{") and value.endswith("}}"):
+                deferred += 1
+                continue
+
+            # Skip empty values (unresolved required vars)
+            if not value:
+                continue
+
+            # Sanitize for PostgreSQL
+            safe_val = value.replace("\x00", "")
+
+            is_secret = bool(_SECRET_PATTERNS.search(key_upper))
+            EnvironmentVariable.objects.create(
+                service=self.service,
+                key=key_upper,
+                value=safe_val,
+                is_secret=is_secret,
+            )
+            injected += 1
+
+            display_val = "********" if is_secret else safe_val[:60]
+            append_log(
+                self.deployment,
+                f"  📋 {key_upper}={display_val}\n",
+            )
+
+        if injected:
+            append_log(
+                self.deployment,
+                f"\n✅ Manifest resolver: {injected} injected, "
+                f"{skipped} already set, {deferred} deploy-time.\n",
+            )
+        return injected
 
     def _inject_env_vars(self):
         """Step 1.6: Auto-inject env vars from code scanning."""
