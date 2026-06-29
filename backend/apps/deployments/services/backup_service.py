@@ -2375,6 +2375,34 @@ def _remap_domain_on_restore(service, metadata):
         pass
 
 
+def normalize_s3_key(s3_key, bucket=None):
+    """Normalize an S3 key copied from various cloud dashboard formats.
+
+    Handles: s3://bucket/key, https://host/bucket/key, bucket/key, bucket/bucket/key
+    """
+    from urllib.parse import urlparse
+
+    key = s3_key.strip()
+
+    if key.startswith('s3://'):
+        key = key[5:]
+
+    if key.startswith(('http://', 'https://')):
+        parsed = urlparse(key)
+        key = parsed.path.lstrip('/')
+
+    key = key.lstrip('/')
+
+    if bucket:
+        while key.startswith(bucket + '/') or key == bucket:
+            if key == bucket:
+                key = ''
+            else:
+                key = key[len(bucket) + 1:]
+
+    return key
+
+
 def _get_s3_client(endpoint='', region='us-east-1',
                    access_key='', secret_key=''):
     """Build a boto3 S3 client with the given credentials."""

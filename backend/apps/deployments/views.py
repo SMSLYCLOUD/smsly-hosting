@@ -5529,15 +5529,12 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
             access_key = request.data.get('s3_access_key', '').strip()
             secret_key = request.data.get('s3_secret_key', '').strip()
 
-        # Strip bucket prefix if user copied full path from R2 dashboard
-        # (e.g. key="my-bucket/smsly-backups/..." but should be "smsly-backups/...")
-        while s3_bucket and s3_key.startswith(s3_bucket + '/'):
-            s3_key = s3_key[len(s3_bucket) + 1:]
+        s3_key = normalize_s3_key(s3_key, s3_bucket)
 
         if not s3_bucket or not s3_key or not access_key or not secret_key:
             return Response({'error': 'Missing required S3 configuration fields or cloud_storage_id.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        from .services.backup_service import download_from_s3, BackupService
+        from .services.backup_service import download_from_s3, normalize_s3_key, BackupService
         import uuid as _uuid
         dest_filename = f"cloud_restore_{_uuid.uuid4().hex[:8]}.tar.gz"
         backups_dir = os.path.join('/app', 'backups', 'services', str(service_id))
@@ -6118,14 +6115,12 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
             access_key = request.data.get('s3_access_key', '').strip()
             secret_key = request.data.get('s3_secret_key', '').strip()
 
-        # Strip bucket prefix if user copied full path from R2 dashboard
-        while s3_bucket and s3_key.startswith(s3_bucket + '/'):
-            s3_key = s3_key[len(s3_bucket) + 1:]
+        s3_key = normalize_s3_key(s3_key, s3_bucket)
 
         if not s3_bucket or not s3_key or not access_key or not secret_key:
             return Response({'error': 'Missing required S3 configuration fields or cloud_storage_id.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        from .services.backup_service import download_from_s3, BackupService
+        from .services.backup_service import download_from_s3, normalize_s3_key, BackupService
         dest_filename = f"cloud_restore_{_uuid.uuid4().hex[:8]}.tar.gz"
         backups_dir = os.path.join('/app', 'backups', 'server')
         os.makedirs(backups_dir, exist_ok=True)
