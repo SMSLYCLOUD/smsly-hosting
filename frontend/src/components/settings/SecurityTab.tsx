@@ -19,7 +19,8 @@ export function SecurityTab() {
   const fetchDevices = async () => {
     try {
       const res = await api.get("/devices/");
-      setDevices(res.data);
+      const data = res.data;
+      setDevices(Array.isArray(data) ? data : (data?.results || []));
     } catch (err) {
       // Ignored if endpoint not ready
     } finally {
