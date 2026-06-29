@@ -280,7 +280,7 @@ def run_scheduled_backups_task():
             cron = croniter.croniter(sched.cron_expression, now)
             next_dt = cron.get_next(datetime)
             if timezone.is_aware(next_dt):
-                next_dt = timezone.make_naive(next_dt, timezone.utc)
+                next_dt = timezone.make_naive(next_dt, datetime.timezone.utc)
             sched.next_run = next_dt
             sched.save(update_fields=['next_run'])
 
@@ -314,7 +314,7 @@ def run_scheduled_snapshots_task():
             cron = croniter.croniter(sched.cron_expression, now)
             next_dt = cron.get_next(datetime)
             if timezone.is_aware(next_dt):
-                next_dt = timezone.make_naive(next_dt, timezone.utc)
+                next_dt = timezone.make_naive(next_dt, datetime.timezone.utc)
             sched.next_run = next_dt
             sched.save(update_fields=['next_run'])
 
