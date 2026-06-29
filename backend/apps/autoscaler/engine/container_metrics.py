@@ -25,8 +25,6 @@ def init_k8s() -> bool:
     if _k8s_clients.get('available') is not None:
         return _k8s_clients['available']
     try:
-        from kubernetes import client as k8s_client
-        from kubernetes import config as k8s_config
         try:
             k8s_config.load_incluster_config()
         except BaseException:
@@ -55,7 +53,6 @@ def collect_container_stats() -> dict:
 
 def _k8s_container_stats() -> dict | None:
     try:
-        from kubernetes import client as k8s_client
         metrics_api = k8s_client.CustomObjectsApi()
         pod_metrics = metrics_api.list_cluster_custom_object(
             group="metrics.k8s.io", version="v1beta1", plural="pods"

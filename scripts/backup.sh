@@ -8,7 +8,8 @@ set -e
 BACKUP_DIR="${BACKUP_DIR:-/opt/smsly-hosting/backups}"
 RETENTION_DAYS="${RETENTION_DAYS:-7}"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-BACKUP_FILE="${BACKUP_DIR}/smsly_hosting_${TIMESTAMP}.sql.gz"
+BACKUP_FILE="${BACKUP_DIR}/smsly_hosting_${TIMESTAMP}.sql.gz.enc"
+BACKUP_PASS="${BACKUP_PASS:-my_secure_fallback_password}"
 
 # Colors
 RED='\033[0;31m'
@@ -37,9 +38,9 @@ fi
 echo "Using database container: $DB_CONTAINER"
 
 # Perform backup using pg_dump inside the container
-docker exec "$DB_CONTAINER" pg_dump -U smsly_admin -d smsly_hosting 2>/dev/null | gzip > "$BACKUP_FILE" || \
-docker exec "$DB_CONTAINER" pg_dump -U smsly -d smsly_hosting 2>/dev/null | gzip > "$BACKUP_FILE" || \
-docker exec "$DB_CONTAINER" pg_dump -U postgres -d smsly_hosting 2>/dev/null | gzip > "$BACKUP_FILE"
+docker exec "$DB_CONTAINER" pg_dump -U smsly_admin -d smsly_hosting | gzip | openssl enc -aes-256-cbc -salt -pbkdf2 -pass pass:"$BACKUP_PASS" > "$BACKUP_FILE" || \
+docker exec "$DB_CONTAINER" pg_dump -U smsly -d smsly_hosting | gzip | openssl enc -aes-256-cbc -salt -pbkdf2 -pass pass:"$BACKUP_PASS" > "$BACKUP_FILE" || \
+docker exec "$DB_CONTAINER" pg_dump -U postgres -d smsly_hosting | gzip | openssl enc -aes-256-cbc -salt -pbkdf2 -pass pass:"$BACKUP_PASS" > "$BACKUP_FILE"
 
 # Check if backup was successful
 if [ -s "$BACKUP_FILE" ]; then
@@ -65,5 +66,7 @@ echo -e "File: $BACKUP_FILE"
 echo -e "Size: $BACKUP_SIZE"
 
 # Optional: Upload to remote storage (uncomment and configure)
-# aws s3 cp "$BACKUP_FILE" s3://your-bucket/smsly-backups/
+if command -v aws &> /dev/null; then
+    aws s3 cp "$BACKUP_FILE" s3://your-bucket/smsly-backups/ || echo -e "${RED}✗ S3 upload failed${NC}"
+fi
 # rclone copy "$BACKUP_FILE" remote:smsly-backups/

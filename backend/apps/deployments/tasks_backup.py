@@ -12,7 +12,7 @@ from apps.deployments.utils import log_event  # noqa: E402
 
 
 @shared_task(bind=True, soft_time_limit=3600, time_limit=3900, max_retries=3, default_retry_delay=300)
-def create_service_backup_task(self, service_id, backup_type='MANUAL', backup_id=None, schedule_id=None):
+def create_service_backup_task(self, service_id, backup_type='MANUAL', backup_id=None, schedule_id=None, encryption_key=None):
     from apps.deployments.utils import log_event
 
     from .services.backup_service import BackupService
@@ -24,6 +24,7 @@ def create_service_backup_task(self, service_id, backup_type='MANUAL', backup_id
             'service_id': str(service_id),
             'backup_id': str(backup_id) if backup_id else None,
             'backup_type': backup_type,
+            'encryption_key_provided': bool(encryption_key),
         },
     )
     db_only = False
@@ -36,7 +37,19 @@ def create_service_backup_task(self, service_id, backup_type='MANUAL', backup_id
 
     try:
         backup_service = BackupService()
-        backup_service.backup_service(service_id, backup_id=backup_id, backup_type=backup_type, db_only=db_only)
+        if encryption_key:
+            import os
+            original_key = os.environ.get('BACKUP_ENCRYPTION_KEY', '')
+            os.environ['BACKUP_ENCRYPTION_KEY'] = encryption_key
+            try:
+                backup_service.backup_service(service_id, backup_id=backup_id, backup_type=backup_type, db_only=db_only)
+            finally:
+                if original_key:
+                    os.environ['BACKUP_ENCRYPTION_KEY'] = original_key
+                else:
+                    os.environ.pop('BACKUP_ENCRYPTION_KEY', None)
+        else:
+            backup_service.backup_service(service_id, backup_id=backup_id, backup_type=backup_type, db_only=db_only)
     except Exception as exc:
         if self.request.retries < self.max_retries:
             raise self.retry(exc=exc)
@@ -49,6 +62,102 @@ def create_service_backup_task(self, service_id, backup_type='MANUAL', backup_id
             _touch_schedule_last_run(schedule_id)
 
 
+@shared_task(bind=True, soft_time_limit=600, time_limit=900)
+def verify_backup_integrity_task(self, backup_ids: list | None = None, sample_size: int = 3):
+    """Verify backup archive integrity by checking checksums and archive validity.
+
+    When ``backup_ids`` is provided, checks those specific backups. If None,
+    samples ``sample_size`` random recent ``COMPLETED`` backups from both
+    ``ServiceBackup`` and ``ServerBackup``.
+
+    Checks performed:
+      1. File exists and is readable.
+      2. SHA-256 checksum matches ``metadata.checksum_sha256`` (if present).
+      3. Archive is a valid gzipped tar file (test-open with ``r:gz``).
+
+    Emits an ``AuditLog`` entry per verification run with pass/fail counts.
+    """
+    import hashlib as _hashlib
+    import random as _random
+    import tarfile as _tarfile
+
+    from apps.deployments.models_backup import ServerBackup, ServiceBackup
+    from apps.deployments.models_audit import AuditLog
+
+    candidates = []
+    if backup_ids:
+        candidates = list(ServiceBackup.objects.filter(
+            id__in=backup_ids, status='COMPLETED',
+        ))
+        candidates += list(ServerBackup.objects.filter(
+            id__in=backup_ids, status='COMPLETED',
+        ))
+    else:
+        svc_backups = list(ServiceBackup.objects.filter(
+            status='COMPLETED',
+        ).order_by('-created_at')[:sample_size])
+        srv_backups = list(ServerBackup.objects.filter(
+            status='COMPLETED',
+        ).order_by('-created_at')[:sample_size])
+        candidates = svc_backups + srv_backups
+
+    if not candidates:
+        logger.info("verify_backup_integrity: no COMPLETED backups to check.")
+        return {'checked': 0, 'passed': 0, 'failed': 0}
+
+    passed = 0
+    failed = 0
+    results = []
+
+    for backup in candidates:
+        filepath = backup.file_path
+        errors = []
+        try:
+            if not filepath or not os.path.exists(filepath):
+                raise FileNotFoundError(f"Backup file not found: {filepath}")
+
+            expected_hash = (getattr(backup, 'metadata', None) or {}).get('checksum_sha256', '')
+            if expected_hash:
+                sha = _hashlib.sha256()
+                with open(filepath, 'rb') as f:
+                    for chunk in iter(lambda: f.read(8192), b''):
+                        sha.update(chunk)
+                if sha.hexdigest() != expected_hash:
+                    raise ValueError("Checksum mismatch — backup may be corrupted")
+
+            with _tarfile.open(filepath, 'r:gz') as tar:
+                members = tar.getmembers()
+                if not members:
+                    raise ValueError("Archive is empty")
+
+            passed += 1
+            results.append({'id': str(backup.id), 'status': 'passed', 'path': filepath})
+        except Exception as exc:
+            failed += 1
+            results.append({'id': str(backup.id), 'status': 'failed', 'path': filepath, 'error': str(exc)})
+            logger.error("Integrity check FAILED for backup %s (%s): %s", backup.id, filepath, exc)
+
+    try:
+        AuditLog.objects.create(
+            actor='system',
+            action='BACKUP_INTEGRITY_CHECK',
+            target=f'Checked {len(candidates)} backup(s)',
+            metadata={
+                'checked': len(candidates),
+                'passed': passed,
+                'failed': failed,
+                'results': results,
+            },
+        )
+    except Exception as exc:
+        logger.warning("Failed to record BACKUP_INTEGRITY_CHECK audit log: %s", exc)
+
+    logger.info(
+        "Backup integrity check complete: %d/%d passed, %d/%d failed",
+        passed, len(candidates), failed, len(candidates),
+    )
+    return {'checked': len(candidates), 'passed': passed, 'failed': failed, 'results': results}
+
 
 def _touch_schedule_last_run(schedule_id):
     """Update the BackupSchedule.last_run to now (called after backup completes)."""
@@ -60,7 +169,7 @@ def _touch_schedule_last_run(schedule_id):
 
 
 @shared_task(bind=True, soft_time_limit=7200, time_limit=7500, max_retries=2, default_retry_delay=600)
-def create_server_backup_task(self, backup_id=None, schedule_id=None):
+def create_server_backup_task(self, backup_id=None, schedule_id=None, encryption_key=None):
     log_event(
         action='BACKUP_CREATE',
         target='Server',
@@ -68,6 +177,7 @@ def create_server_backup_task(self, backup_id=None, schedule_id=None):
         metadata={
             'backup_id': str(backup_id) if backup_id else None,
             'scope': 'server',
+            'encryption_key_provided': bool(encryption_key),
         },
     )
     db_only = False
@@ -80,7 +190,19 @@ def create_server_backup_task(self, backup_id=None, schedule_id=None):
             pass
 
     backup_service = BackupService()
-    backup_service.backup_server(backup_id=backup_id, db_only=db_only)
+    if encryption_key:
+        import os
+        original_key = os.environ.get('BACKUP_ENCRYPTION_KEY', '')
+        os.environ['BACKUP_ENCRYPTION_KEY'] = encryption_key
+        try:
+            backup_service.backup_server(backup_id=backup_id, db_only=db_only)
+        finally:
+            if original_key:
+                os.environ['BACKUP_ENCRYPTION_KEY'] = original_key
+            else:
+                os.environ.pop('BACKUP_ENCRYPTION_KEY', None)
+    else:
+        backup_service.backup_server(backup_id=backup_id, db_only=db_only)
     if schedule_id:
         _touch_schedule_last_run(schedule_id)
 

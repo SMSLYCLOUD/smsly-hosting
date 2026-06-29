@@ -217,7 +217,6 @@ def _apply_scaling(decision: dict):
     action = decision["action"]
     if k8s_available():
         try:
-            from kubernetes import client as k8s_client
             apps_v1 = k8s_client.AppsV1Api()
             namespace = "default"
             deployment = apps_v1.read_namespaced_deployment(name, namespace)

@@ -5965,11 +5965,7 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
             encryption_key=key_provided or None,
         )
         return Response({
-            'status': 'restored',
-            'warning': (
-                'Database dump was not restored. Manual psql restore required. '
-                'See docs/DISASTER_RECOVERY.md for the procedure.'
-            ),
+            'status': 'restore_started',
         })
 
     @action(detail=True, methods=['get'], permission_classes=[permissions.AllowAny], authentication_classes=[])

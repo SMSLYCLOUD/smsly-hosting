@@ -294,8 +294,12 @@ export default function ServerBackupsPage() {
                 const key = json.key_material || json.key || json.encryption_key || json.BACKUP_ENCRYPTION_KEY || '';
                 if (key) {
                     setUploadKeyValue(key);
+                } else if (json.encryption?.key_id || json.backup_id) {
+                    toast({ title: "Metadata File Uploaded", description: "This is a backup header metadata file. It does not contain the encryption key material for security reasons. Please provide a JSON file containing the actual 'key_material'.", variant: "destructive" });
+                    setUploadKeyFile(null);
                 } else {
                     toast({ title: "Invalid Key File", description: "JSON file must contain a 'key_material', 'key', or 'encryption_key' field.", variant: "destructive" });
+                    setUploadKeyFile(null);
                 }
             } catch {
                 toast({ title: "Invalid JSON", description: "Could not parse the selected file as JSON.", variant: "destructive" });
@@ -594,7 +598,7 @@ export default function ServerBackupsPage() {
                         </div>
 
                         <p className="text-xs text-muted-foreground mb-4">
-                            JSON format: {`{ "key_material": "...", "key_id": "..." }`}
+                            JSON format: {`{ "key_material": "<your-fernet-key>" }`}
                         </p>
 
                         <div className="flex justify-end gap-2">

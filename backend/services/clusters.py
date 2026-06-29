@@ -7,7 +7,6 @@ import logging  # noqa: E402
 import re  # noqa: E402
 import time  # noqa: E402
 
-from kubernetes import client, config  # noqa: E402
 from tenacity import retry, stop_after_attempt, wait_exponential  # noqa: E402
 
 logger = logging.getLogger(__name__)

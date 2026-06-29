@@ -6,9 +6,10 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { Loader2, RotateCcw, Clock, CheckCircle, AlertCircle, RefreshCw, Server, Archive } from 'lucide-react';
+import { Loader2, RotateCcw, Clock, CheckCircle, AlertCircle, RefreshCw, Server, Archive, Key } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { Input } from '@/components/ui/input';
 import api from '@/lib/api';
 import Link from 'next/link';
 
@@ -37,7 +38,17 @@ export default function RestorePage() {
     const [loading, setLoading] = useState(true);
     const [serviceBackups, setServiceBackups] = useState<ServiceWithBackups[]>([]);
     const [restoringId, setRestoringId] = useState<string | null>(null);
+    const [restoringName, setRestoringName] = useState<string | null>(null);
+    const [restorePollInterval, setRestorePollInterval] = useState<number | null>(null);
     const [error, setError] = useState<string | null>(null);
+
+    // Encryption key prompt modal state
+    const [keyPromptOpen, setKeyPromptOpen] = useState(false);
+    const [keyPromptValue, setKeyPromptValue] = useState('');
+    const [keyPromptBackupId, setKeyPromptBackupId] = useState<string | null>(null);
+    const [keyPromptServiceName, setKeyPromptServiceName] = useState('');
+    const [keyPromptError, setKeyPromptError] = useState('');
+    const [keyPromptSubmitting, setKeyPromptSubmitting] = useState(false);
 
     const loadData = useCallback(async () => {
         setLoading(true);
@@ -95,6 +106,76 @@ export default function RestorePage() {
         loadData();
     }, [loadData]);
 
+    // Poll backup status while restore is in progress
+    useEffect(() => {
+        if (!restorePollInterval) return;
+        const intervalId = window.setInterval(async () => {
+            try {
+                const res = await api.get(`/backups/${restoringId}/`);
+                const status = res.data?.status;
+                if (status === 'COMPLETED' || status === 'FAILED') {
+                    setRestoringId(null);
+                    setRestoringName(null);
+                    setRestorePollInterval(null);
+                    if (status === 'COMPLETED') {
+                        toast({ title: 'Restore Complete', description: `"${restoringName}" has been restored.` });
+                    }
+                    loadData();
+                }
+            } catch {
+                // Ignore polling errors — the backup might still be processing
+            }
+        }, 5000);
+        return () => window.clearInterval(intervalId);
+    }, [restorePollInterval, restoringId, restoringName, toast, loadData]);
+
+    const doRestore = async (backupId: string, serviceName: string, encryptionKey?: string) => {
+        setRestoringId(backupId);
+        setRestoringName(serviceName);
+        try {
+            await api.post(`/backups/${backupId}/restore/`, {
+                confirm: true,
+                ...(encryptionKey ? { encryption_key: encryptionKey } : {}),
+            });
+            toast({
+                title: 'Restore Started',
+                description: `"${serviceName}" is being restored. This may take several minutes.`,
+            });
+            setRestorePollInterval(Date.now());
+        } catch (err: any) {
+            setRestoringId(null);
+            setRestoringName(null);
+            const data = err?.response?.data;
+            if (data?.error_code === 'ENCRYPTION_KEY_REQUIRED') {
+                setKeyPromptBackupId(backupId);
+                setKeyPromptServiceName(serviceName);
+                setKeyPromptValue('');
+                setKeyPromptError(data?.error || 'Encryption key required');
+                setKeyPromptOpen(true);
+                return;
+            }
+            const msg = data?.error || 'Failed to trigger restore.';
+            toast({ title: 'Restore Failed', description: msg, variant: 'destructive' });
+        }
+    };
+
+    const submitEncryptionKey = async () => {
+        if (!keyPromptBackupId || !keyPromptValue.trim()) {
+            setKeyPromptError('Please enter the encryption key.');
+            return;
+        }
+        setKeyPromptSubmitting(true);
+        setKeyPromptError('');
+        try {
+            await doRestore(keyPromptBackupId, keyPromptServiceName, keyPromptValue.trim());
+            setKeyPromptOpen(false);
+        } catch {
+            setKeyPromptError('Failed to restore with provided key.');
+        } finally {
+            setKeyPromptSubmitting(false);
+        }
+    };
+
     const handleRestore = async (serviceName: string, backupId: string) => {
         if (!await confirm({
             title: `Restore "${serviceName}"?`,
@@ -102,20 +183,7 @@ export default function RestorePage() {
             variant: 'destructive',
             confirmText: 'Restore'
         })) return;
-
-        setRestoringId(backupId);
-        try {
-            await api.post(`/backups/${backupId}/restore/`, { confirm: true });
-            toast({
-                title: 'Restore Started',
-                description: `"${serviceName}" is being restored. Monitor progress in the service page.`,
-            });
-            setTimeout(() => setRestoringId(null), 3000);
-        } catch (err: any) {
-            const msg = err?.response?.data?.error || 'Failed to trigger restore.';
-            toast({ title: 'Restore Failed', description: msg, variant: 'destructive' });
-            setRestoringId(null);
-        }
+        doRestore(backupId, serviceName);
     };
 
     const formatBytes = (bytes: number) => {
@@ -300,6 +368,54 @@ export default function RestorePage() {
                     </CardContent>
                 </Card>
             </div>
+
+            {/* Encryption key prompt modal (for cross-master restores) */}
+            {keyPromptOpen && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 animate-in fade-in duration-200">
+                    <div className="bg-background border border-border rounded-lg p-6 max-w-md w-full mx-4 shadow-lg">
+                        <div className="flex items-center gap-2 mb-4">
+                            <Key className="h-5 w-5 text-amber-500" />
+                            <h3 className="text-lg font-semibold">Encryption Key Required</h3>
+                        </div>
+                        <p className="text-sm text-muted-foreground mb-2">
+                            {keyPromptError}
+                        </p>
+                        <p className="text-xs text-muted-foreground mb-4">
+                            This backup was encrypted on a different master. Enter the source backup
+                            encryption key to decrypt and restore it.
+                        </p>
+                        <Input
+                            type="password"
+                            placeholder="Backup encryption key"
+                            value={keyPromptValue}
+                            onChange={(e) => setKeyPromptValue(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') submitEncryptionKey(); }}
+                            autoFocus
+                            className="mb-4"
+                        />
+                        <div className="flex justify-end gap-2">
+                            <Button
+                                variant="outline"
+                                onClick={() => { setKeyPromptOpen(false); setKeyPromptValue(''); }}
+                                disabled={keyPromptSubmitting}
+                            >
+                                Cancel
+                            </Button>
+                            <Button
+                                onClick={submitEncryptionKey}
+                                disabled={keyPromptSubmitting || !keyPromptValue.trim()}
+                            >
+                                {keyPromptSubmitting ? (
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                ) : (
+                                    <Key className="mr-2 h-4 w-4" />
+                                )}
+                                Restore
+                            </Button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </DashboardShell>
     );
 }

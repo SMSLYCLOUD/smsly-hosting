@@ -3,6 +3,8 @@
 import Link from 'next/link';
 import Image from 'next/image';
 
+import { Badge }
+from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { CloudHeroAnimation } from '@/components/animations/CloudHeroAnimation';
 import {
@@ -49,6 +51,107 @@ import {
     GanttChartSquare
 } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { useMemo } from 'react';
+
+// ============================================
+// SVG ILLUSTRATIONS FOR FEATURE CARDS
+// ============================================
+
+function CardIllustration({ index, className = '' }: { index: number; className?: string }) {
+    const svg = useMemo(() => {
+        const patterns = [
+            // 0 — Network nodes
+            <svg key="net" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+                <circle cx="20" cy="20" r="4" className="fill-current" />
+                <circle cx="60" cy="10" r="3" className="fill-current" />
+                <circle cx="90" cy="25" r="5" className="fill-current" />
+                <circle cx="40" cy="45" r="3" className="fill-current" />
+                <circle cx="75" cy="50" r="4" className="fill-current" />
+                <circle cx="100" cy="60" r="3" className="fill-current" />
+                <circle cx="30" cy="75" r="4" className="fill-current" />
+                <circle cx="65" cy="80" r="3" className="fill-current" />
+                <circle cx="50" cy="95" r="5" className="fill-current" />
+                <line x1="20" y1="20" x2="60" y2="10" stroke="currentColor" strokeWidth="0.8" />
+                <line x1="60" y1="10" x2="90" y2="25" stroke="currentColor" strokeWidth="0.8" />
+                <line x1="20" y1="20" x2="40" y2="45" stroke="currentColor" strokeWidth="0.8" />
+                <line x1="90" y1="25" x2="75" y2="50" stroke="currentColor" strokeWidth="0.8" />
+                <line x1="40" y1="45" x2="75" y2="50" stroke="currentColor" strokeWidth="0.8" />
+                <line x1="75" y1="50" x2="100" y2="60" stroke="currentColor" strokeWidth="0.8" />
+                <line x1="40" y1="45" x2="30" y2="75" stroke="currentColor" strokeWidth="0.8" />
+                <line x1="75" y1="50" x2="65" y2="80" stroke="currentColor" strokeWidth="0.8" />
+                <line x1="30" y1="75" x2="65" y2="80" stroke="currentColor" strokeWidth="0.8" />
+                <line x1="65" y1="80" x2="50" y2="95" stroke="currentColor" strokeWidth="0.8" />
+            </svg>,
+
+            // 1 — Circuit board
+            <svg key="circuit" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+                <path d="M10 10 L40 10 L40 30 L60 30" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+                <path d="M60 30 L60 50 L80 50" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+                <path d="M80 50 L80 70 L100 70" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+                <path d="M100 70 L100 90 L110 90" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+                <path d="M20 60 L20 80 L40 80 L40 95" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+                <path d="M50 15 L50 25" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+                <path d="M90 40 L90 55" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+                <circle cx="10" cy="10" r="2" className="fill-current" />
+                <circle cx="40" cy="30" r="2" className="fill-current" />
+                <circle cx="60" cy="30" r="2" className="fill-current" />
+                <circle cx="50" cy="15" r="1.5" className="fill-current" />
+                <circle cx="50" cy="25" r="1.5" className="fill-current" />
+                <circle cx="80" cy="50" r="2" className="fill-current" />
+                <circle cx="90" cy="40" r="1.5" className="fill-current" />
+                <circle cx="90" cy="55" r="1.5" className="fill-current" />
+            </svg>,
+
+            // 2 — Waveform / signal
+            <svg key="wave" viewBox="0 0 120 80" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+                <path d="M0 40 Q10 10 20 40 T40 40 T60 40 T80 40 T100 40 T120 40" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" fill="none" />
+                <path d="M0 55 Q15 25 30 55 T60 55 T90 55 T120 55" stroke="currentColor" strokeWidth="0.8" strokeLinecap="round" fill="none" opacity="0.5" />
+                <path d="M0 25 Q15 10 30 25 T60 25 T90 25 T120 25" stroke="currentColor" strokeWidth="0.8" strokeLinecap="round" fill="none" opacity="0.5" />
+            </svg>,
+
+            // 3 — Shield / concentric arcs
+            <svg key="shield" viewBox="0 0 80 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+                <path d="M40 5 L70 18 L70 48 Q70 75 40 92 Q10 75 10 48 L10 18 Z" stroke="currentColor" strokeWidth="1" fill="none" />
+                <path d="M40 15 L60 24 L60 48 Q60 68 40 82 Q20 68 20 48 L20 24 Z" stroke="currentColor" strokeWidth="0.8" fill="none" opacity="0.6" />
+                <path d="M40 26 L50 31 L50 48 Q50 60 40 70 Q30 60 30 48 L30 31 Z" stroke="currentColor" strokeWidth="0.6" fill="none" opacity="0.4" />
+            </svg>,
+
+            // 4 — Database / cylinders
+            <svg key="db" viewBox="0 0 80 110" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+                <ellipse cx="40" cy="15" rx="25" ry="8" stroke="currentColor" strokeWidth="1" />
+                <path d="M15 15 L15 42" stroke="currentColor" strokeWidth="1" />
+                <path d="M65 15 L65 42" stroke="currentColor" strokeWidth="1" />
+                <path d="M15 42 Q40 52 65 42" stroke="currentColor" strokeWidth="1" fill="none" />
+                <path d="M15 42 L15 70" stroke="currentColor" strokeWidth="1" />
+                <path d="M65 42 L65 70" stroke="currentColor" strokeWidth="1" />
+                <path d="M15 70 Q40 80 65 70" stroke="currentColor" strokeWidth="1" fill="none" />
+                <path d="M15 70 L15 97" stroke="currentColor" strokeWidth="1" />
+                <path d="M65 70 L65 97" stroke="currentColor" strokeWidth="1" />
+                <ellipse cx="40" cy="97" rx="25" ry="8" stroke="currentColor" strokeWidth="1" />
+                <line x1="25" y1="28" x2="55" y2="28" stroke="currentColor" strokeWidth="0.6" opacity="0.4" />
+                <line x1="25" y1="56" x2="55" y2="56" stroke="currentColor" strokeWidth="0.6" opacity="0.4" />
+                <line x1="25" y1="82" x2="55" y2="82" stroke="currentColor" strokeWidth="0.6" opacity="0.4" />
+            </svg>,
+
+            // 5 — Terminal / angle brackets
+            <svg key="term" viewBox="0 0 100 80" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+                <path d="M15 25 L30 40 L15 55" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                <path d="M45 55 L65 55" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" fill="none" />
+                <circle cx="78" cy="40" r="3" stroke="currentColor" strokeWidth="1" fill="none" />
+                <circle cx="88" cy="40" r="3" stroke="currentColor" strokeWidth="1" fill="none" />
+                <path d="M45 25 L55 40 L45 55" stroke="currentColor" strokeWidth="0.8" strokeLinecap="round" strokeLinejoin="round" fill="none" opacity="0.5" />
+                <path d="M35 55 L45 55" stroke="currentColor" strokeWidth="0.8" strokeLinecap="round" fill="none" opacity="0.5" />
+            </svg>,
+        ];
+        return patterns[index % patterns.length];
+    }, [index, className]);
+
+    return (
+        <div className="absolute bottom-0 right-0 w-28 h-28 md:w-36 md:h-36 opacity-[0.04] dark:opacity-[0.07] pointer-events-none select-none">
+            {svg}
+        </div>
+    );
+}
 
 // ============================================
 // DATA: GLOBAL STATS
@@ -67,225 +170,100 @@ const globalStats = [
 // ============================================
 const features = [
     {
-        icon: GitBranch,
-        title: "Deployment Previews",
-        description: "Spin up isolated, ephemeral environments for every pull request with auto-injected secrets and storage.",
-        color: "text-blue-500",
-        bg: "bg-blue-500/10"
+        icon: Shield,
+        title: "Enterprise Security Hardening",
+        description: "RCE-proof database execution, strict runtime sandboxing, and secure isolated environments for every workload.",
+        color: "text-emerald-500",
+        bg: "bg-emerald-500/10",
+        span: "col-span-1 md:col-span-2 row-span-1"
     },
     {
-        icon: Database,
-        title: "Database Cloning",
-        description: "Zero-copy PostgreSQL template cloning provides instant staging data for previews without the wait.",
-        color: "text-purple-500",
-        bg: "bg-purple-500/10"
+        icon: Cloud,
+        title: "Multi-Database S3 Backups",
+        description: "Automated, encrypted snapshots of PostgreSQL, MySQL, and Redis shipped securely to S3, Cloudflare R2, or MinIO.",
+        color: "text-amber-500",
+        bg: "bg-amber-500/10",
+        span: "col-span-1 md:col-span-1 row-span-1"
     },
     {
         icon: Bot,
-        title: "Multi-Provider AI Engine",
-        description: "17 AI providers with Senate Committee deliberation. Auto-diagnose failures, recommend fixes, and apply remediation.",
+        title: "AI Auto-Remediation",
+        description: "Intelligent log analysis diagnoses crash loops, auto-applies fixes, and re-deploys without human intervention.",
         color: "text-violet-500",
-        bg: "bg-violet-500/10"
-    },
-    {
-        icon: Container,
-        title: "Addon Marketplace",
-        description: "35+ managed data services — PostgreSQL, Redis, MongoDB, Kafka, Elasticsearch, MinIO, Qdrant, and more — one-click provision.",
-        color: "text-orange-500",
-        bg: "bg-orange-500/10"
-    },
-    {
-        icon: Workflow,
-        title: "Blueprints & AI Clusters",
-        description: "One-click deployment for GPU-accelerated LLMs like Ollama, DeepSeek, and custom private data stacks.",
-        color: "text-amber-500",
-        bg: "bg-amber-500/10"
-    },
-    {
-        icon: Server,
-        title: "Managed Fleet Servers",
-        description: "Connect, provision, and orchestrate multiple VPS nodes. Auto health-check, token exchange, and cluster management.",
-        color: "text-indigo-500",
-        bg: "bg-indigo-500/10"
-    },
-    {
-        icon: Waypoints,
-        title: "Dev Tunnels & Subdomains",
-        description: "Expose local dev servers via public URLs with request inspection, replay, and persistent subdomain reservations.",
-        color: "text-rose-500",
-        bg: "bg-rose-500/10"
-    },
-    {
-        icon: Globe,
-        title: "Global Edge Routing",
-        description: "Automated Let's Encrypt SSL and Caddy proxying routes traffic instantly to your global container mesh.",
-        color: "text-teal-500",
-        bg: "bg-teal-500/10"
-    },
-    {
-        icon: Activity,
-        title: "Observability & Mesh",
-        description: "Traefik metrics and WireGuard VPN stats feed real-time health insights and autoscale decisions.",
-        color: "text-cyan-500",
-        bg: "bg-cyan-500/10"
-    },
-    {
-        icon: BrainCircuit,
-        title: "Auto-Remediation",
-        description: "Intelligent log analysis diagnoses crash loops, auto-applies fixes, creates PRs, and re-deploys without human intervention.",
-        color: "text-emerald-500",
-        bg: "bg-emerald-500/10"
+        bg: "bg-violet-500/10",
+        span: "col-span-1 md:col-span-1 row-span-2"
     },
     {
         icon: GanttChartSquare,
         title: "Ecosystem Deployer",
-        description: "Scan all your repos, build a dependency graph, and deploy 30+ connected microservices in dependency-aware waves.",
+        description: "Scan your repos, build a dependency graph, and deploy 30+ connected microservices in dependency-aware waves.",
         color: "text-pink-500",
-        bg: "bg-pink-500/10"
-    },
-    {
-        icon: Blocks,
-        title: "Multi-Git Providers",
-        description: "Connect GitHub, GitLab, and Bitbucket. Deploy from any provider with unified CI/CD, auto-deploy on push, and instant rollbacks.",
-        color: "text-sky-500",
-        bg: "bg-sky-500/10"
-    },
-    {
-        icon: Boxes,
-        title: "Nixpacks Build Support",
-        description: "Auto-detect and build any language with Nixpacks. No Dockerfile needed — Python, Node, Go, Rust, Elixir, and more just work.",
-        color: "text-fuchsia-500",
-        bg: "bg-fuchsia-500/10"
-    },
-    {
-        icon: Cloud,
-        title: "S3 Backup Destinations",
-        description: "Back up databases, volumes, and configs to S3, Cloudflare R2, or MinIO. Automated schedules with point-in-time recovery.",
-        color: "text-amber-500",
-        bg: "bg-amber-500/10"
-    },
-    {
-        icon: AppWindow,
-        title: "Serverless Functions (FaaS)",
-        description: "In-browser Monaco editor to write and deploy Node.js or Python functions instantly — no repo, no Dockerfile, no config.",
-        color: "text-violet-500",
-        bg: "bg-violet-500/10"
-    },
-    {
-        icon: TrendingUp,
-        title: "Predictive Auto-Scaling",
-        description: "AI-driven scaling that predicts load spikes before they hit. Proactively provisions resources using historical patterns and real-time metrics.",
-        color: "text-rose-500",
-        bg: "bg-rose-500/10"
-    },
-    {
-        icon: Terminal,
-        title: "Container Terminal",
-        description: "Web-based SSH into any running container. Debug, inspect logs, run migrations, and manage state without leaving the dashboard.",
-        color: "text-teal-500",
-        bg: "bg-teal-500/10"
-    },
-    {
-        icon: Folders,
-        title: "File Browser",
-        description: "Browse, upload, download, and edit files inside any running container or attached volume — no CLI needed.",
-        color: "text-yellow-500",
-        bg: "bg-yellow-500/10"
-    },
-    {
-        icon: Search,
-        title: "Real-Time Log Streaming",
-        description: "Tail container logs in real time with Loki-powered search, filtering, and multi-service aggregation — all in your browser.",
-        color: "text-sky-500",
-        bg: "bg-sky-500/10"
-    },
-    {
-        icon: BarChart3,
-        title: "Metrics Dashboard",
-        description: "CPU, memory, network, and disk metrics powered by Prometheus and cAdvisor. Historical graphs and live snapshots for every service.",
-        color: "text-emerald-500",
-        bg: "bg-emerald-500/10"
-    },
-    {
-        icon: Cpu,
-        title: "Horizontal Scaling",
-        description: "Scale any service horizontally across replicas. Adjust CPU, memory, and replica count per service with instant apply.",
-        color: "text-orange-500",
-        bg: "bg-orange-500/10"
-    },
-    {
-        icon: Timer,
-        title: "Cron Jobs",
-        description: "Schedule recurring tasks per service. Define cron expressions or pre-set intervals — backups, cleanup, pings, and automation.",
-        color: "text-rose-500",
-        bg: "bg-rose-500/10"
-    },
-    {
-        icon: Network,
-        title: "Lite Edge Agents",
-        description: "Extend your grid to any VPS or edge location. Lite agents share your master database and registry while running local workloads.",
-        color: "text-purple-500",
-        bg: "bg-purple-500/10"
-    },
-    {
-        icon: Users,
-        title: "Teams & Collaboration",
-        description: "Invite team members with role-based access. Manage services, deployments, and environments together — unlimited seats, no per-user pricing.",
-        color: "text-blue-500",
-        bg: "bg-blue-500/10"
-    },
-    {
-        icon: Key,
-        title: "API Tokens & CLI",
-        description: "Generate scoped API tokens for automated workflows. Full-featured CLI for deployments, logs, secrets, env vars, domains, and certificates.",
-        color: "text-fuchsia-500",
-        bg: "bg-fuchsia-500/10"
-    },
-    {
-        icon: RefreshCw,
-        title: "Blue-Green Deployments",
-        description: "Zero-downtime deployments with automatic traffic shifting. Run two identical environments and switch instantly on success.",
-        color: "text-cyan-500",
-        bg: "bg-cyan-500/10"
-    },
-    {
-        icon: Shield,
-        title: "Safe Deploy & Approvals",
-        description: "Stage rollouts behind approval gates. Deploy to preview, run verification checks, and promote to production with a single click.",
-        color: "text-indigo-500",
-        bg: "bg-indigo-500/10"
-    },
-    {
-        icon: Cable,
-        title: "Docker & Kubernetes Targets",
-        description: "Deploy to Docker or Kubernetes clusters. The platform auto-detects your runtime and applies the right orchestrator strategy.",
-        color: "text-sky-500",
-        bg: "bg-sky-500/10"
-    },
-    {
-        icon: Activity,
-        title: "Topology Visualization",
-        description: "Interactive service dependency graph showing connections between apps, addons, volumes, domains, and tunnels — updated in real time.",
-        color: "text-emerald-500",
-        bg: "bg-emerald-500/10"
-    },
-    {
-        icon: Lock,
-        title: "Custom SSL Manager",
-        description: "Upload and manage your own SSL certificates per custom domain. Full Let's Encrypt integration with automatic renewal.",
-        color: "text-violet-500",
-        bg: "bg-violet-500/10"
+        bg: "bg-pink-500/10",
+        span: "col-span-1 md:col-span-2 row-span-1"
     },
     {
         icon: ArrowRight,
         title: "Disaster Recovery",
-        description: "Automatic master DB snapshots pushed to every lite agent. One-click promote an agent to master if the primary fails — no data loss.",
+        description: "Automatic master DB snapshots pushed to edge agents. One-click promote to master on primary failure.",
         color: "text-rose-500",
-        bg: "bg-rose-500/10"
+        bg: "bg-rose-500/10",
+        span: "col-span-1 md:col-span-1 row-span-1"
+    },
+    {
+        icon: Terminal,
+        title: "Web Container Terminal",
+        description: "Web-based SSH into any running container to debug and inspect state natively.",
+        color: "text-teal-500",
+        bg: "bg-teal-500/10",
+        span: "col-span-1 md:col-span-1 row-span-1"
     }
 ];
 
 
+
+
+// --- REDESIGN DATA ---
+const ecosystemHighlights = [
+    { icon: BrainCircuit, title: "Multi-Provider AI Engine", description: "17 AI providers with Senate Committee deliberation." },
+    { icon: Workflow, title: "Blueprints & Clusters", description: "One-click deployment for GPU-accelerated LLMs." },
+    { icon: AppWindow, title: "Serverless FaaS", description: "In-browser Monaco editor to deploy functions instantly." },
+    { icon: Server, title: "Managed Fleet Servers", description: "Connect, provision, and orchestrate multiple VPS nodes." }
+];
+
+const dataDevopsCards = [
+    { icon: Container, title: "Addon Marketplace", description: "35+ managed data services — PostgreSQL, Redis, MongoDB, Kafka." },
+    { icon: Database, title: "Database Cloning", description: "Zero-copy PostgreSQL template cloning provides instant staging data." },
+    { icon: GitBranch, title: "Deployment Previews", description: "Spin up isolated, ephemeral environments for every pull request." },
+    { icon: Blocks, title: "Multi-Git Providers", description: "Connect GitHub, GitLab, and Bitbucket. Auto-deploy on push." },
+    { icon: Boxes, title: "Nixpacks Build Support", description: "Auto-detect and build any language with Nixpacks." },
+    { icon: Waypoints, title: "Dev Tunnels", description: "Expose local dev servers via public URLs with request inspection." }
+];
+
+const edgeSecurityTicker = [
+    { icon: Globe, title: "Global Edge Routing" },
+    { icon: Network, title: "Lite Edge Agents" },
+    { icon: Lock, title: "Custom SSL Manager" },
+    { icon: Shield, title: "Safe Deploy & Approvals" },
+    { icon: Key, title: "API Tokens & CLI" }
+];
+
+const observabilityBento = [
+    { icon: TrendingUp, title: "Predictive Auto-Scaling", description: "AI-driven scaling that predicts load spikes.", colSpan: "col-span-1 md:col-span-2" },
+    { icon: Activity, title: "Observability Mesh", description: "Traefik metrics and WireGuard VPN stats feed real-time health insights.", colSpan: "col-span-1" },
+    { icon: Cpu, title: "Horizontal Scaling", description: "Scale any service horizontally across replicas.", colSpan: "col-span-1" },
+    { icon: Search, title: "Real-Time Log Streaming", description: "Tail container logs in real time with Loki-powered search.", colSpan: "col-span-1" },
+    { icon: BarChart3, title: "Metrics Dashboard", description: "CPU, memory, network, and disk metrics.", colSpan: "col-span-1" },
+    { icon: Activity, title: "Topology Visualization", description: "Interactive service dependency graph.", colSpan: "col-span-1 md:col-span-3" }
+];
+
+const utilityList = [
+    { icon: Folders, title: "File Browser", description: "Browse, upload, download, and edit files inside any running container." },
+    { icon: Timer, title: "Cron Jobs", description: "Schedule recurring tasks per service." },
+    { icon: Users, title: "Teams & Collaboration", description: "Invite team members with role-based access." },
+    { icon: RefreshCw, title: "Blue-Green Deployments", description: "Zero-downtime deployments with automatic traffic shifting." },
+    { icon: Cable, title: "Docker Swarm Targets", description: "Deploy to Docker environments effortlessly." }
+];
+// ---------------------
 
 // ============================================
 // DATA: BATTLE CARDS (COMPARISON)
@@ -739,9 +717,10 @@ export default function Home() {
                                  whileInView={{ opacity: 1, y: 0 }}
                                  viewport={{ once: true }}
                                  transition={{ delay: i * 0.1 }}
-                                 className="flex flex-col bg-white dark:bg-slate-800 p-8 rounded-[2rem] border border-slate-200 dark:border-slate-700 shadow-sm hover:shadow-xl hover:shadow-emerald-500/5 transition-all group"
+                                 className="flex flex-col bg-white dark:bg-slate-800 p-8 rounded-[2rem] border border-slate-200 dark:border-slate-700 shadow-sm hover:shadow-xl hover:shadow-emerald-500/5 transition-all group overflow-hidden relative"
                              >
-                                 <div className={`w-12 h-12 rounded-xl ${cat.bg} ${cat.color} flex items-center justify-center mb-6 group-hover:scale-110 transition-transform`}>
+                                 <CardIllustration index={i + 22} />
+                                 <div className={`w-12 h-12 rounded-xl ${cat.bg} ${cat.color} flex items-center justify-center mb-6 group-hover:scale-110 transition-transform relative z-10`}>
                                      <cat.icon className="w-6 h-6" />
                                  </div>
                                  <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-6">{cat.category}</h3>
@@ -847,23 +826,171 @@ export default function Home() {
                         </p>
                     </motion.div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 md:gap-6">
+                    <div className="grid grid-cols-1 md:grid-cols-3 auto-rows-[280px] gap-4 md:gap-6">
                         {features.map((feature, i) => (
                             <motion.div
                                 key={feature.title}
-                                initial={{ opacity: 0, y: 20 }}
-                                whileInView={{ opacity: 1, y: 0 }}
+                                initial={{ opacity: 0, scale: 0.95 }}
+                                whileInView={{ opacity: 1, scale: 1 }}
                                 viewport={{ once: true }}
-                                transition={{ delay: Math.min(i * 0.03, 0.4) }}
-                                className="group p-5 md:p-6 rounded-2xl bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700/50 hover:border-emerald-500/50 hover:shadow-lg hover:shadow-emerald-500/5 transition-all duration-300"
+                                transition={{ delay: i * 0.1, duration: 0.5, type: 'spring' }}
+                                className={`group p-6 md:p-8 rounded-3xl bg-white dark:bg-slate-800/80 backdrop-blur-xl border border-slate-100 dark:border-slate-700 hover:border-emerald-500/50 hover:shadow-2xl hover:shadow-emerald-500/10 transition-all duration-500 flex flex-col justify-between overflow-hidden relative ${feature.span}`}
                             >
-                                <div className={`inline-flex p-2.5 md:p-3 rounded-xl ${feature.bg} mb-3 md:mb-4 group-hover:rotate-6 transition-transform duration-300`}>
-                                    <feature.icon className={`w-4 h-4 md:w-5 md:h-5 ${feature.color}`} />
+                                {/* Background gradient glow */}
+                                <div className={`absolute -right-20 -top-20 w-40 h-40 rounded-full blur-3xl opacity-20 group-hover:opacity-40 transition-opacity duration-500 ${feature.bg.split('/')[0].replace('bg-', '')}`} />
+                                
+                                <CardIllustration index={i} />
+                                
+                                <div className={`inline-flex items-center justify-center w-12 h-12 md:w-14 md:h-14 rounded-2xl ${feature.bg} mb-4 group-hover:scale-110 group-hover:-rotate-6 transition-transform duration-500 relative z-10`}>
+                                    <feature.icon className={`w-6 h-6 md:w-7 md:h-7 ${feature.color}`} />
                                 </div>
-                                <h3 className="text-sm md:text-base font-bold mb-1.5 md:mb-2 text-slate-900 dark:text-white">{feature.title}</h3>
-                                <p className="text-xs md:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">{feature.description}</p>
+                                
+                                <div className="mt-auto relative z-10">
+                                    <h3 className="text-lg md:text-xl font-extrabold mb-2 text-slate-900 dark:text-white tracking-tight">{feature.title}</h3>
+                                    <p className="text-sm md:text-base text-slate-600 dark:text-slate-400 leading-relaxed">{feature.description}</p>
+                                </div>
                             </motion.div>
                         ))}
+                    </div>
+
+                    {/* SECTION 1: ECOSYSTEM BANNER */}
+                    <div className="mt-32 rounded-3xl bg-gradient-to-br from-slate-900 via-slate-800 to-emerald-950 p-8 md:p-12 lg:p-16 overflow-hidden relative border border-slate-700/50">
+                        <div className="absolute -top-24 -right-24 w-96 h-96 bg-emerald-500/20 blur-[100px] rounded-full pointer-events-none"></div>
+                        <div className="absolute -bottom-24 -left-24 w-96 h-96 bg-blue-500/20 blur-[100px] rounded-full pointer-events-none"></div>
+                        
+                        <div className="relative z-10 grid lg:grid-cols-2 gap-12 items-center">
+                            <div>
+                                <Badge variant="outline" className="text-emerald-400 border-emerald-400/30 mb-6 bg-emerald-400/10 hover:bg-emerald-400/20">The Complete OS</Badge>
+                                <h3 className="text-3xl md:text-5xl font-extrabold text-white mb-6 leading-tight">
+                                    A Full-Stack Ecosystem <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-cyan-400">Out of the Box</span>
+                                </h3>
+                                <p className="text-slate-300 text-lg leading-relaxed mb-8">
+                                    We didn&apos;t just build a deployment engine; we built an entire cloud OS. From edge networking to serverless functions and managed databases, everything you need is pre-configured, auto-scaling, and ready to deploy.
+                                </p>
+                            </div>
+                            
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                {ecosystemHighlights.map((feat, i) => (
+                                    <motion.div 
+                                        key={i}
+                                        initial={{ opacity: 0, y: 20 }}
+                                        whileInView={{ opacity: 1, y: 0 }}
+                                        viewport={{ once: true }}
+                                        transition={{ delay: i * 0.1 }}
+                                        className="bg-slate-800/50 backdrop-blur-md border border-slate-700/50 rounded-2xl p-6 hover:bg-slate-800/80 transition-colors relative overflow-hidden"
+                                    >
+                                        <CardIllustration index={i + 12} />
+                                        <feat.icon className="w-8 h-8 text-emerald-400 mb-4 relative z-10" />
+                                        <h4 className="text-white font-bold mb-2 relative z-10">{feat.title}</h4>
+                                        <p className="text-slate-400 text-sm relative z-10">{feat.description}</p>
+                                    </motion.div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* SECTION 2: DATA & DEVOPS CARDS */}
+                    <div className="mt-32">
+                        <div className="text-center mb-16">
+                            <h3 className="text-3xl font-bold text-slate-900 dark:text-white mb-4">Data Services & CI/CD</h3>
+                            <p className="text-slate-600 dark:text-slate-400 max-w-2xl mx-auto">Everything you need to manage your data layer and automate your deployment pipelines effortlessly.</p>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+                            {dataDevopsCards.map((feat, i) => (
+                                <motion.div 
+                                    key={i}
+                                    initial={{ opacity: 0, scale: 0.95 }}
+                                    whileInView={{ opacity: 1, scale: 1 }}
+                                    viewport={{ once: true }}
+                                    transition={{ delay: i * 0.05 }}
+                                    className="group relative bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-8 rounded-2xl hover:shadow-xl hover:shadow-emerald-500/5 transition-all overflow-hidden"
+                                >
+                                    <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/5 dark:bg-emerald-500/10 blur-[50px] rounded-full group-hover:bg-emerald-500/20 transition-colors pointer-events-none"></div>
+                                    <CardIllustration index={i + 6} />
+                                    <div className="w-16 h-16 bg-emerald-50 dark:bg-slate-800 text-emerald-600 dark:text-emerald-400 rounded-2xl flex items-center justify-center mb-8 group-hover:scale-110 transition-transform shadow-sm border border-emerald-100 dark:border-slate-700 relative z-10">
+                                        <feat.icon className="w-8 h-8" />
+                                    </div>
+                                    <h4 className="text-xl md:text-2xl font-bold text-slate-900 dark:text-white mb-4 group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors relative z-10">{feat.title}</h4>
+                                    <p className="text-slate-600 dark:text-slate-400 leading-relaxed text-base md:text-lg relative z-10">{feat.description}</p>
+                                </motion.div>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* SECTION 3: EDGE & SECURITY TICKER */}
+                    <div className="mt-32 bg-slate-50 dark:bg-slate-900/50 py-16 border-y border-slate-200 dark:border-slate-800 overflow-hidden relative flex flex-col items-center">
+                        <Badge variant="secondary" className="mb-8">Global Edge & Zero-Trust Security</Badge>
+                        
+                        <div className="w-full flex overflow-hidden group">
+                            <motion.div 
+                                className="flex whitespace-nowrap gap-8 pr-8"
+                                animate={{ x: ["0%", "-50%"] }}
+                                transition={{ repeat: Infinity, ease: "linear", duration: 20 }}
+                                style={{ width: "fit-content" }}
+                            >
+                                {[...edgeSecurityTicker, ...edgeSecurityTicker].map((feat, i) => (
+                                    <div key={i} className="inline-flex items-center gap-4 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-full px-6 py-3 shadow-sm hover:border-emerald-500 transition-colors cursor-default">
+                                        <feat.icon className="w-5 h-5 text-emerald-500" />
+                                        <span className="font-bold text-slate-900 dark:text-white">{feat.title}</span>
+                                    </div>
+                                ))}
+                            </motion.div>
+                        </div>
+                    </div>
+
+                    {/* SECTION 4: OBSERVABILITY BENTO */}
+                    <div className="mt-32">
+                        <div className="text-center mb-16">
+                            <h3 className="text-3xl font-bold text-slate-900 dark:text-white mb-4">Monitor & Auto-Scale</h3>
+                            <p className="text-slate-600 dark:text-slate-400">Keep a pulse on your fleet and let AI scale it automatically.</p>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 auto-rows-[240px]">
+                            {observabilityBento.map((feat, i) => (
+                                <motion.div 
+                                    key={i}
+                                    initial={{ opacity: 0, y: 15 }}
+                                    whileInView={{ opacity: 1, y: 0 }}
+                                    viewport={{ once: true }}
+                                    transition={{ delay: i * 0.05 }}
+                                    className={`bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 flex flex-col justify-between hover:border-emerald-500/50 transition-colors overflow-hidden relative ${feat.colSpan}`}
+                                >
+                                    <CardIllustration index={i + 16} />
+                                    <div className="w-10 h-10 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-lg flex items-center justify-center relative z-10">
+                                        <feat.icon className="w-5 h-5" />
+                                    </div>
+                                    <div className="relative z-10">
+                                        <h4 className="font-bold text-slate-900 dark:text-white mb-2">{feat.title}</h4>
+                                        <p className="text-sm text-slate-500 dark:text-slate-400 line-clamp-2">{feat.description}</p>
+                                    </div>
+                                </motion.div>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* SECTION 5: UTILITIES LIST */}
+                    <div className="mt-32 mb-16 border-t border-slate-200 dark:border-slate-800 pt-24">
+                        <div className="flex flex-col md:flex-row gap-16">
+                            <div className="md:w-1/3">
+                                <h3 className="text-3xl font-bold text-slate-900 dark:text-white mb-4">And so much more...</h3>
+                                <p className="text-slate-600 dark:text-slate-400 mb-8">We sweat the details so you don&apos;t have to. Every utility you need to run a robust engineering organization is included.</p>
+                                <Button variant="outline" className="w-full sm:w-auto">View Full Documentation</Button>
+                            </div>
+                            <div className="md:w-2/3">
+                                <ul className="space-y-6">
+                                    {utilityList.map((feat, i) => (
+                                        <li key={i} className="flex gap-4 group">
+                                            <div className="mt-1 flex-shrink-0 text-slate-400 group-hover:text-emerald-500 transition-colors">
+                                                <feat.icon className="w-6 h-6" />
+                                            </div>
+                                            <div>
+                                                <h4 className="text-lg font-bold text-slate-900 dark:text-white group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">{feat.title}</h4>
+                                                <p className="text-slate-600 dark:text-slate-400">{feat.description}</p>
+                                            </div>
+                                        </li>
+                                    ))}
+                                </ul>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </section>

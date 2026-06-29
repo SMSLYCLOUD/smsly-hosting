@@ -9,7 +9,6 @@ from typing import Any
 
 import docker
 from django.conf import settings
-from kubernetes import client, config
 
 from .base import BaseCloudAdapter
 
@@ -132,7 +131,6 @@ class LocalAdapter(BaseCloudAdapter):
     def __init__(self, mode: str = 'AUTO'):
         self.mode = mode
         self.docker_client = None
-        self.k8s_client = None
         self.batch_v1 = None
 
         try:
@@ -206,7 +204,7 @@ class LocalAdapter(BaseCloudAdapter):
         labels[f'traefik.http.routers.{router_name}.priority'] = '1000'
 
     def authenticate(self) -> bool:
-        return self.docker_client is not None or self.k8s_client is not None
+        return self.docker_client is not None
 
     def pull_image(self, image: str) -> bool:
         """Pull image from registry."""

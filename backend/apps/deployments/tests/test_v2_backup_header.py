@@ -29,6 +29,7 @@ from apps.deployments.services.backup_service import (
     _CHUNKED_BACKUP_FINGERPRINT_BYTES,
     _CHUNKED_BACKUP_KEY_ID_BYTES,
     _CHUNKED_BACKUP_V2_MAGIC,
+    _CHUNKED_BACKUP_V3_MAGIC,
     BackupKeyCollisionError,
     BackupService,
     UnknownBackupKeyIdError,
@@ -87,16 +88,16 @@ class V2HeaderRoundTripTests(TestCase):
         with contextlib.suppress(OSError):
             os.rmdir(parent)
 
-    def test_encrypt_writes_v2_magic_with_key_id_and_fingerprint(self):
+    def test_encrypt_writes_v3_magic_with_key_id_and_fingerprint(self):
         key = Fernet.generate_key().decode()
         with patch.dict(os.environ, {'BACKUP_ENCRYPTION_KEY': key}, clear=False):
-            payload = b"hello-v2-archive"
+            payload = b"hello-v3-archive"
             archive = self._write_fake_archive(payload)
             enc_path = BackupService()._maybe_encrypt(archive)
             self.assertTrue(enc_path.endswith('.enc'))
             with open(enc_path, 'rb') as f:
-                magic = f.read(len(_CHUNKED_BACKUP_V2_MAGIC))
-                self.assertEqual(magic, _CHUNKED_BACKUP_V2_MAGIC)
+                magic = f.read(len(_CHUNKED_BACKUP_V3_MAGIC))
+                self.assertEqual(magic, _CHUNKED_BACKUP_V3_MAGIC)
                 key_id = f.read(_CHUNKED_BACKUP_KEY_ID_BYTES)
                 fingerprint = f.read(_CHUNKED_BACKUP_FINGERPRINT_BYTES)
             self.assertEqual(len(key_id), _CHUNKED_BACKUP_KEY_ID_BYTES)
@@ -167,8 +168,8 @@ class V2HeaderDecryptTests(TestCase):
         with patch.dict(os.environ, {'BACKUP_ENCRYPTION_KEY': key}, clear=False):
             enc_path = BackupService()._maybe_encrypt(archive)
             with open(enc_path, 'rb') as f:
-                magic = f.read(len(_CHUNKED_BACKUP_V2_MAGIC))
-            self.assertEqual(magic, _CHUNKED_BACKUP_V2_MAGIC)
+                magic = f.read(len(_CHUNKED_BACKUP_V3_MAGIC))
+            self.assertEqual(magic, _CHUNKED_BACKUP_V3_MAGIC)
             dec_path = BackupService.decrypt_backup(enc_path, key)
             with open(dec_path, 'rb') as f:
                 self.assertEqual(f.read(), payload)
@@ -303,7 +304,7 @@ class V2HeaderReadTests(TestCase):
             try:
                 enc_path = BackupService()._maybe_encrypt(archive)
                 info = BackupService.read_v2_header(enc_path)
-                self.assertEqual(info['magic'], 'V2')
+                self.assertIn(info['magic'], ('V2', 'V3'))
                 self.assertEqual(len(info['key_id']), 8)
                 self.assertEqual(len(info['fingerprint']), 8)
                 self.assertEqual(

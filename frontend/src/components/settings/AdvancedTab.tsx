@@ -64,8 +64,8 @@ export function AdvancedTab({ service }: { service: Service }) {
             <Card className="p-6 border-border shadow-md">
                 <div className="flex justify-between items-center mb-4">
                     <div>
-                        <h3 className="font-bold text-lg">Raw Pod Configuration</h3>
-                        <p className="text-sm text-muted-foreground">Directly override Kubernetes specifications.</p>
+                        <h3 className="font-bold text-lg">Raw Container Configuration</h3>
+                        <p className="text-sm text-muted-foreground">Directly override Docker specifications.</p>
                     </div>
                     <Button variant="outline" className="gap-2">
                         <Save size={16} /> Apply
@@ -76,7 +76,7 @@ export function AdvancedTab({ service }: { service: Service }) {
                         height="100%"
                         defaultLanguage="json"
                         defaultValue={`{
-  "spec": {
+  "config": {
     "containers": [
       {
         "name": "${service.name}",
