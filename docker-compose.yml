@@ -534,7 +534,7 @@ services:
     networks:
       - smsly-net
     healthcheck:
-      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/9080 && echo -e \"GET /ready HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n\" >&3 && grep -q \"200 OK\" <&3' || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:9080/ready || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -643,7 +643,7 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
-    image: python:3.12-alpine
+    image: python:3.12-slim
     container_name: smsly-docker-labels
     restart: unless-stopped
     command: python3 -u /app/exporter.py
@@ -661,7 +661,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 60s
 
   # Grafana - Dashboards and visualization
   grafana:
