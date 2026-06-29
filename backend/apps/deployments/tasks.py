@@ -4171,39 +4171,6 @@ from apps.deployments.tasks_backup import (  # noqa: E402, F401
 )
 
 
-@shared_task
-def run_scheduled_backups_task():
-    """Execute all due BackupSchedule entries."""
-    from datetime import datetime
-
-    import croniter  # type: ignore[import-untyped]
-    from django.utils import timezone
-
-    from .models_backup import BackupSchedule
-
-    now = timezone.now()
-    schedules = BackupSchedule.objects.filter(enabled=True)
-    ran = 0
-    for sched in schedules:
-        try:
-            cron = croniter.croniter(sched.cron_expression, now)
-            next_run = cron.get_next(datetime)
-            if sched.last_run and sched.last_run >= timezone.make_aware(datetime.fromtimestamp(next_run), timezone.get_current_timezone()):
-                continue
-            sched.last_run = now
-            sched.next_run = timezone.make_aware(datetime.fromtimestamp(cron.get_next(datetime)))
-            sched.save(update_fields=['last_run', 'next_run'])
-
-            if sched.is_server_wide:
-                create_server_backup_task.delay()
-            elif sched.service:
-                create_service_backup_task.delay(str(sched.service.id), backup_type='SCHEDULED')
-            ran += 1
-        except Exception as exc:
-            logger.warning("Scheduled backup failed for schedule %s: %s", sched.id, exc)
-    return ran
-
-
 @shared_task(bind=True, soft_time_limit=3600, time_limit=4200)
 def execute_server_transfer_task(self, transfer_id):
     from apps.deployments.services.transfer_service import _redact_transfer_text
