@@ -259,7 +259,7 @@ def cleanup_old_backups_task():
 @shared_task
 def run_scheduled_backups_task():
     """Execute all due BackupSchedule entries."""
-    from datetime import datetime, timezone as dt_timezone
+    from datetime import datetime
 
     import croniter  # type: ignore[import-untyped]
 
@@ -279,8 +279,6 @@ def run_scheduled_backups_task():
             # where a failed task leaves the schedule thinking it ran.
             cron = croniter.croniter(sched.cron_expression, now)
             next_dt = cron.get_next(datetime)
-            if timezone.is_aware(next_dt):
-                next_dt = timezone.make_naive(next_dt, dt_timezone.utc)
             sched.next_run = next_dt
             sched.save(update_fields=['next_run'])
 
@@ -297,7 +295,7 @@ def run_scheduled_backups_task():
 @shared_task
 def run_scheduled_snapshots_task():
     """Execute all due SnapshotSchedule entries."""
-    from datetime import datetime, timezone as dt_timezone
+    from datetime import datetime
     import croniter  # type: ignore[import-untyped]
     from .models_backup import SnapshotSchedule
 
@@ -313,8 +311,6 @@ def run_scheduled_snapshots_task():
             
             cron = croniter.croniter(sched.cron_expression, now)
             next_dt = cron.get_next(datetime)
-            if timezone.is_aware(next_dt):
-                next_dt = timezone.make_naive(next_dt, dt_timezone.utc)
             sched.next_run = next_dt
             sched.save(update_fields=['next_run'])
 
