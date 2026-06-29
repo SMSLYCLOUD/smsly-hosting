@@ -136,12 +136,32 @@ export INSTALL_MODE MODE NODE_TYPE
 # try the Docker overlay DNS name (registry:5000) or the host loopback
 # (127.0.0.1:5000) and update .env automatically.
 # This prevents deploy failures when the .env has a stale or unreachable URL.
+# Inline env helpers (lib/env.sh is not sourced yet at this point)
+_env_get_value() {
+    grep -m1 "^${2}=" "$1" 2>/dev/null | cut -d= -f2- | sed 's/^"//;s/"$//;s/^'\''//;s/'\''$//' || true
+}
+_env_set_value() {
+    python3 - "$1" "$2" "$3" <<'PY'
+from pathlib import Path; import sys
+env_path = Path(sys.argv[1]); key = sys.argv[2]; value = sys.argv[3]; prefix = f"{key}="
+if not env_path.exists(): env_path.write_text(f"{key}={value}\n"); sys.exit(0)
+lines = env_path.read_text().splitlines(); updated = []; found = False
+for line in lines:
+    if line.startswith(prefix):
+        if not found: updated.append(f"{key}={value}"); found = True
+        continue
+    updated.append(line)
+if not found: updated.append(f"{key}={value}")
+env_path.write_text("\n".join(updated) + "\n")
+PY
+}
+
 _registry_self_heal() {
     local env_file="${1:-/opt/smsly-hosting/.env}"
     [ -f "$env_file" ] || return 0
 
     local configured_url
-    configured_url="$(env_get_value "$env_file" "CONTAINER_REGISTRY_URL")"
+    configured_url="$(_env_get_value "$env_file" "CONTAINER_REGISTRY_URL")"
     [ -n "$configured_url" ] || configured_url="127.0.0.1:5000"
 
     # If docker isn't available, skip
@@ -186,7 +206,7 @@ _registry_self_heal() {
     if [ "$working_url" != "$configured_url" ]; then
         echo -e "\033[0;33m⚠ Registry self-heal: CONTAINER_REGISTRY_URL=$configured_url is unreachable.\033[0m"
         echo -e "\033[0;33m  → Updating to $working_url (verified reachable).\033[0m"
-        env_set_value "$env_file" "CONTAINER_REGISTRY_URL" "$working_url"
+        _env_set_value "$env_file" "CONTAINER_REGISTRY_URL" "$working_url"
     fi
 }
 
@@ -194,7 +214,7 @@ _registry_self_heal() {
 if [ -f "/opt/smsly-hosting/.env" ]; then
     _registry_self_heal
 fi
-unset -f _registry_self_heal _test_registry
+unset -f _registry_self_heal _test_registry _env_get_value _env_set_value
 
 # ─── Resolve script path ─────────────────────────────────────────────────────
 SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || echo "$0")"
