@@ -1222,6 +1222,12 @@ class BackupService:
                 except Exception as e:
                     logger.error(f"Failed to backup service {service.name} during server backup: {e}")
 
+            if services.exists() and not included:
+                raise RuntimeError(
+                    f"Server backup failed: {services.count()} service(s) exist but 0 were backed up. "
+                    "Check the logs above for individual service backup errors."
+                )
+
             # 2.5 Addons Backup
             addons_dir = os.path.join(temp_dir, "addons")
             os.makedirs(addons_dir, exist_ok=True)
@@ -1356,7 +1362,7 @@ class BackupService:
 
             # Create pre-restore safety snapshots for each existing service
             # (only on a running server — skip for fresh restore targets)
-            if not requesting_user_id:
+            if requesting_user_id:
                 from apps.deployments.models import Service
                 for service in Service.objects.all():
                     try:
@@ -1373,15 +1379,26 @@ class BackupService:
             # Check if this is a full server backup (services/ dir) or a single service backup
             services_dir = os.path.join(temp_dir, "services")
             metadata_path = os.path.join(temp_dir, "metadata.json")
+            restored = 0
             if os.path.exists(services_dir):
                 for filename in os.listdir(services_dir):
-                    if filename.endswith(".tar.gz"):
+                    if filename.endswith((".tar.gz", ".tar.gz.enc")):
                         self._restore_service_from_file(os.path.join(services_dir, filename), owner=owner)
+                        restored += 1
             elif os.path.exists(metadata_path):
                 logger.info("Detected single-service backup archive. Restoring directly.")
                 self._restore_service_from_file(archive_path, owner=owner)
+                restored += 1
             else:
                 logger.warning("Server backup archive contains neither a services/ directory nor a metadata.json — nothing to restore.")
+
+            if restored == 0 and (os.path.exists(services_dir) or os.path.exists(metadata_path)):
+                files_found = os.listdir(services_dir) if os.path.exists(services_dir) else []
+                raise RuntimeError(
+                    f"Server restore completed but 0 services were restored. "
+                    f"Archive contains {len(files_found)} file(s) in services/ "
+                    f"(expected .tar.gz or .tar.gz.enc)."
+                )
 
         finally:
             if temp_dir and os.path.exists(temp_dir):
