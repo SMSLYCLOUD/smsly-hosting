@@ -2,6 +2,7 @@ import base64
 import binascii
 import contextlib
 import hashlib
+import io
 import json
 import logging
 import os
@@ -30,6 +31,28 @@ from apps.deployments.models_backup import ServerBackup, ServiceBackup
 from apps.deployments.models_storage import Volume
 
 logger = logging.getLogger(__name__)
+
+
+def _copy_file_to_container(docker_client, container_id: str, local_path: str,
+                            dest_path: str) -> None:
+    """Copy a local file into a Docker container via the docker-py API.
+
+    Uses ``put_archive`` with an in-memory tar stream so no
+    subprocess or docker CLI dependency is needed.  ``dest_path``
+    must be an absolute path inside the container including the
+    filename (e.g. ``/tmp/db_dump.sql``).
+    """
+    dest_dir = os.path.dirname(dest_path)
+    dest_name = os.path.basename(dest_path)
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode='w') as tar:
+        ti = tarfile.TarInfo(name=dest_name)
+        ti.size = os.path.getsize(local_path)
+        with open(local_path, 'rb') as f:
+            ti.type = tarfile.REGTYPE
+            tar.addfile(ti, f)
+    buf.seek(0)
+    docker_client.api.put_archive(container_id, dest_dir, buf)
 
 
 def _safe_tar_extractall(tar: tarfile.TarFile, dest: str) -> None:
@@ -112,6 +135,7 @@ class BackupKeyCollisionError(Exception):
 
 _CHUNKED_BACKUP_MAGIC = b"SMSLY-BACKUP-AESGCM-V1\n"
 _CHUNKED_BACKUP_V2_MAGIC = b"SMSLY-BACKUP-AESGCM-V2\n"
+_CHUNKED_BACKUP_V3_MAGIC = b"SMSLY-BACKUP-AESGCM-V3\n"
 _CHUNKED_BACKUP_NONCE_PREFIX_BYTES = 8
 _CHUNKED_BACKUP_KEY_ID_BYTES = 4
 _CHUNKED_BACKUP_FINGERPRINT_BYTES = 4
@@ -119,8 +143,22 @@ _DEFAULT_CRYPTO_CHUNK_SIZE = 4 * 1024 * 1024
 _FERNET_HEADER_SIZE = 1 + 8 + 16
 _FERNET_HMAC_SIZE = 32
 
+# Maximum backup archive size in bytes (default 50 GB).
+# Controlled by BACKUP_MAX_SIZE_BYTES env var.
+_DEFAULT_MAX_BACKUP_SIZE = 50 * 1024 * 1024 * 1024
+
 
 class BackupService:
+    @staticmethod
+    def _get_encryption_key():
+        key = os.environ.get("BACKUP_ENCRYPTION_KEY", "").strip()
+        if not key:
+            try:
+                from django.conf import settings
+                key = getattr(settings, "BACKUP_ENCRYPTION_KEY", "").strip()
+            except ImportError:
+                pass
+        return key
     def __init__(self):
         try:
             from apps.cloud.docker_client import get_docker_client
@@ -191,7 +229,7 @@ class BackupService:
         if not path.endswith(".enc"):
             return path, None
 
-        key = os.environ.get("BACKUP_ENCRYPTION_KEY", "").strip()
+        key = BackupService._get_encryption_key()
         if not key:
             raise ValueError("Encrypted backup detected but BACKUP_ENCRYPTION_KEY is not set.")
         decrypted_path = BackupService.decrypt_backup(path, key)
@@ -336,6 +374,7 @@ class BackupService:
                     # Remove partial file if it exists
                     if os.path.exists(image_path):
                         os.remove(image_path)
+                    raise RuntimeError(f"Failed to save image {image_tag}: {img_err}") from img_err
 
             # 2. Database dump (if container runs a DB — ensures consistent data)
             container_name = service.name
@@ -346,7 +385,8 @@ class BackupService:
             for vol in volumes:
                 if backup.db_only:
                     continue
-                vol_filename = f"volume_{vol.name}.tar.gz"
+                safe_vol_name = vol.name.replace('/', '_').replace('\\', '_').replace('..', '_')
+                vol_filename = f"volume_{safe_vol_name}.tar.gz"
                 vol_path = os.path.join(temp_dir, vol_filename)
 
                 logger.info(f"Backing up volume {vol.name}...")
@@ -368,8 +408,10 @@ class BackupService:
                     try:
                         self.docker_client.volumes.get(vol.name)
                     except docker.errors.NotFound:
-                        logger.warning(f"Docker volume {vol.name} not found, skipping.")
-                        continue
+                        raise RuntimeError(
+                            f"Docker volume {vol.name} is configured for service "
+                            f"{service.name} but does not exist on the host"
+                        )
 
                     # Stream tar content directly from a helper container
                     # We run 'tar cf - .' inside the volume
@@ -398,7 +440,7 @@ class BackupService:
 
                 except Exception as ve:
                     logger.error(f"Failed to backup volume {vol.name}: {ve}")
-                    # Continue with other volumes (partial backup is better than none)
+                    raise RuntimeError(f"Failed to backup volume {vol.name}: {ve}") from ve
 
             # 3. Create Final Archive
             safe_name = slugify(service.name) or f"service-{str(service.id)[:8]}"
@@ -416,8 +458,22 @@ class BackupService:
 
             backup.file_path = filepath
             backup.metadata = metadata
-            backup.status = 'COMPLETED'
             backup.size_bytes = os.path.getsize(filepath)
+
+            # Enforce maximum backup size
+            try:
+                max_bytes = int(os.environ.get("BACKUP_MAX_SIZE_BYTES", str(_DEFAULT_MAX_BACKUP_SIZE)))
+            except (TypeError, ValueError):
+                max_bytes = _DEFAULT_MAX_BACKUP_SIZE
+            if max_bytes > 0 and backup.size_bytes > max_bytes:
+                os.remove(filepath)
+                raise RuntimeError(
+                    f"Backup size ({backup.size_bytes} bytes) exceeds maximum "
+                    f"({max_bytes} bytes). Increase BACKUP_MAX_SIZE_BYTES or "
+                    "reduce service volume/content size."
+                )
+
+            backup.status = 'COMPLETED'
             sha = hashlib.sha256()
             with open(filepath, 'rb') as f:
                 for chunk in iter(lambda: f.read(8192), b''):
@@ -563,6 +619,7 @@ class BackupService:
                         )
 
             # 3. Load Docker Image
+            restored_image = target_service.docker_image
             image_path = os.path.join(temp_dir, "image.tar")
             if os.path.exists(image_path):
                 logger.info("Loading docker image...")
@@ -622,7 +679,7 @@ class BackupService:
                         # 1. Start a temporary helper container
                         helper = self.docker_client.containers.run(
                             "alpine:latest",
-                            command=["sleep", "3600"],
+                            command=["sleep", "86400"],
                             volumes={vol_obj.name: {'bind': '/dest', 'mode': 'rw'}},
                             detach=True,
                             remove=True
@@ -663,46 +720,138 @@ class BackupService:
 
             # 5. Restore database from SQL dump if present (safety net for services that run a DB)
             db_dump = os.path.join(temp_dir, 'db_dump.sql')
-            if os.path.exists(db_dump) and os.path.getsize(db_dump) > 0 and restored_image:
-                logger.info("Restoring database from SQL dump...")
+            redis_dump = os.path.join(temp_dir, 'redis_dump.rdb')
+            image_lower = (restored_image or '').lower()
+            
+            vol_binds = {}
+            for vol_meta in metadata.get('volumes', []):
+                vol_obj = Volume.objects.filter(
+                    service=target_service, mount_path=vol_meta['mount_path']
+                ).first()
+                if vol_obj:
+                    vol_binds[vol_obj.name] = {'bind': vol_meta['mount_path'], 'mode': 'rw'}
+
+            if os.path.exists(redis_dump) and os.path.getsize(redis_dump) > 0 and 'redis' in image_lower:
+                logger.info("Restoring Redis RDB dump...")
                 try:
-                    db_user = 'postgres'
-                    db_name = 'postgres'
-                    for ev in metadata.get('env_vars', []):
-                        if ev['key'] == 'POSTGRES_USER':
-                            db_user = ev['value']
-                        elif ev['key'] == 'POSTGRES_DB':
-                            db_name = ev['value']
-                    vol_binds = {}
-                    for vol_meta in metadata.get('volumes', []):
-                        vol_obj = Volume.objects.filter(
-                            service=target_service, mount_path=vol_meta['mount_path']
-                        ).first()
-                        if vol_obj:
-                            vol_binds[vol_obj.name] = {'bind': vol_meta['mount_path'], 'mode': 'rw'}
+                    # For Redis, we just copy the RDB file into the data volume.
+                    # We assume the volume is bound to /data.
                     temp_ctr = self.docker_client.containers.run(
-                        restored_image,
-                        command=['sleep', '60'],
+                        "alpine:latest",
+                        command=["sleep", "60"],
                         volumes=vol_binds,
                         detach=True,
                         remove=True,
                     )
                     try:
-                        import subprocess as _sp
-                        _sp.run(
-                            ['docker', 'cp', db_dump, f'{temp_ctr.name}:/tmp/db_dump.sql'],
-                            check=True, timeout=30,
+                        _copy_file_to_container(
+                            self.docker_client, temp_ctr.id,
+                            redis_dump, '/tmp/dump.rdb',
                         )
-                        temp_ctr.exec_run(
-                            ['psql', '-U', db_user, '-d', db_name, '-f', '/tmp/db_dump.sql'],
-                            environment={'PGPASSWORD': os.environ.get('POSTGRES_PASSWORD', '')},
-                        )
-                        temp_ctr.exec_run(['rm', '/tmp/db_dump.sql'])
-                        logger.info("Database SQL dump restored successfully.")
+                        # Copy from tmp to whatever volume is mounted.
+                        temp_ctr.exec_run(['sh', '-c', 'cp /tmp/dump.rdb /data/dump.rdb || true'])
+                        logger.info("Redis RDB dump restored successfully.")
                     finally:
                         temp_ctr.remove(force=True)
                 except Exception as db_restore_err:
-                    logger.warning("Database SQL dump restore failed (non-fatal): %s", db_restore_err)
+                    raise RuntimeError(f"Redis dump restore failed: {db_restore_err}") from db_restore_err
+
+            elif os.path.exists(db_dump) and os.path.getsize(db_dump) > 0 and restored_image:
+                logger.info("Restoring database from SQL dump...")
+                try:
+                    import time
+                    
+                    if 'postgres' in image_lower:
+                        db_user = 'postgres'
+                        db_name = 'postgres'
+                        db_password = os.environ.get('POSTGRES_PASSWORD', '')
+                        for ev in metadata.get('env_vars', []):
+                            if ev['key'] == 'POSTGRES_USER':
+                                db_user = ev['value']
+                            elif ev['key'] == 'POSTGRES_DB':
+                                db_name = ev['value']
+                            elif ev['key'] == 'POSTGRES_PASSWORD':
+                                db_password = ev['value']
+                        
+                        temp_ctr = self.docker_client.containers.run(
+                            restored_image,
+                            volumes=vol_binds,
+                            detach=True,
+                            remove=True,
+                            environment={
+                                'POSTGRES_USER': db_user,
+                                'POSTGRES_DB': db_name,
+                                'POSTGRES_PASSWORD': db_password,
+                            }
+                        )
+                        try:
+                            for _ in range(30):
+                                res = temp_ctr.exec_run(['pg_isready', '-U', db_user])
+                                if res.exit_code == 0:
+                                    break
+                                time.sleep(1)
+                            else:
+                                raise RuntimeError("Postgres failed to start in time for restore.")
+
+                            _copy_file_to_container(
+                                self.docker_client, temp_ctr.id,
+                                db_dump, '/tmp/db_dump.sql',
+                            )
+                            res = temp_ctr.exec_run(['psql', '-U', db_user, '-d', db_name, '-f', '/tmp/db_dump.sql'], environment={'PGPASSWORD': db_password})
+                            if res.exit_code != 0:
+                                raise RuntimeError(f"psql execution failed: {res.output}")
+                            logger.info("Postgres SQL dump restored successfully.")
+                        finally:
+                            temp_ctr.remove(force=True)
+                            
+                    elif 'mysql' in image_lower or 'mariadb' in image_lower:
+                        db_password = ''
+                        for ev in metadata.get('env_vars', []):
+                            if ev['key'] == 'MYSQL_ROOT_PASSWORD':
+                                db_password = ev['value']
+                            elif ev['key'] == 'MYSQL_PASSWORD' and not db_password:
+                                db_password = ev['value']
+                                
+                        temp_ctr = self.docker_client.containers.run(
+                            restored_image,
+                            volumes=vol_binds,
+                            detach=True,
+                            remove=True,
+                            environment={
+                                'MYSQL_ROOT_PASSWORD': db_password,
+                                'MYSQL_ALLOW_EMPTY_PASSWORD': 'yes' if not db_password else 'no',
+                            }
+                        )
+                        try:
+                            for _ in range(45):
+                                res = temp_ctr.exec_run(
+                                    ['mysqladmin', 'ping', '-h', '127.0.0.1', '-uroot'],
+                                    environment={'MYSQL_PWD': db_password}
+                                )
+                                if res.exit_code == 0:
+                                    break
+                                time.sleep(1)
+                            else:
+                                raise RuntimeError("MySQL/MariaDB failed to start in time for restore.")
+
+                            _copy_file_to_container(
+                                self.docker_client, temp_ctr.id,
+                                db_dump, '/tmp/db_dump.sql',
+                            )
+                            # Using sh -c for mysql import
+                            res = temp_ctr.exec_run(
+                                ['sh', '-c', 'mysql -uroot < /tmp/db_dump.sql'],
+                                environment={'MYSQL_PWD': db_password}
+                            )
+                            if res.exit_code != 0:
+                                raise RuntimeError(f"mysql execution failed: {res.output}")
+                            logger.info("MySQL/MariaDB SQL dump restored successfully.")
+                        finally:
+                            temp_ctr.remove(force=True)
+                    else:
+                        logger.warning(f"Unknown database image {restored_image} for db_dump.sql. Skipping.")
+                except Exception as db_restore_err:
+                    raise RuntimeError(f"Database SQL dump restore failed: {db_restore_err}") from db_restore_err
 
             logger.info("Restore complete. Queueing deployment.")
             from apps.deployments.models import Deployment
@@ -792,7 +941,9 @@ class BackupService:
 
             # 2. Backup Docker Image remotely
             # Try to commit container
-            out, err, code = ssh.exec_command(f"docker commit {service.name} {image_tag}")
+            import shlex
+            safe_service_name = shlex.quote(service.name)
+            out, err, code = ssh.exec_command(f"docker commit {safe_service_name} {image_tag}")
             has_image = False
             if code == 0:
                 logger.info(f"Committed remote container {service.name} to {image_tag}")
@@ -802,7 +953,7 @@ class BackupService:
                 if code == 0:
                     has_image = True
                 else:
-                    logger.warning(f"Failed to save remote image: {err or out}")
+                    raise RuntimeError(f"Failed to save remote image: {err or out}")
             # If not running, fall back to configured docker_image
             elif service.docker_image:
                 image_tag = service.docker_image
@@ -813,28 +964,29 @@ class BackupService:
                 if code == 0:
                     has_image = True
                 else:
-                    logger.warning(f"Failed to save remote image: {err or out}")
+                    raise RuntimeError(f"Failed to save remote image: {err or out}")
 
             # 3. Backup Volumes remotely
             volumes = Volume.objects.filter(service=service)
             volumes_meta = []
             for vol in volumes:
                 # Check if volume exists remotely
-                out, err, code = ssh.exec_command(f"docker volume inspect {vol.name}")
+                out, err, code = ssh.exec_command(f"docker volume inspect {shlex.quote(vol.name)}")
                 if code != 0:
                     logger.warning(f"Docker volume {vol.name} not found on remote server, skipping.")
                     continue
 
-                vol_filename = f"volume_{vol.name}.tar.gz"
+                safe_vol_name = vol.name.replace('/', '_').replace('\\', '_').replace('..', '_')
+                vol_filename = f"volume_{safe_vol_name}.tar.gz"
                 logger.info(f"Backing up remote volume {vol.name}...")
 
                 # Compress remote volume using alpine helper container
                 compress_cmd = (
                     f"docker run --rm "
                     f"--security-opt no-new-privileges:true --security-opt apparmor=docker-default "
-                    f"-v {vol.name}:/volume_data:ro "
+                    f"-v {shlex.quote(vol.name)}:/volume_data:ro "
                     f"-v {remote_temp_dir}:/backup alpine:latest "
-                    f"tar -czf /backup/{vol_filename} -C /volume_data ."
+                    f"tar -czf /backup/{shlex.quote(vol_filename)} -C /volume_data ."
                 )
                 out, err, code = ssh.exec_command(compress_cmd)
                 if code == 0:
@@ -845,7 +997,7 @@ class BackupService:
                         'size_gb': vol.size_gb
                     })
                 else:
-                    logger.error(f"Failed to backup remote volume {vol.name}: {err or out}")
+                    raise RuntimeError(f"Failed to backup remote volume {vol.name}: {err or out}")
 
             # 4. Prepare Metadata.json locally and upload it
             env_vars_raw = [
@@ -935,12 +1087,12 @@ class BackupService:
             password=server.ssh_password,
             wg_address=server.wg_address,
         )
-        ssh.connect()
-
-        if not ssh.check_docker():
-            raise RuntimeError(f"Docker is not available on remote server {server.name}")
-
         try:
+            ssh.connect()
+
+            if not ssh.check_docker():
+                raise RuntimeError(f"Docker is not available on remote server {server.name}")
+
             # 1. Extract Archive locally to read metadata
             with tarfile.open(archive_path, "r:gz") as tar:
                 _safe_tar_extractall(tar, temp_dir)
@@ -969,6 +1121,7 @@ class BackupService:
                         )
 
             # 3. Load Docker Image remotely
+            restored_image = target_service.docker_image
             image_path = os.path.join(temp_dir, "image.tar")
             if os.path.exists(image_path):
                 logger.info("Uploading Docker image to remote server...")
@@ -976,8 +1129,8 @@ class BackupService:
                 ssh.upload_file(image_path, remote_image_path)
 
                 logger.info("Loading Docker image remotely...")
-                out, err, code = ssh.exec_command(f"docker load -i {remote_image_path}")
-                ssh.exec_command(f"rm -f {remote_image_path}") # clean up immediately
+                out, err, code = ssh.exec_command(f"docker load -i {shlex.quote(remote_image_path)}")
+                ssh.exec_command(f"rm -f {shlex.quote(remote_image_path)}") # clean up immediately
                 if code != 0:
                     raise RuntimeError(f"Failed to load Docker image remotely: {err or out}")
 
@@ -1000,7 +1153,7 @@ class BackupService:
                     )
 
                     # Ensure remote volume exists
-                    ssh.exec_command(f"docker volume create {vol_obj.name}")
+                    ssh.exec_command(f"docker volume create {shlex.quote(vol_obj.name)}")
 
                     vol_tar_path = os.path.join(temp_dir, vol_meta['filename'])
                     if os.path.exists(vol_tar_path):
@@ -1013,14 +1166,126 @@ class BackupService:
                         extract_cmd = (
                             f"docker run --rm "
                             f"--security-opt no-new-privileges:true --security-opt apparmor=docker-default "
-                            f"-v {vol_obj.name}:/dest "
+                            f"-v {shlex.quote(vol_obj.name)}:/dest "
                             f"-v /tmp:/src alpine:latest "
-                            f"tar -xzf /src/{vol_meta['filename']} -C /dest"
+                            f"tar -xzf /src/{shlex.quote(vol_meta['filename'])} -C /dest"
                         )
                         out, err, code = ssh.exec_command(extract_cmd)
-                        ssh.exec_command(f"rm -f {remote_vol_tar_path}") # clean up
+                        ssh.exec_command(f"rm -f {shlex.quote(remote_vol_tar_path)}") # clean up
                         if code != 0:
                             raise RuntimeError(f"Failed to extract volume remotely: {err or out}")
+
+            # 5. Restore database from SQL dump if present (safety net for services that run a DB)
+            db_dump = os.path.join(temp_dir, 'db_dump.sql')
+            redis_dump = os.path.join(temp_dir, 'redis_dump.rdb')
+            image_lower = (restored_image or '').lower()
+            
+            vol_binds = []
+            for vol_meta in metadata.get('volumes', []):
+                vol_obj = Volume.objects.filter(
+                    service=target_service, mount_path=vol_meta['mount_path']
+                ).first()
+                if vol_obj:
+                    vol_binds.append(f"-v {shlex.quote(vol_obj.name)}:{shlex.quote(vol_meta['mount_path'])}")
+            vol_bind_str = " ".join(vol_binds)
+
+            if os.path.exists(redis_dump) and os.path.getsize(redis_dump) > 0 and 'redis' in image_lower:
+                logger.info("Uploading Redis RDB dump to remote server...")
+                remote_redis_dump = f"/tmp/redis_dump_{uuid.uuid4().hex[:8]}.rdb"
+                ssh.upload_file(redis_dump, remote_redis_dump)
+                
+                try:
+                    logger.info("Restoring Redis RDB dump remotely...")
+                    start_cmd = f"docker run -d --rm {vol_bind_str} alpine:latest sleep 60"
+                    out, err, code = ssh.exec_command(start_cmd)
+                    if code != 0:
+                        raise RuntimeError(f"Failed to start temp container remotely: {err or out}")
+                    temp_ctr_id = out.strip()
+                    
+                    try:
+                        ssh.exec_command(f"docker cp {shlex.quote(remote_redis_dump)} {temp_ctr_id}:/tmp/dump.rdb", timeout=300)
+                        ssh.exec_command(f"docker exec {temp_ctr_id} sh -c 'cp /tmp/dump.rdb /data/dump.rdb || true'")
+                        logger.info("Remote Redis RDB dump restored successfully.")
+                    finally:
+                        ssh.exec_command(f"docker kill {temp_ctr_id}")
+                finally:
+                    ssh.exec_command(f"rm -f {shlex.quote(remote_redis_dump)}")
+
+            elif os.path.exists(db_dump) and os.path.getsize(db_dump) > 0 and restored_image:
+                logger.info("Uploading database SQL dump to remote server...")
+                remote_db_dump = f"/tmp/db_dump_{uuid.uuid4().hex[:8]}.sql"
+                ssh.upload_file(db_dump, remote_db_dump)
+                
+                try:
+                    logger.info("Restoring database from SQL dump remotely...")
+                    if 'postgres' in image_lower:
+                        db_user = 'postgres'
+                        db_name = 'postgres'
+                        db_password = ''
+                        for ev in metadata.get('env_vars', []):
+                            if ev['key'] == 'POSTGRES_USER':
+                                db_user = ev['value']
+                            elif ev['key'] == 'POSTGRES_DB':
+                                db_name = ev['value']
+                            elif ev['key'] == 'POSTGRES_PASSWORD':
+                                db_password = ev['value']
+                        
+                        env_str = f"-e POSTGRES_USER={shlex.quote(db_user)} -e POSTGRES_DB={shlex.quote(db_name)} -e POSTGRES_PASSWORD={shlex.quote(db_password)}"
+                        start_cmd = f"docker run -d --rm {env_str} {vol_bind_str} {shlex.quote(restored_image)}"
+                        out, err, code = ssh.exec_command(start_cmd)
+                        if code != 0:
+                            raise RuntimeError(f"Failed to start temp DB container remotely: {err or out}")
+                        temp_ctr_id = out.strip()
+                        
+                        try:
+                            wait_cmd = f"docker exec -e PGUSER={shlex.quote(db_user)} {temp_ctr_id} sh -c 'for i in $(seq 1 30); do pg_isready -U \"$PGUSER\" && exit 0; sleep 1; done; exit 1'"
+                            out, err, code = ssh.exec_command(wait_cmd)
+                            if code != 0:
+                                raise RuntimeError(f"Remote Postgres failed to start in time: {err or out}")
+
+                            ssh.exec_command(f"docker cp {shlex.quote(remote_db_dump)} {temp_ctr_id}:/tmp/db_dump.sql", timeout=300)
+                            psql_cmd = f"docker exec -e PGPASSWORD={shlex.quote(db_password)} {temp_ctr_id} psql -U {shlex.quote(db_user)} -d {shlex.quote(db_name)} -f /tmp/db_dump.sql"
+                            out, err, code = ssh.exec_command(psql_cmd, timeout=86400)
+                            if code != 0:
+                                raise RuntimeError(f"psql execution failed: {err or out}")
+                            logger.info("Remote Postgres SQL dump restored successfully.")
+                        finally:
+                            ssh.exec_command(f"docker kill {temp_ctr_id}")
+                            
+                    elif 'mysql' in image_lower or 'mariadb' in image_lower:
+                        db_password = ''
+                        for ev in metadata.get('env_vars', []):
+                            if ev['key'] == 'MYSQL_ROOT_PASSWORD':
+                                db_password = ev['value']
+                            elif ev['key'] == 'MYSQL_PASSWORD' and not db_password:
+                                db_password = ev['value']
+                                
+                        allow_empty = 'yes' if not db_password else 'no'
+                        env_str = f"-e MYSQL_ROOT_PASSWORD={shlex.quote(db_password)} -e MYSQL_ALLOW_EMPTY_PASSWORD={shlex.quote(allow_empty)}"
+                        start_cmd = f"docker run -d --rm {env_str} {vol_bind_str} {shlex.quote(restored_image)}"
+                        out, err, code = ssh.exec_command(start_cmd)
+                        if code != 0:
+                            raise RuntimeError(f"Failed to start temp DB container remotely: {err or out}")
+                        temp_ctr_id = out.strip()
+                        
+                        try:
+                            wait_cmd = f"docker exec -e MYSQL_PWD={shlex.quote(db_password)} {temp_ctr_id} sh -c 'for i in $(seq 1 45); do mysqladmin ping -h 127.0.0.1 -uroot && exit 0; sleep 1; done; exit 1'"
+                            out, err, code = ssh.exec_command(wait_cmd)
+                            if code != 0:
+                                raise RuntimeError(f"Remote MySQL/MariaDB failed to start in time: {err or out}")
+
+                            ssh.exec_command(f"docker cp {shlex.quote(remote_db_dump)} {temp_ctr_id}:/tmp/db_dump.sql", timeout=300)
+                            mysql_cmd = f"docker exec -e MYSQL_PWD={shlex.quote(db_password)} {temp_ctr_id} sh -c 'mysql -uroot < /tmp/db_dump.sql'"
+                            out, err, code = ssh.exec_command(mysql_cmd, timeout=86400)
+                            if code != 0:
+                                raise RuntimeError(f"mysql execution failed: {err or out}")
+                            logger.info("Remote MySQL SQL dump restored successfully.")
+                        finally:
+                            ssh.exec_command(f"docker kill {temp_ctr_id}")
+                    else:
+                        logger.warning(f"Unknown database image {restored_image} for db_dump.sql. Skipping.")
+                finally:
+                    ssh.exec_command(f"rm -f {shlex.quote(remote_db_dump)}")
 
             logger.info("Remote restore complete. Queueing deployment.")
             from apps.deployments.models import Deployment
@@ -1187,16 +1452,15 @@ class BackupService:
                 raise RuntimeError(f"Database dump failed: {e}") from e
 
             # 1b. Include .env file for configuration recovery
-            env_source = "/opt/smsly-hosting/.env"
+            env_source = getattr(settings, 'PLATFORM_ENV_PATH', '/opt/smsly-hosting/.env')
             if os.path.exists(env_source):
                 shutil.copy2(env_source, os.path.join(temp_dir, ".env"))
 
             # 1c. Include SSL certificates if they exist
-            cert_dirs = [
-                "/opt/smsly-hosting/caddy-config",
-                "/etc/letsencrypt",
-                "/opt/smsly-hosting/ssl",
-            ]
+            cert_dirs = getattr(
+                settings, 'PLATFORM_CERT_DIRS',
+                ['/opt/smsly-hosting/caddy-config', '/etc/letsencrypt', '/opt/smsly-hosting/ssl'],
+            )
             ssl_dir = os.path.join(temp_dir, "ssl")
             for cert_dir in cert_dirs:
                 if os.path.isdir(cert_dir):
@@ -1423,21 +1687,21 @@ class BackupService:
             if not pg_container:
                 raise RuntimeError("No PostgreSQL container found for database restore.")
 
-            # Copy the dump file into the container and restore.
-            import subprocess as _sp
-            _sp.run(
-                ['docker', 'cp', dump_path, f'{pg_container.name}:/tmp/db_dump.sql'],
-                check=True, timeout=60,
+            # Copy the dump file into the container and restore via docker-py.
+            _copy_file_to_container(
+                self.docker_client, pg_container.id,
+                dump_path, '/tmp/db_dump.sql',
             )
-            _sp.run(
-                ['docker', 'exec', pg_container.name,
-                 'psql', '-U', 'postgres', '-f', '/tmp/db_dump.sql'],
-                check=True, timeout=600,
+            psql_res = pg_container.exec_run(
+                ['psql', '-U', 'postgres', '-f', '/tmp/db_dump.sql'],
+                demux=False,
             )
-            _sp.run(
-                ['docker', 'exec', pg_container.name, 'rm', '/tmp/db_dump.sql'],
-                check=False, timeout=10,
-            )
+            if psql_res.exit_code != 0:
+                raise RuntimeError(
+                    f"psql restore failed (exit {psql_res.exit_code}): "
+                    f"{psql_res.output[:2000]!r}"
+                )
+            pg_container.exec_run(['rm', '/tmp/db_dump.sql'])
             logger.info("Database restored successfully from server backup.")
         except Exception as exc:
             logger.error("Database restore failed: %s. The backup archive is intact; operators can restore manually via psql.", exc)
@@ -1637,19 +1901,21 @@ class BackupService:
         or raises :class:`ValueError` if the file is not V2 format.
         """
         with open(path, "rb") as source:
-            magic = source.read(len(_CHUNKED_BACKUP_V2_MAGIC))
-        if magic != _CHUNKED_BACKUP_V2_MAGIC:
+            magic = source.read(len(_CHUNKED_BACKUP_V3_MAGIC))
+        if magic not in (_CHUNKED_BACKUP_V2_MAGIC, _CHUNKED_BACKUP_V3_MAGIC):
             raise ValueError("Backup is not V2 format (no key_id in header)")
         with open(path, "rb") as source:
-            source.read(len(_CHUNKED_BACKUP_V2_MAGIC))
+            # Skip the format magic (same length for all magic strings)
+            BackupService._read_exact(source, len(_CHUNKED_BACKUP_V3_MAGIC))
             key_id = BackupService._read_exact(
                 source, _CHUNKED_BACKUP_KEY_ID_BYTES
             )
             fingerprint = BackupService._read_exact(
                 source, _CHUNKED_BACKUP_FINGERPRINT_BYTES
             )
+        magic_label = 'V3' if magic == _CHUNKED_BACKUP_V3_MAGIC else 'V2'
         return {
-            'magic': 'V2',
+            'magic': magic_label,
             'key_id': key_id.hex(),
             'fingerprint': fingerprint.hex(),
         }
@@ -1734,7 +2000,7 @@ class BackupService:
         ``key_id`` + 4-byte ``fingerprint`` + 8-byte nonce prefix) so
         cross-master restores can look up the source key by ``key_id``.
         """
-        key = os.environ.get("BACKUP_ENCRYPTION_KEY", "").strip()
+        key = BackupService._get_encryption_key()
         if not key:
             if self._backup_encryption_required():
                 raise BackupEncryptionRequired(
@@ -1756,7 +2022,7 @@ class BackupService:
             )
 
             with open(path, "rb") as source, open(enc_path, "wb") as encrypted:
-                encrypted.write(_CHUNKED_BACKUP_V2_MAGIC)
+                encrypted.write(_CHUNKED_BACKUP_V3_MAGIC)
                 encrypted.write(header_key_id)
                 encrypted.write(header_fingerprint)
                 encrypted.write(nonce_prefix)
@@ -1772,6 +2038,13 @@ class BackupService:
                     encrypted.write(struct.pack(">I", len(ciphertext)))
                     encrypted.write(ciphertext)
                     chunk_index += 1
+                
+                # Append encrypted EOF marker
+                eof_nonce = nonce_prefix + struct.pack(">I", chunk_index)
+                eof_ciphertext = aesgcm.encrypt(eof_nonce, b"EOF", None)
+                encrypted.write(struct.pack(">I", len(eof_ciphertext)))
+                encrypted.write(eof_ciphertext)
+                
                 encrypted.write(struct.pack(">I", 0))
 
             with contextlib.suppress(OSError):
@@ -1784,17 +2057,27 @@ class BackupService:
                     os.remove(enc_path)
             except OSError:
                 pass
-            # If encryption is required by policy, DO NOT fall back to
-            # cleartext — delete the original and raise so the caller
-            # knows the backup is unsafe.
+
             if self._backup_encryption_required():
+                # Policy says cleartext is not allowed — delete the original
+                # so we don't silently leave a plaintext backup on disk.
                 with contextlib.suppress(OSError):
                     os.remove(path)
                 raise BackupEncryptionRequired(
                     f"Encryption failed for {path}: {e}. "
-                    "BACKUP_REQUIRE_ENCRYPTION is set — refusing to retain cleartext backup."
+                    "Refusing to retain cleartext backup when encryption "
+                    "is mandatory."
                 ) from e
-            logger.error("Encryption failed for %s (cleartext retained): %s", path, e)
+
+            # Encryption is optional — the original backup is still useful
+            # in cleartext. Log the failure and return the unencrypted path.
+            logger.warning(
+                "Encryption failed for %s: %s. "
+                "BACKUP_REQUIRE_ENCRYPTION is not set, so the backup "
+                "was stored in cleartext. Enable encryption or fix the "
+                "error to protect backup data at rest.",
+                path, e,
+            )
             return path
 
     @staticmethod
@@ -1832,10 +2115,12 @@ class BackupService:
         the source key.
         """
         with open(path, "rb") as source:
-            magic = source.read(len(_CHUNKED_BACKUP_V2_MAGIC))
-        if magic == _CHUNKED_BACKUP_V2_MAGIC:
+            magic = source.read(len(_CHUNKED_BACKUP_V3_MAGIC))
+        if magic == _CHUNKED_BACKUP_V3_MAGIC:
+            return BackupService._decrypt_v3_chunked_backup(path, key)
+        elif magic.startswith(_CHUNKED_BACKUP_V2_MAGIC):
             return BackupService._decrypt_v2_chunked_backup(path, key)
-        if magic == _CHUNKED_BACKUP_MAGIC:
+        if magic.startswith(_CHUNKED_BACKUP_MAGIC):
             return BackupService._decrypt_chunked_backup(path, key)
         return BackupService._decrypt_legacy_fernet_backup(path, key)
 
@@ -1855,7 +2140,8 @@ class BackupService:
         Returns ``(raw_key_bytes, fingerprint_hex)``.
         """
         with open(path, "rb") as source:
-            source.read(len(_CHUNKED_BACKUP_V2_MAGIC))
+            # Skip the format magic (all magics have the same length)
+            BackupService._read_exact(source, len(_CHUNKED_BACKUP_V3_MAGIC))
             header_key_id = BackupService._read_exact(
                 source, _CHUNKED_BACKUP_KEY_ID_BYTES
             )
@@ -1920,6 +2206,43 @@ class BackupService:
         except Exception:
             BackupService.cleanup_decrypted_path(tmp_path)
             raise
+
+    @staticmethod
+    def _decrypt_v3_chunked_backup(path: str, key: str) -> str:
+        raw_key, _fingerprint = BackupService._resolve_key_for_v2(path, key)
+        aesgcm = AESGCM(raw_key)
+
+        tmp_path, _private_dir = BackupService._make_private_decrypted_path()
+        try:
+            with open(path, "rb") as source, open(tmp_path, "wb") as target:
+                magic = BackupService._read_exact(source, len(_CHUNKED_BACKUP_V3_MAGIC))
+                if magic != _CHUNKED_BACKUP_V3_MAGIC:
+                    raise ValueError("Unsupported encrypted backup format (V3 expected)")
+                source.read(_CHUNKED_BACKUP_KEY_ID_BYTES + _CHUNKED_BACKUP_FINGERPRINT_BYTES)
+                nonce_prefix = BackupService._read_exact(
+                    source, _CHUNKED_BACKUP_NONCE_PREFIX_BYTES
+                )
+                chunk_index = 0
+                last_plaintext = None
+                while True:
+                    length_raw = BackupService._read_exact(source, 4)
+                    chunk_length = struct.unpack(">I", length_raw)[0]
+                    if chunk_length == 0:
+                        break
+                    ciphertext = BackupService._read_exact(source, chunk_length)
+                    nonce = nonce_prefix + struct.pack(">I", chunk_index)
+                    plaintext = aesgcm.decrypt(nonce, ciphertext, None)
+                    if last_plaintext is not None:
+                        target.write(last_plaintext)
+                    last_plaintext = plaintext
+                    chunk_index += 1
+                if last_plaintext != b"EOF":
+                    raise ValueError("Backup decryption failed: Missing or invalid EOF marker (possible truncation attack)")
+            return tmp_path
+        except Exception:
+            BackupService.cleanup_decrypted_path(tmp_path)
+            raise
+
 
     @staticmethod
     def _make_private_decrypted_path(suffix: str = ".tar.gz") -> tuple:
@@ -2112,6 +2435,11 @@ class BackupService:
         is scoped to a single service; for ``ServerBackup`` it is global.
         Both the database rows *and* the associated backup files on disk are
         removed.
+
+        Uses a cutoff timestamp to avoid races: the Nth newest backup's
+        ``created_at`` is used as the boundary so that concurrent backups
+        that complete between the query and the delete are correctly kept
+        or pruned based on their creation time rather than a fixed ID set.
         """
         try:
             retain = int(os.environ.get("BACKUP_RETENTION_COUNT", "5"))
@@ -2123,13 +2451,22 @@ class BackupService:
         if service_id and hasattr(model_cls, "service_id"):
             qs = qs.filter(service_id=service_id)
 
-        # Determine which IDs are older than the retention window
-        ids_to_delete = list(qs.values_list("id", flat=True)[retain:])
-        if not ids_to_delete:
-            return
+        # Get the Nth newest backup's creation date as the cutoff.
+        # We use the retain-th newest's created_at so that anything older
+        # (created_at strictly less) is pruned.  This avoids a race where
+        # a backup that completes between the cutoff query and the delete
+        # is accidentally removed — its created_at will be >= the cutoff.
+        nth_newest = qs.values_list("created_at", flat=True)[retain - 1:retain].first()
+        if nth_newest is None:
+            return  # Fewer than retain backups exist — nothing to prune.
+
+        # Use a datetime-based cutoff instead of a fixed set of IDs.
+        old_backups = model_cls.objects.filter(created_at__lt=nth_newest)
+        if service_id and hasattr(model_cls, "service_id"):
+            old_backups = old_backups.filter(service_id=service_id)
 
         # Delete files first so we don't lose the path after the DB row is gone
-        for backup in model_cls.objects.filter(id__in=ids_to_delete):
+        for backup in old_backups.iterator():
             try:
                 if backup.file_path and os.path.exists(backup.file_path):
                     os.remove(backup.file_path)
@@ -2142,8 +2479,18 @@ class BackupService:
                     exc,
                 )
 
+            # Also delete the cloud object if the backup was uploaded.
+            if getattr(backup, 'cloud_uploaded', False):
+                try:
+                    _delete_backup_cloud_object(backup)
+                except Exception as exc:  # pragma: no cover – defensive
+                    logger.warning(
+                        "Failed to delete cloud object for backup %s: %s",
+                        backup.id, exc,
+                    )
+
         # Finally delete the DB rows
-        model_cls.objects.filter(id__in=ids_to_delete).delete()
+        old_backups.delete()
 
 
 def repair_double_encrypted_env_vars(service_id: str | None = None) -> dict:
@@ -2233,17 +2580,24 @@ def _dump_container_database(container_name, image_tag, temp_dir):
                     with open(dump_file, 'wb') as f:
                         f.write(result.output)
                     logger.info("pg_dumpall fallback successful for %s", container_name)
+                else:
+                    raise RuntimeError(f"pg_dumpall failed for {container_name}: {result.output}")
         elif 'mysql' in image_lower or 'mariadb' in image_lower:
             dump_file = os.path.join(temp_dir, 'db_dump.sql')
             c_env = {e.split('=', 1)[0]: e.split('=', 1)[1]
                      for e in (ctr.attrs.get('Config', {}).get('Env', []))
                      if '=' in e}
             password = c_env.get('MYSQL_ROOT_PASSWORD', c_env.get('MYSQL_PASSWORD', ''))
-            result = ctr.exec_run(['mysqldump', '--all-databases', '-u', 'root', f'-p{password}'])
+            result = ctr.exec_run(
+                ['mysqldump', '--all-databases', '-u', 'root'],
+                environment={'MYSQL_PWD': password}
+            )
             if result.exit_code == 0:
                 with open(dump_file, 'wb') as f:
                     f.write(result.output)
                 logger.info("mysqldump successful for %s", container_name)
+            else:
+                raise RuntimeError(f"mysqldump failed for {container_name}: {result.output}")
         elif 'redis' in image_lower:
             dump_file = os.path.join(temp_dir, 'redis_dump.rdb')
             ctr.exec_run(['redis-cli', 'SAVE'])
@@ -2256,6 +2610,7 @@ def _dump_container_database(container_name, image_tag, temp_dir):
                 logger.info("Redis SAVE+backup successful for %s", container_name)
     except Exception as exc:
         logger.warning("DB dump for %s failed: %s", container_name, exc)
+        raise RuntimeError(f"DB dump for {container_name} failed: {exc}") from exc
 
 
 def _stop_service_for_restore(service, is_remote):
@@ -2335,13 +2690,22 @@ def backup_addon(addon_id: str) -> str | None:
                 with open(dump_file, 'wb') as f:
                     f.write(result.output)
                 return dump_file
+            raise RuntimeError(f"Addon pg_dumpall failed with exit {result.exit_code}: {result.output}")
         elif 'mysql' in atype or 'mariadb' in atype:
             dump_file = os.path.join(backup_dir, 'db_dump.sql')
-            result = ctr.exec_run(['mysqldump', '--all-databases', '-u', 'root'])
+            c_env = {e.split('=', 1)[0]: e.split('=', 1)[1]
+                     for e in (ctr.attrs.get('Config', {}).get('Env', []))
+                     if '=' in e}
+            password = c_env.get('MYSQL_ROOT_PASSWORD', c_env.get('MYSQL_PASSWORD', ''))
+            result = ctr.exec_run(
+                ['mysqldump', '--all-databases', '-u', 'root'],
+                environment={'MYSQL_PWD': password}
+            )
             if result.exit_code == 0:
                 with open(dump_file, 'wb') as f:
                     f.write(result.output)
                 return dump_file
+            raise RuntimeError(f"Addon mysqldump failed with exit {result.exit_code}: {result.output}")
         elif 'redis' in atype:
             dump_file = os.path.join(backup_dir, 'redis_dump.rdb')
             ctr.exec_run(['redis-cli', 'SAVE'])
@@ -2580,6 +2944,20 @@ def _upload_backup_to_cloud(backup, filepath, service_name):
             s3_access_key = sched.s3_access_key
             s3_secret_key = sched.s3_secret_key
 
+        # Enforce maximum upload size before attempting S3 transfer.
+        try:
+            max_bytes = int(os.environ.get("BACKUP_MAX_SIZE_BYTES", str(_DEFAULT_MAX_BACKUP_SIZE)))
+        except (TypeError, ValueError):
+            max_bytes = _DEFAULT_MAX_BACKUP_SIZE
+        file_size = os.path.getsize(filepath)
+        if max_bytes > 0 and file_size > max_bytes:
+            logger.warning(
+                "Skipping S3 upload for %s: size %d bytes exceeds "
+                "BACKUP_MAX_SIZE_BYTES (%d bytes).",
+                service_name, file_size, max_bytes,
+            )
+            return False
+
         s3_key = f"smsly-backups/{service_name}/{os.path.basename(filepath)}"
         ok = upload_backup_to_s3(
             filepath, s3_bucket, s3_key,
@@ -2648,6 +3026,28 @@ def _download_backup_from_cloud(backup, local_path) -> bool:
         endpoint=endpoint, region=region,
         access_key=access_key, secret_key=secret_key,
     )
+
+
+def _delete_backup_cloud_object(backup) -> bool:
+    """Delete a backup's cloud object (S3/R2/MinIO).
+
+    Resolves the cloud config via ``_resolve_cloud_config()`` and deletes
+    the object. Returns ``True`` on success or if no cloud config exists.
+    Logs a warning on failure but does not raise.
+    """
+    bucket, key, endpoint, region, access_key, secret_key = _resolve_cloud_config(backup)
+    if not bucket or not key:
+        return True  # Nothing to delete
+    ok = delete_cloud_backup_object(
+        bucket, key,
+        endpoint=endpoint, region=region,
+        access_key=access_key, secret_key=secret_key,
+    )
+    if ok:
+        logger.info("Deleted cloud object s3://%s/%s for backup %s", bucket, key, backup.id)
+    else:
+        logger.warning("Failed to delete cloud object s3://%s/%s for backup %s", bucket, key, backup.id)
+    return ok
 
 
 def purge_user_backups(user_id) -> dict:
@@ -2721,16 +3121,24 @@ def purge_user_backups(user_id) -> dict:
     counters['service_backups_deleted'] = delete_result[0]
 
     # ServerBackups aren't tied to a single user; they reference a list of
-    # service IDs in `services_included`. We scan candidates whose list
-    # overlaps with the user's service IDs and purge the matching ones.
-    user_service_id_strs = {str(sid) for sid in user_service_ids}
-    candidate_server_backups = list(ServerBackup.objects.all())
-    server_backups = [
-        sb for sb in candidate_server_backups
-        if user_service_id_strs.intersection(
-            str(item) for item in (sb.services_included or [])
-        )
-    ]
+    # service IDs in `services_included`. Use a JSON contains query
+    # (PostgreSQL native) to filter at the DB level.  Falls back to
+    # Python-side filtering on non-Postgres backends (SQLite in tests).
+    from django.db.models import Q
+    query = Q()
+    for sid in user_service_ids:
+        query |= Q(services_included__contains=[str(sid)])
+    try:
+        server_backups = list(ServerBackup.objects.filter(query))
+    except Exception:
+        # Database backend doesn't support JSON contains — fall back to
+        # loading all ServerBackups and filtering in Python.
+        server_backups = [
+            sb for sb in ServerBackup.objects.all()
+            if sb.services_included and any(
+                str(sid) in sb.services_included for sid in user_service_ids
+            )
+        ]
     for backup in server_backups:
         if getattr(backup, 'file_path', None) and os.path.exists(backup.file_path):
             try:

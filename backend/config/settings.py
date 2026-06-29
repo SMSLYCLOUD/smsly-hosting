@@ -615,6 +615,16 @@ BACKUP_REQUIRE_ENCRYPTION = _env_bool(
     default='False' if DEBUG else 'True',
 )
 
+# Paths for server-backup file collection.
+# These can be overridden via env vars or settings when the platform is
+# deployed with a different directory layout.
+PLATFORM_ENV_PATH = str(config('PLATFORM_ENV_PATH', default='/opt/smsly-hosting/.env'))
+PLATFORM_CERT_DIRS = config(
+    'PLATFORM_CERT_DIRS',
+    default='/opt/smsly-hosting/caddy-config,/etc/letsencrypt,/opt/smsly-hosting/ssl',
+    cast=lambda v: [d.strip() for d in v.split(',') if d.strip()],
+)
+
 MIDDLEWARE = [
     'django_prometheus.middleware.PrometheusBeforeMiddleware',
     'apps.deployments.middleware.DynamicAllowedHostsMiddleware', # Ensures multi-worker host sync

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -39,6 +39,37 @@ export default function BackupKeysTab() {
     const [importKeyMaterial, setImportKeyMaterial] = useState('');
     const [importLabel, setImportLabel] = useState('');
     const [importing, setImporting] = useState(false);
+
+    const fileInputRef = useRef<HTMLInputElement>(null);
+
+    const handleImportJsonFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+            try {
+                const json = JSON.parse(ev.target?.result as string);
+                
+                let populated = false;
+                if (json.key_id) { setImportKeyId(json.key_id); populated = true; }
+                if (json.key_material) { setImportKeyMaterial(json.key_material); populated = true; }
+                if (json.label || json.source_label) { setImportLabel(json.label || json.source_label); populated = true; }
+                
+                if (!json.key_material && json.encryption?.key_id) {
+                    setImportKeyId(json.encryption.key_id);
+                    toast({ title: "Metadata loaded", description: "This is a backup header file. It loaded the key_id, but you still need to provide the key_material manually.", variant: "default" });
+                } else if (!populated) {
+                    toast({ title: "Invalid JSON format", description: "Could not find key_id or key_material in the JSON file.", variant: "destructive" });
+                } else {
+                    toast({ title: "JSON loaded", description: "Import fields populated from JSON file." });
+                }
+            } catch {
+                toast({ title: "Invalid JSON", description: "Could not parse the selected file as JSON.", variant: "destructive" });
+            }
+        };
+        reader.readAsText(file);
+        e.target.value = '';
+    };
 
     const loadBackups = useCallback(async () => {
         setLoadingBackups(true);
@@ -279,6 +310,18 @@ export default function BackupKeysTab() {
                             <div className="space-y-3 border-t border-border pt-4">
                                 <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-muted-foreground">
                                     <ArrowRight className="h-3 w-3" /> Import on this master
+                                </div>
+                                <div className="flex justify-end">
+                                    <input
+                                        type="file"
+                                        ref={fileInputRef}
+                                        accept=".json"
+                                        className="hidden"
+                                        onChange={handleImportJsonFile}
+                                    />
+                                    <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
+                                        Load from JSON
+                                    </Button>
                                 </div>
                                 <div className="space-y-2">
                                     <Label htmlFor="bk-key-id" className="text-xs">key_id (from source V2 header)</Label>

@@ -9,6 +9,24 @@ const getApiUrl = () => {
   return process.env.NEXT_PUBLIC_API_URL || '/api/v1';
 };
 
+export const downloadBlob = (data: any, path: string) => {
+    const url = window.URL.createObjectURL(new Blob([data]));
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', path.split('/').pop() || 'file');
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+};
+
+export const extractDataList = (response: any): any[] => {
+    const data = response.data;
+    if (Array.isArray(data)) return data;
+    if (data && Array.isArray(data.results)) return data.results;
+    return [];
+};
+
 export const api = axios.create({
   baseURL: getApiUrl(),
   withCredentials: true,
@@ -444,10 +462,7 @@ export interface Volume {
 export const servicesApi = {
   list: async (): Promise<Service[]> => {
     const response = await api.get('/services/');
-    const data = response.data;
-    if (Array.isArray(data)) return data;
-    if (data && Array.isArray(data.results)) return data.results;
-    return [];
+    return extractDataList(response);
   },
   create: async (data: any, requestConfig?: any): Promise<Service> => {
     // If it's a file upload, use FormData
@@ -504,10 +519,7 @@ export const servicesApi = {
   // Deployment Management
   getDeployments: async (serviceId: string): Promise<Deployment[]> => {
     const response = await api.get(`/services/${serviceId}/deployments/`);
-    const data = response.data;
-    if (Array.isArray(data)) return data;
-    if (data && Array.isArray(data.results)) return data.results;
-    return [];
+    return extractDataList(response);
   },
   getDeployment: async (id: string): Promise<Deployment> => {
     const response = await api.get(`/deployments/${id}/`);
@@ -554,17 +566,11 @@ export const servicesApi = {
   // Env Vars Management
   getEnvVars: async (serviceId: string): Promise<EnvVar[]> => {
     const response = await api.get(`/services/${serviceId}/env_vars/`);
-    const data = response.data;
-    if (Array.isArray(data)) return data;
-    if (data && Array.isArray(data.results)) return data.results;
-    return [];
+    return extractDataList(response);
   },
   getPreviews: async (serviceId: string): Promise<PreviewEnvironment[]> => {
     const response = await api.get(`/services/${serviceId}/previews/`);
-    const data = response.data;
-    if (Array.isArray(data)) return data;
-    if (data && Array.isArray(data.results)) return data.results;
-    return [];
+    return extractDataList(response);
   },
   createEnvVar: async (serviceId: string, data: Partial<EnvVar>): Promise<EnvVar> => {
     const response = await api.post(`/services/${serviceId}/env_vars/`, data);
@@ -678,14 +684,7 @@ export const servicesApi = {
           params: { path },
           responseType: 'blob',
       });
-      const url = window.URL.createObjectURL(new Blob([response.data]));
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', path.split('/').pop() || 'file');
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(url);
+      downloadBlob(response.data, path);
   },
   browseFiles: async (serviceId: string, path: string = '/app'): Promise<{ path: string; files: any[] }> => {
       const response = await api.get(`/services/${serviceId}/file-browse/`, { params: { path } });
@@ -710,14 +709,7 @@ export const servicesApi = {
           params: { path },
           responseType: 'blob',
       });
-      const url = window.URL.createObjectURL(new Blob([response.data]));
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', path.split('/').pop() || 'file');
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(url);
+      downloadBlob(response.data, path);
   },
   uploadFile: async (serviceId: string, path: string, file: File): Promise<{ message: string; path: string }> => {
       const formData = new FormData();
@@ -759,10 +751,7 @@ export interface Blueprint {
 export const blueprintsApi = {
   list: async (): Promise<Blueprint[]> => {
     const response = await api.get('/blueprints/');
-    const data = response.data;
-    if (Array.isArray(data)) return data;
-    if (data && Array.isArray(data.results)) return data.results;
-    return [];
+    return extractDataList(response);
   },
   get: async (id: string): Promise<Blueprint> => {
     const response = await api.get(`/blueprints/${id}/`);
@@ -778,10 +767,7 @@ export const templatesApi = {
   list: async (): Promise<any[]> => {
     const response = await api.get('/templates/');
     // Handle pagination if present, or raw list. Safely fallback to empty array.
-    const data = response.data;
-    if (Array.isArray(data)) return data;
-    if (data && Array.isArray(data.results)) return data.results;
-    return [];
+    return extractDataList(response);
   },
   get: async (id: string): Promise<any> => {
     const response = await api.get(`/templates/${id}/`);
@@ -1113,10 +1099,7 @@ export const teamsApi = {
   },
   members: async (id: string): Promise<TeamMember[]> => {
     const response = await api.get(`/teams/${id}/members/`);
-    const data = response.data;
-    if (Array.isArray(data)) return data;
-    if (data && Array.isArray(data.results)) return data.results;
-    return [];
+    return extractDataList(response);
   },
   inviteMember: async (teamId: string, email: string, role: string): Promise<any> => {
     const response = await api.post(`/teams/${teamId}/invite_member/`, { email, role });
@@ -1967,10 +1950,7 @@ export interface Replica {
 export const scalingApi = {
   getReplicas: async (serviceId: string): Promise<Replica[]> => {
     const response = await api.get('/scaling/replicas/', { params: { service: serviceId } });
-    const data = response.data;
-    if (Array.isArray(data)) return data;
-    if (data && Array.isArray(data.results)) return data.results;
-    return [];
+    return extractDataList(response);
   },
   spawnReplica: async (serviceId: string): Promise<any> => {
     const response = await api.post(`/scaling/${serviceId}/spawn/`);
@@ -2083,10 +2063,7 @@ export const domainsApi = {
 export const cloudProviderApi = {
   list: async (): Promise<CloudProvider[]> => {
     const response = await api.get('/cloud/providers/');
-    const data = response.data;
-    if (Array.isArray(data)) return data;
-    if (data && Array.isArray(data.results)) return data.results;
-    return [];
+    return extractDataList(response);
   },
 };
 

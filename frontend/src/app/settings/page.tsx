@@ -17,9 +17,7 @@ import { Badge } from "@/components/ui/badge";
 import { DashboardShell } from "@/components/layout/DashboardShell";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { OAuthTab } from "@/components/settings/OAuthTab";
-import { GitHubIntegrationCard } from "@/components/settings/GitHubIntegrationCard";
-import { GitLabIntegrationCard } from "@/components/settings/GitLabIntegrationCard";
-import { BitbucketIntegrationCard } from "@/components/settings/BitbucketIntegrationCard";
+import { GitIntegrationCard } from "@/components/settings/GitIntegrationCard";
 import { WebhookConfigCard } from "@/components/settings/WebhookConfigCard";
 import { CloudStorageTab } from "@/components/settings/CloudStorageTab";
 import { PlatformSettingsTab } from "@/components/settings/PlatformSettingsTab";
@@ -1220,9 +1218,9 @@ export default function SettingsPage() {
         {/* OAuth Configuration Tab */}
         <TabsContent value="oauth">
             <div className="space-y-6">
-              <GitHubIntegrationCard />
-              <GitLabIntegrationCard />
-              <BitbucketIntegrationCard />
+              <GitIntegrationCard provider="github" />
+              <GitIntegrationCard provider="gitlab" />
+              <GitIntegrationCard provider="bitbucket" />
               <WebhookConfigCard />
               <OAuthTab />
           </div>
