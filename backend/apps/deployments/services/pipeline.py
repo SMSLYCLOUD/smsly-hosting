@@ -2159,19 +2159,39 @@ class PipelineManager:
         # Docker daemon can pull base images (FROM lines in Dockerfile)
         # from an auth-enabled registry without 403 errors.  Uses
         # docker-py so this works without the ``docker`` CLI binary.
-        _reg_user = PlatformConfig.get_config_value('registry_user') or getattr(settings, 'REGISTRY_USER', '')
-        _reg_pass = PlatformConfig.get_config_value('registry_password') or getattr(settings, 'REGISTRY_PASSWORD', '')
-        registry_url = (
-            PlatformConfig.get_config_value('container_registry_url')
-            or getattr(settings, 'CONTAINER_REGISTRY_URL', '') or "registry.smsly.cloud"
-        ).split("://")[-1]
+        #
+        # Resolution priority:
+        #   1. Per-service RegistryCredential (for pulling third-party images)
+        #   2. ScopedRegistry chain (Project → Team → Organization)
+        #   3. PlatformConfig global fallback
+        _reg_user = ""
+        _reg_pass = ""
+        registry_url = ""
 
-        # Use per-service registry credential if available and active
+        # Check per-service RegistryCredential first (third-party image pulls)
         if getattr(self.service, 'registry_credential_id', None) and self.service.registry_credential.is_active:
             _reg_user = self.service.registry_credential.username
             _reg_pass = self.service.registry_credential.password
             if self.service.registry_credential.registry_url:
                 registry_url = self.service.registry_credential.registry_url.replace("https://", "").replace("http://", "").split("/")[0]
+
+        # Fall back to scoped registry chain
+        if not registry_url:
+            from .models_registry_scope import ScopedRegistry
+            scope_obj = self.service.project or self.service.owner
+            registry_info = ScopedRegistry.resolve_registry_credentials(scope_obj)
+            registry_url = (registry_info.get("url") or "").split("://")[-1]
+            _reg_user = _reg_user or registry_info.get("username", "")
+            _reg_pass = _reg_pass or registry_info.get("password", "")
+
+        # Final fallback to PlatformConfig / settings
+        if not registry_url:
+            registry_url = (
+                PlatformConfig.get_config_value('container_registry_url')
+                or getattr(settings, 'CONTAINER_REGISTRY_URL', '') or "registry.smsly.cloud"
+            ).split("://")[-1]
+        _reg_user = _reg_user or PlatformConfig.get_config_value('registry_user') or getattr(settings, 'REGISTRY_USER', '')
+        _reg_pass = _reg_pass or PlatformConfig.get_config_value('registry_password') or getattr(settings, 'REGISTRY_PASSWORD', '')
 
         if _reg_user and _reg_pass:
             try:
@@ -2651,28 +2671,55 @@ class PipelineManager:
         if self.service.deploy_type == 'DOCKER' and self.service.docker_image:
             return
 
-        registry_url = PlatformConfig.get_config_value('container_registry_url') or getattr(settings, 'CONTAINER_REGISTRY_URL', None)
+        # ── Resolve registry URL and credentials ─────────────────
+        # Priority: 1) deployment.registry_override
+        #           2) ScopedRegistry chain (Project → Team → Organization)
+        #           3) PlatformConfig global fallback
+        from .models_registry_scope import ScopedRegistry
+
+        deployment = self.deployment
+        registry_url = None
+        reg_username = None
+        reg_password = None
+
+        if deployment.registry_override:
+            registry_url = deployment.registry_override.get("url")
+            reg_username = deployment.registry_override.get("username")
+            reg_password = deployment.registry_override.get("password")
+
+        if not registry_url:
+            scope_obj = self.service.project or self.service.owner
+            registry_info = ScopedRegistry.resolve_registry_credentials(scope_obj)
+            registry_url = registry_info.get("url")
+            reg_username = registry_info.get("username")
+            reg_password = registry_info.get("password")
+
         is_local = is_deployment_local(self.deployment)
         if not registry_url:
             if not is_local:
                 raise SystemError(
-                    "CONTAINER_REGISTRY_URL is not configured. "
-                    "A registry is required to push/pull images for remote node deployments."
+                    "No registry URL configured. "
+                    "A registry is required to push/pull images for remote node deployments. "
+                    "Set a registry at the Organization, Team, or Project level, "
+                    "or configure CONTAINER_REGISTRY_URL."
                 )
             return
 
         update_stage(self.deployment, 'Push', 'running')
-        timezone.now()
         self._check_cancellation('Push')
 
         try:
             append_log(self.deployment, f"Pushing to {registry_url}...\n")
-            remote_tag, push_error = NixpacksBuilder.push_image(self.image_name, registry_url)
+            remote_tag, push_error = NixpacksBuilder.push_image(
+                self.image_name,
+                registry_url,
+                username=reg_username,
+                password=reg_password,
+            )
             self.image_name = remote_tag
 
-            # If push_image returned the original name (registry unreachable),
-            # log a warning but don't fail — the deploy will use the local image.
-            registry_prefix = PlatformConfig.get_config_value('container_registry_url') or getattr(settings, 'CONTAINER_REGISTRY_URL', None)
+            # Determine if push reached the registry
+            registry_prefix = registry_url
             pushed_to_registry = bool(registry_prefix and remote_tag.startswith(registry_prefix))
 
             if pushed_to_registry:

@@ -272,13 +272,24 @@ class NixpacksBuilder:
             raise RuntimeError(f"Nixpacks build failed:\n{error_detail or e.stderr}") from e
 
     @staticmethod
-    def push_image(image_name: str, registry_url: str) -> tuple[str, str | None]:
+    def push_image(
+        image_name: str,
+        registry_url: str,
+        username: str | None = None,
+        password: str | None = None,
+    ) -> tuple[str, str | None]:
         """
         Tags and pushes the image to the internal or external registry.
 
         If the registry is unreachable (e.g. the node has no registry service),
         logs a warning and returns the original local image name so the
         deploy phase can fall back to the local image.
+
+        Arguments:
+            image_name: Local image name (e.g. ``smsly/myapp:abc1234``).
+            registry_url: Target registry host:port (e.g. ``registry:5000``).
+            username: Optional registry username. Falls back to ``settings.REGISTRY_USER``.
+            password: Optional registry password. Falls back to ``settings.REGISTRY_PASSWORD``.
         """
         from apps.cloud.docker_client import get_docker_client
         client = get_docker_client()
@@ -297,14 +308,15 @@ class NixpacksBuilder:
 
             logger.info(f"Pushing image to {full_tag}...")
 
-            has_creds = bool(
-                settings.REGISTRY_USER and settings.REGISTRY_PASSWORD
-            )
+            # Use passed credentials, fall back to settings
+            _user = username or settings.REGISTRY_USER or ""
+            _pass = password or settings.REGISTRY_PASSWORD or ""
+            has_creds = bool(_user and _pass)
             auth_config = None
             if has_creds:
                 auth_config = {
-                    "username": settings.REGISTRY_USER,
-                    "password": settings.REGISTRY_PASSWORD
+                    "username": _user,
+                    "password": _pass,
                 }
 
             # ── Push via SDK ────────────────────────────────────────────

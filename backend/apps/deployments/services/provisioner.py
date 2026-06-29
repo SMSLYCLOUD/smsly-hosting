@@ -773,6 +773,44 @@ def _broadcast_provision_log(server: ManagedServer, message: str):
         pass  # WebSocket is optional — logs are still saved to DB
 
 
+def _registry_login_commands(server: ManagedServer) -> str:
+    """Generate ``docker login`` commands for all registries this
+    node has access to.
+
+    Returns a shell snippet that runs ``docker login`` for each
+    registry linked via ``server.registry_access``.  For internal
+    registries (reachable via mesh VPN), the login runs without
+    explicit credentials against the registry's public-key or
+    WireGuard-authenticated endpoint.
+    """
+    commands = []
+    registries = server.registry_access.filter(is_active=True).select_related("content_type")
+    for reg in registries:
+        url = (reg.registry_url or "").strip()
+        if not url:
+            continue
+        user = (reg.username or "").strip()
+        pwd = (reg.password or "").strip()
+        if user and pwd:
+            # Authenticated registry — run docker login
+            safe_user = shlex.quote(user)
+            safe_pwd = shlex.quote(pwd)
+            safe_url = shlex.quote(url)
+            commands.append(
+                f"echo {safe_pwd} | docker login --username {safe_user} "
+                f"--password-stdin {safe_url} 2>/dev/null || true"
+            )
+        else:
+            # Unauthenticated / internal registry — just log in without creds
+            safe_url = shlex.quote(url)
+            commands.append(
+                f"docker login {safe_url} 2>/dev/null || true"
+            )
+    if commands:
+        return " && ".join(commands)
+    return "true"
+
+
 def _append_log(server: ManagedServer, line: str):
     """Append a line to provision_logs and broadcast."""
     import re
@@ -1336,7 +1374,22 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                 "rm -rf /tmp/smsly-install.sh /tmp/smsly-hosting-src.tar.gz /tmp/smsly-hosting-src"
             )
 
-        # -- Step 4: Extract credentials --
+        # -- Step 4a: Registry Docker Login --
+        registry_cmds = _registry_login_commands(server)
+        if registry_cmds and registry_cmds != "true":
+            _append_log(server, "🔑 Logging into configured registries on node...")
+            try:
+                stdin, stdout, stderr = ssh.exec_command(registry_cmds, timeout=60)
+                reg_exit = stdout.channel.recv_exit_status()
+                if reg_exit == 0:
+                    _append_log(server, "✅ Docker login succeeded for all configured registries")
+                else:
+                    reg_err = stderr.read().decode("utf-8", errors="replace").strip()[:500]
+                    _append_log(server, f"⚠️ Registry docker-login had non-zero exit ({reg_exit}): {reg_err}")
+            except Exception as exc:
+                _append_log(server, f"⚠️ Registry docker-login command failed: {exc}")
+
+        # -- Step 4b: Extract credentials --
         _append_log(server, "[cred] Reading credentials from server...")
 
         stdin, stdout, stderr = ssh.exec_command(

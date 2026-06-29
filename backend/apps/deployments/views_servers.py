@@ -1768,6 +1768,67 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
 
         return Response({"domains": domains, "count": len(domains)})
 
+    # ── Registry Access ───────────────────────────────────────────────
+
+    @action(detail=True, methods=["get", "post"], url_path="registries")
+    def registries(self, request, pk=None):
+        """
+        GET  /api/v1/servers/{id}/registries/  — list registries this node can access
+        POST /api/v1/servers/{id}/registries/  — set which registries this node can access
+
+        POST body::
+            {
+                "registry_ids": ["uuid1", "uuid2"]
+            }
+
+        The node's installer runs ``docker login`` for each registry
+        during provisioning, so the node can pull images from them.
+        """
+        server = self.get_object()
+
+        if request.method == "POST":
+            registry_ids = request.data.get("registry_ids", [])
+            if not isinstance(registry_ids, list):
+                return Response(
+                    {"error": "registry_ids must be a list of UUIDs"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            from .models import ScopedRegistry
+
+            registries = ScopedRegistry.objects.filter(id__in=registry_ids, is_active=True)
+            if len(registries) != len(registry_ids):
+                return Response(
+                    {"error": "One or more registry IDs are invalid or inactive"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            server.registry_access.set(registries)
+            logger.info(
+                "Set %d registries for server %s (%s)",
+                len(registries), server.name, server.id,
+            )
+            return Response({
+                "status": "ok",
+                "registry_ids": [str(r.id) for r in registries],
+            })
+
+        # GET: return registries this node can access
+        registries = server.registry_access.filter(is_active=True)
+        return Response({
+            "count": registries.count(),
+            "registries": [
+                {
+                    "id": str(r.id),
+                    "registry_url": r.registry_url,
+                    "is_internal": r.is_internal,
+                    "scope_type": r.content_type.model if r.content_type else None,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                }
+                for r in registries
+            ],
+        })
+
     # ── Self-Healing ─────────────────────────────────────────────────────
 
     @action(detail=True, methods=["post"])

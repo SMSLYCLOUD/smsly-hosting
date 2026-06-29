@@ -20,6 +20,7 @@ from .views import (
     SystemConfigView,
     RegistryCredentialViewSet,
 )
+from .views_registry_scope import ScopedRegistryViewSet
 from .views_addons import AddonViewSet
 from .views_analysis import RepoAnalysisView
 from .views_autoscale import ScalingViewSet
@@ -96,6 +97,7 @@ router.register(r'cloud-storage', CloudStorageViewSet, basename='cloud-storage')
 router.register(r'slow-queries', SlowQueryViewSet, basename='slow-query')
 router.register(r'database-replicas', DatabaseReplicaViewSet, basename='database-replica')
 router.register(r'registry-credentials', RegistryCredentialViewSet, basename='registry-credential')
+router.register(r'registry-scopes', ScopedRegistryViewSet, basename='registry-scope')
 
 # Nested Router
 # /api/v1/services/{service_pk}/metrics/

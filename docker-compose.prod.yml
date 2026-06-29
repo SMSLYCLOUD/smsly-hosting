@@ -131,6 +131,12 @@ services:
       start_period: 10s
     labels:
     - managed_by=smsly-hosting
+    # SECURITY: No public Traefik route — registry is accessed via
+    # Docker DNS (registry:5000) for inter-container communication
+    # inside smsly-net, or via WireGuard mesh IP (10.100.0.1:5000)
+    # for remote nodes. The public domain (registry.smsly.cloud)
+    # should be routed through Caddy's reverse proxy with TLS
+    # termination, not Traefik, to avoid leaking the registry port.
     networks:
       - smsly-net
     deploy:
@@ -234,7 +240,12 @@ services:
       UVICORN_WS_PING_INTERVAL: 20
       UVICORN_WS_PING_TIMEOUT: 20
       MASTER_MESH_IP: ${MASTER_MESH_IP:-}
-      CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-127.0.0.1:5000}
+      # SECURITY: Use Docker DNS (registry:5000) for inter-container
+      # communication. 127.0.0.1:5000 resolves to the container's OWN
+      # loopback, not the host's registry. The Docker daemon push goes
+      # through socket-proxy which resolves registry:5000 on the smsly-net
+      # overlay to the registry container.
+      CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-registry:5000}
       DOCKER_HOST: tcp://socket-proxy:2375
       BUILDKIT_HOST: tcp://buildkitd:1234
       SMSLY_ENABLE_STARTUP_CADDY_SYNC: ${SMSLY_ENABLE_STARTUP_CADDY_SYNC:-true}
@@ -250,6 +261,8 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      registry:
+        condition: service_started
     volumes:
     - static_volume:/app/staticfiles
     - media_volume:/app/media
@@ -318,7 +331,7 @@ services:
     env_file: .env
     environment:
       MASTER_MESH_IP: ${MASTER_MESH_IP:-}
-      CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-127.0.0.1:5000}
+      CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-registry:5000}
       DOCKER_HOST: tcp://socket-proxy:2375
       DOCKER_NETWORK: smsly-net
       BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
@@ -334,6 +347,8 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      registry:
+        condition: service_started
     volumes:
     - media_volume:/app/media
     - caddy_config:/caddy-config
@@ -445,7 +460,7 @@ services:
     env_file: .env
     environment:
       MASTER_MESH_IP: ${MASTER_MESH_IP:-}
-      CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-127.0.0.1:5000}
+      CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-registry:5000}
       DOCKER_HOST: tcp://socket-proxy:2375
       DOCKER_NETWORK: smsly-net
       BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
@@ -492,7 +507,7 @@ services:
     env_file: .env
     environment:
       MASTER_MESH_IP: ${MASTER_MESH_IP:-}
-      CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-127.0.0.1:5000}
+      CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-registry:5000}
       DOCKER_HOST: tcp://socket-proxy:2375
       BUILDKIT_HOST: tcp://buildkitd:1234
       DOCKER_NETWORK: smsly-net

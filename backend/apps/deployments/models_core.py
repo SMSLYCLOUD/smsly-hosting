@@ -173,6 +173,15 @@ class ManagedServer(models.Model):
                   "this cert regardless of the system trust store.",
     )
 
+    # ── Registry Access ──
+    # Registries this node can authenticate with for image pulls/deployments.
+    # Set during provisioning — the installer runs ``docker login`` for each.
+    registry_access = models.ManyToManyField(  # type: ignore[var-annotated]
+        'deployments.ScopedRegistry',
+        blank=True,
+        help_text="Registries this node can authenticate with for image pulls/deployments",
+    )
+
     @classmethod
     def get_primary(cls):
         """Return the primary/control-plane server."""
@@ -210,6 +219,10 @@ class Project(models.Model):
     icon_emoji = models.CharField(max_length=10, default="📦")  # type: ignore[var-annotated]
     color = models.CharField(max_length=7, default="#6366f1")  # type: ignore[var-annotated]
     is_default = models.BooleanField(default=False)  # type: ignore[var-annotated]
+    is_ephemeral = models.BooleanField(  # type: ignore[var-annotated]
+        default=False,
+        help_text="Auto-created for custom-registry deploy; hidden from default project list"
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
     updated_at = models.DateTimeField(auto_now=True)  # type: ignore[var-annotated]
@@ -821,6 +834,14 @@ class Deployment(TimeStampedModel):
     metadata = models.JSONField(  # type: ignore[var-annotated]
         default=dict, blank=True,
         help_text="Scratch state for in-flight pipeline phases (e.g. pre-migration state for rollback).")
+
+    # Per-deployment registry override: if set, the builder uses this
+    # instead of the scoped chain (ScopedRegistry → PlatformConfig).
+    registry_override = models.JSONField(  # type: ignore[var-annotated]
+        null=True, blank=True,
+        help_text="Per-deployment registry override {url, username, password} "
+                  "— builder uses this instead of the scoped chain"
+    )
 
     class Meta:
         ordering = ['-created_at']

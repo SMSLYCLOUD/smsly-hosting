@@ -20,21 +20,10 @@ from .models_safedeploy import (
 # platform's own registry (or a small set of well-known public
 # registries) and reject anything that would let a tenant pull
 # from a personal registry on the public internet.
-_ALLOWED_IMAGE_REGISTRIES = (
-    # host:port[:/] prefix — these are the registries the platform
-    # actually supports. Anything else is rejected.
-    "127.0.0.1:5000",
-    "localhost:5000",
-    "registry:5000",
-    "smsly-hosting-registry:5000",
-    "ghcr.io",
-    "docker.io",  # Docker Hub — also matches library/<name> style
-    "registry-1.docker.io",
-    "quay.io",
-    "gcr.io",
-    "mcr.microsoft.com",
-    "public.ecr.aws",
-)
+#
+# The canonical allowlist lives in registry_validation.py to prevent
+# policy drift between the API-boundary serializer and internal callers.
+from .services.registry_validation import ALLOWED_IMAGE_REGISTRY_HOSTS as _ALLOWED_IMAGE_REGISTRIES  # noqa: E501
 
 
 def _validate_docker_image(image: str) -> str:
@@ -424,6 +413,19 @@ class DeploymentTriggerSerializer(serializers.Serializer):
     cpu_cores = serializers.DecimalField(
         max_digits=6, decimal_places=2, required=False)
     memory_mb = serializers.IntegerField(required=False)
+
+    # Optional custom registry (if set, auto-creates a scoped project)
+    registry_url = serializers.CharField(
+        required=False, allow_blank=True,
+        help_text="Custom registry URL for this deployment. "
+                  "If set, a new Project is auto-created and the "
+                  "registry is scoped to it.")
+    registry_username = serializers.CharField(
+        required=False, allow_blank=True,
+        help_text="Username for custom registry authentication")
+    registry_password = serializers.CharField(
+        required=False, allow_blank=True, write_only=True,
+        help_text="Password for custom registry authentication")
 
 
 class InstantRollbackSerializer(serializers.Serializer):
