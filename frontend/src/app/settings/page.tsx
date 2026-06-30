@@ -25,6 +25,7 @@ import { SecurityTab } from "@/components/settings/SecurityTab";
 import { TeamsTab } from "@/components/settings/TeamsTab";
 import { AlertsTab } from "@/components/settings/AlertsTab";
 import { RegistryCredentialsTab } from "@/components/settings/RegistryCredentialsTab";
+import { ScopedRegistryTab } from "@/components/settings/ScopedRegistryTab";
 import BackupKeysTab from "@/components/settings/BackupKeysTab";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
@@ -1497,7 +1498,13 @@ export default function SettingsPage() {
         </TabsContent>
 
         <TabsContent value="registry">
-          <RegistryCredentialsTab />
+          <div className="space-y-8">
+            <RegistryCredentialsTab />
+            <ScopedRegistryTab
+              title="Scoped Registries"
+              description="Registry configurations attached to Organizations, Teams, or Projects. These override the platform default for deployments under their scope."
+            />
+          </div>
         </TabsContent>
 
         <TabsContent value="maintenance">

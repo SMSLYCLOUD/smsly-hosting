@@ -1730,6 +1730,9 @@ class ServiceViewSet(viewsets.ModelViewSet):
         ref = str(request.data.get('ref', 'HEAD'))[:200]
         server_ids = request.data.get('server_ids', [])
         include_local = request.data.get('include_local', True)
+        registry_url = str(request.data.get('registry_url', '')).strip()
+        registry_username = str(request.data.get('registry_username', '')).strip()
+        registry_password = str(request.data.get('registry_password', '')).strip()
 
         from .models_core import PlatformConfig
         PlatformConfig.objects.first()
@@ -1747,6 +1750,42 @@ class ServiceViewSet(viewsets.ModelViewSet):
             )
 
         results = {'local': None, 'remotes': []}
+
+        # ── Custom registry → auto-create ephemeral project ──
+        registry_override = None
+        if registry_url:
+            from .models_project import Project
+            from .models_registry_scope import ScopedRegistry
+
+            now_str = timezone.now().strftime('%Y%m%d-%H%M%S')
+            new_project = Project.objects.create(
+                owner=request.user,
+                name=f"Deploy-{service.name}-{now_str}",
+                description=f"Auto-created for custom registry deployment of {service.name}",
+                is_ephemeral=True,
+            )
+            from django.contrib.contenttypes.models import ContentType
+            ct = ContentType.objects.get_for_model(Project)
+            ScopedRegistry.objects.create(
+                content_type=ct,
+                object_id=new_project.id,
+                registry_url=registry_url,
+                username=registry_username,
+                password=registry_password,
+            )
+            old_project_id = str(service.project_id) if service.project_id else None
+            service.project = new_project
+            service.save(update_fields=['project', 'updated_at'])
+            registry_override = {
+                'url': registry_url,
+                'project_id': str(new_project.id),
+                'project_name': new_project.name,
+                'old_project_id': old_project_id,
+            }
+            if registry_username:
+                registry_override['username'] = registry_username
+            if registry_password:
+                registry_override['password'] = registry_password
 
         # ── 1. Local deploy ─────────────────────────────────────
         # Allow local deploy even if service is assigned to a remote
@@ -1784,6 +1823,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
                             commit_message=f"Multi-deploy: {ref}",
                             branch=service.branch or '',
                             target_is_local=True,
+                            registry_override=registry_override,
                         )
                         try:
                             smart_deploy_task.delay(deployment_id=str(deployment.id), provider_id=str(provider.id))
@@ -1843,6 +1883,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     branch=service.branch or '',
                     target_server=server,
                     target_is_local=False,
+                    registry_override=registry_override,
                 )
 
                 try:
@@ -5528,50 +5569,58 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
                 except (OSError, ValueError):
                     pass
 
-        # ── Pre-flight safety snapshot check (Fix 4) ─────────────
-        # Run a synchronous PRE_TRANSFER snapshot. If it fails, return 422
-        # with the snapshot error so the API consumer sees the failure
-        # instead of silently losing data on a corrupt restore.
-        try:
-            from .services.backup_service import BackupService
-            BackupService().backup_service(
-                target_service.id, backup_type='PRE_TRANSFER',
-            )
-        except Exception as snap_exc:
-            logger.warning(
-                "Pre-restore snapshot failed for service %s: %s",
-                target_service.id, snap_exc,
-            )
-            return Response(
-                {
-                    'error': (
-                        'Pre-restore safety snapshot failed. Refusing to '
-                        'restore to avoid data loss on a corrupt restore.'
-                    ),
-                    'snapshot_error': str(snap_exc),
-                    'backup_id': str(backup.id),
-                },
-                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            )
+        # ── Pre-flight safety snapshot check ─────────────
+        # Attempt a synchronous PRE_TRANSFER snapshot. If it fails, warn
+        # the user and ask them to confirm with "force": true. Without a
+        # safety snapshot, a corrupt restore loses the active state
+        # permanently.
+        force = str(request.data.get('force', '')).lower() == 'true'
+        if not force:
+            try:
+                from .services.backup_service import BackupService
+                BackupService().backup_service(
+                    target_service.id, backup_type='PRE_TRANSFER',
+                )
+            except Exception as snap_exc:
+                logger.warning(
+                    "Pre-restore snapshot failed for service %s: %s",
+                    target_service.id, snap_exc,
+                )
+                return Response(
+                    {
+                        'error': (
+                            'Pre-restore safety snapshot could not be '
+                            'created. Proceeding without a snapshot will '
+                            'permanently destroy the current running state '
+                            'if the restore archive is corrupt.'
+                        ),
+                        'snapshot_error': str(snap_exc),
+                        'backup_id': str(backup.id),
+                        'remediation': (
+                            'Fix the snapshot error and retry, or send '
+                            '"force": true to proceed without a safety '
+                            'snapshot. Use force with caution — data '
+                            'loss is possible if the backup is corrupt.'
+                        ),
+                    },
+                    status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                )
 
         restore_service_backup_task.delay(
             backup_id=str(backup.id),
             target_service_id=str(target_service_id) if target_service_id else None,
             requesting_user_id=request.user.id,
-            raise_on_snapshot_failure=True,
+            raise_on_snapshot_failure=not force,
             encryption_key=key_provided or None,
         )
         return Response({'status': 'restore_started'})
 
     @action(detail=False, methods=['post'], url_path='list-backups')
     def list_cloud_backups(self, request):
-        """List available backup files in a cloud storage bucket.
-
-        Returns a list of {key, size, last_modified} objects that can be
-        selected from a dropdown instead of typing the key manually.
-        """
+        """List available backup files in a cloud storage bucket (service scope)."""
         cloud_storage_id = request.data.get('cloud_storage_id', '').strip()
         prefix = request.data.get('prefix', 'smsly-backups/').strip()
+        service_id = request.data.get('service_id', '').strip()
 
         if not cloud_storage_id:
             return Response(
@@ -5587,6 +5636,13 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
             return Response(
                 {'error': 'Cloud storage destination not found.'},
                 status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Scope: only platform-wide destinations or same-service destinations
+        if dest.service is not None and str(dest.service.id) != service_id:
+            return Response(
+                {'error': 'This cloud destination belongs to a different service.'},
+                status=status.HTTP_403_FORBIDDEN,
             )
 
         from .services.backup_service import list_s3_objects
@@ -5623,6 +5679,12 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
             from apps.deployments.models_cloud_storage import CloudStorageDestination
             try:
                 dest = CloudStorageDestination.objects.get(id=cloud_storage_id)
+                # Scope: only platform-wide or same-service destinations
+                if dest.service is not None and str(dest.service.id) != service_id:
+                    return Response(
+                        {'error': 'This cloud destination belongs to a different service.'},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
                 s3_bucket = dest.bucket
                 endpoint = dest.endpoint
                 region = dest.region
@@ -6362,6 +6424,13 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        # Server-level backups must use platform-wide destinations only
+        if dest.service is not None:
+            return Response(
+                {'error': 'Server backups require a platform-wide cloud destination (no service binding).'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         from .services.backup_service import list_s3_objects
 
         objects = list_s3_objects(
@@ -6385,6 +6454,12 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
             from apps.deployments.models_cloud_storage import CloudStorageDestination
             try:
                 dest = CloudStorageDestination.objects.get(id=cloud_storage_id)
+                # Server-level restores must use platform-wide destinations
+                if dest.service is not None:
+                    return Response(
+                        {'error': 'Server restores require a platform-wide cloud destination (no service binding).'},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
                 s3_bucket = dest.bucket
                 endpoint = dest.endpoint
                 region = dest.region
