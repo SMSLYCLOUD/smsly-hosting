@@ -501,6 +501,13 @@ class LocalAdapter(BaseCloudAdapter):
             else:
                 create_kwargs["command"] = list(command)
 
+        from apps.deployments.services.container_runtime import get_runtime_for_container
+        container_runtime = get_runtime_for_container(
+            service_name=self.service_id if hasattr(self, "service_id") else "",
+        )
+        if container_runtime:
+            create_kwargs["runtime"] = container_runtime
+
         new_container = self.docker_client.containers.create(**create_kwargs)
         new_container.start()
         logger.info(

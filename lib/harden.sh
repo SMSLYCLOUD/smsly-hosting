@@ -346,6 +346,58 @@ _harden_falco_verify() {
     return 0
 }
 
+# ─── Container Runtime Sandboxing ─────────────────────────────────────────────
+
+_harden_container_runtime_bootstrap() {
+    local install_dir="${INSTALL_DIR:-/opt/smsly-hosting}"
+
+    # Try gVisor first (lighter, no KVM required)
+    if ! command -v runsc &>/dev/null; then
+        if [ -f "$install_dir/lib/install-gvisor.sh" ]; then
+            echo -e "${BLUE}  → [harden] gVisor (runsc) not detected — installing...${NC}"
+            bash "$install_dir/lib/install-gvisor.sh" || true
+        fi
+    fi
+
+    # Try Kata if KVM is available
+    if [ -e /dev/kvm ] && ! command -v kata-runtime &>/dev/null; then
+        if [ -f "$install_dir/lib/install-kata.sh" ]; then
+            echo -e "${BLUE}  → [harden] Kata Containers not detected (KVM available) — installing...${NC}"
+            bash "$install_dir/lib/install-kata.sh" || true
+        fi
+    fi
+}
+
+_harden_container_runtime_verify() {
+    local found=0
+
+    if command -v runsc &>/dev/null; then
+        _harden_log ok "gVisor (runsc) installed"
+        found=1
+    fi
+
+    if command -v kata-runtime &>/dev/null; then
+        _harden_log ok "Kata Containers installed"
+        found=1
+    fi
+
+    if [ "$found" -eq 0 ]; then
+        _harden_log warn "container runtime sandboxing — install gVisor or Kata for VM-level isolation"
+        return 1
+    fi
+
+    # Check Docker runtime registration
+    if [ -f /etc/docker/daemon.json ]; then
+        if python3 -c "import json; import sys; cfg=json.load(open('/etc/docker/daemon.json')); sys.exit(0 if 'runsc' in cfg.get('runtimes',{}) else 1)" 2>/dev/null; then
+            _harden_log ok "gVisor registered with Docker"
+        elif python3 -c "import json; import sys; cfg=json.load(open('/etc/docker/daemon.json')); sys.exit(0 if 'kata-runtime' in cfg.get('runtimes',{}) else 1)" 2>/dev/null; then
+            _harden_log ok "Kata registered with Docker"
+        fi
+    fi
+
+    return "$found"
+}
+
 # ─── Public Entry Points ──────────────────────────────────────────────────────
 
 harden_security_bootstrap() {
@@ -358,6 +410,7 @@ harden_security_bootstrap() {
     _harden_docker_daemon_bootstrap
     _harden_crowdsec_bootstrap
     _harden_falco_bootstrap
+    _harden_container_runtime_bootstrap
     echo -e "${GREEN}  ✓ [harden] Bootstrap dispatched — verifying later${NC}"
 }
 
@@ -377,6 +430,7 @@ harden_security_verify() {
     _harden_docker_daemon_verify || { ((failures++)); true; }; ((checks++))
     _harden_crowdsec_verify   || { ((failures++)); true; }; ((checks++))
     _harden_falco_verify      || { ((failures++)); true; }; ((checks++))
+    _harden_container_runtime_verify || { ((failures++)); true; }; ((checks++))
 
     local passed=$((checks - failures))
     echo ""
