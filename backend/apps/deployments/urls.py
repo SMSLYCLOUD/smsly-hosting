@@ -21,6 +21,7 @@ from .views import (
     RegistryCredentialViewSet,
 )
 from .views_registry_scope import ScopedRegistryViewSet
+from .views_network_scope import ScopedNetworkViewSet
 from .views_registry_auth import registry_token
 from .views_addons import AddonViewSet
 from .views_analysis import RepoAnalysisView
@@ -99,6 +100,7 @@ router.register(r'slow-queries', SlowQueryViewSet, basename='slow-query')
 router.register(r'database-replicas', DatabaseReplicaViewSet, basename='database-replica')
 router.register(r'registry-credentials', RegistryCredentialViewSet, basename='registry-credential')
 router.register(r'registry-scopes', ScopedRegistryViewSet, basename='registry-scope')
+router.register(r'network-scopes', ScopedNetworkViewSet, basename='network-scope')
 
 # Nested Router
 # /api/v1/services/{service_pk}/metrics/

@@ -163,7 +163,7 @@ class LocalAdapter(BaseCloudAdapter):
 
         labels = {
             'traefik.enable': str(is_public).lower(),
-            'traefik.docker.network': os.getenv('DOCKER_NETWORK', 'smsly-net'),
+            'traefik.docker.network': network_name if isinstance(network_name, str) else os.getenv('DOCKER_NETWORK', 'smsly-net'),
             f'traefik.http.routers.{router_name}.rule': host_rule,
             f'traefik.http.services.{router_name}.loadbalancer.server.port': str(port),
             f'traefik.http.routers.{router_name}.priority': '100',
@@ -262,14 +262,38 @@ class LocalAdapter(BaseCloudAdapter):
         a green container first, then promotes it. The old container keeps
         serving while the green candidate is warming up.
         """
-        # Ensure shared network exists
+        # Resolve scoped network for this service
         network_name = os.getenv('DOCKER_NETWORK', 'smsly-net')
+        try:
+            from apps.deployments.models import Service as _Svc
+            _svc = _Svc.objects.filter(id=self.service_id).select_related('project__team__organization').first() if hasattr(self, 'service_id') and hasattr(self, '_service') else None
+            if _svc is None and hasattr(self, 'service_id'):
+                _svc = self._service if hasattr(self, '_service') else None
+            if _svc and hasattr(_svc, 'project') and _svc.project:
+                from apps.deployments.models_network_scope import ScopedNetwork
+                network_name = ScopedNetwork.resolve_network_name(_svc.project)
+        except Exception:
+            pass
+
         if not self.docker_client:
             raise RuntimeError("Docker client not available")
         try:
             self.docker_client.networks.get(network_name)
         except docker.errors.NotFound:
-            self.docker_client.networks.create(network_name, driver="bridge")
+            driver = "bridge"
+            try:
+                from apps.deployments.models_network_scope import ScopedNetwork
+                if hasattr(self, 'service_id'):
+                    from apps.deployments.models import Service as _Svc2
+                    _svc2 = _Svc2.objects.filter(id=self.service_id).select_related('project').first() if hasattr(self, 'service_id') and hasattr(self, '_service') else None
+                    if _svc2 is None and hasattr(self, 'service_id'):
+                        _svc2 = self._service if hasattr(self, '_service') else None
+                    if _svc2 and hasattr(_svc2, 'project') and _svc2.project:
+                        cfg = ScopedNetwork.resolve_network_config(_svc2.project)
+                        driver = cfg.get("driver", "bridge")
+            except Exception:
+                pass
+            self.docker_client.networks.create(network_name, driver=driver)
 
         # Prepare volumes
         docker_volumes = {}
