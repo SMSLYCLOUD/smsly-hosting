@@ -486,6 +486,11 @@ class LocalAdapter(BaseCloudAdapter):
             "labels": labels,
             "volumes": docker_volumes if docker_volumes else None,
             "restart_policy": rp,
+            # Container hardening: drop all capabilities, block privilege escalation,
+            # restrict to Docker's default seccomp profile (plus apparmor if host supports it).
+            "security_opt": ["no-new-privileges:true"],
+            "cap_drop": ["ALL"],
+            "cap_add": ["NET_BIND_SERVICE", "CHOWN", "DAC_OVERRIDE", "SETGID", "SETUID", "SYS_CHROOT"],
             **run_kwargs,
         }
         if docker_healthcheck is not None:
@@ -777,6 +782,9 @@ class LocalAdapter(BaseCloudAdapter):
                 "restart_policy": rp,
                 "command": green_cmd,
                 "entrypoint": green_entrypoint,
+                "security_opt": ["no-new-privileges:true"],
+                "cap_drop": ["ALL"],
+                "cap_add": ["NET_BIND_SERVICE", "CHOWN", "DAC_OVERRIDE", "SETGID", "SETUID", "SYS_CHROOT"],
                 **run_kwargs,
             }
             if green_healthcheck is not None:

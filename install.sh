@@ -486,6 +486,11 @@ fi
 # ─── Refresh Mode ─────────────────────────────────────────────────────────────
 if [ "$REFRESH_MODE" = "true" ]; then
     safe_refresh_runtime_services
+    # Security self-healing: verify and repair security stack during refresh
+    if [ -f "$INSTALL_DIR/lib/harden.sh" ]; then
+        source "$INSTALL_DIR/lib/harden.sh"
+        harden_security_stack
+    fi
     exit 0
 fi
 

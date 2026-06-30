@@ -302,8 +302,13 @@ echo -e "${GREEN}  ✓ Previous artifacts cleaned${NC}"
 apt_run apt-get update -qq
 apt_run apt-get install -y curl wget git python3 python3-pip python3-venv openssl ca-certificates gnupg lsb-release dnsutils apache2-utils fail2ban apparmor-utils
 
-# Configure Fail2ban basic SSH protection
-cat << 'EOF' > /etc/fail2ban/jail.local
+# ─── Security Hardening (Fail2ban, UFW, AppArmor, SSH, kernel, auditd, CrowdSec, Falco) ──
+if [ -f "$INSTALL_DIR/lib/harden.sh" ]; then
+    source "$INSTALL_DIR/lib/harden.sh"
+    harden_security_stack
+else
+    # Fallback: basic Fail2ban SSH protection (harden.sh handles this better when present)
+    cat << 'EOF' > /etc/fail2ban/jail.local
 [DEFAULT]
 bantime = 10m
 findtime = 10m
@@ -316,9 +321,10 @@ filter = sshd
 logpath = /var/log/auth.log
 maxretry = 3
 EOF
-systemctl enable fail2ban >/dev/null 2>&1 || true
-systemctl restart fail2ban >/dev/null 2>&1 || true
-echo -e "${GREEN}  ✓ Fail2ban configured and started${NC}"
+    systemctl enable fail2ban >/dev/null 2>&1 || true
+    systemctl restart fail2ban >/dev/null 2>&1 || true
+    echo -e "${GREEN}  ✓ Fail2ban configured and started${NC}"
+fi
 
 # Install Docker if missing
 if ! command -v docker &> /dev/null; then

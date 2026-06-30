@@ -37,6 +37,12 @@ if [ -n "$UPDATE_MODE" ]; then
     check_caddy_conflict
     ensure_system_swap
 
+    # ─── Security Hardening ───────────────────────────────────────────────
+    if [ -f "$INSTALL_DIR/lib/harden.sh" ]; then
+        source "$INSTALL_DIR/lib/harden.sh"
+        harden_security_stack
+    fi
+
     # ─── Git Safety ──────────────────────────────────────────────────────────
     # Prevents "dubious ownership" errors on production VPS
     git config --global --add safe.directory "$INSTALL_DIR" 2>/dev/null || true
