@@ -1,0 +1,163 @@
+name: Trivy Vulnerability Scan
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "backend/Dockerfile"
+      - "backend/requirements.txt"
+      - "backend/**.py"
+      - "frontend/Dockerfile"
+      - "frontend/package.json"
+      - "frontend/package-lock.json"
+      - "Dockerfile"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "backend/Dockerfile"
+      - "backend/requirements.txt"
+      - "backend/**.py"
+      - "frontend/Dockerfile"
+      - "frontend/package.json"
+      - "frontend/package-lock.json"
+      - "Dockerfile"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  trivy-fs-backend:
+    name: Trivy FS Scan — Backend Python deps
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+      - name: Run Trivy filesystem scan (backend)
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bcbf0874569a87b02f # 0.28.0
+        with:
+          scan-type: "fs"
+          scan-ref: "backend/"
+          scanners: "vuln,secret,misconfig"
+          severity: "CRITICAL,HIGH"
+          format: "sarif"
+          output: "trivy-backend-fs.sarif"
+          exit-code: "1"
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: "trivy-backend-fs.sarif"
+          category: "trivy-backend-fs"
+
+  trivy-fs-frontend:
+    name: Trivy FS Scan — Frontend npm deps
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+      - name: Run Trivy filesystem scan (frontend)
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bcbf0874569a87b02f # 0.28.0
+        with:
+          scan-type: "fs"
+          scan-ref: "frontend/"
+          scanners: "vuln,secret,misconfig"
+          severity: "CRITICAL,HIGH"
+          format: "sarif"
+          output: "trivy-frontend-fs.sarif"
+          exit-code: "1"
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: "trivy-frontend-fs.sarif"
+          category: "trivy-frontend-fs"
+
+  trivy-image-backend:
+    name: Trivy Image Scan — Backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+      - name: Build backend image
+        run: docker build -t smsly-backend:ci -f backend/Dockerfile backend/
+      - name: Run Trivy image scan (backend)
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bcbf0874569a87b02f # 0.28.0
+        with:
+          scan-type: "image"
+          image-ref: "smsly-backend:ci"
+          scanners: "vuln,secret"
+          severity: "CRITICAL,HIGH"
+          format: "sarif"
+          output: "trivy-backend-image.sarif"
+          exit-code: "1"
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: "trivy-backend-image.sarif"
+          category: "trivy-backend-image"
+
+  trivy-image-frontend:
+    name: Trivy Image Scan — Frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+      - name: Build frontend image
+        run: docker build -t smsly-frontend:ci -f frontend/Dockerfile frontend/
+      - name: Run Trivy image scan (frontend)
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bcbf0874569a87b02f # 0.28.0
+        with:
+          scan-type: "image"
+          image-ref: "smsly-frontend:ci"
+          scanners: "vuln,secret"
+          severity: "CRITICAL,HIGH"
+          format: "sarif"
+          output: "trivy-frontend-image.sarif"
+          exit-code: "1"
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: "trivy-frontend-image.sarif"
+          category: "trivy-frontend-image"
+
+  trivy-configs:
+    name: Trivy Misconfig Scan — IaC & Dockerfiles
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+      - name: Run Trivy config scan
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bcbf0874569a87b02f # 0.28.0
+        with:
+          scan-type: "config"
+          scan-ref: "."
+          scanners: "misconfig"
+          severity: "CRITICAL,HIGH"
+          format: "sarif"
+          output: "trivy-configs.sarif"
+          exit-code: "1"
+          trivy-config: "trivy.yaml"
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: "trivy-configs.sarif"
+          category: "trivy-configs"

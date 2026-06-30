@@ -21,6 +21,7 @@ from .views import (
     RegistryCredentialViewSet,
 )
 from .views_registry_scope import ScopedRegistryViewSet
+from .views_registry_auth import registry_token
 from .views_addons import AddonViewSet
 from .views_analysis import RepoAnalysisView
 from .views_autoscale import ScalingViewSet
@@ -214,6 +215,8 @@ urlpatterns = [
         name='server-agent-heartbeat',
     ),
     path('deployments/remote-trigger/', RemoteTriggerView.as_view(), name='deployment-remote-trigger'),
+    # Docker Registry token auth
+    path('registry/auth/', registry_token, name='registry-token'),
     # Device trust — hardware fingerprint-based device enrollment
     path('devices/register/', register_device, name='device-register'),
     path('devices/', list_devices, name='device-list'),

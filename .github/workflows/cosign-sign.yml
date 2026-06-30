@@ -1,0 +1,58 @@
+name: Cosign Image Signing
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  REGISTRY: "127.0.0.1:5000"
+
+jobs:
+  build-and-sign:
+    name: Build + Sign Platform Images
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    steps:
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+
+      - name: Set up Cosign
+        uses: sigstore/cosign-installer@59acb6260d86c0f8a58fa4c3ddb032a715305043 # v3.5.0
+
+      - name: Build backend image
+        run: docker build -t smsly/backend:latest -f backend/Dockerfile backend/
+
+      - name: Build frontend image
+        run: docker build -t smsly/frontend:latest -f frontend/Dockerfile frontend/
+
+      - name: Sign backend image (keyless)
+        run: |
+          cosign sign --yes \
+            smsly/backend:latest
+
+      - name: Sign frontend image (keyless)
+        run: |
+          cosign sign --yes \
+            smsly/frontend:latest
+
+      - name: Verify backend signature
+        run: |
+          cosign verify \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "https://github.com/${{ github.repository }}/.github/workflows/cosign-sign.yml@${{ github.ref }}" \
+            smsly/backend:latest
+
+      - name: Verify frontend signature
+        run: |
+          cosign verify \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "https://github.com/${{ github.repository }}/.github/workflows/cosign-sign.yml@${{ github.ref }}" \
+            smsly/frontend:latest
