@@ -23,6 +23,9 @@ from apps.deployments.models_safedeploy import (
     PreviewEnvironment,
 )
 from apps.deployments.services.safedeploy.django_adapter import DjangoAdapter
+from apps.deployments.services.safedeploy.migration_environment import (
+    build_migration_environment,
+)
 from apps.deployments.services.safedeploy.postgres_snapshot_manager import (
     PostgresSnapshotManager,
 )
@@ -307,21 +310,12 @@ def run_migration_validation_job(preview_id: str):
     workspace_dir = None
     try:
         preview = PreviewEnvironment.objects.get(id=preview_id)
-        adapter = DjangoAdapter()
 
-        workspace_dir = tempfile.mkdtemp(prefix=f"preview_{preview.id}_")
+        validation, _ = MigrationValidation.objects.get_or_create(preview_environment=preview)
+
         repo_url = preview.service.repository_url
-        cloned_path = workspace_dir
-        if repo_url:
-             from apps.deployments.utils import get_github_oauth_token_for_user
-             token = get_github_oauth_token_for_user(preview.service.owner)
-             cloned_path = checkout_code(repo_url, preview.branch_name, preview.commit_sha, workspace_dir, token)
-             if not cloned_path:
-                 raise Exception("Failed to clone repository")
-
         if not repo_url:
             logger.error(f"Service {preview.service.id} has no repository URL configured")
-            validation, _ = MigrationValidation.objects.get_or_create(preview_environment=preview)
             validation.status = MigrationValidation.Status.FAILED
             validation.error_message = "No repository URL configured"
             validation.save()
@@ -329,7 +323,12 @@ def run_migration_validation_job(preview_id: str):
             preview.save()
             return
 
-        validation, _ = MigrationValidation.objects.get_or_create(preview_environment=preview)
+        workspace_dir = tempfile.mkdtemp(prefix=f"preview_{preview.id}_")
+        from apps.deployments.utils import get_github_oauth_token_for_user
+        token = get_github_oauth_token_for_user(preview.service.owner)
+        cloned_path = checkout_code(repo_url, preview.branch_name, preview.commit_sha, workspace_dir, token)
+        if not cloned_path:
+            raise Exception("Failed to clone repository")
 
         try:
             db_clone = preview.database_clone
@@ -337,7 +336,6 @@ def run_migration_validation_job(preview_id: str):
             db_clone = None
 
         if not db_clone or db_clone.status != DatabaseClone.Status.READY:
-            # Check if this service has a PostgreSQL addon at all
             from apps.deployments.models_addons import Addon
             has_pg_addon = Addon.objects.filter(
                 service=preview.service, addon_type=Addon.Type.POSTGRES
@@ -350,7 +348,6 @@ def run_migration_validation_job(preview_id: str):
                 preview.save()
                 return
             else:
-                # No DB means no migrations to validate — skip gracefully
                 validation.status = MigrationValidation.Status.NOT_CONFIGURED
                 validation.save()
                 preview.status = PreviewEnvironment.Status.TESTS_RUNNING
@@ -374,6 +371,24 @@ def run_migration_validation_job(preview_id: str):
             preview.save()
             return
 
+        # Collect all service env vars to pass to the migration environment
+        service_env_vars = {
+            env_var.key: env_var.value
+            for env_var in preview.service.env_vars.all()
+        }
+
+        # Build isolated venv with dependencies installed and settings discovered
+        mig_env = build_migration_environment(cloned_path, clone_url, service_env_vars)
+        if not mig_env.ok:
+            validation.status = MigrationValidation.Status.FAILED
+            validation.error_message = f"Migration environment setup failed: {mig_env.error}"
+            validation.save()
+            preview.status = PreviewEnvironment.Status.MIGRATION_FAILED
+            preview.save()
+            return
+
+        adapter = DjangoAdapter(python_bin=mig_env.python_bin)
+
         if not adapter.detect(cloned_path):
             validation.status = MigrationValidation.Status.NOT_CONFIGURED
             validation.save()
@@ -382,13 +397,13 @@ def run_migration_validation_job(preview_id: str):
             run_preview_tests_job.delay(preview_id)
             return
 
-        env = {"DATABASE_URL": clone_url}
+        env = mig_env.env
 
         # Run Check
         rc, out, err = adapter.run_check(cloned_path, env)
         if rc != 0:
             validation.status = MigrationValidation.Status.FAILED
-            validation.error_message = "Django check failed"
+            validation.error_message = f"Django check failed: {err[-500:] if err else 'unknown'}"
             validation.save()
             preview.status = PreviewEnvironment.Status.MIGRATION_FAILED
             preview.save()
@@ -398,7 +413,7 @@ def run_migration_validation_job(preview_id: str):
         rc, mm_out, mm_err = adapter.run_makemigrations_check(cloned_path, env)
         if rc != 0:
             validation.status = MigrationValidation.Status.FAILED
-            validation.error_message = f"makemigrations --check failed: {mm_err}"
+            validation.error_message = f"makemigrations --check failed: {mm_err[-500:] if mm_err else 'unknown'}"
             validation.save()
             preview.status = PreviewEnvironment.Status.MIGRATION_FAILED
             preview.save()
@@ -419,13 +434,13 @@ def run_migration_validation_job(preview_id: str):
         validation.auto_deploy_policy = risk_report['auto_deploy_policy']
         validation.requires_backup = risk_report['requires_backup']
 
-        # Migrate
+        # Migrate against the cloned database
         rc, out, err = adapter.run_migrate(cloned_path, env)
         DeploymentArtifact.objects.create(service=preview.service, preview_environment=preview, artifact_type=DeploymentArtifact.ArtifactType.MIGRATION_OUTPUT, content=f"RC: {rc}\n{out}\n{err}")
 
         if rc != 0:
             validation.status = MigrationValidation.Status.FAILED
-            validation.error_message = "Migration apply failed."
+            validation.error_message = f"Migration apply failed: {err[-500:] if err else 'unknown'}"
             validation.save()
             preview.status = PreviewEnvironment.Status.MIGRATION_FAILED
             preview.save()
