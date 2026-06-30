@@ -7,7 +7,7 @@ from .redaction import redact_secrets
 logger = logging.getLogger(__name__)
 
 class CommandExecutor:
-    def run(self, cmd: str, cwd: str, env: dict[str, str] | None = None, timeout: int = 120) -> tuple[int, str, str]:
+    def run(self, cmd: str, cwd: str, env: dict[str, str] | None = None, timeout: int = 900) -> tuple[int, str, str]:
         import shlex
         run_env = os.environ.copy()
         if env:

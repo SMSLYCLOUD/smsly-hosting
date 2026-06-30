@@ -1,4 +1,6 @@
 import logging
+import logging
+import os
 import re
 
 from django.conf import settings
@@ -132,51 +134,79 @@ class ProductionDeploymentPipeline:
     def _run_migration_phase(self, deployment: Deployment) -> None:
         deployment.status = Deployment.Status.MIGRATION_RUNNING
         deployment.save()
+        pre_migration_state = None
+        workspace_dir = None
         try:
             import shutil
             import tempfile
 
-            from apps.deployments.services.safedeploy.django_adapter import (
-                DjangoAdapter,
-            )
-            adapter = DjangoAdapter()
+            svc = deployment.service
+            repo_url = svc.repository_url
+            if not repo_url:
+                logger.warning("Migration phase skipped — no repository URL for service %s", svc.id)
+                return
+
             workspace_dir = tempfile.mkdtemp(prefix=f"prod_deploy_{deployment.id}_")
-            repo_url = deployment.service.repository_url
-            cloned_path: str | None = workspace_dir
-            if repo_url:
-                try:
-                    from apps.deployments.services.git_manager import GitManager
-                    from apps.deployments.utils import get_github_oauth_token_for_user
-                    token = get_github_oauth_token_for_user(deployment.service.owner)
-                    cloned_path = GitManager.clone_repo(
-                        repo_url=repo_url,
-                        branch=deployment.service.branch or 'main',
-                        destination=workspace_dir,
-                        token=token,
-                        commit_hash=deployment.commit_hash
-                    )
-                except Exception as e:
-                    logger.error(f"Migration clone failed for deployment {deployment.id}: {e}")
-                    cloned_path = None
+
+            from apps.deployments.utils import get_github_oauth_token_for_user
+            token = get_github_oauth_token_for_user(svc.owner)
+
+            from apps.deployments.services.git_manager import GitManager
+            cloned_path = GitManager.clone_repo(
+                repo_url=repo_url,
+                branch=svc.branch or 'main',
+                destination=workspace_dir,
+                token=token,
+                commit_hash=deployment.commit_hash,
+            )
+            if not cloned_path:
+                raise Exception("Failed to clone repository for migration phase")
+
             prod_db_url = None
-            for env_var in deployment.service.env_vars.all():
+            for env_var in svc.env_vars.all():
                 if env_var.key == 'DATABASE_URL':
                     prod_db_url = env_var.value
 
-            pre_migration_state = None
-            if cloned_path and prod_db_url and adapter.detect(cloned_path):
-                env = {"DATABASE_URL": prod_db_url}
-                pre_migration_state = self._capture_pre_migration_state(adapter, cloned_path, env)
-                if pre_migration_state:
-                    meta = dict(deployment.metadata or {})
-                    meta["pre_migration_state"] = pre_migration_state
-                    deployment.metadata = meta
-                    deployment.save(update_fields=["metadata"])
-                rc, out, err = adapter.run_migrate(cloned_path, env)
-                DeploymentArtifact.objects.create(service=deployment.service, deployment=deployment, artifact_type=DeploymentArtifact.ArtifactType.MIGRATION_OUTPUT, content=f"RC: {rc}\n{out}\n{err}")
-                if rc != 0:
-                    raise Exception("Production Migration apply failed.")
-            shutil.rmtree(workspace_dir, ignore_errors=True)
+            if not prod_db_url:
+                raise Exception("No DATABASE_URL configured on service")
+
+            service_env_vars = {
+                env_var.key: env_var.value
+                for env_var in svc.env_vars.all()
+            }
+
+            from apps.deployments.services.safedeploy.migration_environment import (
+                build_migration_environment,
+            )
+            mig_env = build_migration_environment(cloned_path, prod_db_url, service_env_vars, block_addon_urls=False)
+            if not mig_env.ok:
+                raise Exception(f"Migration environment setup failed: {mig_env.error}")
+
+            from apps.deployments.services.safedeploy.django_adapter import (
+                DjangoAdapter,
+            )
+            adapter = DjangoAdapter(python_bin=mig_env.python_bin)
+
+            if not adapter.detect(cloned_path):
+                raise Exception("manage.py not found in cloned repository")
+
+            env = mig_env.env
+            pre_migration_state = self._capture_pre_migration_state(adapter, cloned_path, env)
+            if pre_migration_state:
+                meta = dict(deployment.metadata or {})
+                meta["pre_migration_state"] = pre_migration_state
+                deployment.metadata = meta
+                deployment.save(update_fields=["metadata"])
+
+            rc, out, err = adapter.run_migrate(cloned_path, env)
+            DeploymentArtifact.objects.create(
+                service=svc,
+                deployment=deployment,
+                artifact_type=DeploymentArtifact.ArtifactType.MIGRATION_OUTPUT,
+                content=f"RC: {rc}\n{out}\n{err}",
+            )
+            if rc != 0:
+                raise Exception(f"Production Migration apply failed: {err[-500:] if err else 'unknown'}")
         except Exception as e:
             logger.error(f"Migration phase failed for deployment {deployment.id}: {e}")
             deployment.status = Deployment.Status.MIGRATION_FAILED
@@ -190,6 +220,9 @@ class ProductionDeploymentPipeline:
                 self._emit_critical_rollback_alert(deployment, e)
                 deployment.status = Deployment.Status.FAILED
                 deployment.save()
+        finally:
+            if workspace_dir:
+                shutil.rmtree(workspace_dir, ignore_errors=True)
 
     def _capture_pre_migration_state(self, adapter, cloned_path, env):
         """Run `manage.py showmigrations --plan` and extract the last applied migration per app.
@@ -226,69 +259,89 @@ class ProductionDeploymentPipeline:
         return state or None
 
     def _attempt_migration_rollback(self, deployment: Deployment, pre_migration_state) -> bool:
-        """Try to roll the production DB back to ``pre_migration_state``.
-
-        Returns True only if every captured app was reverted successfully.
-        """
         if not pre_migration_state:
             return False
         import shutil
         import tempfile
 
-        from apps.deployments.services.safedeploy.django_adapter import DjangoAdapter
-        adapter = DjangoAdapter()
-        workspace_dir = tempfile.mkdtemp(prefix=f"prod_rollback_{deployment.id}_")
-        cloned_path = workspace_dir
-        repo_url = deployment.service.repository_url
-        if repo_url:
-            try:
-                from apps.deployments.services.git_manager import GitManager
-                from apps.deployments.utils import get_github_oauth_token_for_user
-                token = get_github_oauth_token_for_user(deployment.service.owner)
-                cloned_path = GitManager.clone_repo(
-                    repo_url=repo_url,
-                    branch=deployment.service.branch or 'main',
-                    destination=workspace_dir,
-                    token=token,
-                    commit_hash=deployment.commit_hash,
-                )
-            except Exception as e:
-                logger.error(f"Rollback clone failed for deployment {deployment.id}: {e}")
-                shutil.rmtree(workspace_dir, ignore_errors=True)
+        workspace_dir = None
+        try:
+            workspace_dir = tempfile.mkdtemp(prefix=f"prod_rollback_{deployment.id}_")
+            svc = deployment.service
+            repo_url = svc.repository_url
+            if not repo_url:
                 return False
-        prod_db_url = None
-        for env_var in deployment.service.env_vars.all():
-            if env_var.key == 'DATABASE_URL':
-                prod_db_url = env_var.value
-        if not (cloned_path and prod_db_url and adapter.detect(cloned_path)):
-            shutil.rmtree(workspace_dir, ignore_errors=True)
-            return False
-        env = {"DATABASE_URL": prod_db_url}
-        all_ok = True
-        for app_label, migration_name in pre_migration_state.items():
-            try:
-                rc, out, err = adapter.executor.run(
-                    f"python manage.py migrate {app_label} {migration_name} --noinput",
-                    cloned_path,
-                    env,
-                )
-                DeploymentArtifact.objects.create(
-                    service=deployment.service,
-                    deployment=deployment,
-                    artifact_type=DeploymentArtifact.ArtifactType.ROLLBACK_REPORT,
-                    content=f"Rollback to {app_label}.{migration_name}: rc={rc}\n{out}\n{err}",
-                )
-                if rc != 0:
-                    all_ok = False
-                    logger.error(
-                        "Rollback migrate %s %s failed: rc=%s stderr=%s",
-                        app_label, migration_name, rc, err,
+
+            from apps.deployments.utils import get_github_oauth_token_for_user
+            token = get_github_oauth_token_for_user(svc.owner)
+
+            from apps.deployments.services.git_manager import GitManager
+            cloned_path = GitManager.clone_repo(
+                repo_url=repo_url,
+                branch=svc.branch or 'main',
+                destination=workspace_dir,
+                token=token,
+                commit_hash=deployment.commit_hash,
+            )
+            if not cloned_path:
+                return False
+
+            prod_db_url = None
+            for env_var in svc.env_vars.all():
+                if env_var.key == 'DATABASE_URL':
+                    prod_db_url = env_var.value
+            if not prod_db_url:
+                return False
+
+            service_env_vars = {
+                env_var.key: env_var.value
+                for env_var in svc.env_vars.all()
+            }
+
+            from apps.deployments.services.safedeploy.migration_environment import (
+                build_migration_environment,
+            )
+            mig_env = build_migration_environment(cloned_path, prod_db_url, service_env_vars, block_addon_urls=False)
+            if not mig_env.ok:
+                logger.error("Rollback venv setup failed: %s", mig_env.error)
+                return False
+
+            from apps.deployments.services.safedeploy.django_adapter import DjangoAdapter
+            adapter = DjangoAdapter(python_bin=mig_env.python_bin)
+            if not adapter.detect(cloned_path):
+                return False
+
+            env = mig_env.env
+            all_ok = True
+            for app_label, migration_name in pre_migration_state.items():
+                try:
+                    rc, out, err = adapter.executor.run(
+                        f"{mig_env.python_bin} manage.py migrate {app_label} {migration_name} --noinput",
+                        cloned_path,
+                        env,
                     )
-            except Exception as e:
-                all_ok = False
-                logger.error("Rollback for %s.%s raised: %s", app_label, migration_name, e)
-        shutil.rmtree(workspace_dir, ignore_errors=True)
-        return all_ok
+                    DeploymentArtifact.objects.create(
+                        service=svc,
+                        deployment=deployment,
+                        artifact_type=DeploymentArtifact.ArtifactType.ROLLBACK_REPORT,
+                        content=f"Rollback to {app_label}.{migration_name}: rc={rc}\n{out}\n{err}",
+                    )
+                    if rc != 0:
+                        all_ok = False
+                        logger.error(
+                            "Rollback migrate %s %s failed: rc=%s stderr=%s",
+                            app_label, migration_name, rc, err,
+                        )
+                except Exception as e:
+                    all_ok = False
+                    logger.error("Rollback for %s.%s raised: %s", app_label, migration_name, e)
+            return all_ok
+        except Exception as e:
+            logger.error("Rollback attempt failed: %s", e)
+            return False
+        finally:
+            if workspace_dir:
+                shutil.rmtree(workspace_dir, ignore_errors=True)
 
     def _emit_critical_rollback_alert(self, deployment: Deployment, original_error) -> None:
         """Best-effort critical alert when migration rollback cannot recover."""
@@ -312,7 +365,6 @@ class ProductionDeploymentPipeline:
             logger.error("Failed to emit critical rollback alert: %s", alert_err)
 
     def _run_tests_phase(self, deployment: Deployment) -> None:
-        """Run the test suite against the production DB. Opt-in via SAFEDEPLOY_RUN_TESTS."""
         if not getattr(settings, "SAFEDEPLOY_RUN_TESTS", False):
             logger.info("Skipping _run_tests_phase (SAFEDEPLOY_RUN_TESTS is not enabled).")
             return
@@ -322,40 +374,58 @@ class ProductionDeploymentPipeline:
         import shutil
         import tempfile
 
-        from apps.deployments.services.safedeploy.django_adapter import DjangoAdapter
-        adapter = DjangoAdapter()
-        workspace_dir = tempfile.mkdtemp(prefix=f"prod_tests_{deployment.id}_")
-        cloned_path = workspace_dir
-        repo_url = svc.repository_url
-        if repo_url:
-            try:
-                from apps.deployments.services.git_manager import GitManager
-                from apps.deployments.utils import get_github_oauth_token_for_user
-                token = get_github_oauth_token_for_user(svc.owner)
-                cloned_path = GitManager.clone_repo(
-                    repo_url=repo_url,
-                    branch=svc.branch or 'main',
-                    destination=workspace_dir,
-                    token=token,
-                    commit_hash=deployment.commit_hash,
-                )
-            except Exception as e:
-                logger.error(f"Tests clone failed for deployment {deployment.id}: {e}")
-                shutil.rmtree(workspace_dir, ignore_errors=True)
+        workspace_dir = None
+        try:
+            workspace_dir = tempfile.mkdtemp(prefix=f"prod_tests_{deployment.id}_")
+            repo_url = svc.repository_url
+            if not repo_url:
+                return
+
+            from apps.deployments.utils import get_github_oauth_token_for_user
+            token = get_github_oauth_token_for_user(svc.owner)
+
+            from apps.deployments.services.git_manager import GitManager
+            cloned_path = GitManager.clone_repo(
+                repo_url=repo_url,
+                branch=svc.branch or 'main',
+                destination=workspace_dir,
+                token=token,
+                commit_hash=deployment.commit_hash,
+            )
+            if not cloned_path:
                 deployment.status = Deployment.Status.FAILED
                 deployment.save()
                 return
-        prod_db_url = None
-        for env_var in svc.env_vars.all():
-            if env_var.key == 'DATABASE_URL':
-                prod_db_url = env_var.value
-        if not (cloned_path and prod_db_url and adapter.detect(cloned_path)):
-            shutil.rmtree(workspace_dir, ignore_errors=True)
-            return
-        env = {"DATABASE_URL": prod_db_url}
-        try:
+
+            prod_db_url = None
+            for env_var in svc.env_vars.all():
+                if env_var.key == 'DATABASE_URL':
+                    prod_db_url = env_var.value
+            if not prod_db_url:
+                return
+
+            service_env_vars = {
+                env_var.key: env_var.value
+                for env_var in svc.env_vars.all()
+            }
+
+            from apps.deployments.services.safedeploy.migration_environment import (
+                build_migration_environment,
+            )
+            mig_env = build_migration_environment(cloned_path, prod_db_url, service_env_vars, block_addon_urls=False)
+            if not mig_env.ok:
+                deployment.status = Deployment.Status.FAILED
+                deployment.save()
+                return
+
+            from apps.deployments.services.safedeploy.django_adapter import DjangoAdapter
+            adapter = DjangoAdapter(python_bin=mig_env.python_bin)
+            if not adapter.detect(cloned_path):
+                return
+
+            env = mig_env.env
             rc, out, err = adapter.executor.run(
-                "python manage.py test --keepdb",
+                f"{mig_env.python_bin} manage.py test --keepdb",
                 cloned_path,
                 env,
                 timeout=600,
@@ -374,7 +444,8 @@ class ProductionDeploymentPipeline:
             deployment.status = Deployment.Status.FAILED
             deployment.save()
         finally:
-            shutil.rmtree(workspace_dir, ignore_errors=True)
+            if workspace_dir:
+                shutil.rmtree(workspace_dir, ignore_errors=True)
 
     def _run_deploy_phase(self, deployment: Deployment) -> None:
         """Recursively enqueue smart_deploy_task with skip_review=True so the

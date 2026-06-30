@@ -8,8 +8,9 @@ from .command_executor import CommandExecutor
 
 
 class DjangoAdapter:
-    def __init__(self):
+    def __init__(self, python_bin: str = "python"):
         self.executor = CommandExecutor()
+        self.python_bin = python_bin
 
     def detect(self, project_path: str) -> bool:
         if not project_path:
@@ -17,16 +18,16 @@ class DjangoAdapter:
         return os.path.exists(os.path.join(project_path, 'manage.py'))
 
     def run_check(self, cwd: str, env: dict) -> tuple[int, str, str]:
-        return self.executor.run("python manage.py check", cwd, env)
+        return self.executor.run(f"{self.python_bin} manage.py check", cwd, env)
 
     def run_makemigrations_check(self, cwd: str, env: dict) -> tuple[int, str, str]:
-        return self.executor.run("python manage.py makemigrations --check --dry-run", cwd, env)
+        return self.executor.run(f"{self.python_bin} manage.py makemigrations --check --dry-run", cwd, env)
 
     def run_showmigrations(self, cwd: str, env: dict) -> tuple[int, str, str]:
-        return self.executor.run("python manage.py showmigrations --plan", cwd, env)
+        return self.executor.run(f"{self.python_bin} manage.py showmigrations --plan", cwd, env)
 
     def run_migrate(self, cwd: str, env: dict) -> tuple[int, str, str]:
-        return self.executor.run("python manage.py migrate --noinput", cwd, env)
+        return self.executor.run(f"{self.python_bin} manage.py migrate --noinput", cwd, env)
 
     def inspect_migration_files(self, project_path: str) -> list[dict[str, Any]]:
         operations: list[dict[str, Any]] = []
