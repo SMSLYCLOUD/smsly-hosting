@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import {
-  PROTECTED_PREFIXES,
   isProtectedPath,
   isAuthPage,
   isCallbackPage,
@@ -144,7 +143,6 @@ export async function middleware(request: NextRequest) {
 
   const hasApiToken = hasAuthTokenCookie(request);
   const hasSession = hasSessionCookie(request);
-  const hasCsrf = hasCsrfTokenCookie(request);
 
   // Protect dashboard routes. Allow session-only users through so the
   // client can exchange session->token without forcing a hard redirect loop.

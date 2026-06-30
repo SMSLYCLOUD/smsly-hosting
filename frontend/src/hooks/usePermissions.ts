@@ -86,8 +86,8 @@ export function usePermissions(): PermissionState {
   const auth = useContext(AuthContext);
 
   const permissions: string[] = auth?.user?.permissions ?? [];
-  const teamRoles: TeamRole[] = auth?.user?.roles?.teams ?? [];
-  const orgRoles: OrgRole[] = auth?.user?.roles?.orgs ?? [];
+  const teamRoles: TeamRole[] = (auth?.user?.roles?.teams ?? []) as TeamRole[];
+  const orgRoles: OrgRole[] = (auth?.user?.roles?.orgs ?? []) as OrgRole[];
   const isSuperuser = auth?.user?.is_superuser ?? false;
   const isStaff = auth?.user?.is_staff ?? false;
 
