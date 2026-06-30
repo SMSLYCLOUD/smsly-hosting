@@ -1778,6 +1778,34 @@ class BackupService:
                 os.remove(cleanup_archive)
 
     # ------------------------------------------------------------------
+    # Progress broadcasting (WebSocket)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _broadcast_progress(backup_id: str, stage: str, percent: float = 0,
+                            message: str = '', bytes_transferred: int = 0,
+                            total_bytes: int = 0) -> None:
+        try:
+            from asgiref.sync import async_to_sync
+            from channels.layers import get_channel_layer
+            from django.utils import timezone as tz
+            channel_layer = get_channel_layer()
+            if channel_layer:
+                async_to_sync(channel_layer.group_send)(
+                    f"backup_progress_{backup_id}",
+                    {
+                        "type": "backup_progress",
+                        "stage": stage,
+                        "percent": percent,
+                        "message": message,
+                        "bytes_transferred": bytes_transferred,
+                        "total_bytes": total_bytes,
+                        "timestamp": tz.now().isoformat(),
+                    },
+                )
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
     # Hardening helpers
     # ------------------------------------------------------------------
     @staticmethod

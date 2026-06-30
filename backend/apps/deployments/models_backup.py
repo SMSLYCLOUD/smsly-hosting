@@ -89,6 +89,7 @@ class ServerBackup(models.Model):
     file_path = models.CharField(max_length=500, blank=True)  # type: ignore[var-annotated]
     size_bytes = models.BigIntegerField(default=0)  # type: ignore[var-annotated]
     services_included = models.JSONField(default=list)  # type: ignore[var-annotated]
+    metadata = models.JSONField(default=dict, help_text='Additional metadata: cloud_upload_error, checksums, etc.')  # type: ignore[var-annotated]
     error_message = models.TextField(blank=True, default='')  # type: ignore[var-annotated]
     created_at = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
     completed_at = models.DateTimeField(null=True, blank=True)  # type: ignore[var-annotated]

@@ -1232,3 +1232,84 @@ class ServiceStatusConsumer(AsyncWebsocketConsumer):
                 }))
         except Exception as e:
             logger.error("Error sending initial service statuses: %s", e)
+
+
+class BackupProgressConsumer(AsyncWebsocketConsumer):
+    """Real-time backup/restore progress streaming consumer.
+
+    Channel group: ``backup_progress_{backup_id}``
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.backup_id = None
+        self.group_name = None
+        self.user = None
+
+    async def connect(self):
+        self.backup_id = self.scope['url_route']['kwargs']['backup_id']
+        await self.accept()
+        try:
+            query_string = self.scope.get('query_string', b'').decode()
+            token_key = None
+            for param in query_string.split('&'):
+                if param.startswith('token='):
+                    token_key = param.split('=', 1)[1]
+                    break
+            if not token_key:
+                await self.send(text_data=json.dumps({'error': 'Missing token'}))
+                await self.close(code=4001)
+                return
+            self.user = await self._authenticate_token(token_key)
+            if not self.user:
+                await self.send(text_data=json.dumps({'error': 'Invalid token'}))
+                await self.close(code=4002)
+                return
+            self.group_name = f"backup_progress_{self.backup_id}"
+            await self.channel_layer.group_add(self.group_name, self.channel_name)
+        except Exception:
+            if settings.DEBUG:
+                logger.error("BackupProgressConsumer.connect() failed: %s", exc_info=True)
+            with contextlib.suppress(Exception):
+                await self.send(text_data=json.dumps({'error': 'Internal error'}))
+            await self.close(code=4000)
+
+    async def disconnect(self, code):
+        if self.group_name:
+            await self.channel_layer.group_discard(self.group_name, self.channel_name)
+
+    async def receive(self, text_data=None, bytes_data=None):
+        pass
+
+    async def backup_progress(self, event):
+        await self.send(text_data=json.dumps({
+            'type': 'backup_progress',
+            'stage': event['stage'],
+            'percent': event.get('percent', 0),
+            'message': event.get('message', ''),
+            'bytes_transferred': event.get('bytes_transferred'),
+            'total_bytes': event.get('total_bytes'),
+            'timestamp': event.get('timestamp', ''),
+        }))
+
+    @database_sync_to_async
+    def _authenticate_token(self, token_key):
+        import hashlib
+        from django.core.cache import cache
+        from rest_framework.authtoken.models import Token
+        if not token_key or not isinstance(token_key, str):
+            return None
+        if len(token_key) != 40 or not all(c in '0123456789abcdef' for c in token_key):
+            return None
+        cache_key = f'invalid_token:{hashlib.sha256(token_key.encode()).hexdigest()}'
+        if cache.get(cache_key):
+            return None
+        try:
+            token = Token.objects.select_related('user').get(key=token_key)
+            if not token.user.is_active:
+                cache.set(cache_key, True, 300)
+                return None
+            return token.user
+        except Token.DoesNotExist:
+            cache.set(cache_key, True, 300)
+            return None
