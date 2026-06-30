@@ -376,34 +376,6 @@ with open('$daemon_cfg','w') as f:
     fi
 }
 
-# ─── SSH hardening ────────────────────────────────────────────────────────────
-_harden_ssh() {
-    _harden_log info "SSH server hardening"
-    local sshd_cfg="/etc/ssh/sshd_config.d/smsly-hardening.conf"
-    mkdir -p /etc/ssh/sshd_config.d
-
-    cat > "$sshd_cfg" <<'SSHD_EOF'
-# SMSLY Hardening — applied at install/update time
-PermitRootLogin prohibit-password
-PasswordAuthentication no
-PubkeyAuthentication yes
-ChallengeResponseAuthentication no
-UsePAM yes
-X11Forwarding no
-PrintMotd no
-ClientAliveInterval 300
-ClientAliveCountMax 2
-MaxAuthTries 3
-MaxSessions 10
-AllowAgentForwarding no
-AllowTcpForwarding yes
-PermitTunnel no
-SSHD_EOF
-
-    systemctl restart sshd >/dev/null 2>&1 || systemctl restart ssh >/dev/null 2>&1 || true
-    _harden_log ok "SSH hardened — password auth disabled, root key-only, agent fwd off"
-}
-
 # ─── Comprehensive security check (non-blocking) ─────────────────────────────
 harden_security_stack() {
     echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
@@ -416,7 +388,6 @@ harden_security_stack() {
     _harden_fail2ban;      [ $? -eq 0 ] || ((failures++)); ((checks++))
     _harden_ufw;            [ $? -eq 0 ] || ((failures++)); ((checks++))
     _harden_apparmor;       [ $? -eq 0 ] || ((failures++)); ((checks++))
-    _harden_ssh;            [ $? -eq 0 ] || ((failures++)); ((checks++))
     _harden_kernel;         [ $? -eq 0 ] || ((failures++)); ((checks++))
     _harden_auditd;         [ $? -eq 0 ] || ((failures++)); ((checks++))
     _harden_docker_daemon;  [ $? -eq 0 ] || ((failures++)); ((checks++))
