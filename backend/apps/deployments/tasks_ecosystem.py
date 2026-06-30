@@ -722,6 +722,131 @@ def _resolve_single_placeholder(
     return None
 
 
+def _resolve_from_manifest_or_fallback(
+    repo: str,
+    service_name: str,
+    entry: dict[str, Any],
+    svc_plan: dict[str, Any],
+    created_services: dict[str, Any],
+    shared_addons: dict[str, str],
+    shared_secrets: dict[str, str],
+    stack: str = "",
+) -> dict[str, str]:
+    """Resolve env vars from actual source files when available.
+
+    Priority:
+      1. ManifestEnvResolver (reads .env.example + SECRETS-MANIFEST.yaml)
+      2. _resolve_env_placeholders + AI Senate fallback (existing behavior)
+    """
+    # Try to find cloned source for this repo
+    source_dir = _find_cloned_source_for_repo(repo, service_name)
+
+    if source_dir:
+        try:
+            from apps.deployments.services.manifest_env_resolver import ManifestEnvResolver
+
+            resolver = ManifestEnvResolver(
+                source_dir=source_dir,
+                service_name=service_name,
+            )
+            resolved = resolver.resolve_all()
+
+            # Resolve addon placeholders in manifest-resolved values
+            manifest_resolved: dict[str, str] = {}
+            for key, value in resolved.items():
+                if "{{POSTGRES_URL}}" in str(value):
+                    manifest_resolved[key] = _resolve_env_placeholders(
+                        {key: value}, created_services, shared_addons, shared_secrets,
+                    ).get(key, value)
+                elif "{{REDIS_URL}}" in str(value):
+                    manifest_resolved[key] = _resolve_env_placeholders(
+                        {key: value}, created_services, shared_addons, shared_secrets,
+                    ).get(key, value)
+                elif "{{RABBITMQ_URL}}" in str(value):
+                    manifest_resolved[key] = _resolve_env_placeholders(
+                        {key: value}, created_services, shared_addons, shared_secrets,
+                    ).get(key, value)
+                else:
+                    manifest_resolved[key] = value
+
+            logger.info(
+                "Manifest resolver filled %d vars for %s (stack=%s)",
+                len(manifest_resolved), service_name, resolver.stack,
+            )
+            return manifest_resolved
+
+        except Exception as exc:
+            logger.warning(
+                "Manifest resolver failed for %s: %s; falling back to placeholder + AI Senate",
+                service_name, exc,
+            )
+
+    # Fallback: original placeholder resolution + AI Senate
+    env_vars = _normalize_env_vars(svc_plan.get("env_vars", {}))
+    resolved_env = _resolve_env_placeholders(
+        env_vars, created_services,
+        shared_addons=shared_addons,
+        shared_secrets=shared_secrets,
+    )
+
+    _is_frontend = stack in {"nextjs", "nuxt"} or "frontend" in service_name.lower()
+    if getattr(settings, "SENATE_ENABLED", True) and not _is_frontend:
+        try:
+            from apps.intelligence.services.env_intelligence import (
+                EnvironmentIntelligenceService,
+            )
+            _empty_vars = {
+                k: v for k, v in resolved_env.items()
+                if not v or v in ("", "{{GENERATE}}", "{{FILL_ME}}")
+                or str(v).startswith("REPLACE_WITH_")
+            }
+            if _empty_vars:
+                senate_suggestions = EnvironmentIntelligenceService.resolve_environment(
+                    _empty_vars, stack, service_name,
+                )
+                for k, v in senate_suggestions.items():
+                    if k in resolved_env and (not resolved_env[k] or resolved_env[k] in ("", "{{GENERATE}}", "{{FILL_ME}}")):
+                        resolved_env[k] = v
+        except Exception as exc:
+            logger.warning("AI Senate enrichment failed for %s: %s", service_name, exc)
+
+    return resolved_env
+
+
+def _find_cloned_source_for_repo(repo: str, service_name: str) -> str | None:
+    """Find the local cloned source directory for a repo.
+
+    Checks common paths where ecosystem scans or manual setups would
+    clone repos to."""
+    import os as _os
+
+    candidates = []
+
+    # Check SMSLYCLOUD directory (ecosystem monorepo checkout)
+    smslycloud = _os.path.join(_os.getcwd(), "SMSLYCLOUD")
+    if _os.path.isdir(smslycloud):
+        for name in _os.listdir(smslycloud):
+            candidate = _os.path.join(smslycloud, name)
+            if _os.path.isdir(candidate) and not name.startswith("."):
+                # Match by repo short name
+                repo_short = repo.lower().split("/")[-1].replace(".git", "")
+                if repo_short == name.lower() or repo_short in name.lower():
+                    candidates.append(candidate)
+
+    # Check builds directory
+    builds_root = _os.environ.get("SMSLY_BUILDS_DIR", "/opt/smsly-hosting/builds")
+    if _os.path.isdir(builds_root):
+        for name in _os.listdir(builds_root):
+            candidate = _os.path.join(builds_root, name)
+            if _os.path.isdir(candidate) and _os.path.isdir(_os.path.join(candidate, ".git")):
+                if name == service_name or service_name.replace("smsly-", "") in name:
+                    candidates.append(candidate)
+
+    if candidates:
+        return candidates[0]
+    return None
+
+
 def _resolve_env_placeholders(
     env_vars: dict[str, str],
     created_services: dict[str, Any],
@@ -1863,48 +1988,24 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                 created_services[alias] = service
 
             env_vars = _normalize_env_vars(svc_plan.get("env_vars", {}))
+            service_addon_types = _service_plan_addon_types(svc_plan, plan.get("addons", []))
 
-            resolved_env = _resolve_env_placeholders(
-                env_vars,
-                created_services,
+            # ── Manifest-backed env resolution (replaces AI hallucination) ──
+            # When the source repo is available locally, read actual .env.example
+            # and SECRETS-MANIFEST.yaml files to produce a fully resolved,
+            # grounded env configuration. Falls back to placeholder resolution
+            # + AI Senate only when source files are unavailable.
+            resolved_env = _resolve_from_manifest_or_fallback(
+                repo=repo,
+                service_name=service.name,
+                entry=entry,
+                svc_plan=svc_plan,
+                created_services=created_services,
                 shared_addons=provisioned_addon_urls,
                 shared_secrets=shared_secrets,
+                stack=stack,
             )
-            service_addon_types = _service_plan_addon_types(svc_plan, plan.get("addons", []))
             _inject_addon_env_defaults(resolved_env, service_addon_types, provisioned_addon_urls)
-
-            # -----------------------------------------------------------------
-            # AI Senate integration – optionally enrich env vars using the
-            # intelligence service when the feature flag is enabled.
-            # Skip for frontend stacks (nextjs/nuxt/node-frontend) — the
-            # Senate injects Django-specific vars that break frontends.
-            # -----------------------------------------------------------------
-            _is_frontend = stack in {"nextjs", "nuxt"} or "frontend" in service.name.lower()
-            if getattr(settings, "SENATE_ENABLED", True) and not _is_frontend:
-                try:
-                    from apps.intelligence.services.env_intelligence import (
-                        EnvironmentIntelligenceService,
-                    )
-
-                    # Only pass existing env vars as context — Senate fills
-                    # values for vars the user already has, not inject new ones.
-                    _empty_vars = {
-                        k: v for k, v in resolved_env.items()
-                        if not v or v in ("", "{{GENERATE}}", "{{FILL_ME}}")
-                        or str(v).startswith("REPLACE_WITH_")
-                    }
-                    if _empty_vars:
-                        senate_suggestions = EnvironmentIntelligenceService.resolve_environment(
-                            _empty_vars,
-                            stack,
-                            service.name,
-                        )
-                        # Only fill existing vars with empty values — never add new ones.
-                        for k, v in senate_suggestions.items():
-                            if k in resolved_env and (not resolved_env[k] or resolved_env[k] in ("", "{{GENERATE}}", "{{FILL_ME}}")):
-                                resolved_env[k] = v
-                except Exception as exc:
-                    logger.warning("AI Senate enrichment failed for %s: %s", service.name, exc)
 
             # Filter out Django/framework-specific vars from non-Django services.
             if stack not in {"django", "python"}:

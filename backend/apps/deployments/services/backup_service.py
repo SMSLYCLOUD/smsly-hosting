@@ -2880,12 +2880,25 @@ def _get_s3_client(endpoint='', region='us-east-1',
 
 
 def _s3_upload_with_retry(client, local_path, s3_bucket, s3_key,
-                          max_retries=3) -> bool:
+                          max_retries=3, progress_callback=None) -> bool:
     """Upload a file to S3 with exponential backoff retry."""
     import time
+    from botocore.s3.transfer import TransferConfig
+    config = TransferConfig(
+        multipart_threshold=8 * 1024 * 1024,
+        max_concurrency=4,
+        use_threads=True,
+    )
     for attempt in range(1, max_retries + 1):
         try:
-            client.upload_file(local_path, s3_bucket, s3_key)
+            extra_args = {}
+            if progress_callback:
+                extra_args['Callback'] = progress_callback
+            client.upload_file(
+                local_path, s3_bucket, s3_key,
+                Config=config,
+                **extra_args,
+            )
             return True
         except Exception as exc:
             logger.warning(
@@ -2915,12 +2928,18 @@ def _s3_delete_with_retry(client, s3_bucket, s3_key, max_retries=3) -> bool:
 
 
 def _s3_download_with_retry(client, s3_bucket, s3_key, local_path,
-                            max_retries=3) -> bool:
+                            max_retries=3, progress_callback=None) -> bool:
     """Download a file from S3 with exponential backoff retry."""
     import time
     for attempt in range(1, max_retries + 1):
         try:
-            client.download_file(s3_bucket, s3_key, local_path)
+            extra_args = {}
+            if progress_callback:
+                extra_args['Callback'] = progress_callback
+            client.download_file(
+                s3_bucket, s3_key, local_path,
+                **extra_args,
+            )
             return True
         except Exception as exc:
             logger.warning(
@@ -2934,11 +2953,12 @@ def _s3_download_with_retry(client, s3_bucket, s3_key, local_path,
 
 def upload_backup_to_s3(local_path: str, s3_bucket: str, s3_key: str,
                         endpoint: str = '', region: str = 'us-east-1',
-                        access_key: str = '', secret_key: str = '') -> bool:
+                        access_key: str = '', secret_key: str = '',
+                        progress_callback=None) -> bool:
     """Upload a backup file to S3 (or R2/MinIO via custom endpoint) with retry."""
     try:
         client = _get_s3_client(endpoint, region, access_key, secret_key)
-        ok = _s3_upload_with_retry(client, local_path, s3_bucket, s3_key)
+        ok = _s3_upload_with_retry(client, local_path, s3_bucket, s3_key, progress_callback=progress_callback)
         if ok:
             logger.info("Backup uploaded to s3://%s/%s", s3_bucket, s3_key)
         else:
@@ -2953,11 +2973,12 @@ def upload_backup_to_s3(local_path: str, s3_bucket: str, s3_key: str,
 
 def download_from_s3(s3_bucket: str, s3_key: str, local_path: str,
                      endpoint: str = '', region: str = 'us-east-1',
-                     access_key: str = '', secret_key: str = '') -> bool:
+                     access_key: str = '', secret_key: str = '',
+                     progress_callback=None) -> bool:
     """Download a backup file from S3 (or R2/MinIO) to local path with retry."""
     try:
         client = _get_s3_client(endpoint, region, access_key, secret_key)
-        ok = _s3_download_with_retry(client, s3_bucket, s3_key, local_path)
+        ok = _s3_download_with_retry(client, s3_bucket, s3_key, local_path, progress_callback=progress_callback)
         if ok:
             logger.info("Backup downloaded from s3://%s/%s to %s", s3_bucket, s3_key, local_path)
         else:
@@ -3054,10 +3075,25 @@ def _upload_backup_to_cloud(backup, filepath, service_name):
 
         result["bucket"] = s3_bucket
         result["key"] = f"smsly-backups/{service_name}/{os.path.basename(filepath)}"
+        backup_id_str = str(getattr(backup, 'id', ''))
+        class _S3UploadProgress:
+            def __init__(self):
+                self.total = os.path.getsize(filepath)
+                self.transferred = 0
+            def __call__(self, bytes_amount):
+                self.transferred += bytes_amount
+                pct = min(95, (self.transferred / max(self.total, 1)) * 100)
+                BackupService._broadcast_progress(
+                    backup_id_str, 'cloud_upload', percent=pct,
+                    message=f'Uploading... {self.transferred // (1024 * 1024)} MB',
+                    bytes_transferred=self.transferred, total_bytes=self.total,
+                )
+        progress = _S3UploadProgress()
         ok = upload_backup_to_s3(
             filepath, s3_bucket, result["key"],
             endpoint=s3_endpoint, region=s3_region,
             access_key=s3_access_key, secret_key=s3_secret_key,
+            progress_callback=progress,
         )
         if ok:
             backup.cloud_uploaded = True
@@ -3198,10 +3234,19 @@ def _download_backup_from_cloud(backup, local_path) -> bool:
     if not bucket or not key:
         logger.warning("No cloud config found to download backup %s", backup.id)
         return False
+    backup_id_str = str(getattr(backup, 'id', ''))
+    class _S3DownloadProgress:
+        def __call__(self, bytes_amount):
+            BackupService._broadcast_progress(
+                backup_id_str, 'downloading', percent=min(10, bytes_amount / (1024 * 1024)),
+                message=f'Downloading from cloud...',
+                bytes_transferred=bytes_amount, total_bytes=0,
+            )
     return download_from_s3(
         bucket, key, local_path,
         endpoint=endpoint, region=region,
         access_key=access_key, secret_key=secret_key,
+        progress_callback=_S3DownloadProgress(),
     )
 
 
