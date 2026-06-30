@@ -373,8 +373,9 @@ def ai_test_prompt(request):
             "active_count": len(configured),
         })
     except Exception as e:
+        logger.exception("AI completion failed")
         return Response(
-            {"error": str(e)},
+            {"error": "An AI service error occurred."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -458,8 +459,8 @@ def ai_chat_completions(request):
             "usage": recorded,
         })
     except Exception as e:
-        logger.exception("AI Chat completion failed: %s", e)
-        return Response({"error": str(e)}, status=500)
+        logger.exception("AI Chat completion failed")
+        return Response({"error": "An AI service error occurred."}, status=500)
 
 
 @api_view(["POST"])
@@ -537,8 +538,8 @@ def ai_chat_stream(request):
 
             yield "data: [DONE]\n\n"
         except Exception as exc:
-            logger.error("AI streaming error: %s", exc)
-            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+            logger.exception("AI streaming error")
+            yield f"data: {json.dumps({'error': 'An AI service error occurred.'})}\n\n"
             yield "data: [DONE]\n\n"
 
     return StreamingHttpResponse(

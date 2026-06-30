@@ -22,7 +22,14 @@ if [ ! -e /dev/kvm ]; then
     exit 1
 fi
 
-KATA_VERSION="${KATA_VERSION:-3.14.0}"
+# Resolve latest Kata release from GitHub API if not pinned.
+if [ -z "${KATA_VERSION:-}" ] || [ "$KATA_VERSION" = "latest" ]; then
+    KATA_VERSION="$(curl -fsSL -o /dev/null -w '%{url_effective}' \
+        "https://github.com/kata-containers/kata-containers/releases/latest" 2>/dev/null \
+        | sed 's|.*/||' || true)"
+    # Fallback to a known-stable version if API is unreachable
+    KATA_VERSION="${KATA_VERSION:-3.14.0}"
+fi
 ARCH="$(uname -m)"
 case "$ARCH" in
     x86_64)  KATA_ARCH="amd64" ;;
@@ -37,6 +44,21 @@ echo "=== Installing Kata Containers ${KATA_VERSION} ==="
 
 cd /tmp
 curl -fsSL "$KATA_URL" -o "$KATA_TARBALL"
+
+# Verify checksum if KATA_SHA256 is provided
+if [ -n "${KATA_SHA256:-}" ]; then
+    echo "  Verifying checksum..."
+    echo "${KATA_SHA256}  ${KATA_TARBALL}" | sha256sum -c - || { echo "ERROR: Kata checksum verification failed"; exit 1; }
+else
+    echo "  WARNING: KATA_SHA256 not set — skipping checksum verification"
+fi
+
+# Validate tarball: reject absolute paths and path traversal
+echo "  Validating tarball contents..."
+if tar -tJf "$KATA_TARBALL" | grep -qE '^/|^\.\./|\.\./'; then
+    echo "ERROR: tarball contains unsafe paths (absolute or path traversal)"
+    exit 1
+fi
 
 echo "  Extracting..."
 tar -xJf "$KATA_TARBALL" -C /

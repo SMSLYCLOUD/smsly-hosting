@@ -11,6 +11,7 @@ services:
       - DATABASE_URL=postgres://postgres:postgres@db:5432/smsly
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672/
+      # SECURITY: These are test-only values. Never use in production.
       - SECRET_KEY=super-secret-e2e-key
       - FIELD_ENCRYPTION_KEY=LyqeUecMN-ZRJFar9Gegvst3EdlOEOnX_c0npcJ8KG8=
       - DOMAIN=localhost
@@ -33,6 +34,7 @@ services:
       - DATABASE_URL=postgres://postgres:postgres@db:5432/smsly
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672/
+      # SECURITY: These are test-only values. Never use in production.
       - SECRET_KEY=super-secret-e2e-key
       - FIELD_ENCRYPTION_KEY=LyqeUecMN-ZRJFar9Gegvst3EdlOEOnX_c0npcJ8KG8=
       - DOMAIN=localhost
@@ -73,40 +75,40 @@ services:
 
   # Simulated worker nodes (ssh enabled)
   worker-1:
-    image: lscr.io/linuxserver/openssh-server:latest
+    image: lscr.io/linuxserver/openssh-server:5.21.0 # TODO: pin to digest via dependabot/renovate
     container_name: grid-e2e-node-1
     environment:
-      - PUID=0
-      - PGID=0
+      - PUID=1000
+      - PGID=1000
       - TZ=Etc/UTC
       - PASSWORD_ACCESS=true
       - USER_PASSWORD=gridpass
       - USER_NAME=root
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/run/docker.sock:/var/run/docker.sock:ro
 
   worker-2:
-    image: lscr.io/linuxserver/openssh-server:latest
+    image: lscr.io/linuxserver/openssh-server:5.21.0 # TODO: pin to digest via dependabot/renovate
     container_name: grid-e2e-node-2
     environment:
-      - PUID=0
-      - PGID=0
+      - PUID=1000
+      - PGID=1000
       - TZ=Etc/UTC
       - PASSWORD_ACCESS=true
       - USER_PASSWORD=gridpass
       - USER_NAME=root
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/run/docker.sock:/var/run/docker.sock:ro
 
   worker-3:
-    image: lscr.io/linuxserver/openssh-server:latest
+    image: lscr.io/linuxserver/openssh-server:5.21.0 # TODO: pin to digest via dependabot/renovate
     container_name: grid-e2e-node-3
     environment:
-      - PUID=0
-      - PGID=0
+      - PUID=1000
+      - PGID=1000
       - TZ=Etc/UTC
       - PASSWORD_ACCESS=true
       - USER_PASSWORD=gridpass
       - USER_NAME=root
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/run/docker.sock:/var/run/docker.sock:ro

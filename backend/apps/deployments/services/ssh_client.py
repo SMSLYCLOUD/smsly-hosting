@@ -134,10 +134,10 @@ class SSHClient:
             self.client.set_missing_host_key_policy(paramiko.RejectPolicy())
         elif allow_auto_add:
             self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            warnings.warn("Using AutoAddPolicy for initial provisioning (Trust On First Use).", stacklevel=2)
+            logger.warning("Using AutoAddPolicy for SSH host %s (Trust On First Use). Set SMSLY_STRICT_SSH_HOST_KEY_CHECK=true for production.", self.ip)
         else:
-            self.client.set_missing_host_key_policy(paramiko.WarningPolicy())
-            warnings.warn("Strict SSH host key checking is disabled. This is insecure!", stacklevel=2)
+            self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            logger.warning("Strict SSH host key checking is disabled for %s. Using AutoAddPolicy (insecure — set SMSLY_STRICT_SSH_HOST_KEY_CHECK=true).", self.ip)
 
 
         # Determine auth method: key or password

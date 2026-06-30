@@ -123,8 +123,11 @@ except ImportError:
     pass  # tunnels module not installed
 
 # ─── OpenAPI Schema & Docs ────────────────────────────────────────────
-urlpatterns += [
-    path('api/docs/schema/', SpectacularAPIView.as_view(), name='schema'),
-    path('api/docs/swagger/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
-    path('api/docs/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
-]
+# SECURITY: Only expose schema/docs in DEBUG mode to prevent API surface
+# enumeration in production. Set DEBUG=True temporarily to access docs.
+if settings.DEBUG:
+    urlpatterns += [
+        path('api/docs/schema/', SpectacularAPIView.as_view(), name='schema'),
+        path('api/docs/swagger/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
+        path('api/docs/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
+    ]

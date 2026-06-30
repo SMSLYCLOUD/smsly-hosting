@@ -205,9 +205,9 @@ def grafana_embed_url(request, dashboard_uid: str):
         resp.raise_for_status()
         dashboard = resp.json().get('dashboard', {})
     except requests.RequestException as exc:
-        logger.warning("Grafana dashboard lookup failed for %s: %s", dashboard_uid, exc)
+        logger.exception("Grafana dashboard lookup failed for %s", dashboard_uid)
         return Response(
-            {'error': 'Grafana is unreachable.', 'detail': str(exc)},
+            {'error': 'Grafana is unreachable.'},
             status=status.HTTP_502_BAD_GATEWAY,
         )
 
@@ -279,7 +279,8 @@ def loki_query(request):
     try:
         query = _scope_query_to_tenant(query, service_names)
     except ValueError as exc:
-        return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        logger.exception("Tenant query scoping failed")
+        return Response({'error': 'An observability query failed.'}, status=status.HTTP_400_BAD_REQUEST)
 
     # Resolve UUID in compose_service filter (safety net for unresolved UUIDs)
     uuid_match = re.search(
@@ -332,9 +333,9 @@ def loki_query(request):
         resp.raise_for_status()
         data = resp.json()
     except requests.RequestException as exc:
-        logger.warning("Loki query failed: %s", exc)
+        logger.exception("Loki query failed")
         return Response(
-            {'error': 'Loki is unreachable.', 'detail': str(exc)},
+            {'error': 'Loki is unreachable.'},
             status=status.HTTP_502_BAD_GATEWAY,
         )
 
@@ -383,9 +384,9 @@ def loki_label_values(request, label: str):
         resp.raise_for_status()
         data = resp.json()
     except requests.RequestException as exc:
-        logger.warning("Loki label-values lookup failed: %s", exc)
+        logger.exception("Loki label-values lookup failed")
         return Response(
-            {'error': 'Loki is unreachable.', 'detail': str(exc)},
+            {'error': 'Loki is unreachable.'},
             status=status.HTTP_502_BAD_GATEWAY,
         )
 
@@ -418,7 +419,8 @@ def prometheus_query(request):
     try:
         query = _scope_query_to_tenant(query, service_names)
     except ValueError as exc:
-        return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        logger.exception("Tenant query scoping failed for Prometheus")
+        return Response({'error': 'An observability query failed.'}, status=status.HTTP_400_BAD_REQUEST)
 
     raw_time = request.GET.get('time')
     if raw_time:
@@ -443,9 +445,9 @@ def prometheus_query(request):
         resp.raise_for_status()
         data = resp.json()
     except requests.RequestException as exc:
-        logger.warning("Prometheus query failed: %s", exc)
+        logger.exception("Prometheus query failed")
         return Response(
-            {'error': 'Prometheus is unreachable.', 'detail': str(exc)},
+            {'error': 'Prometheus is unreachable.'},
             status=status.HTTP_502_BAD_GATEWAY,
         )
 

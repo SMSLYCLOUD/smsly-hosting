@@ -91,6 +91,8 @@ gen_password() {
 ensure_replication_role() {
     blue "[1/6] Ensuring replicator role exists on the primary..."
     local repl_pass="$1"
+    # Escape single quotes to prevent SQL injection
+    repl_pass="${repl_pass//\'/\'\'}"
     local db_container
     db_container="$(docker compose -f "$COMPOSE_BASE" ps -q db | head -1)"
     if [ -z "$db_container" ]; then

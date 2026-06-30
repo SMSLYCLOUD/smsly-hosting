@@ -7,7 +7,7 @@ BACKUP_DIR="${BACKUP_DIR:-/opt/smsly-hosting/backups}"
 RETENTION_DAYS="${RETENTION_DAYS:-7}"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 BACKUP_FILE="${BACKUP_DIR}/smsly_hosting_${TIMESTAMP}.sql.gz.enc"
-BACKUP_PASS="${BACKUP_PASS:-my_secure_fallback_password}"
+BACKUP_PASS="${BACKUP_PASS:?BACKUP_PASS environment variable must be set}"
 BACKUP_SUCCESS=0
 
 # Colors
@@ -53,8 +53,8 @@ fi
 
 # Cleanup old backups
 echo -e "${YELLOW}Cleaning up backups older than ${RETENTION_DAYS} days...${NC}"
-find "$BACKUP_DIR" -name "smsly_hosting_*.sql.gz" -mtime +${RETENTION_DAYS} -delete
-REMAINING=$(ls -1 "$BACKUP_DIR"/*.sql.gz 2>/dev/null | wc -l)
+find "$BACKUP_DIR" \( -name "smsly_hosting_*.sql.gz" -o -name "smsly_hosting_*.sql.gz.enc" \) -mtime +${RETENTION_DAYS} -delete
+REMAINING=$(find "$BACKUP_DIR" \( -name "smsly_hosting_*.sql.gz" -o -name "smsly_hosting_*.sql.gz.enc" \) 2>/dev/null | wc -l)
 echo -e "${GREEN}✓ Cleanup complete. ${REMAINING} backups retained.${NC}"
 
 # Log backup info

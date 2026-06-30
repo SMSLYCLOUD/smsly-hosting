@@ -44,6 +44,12 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Validate DB_NAME to prevent SQL injection
+if [[ ! "$DB_NAME" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+    echo -e "${RED}Error: Invalid DB_NAME '$DB_NAME'. Must match ^[a-zA-Z_][a-zA-Z0-9_]*\$${NC}"
+    exit 1
+fi
+
 if [[ -z "$DUMP_FILE" ]]; then
     echo -e "${RED}Error: No dump file specified.${NC}"
     usage 1

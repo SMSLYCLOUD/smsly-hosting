@@ -4,6 +4,8 @@ import hmac
 import ipaddress
 import logging
 import os
+import re
+import shlex
 import socket
 import time
 
@@ -31,6 +33,45 @@ ACTIVE_TRANSFER_STATUSES = [
     'DNS_CUTOVER',
     'VERIFYING',
 ]
+
+# Allowed image name pattern: must start with a known registry prefix or be
+# a bare Docker Hub library image (e.g. "nginx:latest").  This prevents an
+# attacker from specifying an arbitrary image that could pull malicious code.
+_VALID_IMAGE_RE = re.compile(
+    r'^('
+    r'(?:[a-zA-Z0-9._-]+\.)+[a-zA-Z]{2,}'  # registry host (e.g. registry.example.com)
+    r'(?::\d+)?'                              # optional port
+    r'/)?'                                    # slash (group optional for bare images)
+    r'[a-zA-Z0-9][a-zA-Z0-9._/-]*'           # image name
+    r'(?::[a-zA-Z0-9._-]+)?'                 # optional tag
+    r'(@sha256:[a-f0-9]{64})?$'              # optional digest
+)
+
+
+def _validate_transfer_image(image: str) -> bool:
+    """Return True if *image* matches a safe pattern.
+
+    Additionally, if the platform has CONTAINER_REGISTRY_URL configured,
+    the image must either start with that registry prefix or be a bare
+    Docker Hub library reference (no host component).
+    """
+    if not image or not _VALID_IMAGE_RE.match(image):
+        return False
+    # Reject anything with shell metacharacters (defense-in-depth)
+    if any(ch in image for ch in (';', '|', '&', '$', '`', '(', ')', '{', '}', '\n')):
+        return False
+    registry_url = getattr(settings, 'CONTAINER_REGISTRY_URL', None) or ''
+    if not registry_url:
+        return True
+    # Normalize: strip scheme for comparison
+    registry_host = registry_url.replace('https://', '').replace('http://', '').rstrip('/')
+    # If the image has a registry component, it must match the platform registry
+    if '/' in image:
+        image_host = image.split('/')[0]
+        if '.' in image_host or ':' in image_host or image_host == 'localhost':
+            return image_host == registry_host
+    # Bare library image (e.g. "nginx:latest") — allow it
+    return True
 
 
 class TransferCreateThrottle(UserRateThrottle):
@@ -201,7 +242,8 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         try:
             owner = _resolve_incoming_owner(request, source_ip)
         except RuntimeError as exc:
-            return Response({'error': str(exc)}, status=status.HTTP_401_UNAUTHORIZED)
+            logger.exception("Incoming owner resolution failed")
+            return Response({'error': 'Authentication failed.'}, status=status.HTTP_401_UNAUTHORIZED)
 
         # Check if a similar incoming transfer already exists
         existing = ServerTransfer.objects.filter(
@@ -583,13 +625,19 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         image = request.data.get('image')
         if not image:
             return Response({'error': 'image required'}, status=status.HTTP_400_BAD_REQUEST)
+        if not _validate_transfer_image(image):
+            return Response(
+                {'error': 'Image name rejected: must match platform registry or be a valid Docker Hub library image.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         try:
             from apps.cloud.docker_client import get_docker_client
             client = get_docker_client()
             client.images.pull(image)
             return Response({'status': 'pulled', 'image': image})
         except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            logger.exception("Image pull failed")
+            return Response({'error': 'An internal error occurred. Please check server logs.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=True, methods=['post'], url_path='incoming/deploy')
     def incoming_deploy(self, request, pk=None):
@@ -605,6 +653,11 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         restart_policy = request.data.get('restart_policy', 'unless-stopped')
         if not image or not container_name:
             return Response({'error': 'image and container_name required'}, status=status.HTTP_400_BAD_REQUEST)
+        if not _validate_transfer_image(image):
+            return Response(
+                {'error': 'Image name rejected: must match platform registry or be a valid Docker Hub library image.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         try:
             from apps.cloud.docker_client import get_docker_client
             client = get_docker_client()
@@ -619,7 +672,8 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
             )
             return Response({'container_id': container.id, 'status': 'running'})
         except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            logger.exception("Transfer operation failed")
+            return Response({'error': 'An internal error occurred. Please check server logs.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=True, methods=['post'], url_path='incoming/exec')
     def incoming_exec(self, request, pk=None):
@@ -635,8 +689,14 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         try:
             if shell:
                 import subprocess
+                # SECURITY: Use shell=False with shlex.split to prevent
+                # shell injection. If the command requires shell features,
+                # the caller must break it into safe components.
+                cmd = shlex.split(script)
+                if not cmd:
+                    return Response({'error': 'Empty command'}, status=status.HTTP_400_BAD_REQUEST)
                 result = subprocess.run(
-                    script, shell=True, capture_output=True, text=True, timeout=300,
+                    cmd, shell=False, capture_output=True, text=True, timeout=300,
                 )
             elif container:
                 from apps.cloud.docker_client import get_docker_client
@@ -669,7 +729,8 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         except subprocess.TimeoutExpired:
             return Response({'error': 'Script timed out'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            logger.exception("Incoming exec failed")
+            return Response({'error': 'An internal error occurred. Please check server logs.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=True, methods=['post'], url_path='incoming/stop-container')
     def incoming_stop_container(self, request, pk=None):
@@ -691,7 +752,8 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
                 pass
             return Response({'status': 'stopped'})
         except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            logger.exception("Container stop failed")
+            return Response({'error': 'An internal error occurred. Please check server logs.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=True, methods=['get'], url_path='incoming/container-status')
     def incoming_container_status(self, request, pk=None):
@@ -725,7 +787,8 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
             client.ping()
             return Response({'docker_available': True})
         except Exception as e:
-            return Response({'docker_available': False, 'error': str(e)})
+            logger.exception("Docker health check failed")
+            return Response({'docker_available': False, 'error': 'An internal error occurred. Please check server logs.'})
 
     @action(detail=True, methods=['post'], url_path='incoming/upload-file')
     def incoming_upload_file(self, request, pk=None):
@@ -770,7 +833,8 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
                 f.write(raw)
             return Response({'status': 'written', 'path': dest_path, 'size': len(raw)})
         except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            logger.exception("Incoming write-file failed")
+            return Response({'error': 'An internal error occurred. Please check server logs.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=False, methods=['post'], url_path='incoming/db-backup')
     def incoming_db_backup(self, request):
@@ -814,7 +878,8 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
                 'size_bytes': len(raw_body),
             })
         except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            logger.exception("Incoming tar-upload failed")
+            return Response({'error': 'An internal error occurred. Please check server logs.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=False, methods=['get'], url_path='incoming/db-backup/status')
     def incoming_db_backup_status(self, request):
@@ -838,4 +903,5 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
                 'backup_dir': backup_dir,
             })
         except Exception as e:
-            return Response({'backups_available': 0, 'error': str(e)})
+            logger.exception("Incoming list-backups failed")
+            return Response({'backups_available': 0, 'error': 'An internal error occurred. Please check server logs.'})

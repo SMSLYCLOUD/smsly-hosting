@@ -151,7 +151,7 @@ services:
     image: registry:2.8.3
     restart: unless-stopped
     ports:
-      - 5001:5000
+      - "127.0.0.1:5001:5000"
     environment:
       REGISTRY_PROXY_REMOTEURL: https://registry-1.docker.io
       REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /var/lib/registry
@@ -177,7 +177,7 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
-    image: sameersbn/apt-cacher-ng:latest
+    image: sameersbn/apt-cacher-ng:3.1-20240122 # TODO: pin to digest via dependabot/renovate
     container_name: smsly-apt-cacher
     restart: unless-stopped
     volumes:
@@ -201,7 +201,7 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
-    image: verdaccio/verdaccio:latest
+    image: verdaccio/verdaccio:5.31 # TODO: pin to digest via dependabot/renovate
     container_name: smsly-verdaccio
     restart: unless-stopped
     ports:
@@ -618,7 +618,7 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
-    image: crowdsecurity/crowdsec:latest
+    image: crowdsecurity/crowdsec:1.6.4 # TODO: pin to digest via dependabot/renovate
     container_name: smsly-crowdsec
     restart: unless-stopped
     environment:
@@ -792,7 +792,7 @@ services:
         limits:
           memory: ${RABBITMQ_MEMORY_LIMIT:-1G}
   buildkitd:
-    image: moby/buildkit:latest
+    image: moby/buildkit:0.18 # TODO: pin to digest via dependabot/renovate
     container_name: smsly-buildkitd
     restart: unless-stopped
     security_opt:

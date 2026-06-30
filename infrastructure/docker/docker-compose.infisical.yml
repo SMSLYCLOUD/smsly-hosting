@@ -7,7 +7,7 @@
 
 services:
   infisical:
-    image: infisical/infisical:latest
+    image: infisical/infisical:0.63 # TODO: pin to digest via dependabot/renovate
     restart: unless-stopped
     environment:
       ENCRYPTION_KEY: ${INFISICAL_ENCRYPTION_KEY:?INFISICAL_ENCRYPTION_KEY is required}

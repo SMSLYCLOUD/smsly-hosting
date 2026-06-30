@@ -659,8 +659,9 @@ else
     [ -n "${BACKUP_ENCRYPTION_KEY:-}" ] || BACKUP_ENCRYPTION_KEY="$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null || openssl rand -base64 32)"
     [ -n "${CROWDSEC_BOUNCER_KEY:-}" ] || CROWDSEC_BOUNCER_KEY="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
     [ -n "${BACKUP_REQUIRE_ENCRYPTION:-}" ] || BACKUP_REQUIRE_ENCRYPTION="true"
-    # SECURITY: default to true (was false pre-2026-06). Strict SSH host-key
-    # checking is the safe default when .env does not pin a value.
+    # SECURITY: SSH strict host-key checking. Defaults to false (accept-first)
+    # for convenience during initial provisioning. Operators managing trusted
+    # environments with pre-populated known_hosts should set this to "true".
     [ -n "${SMSLY_STRICT_SSH_HOST_KEY_CHECK:-}" ] || SMSLY_STRICT_SSH_HOST_KEY_CHECK="false"
     # Optional read-replica plumbing (only used when docker-compose.replica.yml
     # is enabled). Initialize empty defaults so set -u doesn't trip on them
@@ -1625,75 +1626,76 @@ if command -v ufw >/dev/null 2>&1; then
     # Allow Docker Mirror (Option B) if this is the Master/Leader
     if [ -z "${MASTER_IP:-}" ] || [ "$MASTER_IP" = "127.0.0.1" ] || [ "$MASTER_IP" = "$(detect_public_ip)" ]; then
         ufw allow 5001/tcp >/dev/null 2>&1 || true
-        # Allow Lite Agents to reach core services
-        echo -e "${YELLOW}  ⚠ Master node: Exposing DB/Redis/MQ ports for Lite Agents (protected by password)${NC}"
-        ufw allow 5432/tcp >/dev/null 2>&1 || true
-        ufw allow 6379/tcp >/dev/null 2>&1 || true
-        ufw allow 5672/tcp >/dev/null 2>&1 || true
+        # Allow Lite Agents to reach core services — RESTRICTED to WireGuard mesh only.
+        # These ports carry database/cache/message-queue traffic and must never be
+        # exposed to the public internet. Lite Agents connect via the WireGuard VPN
+        # mesh (10.100.0.0/24), so we whitelist that subnet plus the master's own
+        # mesh IP. Password auth is the second layer of defense.
+        echo -e "${BLUE}  → Master node: Restricting DB/Redis/MQ ports to WireGuard mesh (10.100.0.0/24)${NC}"
+        ufw allow from 10.100.0.0/24 to any port 5432 proto tcp >/dev/null 2>&1 || true
+        ufw allow from 10.100.0.0/24 to any port 6379 proto tcp >/dev/null 2>&1 || true
+        ufw allow from 10.100.0.0/24 to any port 5672 proto tcp >/dev/null 2>&1 || true
+        # Also allow localhost (container-to-container on the same host)
+        ufw allow from 127.0.0.1 to any port 5432 proto tcp >/dev/null 2>&1 || true
+        ufw allow from 127.0.0.1 to any port 6379 proto tcp >/dev/null 2>&1 || true
+        ufw allow from 127.0.0.1 to any port 5672 proto tcp >/dev/null 2>&1 || true
+        # Allow Docker bridge networks (172.16.0.0/12) for container-to-host communication
+        ufw allow from 172.16.0.0/12 to any port 5432 proto tcp >/dev/null 2>&1 || true
+        ufw allow from 172.16.0.0/12 to any port 6379 proto tcp >/dev/null 2>&1 || true
+        ufw allow from 172.16.0.0/12 to any port 5672 proto tcp >/dev/null 2>&1 || true
     fi
     echo "y" | ufw enable >/dev/null 2>&1 || true
     echo -e "${GREEN}  ✓ Firewall hardened (Inbound blocked, SSH/Web permitted)${NC}"
 fi
 
-# ── Registry port firewall (DOCKER-USER chain) ──────────────────────────
+# ── Infrastructure port firewall (DOCKER-USER chain) ────────────────────
 # Docker bypasses UFW by inserting its own iptables rules in the DOCKER
 # chain. The DOCKER-USER chain is the official way to add custom rules.
-# Since the registry has no auth, we lock port 5000 to trusted sources.
+# We lock down all infrastructure ports (registry, DB, Redis, RabbitMQ)
+# to trusted sources only: localhost, Docker bridges, and WireGuard mesh.
 if command -v iptables >/dev/null 2>&1; then
-    echo -e "${BLUE}  → Securing registry port 5000 via iptables (DOCKER-USER chain)...${NC}"
+    echo -e "${BLUE}  → Securing infrastructure ports via iptables (DOCKER-USER chain)...${NC}"
 
     # Ensure DOCKER-USER chain exists (Docker creates it, but be safe)
     iptables -N DOCKER-USER 2>/dev/null || true
 
-    # --- Pre-check: detect if registry port 5000 is currently open to the public internet ---
-    _registry_port_open=false
-    _existing_drop_rule="$(iptables -L DOCKER-USER -n 2>/dev/null | grep -c 'dpt:5000.*DROP' || true)"
-    if [ "${_existing_drop_rule:-0}" -eq 0 ]; then
-        # No DROP rule exists — port 5000 is currently reachable from any source
-        _registry_port_open=true
-        echo -e "${YELLOW}  ⚠ WARNING: Registry port 5000 is currently OPEN to the public internet!${NC}"
-        echo -e "${YELLOW}    The container registry has no authentication and is accessible from any IP.${NC}"
-        echo -e "${YELLOW}    Hardening now to restrict access to trusted sources only...${NC}"
-    else
-        echo -e "${BLUE}  → Registry port 5000 already has DROP rules — refreshing whitelist...${NC}"
-    fi
+    # Ports to whitelist: registry (5000), PostgreSQL (5432), Redis (6379), RabbitMQ (5672)
+    _infra_ports="5000 5432 6379 5672"
 
-    # Flush any previous registry rules (idempotent re-runs)
-    # Use a subshell to isolate from set -e / pipefail
-    (
-        iptables -L DOCKER-USER --line-numbers -n 2>/dev/null | \
-            grep "dpt:5000" | awk '{print $1}' | sort -rn | \
-            while read -r num; do iptables -D DOCKER-USER "$num" 2>/dev/null || true
-        done
-    ) || true
+    # Flush any previous infrastructure port rules (idempotent re-runs)
+    for _port in $_infra_ports; do
+        (
+            iptables -L DOCKER-USER --line-numbers -n 2>/dev/null | \
+                grep "dpt:${_port}" | awk '{print $1}' | sort -rn | \
+                while read -r num; do iptables -D DOCKER-USER "$num" 2>/dev/null || true
+            done
+        ) || true
+    done
 
-    # Allow localhost (container-to-registry on the same host)
-    iptables -I DOCKER-USER -i lo -p tcp --dport 5000 -j ACCEPT 2>/dev/null || true
+    for _port in $_infra_ports; do
+        # Allow localhost (container-to-container on the same host)
+        iptables -I DOCKER-USER -i lo -p tcp --dport "$_port" -j ACCEPT 2>/dev/null || true
 
-    # Allow Docker bridge networks (172.16.0.0/12 covers docker0 + compose nets)
-    iptables -I DOCKER-USER -s 172.16.0.0/12 -p tcp --dport 5000 -j ACCEPT 2>/dev/null || true
+        # Allow Docker bridge networks (172.16.0.0/12 covers docker0 + compose nets)
+        iptables -I DOCKER-USER -s 172.16.0.0/12 -p tcp --dport "$_port" -j ACCEPT 2>/dev/null || true
 
-    # Allow WireGuard mesh (10.100.0.0/24 is the assigned mesh range)
-    iptables -I DOCKER-USER -s 10.100.0.0/24 -p tcp --dport 5000 -j ACCEPT 2>/dev/null || true
+        # Allow WireGuard mesh (10.100.0.0/24 is the assigned mesh range)
+        iptables -I DOCKER-USER -s 10.100.0.0/24 -p tcp --dport "$_port" -j ACCEPT 2>/dev/null || true
 
-    # Allow known node IPs
-    if [ -n "${MASTER_MESH_IP:-}" ]; then
-        iptables -I DOCKER-USER -s "${MASTER_MESH_IP}" -p tcp --dport 5000 -j ACCEPT 2>/dev/null || true
-    fi
+        # Allow known node IPs
+        if [ -n "${MASTER_MESH_IP:-}" ]; then
+            iptables -I DOCKER-USER -s "${MASTER_MESH_IP}" -p tcp --dport "$_port" -j ACCEPT 2>/dev/null || true
+        fi
 
-    # Drop everything else to port 5000
-    iptables -A DOCKER-USER -p tcp --dport 5000 -j DROP 2>/dev/null || true
+        # Drop everything else to this port
+        iptables -A DOCKER-USER -p tcp --dport "$_port" -j DROP 2>/dev/null || true
+    done
 
     # Return to the DOCKER chain for all other traffic
-    # (ensure the RETURN rule exists at the end)
     iptables -C DOCKER-USER -j RETURN 2>/dev/null || \
         iptables -A DOCKER-USER -j RETURN 2>/dev/null || true
 
-    if [ "$_registry_port_open" = true ]; then
-        echo -e "${GREEN}  ✓ Registry port 5000 HARDENED — now locked to localhost + mesh/docker networks${NC}"
-    else
-        echo -e "${GREEN}  ✓ Registry port 5000 rules refreshed (trusted sources only)${NC}"
-    fi
+    echo -e "${GREEN}  ✓ Infrastructure ports hardened (5000, 5432, 6379, 5672) — locked to localhost + mesh + docker networks${NC}"
 
     # Allow remote Promtail → Loki on WireGuard interface (VPN mesh)
     iptables -A INPUT -i wg+ -p tcp --dport 3100 -j ACCEPT 2>/dev/null || true

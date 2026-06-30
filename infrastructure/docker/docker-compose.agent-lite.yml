@@ -5,7 +5,7 @@ services:
   # Docker Socket Proxy (Secure Docker access for the agent)
   # ============================================================
   socket-proxy:
-    image: tecnativa/docker-socket-proxy:latest
+    image: tecnativa/docker-socket-proxy:0.2 # TODO: pin to digest via dependabot/renovate
     restart: unless-stopped
     environment:
       CONTAINERS: 1

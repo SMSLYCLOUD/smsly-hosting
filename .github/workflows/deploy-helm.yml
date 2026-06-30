@@ -42,6 +42,10 @@ jobs:
         uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
 
       - name: Configure SSH
+        # TODO: ssh-keyscan at deploy time is a TOCTOU risk — an attacker who
+        # controls DNS/BGP could inject a rogue host key.  For stronger
+        # guarantees, pin the expected SSH host key fingerprint in a repository
+        # secret (e.g. VPS_SSH_HOST_KEY) and write it directly to known_hosts.
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts

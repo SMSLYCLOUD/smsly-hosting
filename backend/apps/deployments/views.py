@@ -5203,16 +5203,6 @@ class RouteRecheckView(GenericAPIView):
     serializer_class = EmptySerializer
     permission_classes = [permissions.AllowAny]
 
-    @staticmethod
-    def _cors(response: Response):
-        response["Access-Control-Allow-Origin"] = "*"
-        response["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-        response["Access-Control-Allow-Headers"] = "Content-Type"
-        return response
-
-    def options(self, request, *args, **kwargs):  # pylint: disable=unused-argument
-        return self._cors(Response(status=status.HTTP_204_NO_CONTENT))
-
     def _extract_domain(self, request):
         raw_host = (
             request.query_params.get("host")
@@ -5251,20 +5241,16 @@ class RouteRecheckView(GenericAPIView):
     def _handle(self, request):
         domain, domain_error = self._extract_domain(request)
         if domain_error:
-            return self._cors(
-                Response(
-                    {"error": f"Invalid domain: {domain_error}"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+            return Response(
+                {"error": f"Invalid domain: {domain_error}"},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         service = _service_for_domain(domain)
         if not service:
-            return self._cors(
-                Response(
-                    {"error": "Domain is not mapped to a service"},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
+            return Response(
+                {"error": "Domain is not mapped to a service"},
+                status=status.HTTP_404_NOT_FOUND,
             )
 
         client_ip = (
@@ -5274,31 +5260,25 @@ class RouteRecheckView(GenericAPIView):
         )
         throttle_key = f"route-recheck:{service.id}:{client_ip}"
         if cache.get(throttle_key):
-            return self._cors(
-                Response(
-                    {"error": "Recheck already requested. Try again in a few seconds."},
-                    status=status.HTTP_429_TOO_MANY_REQUESTS,
-                )
+            return Response(
+                {"error": "Recheck already requested. Try again in a few seconds."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
             )
         cache.set(throttle_key, True, timeout=20)
 
         ok, health_status = self._trigger_recheck(service)
         if not ok:
-            return self._cors(
-                Response(
-                    {"error": "Failed to run health recheck"},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                )
+            return Response(
+                {"error": "Failed to run health recheck"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        return self._cors(
-            Response(
-                {
-                    "message": "Health recheck triggered",
-                    "service_id": str(service.id),
-                    "health_status": health_status,
-                }
-            )
+        return Response(
+            {
+                "message": "Health recheck triggered",
+                "service_id": str(service.id),
+                "health_status": health_status,
+            }
         )
 
 
@@ -6850,4 +6830,5 @@ class RegistryCredentialViewSet(viewsets.ModelViewSet):
             )
             return Response({'status': 'success', 'message': result.get('Status', 'Login succeeded')})
         except Exception as e:
-            return Response({'status': 'error', 'message': str(e)}, status=400)
+            logger.exception("Registry connection test failed")
+            return Response({'status': 'error', 'message': 'Connection test failed. Please verify your credentials.'}, status=400)

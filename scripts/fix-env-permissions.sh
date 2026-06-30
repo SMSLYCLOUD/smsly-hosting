@@ -66,8 +66,8 @@ CURRENT_MODE=$(stat -c "%a" "$ENV_FILE" 2>/dev/null || stat -f "%OLp" "$ENV_FILE
 # ──────────────────────────────────────────
 # Step 2: Fix ownership — root:1000
 #   root (owner) can read/write
-#   GID 1000 (group) can read/write (this is the container's smsly user)
-#   others can read
+#   GID 1000 (group) can read-only (this is the container's smsly user)
+#   others have no access
 # ──────────────────────────────────────────
 echo -e "${BLUE}Fixing ownership:${NC}"
 chown root:1000 "$ENV_FILE" 2>/dev/null || {
@@ -78,17 +78,17 @@ echo -e "  ${GREEN}✓${NC} Owner set to root:1000"
 echo ""
 
 # ──────────────────────────────────────────
-# Step 3: Fix permissions — 664
+# Step 3: Fix permissions — 640
 #   6 = owner read+write
-#   6 = group read+write
-#   4 = others read
+#   4 = group read-only
+#   0 = others none
 # ──────────────────────────────────────────
 echo -e "${BLUE}Fixing permissions:${NC}"
-chmod 664 "$ENV_FILE" 2>/dev/null || {
+chmod 640 "$ENV_FILE" 2>/dev/null || {
     echo -e "${YELLOW}  ⚠ chmod failed. Trying with sudo...${NC}"
-    sudo chmod 664 "$ENV_FILE"
+    sudo chmod 640 "$ENV_FILE"
 }
-echo -e "  ${GREEN}✓${NC} Permissions set to 664"
+echo -e "  ${GREEN}✓${NC} Permissions set to 640"
 echo ""
 
 # ──────────────────────────────────────────
@@ -113,10 +113,10 @@ NEW_OWNER=$(stat -c "%u:%g" "$ENV_FILE" 2>/dev/null || stat -f "%u:%g" "$ENV_FIL
 NEW_MODE=$(stat -c "%a" "$ENV_FILE" 2>/dev/null || stat -f "%OLp" "$ENV_FILE" 2>/dev/null || echo "unknown")
 
 echo ""
-if [ "$NEW_OWNER" = "0:1000" ] && [ "$NEW_MODE" = "664" ]; then
+if [ "$NEW_OWNER" = "0:1000" ] && [ "$NEW_MODE" = "640" ]; then
     echo -e "${GREEN}✅ Permissions are correct.${NC}"
     echo ""
-    echo -e "  The backend container (UID 1000) can now write to .env."
+    echo -e "  The backend container (UID 1000) can now read .env."
     echo -e "  Any domain changes via Settings → Domain & SSL will"
     echo -e "  automatically persist to .env — no SSH needed."
     echo ""
@@ -128,6 +128,6 @@ if [ "$NEW_OWNER" = "0:1000" ] && [ "$NEW_MODE" = "664" ]; then
     echo -e "  Then re-save the domain via Settings → Domain & SSL."
 else
     echo -e "${YELLOW}⚠ Unexpected permissions: owner=$NEW_OWNER mode=$NEW_MODE${NC}"
-    echo -e "  Expected: owner=0:1000 mode=664"
+    echo -e "  Expected: owner=0:1000 mode=640"
     echo -e "  Try running with: sudo bash $0"
 fi

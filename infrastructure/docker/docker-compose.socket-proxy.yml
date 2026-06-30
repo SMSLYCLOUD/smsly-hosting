@@ -6,7 +6,7 @@
 
 services:
   socket-proxy:
-    image: tecnativa/docker-socket-proxy:latest
+    image: tecnativa/docker-socket-proxy:0.2 # TODO: pin to digest via dependabot/renovate
     container_name: smsly-socket-proxy
     restart: unless-stopped
     volumes:

@@ -9,7 +9,7 @@
 # ============================================================
 set -euo pipefail
 
-GVISOR_VERSION="${GVISOR_VERSION:-20250623.0}"
+GVISOR_VERSION="${GVISOR_VERSION:-latest}"
 ARCH="$(uname -m)"
 case "$ARCH" in
     x86_64)  ARCH="amd64" ;;
@@ -67,8 +67,12 @@ with open('$DAEMON_JSON', 'w') as f:
 fi
 
 # Install containerd-shim-runsc-v1 for proper containerd integration
-curl -fsSL "${GVISOR_URL}/containerd-shim-runsc-v1" -o /usr/local/bin/containerd-shim-runsc-v1
-chmod +x /usr/local/bin/containerd-shim-runsc-v1
+cd /tmp
+curl -fsSL "${GVISOR_URL}/containerd-shim-runsc-v1" -o containerd-shim-runsc-v1
+curl -fsSL "${GVISOR_URL}/containerd-shim-runsc-v1.sha512" -o containerd-shim-runsc-v1.sha512
+sha512sum -c containerd-shim-runsc-v1.sha512 || { echo "ERROR: containerd-shim checksum verification failed"; exit 1; }
+chmod +x containerd-shim-runsc-v1
+mv containerd-shim-runsc-v1 /usr/local/bin/containerd-shim-runsc-v1
 
 # Set up systemd mount for /etc/docker/daemon.json
 if command -v systemctl &>/dev/null; then

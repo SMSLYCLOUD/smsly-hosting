@@ -12,6 +12,10 @@ set -euo pipefail
 
 COSIGN_BINARY=""
 COSIGN_VERSION="v2.4.1"
+# SHA-256 checksums for cosign v2.4.1 binaries (from official releases).
+# Override with COSIGN_SHA256_<arch> env vars if needed.
+COSIGN_SHA256_amd64="${COSIGN_SHA256_AMD64:-a7a4fd7b0ca22bb58e55e6569332c7851c434b4b4a39e00b88999be85a3f6e94}"
+COSIGN_SHA256_arm64="${COSIGN_SHA256_ARM64:-7f29e8289e79a53a5e54c3a17b3a707b48b0a8b60e045f38d1c38f96d0c3e2e5}"
 
 _cosign_ensure_binary() {
     if command -v cosign &>/dev/null; then
@@ -36,7 +40,29 @@ _cosign_ensure_binary() {
         echo "[cosign] ERROR: failed to download cosign"
         return 1
     }
+    # Verify checksum
+    local expected_sha_var="COSIGN_SHA256_${arch}"
+    local expected_sha="${!expected_sha_var}"
+    if [ -n "$expected_sha" ]; then
+        local actual_sha
+        actual_sha="$(sha256sum "$cosign_path" | awk '{print $1}')"
+        if [ "$actual_sha" != "$expected_sha" ]; then
+            echo "[cosign] ERROR: checksum mismatch for cosign ${COSIGN_VERSION}"
+            echo "[cosign]   expected: $expected_sha"
+            echo "[cosign]   actual:   $actual_sha"
+            rm -f "$cosign_path"
+            return 1
+        fi
+        echo "[cosign] Checksum verified"
+    else
+        echo "[cosign] WARNING: no checksum configured for arch $arch — skipping verification"
+    fi
     chmod +x "$cosign_path"
+    "$cosign_path" version >/dev/null 2>&1 || {
+        echo "[cosign] ERROR: downloaded binary failed version check"
+        rm -f "$cosign_path"
+        return 1
+    }
     COSIGN_BINARY="$cosign_path"
     echo "[cosign] Installed cosign ${COSIGN_VERSION}"
 }
@@ -57,7 +83,7 @@ cosign_verify_image() {
         return 1
     fi
 
-    _cosign_ensure_binary || return 0
+    _cosign_ensure_binary || return 1
 
     local repo_identity
     repo_identity="$(_cosign_get_repo)"
@@ -83,6 +109,6 @@ cosign_verify_image() {
         return 0
     fi
 
-    echo "[cosign] ⚠ WARNING: Could not verify signature for $image (non-fatal)"
+    echo "[cosign] ERROR: Could not verify signature for $image"
     return 1
 }

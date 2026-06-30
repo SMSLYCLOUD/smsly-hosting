@@ -85,8 +85,23 @@ class SecurityMiddleware:
             return False
 
         # Skip if user is already authenticated (e.g. via session/token middleware)
+        # SECURITY: But if the request carries HMAC headers, verify them
+        # regardless — an inter-service caller should always present a
+        # valid signature even if it also happens to have a valid session
+        # cookie. This prevents a compromised browser session from being
+        # used to forge inter-service requests without the gateway secret.
         if hasattr(request, 'user') and request.user.is_authenticated:
-            return False
+            has_hmac_headers = bool(
+                request.headers.get('X-Gateway-Signature-V2')
+                and request.headers.get('X-Request-Timestamp')
+                and request.headers.get('X-Request-Nonce')
+            )
+            if has_hmac_headers:
+                # HMAC headers present — this is an inter-service request.
+                # Fall through to signature verification.
+                pass
+            else:
+                return False
 
         # DRF test clients using force_authenticate inject these markers.
         # Skip HMAC so application-level auth tests can execute normally.

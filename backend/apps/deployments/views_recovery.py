@@ -1,10 +1,12 @@
 """Recovery phrase views — generate, verify, and use recovery phrases."""
 import json
+import logging
 
 from django.contrib.auth import get_user_model, login
 from rest_framework import permissions, status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.response import Response
+from rest_framework.throttling import AnonRateThrottle
 
 from .models_core import PlatformConfig
 from .services.recovery import (
@@ -13,6 +15,8 @@ from .services.recovery import (
     hash_recovery_phrase,
     verify_recovery_phrase,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @api_view(['GET'])
@@ -41,6 +45,7 @@ def recovery_phrase_generate(request):
 
 @api_view(['POST'])
 @permission_classes([permissions.AllowAny])
+@throttle_classes([AnonRateThrottle])
 def recovery_phrase_verify(request):
     """
     Verify a recovery phrase and log the user in.
@@ -76,6 +81,11 @@ def recovery_phrase_verify(request):
                         status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     if not verify_recovery_phrase(words, stored_hash, salt):
+        client_ip = (
+            request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0].strip()
+            or request.META.get('REMOTE_ADDR', 'unknown')
+        )
+        logger.warning("Failed recovery phrase attempt from %s for user '%s'", client_ip, username)
         return Response({'error': 'Invalid recovery phrase'},
                         status=status.HTTP_403_FORBIDDEN)
 

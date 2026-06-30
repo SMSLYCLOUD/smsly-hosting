@@ -8,6 +8,9 @@
 - Do not modify SSH authentication settings (PasswordAuthentication, PermitRootLogin) in harden.sh — the platform manages SSH auth via scope key after provisioning. Confidence: 0.70
 - Authentication uses DRF Token model (rest_framework.authtoken.models.Token), not djangorestframework-simplejwt. Do not import from rest_framework_simplejwt — it is not installed. Confidence: 0.75
 
+# infrastructure
+- Registry TLS certificates are managed by Traefik — do not regenerate certs with standalone openssl; investigate Traefik cert generation if cert/key mismatch occurs. Confidence: 0.65
+
 # env-resolver
 - When manifest env resolver cannot resolve a var from any real source, fill it with a mock/placeholder value instead of leaving it empty or marking it unresolved. Confidence: 0.70
 

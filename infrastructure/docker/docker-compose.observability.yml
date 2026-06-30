@@ -134,7 +134,8 @@ services:
     image: gcr.io/cadvisor/cadvisor:v0.49.1
     container_name: smsly-cadvisor
     restart: unless-stopped
-    privileged: true
+    cap_add: [SYS_PTRACE, NET_ADMIN, SYS_ADMIN]
+    security_opt: [no-new-privileges:true]
     command:
       - --containerd=unix:///var/run/containerd/containerd.sock
     volumes:
@@ -236,10 +237,8 @@ services:
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_SERVER_ROOT_URL=https://${DOMAIN:-localhost}/grafana/
       - GF_SERVER_SERVE_FROM_SUB_PATH=true
-      - GF_AUTH_ANONYMOUS_ENABLED=true
-      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
-      - GF_SECURITY_ALLOW_EMBEDDING=true
-      - GF_SECURITY_COOKIE_SAMESITE=none
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      - GF_SECURITY_COOKIE_SAMESITE=strict
     volumes:
       - grafana-data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro

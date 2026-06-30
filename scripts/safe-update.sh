@@ -189,7 +189,19 @@ safe_update_post_verify() {
 safe_update_rollback() {
     _step "ROLLBACK — Restoring Previous State"
     [ -f "$SNAPSHOT_FILE" ] || { _fail "No snapshot — cannot rollback"; return 1; }
-    source "$SNAPSHOT_FILE" 2>/dev/null || true
+
+    # Extract variables safely instead of sourcing the file
+    PREV_HASH=$(grep '^PREV_HASH=' "$SNAPSHOT_FILE" | cut -d= -f2 | tr -d "'\"")
+    PREV_BRANCH=$(grep '^PREV_BRANCH=' "$SNAPSHOT_FILE" | cut -d= -f2 | tr -d "'\"")
+    BACKUP_FILE=$(grep '^BACKUP_FILE=' "$SNAPSHOT_FILE" | cut -d= -f2 | tr -d "'\"")
+
+    # Validate PREV_HASH is a valid git hash
+    if [ -n "${PREV_HASH:-}" ] && [ "$PREV_HASH" != "unknown" ]; then
+        if ! echo "$PREV_HASH" | grep -qE '^[a-f0-9]{40}$'; then
+            _fail "Invalid PREV_HASH in snapshot: $PREV_HASH"
+            return 1
+        fi
+    fi
 
     _warn "Reverting to: ${PREV_HASH:-unknown}"
     cd "$INSTALL_DIR"

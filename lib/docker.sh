@@ -1,3 +1,30 @@
+_merge_daemon_json() {
+    # Merge new keys into /etc/docker/daemon.json without clobbering existing
+    # settings (runtimes, log-driver, live-restore, etc.) that other installer
+    # modules may have written.
+    # Usage: _merge_daemon_json '{"insecure-registries":[...],"dns":[...]}'
+    local new_json="$1"
+    local daemon_json="/etc/docker/daemon.json"
+    python3 - "$daemon_json" "$new_json" <<'PY'
+import json, sys
+from pathlib import Path
+
+daemon_path = Path(sys.argv[1])
+new_cfg = json.loads(sys.argv[2])
+
+if daemon_path.exists():
+    try:
+        cfg = json.loads(daemon_path.read_text())
+    except (json.JSONDecodeError, ValueError):
+        cfg = {}
+else:
+    cfg = {}
+
+cfg.update(new_cfg)
+daemon_path.write_text(json.dumps(cfg, indent=2) + "\n")
+PY
+}
+
 configure_docker_mirror() {
     # Ensure COMPOSE_FILE is defined for this scope
     local compose_f="${COMPOSE_FILE:-docker-compose.prod.yml}"
@@ -36,31 +63,13 @@ configure_docker_mirror() {
             trust_list="${trust_list}, \"${MASTER_MESH_IP}:5000\""
         fi
 
-        # Build the daemon.json
-        local temp_daemon_json
-        temp_daemon_json=$(mktemp)
+        # Merge mirror config into daemon.json (preserves runtimes, log-driver, etc.)
+        local mirror_json="{\"registry-mirrors\":[\"http://${MASTER_IP}:5001\"],\"insecure-registries\":[${trust_list}]}"
         if [ "$use_dns_fallback" = "true" ]; then
-            cat > "$temp_daemon_json" <<EOF
-{
-  "registry-mirrors": ["http://${MASTER_IP}:5001"],
-  "insecure-registries": [${trust_list}],
-  "dns": ["8.8.8.8", "1.1.1.1"]
-}
-EOF
-        else
-            cat > "$temp_daemon_json" <<EOF
-{
-  "registry-mirrors": ["http://${MASTER_IP}:5001"],
-  "insecure-registries": [${trust_list}]
-}
-EOF
+            mirror_json="{\"registry-mirrors\":[\"http://${MASTER_IP}:5001\"],\"insecure-registries\":[${trust_list}],\"dns\":[\"8.8.8.8\",\"1.1.1.1\"]}"
         fi
-        if [ ! -f /etc/docker/daemon.json ] || ! cmp -s "$temp_daemon_json" /etc/docker/daemon.json; then
-            mkdir -p /etc/docker
-            cp "$temp_daemon_json" /etc/docker/daemon.json
-            systemctl restart docker || true
-        fi
-        rm -f "$temp_daemon_json"
+        _merge_daemon_json "$mirror_json"
+        systemctl restart docker || true
         echo -e "${GREEN}  ✓ Docker mirror configured${NC}"
     else
         # This is the Master node (or MASTER_IP matches local IP)
@@ -75,44 +84,17 @@ EOF
             if [ -n "${MASTER_MESH_IP:-}" ]; then
                 master_trust_list="${master_trust_list}, \"${MASTER_MESH_IP}:5000\""
             fi
-            # Registry now has TLS + htpasswd auth — keep insecure flag for self-signed certs
-            local temp_daemon_json
-            temp_daemon_json=$(mktemp)
+            # Merge insecure registry config (preserves runtimes, log-driver, etc.)
+            local master_json="{\"insecure-registries\":[${master_trust_list}]}"
             if [ "$use_dns_fallback" = "true" ]; then
-                cat > "$temp_daemon_json" <<EOF
-{
-  "insecure-registries": [${master_trust_list}],
-  "dns": ["8.8.8.8", "1.1.1.1"]
-}
-EOF
-            else
-                cat > "$temp_daemon_json" <<EOF
-{
-  "insecure-registries": [${master_trust_list}]
-}
-EOF
+                master_json="{\"insecure-registries\":[${master_trust_list}],\"dns\":[\"8.8.8.8\",\"1.1.1.1\"]}"
             fi
-            if [ ! -f /etc/docker/daemon.json ] || ! cmp -s "$temp_daemon_json" /etc/docker/daemon.json; then
-                mkdir -p /etc/docker
-                cp "$temp_daemon_json" /etc/docker/daemon.json
-                systemctl restart docker || true
-            fi
-            rm -f "$temp_daemon_json"
+            _merge_daemon_json "$master_json"
+            systemctl restart docker || true
         elif [ "$use_dns_fallback" = "true" ]; then
             # If local host (127.0.0.1) but DNS fallback is needed
-            local temp_daemon_json
-            temp_daemon_json=$(mktemp)
-            cat > "$temp_daemon_json" <<EOF
-{
-  "dns": ["8.8.8.8", "1.1.1.1"]
-}
-EOF
-            if [ ! -f /etc/docker/daemon.json ] || ! cmp -s "$temp_daemon_json" /etc/docker/daemon.json; then
-                mkdir -p /etc/docker
-                cp "$temp_daemon_json" /etc/docker/daemon.json
-                systemctl restart docker || true
-            fi
-            rm -f "$temp_daemon_json"
+            _merge_daemon_json '{"dns":["8.8.8.8","1.1.1.1"]}'
+            systemctl restart docker || true
         fi
 
         # Ensure the mirror service is UP if it exists in the compose file

@@ -467,7 +467,7 @@ fi
 
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput 2>/dev/null || true
 
-            # 4. Clean celerybeat-schedule and restart celery workers
+            # 5. Clean celerybeat-schedule and restart celery workers
             echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule 2>/dev/null || true
 
@@ -589,23 +589,10 @@ fi
             else
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps backend
             fi
-            run_backend_migrations --root || {
-                echo -e "${YELLOW}  ⚠ Migration failed — retrying in 15s...${NC}"
-                sleep 15
-                run_backend_migrations --root
-            }
-
-            # 10. Start backend
-            echo -e "${BLUE}  → Starting backend...${NC}"
-            if [ "$MODE_AGENT_LITE" = "true" ]; then
-                docker compose -f "$COMPOSE_FILE" up -d --force-recreate backend
-            else
-                docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps backend
-            fi
 
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput
 
-            # 9. Clean celerybeat-schedule and restart beat
+            # 11. Clean celerybeat-schedule and restart beat
             echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule 2>/dev/null || true
             

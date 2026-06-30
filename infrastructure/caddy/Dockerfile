@@ -11,3 +11,7 @@ COPY --from=builder /usr/bin/caddy /usr/bin/caddy
 
 # Ensure Caddy can listen on low ports as non-root (if needed)
 RUN setcap cap_net_bind_service=+ep /usr/bin/caddy
+
+# Run as non-root user
+RUN adduser -D -u 1000 caddy
+USER caddy

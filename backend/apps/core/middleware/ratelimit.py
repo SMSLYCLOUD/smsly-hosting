@@ -47,11 +47,19 @@ class RateLimitMiddleware:
         """
         Use X-Real-IP (set by reverse proxy) or REMOTE_ADDR.
         Never trust unvetted X-Forwarded-For leftmost values.
+
+        SECURITY: X-Real-IP is only trusted when the direct TCP connection
+        (REMOTE_ADDR) comes from a known proxy IP in TRUSTED_PROXY_IPS.
+        Otherwise REMOTE_ADDR is used regardless of any X-Real-IP header,
+        preventing clients from spoofing their IP to evade rate limits.
         """
+        trusted_proxies = getattr(settings, "TRUSTED_PROXY_IPS", []) or []
+        remote_addr = request.META.get("REMOTE_ADDR", "0.0.0.0")
         real_ip = request.META.get("HTTP_X_REAL_IP")
-        if real_ip:
+
+        if real_ip and remote_addr in trusted_proxies:
             return real_ip.strip()
-        return request.META.get("REMOTE_ADDR", "0.0.0.0")
+        return remote_addr
 
     def _check_rate_limit(self, ip):
         """Return True when request is allowed."""

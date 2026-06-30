@@ -308,8 +308,8 @@ echo -e "${GREEN}  PROMOTION COMPLETE${NC}"
 echo "===================================="
 echo ""
 echo "New Master IP:       $NEW_MASTER_IP"
-echo "GATEWAY_SECRET:      $GATEWAY_SECRET"
-echo "Database:            $RESOLVED_DB_URL"
+echo "GATEWAY_SECRET:      (written to .promoted-master.json)"
+echo "Database:            (written to .promoted-master.json)"
 echo ""
 echo "Re-point other agents:"
 echo ""
@@ -324,9 +324,9 @@ cat > "$INSTALL_DIR/.promoted-master.json" << EOF
     "gateway_secret": "$GATEWAY_SECRET",
     "db_url": "$RESOLVED_DB_URL",
     "db_user": "$DB_USER",
-    "db_password": "$DB_PASSWORD",
     "db_name": "$DB_NAME",
     "promoted_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 EOF
-ok "Metadata saved to .promoted-master.json"
+chmod 600 "$INSTALL_DIR/.promoted-master.json"
+ok "Metadata saved to .promoted-master.json (permissions: 600)"

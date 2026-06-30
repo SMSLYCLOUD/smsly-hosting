@@ -49,6 +49,10 @@ jobs:
             smsly/frontend:latest
 
       - name: Add host key
+        # TODO: ssh-keyscan at deploy time is a TOCTOU risk — an attacker who
+        # controls DNS/BGP could inject a rogue host key.  For stronger
+        # guarantees, pin the expected SSH host key fingerprint in a repository
+        # secret (e.g. VPS_SSH_HOST_KEY) and write it directly to known_hosts.
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
@@ -65,6 +69,8 @@ jobs:
             set -e
             cd /opt/smsly-hosting
 
+            # NOTE: safe-update.sh provides automatic rollback on failure and
+            # should be preferred for automated deploys once it is validated.
             echo "=== Running installer update mode (safe pull + rebuild) ==="
             SKIP_SCREEN=1 bash install.sh --update
 

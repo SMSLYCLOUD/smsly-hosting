@@ -279,7 +279,8 @@ class CheckoutView(GenericAPIView):
 
             raise ValueError("Unknown provider.")
         except Exception as e: # pylint: disable=broad-exception-caught
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            logger.exception("Checkout session creation failed")
+            return Response({"error": "A billing error occurred. Please try again or contact support."}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class PortalSessionView(GenericAPIView):
@@ -299,7 +300,8 @@ class PortalSessionView(GenericAPIView):
             url = StripeService.create_portal_session(user=request.user, return_url=return_url)
             return Response({"url": url})
         except Exception as e: # pylint: disable=broad-exception-caught
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            logger.exception("Portal session creation failed")
+            return Response({"error": "A billing error occurred. Please try again or contact support."}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class InvoicesView(GenericAPIView):
@@ -316,7 +318,8 @@ class InvoicesView(GenericAPIView):
             invoices = StripeService.list_invoices(user=request.user, limit=10)
             return Response({"invoices": invoices})
         except Exception as e: # pylint: disable=broad-exception-caught
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            logger.exception("Invoice listing failed")
+            return Response({"error": "A billing error occurred. Please try again or contact support."}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class WebhookRateThrottle(AnonRateThrottle):
@@ -360,7 +363,8 @@ class StripeWebhookView(GenericAPIView):
                 StripeService._configure_stripe()
                 event = stripe.Webhook.construct_event(payload, sig_header, secret)
             except Exception as e: # pylint: disable=broad-exception-caught
-                return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+                logger.exception("Stripe webhook verification failed")
+                return Response({"error": "A billing error occurred. Please try again or contact support."}, status=status.HTTP_400_BAD_REQUEST)
 
         event_type = event.get("type")
         obj = (event.get("data") or {}).get("object") or {}
@@ -456,12 +460,14 @@ class FlutterwaveWebhookView(GenericAPIView):
                     status=status.HTTP_401_UNAUTHORIZED
                 )
         except Exception as e: # pylint: disable=broad-exception-caught
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            logger.exception("Flutterwave webhook signature verification failed")
+            return Response({"error": "A billing error occurred. Please try again or contact support."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             event = FlutterwaveService.parse_webhook(raw)
         except Exception as e: # pylint: disable=broad-exception-caught
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            logger.exception("Flutterwave webhook parsing failed")
+            return Response({"error": "A billing error occurred. Please try again or contact support."}, status=status.HTTP_400_BAD_REQUEST)
 
         data = (event.get("data") or {}) if isinstance(event, dict) else {}
         tx_ref = data.get("tx_ref") or data.get("txRef")
@@ -529,7 +535,8 @@ class CryptomusWebhookView(GenericAPIView):
                     status=status.HTTP_401_UNAUTHORIZED
                 )
         except Exception as e: # pylint: disable=broad-exception-caught
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            logger.exception("Cryptomus webhook verification failed")
+            return Response({"error": "A billing error occurred. Please try again or contact support."}, status=status.HTTP_400_BAD_REQUEST)
 
         order_id = payload.get("order_id") or payload.get("orderId")
         cm_status = (payload.get("status") or "").lower().strip()

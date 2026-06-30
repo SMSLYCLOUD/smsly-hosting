@@ -135,21 +135,15 @@ reconcile_compose_stack_after_resume() {
     echo -e "${YELLOW}  -> Resumed checkpoint is stale; reconciling compose stack:${NC}"
     printf '%s\n' "$drift" | sed 's/^/     - /'
 
-    # TODO(install): replace set -e toggle with explicit conditional
-    set +e
-    compose_stack_up --remove-orphans
-    reconcile_rc=$?
+    set +e; compose_stack_up --remove-orphans; reconcile_rc=$?; set -e
     if [ "$reconcile_rc" -ne 0 ]; then
         echo -e "${YELLOW}  -> Compose reconciliation needs a rebuild; rebuilding stack...${NC}"
         echo -e "${YELLOW}    ↳ Rebuilding with --no-cache to ensure clean state...${NC}"
-        compose_stack_build --no-cache
-        reconcile_rc=$?
+        set +e; compose_stack_build --no-cache; reconcile_rc=$?; set -e
         if [ "$reconcile_rc" -eq 0 ]; then
-            compose_stack_up --remove-orphans
-            reconcile_rc=$?
+            set +e; compose_stack_up --remove-orphans; reconcile_rc=$?; set -e
         fi
     fi
-    set -e
 
     if [ "$reconcile_rc" -ne 0 ]; then
         echo -e "${RED}  x Compose reconciliation failed (exit $reconcile_rc).${NC}"

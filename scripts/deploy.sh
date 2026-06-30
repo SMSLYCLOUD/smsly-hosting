@@ -94,7 +94,7 @@ echo ""
 echo "[5/9] Starting backend..."
 "${COMPOSE_CMD[@]}" up -d backend
 echo "Waiting for backend health..."
-wait_for_healthy backend 120 || "${COMPOSE_CMD[@]}" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health/live
+wait_for_healthy backend 120 || { echo "ERROR: backend failed health check"; exit 1; }
 
 echo ""
 echo "[6/9] Starting and recycling celery worker + beat..."
@@ -105,7 +105,7 @@ sleep 3
 echo ""
 echo "[7/9] Starting frontend..."
 "${COMPOSE_CMD[@]}" up -d frontend
-wait_for_healthy frontend 60
+wait_for_healthy frontend 60 || { echo "ERROR: frontend failed health check"; exit 1; }
 
 echo ""
 echo "[8/9] Starting platform reverse-proxy (caddy)..."

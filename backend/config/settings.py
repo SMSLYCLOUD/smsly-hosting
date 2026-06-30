@@ -111,6 +111,13 @@ except Exception as e:
 DOMAIN = (config('DOMAIN', default='localhost') or 'localhost').strip()
 DEBUG = _env_bool('DEBUG', default='False')
 SMSLY_DISABLE_SIGNATURE_CHECK = _env_bool('SMSLY_DISABLE_SIGNATURE_CHECK', default='False')
+if SMSLY_DISABLE_SIGNATURE_CHECK:
+    import warnings
+    warnings.warn(
+        "SECURITY: SMSLY_DISABLE_SIGNATURE_CHECK is True — HMAC signature "
+        "verification is globally disabled. Never use this in production.",
+        stacklevel=2,
+    )
 
 
 def _resolve_gateway_secret() -> str:
@@ -171,6 +178,8 @@ if not DEBUG and not IS_TESTING:
     _ssl_enabled = _use_ssl and not _is_ip and not _is_local_host
     # Caddy natively redirects domains to HTTPS. If Django also redirects,
     # it traps raw IP addresses (which bypass Caddy's redirect) in an HTTP->HTTPS loop.
+    # This MUST remain False as long as Caddy is the edge reverse proxy; enable only
+    # if Django is directly exposed to the internet without Caddy in front.
     SECURE_SSL_REDIRECT = False
 
     SECURE_REDIRECT_EXEMPT = [
@@ -190,6 +199,16 @@ else:
     SESSION_COOKIE_SECURE = False
     CSRF_COOKIE_SECURE = False
     SECURE_PROXY_SSL_HEADER = None
+
+# Trusted proxy IPs for X-Real-IP header validation.
+# Only requests arriving from these IPs are allowed to set X-Real-IP.
+# Empty list (default) means X-Real-IP is NEVER trusted — REMOTE_ADDR
+# is always used. Set this to your load balancer / reverse proxy IPs.
+TRUSTED_PROXY_IPS = config(
+    'TRUSTED_PROXY_IPS',
+    default='',
+    cast=lambda v: [ip.strip() for ip in v.split(',') if ip.strip()],
+)
 
 # Container Registry
 CONTAINER_REGISTRY_URL = config(
@@ -271,9 +290,15 @@ elif DEBUG:
 elif _GITHUB_WEBHOOK_SECRET_RAW:
     GITHUB_WEBHOOK_SECRET = _GITHUB_WEBHOOK_SECRET_RAW
 else:
-    import secrets as _secrets
-    print("[settings] ERROR: GITHUB_WEBHOOK_SECRET missing in production. Generating random value (webhooks will break until this is set explicitly).")
-    GITHUB_WEBHOOK_SECRET = _secrets.token_hex(64)
+    raise ImproperlyConfigured(
+        "GITHUB_WEBHOOK_SECRET is not set.\n\n"
+        "  In production, GITHUB_WEBHOOK_SECRET must be explicitly configured\n"
+        "  so that GitHub webhook signatures can be verified. Without it,\n"
+        "  webhook payloads cannot be trusted.\n\n"
+        "  Generate one with:\n"
+        "    python -c \"import secrets; print(secrets.token_hex(32))\"\n\n"
+        "  Then add GITHUB_WEBHOOK_SECRET=<value> to your .env file."
+    )
 # SECURITY: No wildcard default - prevents host header injection
 # (DOMAIN moved to top of file)
 _DEFAULT_TUNNEL_BASE_DOMAIN = 'tunnel.localhost'
@@ -679,6 +704,9 @@ ACCOUNT_EMAIL_VERIFICATION = 'none'
 
 # Store social OAuth tokens (required for private-repo deploys via linked GitHub accounts).
 # Explicitly set to avoid relying on allauth defaults.
+# SECURITY RISK: If the database is compromised, all linked OAuth tokens are exposed,
+# giving attackers access to users' GitHub/GitLab/Google repos. Ensure DB encryption
+# at rest and strict access controls are in place.
 SOCIALACCOUNT_STORE_TOKENS = True
 
 # Redirect to frontend callback after login
@@ -921,7 +949,7 @@ REST_FRAMEWORK = {
         # (RateLimitMiddleware) provides a separate per-IP
         # edge guard.
         'anon': '10000/hour',
-        'user': '1000000/hour',
+        'user': '5000/hour',
         # SECURITY (Batch I): the 'deployment_burst' was
         # 30/minute which was still too tight for interactive
         # work — operators were hitting 429 on
@@ -939,7 +967,7 @@ REST_FRAMEWORK = {
         # guard is effectively a no-op for normal use but still
         # bounds a true abuse vector.
         'deployments': '10000/minute',
-        'deployment_burst': '5000/minute',
+        'deployment_burst': '1000/minute',
         'transfers': '30/minute',
         'server_run_command': '10/minute',
         'server_run_command_burst': '2/minute',
@@ -960,7 +988,9 @@ REST_FRAMEWORK = {
         # restore sane limits and are per-minute so the throttle
         # resets quickly if a legitimate user trips it.
         'login': '10/minute',
-        'password_reset': '30/minute',
+        'recovery_phrase': '5/minute',
+        'two_factor_login': '10/minute',
+        'password_reset': '10/minute',
         'registration': '30/minute',
         'attestation_verify': '30/minute',
         # SECURITY (Batch I): database maintenance. The
@@ -1309,8 +1339,8 @@ if SENTRY_DSN:
 # =============================================================================
 EMAIL_BACKEND = config('EMAIL_BACKEND', default='django.core.mail.backends.smtp.EmailBackend')
 EMAIL_HOST = config('EMAIL_HOST', default='localhost')
-EMAIL_PORT = config('EMAIL_PORT', default=25, cast=int)
-EMAIL_USE_TLS = config('EMAIL_USE_TLS', default=False, cast=bool)
+EMAIL_PORT = config('EMAIL_PORT', default=587, cast=int)
+EMAIL_USE_TLS = config('EMAIL_USE_TLS', default=True, cast=bool)
 EMAIL_USE_SSL = config('EMAIL_USE_SSL', default=False, cast=bool)
 EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='')
 EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')

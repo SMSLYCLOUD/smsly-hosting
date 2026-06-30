@@ -47,7 +47,7 @@ jobs:
           output: "trivy-backend-fs.sarif"
           exit-code: "1"
       - name: Upload Trivy results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@4dd16135b69a43b6c8efb853346f8437d92d3c93 # v3.26.6
         if: always()
         with:
           sarif_file: "trivy-backend-fs.sarif"
@@ -73,7 +73,7 @@ jobs:
           output: "trivy-frontend-fs.sarif"
           exit-code: "1"
       - name: Upload Trivy results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@4dd16135b69a43b6c8efb853346f8437d92d3c93 # v3.26.6
         if: always()
         with:
           sarif_file: "trivy-frontend-fs.sarif"
@@ -101,7 +101,7 @@ jobs:
           output: "trivy-backend-image.sarif"
           exit-code: "1"
       - name: Upload Trivy results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@4dd16135b69a43b6c8efb853346f8437d92d3c93 # v3.26.6
         if: always()
         with:
           sarif_file: "trivy-backend-image.sarif"
@@ -129,7 +129,7 @@ jobs:
           output: "trivy-frontend-image.sarif"
           exit-code: "1"
       - name: Upload Trivy results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@4dd16135b69a43b6c8efb853346f8437d92d3c93 # v3.26.6
         if: always()
         with:
           sarif_file: "trivy-frontend-image.sarif"
@@ -156,7 +156,7 @@ jobs:
           exit-code: "1"
           trivy-config: "trivy.yaml"
       - name: Upload Trivy results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@4dd16135b69a43b6c8efb853346f8437d92d3c93 # v3.26.6
         if: always()
         with:
           sarif_file: "trivy-configs.sarif"

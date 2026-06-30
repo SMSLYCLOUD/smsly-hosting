@@ -77,7 +77,7 @@ LOCK_FILE="/tmp/smsly-install.lock"
 # Do not layer docker-compose.socket-proxy.yml on top of it or Docker Compose
 # will reject the config due to duplicate services.
 ROLLBACK_NEEDED=false
-CADDY_LAST_GOOD=""$INSTALL_DIR"/caddy-config/Caddyfile.smsly-last-good"
+CADDY_LAST_GOOD="$INSTALL_DIR/caddy-config/Caddyfile.smsly-last-good"
 
 acquire_install_lock() {
     if command -v flock >/dev/null 2>&1; then

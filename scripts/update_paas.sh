@@ -14,14 +14,13 @@ echo "========================================"
 echo " Grid PaaS - Core Update Script"
 echo "========================================"
 
-# Lock file check
+# Lock file check (mkdir is atomic and immune to symlink attacks)
 LOCK_FILE="/tmp/paas_update.lock"
-if [ -f "$LOCK_FILE" ]; then
-    echo "[ERROR] Update already in progress (lock file exists: $LOCK_FILE)."
+if ! mkdir "$LOCK_FILE" 2>/dev/null; then
+    echo "[ERROR] Update already in progress (lock exists: $LOCK_FILE)."
     exit 1
 fi
-touch "$LOCK_FILE"
-trap 'rm -f $LOCK_FILE' EXIT
+trap 'rm -rf $LOCK_FILE' EXIT
 
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
 if [ ! -f "$COMPOSE_FILE" ]; then
@@ -36,13 +35,22 @@ if ! command -v docker &> /dev/null; then
 fi
 
 echo "--> Pulling latest images for all services..."
-"${COMPOSE_CMD[@]}" pull || true
+if ! "${COMPOSE_CMD[@]}" pull; then
+    echo "[ERROR] Failed to pull latest images."
+    exit 1
+fi
 
 echo "--> Restarting all services safely..."
-"${COMPOSE_CMD[@]}" up -d || true
+if ! "${COMPOSE_CMD[@]}" up -d; then
+    echo "[ERROR] Failed to restart services."
+    exit 1
+fi
 
 echo "--> Running post-update health check..."
 sleep 10
-curl -s http://localhost/api/v1/system/ready/ || echo "[WARNING] Health check not responding immediately."
+if ! curl -fsS --retry 3 --max-time 10 http://localhost/api/v1/system/ready/ > /dev/null 2>&1; then
+    echo "[ERROR] Health check failed after update."
+    exit 1
+fi
 
 echo "--> Update script finished."
