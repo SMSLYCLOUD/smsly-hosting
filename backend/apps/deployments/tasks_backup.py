@@ -406,6 +406,7 @@ def _make_aware(dt):
     return dt
 
 
+@shared_task
 def run_scheduled_backups_task():
     """Execute all due BackupSchedule entries."""
     import croniter  # type: ignore[import-untyped]
