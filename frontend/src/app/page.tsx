@@ -170,50 +170,50 @@ const globalStats = [
 const features = [
     {
         icon: Shield,
-        title: "Enterprise Security Hardening",
-        description: "RCE-proof database execution, strict runtime sandboxing, and secure isolated environments for every workload.",
+        title: "Kata/gVisor VM Isolation",
+        description: "Every container runs inside its own kernel (Kata KVM) or gVisor user-space sandbox. True hardware-grade isolation — no shared kernel surface.",
         color: "text-emerald-500",
         bg: "bg-emerald-500/10",
         span: "col-span-1 md:col-span-2 row-span-1"
     },
     {
-        icon: Cloud,
-        title: "Multi-Database S3 Backups",
-        description: "Automated, encrypted snapshots of PostgreSQL, MySQL, and Redis shipped securely to S3, Cloudflare R2, or MinIO.",
-        color: "text-amber-500",
-        bg: "bg-amber-500/10",
+        icon: Fingerprint,
+        title: "Cosign Image Signing",
+        description: "Keyless image signing via Sigstore OIDC. Every image verified before deployment. Tamper-proof supply chain from CI to registry to runtime.",
+        color: "text-cyan-500",
+        bg: "bg-cyan-500/10",
         span: "col-span-1 md:col-span-1 row-span-1"
     },
     {
-        icon: Bot,
-        title: "AI Auto-Remediation",
-        description: "Intelligent log analysis diagnoses crash loops, auto-applies fixes, and re-deploys without human intervention.",
+        icon: Search,
+        title: "Trivy CVE Scanning",
+        description: "Continuous vulnerability scanning at push time and daily runtime. Filesystem, image, and IaC configs scanned. Results in GitHub Security tab.",
         color: "text-violet-500",
         bg: "bg-violet-500/10",
         span: "col-span-1 md:col-span-1 row-span-2"
     },
     {
-        icon: GanttChartSquare,
-        title: "Ecosystem Deployer",
-        description: "Scan your repos, build a dependency graph, and deploy 30+ connected microservices in dependency-aware waves.",
-        color: "text-pink-500",
-        bg: "bg-pink-500/10",
+        icon: Key,
+        title: "Registry RBAC + JWT Auth",
+        description: "Docker Registry token auth backed by platform credentials. Superusers get full access, users get scoped pull/push by project.",
+        color: "text-amber-500",
+        bg: "bg-amber-500/10",
         span: "col-span-1 md:col-span-2 row-span-1"
     },
     {
-        icon: ArrowRight,
-        title: "Disaster Recovery",
-        description: "Automatic master DB snapshots pushed to edge agents. One-click promote to master on primary failure.",
-        color: "text-rose-500",
-        bg: "bg-rose-500/10",
+        icon: Boxes,
+        title: "Infisical Secret Management",
+        description: "Encrypted secret store with versioning, RBAC, audit logs. Auto-reload secrets in running containers. Integrates with existing PostgreSQL.",
+        color: "text-pink-500",
+        bg: "bg-pink-500/10",
         span: "col-span-1 md:col-span-1 row-span-1"
     },
     {
-        icon: Terminal,
-        title: "Web Container Terminal",
-        description: "Web-based SSH into any running container to debug and inspect state natively.",
-        color: "text-teal-500",
-        bg: "bg-teal-500/10",
+        icon: Brain,
+        title: "AI Auto-Remediation",
+        description: "Intelligent log analysis diagnoses crash loops, auto-applies fixes, and re-deploys without human intervention.",
+        color: "text-blue-500",
+        bg: "bg-blue-500/10",
         span: "col-span-1 md:col-span-1 row-span-1"
     }
 ];
