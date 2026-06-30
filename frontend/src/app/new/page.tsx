@@ -106,6 +106,12 @@ export default function NewServicePage() {
   const [projectsList, setProjectsList] = React.useState<Project[]>([])
   const [selectedProject, setSelectedProject] = React.useState<string>("")
 
+  // Registry config state (custom push registry for this deployment)
+  const [showRegistryConfig, setShowRegistryConfig] = React.useState(false)
+  const [registryUrl, setRegistryUrl] = React.useState("")
+  const [registryUsername, setRegistryUsername] = React.useState("")
+  const [registryPassword, setRegistryPassword] = React.useState("")
+
   React.useEffect(() => {
     setGitLoading(true)
     api.get(`/integrations/${gitProvider}/repos/`)
@@ -339,6 +345,7 @@ export default function NewServicePage() {
         workloadServerIds,
         includeLocal,
         localOnlyRequest,
+        registryUrl ? { url: registryUrl, username: registryUsername, password: registryPassword } : undefined,
       )
       setDeployResults(results)
 
@@ -955,6 +962,61 @@ export default function NewServicePage() {
                     </Select>
                   </div>
 
+                  {/* Custom registry (push to) */}
+                  <div className="border rounded-lg p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <Label className="flex items-center gap-1.5">
+                        <Server className="h-3.5 w-3.5" /> Custom Push Registry
+                        <span className="text-xs text-muted-foreground">(optional)</span>
+                      </Label>
+                      <Button variant="ghost" size="sm" onClick={() => {
+                        if (showRegistryConfig) {
+                          setRegistryUrl("")
+                          setRegistryUsername("")
+                          setRegistryPassword("")
+                        }
+                        setShowRegistryConfig(!showRegistryConfig)
+                      }}>
+                        {showRegistryConfig ? "Remove" : "Configure"}
+                      </Button>
+                    </div>
+                    {showRegistryConfig && (
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-1.5 col-span-2">
+                          <Label className="text-xs">Registry URL</Label>
+                          <Input
+                            placeholder="registry.example.com:5000"
+                            value={registryUrl}
+                            onChange={e => setRegistryUrl(e.target.value)}
+                            className="h-9"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <Label className="text-xs">Username</Label>
+                          <Input
+                            placeholder="registry-user"
+                            value={registryUsername}
+                            onChange={e => setRegistryUsername(e.target.value)}
+                            className="h-9"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <Label className="text-xs">Password / Token</Label>
+                          <Input
+                            type="password"
+                            placeholder="••••••••"
+                            value={registryPassword}
+                            onChange={e => setRegistryPassword(e.target.value)}
+                            className="h-9"
+                          />
+                        </div>
+                        <p className="text-xs text-muted-foreground col-span-2">
+                          Sets where built images are pushed for this deployment. Overrides any project-level registry scope.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
                   {/* Resource allocation */}
                   <div className="grid grid-cols-2 gap-4">
                     <div className="grid gap-2">
@@ -1050,6 +1112,12 @@ export default function NewServicePage() {
                           <><Settings2 className="h-3.5 w-3.5" /> Manual</>
                         )}
                       </div>
+                      {registryUrl && (
+                        <>
+                          <div className="text-muted-foreground">Push Registry</div>
+                          <div className="font-medium font-mono text-xs truncate" title={registryUrl}>{registryUrl}</div>
+                        </>
+                      )}
                     </div>
                   </CardContent>
                 </Card>

@@ -1302,12 +1302,19 @@ export const deployApi = {
     serverIds: string[] = [],
     includeLocal: boolean = true,
     requestConfig?: any,
+    registry?: { url?: string; username?: string; password?: string },
   ): Promise<any> => {
-    const res = await api.post(`/services/${serviceId}/multi-deploy/`, {
+    const payload: Record<string, unknown> = {
       ref,
       server_ids: serverIds,
       include_local: includeLocal,
-    }, requestConfig);
+    };
+    if (registry?.url) {
+      payload.registry_url = registry.url;
+      if (registry.username) payload.registry_username = registry.username;
+      if (registry.password) payload.registry_password = registry.password;
+    }
+    const res = await api.post(`/services/${serviceId}/multi-deploy/`, payload, requestConfig);
     return res.data;
   },
 };
@@ -2267,6 +2274,33 @@ export const registryCredentialsApi = {
   },
   testConnection: async (id: string) => {
     const response = await api.post(`/registry-credentials/${id}/test_connection/`);
+    return response.data;
+  }
+};
+
+export const scopedRegistryApi = {
+  list: async (params?: { scope_type?: string; scope_id?: string }) => {
+    const response = await api.get('/registry-scopes/', { params });
+    const data = response.data;
+    return Array.isArray(data) ? data : (data?.results || []);
+  },
+  get: async (id: string) => {
+    const response = await api.get(`/registry-scopes/${id}/`);
+    return response.data;
+  },
+  create: async (data: { scope_type: string; scope_id: string; registry_url: string; username?: string; password?: string; is_internal?: boolean; allowed_registry_hosts?: string[]; is_active?: boolean }) => {
+    const response = await api.post('/registry-scopes/', data);
+    return response.data;
+  },
+  update: async (id: string, data: Record<string, unknown>) => {
+    const response = await api.patch(`/registry-scopes/${id}/`, data);
+    return response.data;
+  },
+  delete: async (id: string) => {
+    await api.delete(`/registry-scopes/${id}/`);
+  },
+  resolve: async (params: { scope_type: string; scope_id: string }) => {
+    const response = await api.get('/registry-scopes/resolve/', { params });
     return response.data;
   }
 };

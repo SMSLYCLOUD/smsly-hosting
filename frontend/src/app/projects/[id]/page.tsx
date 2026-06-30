@@ -13,11 +13,12 @@ import { Button } from '@/components/ui/button';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ArrowLeft, Plus, FolderOpen, Settings2,
-  GitBranch, Globe, Layers, Trash2, X, Save, RefreshCcw,
+  GitBranch, Globe, Layers, Trash2, X, Save, RefreshCcw, Server,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/components/ui/use-toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { ScopedRegistryTab } from '@/components/settings/ScopedRegistryTab';
 
 const STATUS_COLORS: Record<string, string> = {
   ACTIVE: '#10b981',
@@ -45,7 +46,7 @@ function ProjectDetailContent() {
   const [services, setServices] = useState<Service[]>([]);
   const [allServices, setAllServices] = useState<Service[]>([]);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<'services' | 'settings'>(initialTab as 'services' | 'settings');
+  const [tab, setTab] = useState<'services' | 'settings' | 'registry'>(initialTab as 'services' | 'settings' | 'registry');
   const [showAddService, setShowAddService] = useState(false);
 
   // Settings state
@@ -252,6 +253,7 @@ function ProjectDetailContent() {
         <div className="flex items-center gap-1 border-b border-zinc-800 mb-6">
           {[
             { id: 'services' as const, label: 'Services', icon: Layers },
+            { id: 'registry' as const, label: 'Registry', icon: Server },
             { id: 'settings' as const, label: 'Settings', icon: Settings2 },
           ].map(t => (
             <button
@@ -375,6 +377,21 @@ function ProjectDetailContent() {
               </div>
             )}
           </>
+        )}
+
+        {/* Registry Tab */}
+        {tab === 'registry' && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+          >
+            <ScopedRegistryTab
+              scopeType="project"
+              scopeId={projectId}
+              title="Project Registry"
+              description="Configure where this project's built images are pushed."
+            />
+          </motion.div>
         )}
 
         {/* Settings Tab */}
