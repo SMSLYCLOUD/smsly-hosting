@@ -171,12 +171,34 @@ _registry_self_heal() {
         local url="$1"
         local host="${url%%:*}"
         local port="${url##*:}"
+        local code
+
         # Try HEAD /v2/ — if it returns anything (even 401/403), the registry is reachable
-        timeout 5 curl -sfk -o /dev/null -w "%{http_code}" "https://${url}/v2/" 2>/dev/null | grep -qE '^(200|401|403)' && return 0
-        timeout 5 curl -sfk -o /dev/null -w "%{http_code}" "http://${url}/v2/" 2>/dev/null | grep -qE '^(200|401|403)' && return 0
-        # Fallback: try docker pull from localhost (checks daemon→registry connectivity)
-        timeout 10 docker pull "127.0.0.1:5000/alpine:latest" 2>/dev/null | grep -q "Pulled\|up to date\|Image is up to date" && return 0
-        timeout 10 docker pull "${url}/alpine:latest" 2>/dev/null | grep -q "Pulled\|up to date\|Image is up to date" && return 0
+        code=$(timeout 5 curl -sfk -o /dev/null -w "%{http_code}" "https://${url}/v2/" 2>/dev/null)
+        if echo "$code" | grep -qE '^(200|401|403)$'; then
+            echo -e "  \033[0;32m→ $url OK (HTTPS $code)\033[0m"
+            return 0
+        fi
+        code=$(timeout 5 curl -sfk -o /dev/null -w "%{http_code}" "http://${url}/v2/" 2>/dev/null)
+        if echo "$code" | grep -qE '^(200|401|403)$'; then
+            echo -e "  \033[0;32m→ $url OK (HTTP $code)\033[0m"
+            return 0
+        fi
+
+        # Diagnostics: show the actual failure reason for debugging
+        local curl_err
+        curl_err=$(timeout 3 curl -sv "http://${url}/v2/" 2>&1 | grep -E '^(curl:|Connected|Connection refused|Operation timed out|resolve|ssl|SSL)' | head -5)
+        [ -n "$curl_err" ] && echo -e "  \033[0;33m  ↳ $url ${code:-timeout/error} — ${curl_err//$'\n'/ | }\033[0m"
+
+        # Fallback: try docker pull
+        local pull_out pull_short
+        pull_out=$(timeout 10 docker pull "${url}/alpine:latest" 2>&1 || true)
+        if echo "$pull_out" | grep -qE "Pulled|up to date|Image is up to date"; then
+            echo -e "  \033[0;32m→ $url OK (docker pull)\033[0m"
+            return 0
+        fi
+        pull_short=$(echo "$pull_out" | tail -3 | tr '\n' ' ')
+        [ -n "$pull_short" ] && echo -e "  \033[0;33m  ↳ $url pull: $pull_short\033[0m"
         return 1
     }
 
