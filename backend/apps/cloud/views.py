@@ -647,15 +647,42 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
     def ecosystem_scan(self, request):
         """
         Scan all accessible GitHub repositories and generate a zero-click deploy plan.
+
+        Accepts optional ``project_id`` to scope the plan and all subsequently
+        created services to a specific project for isolation and permissions.
         """
         from apps.deployments.models_ecosystem import EcosystemPlan
         from apps.deployments.tasks_ecosystem import ecosystem_scan_task
 
         ai_provider = request.data.get('ai_provider')
         selected_repos = request.data.get('selected_repos')
+        project_id = request.data.get('project_id')
+
+        # Validate project access if provided
+        project = None
+        if project_id:
+            from apps.deployments.models_core import Project
+            try:
+                project = Project.objects.get(id=project_id)
+                if project.owner != request.user:
+                    from apps.deployments.models_project import ProjectMember
+                    is_member = ProjectMember.objects.filter(
+                        project=project, user=request.user,
+                    ).exists()
+                    if not is_member:
+                        return Response(
+                            {'error': 'You do not have access to this project.'},
+                            status=status.HTTP_403_FORBIDDEN,
+                        )
+            except Project.DoesNotExist:
+                return Response(
+                    {'error': 'Project not found.'},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
 
         plan_record = EcosystemPlan.objects.create(
             user=request.user,
+            project=project,
             selected_repos=selected_repos or [],
             ai_provider=ai_provider,
             status=EcosystemPlan.Status.SCANNING,
@@ -667,6 +694,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             ai_provider=ai_provider,
             selected_repos=selected_repos,
             plan_id=str(plan_record.id),
+            project_id=str(project.id) if project else None,
         )
 
         plan_record.scan_task_id = task.id
@@ -675,6 +703,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         return Response({
             'task_id': task.id,
             'plan_id': str(plan_record.id),
+            'project_id': str(project.id) if project else None,
             'status': 'scanning',
         })
 
@@ -728,23 +757,46 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
     def ecosystem_deploy(self, request):
         """
         Deploy a previously generated ecosystem plan.
+
+        All services created are scoped to the plan's project for
+        isolation, permissions, and resource tracking.
         """
         from apps.deployments.models_ecosystem import EcosystemPlan
         from apps.deployments.tasks_ecosystem import ecosystem_deploy_task
 
         plan_id = request.data.get('plan_id')
         plan = request.data.get('plan')
+        project_id = request.data.get('project_id')
         if not isinstance(plan, dict):
             return Response(
                 {'error': 'plan (object) is required'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Resolve project — from explicit param, or from existing plan
+        project = None
+        if project_id:
+            from apps.deployments.models_core import Project
+            try:
+                project = Project.objects.get(id=project_id)
+                if project.owner != request.user:
+                    from apps.deployments.models_project import ProjectMember
+                    if not ProjectMember.objects.filter(project=project, user=request.user).exists():
+                        return Response(
+                            {'error': 'You do not have access to this project.'},
+                            status=status.HTTP_403_FORBIDDEN,
+                        )
+            except Project.DoesNotExist:
+                return Response({'error': 'Project not found.'}, status=status.HTTP_404_NOT_FOUND)
+
         try:
             plan_record = EcosystemPlan.objects.get(id=plan_id, user=request.user)
+            if project and not plan_record.project:
+                plan_record.project = project
         except EcosystemPlan.DoesNotExist:
             plan_record = EcosystemPlan.objects.create(
                 user=request.user,
+                project=project,
                 plan=plan,
                 status=EcosystemPlan.Status.DEPLOYING,
             )
@@ -757,6 +809,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             str(request.user.id),
             plan,
             plan_id=str(plan_record.id),
+            project_id=str(project.id) if project else None,
         )
 
         plan_record.deploy_task_id = task.id
@@ -765,6 +818,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         return Response({
             'task_id': task.id,
             'plan_id': str(plan_record.id),
+            'project_id': str(project.id) if project else None,
             'status': 'deploying',
         })
 

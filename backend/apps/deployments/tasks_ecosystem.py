@@ -816,31 +816,63 @@ def _resolve_from_manifest_or_fallback(
 def _find_cloned_source_for_repo(repo: str, service_name: str) -> str | None:
     """Find the local cloned source directory for a repo.
 
-    Checks common paths where ecosystem scans or manual setups would
-    clone repos to."""
+    Checks multiple common paths where ecosystem scans or builds
+    would clone repos to. Works for any repo, not just SMSLYCLOUD.
+    """
     import os as _os
 
+    repo_short = repo.lower().split("/")[-1].replace(".git", "")
     candidates = []
 
-    # Check SMSLYCLOUD directory (ecosystem monorepo checkout)
+    # Priority 1: SMSLY_BUILDS_DIR (where the platform clones repos for building)
+    builds_root = _os.environ.get("SMSLY_BUILDS_DIR", "/opt/smsly-hosting/builds")
+    for build_candidate in [
+        _os.path.join(builds_root, f"svc_{service_name}"),
+        _os.path.join(builds_root, f"svc_{repo_short}"),
+        _os.path.join(builds_root, f"build_{repo_short}"),
+    ]:
+        if _os.path.isdir(build_candidate) and _os.path.isdir(_os.path.join(build_candidate, ".git")):
+            candidates.append(build_candidate)
+
+    # Priority 2: Scan builds directory for any matching subdir with .git
+    if _os.path.isdir(builds_root):
+        try:
+            for name in _os.listdir(builds_root):
+                candidate = _os.path.join(builds_root, name)
+                if not _os.path.isdir(candidate) or name.startswith("."):
+                    continue
+                if name == service_name or repo_short in name:
+                    if _os.path.isdir(_os.path.join(candidate, ".git")):
+                        candidates.append(candidate)
+        except OSError:
+            pass
+
+    # Priority 3: SMSLYCLOUD monorepo checkout (development convenience)
     smslycloud = _os.path.join(_os.getcwd(), "SMSLYCLOUD")
     if _os.path.isdir(smslycloud):
-        for name in _os.listdir(smslycloud):
-            candidate = _os.path.join(smslycloud, name)
-            if _os.path.isdir(candidate) and not name.startswith("."):
-                # Match by repo short name
-                repo_short = repo.lower().split("/")[-1].replace(".git", "")
-                if repo_short == name.lower() or repo_short in name.lower():
+        try:
+            for name in _os.listdir(smslycloud):
+                candidate = _os.path.join(smslycloud, name)
+                if not _os.path.isdir(candidate) or name.startswith("."):
+                    continue
+                if repo_short == name.lower() or repo_short in name.lower() or service_name in name:
                     candidates.append(candidate)
+        except OSError:
+            pass
 
-    # Check builds directory
-    builds_root = _os.environ.get("SMSLY_BUILDS_DIR", "/opt/smsly-hosting/builds")
-    if _os.path.isdir(builds_root):
-        for name in _os.listdir(builds_root):
-            candidate = _os.path.join(builds_root, name)
-            if _os.path.isdir(candidate) and _os.path.isdir(_os.path.join(candidate, ".git")):
-                if name == service_name or service_name.replace("smsly-", "") in name:
-                    candidates.append(candidate)
+    # Priority 4: /tmp clone directory (ecosystem scan clones)
+    tmp_root = _os.path.join("/tmp", "smsly-ecosystem")
+    if _os.path.isdir(tmp_root):
+        try:
+            for name in _os.listdir(tmp_root):
+                candidate = _os.path.join(tmp_root, name)
+                if not _os.path.isdir(candidate) or name.startswith("."):
+                    continue
+                if repo_short in name or service_name in name:
+                    if _os.path.isdir(_os.path.join(candidate, ".git")):
+                        candidates.append(candidate)
+        except OSError:
+            pass
 
     if candidates:
         return candidates[0]
@@ -1376,7 +1408,7 @@ def _update_plan_progress(plan_id: str, msg: str) -> None:
 
 
 @shared_task(bind=True, queue='deploy', soft_time_limit=1800, time_limit=2100)
-def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provider: str | None = None, selected_repos: list | None = None, plan_id: str | None = None) -> dict:
+def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provider: str | None = None, selected_repos: list | None = None, plan_id: str | None = None, project_id: str | None = None) -> dict:
     """
     Scan all of a user's GitHub repos and return a deploy plan.
     This is async because fetching and AI analysis can take 30-60s.
@@ -1658,7 +1690,7 @@ def ecosystem_release_wave_task(
     max_retries=3, default_retry_delay=60,
     autoretry_for=(Exception,),
 )
-def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = None) -> dict:
+def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = None, project_id: str | None = None) -> dict:
     """
     Deploy all services in the plan using dependency-aware waves.
 
@@ -1710,6 +1742,15 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
     except (TypeError, ValueError):
         requested_wave_size = build_cfg["wave_size"]
     wave_size = max(1, min(_MAX_WAVE_SIZE, requested_wave_size))
+
+    # Resolve project for scoping all created services
+    project = None
+    if project_id:
+        from apps.deployments.models_core import Project
+        try:
+            project = Project.objects.get(id=project_id)
+        except Project.DoesNotExist:
+            pass  # project_id is advisory — services will be created without project
 
     # 1. Parse and validate manifest if provided, bulk verify env before continuing
     manifest_content = plan.get("manifest")
@@ -1951,6 +1992,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                 service = Service.objects.create(
                     name=final_name,
                     owner=user,
+                    project=project,
                     repository_url=_repository_url(repo),
                     branch=str(
                         svc_plan.get("branch")

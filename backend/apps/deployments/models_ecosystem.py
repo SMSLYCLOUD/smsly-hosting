@@ -5,7 +5,12 @@ from django.db import models
 
 
 class EcosystemPlan(models.Model):
-    """Persisted ecosystem scan/deploy plan for resume capability."""
+    """Persisted ecosystem scan/deploy plan for resume capability.
+
+    Project-scoped — all services created by the deploy task are
+    assigned to the plan's project for isolation and permission
+    management.
+    """
 
     class Status(models.TextChoices):
         SCANNING = 'scanning', 'Scanning'
@@ -16,6 +21,13 @@ class EcosystemPlan(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)  # type: ignore[var-annotated]
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='ecosystem_plans')  # type: ignore[var-annotated]
+    project = models.ForeignKey(  # type: ignore[var-annotated]
+        'deployments.Project',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='ecosystem_plans',
+        help_text='Project this ecosystem plan belongs to. All created services are scoped to this project.',
+    )
 
     # Task IDs for resume
     scan_task_id = models.CharField(max_length=255, blank=True, null=True)  # type: ignore[var-annotated]
@@ -43,9 +55,11 @@ class EcosystemPlan(models.Model):
         ordering = ['-created_at']
         indexes = [
             models.Index(fields=['user', 'status']),
+            models.Index(fields=['project', 'status']),
             models.Index(fields=['scan_task_id']),
             models.Index(fields=['deploy_task_id']),
         ]
 
     def __str__(self):
-        return f"EcosystemPlan {self.id} - {self.user.username} - {self.status}"
+        proj = f" project={self.project_id}" if self.project_id else ""
+        return f"EcosystemPlan {self.id} - {self.user.username}{proj} - {self.status}"
