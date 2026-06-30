@@ -2177,7 +2177,7 @@ class PipelineManager:
 
         # Fall back to scoped registry chain
         if not registry_url:
-            from .models_registry_scope import ScopedRegistry
+            from apps.deployments.models_registry_scope import ScopedRegistry
             scope_obj = self.service.project or self.service.owner
             registry_info = ScopedRegistry.resolve_registry_credentials(scope_obj)
             registry_url = (registry_info.get("url") or "").split("://")[-1]
@@ -2675,7 +2675,7 @@ class PipelineManager:
         # Priority: 1) deployment.registry_override
         #           2) ScopedRegistry chain (Project → Team → Organization)
         #           3) PlatformConfig global fallback
-        from .models_registry_scope import ScopedRegistry
+        from apps.deployments.models_registry_scope import ScopedRegistry
 
         deployment = self.deployment
         registry_url = None
