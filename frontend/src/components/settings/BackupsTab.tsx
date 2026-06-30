@@ -80,6 +80,16 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
     const [keyPromptError, setKeyPromptError] = useState<string>('');
     const [keyPromptSubmitting, setKeyPromptSubmitting] = useState(false);
 
+    // Pre-restore snapshot override dialog
+    const [snapOverrideOpen, setSnapOverrideOpen] = useState(false);
+    const [snapOverrideBackupId, setSnapOverrideBackupId] = useState<string | null>(null);
+    const [snapOverrideError, setSnapOverrideError] = useState('');
+    const [snapOverrideRemediation, setSnapOverrideRemediation] = useState('');
+    const [snapOverrideSubmitting, setSnapOverrideSubmitting] = useState(false);
+    const [snapOverrideIsCloud, setSnapOverrideIsCloud] = useState(false);
+    const snapOverrideCloudFormRef = useRef<any>(null);
+    const snapOverrideOpenRef = useRef(false);
+
     // Restore progress tracking
     const [restoringId, setRestoringId] = useState<string | null>(null);
     const [restoreStatus, setRestoreStatus] = useState<string>('');
@@ -89,6 +99,14 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
     const [isLiveDeploying, setIsLiveDeploying] = useState(false);
     const wsRef = useRef<WebSocket | null>(null);
     const reconnectTimer = useRef<NodeJS.Timeout | null>(null);
+
+    // Backup progress WebSocket
+    const progressWsRef = useRef<WebSocket | null>(null);
+    const [backupProgress, setBackupProgress] = useState<{
+        stage: string; percent: number; message: string;
+        bytes_transferred?: number; total_bytes?: number;
+    } | null>(null);
+    const [progressLog, setProgressLog] = useState<string[]>([]);
 
     // Verify state
     const [verifying, setVerifying] = useState<string | null>(null);
@@ -219,9 +237,12 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
     const handleCreateBackup = async () => {
         setCreating(true);
         try {
-            await api.post('/backups/', { service: serviceId, db_only: dbOnly, label: backupLabel || undefined });
+            const res = await api.post('/backups/', { service: serviceId, db_only: dbOnly, label: backupLabel || undefined });
             toast({ title: "Backup Started", description: "This may take a few minutes." });
             setBackupLabel('');
+            if (res.data?.id) {
+                connectBackupProgressWebSocket(res.data.id);
+            }
         } catch (err) {
             toast({ title: "Error", description: "Failed to start backup.", variant: "destructive" });
         } finally {
@@ -262,14 +283,29 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                 loadBackups();
             }
         } catch (err: any) {
-            const msg = err?.response?.data?.error || "Failed to download and restore backup.";
+            const data = err?.response?.data;
+            const status = err?.response?.status;
+            if (status === 422 && data?.snapshot_error) {
+                snapOverrideCloudFormRef.current = { ...cloudRestoreForm, service_id: serviceId };
+                snapOverrideOpenRef.current = true;
+                setSnapOverrideBackupId(data.backup_id || null);
+                setSnapOverrideError(data.snapshot_error);
+                setSnapOverrideRemediation(data.remediation || '');
+                setSnapOverrideOpen(true);
+                setSnapOverrideIsCloud(true);
+                setCreating(false);
+                return;
+            }
+            const msg = data?.error || "Failed to download and restore backup.";
             toast({ title: "Restore Failed", description: msg, variant: "destructive" });
         } finally {
             setCreating(false);
-            setCloudRestoreForm({
-                cloud_storage_id: '', s3_bucket: '', s3_key: '', s3_endpoint: '', s3_region: 'us-east-1',
-                s3_access_key: '', s3_secret_key: '', encryption_key: ''
-            });
+            if (!snapOverrideOpenRef.current) {
+                setCloudRestoreForm({
+                    cloud_storage_id: '', s3_bucket: '', s3_key: '', s3_endpoint: '', s3_region: 'us-east-1',
+                    s3_access_key: '', s3_secret_key: '', encryption_key: ''
+                });
+            }
         }
     };
 
@@ -291,15 +327,28 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
 
             // Connect WebSocket for real-time updates
             connectWebSocket(id);
+            connectBackupProgressWebSocket(id);
 
         } catch (err: any) {
             const data = err?.response?.data;
+            const status = err?.response?.status;
             // If the backup needs an encryption key, show the key prompt
             if (data?.error_code === 'ENCRYPTION_KEY_REQUIRED') {
                 setKeyPromptBackupId(id);
                 setKeyPromptValue('');
                 setKeyPromptError(data?.error || 'Encryption key required');
                 setKeyPromptOpen(true);
+                setRestoringId(null);
+                setRestoreStatus('');
+                return;
+            }
+            // If pre-restore snapshot failed, show override dialog
+            if (status === 422 && data?.snapshot_error) {
+                setSnapOverrideBackupId(id);
+                setSnapOverrideError(data.snapshot_error);
+                setSnapOverrideRemediation(data.remediation || '');
+                setSnapOverrideOpen(true);
+                setSnapOverrideIsCloud(false);
                 setRestoringId(null);
                 setRestoreStatus('');
                 return;
@@ -326,6 +375,40 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
             // handleRestore already shows the toast on error
         } finally {
             setKeyPromptSubmitting(false);
+        }
+    };
+
+    const submitSnapOverride = async () => {
+        if (!snapOverrideBackupId) return;
+        setSnapOverrideSubmitting(true);
+        try {
+            if (snapOverrideIsCloud && snapOverrideCloudFormRef.current) {
+                const res = await api.post('/backups/restore-from-cloud/', {
+                    ...snapOverrideCloudFormRef.current, force: true,
+                });
+                if (res.data?.backup_id) {
+                    setRestoringId(res.data.backup_id);
+                    connectBackupProgressWebSocket(res.data.backup_id);
+                    monitorDeploymentAfterRestore(res.data.backup_id);
+                }
+            } else {
+                await api.post(`/backups/${snapOverrideBackupId}/restore/`, {
+                    confirm: true, force: true,
+                });
+                setRestoringId(snapOverrideBackupId);
+                setRestoreStatus('RESTORING');
+                connectBackupProgressWebSocket(snapOverrideBackupId);
+                connectWebSocket(snapOverrideBackupId);
+                monitorDeploymentAfterRestore(snapOverrideBackupId);
+            }
+            toast({ title: "Restore Started", description: "Proceeding without safety snapshot." });
+            setSnapOverrideOpen(false);
+            snapOverrideOpenRef.current = false;
+            snapOverrideCloudFormRef.current = null;
+        } catch (err: any) {
+            toast({ title: "Restore Failed", description: err?.response?.data?.error || 'Failed to trigger restore.', variant: "destructive" });
+        } finally {
+            setSnapOverrideSubmitting(false);
         }
     };
 
@@ -452,6 +535,64 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
         if (reconnectTimer.current) {
             clearTimeout(reconnectTimer.current);
             reconnectTimer.current = null;
+        }
+    };
+
+    const connectBackupProgressWebSocket = (backupId: string) => {
+        if (progressWsRef.current?.readyState === WebSocket.OPEN) return;
+
+        const proto = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss' : 'ws';
+        const host = typeof window !== 'undefined' ? window.location.host : 'localhost';
+        const token = typeof document !== 'undefined' ? document.cookie.replace(/(?:(?:^|.*;\s*)auth_token\s*=\s*([^;]*).*$)|^.*$/, '$1') : '';
+        const wsUrl = `${proto}://${host}/ws/backup-progress/${backupId}/${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+
+        try {
+            const ws = new WebSocket(wsUrl);
+            setProgressLog([]);
+            setBackupProgress({ stage: 'connecting', percent: 0, message: 'Connecting...' });
+
+            ws.onopen = () => {
+                setBackupProgress({ stage: 'connected', percent: 0, message: 'Waiting for progress...' });
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'backup_progress') {
+                        setBackupProgress({
+                            stage: data.stage,
+                            percent: data.percent ?? 0,
+                            message: data.message ?? '',
+                            bytes_transferred: data.bytes_transferred,
+                            total_bytes: data.total_bytes,
+                        });
+                        const timeStr = data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : '';
+                        const logLine = `[${timeStr}] ${data.stage}: ${data.message || ''}`;
+                        setProgressLog(prev => [...prev.slice(-200), logLine]);
+                    }
+                } catch {
+                    // Ignore non-JSON messages
+                }
+            };
+
+            ws.onerror = () => {
+                ws.close();
+            };
+
+            ws.onclose = () => {
+                progressWsRef.current = null;
+            };
+
+            progressWsRef.current = ws;
+        } catch (error) {
+            console.error('Backup progress WebSocket failed:', error);
+        }
+    };
+
+    const disconnectBackupProgressWebSocket = () => {
+        if (progressWsRef.current) {
+            progressWsRef.current.close();
+            progressWsRef.current = null;
         }
     };
 
@@ -1004,6 +1145,81 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                   </CardContent>
               </Card>
 
+             {/* Live Backup/Restore Progress Terminal */}
+             {backupProgress && (
+                 <Card className="border-zinc-800">
+                     <CardHeader className="pb-2">
+                         <CardTitle className="flex items-center gap-2 text-sm">
+                             {backupProgress.stage === 'connecting' || backupProgress.stage === 'connected' ? (
+                                 <Loader2 className="w-4 h-4 animate-spin text-blue-500" />
+                             ) : backupProgress.stage === 'completed' ? (
+                                 <CheckCircle className="w-4 h-4 text-green-500" />
+                             ) : backupProgress.stage === 'failed' ? (
+                                 <AlertCircle className="w-4 h-4 text-red-500" />
+                             ) : (
+                                 <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
+                             )}
+                             {backupProgress.stage === 'completed' ? 'Complete' : 'Live Progress'}
+                             <span className="text-xs text-zinc-400 ml-auto">
+                                 {backupProgress.percent.toFixed(0)}%
+                             </span>
+                         </CardTitle>
+                     </CardHeader>
+                     <CardContent className="space-y-2">
+                         {/* Progress bar */}
+                         <div className="w-full bg-zinc-800 rounded-full h-1.5 overflow-hidden">
+                             <div
+                                 className={`h-full rounded-full transition-all duration-300 ${
+                                     backupProgress.stage === 'completed' ? 'bg-green-500' :
+                                     backupProgress.stage === 'failed' ? 'bg-red-500' : 'bg-blue-500'
+                                 }`}
+                                 style={{ width: `${Math.min(100, backupProgress.percent)}%` }}
+                             />
+                         </div>
+
+                         {/* Current stage message */}
+                         <div className="text-sm text-zinc-300 font-medium">
+                             {backupProgress.message}
+                         </div>
+
+                         {/* Transfer metrics */}
+                         {backupProgress.bytes_transferred != null && backupProgress.total_bytes != null && backupProgress.total_bytes > 0 && (
+                             <div className="text-xs text-zinc-500">
+                                 {backupProgress.bytes_transferred >= 1048576
+                                     ? `${(backupProgress.bytes_transferred / (1024 * 1024)).toFixed(1)} MB`
+                                     : `${(backupProgress.bytes_transferred / 1024).toFixed(1)} KB`} / {backupProgress.total_bytes >= 1048576
+                                     ? `${(backupProgress.total_bytes / (1024 * 1024)).toFixed(1)} MB`
+                                     : `${(backupProgress.total_bytes / 1024).toFixed(1)} KB`} transferred
+                             </div>
+                         )}
+
+                         {/* Log feed */}
+                         {progressLog.length > 0 && (
+                             <div className="bg-zinc-950 border border-zinc-800 rounded p-2 max-h-32 overflow-y-auto font-mono text-xs">
+                                 {progressLog.slice(-50).map((line, i) => (
+                                     <div key={i} className="text-green-400/80">
+                                         {line}
+                                     </div>
+                                 ))}
+                             </div>
+                         )}
+
+                         <Button
+                             variant="ghost"
+                             size="sm"
+                             onClick={() => {
+                                 disconnectBackupProgressWebSocket();
+                                 setBackupProgress(null);
+                                 setProgressLog([]);
+                             }}
+                             className="text-xs"
+                         >
+                             Dismiss
+                         </Button>
+                     </CardContent>
+                 </Card>
+             )}
+
              {/* Restore Progress Section */}
              {restoringId && (
                  <Card>
@@ -1408,6 +1624,50 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                      </div>
                  </div>
              </div>
+         )}
+
+         {snapOverrideOpen && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+                <div className="bg-background border border-red-900/50 rounded-lg p-6 max-w-lg w-full mx-4 shadow-lg">
+                    <div className="flex items-center gap-2 mb-4">
+                        <AlertCircle className="h-5 w-5 text-red-500" />
+                        <h3 className="text-lg font-semibold">Safety Snapshot Failed</h3>
+                    </div>
+                    <p className="text-sm text-muted-foreground mb-2">
+                        The pre-restore safety snapshot could not be created. Without it, a corrupt
+                        restore archive would permanently destroy the current running state.
+                    </p>
+                    <div className="bg-red-950/30 border border-red-900/30 rounded p-3 mb-4">
+                        <p className="text-xs font-mono text-red-400 break-all">
+                            {snapOverrideError}
+                        </p>
+                    </div>
+                    <p className="text-xs text-amber-400 mb-4">
+                        {snapOverrideRemediation || 'Fix the error and retry, or override to proceed without a safety net.'}
+                    </p>
+                    <div className="flex justify-end gap-2">
+                        <Button
+                            variant="outline"
+                            onClick={() => { setSnapOverrideOpen(false); snapOverrideOpenRef.current = false; snapOverrideCloudFormRef.current = null; }}
+                            disabled={snapOverrideSubmitting}
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            variant="destructive"
+                            onClick={submitSnapOverride}
+                            disabled={snapOverrideSubmitting}
+                        >
+                            {snapOverrideSubmitting ? (
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            ) : (
+                                <AlertCircle className="mr-2 h-4 w-4" />
+                            )}
+                            Proceed Without Snapshot
+                        </Button>
+                    </div>
+                </div>
+            </div>
          )}
 
           {showCreateSnapshotDialog && (

@@ -5731,6 +5731,43 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
             error_message=f'Restored from cloud: {s3_bucket}/{s3_key}',
         )
 
+        # ── Pre-flight safety snapshot check ─────────────
+        force = str(request.data.get('force', '')).lower() == 'true'
+        if not force:
+            try:
+                BackupService().backup_service(
+                    target_service.id, backup_type='PRE_TRANSFER',
+                )
+            except Exception as snap_exc:
+                logger.warning(
+                    "Pre-restore snapshot failed for service %s during cloud restore: %s",
+                    target_service.id, snap_exc,
+                )
+                with contextlib.suppress(OSError):
+                    os.remove(dest_path)
+                backup.status = 'FAILED'
+                backup.error_message = f"Pre-restore snapshot failed: {snap_exc}"
+                backup.save(update_fields=['status', 'error_message'])
+                return Response(
+                    {
+                        'error': (
+                            'Pre-restore safety snapshot could not be '
+                            'created. Proceeding without a snapshot will '
+                            'permanently destroy the current running state '
+                            'if the restore archive is corrupt.'
+                        ),
+                        'snapshot_error': str(snap_exc),
+                        'backup_id': str(backup.id),
+                        'remediation': (
+                            'Fix the snapshot error and retry, or send '
+                            '"force": true to proceed without a safety '
+                            'snapshot. Use force with caution — data '
+                            'loss is possible if the backup is corrupt.'
+                        ),
+                    },
+                    status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                )
+
         encryption_key = _resolve_encryption_key(request)
         from apps.deployments.tasks import restore_service_backup_task
         restore_service_backup_task.delay(
@@ -5738,7 +5775,7 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
             target_service_id=str(service_id),
             requesting_user_id=request.user.id,
             encryption_key=encryption_key,
-            raise_on_snapshot_failure=False,
+            raise_on_snapshot_failure=not force,
         )
 
         return Response({
@@ -6279,6 +6316,14 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
         )
         return Response({
             'status': 'restore_started',
+            'volume_restore_required': True,
+            'volume_warning': (
+                "Docker volumes are NOT restored during server restores. "
+                "Volumes live on the host filesystem and will be re-attached "
+                "on the next deployment of each service. If volume data was "
+                "also lost, restore it from service-level backups or filesystem "
+                "snapshots."
+            ),
         })
 
     @action(detail=True, methods=['get'], permission_classes=[permissions.AllowAny], authentication_classes=[])

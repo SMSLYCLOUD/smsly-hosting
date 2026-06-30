@@ -2,14 +2,13 @@
 # SMSLY Hosting Database Backup Script
 # Run this daily via cron: 0 2 * * * /opt/smsly-hosting/scripts/backup.sh
 
-set -e
-
 # Configuration
 BACKUP_DIR="${BACKUP_DIR:-/opt/smsly-hosting/backups}"
 RETENTION_DAYS="${RETENTION_DAYS:-7}"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 BACKUP_FILE="${BACKUP_DIR}/smsly_hosting_${TIMESTAMP}.sql.gz.enc"
 BACKUP_PASS="${BACKUP_PASS:-my_secure_fallback_password}"
+BACKUP_SUCCESS=0
 
 # Colors
 RED='\033[0;31m'
@@ -46,10 +45,10 @@ docker exec "$DB_CONTAINER" pg_dump -U postgres -d smsly_hosting | gzip | openss
 if [ -s "$BACKUP_FILE" ]; then
     BACKUP_SIZE=$(du -h "$BACKUP_FILE" | cut -f1)
     echo -e "${GREEN}✓ Backup created: $BACKUP_FILE ($BACKUP_SIZE)${NC}"
+    BACKUP_SUCCESS=1
 else
     echo -e "${RED}✗ Backup failed or empty${NC}"
     rm -f "$BACKUP_FILE"
-    exit 1
 fi
 
 # Cleanup old backups
@@ -70,3 +69,14 @@ if command -v aws &> /dev/null; then
     aws s3 cp "$BACKUP_FILE" s3://your-bucket/smsly-backups/ || echo -e "${RED}✗ S3 upload failed${NC}"
 fi
 # rclone copy "$BACKUP_FILE" remote:smsly-backups/
+
+# ── Healthcheck ping ─────────────────────────────────────────────────
+if [ -n "${BACKUP_HEALTHCHECK_URL:-}" ]; then
+    if [ "$BACKUP_SUCCESS" -eq 1 ]; then
+        curl -fsS --retry 3 --max-time 10 "${BACKUP_HEALTHCHECK_URL}" > /dev/null 2>&1 || true
+    else
+        curl -fsS --retry 3 --max-time 10 "${BACKUP_HEALTHCHECK_URL}/fail" > /dev/null 2>&1 || true
+    fi
+fi
+
+exit $((1 - BACKUP_SUCCESS))

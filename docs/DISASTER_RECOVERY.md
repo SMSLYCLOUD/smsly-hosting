@@ -221,6 +221,25 @@ The cost is dominated by egress, not storage. Operators who do not need off-host
 
 The full-server restore does not auto-restore the database. The operator must restore the database manually.
 
+### Quick Restore (Recommended)
+
+Use the automated wrapper script instead of manual steps:
+
+```bash
+./scripts/restore_db.sh /var/lib/grid/server-backups/<backup-id>/db/dump.sql
+```
+
+Options:
+- `--dry-run` — validate the dump file only, do not restore
+- `--db-name NAME` — target database name (default: `smsly_hosting`)
+- `--db-user USER` — database user (default: `postgres`)
+- `--force` — proceed even if the target DB already has tables
+
+The script auto-discovers the PostgreSQL container, validates the dump file,
+drops/recreates the database, runs the restore, and verifies row counts.
+
+### Manual Steps (Fallback)
+
 ### Steps
 
 1. **Locate the `pg_dump` file** in the server backup. The `ServerBackup` archive contains a file at `db/dump.custom`. The full path after decryption is `/tmp/smsly-decrypted-<uuid>/db/dump.custom`.
@@ -347,3 +366,27 @@ When a user requests erasure (typically via a support email or a "delete my acco
 - **Encryption key rotation is a manual procedure.** The platform does not auto-rotate `BACKUP_ENCRYPTION_KEY`. Set a calendar reminder.
 - **`purge_user_backups_task` does not erase the audit log.** The audit chain's hash integrity is preserved at the cost of a soft delete on the user references. Operators with stricter requirements must rebuild the chain.
 - **No cross-platform backup verification.** The platform does not verify that a backup can be restored at the time of write. A corrupt backup is detected on the next restore attempt, not at write time. Operators who need write-time verification should run a scheduled test-restore in a sandbox.
+
+## Offline Key Escrow
+
+In a worst-case scenario where the platform database is lost **and** the
+operator doesn't have the raw `BACKUP_ENCRYPTION_KEY`, cloud backups
+become unrecoverable. To prevent this:
+
+1. **Export keys periodically:**
+
+   ```bash
+   python manage.py export_backup_keys --output /secure/offsite/backup-keys-$(date +%Y%m%d).json
+   ```
+
+2. **Store offline:** Copy the JSON file to offline media (USB, paper,
+   password manager, vault).
+
+3. **Recover:** On a new master with the same `FIELD_ENCRYPTION_KEY`, run:
+
+   ```bash
+   python manage.py import_backup_keys /path/to/keys.json
+   ```
+
+4. **Verify:** After import, the Backup Keys tab in Settings should show
+   the imported keys with `source=IMPORTED` and correct fingerprints.

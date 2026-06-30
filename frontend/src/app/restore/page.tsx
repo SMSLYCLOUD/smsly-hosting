@@ -50,6 +50,13 @@ export default function RestorePage() {
     const [keyPromptError, setKeyPromptError] = useState('');
     const [keyPromptSubmitting, setKeyPromptSubmitting] = useState(false);
 
+    // Pre-restore snapshot override dialog
+    const [snapOverrideOpen, setSnapOverrideOpen] = useState(false);
+    const [snapOverrideBackupId, setSnapOverrideBackupId] = useState<string | null>(null);
+    const [snapOverrideError, setSnapOverrideError] = useState('');
+    const [snapOverrideRemediation, setSnapOverrideRemediation] = useState('');
+    const [snapOverrideSubmitting, setSnapOverrideSubmitting] = useState(false);
+
     const loadData = useCallback(async () => {
         setLoading(true);
         setError(null);
@@ -129,13 +136,14 @@ export default function RestorePage() {
         return () => window.clearInterval(intervalId);
     }, [restorePollInterval, restoringId, restoringName, toast, loadData]);
 
-    const doRestore = async (backupId: string, serviceName: string, encryptionKey?: string) => {
+    const doRestore = async (backupId: string, serviceName: string, encryptionKey?: string, force?: boolean) => {
         setRestoringId(backupId);
         setRestoringName(serviceName);
         try {
             await api.post(`/backups/${backupId}/restore/`, {
                 confirm: true,
                 ...(encryptionKey ? { encryption_key: encryptionKey } : {}),
+                ...(force ? { force: true } : {}),
             });
             toast({
                 title: 'Restore Started',
@@ -146,12 +154,20 @@ export default function RestorePage() {
             setRestoringId(null);
             setRestoringName(null);
             const data = err?.response?.data;
+            const status = err?.response?.status;
             if (data?.error_code === 'ENCRYPTION_KEY_REQUIRED') {
                 setKeyPromptBackupId(backupId);
                 setKeyPromptServiceName(serviceName);
                 setKeyPromptValue('');
                 setKeyPromptError(data?.error || 'Encryption key required');
                 setKeyPromptOpen(true);
+                return;
+            }
+            if (status === 422 && data?.snapshot_error) {
+                setSnapOverrideBackupId(backupId);
+                setSnapOverrideError(data.snapshot_error);
+                setSnapOverrideRemediation(data.remediation || '');
+                setSnapOverrideOpen(true);
                 return;
             }
             const msg = data?.error || 'Failed to trigger restore.';
@@ -173,6 +189,20 @@ export default function RestorePage() {
             setKeyPromptError('Failed to restore with provided key.');
         } finally {
             setKeyPromptSubmitting(false);
+        }
+    };
+
+    const submitSnapOverride = async () => {
+        if (!snapOverrideBackupId) return;
+        setSnapOverrideSubmitting(true);
+        try {
+            const encrypted = keyPromptValue.trim() || undefined;
+            await doRestore(snapOverrideBackupId, restoringName || '', encrypted, true);
+            setSnapOverrideOpen(false);
+        } catch {
+            // doRestore handles the toast
+        } finally {
+            setSnapOverrideSubmitting(false);
         }
     };
 
@@ -411,6 +441,51 @@ export default function RestorePage() {
                                     <Key className="mr-2 h-4 w-4" />
                                 )}
                                 Restore
+                            </Button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Snapshot override modal */}
+            {snapOverrideOpen && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 animate-in fade-in duration-200">
+                    <div className="bg-background border border-red-900/50 rounded-lg p-6 max-w-lg w-full mx-4 shadow-lg">
+                        <div className="flex items-center gap-2 mb-4">
+                            <AlertCircle className="h-5 w-5 text-red-500" />
+                            <h3 className="text-lg font-semibold">Safety Snapshot Failed</h3>
+                        </div>
+                        <p className="text-sm text-muted-foreground mb-2">
+                            The pre-restore safety snapshot could not be created. Without it, a corrupt
+                            restore archive would permanently destroy the current running state.
+                        </p>
+                        <div className="bg-red-950/30 border border-red-900/30 rounded p-3 mb-4">
+                            <p className="text-xs font-mono text-red-400 break-all">
+                                {snapOverrideError}
+                            </p>
+                        </div>
+                        <p className="text-xs text-amber-400 mb-4">
+                            {snapOverrideRemediation || 'Fix the error and retry, or override to proceed without a safety net.'}
+                        </p>
+                        <div className="flex justify-end gap-2">
+                            <Button
+                                variant="outline"
+                                onClick={() => setSnapOverrideOpen(false)}
+                                disabled={snapOverrideSubmitting}
+                            >
+                                Cancel
+                            </Button>
+                            <Button
+                                variant="destructive"
+                                onClick={submitSnapOverride}
+                                disabled={snapOverrideSubmitting}
+                            >
+                                {snapOverrideSubmitting ? (
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                ) : (
+                                    <AlertCircle className="mr-2 h-4 w-4" />
+                                )}
+                                Proceed Without Snapshot
                             </Button>
                         </div>
                     </div>
