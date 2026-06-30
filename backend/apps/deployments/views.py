@@ -5765,15 +5765,44 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
         """POST /api/v1/backups/{id}/verify/
 
         Runs integrity verification (checksum + archive validity) on
-        this backup asynchronously. Returns a task ID for polling.
+        this backup synchronously and returns the result immediately.
         """
+        import hashlib as _hashlib
+        import tarfile as _tarfile
+        import os as _os
+
         backup = self.get_object()
-        from .tasks_backup import verify_backup_integrity_task
-        task = verify_backup_integrity_task.delay(backup_ids=[str(backup.id)])
+        filepath = backup.file_path
+        errors = []
+        passed = False
+
+        try:
+            if not filepath or not _os.path.exists(filepath):
+                raise FileNotFoundError(f"Backup file not found: {filepath}")
+
+            expected_hash = (getattr(backup, 'metadata', None) or {}).get('checksum_sha256', '')
+            if expected_hash:
+                sha = _hashlib.sha256()
+                with open(filepath, 'rb') as f:
+                    for chunk in iter(lambda: f.read(8192), b''):
+                        sha.update(chunk)
+                if sha.hexdigest() != expected_hash:
+                    raise ValueError("Checksum mismatch — backup may be corrupted")
+
+            with _tarfile.open(filepath, 'r:gz') as tar:
+                members = tar.getmembers()
+                if not members:
+                    raise ValueError("Archive is empty")
+
+            passed = True
+        except Exception as exc:
+            errors.append(str(exc))
+
         return Response({
-            'status': 'verification_started',
-            'task_id': task.id,
+            'status': 'completed',
             'backup_id': str(backup.id),
+            'passed': passed,
+            'errors': errors,
         })
 
     # ── Restore from local file upload ──────────────────────────────
