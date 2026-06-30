@@ -23,6 +23,31 @@ jobs:
       - name: Checkout
         uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
 
+      - name: Set up Cosign
+        uses: sigstore/cosign-installer@59acb6260d86c0f8a58fa4c3ddb032a715305043 # v3.5.0
+
+      - name: Build backend image
+        run: docker build -t smsly/backend:latest -f backend/Dockerfile backend/
+
+      - name: Build frontend image
+        run: docker build -t smsly/frontend:latest -f frontend/Dockerfile frontend/
+
+      - name: Sign and verify backend
+        run: |
+          cosign sign --yes smsly/backend:latest
+          cosign verify \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "https://github.com/${{ github.repository }}/.github/workflows/deploy.yml@${{ github.ref }}" \
+            smsly/backend:latest
+
+      - name: Sign and verify frontend
+        run: |
+          cosign sign --yes smsly/frontend:latest
+          cosign verify \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "https://github.com/${{ github.repository }}/.github/workflows/deploy.yml@${{ github.ref }}" \
+            smsly/frontend:latest
+
       - name: Add host key
         run: |
           mkdir -p ~/.ssh

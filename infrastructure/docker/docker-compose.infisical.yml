@@ -1,0 +1,57 @@
+# ============================================================
+# Infisical — Encrypted secret management for the SMSLY PaaS
+# ============================================================
+# Adds: secret versioning, RBAC, audit logs, auto-reload
+# for user-deployed containers.
+# ============================================================
+
+services:
+  infisical:
+    image: infisical/infisical:latest
+    restart: unless-stopped
+    environment:
+      ENCRYPTION_KEY: ${INFISICAL_ENCRYPTION_KEY:?INFISICAL_ENCRYPTION_KEY is required}
+      JWT_SIGNUP_SECRET: ${INFISICAL_JWT_SIGNUP_SECRET:?INFISICAL_JWT_SIGNUP_SECRET is required}
+      JWT_REFRESH_SECRET: ${INFISICAL_JWT_REFRESH_SECRET:?INFISICAL_JWT_REFRESH_SECRET is required}
+      JWT_AUTH_SECRET: ${INFISICAL_JWT_AUTH_SECRET:?INFISICAL_JWT_AUTH_SECRET is required}
+      JWT_SERVICE_SECRET: ${INFISICAL_JWT_SERVICE_SECRET:?INFISICAL_JWT_SERVICE_SECRET is required}
+      JWT_MFA_SECRET: ${INFISICAL_JWT_MFA_SECRET:?INFISICAL_JWT_MFA_SECRET is required}
+      JWT_PROVIDER_AUTH_SECRET: ${INFISICAL_PROVIDER_AUTH_SECRET:-}
+      DB_CONNECTION_URI: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/infisical
+      REDIS_URL: redis://redis:6379
+      SITE_URL: ${INFISICAL_SITE_URL:-https://secrets.${DOMAIN:-localhost}}
+      SMTP_HOST: ${INFISICAL_SMTP_HOST:-}
+      SMTP_PORT: ${INFISICAL_SMTP_PORT:-587}
+      SMTP_USERNAME: ${INFISICAL_SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${INFISICAL_SMTP_PASSWORD:-}
+      SMTP_SECURE: ${INFISICAL_SMTP_SECURE:-false}
+      SMTP_FROM_ADDRESS: ${INFISICAL_SMTP_FROM_ADDRESS:-}
+      INVITE_ONLY_SIGNUP: ${INFISICAL_INVITE_ONLY:-true}
+    ports:
+      - "127.0.0.1:8085:8080"
+    volumes:
+      - infisical_data:/data
+    labels:
+      - managed_by=smsly-hosting
+      - traefik.enable=true
+      - traefik.http.routers.infisical.rule=Host(`secrets.${DOMAIN:-grid.smsly.cloud}`)
+      - traefik.http.routers.infisical.entrypoints=websecure
+      - traefik.http.routers.infisical.tls=true
+      - traefik.http.services.infisical.loadbalancer.server.port=8080
+    networks:
+      - smsly-net
+    healthcheck:
+      test: ["CMD-SHELL", "node -e 'require(\"http\").get(\"http://127.0.0.1:8080/api/status\",r=>{process.exit(r.statusCode===200?0:1)})'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+volumes:
+  infisical_data: null
