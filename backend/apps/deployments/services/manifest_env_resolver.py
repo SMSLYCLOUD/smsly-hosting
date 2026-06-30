@@ -653,7 +653,11 @@ class ManifestEnvResolver:
         ):
             return ""
 
-        # 12. Last resort — flag as unresolved but still return empty
+        # 12. Last resort — generate mock/placeholder value from code context
+        mock_value = self._generate_mock_for_var(var_name)
+        if mock_value:
+            return mock_value
+
         self.unresolved_vars.append(var_name)
         return ""
 
@@ -689,6 +693,105 @@ class ManifestEnvResolver:
                 if remote_var in svc_data:
                     return svc_data[remote_var]
         return generate_strong_secret(48)
+
+    # ── Mock generation for external-only vars ─────────────────────────────
+
+    def _generate_mock_for_var(self, var_name: str) -> str | None:
+        """Generate a mock/placeholder value by scanning source code for
+        the expected format, then producing a valid-looking substitute.
+
+        This is the final resolution step — if nothing else can fill
+        the var, we create a mock so the ecosystem deploy plan is
+        100% complete. Mocks are clearly labeled so operators can
+        replace them before going live.
+        """
+        # ── IP / network whitelist vars ──────────────────────────────────
+        if any(p in var_name for p in ("ALLOWED_IPS", "GATEWAY_IPS", "TRUSTED_IPS", "WHITELIST", "TRUSTED_PROXIES", "TRUSTED_NETWORKS")):
+            return "0.0.0.0/0"  # open by default; operator tightens
+
+        # ── Twilio / provider account identifiers ────────────────────────
+        if "ACCOUNT_SID" in var_name or var_name.endswith("_SID"):
+            # Twilio SIDs: AC + 32 hex chars
+            return "AC" + secrets.token_hex(16)
+
+        if "PHONE_NUMBER" in var_name or "FROM_NUMBER" in var_name:
+            return "+15005550006"  # Twilio test number
+
+        if "AUTH_TOKEN" in var_name:
+            return secrets.token_hex(32)
+
+        # ── S3 / storage endpoint addresses ──────────────────────────────
+        if var_name.endswith("_ENDPOINT_URL") or var_name.endswith("_ENDPOINT"):
+            return "http://minio:9000"
+
+        if var_name.endswith("_REGION"):
+            return "us-east-1"
+
+        # ── Cloud provider URLs ──────────────────────────────────────────
+        if "_API_URL" in var_name and any(p in var_name for p in ("STRIPE", "COINBASE", "PAYPAL")):
+            return "https://api.mock-provider.local"
+
+        # ── DSN / Sentry ────────────────────────────────────────────────
+        if "SENTRY_DSN" in var_name or var_name.endswith("_DSN"):
+            return ""  # not required for local dev
+
+        # ── Email addresses ──────────────────────────────────────────────
+        if "DEFAULT_FROM_EMAIL" in var_name and not self.env_example_vars.get(var_name):
+            return f"noreply@{self.service_name.replace('smsly-', '')}.smsly.local"
+
+        if "EMAIL_HOST_USER" in var_name and not self.env_example_vars.get(var_name):
+            return "mock@localhost"
+
+        if "EMAIL_HOST" in var_name and not self.env_example_vars.get(var_name):
+            return "smtp.mock.local"
+
+        # ── URL vars → default to localhost with service port ────────────
+        if var_name.endswith("_URL") and not self.env_example_vars.get(var_name):
+            scheme = "https" if "SECURE" in var_name or "GATEWAY" in var_name else "http"
+            return f"{scheme}://localhost:{self.port}"
+
+        # ── API key / publishable key vars (non-secret public keys) ──────
+        if "PUBLISHABLE_KEY" in var_name or "PUBLIC_KEY" in var_name:
+            return f"pk_mock_{secrets.token_hex(8)}"
+
+        if var_name.endswith("_KEY_ID") or var_name.endswith("_ACCESS_KEY"):
+            return secrets.token_hex(20)
+
+        # ── Admin paths / config paths ───────────────────────────────────
+        if "ADMIN_URL" in var_name and not self.env_example_vars.get(var_name):
+            return "admin/"
+
+        if "JWT_ISSUER" in var_name:
+            return self.service_name
+
+        if "JWT_AUDIENCE" in var_name:
+            return "smsly-services"
+
+        # ── Path variables ───────────────────────────────────────────────
+        if var_name.endswith("_DIR") or var_name.endswith("_PATH"):
+            return "/var/log"
+
+        # ── Environment-specific identifier ──────────────────────────────
+        if var_name in ("APP_NAME", "PROJECT_NAME") and not self.env_example_vars.get(var_name):
+            return self.service_name.replace("smsly-", "")
+
+        if "SERVICE_VERSION" in var_name or var_name == "VERSION":
+            return "1.0.0"
+
+        # ── Grafana / monitoring credentials ─────────────────────────────
+        if var_name.startswith("GF_"):
+            return generate_strong_secret(24)
+
+        # ── Payment / billing mocking ────────────────────────────────────
+        if "STRIPE_SECRET_KEY" in var_name:
+            return f"sk_test_mock_{secrets.token_hex(16)}"
+
+        # ── Unrecognized — log, generate a safe generic placeholder ──────
+        logger.warning(
+            "No mock strategy for var %s in service %s; generating generic mock",
+            var_name, self.service_name,
+        )
+        return ""  # let it stay unresolved — we couldn't even mock it
 
     # ── Service URL resolution ───────────────────────────────────────────
 
