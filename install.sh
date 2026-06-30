@@ -485,11 +485,14 @@ fi
 
 # ─── Refresh Mode ─────────────────────────────────────────────────────────────
 if [ "$REFRESH_MODE" = "true" ]; then
-    safe_refresh_runtime_services
-    # Security self-healing: verify and repair security stack during refresh
+    # Security: bootstrap services (fire-and-forget), then refresh, then verify
     if [ -f "$INSTALL_DIR/lib/harden.sh" ]; then
         source "$INSTALL_DIR/lib/harden.sh"
-        harden_security_stack
+        harden_security_bootstrap
+    fi
+    safe_refresh_runtime_services
+    if command -v harden_security_verify >/dev/null 2>&1; then
+        harden_security_verify
     fi
     exit 0
 fi
