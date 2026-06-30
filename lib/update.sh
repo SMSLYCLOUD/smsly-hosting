@@ -37,10 +37,10 @@ if [ -n "$UPDATE_MODE" ]; then
     check_caddy_conflict
     ensure_system_swap
 
-    # ─── Security Hardening ───────────────────────────────────────────────
+    # ─── Security: bootstrap (fire-and-forget) ────────────────────────────
     if [ -f "$INSTALL_DIR/lib/harden.sh" ]; then
         source "$INSTALL_DIR/lib/harden.sh"
-        harden_security_stack
+        harden_security_bootstrap
     fi
 
     # ─── Git Safety ──────────────────────────────────────────────────────────
@@ -1368,6 +1368,11 @@ RESTORE_EOF
     fi
 
     echo -e "${GREEN}   ✓ UPDATE SUCCESSFUL ($UPDATE_MODE)${NC}"
+
+    # ─── Security verify ──────────────────────────────────────────────────
+    if [ -f "$INSTALL_DIR/lib/harden.sh" ]; then
+        harden_security_verify
+    fi
 
     echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
     echo -e "${YELLOW}  Debug snapshot:    sudo bash install.sh --debug${NC}"
