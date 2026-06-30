@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import os
+import re
 import shutil
 import struct
 import sys
@@ -146,6 +147,25 @@ _FERNET_HMAC_SIZE = 32
 # Maximum backup archive size in bytes (default 50 GB).
 # Controlled by BACKUP_MAX_SIZE_BYTES env var.
 _DEFAULT_MAX_BACKUP_SIZE = 50 * 1024 * 1024 * 1024
+
+# Pattern matching environment variable names that hold secrets.
+_SENSITIVE_ENV_PATTERN = re.compile(
+    r'(PASSWORD|SECRET|KEY|TOKEN|CREDENTIAL|API_KEY|PRIVATE)',
+    re.IGNORECASE,
+)
+
+
+def _redact_env_for_backup(env_path, dest_path):
+    """Copy a .env file to *dest_path* with sensitive values replaced by REDACTED."""
+    with open(env_path) as src, open(dest_path, 'w') as dst:
+        for line in src:
+            stripped = line.strip()
+            if stripped and not stripped.startswith('#') and '=' in stripped:
+                key = stripped.split('=', 1)[0]
+                if _SENSITIVE_ENV_PATTERN.search(key):
+                    dst.write(f"{key}=REDACTED\n")
+                    continue
+            dst.write(line)
 
 
 class BackupService:
@@ -1454,10 +1474,10 @@ class BackupService:
                 logger.error("Database backup FAILED — aborting server backup: %s", e)
                 raise RuntimeError(f"Database dump failed: {e}") from e
 
-            # 1b. Include .env file for configuration recovery
+            # 1b. Include .env file for configuration recovery (secrets redacted)
             env_source = getattr(settings, 'PLATFORM_ENV_PATH', '/opt/smsly-hosting/.env')
             if os.path.exists(env_source):
-                shutil.copy2(env_source, os.path.join(temp_dir, ".env"))
+                _redact_env_for_backup(env_source, os.path.join(temp_dir, ".env"))
 
             # 1c. Include SSL certificates if they exist
             cert_dirs = getattr(

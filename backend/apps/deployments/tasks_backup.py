@@ -1,9 +1,16 @@
 import logging
+import threading
 
 logger = logging.getLogger(__name__)
 import os  # noqa: E402
 
 from celery import shared_task  # noqa: E402
+
+# Serializes backup/restore tasks that carry a per-request encryption key.
+# Without this lock, two concurrent Celery workers can clobber each other's
+# BACKUP_ENCRYPTION_KEY in os.environ (process-wide).  Tasks that use the
+# default key from the environment do NOT acquire the lock.
+_backup_key_lock = threading.Lock()
 from django.utils import timezone  # noqa: E402
 
 from apps.deployments.models_backup import BackupSchedule  # noqa: E402
@@ -38,16 +45,16 @@ def create_service_backup_task(self, service_id, backup_type='MANUAL', backup_id
     try:
         backup_service = BackupService()
         if encryption_key:
-            import os
-            original_key = os.environ.get('BACKUP_ENCRYPTION_KEY', '')
-            os.environ['BACKUP_ENCRYPTION_KEY'] = encryption_key
-            try:
-                backup_service.backup_service(service_id, backup_id=backup_id, backup_type=backup_type, db_only=db_only)
-            finally:
-                if original_key:
-                    os.environ['BACKUP_ENCRYPTION_KEY'] = original_key
-                else:
-                    os.environ.pop('BACKUP_ENCRYPTION_KEY', None)
+            with _backup_key_lock:
+                original_key = os.environ.get('BACKUP_ENCRYPTION_KEY', '')
+                os.environ['BACKUP_ENCRYPTION_KEY'] = encryption_key
+                try:
+                    backup_service.backup_service(service_id, backup_id=backup_id, backup_type=backup_type, db_only=db_only)
+                finally:
+                    if original_key:
+                        os.environ['BACKUP_ENCRYPTION_KEY'] = original_key
+                    else:
+                        os.environ.pop('BACKUP_ENCRYPTION_KEY', None)
         else:
             backup_service.backup_service(service_id, backup_id=backup_id, backup_type=backup_type, db_only=db_only)
     except Exception as exc:
@@ -191,16 +198,16 @@ def create_server_backup_task(self, backup_id=None, schedule_id=None, encryption
 
     backup_service = BackupService()
     if encryption_key:
-        import os
-        original_key = os.environ.get('BACKUP_ENCRYPTION_KEY', '')
-        os.environ['BACKUP_ENCRYPTION_KEY'] = encryption_key
-        try:
-            backup_service.backup_server(backup_id=backup_id, db_only=db_only)
-        finally:
-            if original_key:
-                os.environ['BACKUP_ENCRYPTION_KEY'] = original_key
-            else:
-                os.environ.pop('BACKUP_ENCRYPTION_KEY', None)
+        with _backup_key_lock:
+            original_key = os.environ.get('BACKUP_ENCRYPTION_KEY', '')
+            os.environ['BACKUP_ENCRYPTION_KEY'] = encryption_key
+            try:
+                backup_service.backup_server(backup_id=backup_id, db_only=db_only)
+            finally:
+                if original_key:
+                    os.environ['BACKUP_ENCRYPTION_KEY'] = original_key
+                else:
+                    os.environ.pop('BACKUP_ENCRYPTION_KEY', None)
     else:
         backup_service.backup_server(backup_id=backup_id, db_only=db_only)
     if schedule_id:
@@ -226,22 +233,22 @@ def restore_service_backup_task(self, backup_id, target_service_id=None, request
     # If a key was provided in the request, use it for this restore only
     # (don't persist to BACKUP_ENCRYPTION_KEY env var).
     if encryption_key:
-        import os
-        original_key = os.environ.get('BACKUP_ENCRYPTION_KEY', '')
-        os.environ['BACKUP_ENCRYPTION_KEY'] = encryption_key
-        try:
-            return backup_service.restore_service(
-                backup_id,
-                target_service_id=target_service_id,
-                requesting_user_id=requesting_user_id,
-                raise_on_snapshot_failure=raise_on_snapshot_failure,
-            )
-        finally:
-            # Restore the original env var (or remove if there was none)
-            if original_key:
-                os.environ['BACKUP_ENCRYPTION_KEY'] = original_key
-            else:
-                os.environ.pop('BACKUP_ENCRYPTION_KEY', None)
+        with _backup_key_lock:
+            original_key = os.environ.get('BACKUP_ENCRYPTION_KEY', '')
+            os.environ['BACKUP_ENCRYPTION_KEY'] = encryption_key
+            try:
+                return backup_service.restore_service(
+                    backup_id,
+                    target_service_id=target_service_id,
+                    requesting_user_id=requesting_user_id,
+                    raise_on_snapshot_failure=raise_on_snapshot_failure,
+                )
+            finally:
+                # Restore the original env var (or remove if there was none)
+                if original_key:
+                    os.environ['BACKUP_ENCRYPTION_KEY'] = original_key
+                else:
+                    os.environ.pop('BACKUP_ENCRYPTION_KEY', None)
     return backup_service.restore_service(
         backup_id,
         target_service_id=target_service_id,
@@ -266,16 +273,16 @@ def restore_server_backup_task(self, backup_id, requesting_user_id=None, encrypt
     )
     backup_service = BackupService()
     if encryption_key:
-        import os
-        original_key = os.environ.get('BACKUP_ENCRYPTION_KEY', '')
-        os.environ['BACKUP_ENCRYPTION_KEY'] = encryption_key
-        try:
-            return backup_service.restore_server(backup_id=backup_id, requesting_user_id=requesting_user_id)
-        finally:
-            if original_key:
-                os.environ['BACKUP_ENCRYPTION_KEY'] = original_key
-            else:
-                os.environ.pop('BACKUP_ENCRYPTION_KEY', None)
+        with _backup_key_lock:
+            original_key = os.environ.get('BACKUP_ENCRYPTION_KEY', '')
+            os.environ['BACKUP_ENCRYPTION_KEY'] = encryption_key
+            try:
+                return backup_service.restore_server(backup_id=backup_id, requesting_user_id=requesting_user_id)
+            finally:
+                if original_key:
+                    os.environ['BACKUP_ENCRYPTION_KEY'] = original_key
+                else:
+                    os.environ.pop('BACKUP_ENCRYPTION_KEY', None)
     return backup_service.restore_server(backup_id=backup_id, requesting_user_id=requesting_user_id)
 
 

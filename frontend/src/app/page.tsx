@@ -12,6 +12,7 @@ import {
     Shield,
     Globe,
     Cpu,
+    GitBranch,
     Cloud,
     Sparkles,
     Server,
@@ -39,7 +40,108 @@ import {
     Brain,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { useMemo } from 'react';
 import StoryTellingSection from '@/components/sections/StoryTellingSection';
+
+// ============================================
+// SVG ILLUSTRATIONS FOR FEATURE CARDS
+// ============================================
+
+function CardIllustration({ index, className = '' }: { index: number; className?: string }) {
+    const svg = useMemo(() => {
+        const patterns = [
+            // 0 — Network nodes
+            <svg key="net" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+                <circle cx="20" cy="20" r="4" className="fill-current" />
+                <circle cx="60" cy="10" r="3" className="fill-current" />
+                <circle cx="90" cy="25" r="5" className="fill-current" />
+                <circle cx="40" cy="45" r="3" className="fill-current" />
+                <circle cx="75" cy="50" r="4" className="fill-current" />
+                <circle cx="100" cy="60" r="3" className="fill-current" />
+                <circle cx="30" cy="75" r="4" className="fill-current" />
+                <circle cx="65" cy="80" r="3" className="fill-current" />
+                <circle cx="50" cy="95" r="5" className="fill-current" />
+                <line x1="20" y1="20" x2="60" y2="10" stroke="currentColor" strokeWidth="0.8" />
+                <line x1="60" y1="10" x2="90" y2="25" stroke="currentColor" strokeWidth="0.8" />
+                <line x1="20" y1="20" x2="40" y2="45" stroke="currentColor" strokeWidth="0.8" />
+                <line x1="90" y1="25" x2="75" y2="50" stroke="currentColor" strokeWidth="0.8" />
+                <line x1="40" y1="45" x2="75" y2="50" stroke="currentColor" strokeWidth="0.8" />
+                <line x1="75" y1="50" x2="100" y2="60" stroke="currentColor" strokeWidth="0.8" />
+                <line x1="40" y1="45" x2="30" y2="75" stroke="currentColor" strokeWidth="0.8" />
+                <line x1="75" y1="50" x2="65" y2="80" stroke="currentColor" strokeWidth="0.8" />
+                <line x1="30" y1="75" x2="65" y2="80" stroke="currentColor" strokeWidth="0.8" />
+                <line x1="65" y1="80" x2="50" y2="95" stroke="currentColor" strokeWidth="0.8" />
+            </svg>,
+
+            // 1 — Circuit board
+            <svg key="circuit" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+                <path d="M10 10 L40 10 L40 30 L60 30" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+                <path d="M60 30 L60 50 L80 50" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+                <path d="M80 50 L80 70 L100 70" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+                <path d="M100 70 L100 90 L110 90" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+                <path d="M20 60 L20 80 L40 80 L40 95" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+                <path d="M50 15 L50 25" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+                <path d="M90 40 L90 55" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+                <circle cx="10" cy="10" r="2" className="fill-current" />
+                <circle cx="40" cy="30" r="2" className="fill-current" />
+                <circle cx="60" cy="30" r="2" className="fill-current" />
+                <circle cx="50" cy="15" r="1.5" className="fill-current" />
+                <circle cx="50" cy="25" r="1.5" className="fill-current" />
+                <circle cx="80" cy="50" r="2" className="fill-current" />
+                <circle cx="90" cy="40" r="1.5" className="fill-current" />
+                <circle cx="90" cy="55" r="1.5" className="fill-current" />
+            </svg>,
+
+            // 2 — Waveform / signal
+            <svg key="wave" viewBox="0 0 120 80" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+                <path d="M0 40 Q10 10 20 40 T40 40 T60 40 T80 40 T100 40 T120 40" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" fill="none" />
+                <path d="M0 55 Q15 25 30 55 T60 55 T90 55 T120 55" stroke="currentColor" strokeWidth="0.8" strokeLinecap="round" fill="none" opacity="0.5" />
+                <path d="M0 25 Q15 10 30 25 T60 25 T90 25 T120 25" stroke="currentColor" strokeWidth="0.8" strokeLinecap="round" fill="none" opacity="0.5" />
+            </svg>,
+
+            // 3 — Shield / concentric arcs
+            <svg key="shield" viewBox="0 0 80 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+                <path d="M40 5 L70 18 L70 48 Q70 75 40 92 Q10 75 10 48 L10 18 Z" stroke="currentColor" strokeWidth="1" fill="none" />
+                <path d="M40 15 L60 24 L60 48 Q60 68 40 82 Q20 68 20 48 L20 24 Z" stroke="currentColor" strokeWidth="0.8" fill="none" opacity="0.6" />
+                <path d="M40 26 L50 31 L50 48 Q50 60 40 70 Q30 60 30 48 L30 31 Z" stroke="currentColor" strokeWidth="0.6" fill="none" opacity="0.4" />
+            </svg>,
+
+            // 4 — Database / cylinders
+            <svg key="db" viewBox="0 0 80 110" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+                <ellipse cx="40" cy="15" rx="25" ry="8" stroke="currentColor" strokeWidth="1" />
+                <path d="M15 15 L15 42" stroke="currentColor" strokeWidth="1" />
+                <path d="M65 15 L65 42" stroke="currentColor" strokeWidth="1" />
+                <path d="M15 42 Q40 52 65 42" stroke="currentColor" strokeWidth="1" fill="none" />
+                <path d="M15 42 L15 70" stroke="currentColor" strokeWidth="1" />
+                <path d="M65 42 L65 70" stroke="currentColor" strokeWidth="1" />
+                <path d="M15 70 Q40 80 65 70" stroke="currentColor" strokeWidth="1" fill="none" />
+                <path d="M15 70 L15 97" stroke="currentColor" strokeWidth="1" />
+                <path d="M65 70 L65 97" stroke="currentColor" strokeWidth="1" />
+                <ellipse cx="40" cy="97" rx="25" ry="8" stroke="currentColor" strokeWidth="1" />
+                <line x1="25" y1="28" x2="55" y2="28" stroke="currentColor" strokeWidth="0.6" opacity="0.4" />
+                <line x1="25" y1="56" x2="55" y2="56" stroke="currentColor" strokeWidth="0.6" opacity="0.4" />
+                <line x1="25" y1="82" x2="55" y2="82" stroke="currentColor" strokeWidth="0.6" opacity="0.4" />
+            </svg>,
+
+            // 5 — Terminal / angle brackets
+            <svg key="term" viewBox="0 0 100 80" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+                <path d="M15 25 L30 40 L15 55" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                <path d="M45 55 L65 55" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" fill="none" />
+                <circle cx="78" cy="40" r="3" stroke="currentColor" strokeWidth="1" fill="none" />
+                <circle cx="88" cy="40" r="3" stroke="currentColor" strokeWidth="1" fill="none" />
+                <path d="M45 25 L55 40 L45 55" stroke="currentColor" strokeWidth="0.8" strokeLinecap="round" strokeLinejoin="round" fill="none" opacity="0.5" />
+                <path d="M35 55 L45 55" stroke="currentColor" strokeWidth="0.8" strokeLinecap="round" fill="none" opacity="0.5" />
+            </svg>,
+        ];
+        return patterns[index % patterns.length];
+    }, [index, className]);
+
+    return (
+        <div className="absolute bottom-0 right-0 w-28 h-28 md:w-36 md:h-36 opacity-[0.04] dark:opacity-[0.07] pointer-events-none select-none">
+            {svg}
+        </div>
+    );
+}
 
 // ============================================
 // DATA: GLOBAL STATS

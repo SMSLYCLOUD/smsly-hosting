@@ -8,6 +8,7 @@ RETENTION_DAYS="${RETENTION_DAYS:-7}"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 BACKUP_FILE="${BACKUP_DIR}/smsly_hosting_${TIMESTAMP}.sql.gz.enc"
 BACKUP_PASS="${BACKUP_PASS:?BACKUP_PASS environment variable must be set}"
+export BACKUP_PASS
 BACKUP_SUCCESS=0
 
 # Colors
@@ -37,9 +38,9 @@ fi
 echo "Using database container: $DB_CONTAINER"
 
 # Perform backup using pg_dump inside the container
-docker exec "$DB_CONTAINER" pg_dump -U smsly_admin -d smsly_hosting | gzip | openssl enc -aes-256-cbc -salt -pbkdf2 -pass pass:"$BACKUP_PASS" > "$BACKUP_FILE" || \
-docker exec "$DB_CONTAINER" pg_dump -U smsly -d smsly_hosting | gzip | openssl enc -aes-256-cbc -salt -pbkdf2 -pass pass:"$BACKUP_PASS" > "$BACKUP_FILE" || \
-docker exec "$DB_CONTAINER" pg_dump -U postgres -d smsly_hosting | gzip | openssl enc -aes-256-cbc -salt -pbkdf2 -pass pass:"$BACKUP_PASS" > "$BACKUP_FILE"
+docker exec "$DB_CONTAINER" pg_dump -U smsly_admin -d smsly_hosting | gzip | openssl enc -aes-256-cbc -salt -pbkdf2 -pass env:BACKUP_PASS -md sha256 > "$BACKUP_FILE" || \
+docker exec "$DB_CONTAINER" pg_dump -U smsly -d smsly_hosting | gzip | openssl enc -aes-256-cbc -salt -pbkdf2 -pass env:BACKUP_PASS -md sha256 > "$BACKUP_FILE" || \
+docker exec "$DB_CONTAINER" pg_dump -U postgres -d smsly_hosting | gzip | openssl enc -aes-256-cbc -salt -pbkdf2 -pass env:BACKUP_PASS -md sha256 > "$BACKUP_FILE"
 
 # Check if backup was successful
 if [ -s "$BACKUP_FILE" ]; then

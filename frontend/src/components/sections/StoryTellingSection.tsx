@@ -82,7 +82,7 @@ function ChapterNav() {
 // CHAPTER HEADER (shared)
 // ============================================
 function ChapterHeader({ number, title, subtitle, accent }: {
-    number: string; title: string; subtitle: string; accent: string;
+    number: string; title: ReactNode; subtitle: string; accent: string;
 }) {
     const ref = useRef(null);
     const inView = useInView(ref, { once: true, margin: '-100px' });

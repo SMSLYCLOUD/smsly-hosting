@@ -460,14 +460,31 @@ class DeploymentApproveSerializer(serializers.Serializer):
 class ServiceBackupSerializer(serializers.ModelSerializer):
     class Meta:
         model = ServiceBackup
-        fields = '__all__'
-        read_only_fields = ['id', 'created_at', 'completed_at', 'status', 'file_path', 'size_bytes', 'metadata', 'error_message']
+        fields = [
+            'id', 'service', 'created_by', 'label', 'status', 'db_only',
+            'backup_type', 'size_bytes', 'error_message',
+            'created_at', 'completed_at',
+            'cloud_uploaded', 'cloud_destination', 'cloud_bucket',
+        ]
+        read_only_fields = [
+            'id', 'created_by', 'status', 'size_bytes', 'error_message',
+            'created_at', 'completed_at', 'cloud_uploaded', 'cloud_bucket',
+        ]
 
 class ServerBackupSerializer(serializers.ModelSerializer):
     class Meta:
         model = ServerBackup
-        fields = '__all__'
-        read_only_fields = ['id', 'status', 'file_path', 'size_bytes', 'services_included', 'created_at', 'completed_at']
+        fields = [
+            'id', 'label', 'status', 'db_only', 'size_bytes',
+            'services_included', 'error_message',
+            'created_at', 'completed_at',
+            'cloud_uploaded', 'cloud_destination', 'cloud_bucket',
+        ]
+        read_only_fields = [
+            'id', 'status', 'size_bytes', 'services_included',
+            'error_message', 'created_at', 'completed_at',
+            'cloud_uploaded', 'cloud_bucket',
+        ]
 
 class BackupScheduleSerializer(serializers.ModelSerializer):
     cloud_destination_id = serializers.UUIDField(write_only=True, required=False, allow_null=True)

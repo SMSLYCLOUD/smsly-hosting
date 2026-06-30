@@ -135,7 +135,16 @@ if [[ "$EXISTING_TABLES" -gt 0 ]]; then
     log "${YELLOW}Warning: Database '$DB_NAME' has $EXISTING_TABLES table(s). Dropping...${NC}"
 fi
 
-# ── 4. Drop and recreate the database ─────────────────────────────────
+# ── 4. Safety backup before destructive operation ────────────────────
+SAFETY_BACKUP="/tmp/smsly_pre_restore_${DB_NAME}_$(date +%Y%m%d%H%M%S).sql.gz"
+log "Creating safety backup of current database..."
+if docker exec "$DB_CONTAINER" pg_dump -U "$DB_USER" "$DB_NAME" 2>/dev/null | gzip > "$SAFETY_BACKUP"; then
+    log "${GREEN}Safety backup saved to $SAFETY_BACKUP${NC}"
+else
+    log "${YELLOW}WARNING: Could not create safety backup (database may not exist)${NC}"
+fi
+
+# ── 5. Drop and recreate the database ─────────────────────────────────
 log "Dropping existing database..."
 docker exec "$DB_CONTAINER" psql -U "$DB_USER" -c \
     "SELECT pg_terminate_backend(pg_stat_activity.pid) FROM pg_stat_activity WHERE pg_stat_activity.datname = '$DB_NAME' AND pid <> pg_backend_pid();" 2>/dev/null || true
@@ -144,7 +153,7 @@ docker exec "$DB_CONTAINER" dropdb -U "$DB_USER" --if-exists "$DB_NAME" 2>/dev/n
 log "Creating fresh database '$DB_NAME'..."
 docker exec "$DB_CONTAINER" createdb -U "$DB_USER" "$DB_NAME"
 
-# ── 5. Copy dump into container and restore ───────────────────────────
+# ── 6. Copy dump into container and restore ───────────────────────────
 DEST="/tmp/db_dump_$$.sql"
 log "Copying dump file into container..."
 docker cp "$DUMP_FILE" "${DB_CONTAINER}:${DEST}"
@@ -166,7 +175,7 @@ RESTORE_DURATION=$((RESTORE_END - RESTORE_START))
 # Cleanup temp file
 docker exec "$DB_CONTAINER" rm -f "$DEST"
 
-# ── 6. Verify row counts ──────────────────────────────────────────────
+# ── 7. Verify row counts ──────────────────────────────────────────────
 log "Verifying restore..."
 TOTAL_ROWS=$(docker exec "$DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" -tAc \
     "SELECT sum(n_live_tup) FROM pg_stat_user_tables;" 2>/dev/null || echo 0)
