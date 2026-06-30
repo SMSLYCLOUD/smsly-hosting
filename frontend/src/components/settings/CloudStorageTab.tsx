@@ -25,6 +25,8 @@ interface CloudDestination {
   secret_key_masked: string;
   is_active: boolean;
   created_at: string;
+  service: string | null;
+  service_name: string | null;
 }
 
 const PROVIDER_TEMPLATES: Record<string, { name: string; endpoint: string; region: string }> = {
@@ -51,7 +53,12 @@ export function CloudStorageTab({ serviceId }: { serviceId?: string }) {
   const fetchDestinations = useCallback(async () => {
     try {
       const params = new URLSearchParams();
-      if (serviceId) params.set('service', serviceId);
+      if (serviceId) {
+        params.set('service', serviceId);
+      } else {
+        // Settings page: show ALL destinations regardless of scope
+        params.set('show_all', 'true');
+      }
       const res = await api.get(`/cloud-storage/?${params.toString()}`);
       setDestinations(Array.isArray(res.data) ? res.data : res.data?.results || []);
     } catch { toast({ title: "Failed to load destinations", variant: "destructive" }); }
@@ -115,7 +122,18 @@ export function CloudStorageTab({ serviceId }: { serviceId?: string }) {
                 <div className="flex items-center gap-3">
                   <div className="p-2 rounded-lg bg-zinc-800"><HardDrive className="w-4 h-4 text-blue-400" /></div>
                   <div>
-                    <p className="font-medium text-sm">{d.name}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="font-medium text-sm">{d.name}</p>
+                      {d.service ? (
+                        <Badge variant="outline" className="text-[10px] bg-purple-500/10 text-purple-400 border-purple-500/30">
+                          Service: {d.service_name || d.service?.slice(0, 8)}
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-[10px] bg-sky-500/10 text-sky-400 border-sky-500/30">
+                          Server-Wide
+                        </Badge>
+                      )}
+                    </div>
                     <p className="text-xs text-zinc-500">
                       {d.provider_display} · {d.bucket} · {d.region}
                       {d.endpoint && ` · ${d.endpoint}`}

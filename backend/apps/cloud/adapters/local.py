@@ -841,27 +841,68 @@ class LocalAdapter(BaseCloudAdapter):
                     promoted.remove(force=True)
 
             if old_container is not None and backup_name:
-                with contextlib.suppress(Exception):
+                try:
                     old_container.reload()
-                try:
-                    if getattr(old_container, "name", "") != name:
-                        old_container.rename(name)
-                except Exception as restore_exc:
-                    raise RuntimeError(
-                        "Promotion failed and previous live container could not be restored"
-                    ) from restore_exc
-
-                try:
-                    if self.docker_client is None:
-                        raise RuntimeError("Docker client unavailable")
-                    net = self.docker_client.networks.get(network_name)
-                    net.disconnect(old_container)
-                    net.connect(old_container, aliases=[name, f"{name}.default.internal"])
-                except Exception as net_exc:
-                    logger.warning(
-                        "Blue-green promote restore alias update failed: %s",
-                        net_exc,
+                except docker.errors.NotFound:
+                    logger.error(
+                        "Blue-green rollback: previous live container %s "
+                        "is gone — cannot restore. Creating emergency replacement.",
+                        backup_name,
                     )
+                    old_container = None
+                except Exception as reload_exc:
+                    logger.warning(
+                        "Blue-green rollback: old container reload failed for %s: %s",
+                        backup_name, reload_exc,
+                    )
+                if old_container is not None:
+                    try:
+                        if getattr(old_container, "name", "") != name:
+                            old_container.rename(name)
+                    except Exception as restore_exc:
+                        raise RuntimeError(
+                            "Promotion failed and previous live container could not be restored"
+                        ) from restore_exc
+
+                    try:
+                        if self.docker_client is None:
+                            raise RuntimeError("Docker client unavailable")
+                        net = self.docker_client.networks.get(network_name)
+                        net.disconnect(old_container)
+                        net.connect(old_container, aliases=[name, f"{name}.default.internal"])
+                    except Exception as net_exc:
+                        logger.warning(
+                            "Blue-green promote restore alias update failed: %s",
+                            net_exc,
+                        )
+                else:
+                    # Emergency: rollback container is gone and promote failed.
+                    # Attempt to recreate from the green image to avoid total loss.
+                    logger.error(
+                        "Blue-green promote: rollback container %s is gone and "
+                        "promote failed. Attempting emergency recreate from green image.",
+                        backup_name,
+                    )
+                    try:
+                        emergency = self.docker_client.containers.create(
+                            image=image_ref,
+                            name=name,
+                            environment=green_env,
+                            network=network_name,
+                            labels=live_labels,
+                            restart_policy=rp,
+                            command=green_cmd,
+                        )
+                        emergency.start()
+                        logger.info(
+                            "Emergency recreate succeeded for %s (container %s).",
+                            name, emergency.id[:12],
+                        )
+                    except Exception as emergency_exc:
+                        logger.error(
+                            "Emergency recreate also failed for %s: %s",
+                            name, emergency_exc,
+                        )
 
             raise RuntimeError(f"Blue-green promote failed: {exc}") from exc
 

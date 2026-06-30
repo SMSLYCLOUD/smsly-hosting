@@ -45,21 +45,27 @@ class CloudStorageViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        # SECURITY: scope to destinations whose service is owned by the caller,
-        # or are platform-wide (service IS NULL). Without this, any authenticated
-        # user could list/modify/delete every other user's destinations.
-        qs = CloudStorageDestination.objects.filter(
-            models.Q(service__owner=user) | models.Q(service__isnull=True)
-        ).distinct()
         service_id = self.request.GET.get('service')
         platform_only = self.request.GET.get('platform') == 'true'
+        show_all = self.request.GET.get('show_all') == 'true' and user.is_superuser
 
-        if service_id:
+        if show_all:
+            # Settings page superuser override: see every destination
+            qs = CloudStorageDestination.objects.all()
+        else:
+            # SECURITY: scope to destinations whose service is owned by the caller,
+            # or are platform-wide (service IS NULL). Without this, any authenticated
+            # user could list/modify/delete every other user's destinations.
+            qs = CloudStorageDestination.objects.filter(
+                models.Q(service__owner=user) | models.Q(service__isnull=True)
+            ).distinct()
+
+        if service_id and not show_all:
             # Return both platform-wide AND this service's own destinations
             qs = qs.filter(
                 models.Q(service__isnull=True) | models.Q(service_id=service_id)
             )
-        elif platform_only:
+        elif platform_only and not show_all:
             qs = qs.filter(service__isnull=True)
         return qs.filter(is_active=True)
 

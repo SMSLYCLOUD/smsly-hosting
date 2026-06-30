@@ -5,7 +5,7 @@ import { DashboardShell } from '@/components/layout/DashboardShell';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Loader2, Download, RotateCcw, Archive, Trash2, Upload, Key, FileKey, Cloud, Clock } from 'lucide-react';
+import { Loader2, Download, RotateCcw, Archive, Trash2, Upload, Key, FileKey, Cloud, Clock, Save, Camera, X } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { Input } from '@/components/ui/input';
@@ -86,14 +86,26 @@ export default function ServerBackupsPage() {
     const [retentionDays, setRetentionDays] = useState(7);
     const [scheduleEnabled, setScheduleEnabled] = useState(true);
     const [scheduleCloudDest, setScheduleCloudDest] = useState('');
+    const [scheduleCloudUpload, setScheduleCloudUpload] = useState(true);
     const [savingSchedule, setSavingSchedule] = useState(false);
     const [scheduleLoading, setScheduleLoading] = useState(true);
     const [scheduleDbOnly, setScheduleDbOnly] = useState(false);
     const [dbOnly, setDbOnly] = useState(false);
 
+    // Snapshot schedule state (server-wide)
+    const [snapSchedule, setSnapSchedule] = useState<any | null>(null);
+    const [snapCronExpression, setSnapCronExpression] = useState('0 3 * * *');
+    const [snapRetentionDays, setSnapRetentionDays] = useState(7);
+    const [snapScheduleEnabled, setSnapScheduleEnabled] = useState(true);
+    const [snapScheduleCloudDest, setSnapScheduleCloudDest] = useState('');
+    const [snapScheduleCloudUpload, setSnapScheduleCloudUpload] = useState(true);
+    const [savingSnapSchedule, setSavingSnapSchedule] = useState(false);
+    const [snapScheduleLoading, setSnapScheduleLoading] = useState(true);
+
     useEffect(() => {
         loadBackups();
         loadSchedule();
+        loadSnapSchedule();
     }, []);
 
     const loadSchedule = async () => {
@@ -107,6 +119,7 @@ export default function ServerBackupsPage() {
                 setRetentionDays(sched.retention_days);
                 setScheduleEnabled(sched.enabled);
                 setScheduleDbOnly(sched.db_only || false);
+                setScheduleCloudUpload(sched.cloud_upload_enabled !== false);
                 if (sched.cloud_destination) {
                     setScheduleCloudDest(sched.cloud_destination);
                 }
@@ -115,6 +128,25 @@ export default function ServerBackupsPage() {
             console.error('Failed to load server backup schedule', err);
         } finally {
             setScheduleLoading(false);
+        }
+    };
+
+    const loadSnapSchedule = async () => {
+        try {
+            const res = await api.get('/snapshot-schedules/', { params: { is_server_wide: true } });
+            const schedules = Array.isArray(res.data) ? res.data : res.data.results || [];
+            const sched = schedules.find((s: any) => s.is_server_wide);
+            if (sched) {
+                setSnapSchedule(sched);
+                setSnapCronExpression(sched.cron_expression);
+                setSnapRetentionDays(sched.retention_days);
+                setSnapScheduleEnabled(sched.enabled);
+                setSnapScheduleCloudUpload(sched.cloud_upload_enabled !== false);
+            }
+        } catch (err) {
+            console.error('Failed to load server snapshot schedule', err);
+        } finally {
+            setSnapScheduleLoading(false);
         }
     };
 
@@ -146,6 +178,7 @@ export default function ServerBackupsPage() {
                 retention_days: retentionDays,
                 enabled: scheduleEnabled,
                 db_only: scheduleDbOnly,
+                cloud_upload_enabled: scheduleCloudUpload,
             };
             
             if (scheduleCloudDest) {
@@ -165,6 +198,37 @@ export default function ServerBackupsPage() {
             toast({ title: "Error", description: "Failed to save schedule.", variant: "destructive" });
         } finally {
             setSavingSchedule(false);
+        }
+    };
+
+    const handleSaveSnapSchedule = async () => {
+        setSavingSnapSchedule(true);
+        try {
+            const payload: any = {
+                is_server_wide: true,
+                cron_expression: snapCronExpression,
+                retention_days: snapRetentionDays,
+                enabled: snapScheduleEnabled,
+                cloud_upload_enabled: snapScheduleCloudUpload,
+            };
+
+            if (snapScheduleCloudDest) {
+                payload.cloud_destination_id = snapScheduleCloudDest;
+            } else {
+                payload.cloud_destination_id = null;
+                payload.storage_backend = 'local';
+            }
+            if (snapSchedule?.id) {
+                await api.patch(`/snapshot-schedules/${snapSchedule.id}/`, payload);
+            } else {
+                await api.post('/snapshot-schedules/', payload);
+            }
+            toast({ title: "Snapshot schedule saved", description: "Server snapshot schedule has been updated." });
+            loadSnapSchedule();
+        } catch (err) {
+            toast({ title: "Error", description: "Failed to save snapshot schedule.", variant: "destructive" });
+        } finally {
+            setSavingSnapSchedule(false);
         }
     };
 
@@ -523,6 +587,136 @@ export default function ServerBackupsPage() {
                         </Table>
                     </CardContent>
                 </Card>
+
+                {/* Backup Schedule */}
+                <Card>
+                    <CardContent className="p-6">
+                        <h2 className="text-lg font-semibold mb-1">Backup Schedule</h2>
+                        <p className="text-sm text-muted-foreground mb-4">Configure automated server-wide backup frequency and retention.</p>
+                        {scheduleLoading ? (
+                            <div className="flex justify-center p-4"><Loader2 className="animate-spin h-5 w-5 text-muted-foreground" /></div>
+                        ) : (
+                            <div className="space-y-4">
+                                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                    <div className="space-y-1">
+                                        <label className="flex items-center space-x-2 text-sm font-medium mb-2 cursor-pointer">
+                                            <input type="checkbox" checked={scheduleDbOnly} onChange={(e) => setScheduleDbOnly(e.target.checked)} className="rounded border-gray-300 text-blue-600" disabled={savingSchedule} />
+                                            <span>Database Only Backup</span>
+                                        </label>
+                                        <label className="text-sm font-medium">Cron Expression</label>
+                                        <input type="text" value={cronExpression} onChange={(e) => setCronExpression(e.target.value)} className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm font-mono" placeholder="0 3 * * *" />
+                                        <div className="flex flex-wrap gap-1.5 mt-1.5">
+                                            {[
+                                                { label: 'Every 30 min', expr: '*/30 * * * *' },
+                                                { label: 'Hourly', expr: '0 * * * *' },
+                                                { label: 'Every 6h', expr: '0 */6 * * *' },
+                                                { label: 'Daily 12 AM', expr: '0 0 * * *' },
+                                                { label: 'Daily 3 AM', expr: '0 3 * * *' },
+                                                { label: 'Weekly Sun', expr: '0 3 * * 0' },
+                                            ].map(p => (
+                                                <button key={p.expr} type="button" onClick={() => setCronExpression(p.expr)}
+                                                    className={`text-[11px] px-2 py-0.5 rounded-full border transition-colors ${cronExpression === p.expr ? 'bg-primary/10 border-primary text-primary' : 'bg-background border-border text-muted-foreground hover:border-primary/50'}`}>
+                                                    {p.label}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <div className="space-y-1">
+                                        <label className="text-sm font-medium">Retention (days)</label>
+                                        <input type="number" value={retentionDays} onChange={(e) => setRetentionDays(parseInt(e.target.value) || 7)} min={1} max={365} className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm" />
+                                        <p className="text-[10px] text-muted-foreground">Backups older than this are auto-deleted</p>
+                                    </div>
+                                    <div className="space-y-1">
+                                        <label className="text-sm font-medium">Status</label>
+                                        <label className="flex items-center gap-3 rounded-lg border border-border p-2.5 cursor-pointer">
+                                            <input type="checkbox" checked={scheduleEnabled} onChange={(e) => setScheduleEnabled(e.target.checked)} className="w-4 h-4 rounded border-border" />
+                                            <span className="text-sm font-medium">{scheduleEnabled ? 'Enabled' : 'Paused'}</span>
+                                        </label>
+                                    </div>
+                                    <div className="space-y-1">
+                                        <label className="text-sm font-medium">Storage Destination</label>
+                                        <select value={scheduleCloudDest} onChange={(e) => setScheduleCloudDest(e.target.value)} className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm h-[42px]">
+                                            <option value="">Local Server</option>
+                                            {destinations.map(d => (
+                                                <option key={d.id} value={d.id}>{d.name} ({d.provider_display})</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                </div>
+                                <div className="flex items-center gap-4 pt-2 border-t border-border">
+                                    <label className="flex items-center gap-2 text-sm cursor-pointer">
+                                        <input type="checkbox" checked={scheduleCloudUpload} onChange={(e) => setScheduleCloudUpload(e.target.checked)} className="rounded border-gray-300" />
+                                        <span>Auto-upload to cloud storage</span>
+                                    </label>
+                                    {schedule && (
+                                        <span className="text-xs text-muted-foreground">
+                                            Last run: {schedule.last_run ? new Date(schedule.last_run).toLocaleString() : 'Never'} &middot;
+                                            Next run: {schedule.next_run ? new Date(schedule.next_run).toLocaleString() : 'TBD'}
+                                        </span>
+                                    )}
+                                    <Button onClick={handleSaveSchedule} disabled={savingSchedule} className="ml-auto">
+                                        {savingSchedule ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                                        {schedule ? 'Update Schedule' : 'Create Schedule'}
+                                    </Button>
+                                </div>
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
+
+                {/* Snapshot Schedule */}
+                <Card>
+                    <CardContent className="p-6">
+                        <h2 className="text-lg font-semibold mb-1">Snapshot Schedule</h2>
+                        <p className="text-sm text-muted-foreground mb-4">Automated configuration snapshots for fast config rollback.</p>
+                        {snapScheduleLoading ? (
+                            <div className="flex justify-center p-4"><Loader2 className="animate-spin h-5 w-5 text-muted-foreground" /></div>
+                        ) : (
+                            <div className="space-y-4">
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                    <div className="space-y-1">
+                                        <label className="text-sm font-medium">Cron Expression</label>
+                                        <input type="text" value={snapCronExpression} onChange={(e) => setSnapCronExpression(e.target.value)} className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm font-mono" placeholder="0 3 * * *" />
+                                        <div className="flex flex-wrap gap-1.5 mt-1.5">
+                                            {[
+                                                { label: 'Hourly', expr: '0 * * * *' },
+                                                { label: 'Every 6h', expr: '0 */6 * * *' },
+                                                { label: 'Daily 3 AM', expr: '0 3 * * *' },
+                                                { label: 'Weekly Sun', expr: '0 3 * * 0' },
+                                            ].map(p => (
+                                                <button key={p.expr} type="button" onClick={() => setSnapCronExpression(p.expr)}
+                                                    className={`text-[11px] px-2 py-0.5 rounded-full border transition-colors ${snapCronExpression === p.expr ? 'bg-primary/10 border-primary text-primary' : 'bg-background border-border text-muted-foreground hover:border-primary/50'}`}>
+                                                    {p.label}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <div className="space-y-1">
+                                        <label className="text-sm font-medium">Retention (days)</label>
+                                        <input type="number" value={snapRetentionDays} onChange={(e) => setSnapRetentionDays(parseInt(e.target.value) || 7)} min={1} max={365} className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm" />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <label className="text-sm font-medium">Status</label>
+                                        <label className="flex items-center gap-3 rounded-lg border border-border p-2.5 cursor-pointer">
+                                            <input type="checkbox" checked={snapScheduleEnabled} onChange={(e) => setSnapScheduleEnabled(e.target.checked)} className="w-4 h-4 rounded border-border" />
+                                            <span className="text-sm font-medium">{snapScheduleEnabled ? 'Enabled' : 'Paused'}</span>
+                                        </label>
+                                    </div>
+                                </div>
+                                <div className="flex items-center gap-4 pt-2 border-t border-border">
+                                    <label className="flex items-center gap-2 text-sm cursor-pointer">
+                                        <input type="checkbox" checked={snapScheduleCloudUpload} onChange={(e) => setSnapScheduleCloudUpload(e.target.checked)} className="rounded border-gray-300" />
+                                        <span>Auto-upload snapshots to cloud</span>
+                                    </label>
+                                    <Button onClick={handleSaveSnapSchedule} disabled={savingSnapSchedule} className="ml-auto">
+                                        {savingSnapSchedule ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                                        {snapSchedule ? 'Update Schedule' : 'Create Schedule'}
+                                    </Button>
+                                </div>
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
             </div>
 
             {/* Encryption key prompt modal (for existing backup restore) */}
@@ -801,7 +995,13 @@ export default function ServerBackupsPage() {
                             </Button>
                             <Button
                                 onClick={handleCloudRestoreSubmit}
-                                disabled={uploading || !cloudRestoreForm.s3_bucket || !cloudRestoreForm.s3_key || !cloudRestoreForm.s3_access_key || !cloudRestoreForm.s3_secret_key}
+                                disabled={
+                                    uploading ||
+                                    !cloudRestoreForm.s3_key ||
+                                    (!cloudRestoreForm.cloud_storage_id || cloudRestoreForm.cloud_storage_id === 'custom'
+                                        ? (!cloudRestoreForm.s3_bucket || !cloudRestoreForm.s3_access_key || !cloudRestoreForm.s3_secret_key)
+                                        : false)
+                                }
                             >
                                 {uploading ? (
                                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />

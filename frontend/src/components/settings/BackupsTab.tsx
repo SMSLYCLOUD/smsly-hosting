@@ -60,6 +60,7 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
             api.post('/backups/list-backups/', {
                 cloud_storage_id: cloudRestoreForm.cloud_storage_id,
                 prefix: cloudBackupPrefix,
+                service_id: serviceId,
             }).then(res => {
                 setCloudBackupList(res.data?.objects || []);
             }).catch(() => {
@@ -109,6 +110,7 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
     const [retentionDays, setRetentionDays] = useState(7);
     const [scheduleEnabled, setScheduleEnabled] = useState(true);
     const [scheduleDbOnly, setScheduleDbOnly] = useState(false);
+    const [scheduleCloudUpload, setScheduleCloudUpload] = useState(true);
     const [savingSchedule, setSavingSchedule] = useState(false);
     const [dbOnly, setDbOnly] = useState(false);
     const [backupLabel, setBackupLabel] = useState('');
@@ -133,6 +135,7 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
     const [snapRetentionDays, setSnapRetentionDays] = useState(30);
     const [snapScheduleCloudDest, setSnapScheduleCloudDest] = useState('');
     const [snapScheduleEnabled, setSnapScheduleEnabled] = useState(true);
+    const [snapScheduleCloudUpload, setSnapScheduleCloudUpload] = useState(true);
     const [savingSnapSchedule, setSavingSnapSchedule] = useState(false);
 
     const loadBackups = useCallback(async () => {
@@ -168,6 +171,7 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                 setRetentionDays(sched.retention_days);
                 setScheduleEnabled(sched.enabled);
                 setScheduleDbOnly(sched.db_only || false);
+                setScheduleCloudUpload(sched.cloud_upload_enabled !== false);
                 if (sched.cloud_destination) {
                     setSelectedDestination(sched.cloud_destination);
                 }
@@ -188,6 +192,7 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                 setSnapCronExpression(sched.cron_expression);
                 setSnapRetentionDays(sched.retention_days);
                 setSnapScheduleEnabled(sched.enabled);
+                setSnapScheduleCloudUpload(sched.cloud_upload_enabled !== false);
             }
         } catch (err) {
             console.error('Failed to load snapshot schedule', err);
@@ -196,11 +201,8 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
 
     const loadDestinations = useCallback(async () => {
         try {
-            const res = await api.get('/cloud-storage/');
-            const allDestinations = Array.isArray(res.data) ? res.data : res.data.results || [];
-            // Filter to show platform-wide (service=null) or specifically for this service
-            const relevant = allDestinations.filter((d: any) => !d.service || String(d.service) === serviceId);
-            setDestinations(relevant);
+            const res = await api.get(`/cloud-storage/?service=${serviceId}`);
+            setDestinations(Array.isArray(res.data) ? res.data : res.data.results || []);
         } catch (err) {
             console.error('Failed to load cloud destinations', err);
         }
@@ -559,6 +561,7 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                 retention_days: retentionDays,
                 enabled: scheduleEnabled,
                 db_only: scheduleDbOnly,
+                cloud_upload_enabled: scheduleCloudUpload,
             };
             
             if (selectedDestination !== 'local') {
@@ -588,7 +591,8 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                 service: serviceId,
                 cron_expression: snapCronExpression,
                 retention_days: snapRetentionDays,
-                enabled: snapScheduleEnabled
+                enabled: snapScheduleEnabled,
+                cloud_upload_enabled: snapScheduleCloudUpload,
             };
             if (snapScheduleCloudDest) {
                 payload.cloud_destination_id = snapScheduleCloudDest;
@@ -1235,8 +1239,16 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                                   </div>
                             </div>
 
+                            <div className="flex items-center gap-2 pt-2 border-t border-border">
+                                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                                    <input type="checkbox" checked={scheduleCloudUpload} onChange={(e) => setScheduleCloudUpload(e.target.checked)}
+                                        className="rounded border-gray-300" />
+                                    <span>Auto-upload to cloud storage</span>
+                                </label>
+                            </div>
+
                             {schedule && (
-                                <div className="flex items-center gap-4 text-xs text-muted-foreground border-t border-border pt-3">
+                                <div className="flex items-center gap-4 text-xs text-muted-foreground">
                                     <Clock className="w-3 h-3" />
                                     <span>Last run: {schedule.last_run ? new Date(schedule.last_run).toLocaleString() : 'Never'}</span>
                                     <span>|</span>
@@ -1334,6 +1346,13 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                                   </select>
                                   <p className="text-[10px] text-muted-foreground">Upload snapshots to S3/MinIO</p>
                               </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 pt-2 border-t border-border">
+                            <label className="flex items-center gap-2 text-sm cursor-pointer">
+                                <input type="checkbox" checked={snapScheduleCloudUpload} onChange={(e) => setSnapScheduleCloudUpload(e.target.checked)} className="rounded border-gray-300" />
+                                <span>Auto-upload snapshots to cloud</span>
+                            </label>
                         </div>
 
                         <Button onClick={handleSaveSnapSchedule} disabled={savingSnapSchedule}>
@@ -1673,7 +1692,16 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
 
                       <div className="p-6 pt-4 border-t border-border flex justify-end gap-2 shrink-0">
                           <Button variant="outline" onClick={() => setCloudRestorePromptOpen(false)}>Cancel</Button>
-                          <Button onClick={handleCloudRestoreSubmit} disabled={creating}>
+                          <Button
+                              onClick={handleCloudRestoreSubmit}
+                              disabled={
+                                  creating ||
+                                  !cloudRestoreForm.s3_key ||
+                                  (!cloudRestoreForm.cloud_storage_id || cloudRestoreForm.cloud_storage_id === 'custom'
+                                      ? (!cloudRestoreForm.s3_bucket || !cloudRestoreForm.s3_access_key || !cloudRestoreForm.s3_secret_key)
+                                      : false)
+                              }
+                          >
                               {creating ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
                               Restore from Cloud
                           </Button>
