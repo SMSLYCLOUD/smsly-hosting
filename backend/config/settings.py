@@ -570,6 +570,7 @@ INSTALLED_APPS = [
     'apps.addons',
     'apps.autoscaler',
     'apps.licensing',
+    'apps.permissions',
 ]
 
 if IS_AGENT_MODE:
@@ -638,6 +639,7 @@ MIDDLEWARE = [
     'django_otp.middleware.OTPMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'apps.permissions.middleware.PermissionAuditMiddleware',
     'apps.core.middleware.security.SecurityMiddleware',  # Zero Trust HMAC V2
     'apps.core.middleware.ratelimit.RateLimitMiddleware', # App-layer Rate Limiting
     'apps.licensing.middleware.TierLimitsMiddleware', # License Tier Enforcement
@@ -660,6 +662,7 @@ ACCOUNT_LOGIN_METHODS = {'username', 'email'}
 ACCOUNT_SIGNUP_FIELDS = ['email*', 'username*', 'password1*', 'password2*']
 # Fix dj-rest-auth deprecation warnings
 REST_AUTH = {
+    'USER_DETAILS_SERIALIZER': 'apps.core.serializers.CustomUserDetailsSerializer',
     'SIGNUP_FIELDS': {
         'username': {'required': True},
         'email': {'required': True},

@@ -6,6 +6,9 @@ import { Activity, Box, DollarSign, Loader2, RefreshCw, Server, HardDrive } from
 
 import api from '@/lib/api';
 import { DashboardShell } from '@/components/layout/DashboardShell';
+import { RequirePermission } from '@/components/RequirePermission';
+import { AccessDenied } from '@/components/AccessDenied';
+import { PERMISSION } from '@/hooks/usePermissions';
 
 interface PlatformStats {
   total_services: number;
@@ -41,13 +44,11 @@ export default function AdminDashboardPage() {
   const [events, setEvents] = useState<PlatformEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [accessDenied, setAccessDenied] = useState(false);
 
   const fetchData = async () => {
     try {
       // Admin gate: this endpoint is IsAdminUser on backend.
       const configRes = await api.get('/system/config/');
-      setAccessDenied(false);
 
       const [servicesRes, deploymentsRes, overviewRes] = await Promise.allSettled([
         api.get('/services/'),
@@ -105,11 +106,7 @@ export default function AdminDashboardPage() {
       }));
       setEvents(recentEvents);
     } catch (err: any) {
-      if (err?.response?.status === 403) {
-        setAccessDenied(true);
-      } else {
-        console.error('Failed to fetch admin data:', err);
-      }
+      console.error('Failed to fetch admin data:', err);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -127,37 +124,19 @@ export default function AdminDashboardPage() {
 
   if (loading) {
     return (
-      <DashboardShell>
-        <div className="flex-1 flex items-center justify-center">
-          <Loader2 className="h-8 w-8 animate-spin text-primary" />
-        </div>
-      </DashboardShell>
-    );
-  }
-
-  if (accessDenied) {
-    return (
-      <DashboardShell>
-        <div className="flex-1 p-6 md:p-12 max-w-4xl mx-auto w-full flex items-center">
-          <div className="w-full border border-border rounded-xl bg-card p-8 space-y-3">
-            <h1 className="text-2xl font-bold">Admin Access Required</h1>
-            <p className="text-muted-foreground">
-              Your account does not have admin permissions for this dashboard.
-            </p>
-            <Link
-              href="/dashboard"
-              className="inline-flex items-center px-4 py-2 rounded-lg bg-primary text-white font-medium hover:opacity-90"
-            >
-              Go to User Dashboard
-            </Link>
+      <RequirePermission code={PERMISSION.ADMIN_ACCESS} fallback={<AccessDenied message="Admin access required to view the operator command center." />}>
+        <DashboardShell>
+          <div className="flex-1 flex items-center justify-center">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
           </div>
-        </div>
-      </DashboardShell>
+        </DashboardShell>
+      </RequirePermission>
     );
   }
 
   return (
-    <DashboardShell>
+    <RequirePermission code={PERMISSION.ADMIN_ACCESS} fallback={<AccessDenied message="Admin access required to view the operator command center." />}>
+      <DashboardShell>
       <div className="flex-1 p-6 md:p-12 max-w-7xl mx-auto w-full">
         <div className="flex items-center justify-between mb-8">
           <h1 className="text-3xl font-bold text-foreground">Operator Command Center</h1>
@@ -236,6 +215,7 @@ export default function AdminDashboardPage() {
         </div>
       </div>
     </DashboardShell>
+      </RequirePermission>
   );
 }
 

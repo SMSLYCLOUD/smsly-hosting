@@ -46,6 +46,23 @@ def assert_member(user, organization):
         raise PermissionDenied("You are not a member of this organization.")
 
 
+def get_org_from_resource(obj):
+    """Walk from a Service/Project/Team to its Organization, or return None."""
+    # Service → Project → Team → Organization
+    team = getattr(obj, 'team', None)  # Project or Team itself
+    if not team:
+        project = getattr(obj, 'project', None)
+        if project:
+            team = getattr(project, 'team', None)
+    if not team:
+        service = getattr(obj, 'service', None)
+        if service:
+            team = getattr(getattr(service, 'project', None), 'team', None)
+    if not team:
+        return None
+    return getattr(team, 'organization', None)
+
+
 def get_org_q_filter(user):
     """Return a Q filter scoping queries to the user's organizations."""
     org_ids = OrganizationMembership.objects.filter(

@@ -17,9 +17,14 @@ class TeamMemberSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = TeamMember
-        fields = ('id', 'user', 'username', 'email', 'role', 'team')
+        fields = (
+            'id', 'user', 'username', 'email', 'role', 'team',
+            'permissions', 'can_manage_billing', 'is_active', 'expires_at',
+        )
         read_only_fields = ('user', 'team')
 
 class InviteMemberSerializer(serializers.Serializer):
     email = serializers.EmailField()
     role = serializers.ChoiceField(choices=TeamMember.Role.choices)
+    expires_at = serializers.DateTimeField(required=False, allow_null=True)
+    can_manage_billing = serializers.BooleanField(required=False, default=False)

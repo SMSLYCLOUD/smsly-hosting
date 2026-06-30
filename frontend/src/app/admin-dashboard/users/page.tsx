@@ -11,6 +11,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/use-toast";
+import { RequirePermission } from "@/components/RequirePermission";
+import { AccessDenied } from "@/components/AccessDenied";
+import { PERMISSION } from "@/hooks/usePermissions";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,7 +28,6 @@ export default function AdminUsersPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState("");
-  const [accessDenied, setAccessDenied] = useState(false);
   const { toast } = useToast();
 
   const fetchData = async () => {
@@ -34,13 +36,8 @@ export default function AdminUsersPage() {
       await api.get("/system/config/"); // verify admin
       const data = await coreApi.adminGetUsers();
       setUsers(data);
-      setAccessDenied(false);
     } catch (err: any) {
-      if (err?.response?.status === 403) {
-        setAccessDenied(true);
-      } else {
-        toast({ title: "Failed to load users", variant: "destructive" });
-      }
+      toast({ title: "Failed to load users", variant: "destructive" });
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -68,33 +65,20 @@ export default function AdminUsersPage() {
 
   if (loading) {
     return (
-      <DashboardShell>
-        <div className="flex-1 flex items-center justify-center">
-          <Loader2 className="h-8 w-8 animate-spin text-primary" />
-        </div>
-      </DashboardShell>
-    );
-  }
-
-  if (accessDenied) {
-    return (
-      <DashboardShell>
-        <div className="flex-1 p-6 md:p-12 max-w-4xl mx-auto w-full flex items-center">
-          <div className="w-full border border-border rounded-xl bg-card p-8 space-y-3">
-            <h1 className="text-2xl font-bold">Admin Access Required</h1>
-            <p className="text-muted-foreground">Your account does not have admin permissions.</p>
-            <Link href="/dashboard" className="inline-flex items-center px-4 py-2 rounded-lg bg-primary text-white font-medium hover:opacity-90">
-              Go to User Dashboard
-            </Link>
+      <RequirePermission code={PERMISSION.ADMIN_ACCESS} fallback={<AccessDenied />}>
+        <DashboardShell>
+          <div className="flex-1 flex items-center justify-center">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
           </div>
-        </div>
-      </DashboardShell>
+        </DashboardShell>
+      </RequirePermission>
     );
   }
 
   return (
-    <DashboardShell>
-      <div className="flex-1 p-6 md:p-12 max-w-7xl mx-auto w-full">
+    <RequirePermission code={PERMISSION.ADMIN_ACCESS} fallback={<AccessDenied />}>
+      <DashboardShell>
+        <div className="flex-1 p-6 md:p-12 max-w-7xl mx-auto w-full">
         <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
           <div>
             <h1 className="text-3xl font-bold text-foreground flex items-center gap-3">
@@ -197,5 +181,6 @@ export default function AdminUsersPage() {
         </div>
       </div>
     </DashboardShell>
+    </RequirePermission>
   );
 }

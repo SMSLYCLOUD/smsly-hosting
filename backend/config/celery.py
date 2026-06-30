@@ -281,6 +281,12 @@ app.conf.beat_schedule = {
         'schedule': 300.0,
         'options': {'expires': 300.0},
     },
+    # Deactivate expired team, org, and project memberships daily
+    'deactivate-expired-memberships-daily': {
+        'task': 'apps.permissions.tasks.deactivate_expired_memberships',
+        'schedule': 86400.0,
+        'options': {'expires': 86400.0},
+    },
 }
 
 

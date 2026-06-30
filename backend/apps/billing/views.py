@@ -38,6 +38,7 @@ from apps.billing.services.flutterwave import FlutterwaveService
 from apps.billing.services.metering import UsageMeter
 from apps.billing.services.stripe import StripeService
 from apps.billing.utils import _activate_paid_plan
+from apps.permissions.drf import CanManageBilling, CanViewBilling
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +123,7 @@ def _pro_amount_currency() -> tuple[Decimal, str]:
 class BillingSummaryView(GenericAPIView):
     """View for retrieving billing summary."""
     serializer_class = EmptySerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, CanViewBilling]
 
     def get(self, request):
         """Get billing summary."""
@@ -179,7 +180,7 @@ class BillingSummaryView(GenericAPIView):
 class CheckoutView(GenericAPIView):
     """View for initiating checkout."""
     serializer_class = CheckoutSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, CanManageBilling]
 
     def post(self, request):
         """Create checkout session."""
@@ -284,7 +285,7 @@ class CheckoutView(GenericAPIView):
 class PortalSessionView(GenericAPIView):
     """View for creating customer portal sessions."""
     serializer_class = PortalSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, CanManageBilling]
 
     def post(self, request):
         """Create portal session."""
@@ -584,7 +585,7 @@ class PricingPlanViewSet(viewsets.ReadOnlyModelViewSet):
 class SubscriptionViewSet(viewsets.ModelViewSet):
     queryset = UserSubscription.objects.all()
     serializer_class = UserSubscriptionSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, CanViewBilling]
 
     def get_queryset(self):
         return self.queryset.filter(user=self.request.user)
@@ -592,11 +593,15 @@ class SubscriptionViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['POST'])
     def subscribe(self, request):
         """Backward-compatible alias for /billing/checkout/."""
+        if not CanManageBilling().has_permission(request, self):
+            return Response({'error': 'You do not have billing management access'}, status=status.HTTP_403_FORBIDDEN)
         checkout_view = CheckoutView()
         return checkout_view.post(request)
 
     @action(detail=False, methods=['POST'])
     def cancel(self, request):
+        if not CanManageBilling().has_permission(request, self):
+            return Response({'error': 'You do not have billing management access'}, status=status.HTTP_403_FORBIDDEN)
         sub = self.get_queryset().filter(status='ACTIVE').first()
         if not sub:
             return Response({'error': 'No active subscription'}, status=status.HTTP_400_BAD_REQUEST)
@@ -615,7 +620,7 @@ class SubscriptionViewSet(viewsets.ModelViewSet):
 class InvoiceViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Invoice.objects.all()
     serializer_class = InvoiceSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, CanViewBilling]
 
     def get_queryset(self):
         return self.queryset.filter(user=self.request.user).order_by('-period_end')
@@ -632,7 +637,7 @@ class UsageSummarySerializer(serializers.Serializer):
 
 class UsageViewSet(viewsets.GenericViewSet):
     serializer_class = UsageSummarySerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, CanViewBilling]
 
     def list(self, request):
         meter = UsageMeter()

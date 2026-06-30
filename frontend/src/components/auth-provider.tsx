@@ -9,6 +9,7 @@ import {
   canRedirectToLogin,
   resetRedirectGuard,
 } from "@/lib/paths";
+import { getRequiredPermissions } from "@/lib/role-routes";
 
 interface User {
   pk: number;
@@ -16,6 +17,23 @@ interface User {
   email: string;
   first_name: string;
   last_name: string;
+  is_staff?: boolean;
+  is_superuser?: boolean;
+  permissions?: string[];
+  roles?: {
+    teams?: Array<{
+      team_id: string;
+      team_name: string;
+      role: string;
+      can_manage_billing: boolean;
+    }>;
+    orgs?: Array<{
+      org_id: string;
+      org_name: string;
+      role: string;
+      can_manage_billing: boolean;
+    }>;
+  };
 }
 
 interface AuthContextType {
@@ -23,7 +41,7 @@ interface AuthContextType {
   loading: boolean;
 }
 
-const AuthContext = createContext<AuthContextType>({ user: null, loading: true });
+export const AuthContext = createContext<AuthContextType>({ user: null, loading: true });
 
 /** Interval between periodic /auth/user/ revalidation (ms). */
 const AUTH_REVALIDATE_INTERVAL = 60_000;
@@ -44,6 +62,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (isAuthPage(path)) {
           if (canRedirectToLogin()) {
             window.location.replace("/dashboard");
+          }
+        }
+
+        // Role-based redirect: if the user lacks permission for the current
+        // route, redirect to the fallback page.
+        if (!isRevalidate) {
+          const req = getRequiredPermissions(path);
+          if (req) {
+            const userPerms: string[] = res.data?.permissions ?? [];
+            const hasAccess =
+              res.data?.is_superuser ||
+              req.permissions.some((p: string) => userPerms.includes(p));
+            if (!hasAccess && canRedirectToLogin()) {
+              window.location.replace(req.redirect);
+            }
           }
         }
       } catch {

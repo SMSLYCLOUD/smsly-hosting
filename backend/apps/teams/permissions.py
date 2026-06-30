@@ -8,7 +8,28 @@ Role hierarchy (highest to lowest):
 This module replaces inline Q filters scattered across views with
 a single, testable permission layer.
 """
+from __future__ import annotations
+
+import logging
+
 from django.db.models import Q
+
+logger = logging.getLogger(__name__)
+
+
+def _log_denial(user, obj, code: str) -> None:
+    """Best-effort audit logging for permission denials raised by assert helpers."""
+    try:
+        from apps.permissions.models import PermissionDeniedAudit
+        PermissionDeniedAudit.objects.create(
+            user=user if user and user.is_authenticated else None,
+            path='',
+            method='INTERNAL',
+            permission_code=code,
+            resource_id=getattr(obj, 'pk', None),
+        )
+    except Exception:
+        logger.exception("Failed to log permission denial for code=%s", code)
 
 
 def _team_role(user, service_or_project) -> str | None:
@@ -21,10 +42,15 @@ def _team_role(user, service_or_project) -> str | None:
     team = _resolve_team(service_or_project)
     if not team:
         return None
-    membership = TeamMember.objects.filter(team=team, user=user).first()
-    if membership:
-        return membership.role
-    return None
+    membership = TeamMember.objects.filter(
+        team=team, user=user, is_active=True,
+    ).first()
+    if not membership:
+        return None
+    from django.utils import timezone
+    if membership.expires_at and membership.expires_at < timezone.now():
+        return None
+    return membership.role
 
 
 def _resolve_team(service_or_project):
@@ -59,10 +85,15 @@ def user_can_read(user, service_or_project) -> bool:
 def user_is_owner_or_team_member(user, service_or_project) -> bool:
     """Legacy check — any team membership (binary)."""
     from .models import TeamMember
+    from django.utils import timezone
     team = _resolve_team(service_or_project)
     if not team:
         return False
-    return TeamMember.objects.filter(team=team, user=user).exists()
+    return TeamMember.objects.filter(
+        team=team, user=user, is_active=True,
+    ).exclude(
+        expires_at__isnull=False, expires_at__lt=timezone.now(),
+    ).exists()
 
 
 def get_team_q_filter(user) -> Q:
@@ -75,7 +106,12 @@ def get_team_q_filter(user) -> Q:
     if user.is_superuser:
         return Q()
     from .models import TeamMember
-    team_ids = TeamMember.objects.filter(user=user).values_list('team_id', flat=True)
+    from django.utils import timezone
+    team_ids = TeamMember.objects.filter(
+        user=user, is_active=True,
+    ).exclude(
+        expires_at__isnull=False, expires_at__lt=timezone.now(),
+    ).values_list('team_id', flat=True)
     return Q(owner=user) | Q(project__team_id__in=list(team_ids))
 
 
@@ -87,6 +123,8 @@ def assert_can_write(user, service_or_project, action='modify'):
     if getattr(service_or_project, 'owner', None) == user:
         return
     if not user_can_write(user, service_or_project):
+        code = f"service.{action.lower().replace(' ', '_')}"
+        _log_denial(user, service_or_project, code)
         raise PermissionDenied(
             f'You do not have permission to {action} this resource. '
             'Requires ADMIN or MEMBER role on the owning team.'
@@ -101,6 +139,7 @@ def assert_can_delete(user, service_or_project):
     if getattr(service_or_project, 'owner', None) == user:
         return
     if not user_is_team_admin(user, service_or_project):
+        _log_denial(user, service_or_project, 'service.delete')
         raise PermissionDenied(
             'Only the resource owner or a team ADMIN can delete this resource.'
         )
