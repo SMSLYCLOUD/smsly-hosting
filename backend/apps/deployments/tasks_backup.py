@@ -397,7 +397,6 @@ def cleanup_old_backups_task():
 
 
 
-@shared_task
 def _make_aware(dt):
     """Convert a timezone-naive datetime to aware using the current timezone.
 
