@@ -5758,12 +5758,30 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
                 return Response({'error': 'Invalid or expired download link'}, status=status.HTTP_401_UNAUTHORIZED)
         elif not request.user.is_authenticated:
             return Response({'error': 'Authentication credentials were not provided.'}, status=status.HTTP_401_UNAUTHORIZED)
+        elif not request.user.is_superuser:
+            # Server backups contain the full platform state — only
+            # superusers may download them without a signed URL.
+            return Response(
+                {'error': 'Not found'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
 
         # Bypass get_queryset() which filters by request.user — signed/AllowAny
         # requests have an AnonymousUser that crashes the queryset filter.
         backup = self.queryset.model.objects.filter(pk=pk).first()
         if not backup:
             return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Ownership gate: authenticated downloaders must own the backup's service.
+        # Signed URLs bypass this (already verified above). Without this, an
+        # authenticated user could brute-force UUIDs and download any backup.
+        if not signed_value and request.user.is_authenticated:
+            if not self._user_can_access_service(request.user, backup.service):
+                return Response(
+                    {'error': 'Not found'},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
         file_path = backup.file_path
 
         if not file_path or not os.path.exists(file_path):
