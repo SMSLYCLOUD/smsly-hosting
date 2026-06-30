@@ -3,8 +3,7 @@
 import Link from 'next/link';
 import Image from 'next/image';
 
-import { Badge }
-from '@/components/ui/badge';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { CloudHeroAnimation } from '@/components/animations/CloudHeroAnimation';
 import {
