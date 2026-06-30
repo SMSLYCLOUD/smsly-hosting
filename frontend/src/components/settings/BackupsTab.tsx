@@ -111,6 +111,7 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
     const [scheduleDbOnly, setScheduleDbOnly] = useState(false);
     const [savingSchedule, setSavingSchedule] = useState(false);
     const [dbOnly, setDbOnly] = useState(false);
+    const [backupLabel, setBackupLabel] = useState('');
     
     // Cloud storage state
     const [destinations, setDestinations] = useState<CloudDestination[]>([]);
@@ -216,9 +217,9 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
     const handleCreateBackup = async () => {
         setCreating(true);
         try {
-            await api.post('/backups/', { service: serviceId, db_only: dbOnly });
+            await api.post('/backups/', { service: serviceId, db_only: dbOnly, label: backupLabel || undefined });
             toast({ title: "Backup Started", description: "This may take a few minutes." });
-            loadBackups();
+            setBackupLabel('');
         } catch (err) {
             toast({ title: "Error", description: "Failed to start backup.", variant: "destructive" });
         } finally {
@@ -731,6 +732,21 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                                 <Cloud className="mr-2 h-4 w-4" />
                                 Restore from Cloud
                             </Button>
+                            <Button variant="outline" onClick={() => setUploadRestoreOpen(true)} disabled={creating}>
+                                <Upload className="mr-2 h-4 w-4" />
+                                Restore from Local
+                            </Button>
+                            <Button variant="outline" onClick={loadRestoreHistory} disabled={restoreHistoryLoading}>
+                                {restoreHistoryLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <History className="mr-2 h-4 w-4" />}
+                                Restore History
+                            </Button>
+                            <Input
+                                placeholder="Label (optional)"
+                                value={backupLabel}
+                                onChange={(e) => setBackupLabel(e.target.value)}
+                                className="w-40 h-9 text-xs"
+                                disabled={creating}
+                            />
                             <Button onClick={handleCreateBackup} disabled={creating}>
                                 {creating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4" />}
                                 Create Backup
@@ -744,6 +760,7 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                             <TableRow>
                                 <TableHead>Date</TableHead>
                                 <TableHead>Type</TableHead>
+                                <TableHead>Label</TableHead>
                                 <TableHead>Size</TableHead>
                                 <TableHead>Status</TableHead>
                                 <TableHead className="text-right">Actions</TableHead>
@@ -758,6 +775,13 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                                             <span className="text-xs font-mono bg-muted px-2 py-1 rounded">{backup.backup_type}</span>
                                             {backup.db_only && <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded border border-blue-200">DB Only</span>}
                                         </div>
+                                    </TableCell>
+                                    <TableCell className="max-w-[160px]">
+                                        {backup.label ? (
+                                            <span className="text-xs truncate block" title={backup.label}>{backup.label}</span>
+                                        ) : (
+                                            <span className="text-[10px] text-muted-foreground italic">—</span>
+                                        )}
                                     </TableCell>
                                     <TableCell>{formatBytes(backup.size_bytes)}</TableCell>
                                     <TableCell>
@@ -872,7 +896,7 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                             ))}
                             {backups.length === 0 && (
                                 <TableRow>
-                                    <TableCell colSpan={5} className="text-center py-6 text-muted-foreground">No backups found. Create your first backup to get started.</TableCell>
+                                    <TableCell colSpan={6} className="text-center py-6 text-muted-foreground">No backups found. Create your first backup to get started.</TableCell>
                                 </TableRow>
                             )}
                          </TableBody>

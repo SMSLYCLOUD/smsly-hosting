@@ -55,6 +55,8 @@ class ServiceBackup(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4)  # type: ignore[var-annotated]
     service = models.ForeignKey(Service, on_delete=models.CASCADE, related_name='backups')  # type: ignore[var-annotated]
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)  # type: ignore[var-annotated]
+    label = models.CharField(max_length=255, blank=True, default='',  # type: ignore[var-annotated]
+                             help_text='Human-readable label for quick identification, e.g. "Pre-upgrade backup" or "Cloud restore"')
     status = models.CharField(choices=[  # type: ignore[var-annotated]
         ('PENDING', 'Pending'), ('IN_PROGRESS', 'In Progress'),
         ('COMPLETED', 'Completed'), ('FAILED', 'Failed'),
@@ -80,6 +82,8 @@ class ServiceBackup(models.Model):
 class ServerBackup(models.Model):
     """Full server export: all services + platform config + Traefik + SSL certs."""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4)  # type: ignore[var-annotated]
+    label = models.CharField(max_length=255, blank=True, default='',  # type: ignore[var-annotated]
+                             help_text='Human-readable label for quick identification')
     status = models.CharField(max_length=20, default='PENDING')  # type: ignore[var-annotated]
     db_only = models.BooleanField(default=False)  # type: ignore[var-annotated]
     file_path = models.CharField(max_length=500, blank=True)  # type: ignore[var-annotated]
