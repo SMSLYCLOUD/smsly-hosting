@@ -577,6 +577,29 @@ class Service(TimeStampedModel):
         null=True, blank=True,
         help_text="Last time the autoscaler scaled this service (used for cooldown).",
     )
+
+    # ── Resource-level ACLs ──
+    locked = models.BooleanField(  # type: ignore[var-annotated]
+        default=False,
+        help_text="Deployment lock — blocks deploys and destructive writes",
+    )
+    locked_reason = models.TextField(  # type: ignore[var-annotated]
+        blank=True, default='',
+        help_text="Why this service is locked (shown in UI)",
+    )
+    restrict_to_creator = models.BooleanField(  # type: ignore[var-annotated]
+        default=False,
+        help_text="Only the owner can modify this service",
+    )
+    allowed_actions = models.JSONField(  # type: ignore[var-annotated]
+        default=list, blank=True,
+        help_text="Explicitly allowed permission codes — if set, overrides role-based checks",
+    )
+    restricted_environments = models.JSONField(  # type: ignore[var-annotated]
+        default=list, blank=True,
+        help_text="List of allowed deployment target environments (e.g. ['production', 'staging'])",
+    )
+
     def __str__(self):
         return f"{self.name} ({self.slug})"
 

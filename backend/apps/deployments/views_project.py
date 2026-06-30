@@ -2,8 +2,11 @@
 Views for Project CRUD and nested service management.
 """
 
+from __future__ import annotations
+
 import logging
 
+from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.db.models import Q
 from rest_framework import permissions, status, viewsets
@@ -11,8 +14,12 @@ from rest_framework import serializers as drf_serializers
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
+from apps.permissions.codes import MEMBER_INVITE, MEMBER_REMOVE, MEMBER_ROLE_CHANGE
+from apps.permissions.drf import HasAnyPermission
+from apps.permissions.utils import has_permission
+
 from .models import Service  # type: ignore[attr-defined]
-from .models_project import Project  # type: ignore[attr-defined]
+from .models_project import Project, ProjectMember  # type: ignore[attr-defined]
 from .serializers import ServiceSerializer
 
 logger = logging.getLogger(__name__)
@@ -320,3 +327,106 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 {"error": f"Sync failed: {e!s}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+    # ── Project Members ───────────────────────────────────────────
+
+    @action(detail=True, methods=['get'], url_path='members')
+    def project_members(self, request, pk=None):
+        """GET /api/v1/projects/{id}/members/ — list project members."""
+        project = self.get_object()
+        members = ProjectMember.objects.filter(project=project).select_related('user').order_by('role', 'user__username')
+
+        class ProjectMemberSerializer(drf_serializers.ModelSerializer):
+            username = drf_serializers.CharField(source='user.username', read_only=True)
+            email = drf_serializers.EmailField(source='user.email', read_only=True)
+
+            class Meta:
+                model = ProjectMember
+                fields = ('id', 'user', 'username', 'email', 'role', 'permissions', 'expires_at', 'joined_at')
+                read_only_fields = ('user', 'joined_at')
+
+        return Response(ProjectMemberSerializer(members, many=True).data)
+
+    @action(detail=True, methods=['post'], url_path='members/invite')
+    def invite_project_member(self, request, pk=None):
+        """POST /api/v1/projects/{id}/members/invite/ — add a member to this project."""
+        project = self.get_object()
+
+        if not has_permission(request.user, project, MEMBER_INVITE):
+            return Response({'error': 'You do not have permission to invite project members'}, status=status.HTTP_403_FORBIDDEN)
+
+        email = request.data.get('email', '').strip()
+        role = request.data.get('role', ProjectMember.Role.MEMBER)
+        expires_at = request.data.get('expires_at')
+        permissions_override = request.data.get('permissions')
+
+        User = get_user_model()
+        try:
+            invitee = User.objects.get(email__iexact=email)
+        except User.DoesNotExist:
+            return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
+
+        if ProjectMember.objects.filter(project=project, user=invitee).exists():
+            return Response({'error': 'User already a project member'}, status=status.HTTP_400_BAD_REQUEST)
+
+        member = ProjectMember.objects.create(
+            project=project,
+            user=invitee,
+            role=role if role in dict(ProjectMember.Role.choices) else ProjectMember.Role.MEMBER,
+            expires_at=expires_at if expires_at else None,
+            permissions=permissions_override if isinstance(permissions_override, list) else [],
+        )
+
+        class ProjectMemberSerializer(drf_serializers.ModelSerializer):
+            username = drf_serializers.CharField(source='user.username', read_only=True)
+            email = drf_serializers.EmailField(source='user.email', read_only=True)
+
+            class Meta:
+                model = ProjectMember
+                fields = ('id', 'user', 'username', 'email', 'role', 'permissions', 'expires_at', 'joined_at')
+                read_only_fields = ('user', 'joined_at')
+
+        return Response(ProjectMemberSerializer(member).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], url_path=r'members/(?P<member_id>[^/.]+)/remove')
+    def remove_project_member(self, request, pk=None, member_id=None):
+        """POST /api/v1/projects/{id}/members/{mid}/remove/"""
+        project = self.get_object()
+
+        if not has_permission(request.user, project, MEMBER_REMOVE):
+            return Response({'error': 'You do not have permission to remove project members'}, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            member = ProjectMember.objects.get(project=project, id=member_id)
+        except ProjectMember.DoesNotExist:
+            return Response({'error': 'Member not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        member.delete()
+        return Response({'status': 'removed'})
+
+    @action(detail=True, methods=['post'], url_path=r'members/(?P<member_id>[^/.]+)/change-role')
+    def change_project_member_role(self, request, pk=None, member_id=None):
+        """POST /api/v1/projects/{id}/members/{mid}/change-role/"""
+        project = self.get_object()
+
+        if not has_permission(request.user, project, MEMBER_ROLE_CHANGE):
+            return Response({'error': 'You do not have permission to change project member roles'}, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            member = ProjectMember.objects.get(project=project, id=member_id)
+        except ProjectMember.DoesNotExist:
+            return Response({'error': 'Member not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        new_role = request.data.get('role')
+        expires_at = request.data.get('expires_at')
+        permissions_override = request.data.get('permissions')
+
+        if new_role and new_role in dict(ProjectMember.Role.choices):
+            member.role = new_role
+        if expires_at is not None:
+            member.expires_at = expires_at if expires_at else None
+        if permissions_override is not None:
+            member.permissions = permissions_override if isinstance(permissions_override, list) else []
+
+        member.save(update_fields=[f for f in ('role', 'expires_at', 'permissions') if f in request.data])
+        return Response({'status': 'updated'})

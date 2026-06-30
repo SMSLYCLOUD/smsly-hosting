@@ -39,6 +39,23 @@ class TeamMember(models.Model):
         max_length=20,
         choices=Role.choices,
         default=Role.MEMBER)
+    permissions = models.JSONField(  # type: ignore[var-annotated]
+        default=list, blank=True,
+        help_text="Custom permission code overrides for this member. "
+                  "If set, these replace the default role permissions.",
+    )
+    can_manage_billing = models.BooleanField(  # type: ignore[var-annotated]
+        default=False,
+        help_text="Allow this team member to manage billing (plans, checkout, invoices)",
+    )
+    is_active = models.BooleanField(  # type: ignore[var-annotated]
+        default=True,
+        help_text="Suspend membership without removing the record",
+    )
+    expires_at = models.DateTimeField(  # type: ignore[var-annotated]
+        null=True, blank=True,
+        help_text="If set, membership automatically expires after this date",
+    )
 
     class Meta:
         unique_together = ('team', 'user')

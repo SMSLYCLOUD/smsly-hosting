@@ -53,6 +53,18 @@ class OrganizationMembership(models.Model):
     role = models.CharField(  # type: ignore[var-annotated]
         max_length=20, choices=Role.choices, default=Role.MEMBER,
     )
+    can_manage_billing = models.BooleanField(  # type: ignore[var-annotated]
+        default=False,
+        help_text="Allow this member to manage billing (plans, checkout, invoices)",
+    )
+    is_active = models.BooleanField(  # type: ignore[var-annotated]
+        default=True,
+        help_text="Suspend membership without removing the record",
+    )
+    expires_at = models.DateTimeField(  # type: ignore[var-annotated]
+        null=True, blank=True,
+        help_text="If set, membership automatically expires after this date",
+    )
     invited_at = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
     accepted_at = models.DateTimeField(null=True, blank=True)  # type: ignore[var-annotated]
 

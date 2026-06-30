@@ -813,6 +813,25 @@ class BuildLogConsumer(AsyncWebsocketConsumer):
                 self.channel_name
             )
 
+    async def receive(self, text_data=None, bytes_data=None):
+        """Re-validate auth on every received message.
+
+        SECURITY: Mirrors TerminalConsumer's per-message re-auth pattern so
+        that if a user is removed from a team or a token is revoked while
+        the connection is open, further messages are rejected immediately.
+        """
+        if not await self._revalidate_auth():
+            await self.close(code=4001)
+            return
+        # BuildLogConsumer does not process client-to-server messages;
+        # all data flows server-to-client via channel_layer.
+
+    async def _revalidate_auth(self) -> bool:
+        """Check that the user still has access to this deployment."""
+        if not self.user or not self.deployment_id:
+            return False
+        return await self._verify_ownership()
+
     # ── Channel layer handlers ──────────────────────────────────────────
 
     async def build_log(self, event):
@@ -960,6 +979,8 @@ class ServiceStatusConsumer(AsyncWebsocketConsumer):
         super().__init__(*args, **kwargs)
         self.user = None
         self.user_group_name = None
+        self._periodic_auth_task = None
+        self.is_disconnected = False
 
     async def connect(self):
         """Authenticate and join user's service status group.
@@ -994,6 +1015,9 @@ class ServiceStatusConsumer(AsyncWebsocketConsumer):
 
             # Send initial service statuses
             await self._send_initial_services()
+
+            # Start periodic auth re-validation (every 5 minutes)
+            self._periodic_auth_task = asyncio.create_task(self._periodic_auth_check())
         except Exception as e:
             if settings.DEBUG:
                 logger.error("ServiceStatusConsumer.connect() failed: %s", e, exc_info=True)
@@ -1002,7 +1026,12 @@ class ServiceStatusConsumer(AsyncWebsocketConsumer):
             await self.close(code=4000)
 
     async def disconnect(self, code):
-        """Leave group on disconnect."""
+        """Leave group on disconnect and cancel periodic auth check."""
+        self.is_disconnected = True
+        if self._periodic_auth_task and not self._periodic_auth_task.done():
+            self._periodic_auth_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._periodic_auth_task
         if self.user_group_name:
             await self.channel_layer.group_discard(
                 self.user_group_name,
@@ -1010,7 +1039,19 @@ class ServiceStatusConsumer(AsyncWebsocketConsumer):
             )
 
     async def receive(self, text_data=None, bytes_data=None):
-        """Handle incoming messages (typically pings)."""
+        """Handle incoming messages with per-message auth re-validation.
+
+        SECURITY: Verifies the user is still authenticated and active on
+        every incoming message. If the token expired or the user was
+        deactivated, the connection is closed immediately.
+        """
+        if not self.scope.get('user') or not getattr(self.scope.get('user'), 'is_authenticated', False):
+            await self.close(code=4001)
+            return
+        if not await self._revalidate_user():
+            await self.close(code=4001)
+            return
+
         if text_data:
             try:
                 data = json.loads(text_data)
@@ -1018,6 +1059,43 @@ class ServiceStatusConsumer(AsyncWebsocketConsumer):
                     await self.send(text_data=json.dumps({'type': 'pong'}))
             except json.JSONDecodeError:
                 pass
+
+    async def _revalidate_user(self) -> bool:
+        """Check that the scope user is still active."""
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+
+        @database_sync_to_async
+        def check_user(user_id):
+            try:
+                u = User.objects.get(pk=user_id)
+                return u.is_active
+            except User.DoesNotExist:
+                return False
+
+        user = self.scope.get('user')
+        if not user or not getattr(user, 'is_authenticated', False):
+            return False
+        return await check_user(user.pk)
+
+    async def _periodic_auth_check(self):
+        """Periodically re-validate that the user is still active.
+
+        Runs every 5 minutes. If the user was deactivated or deleted,
+        the connection is closed with code 4001.
+        """
+        try:
+            while not self.is_disconnected:
+                await asyncio.sleep(300)
+                if not await self._revalidate_user():
+                    logger.warning(
+                        "ServiceStatusConsumer: user %s deactivated, closing WS",
+                        getattr(self.scope.get('user'), 'id', '?'),
+                    )
+                    await self.close(code=4001)
+                    break
+        except asyncio.CancelledError:
+            pass
 
     async def service_status_update(self, event):
         """Handle service status update broadcast."""
