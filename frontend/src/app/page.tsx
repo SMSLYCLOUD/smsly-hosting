@@ -243,7 +243,9 @@ const edgeSecurityTicker = [
     { icon: Network, title: "Lite Edge Agents" },
     { icon: Lock, title: "Custom SSL Manager" },
     { icon: Shield, title: "Safe Deploy & Approvals" },
-    { icon: Key, title: "API Tokens & CLI" }
+    { icon: Key, title: "API Tokens & CLI" },
+    { icon: Fingerprint, title: "Device Trust & Attestation" },
+    { icon: Search, title: "Trivy CVE Scanning" }
 ];
 
 const observabilityBento = [
@@ -258,9 +260,25 @@ const observabilityBento = [
 const utilityList = [
     { icon: Folders, title: "File Browser", description: "Browse, upload, download, and edit files inside any running container." },
     { icon: Timer, title: "Cron Jobs", description: "Schedule recurring tasks per service." },
-    { icon: Users, title: "Teams & Collaboration", description: "Invite team members with role-based access." },
+    { icon: Users, title: "Teams & RBAC", description: "Invite team members with role-based access. Organizations, teams, and fine-grained permissions." },
     { icon: RefreshCw, title: "Blue-Green Deployments", description: "Zero-downtime deployments with automatic traffic shifting." },
-    { icon: Cable, title: "Docker Swarm Targets", description: "Deploy to Docker environments effortlessly." }
+    { icon: Cable, title: "Cloud Provider Targets", description: "Deploy to AWS, GCP, Azure, Railway, Vercel, or local Docker." },
+    { icon: Sparkles, title: "Platform Self-Updates", description: "9-stage federated update pipeline across all managed servers." },
+    { icon: Command, title: "Immutable Audit Log", description: "SHA-256 blockchain-style chain of custody. Every action tracked, immutable." }
+];
+
+const fleetFeatures = [
+    { icon: Network, title: "WireGuard VPN Mesh", description: "Encrypted mesh network across all managed servers. Auto-allocated IPs, encrypted-at-rest keys, per-peer latency tracking. Multiple named meshes.", color: "text-blue-500", bg: "bg-blue-500/10" },
+    { icon: Server, title: "Raft Leader Election", description: "Automatic leader election across your server fleet. Term tracking, heartbeat monitoring, quorum requirements, full vote history.", color: "text-violet-500", bg: "bg-violet-500/10" },
+    { icon: RefreshCw, title: "Federated Fleet Updates", description: "4-stage rollout: Shadow Pull → Master Update → Canary Verification → Fleet Rollout. Per-node progress with fleet-wide rollback.", color: "text-emerald-500", bg: "bg-emerald-500/10" },
+    { icon: Waypoints, title: "Server Migration", description: "9-state cross-server transfer engine. DNS cutover, rollback with deadline, progress tracking, estimated downtime. Cross-platform migration support.", color: "text-amber-500", bg: "bg-amber-500/10" }
+];
+
+const billingLicensing = [
+    { icon: BarChart3, title: "Multi-Provider Billing", description: "Stripe, Flutterwave, and Cryptomus integration. Usage-based metering per CPU/RAM/storage/addon. Revenue analytics and infrastructure cost tracking.", color: "text-green-500", bg: "bg-green-500/10" },
+    { icon: Key, title: "Offline License Validation", description: "RSA-signed license keys. Three tiers: Community, Pro, Enterprise. Feature limits, expiration tracking, offline-capable verification.", color: "text-indigo-500", bg: "bg-indigo-500/10" },
+    { icon: Cloud, title: "7 Cloud Storage Backends", description: "Cloudflare R2, Amazon S3, MinIO, Backblaze B2, DigitalOcean Spaces, Wasabi, Custom. Per-service or platform-wide backup offloading.", color: "text-sky-500", bg: "bg-sky-500/10" },
+    { icon: Brain, title: "Code Intelligence", description: "Automatic codebase scanner with deep AI analysis. Skeleton extraction, dep graph building, deployment plan verification. AI auto-injects missing env vars.", color: "text-purple-500", bg: "bg-purple-500/10" }
 ];
 // ---------------------
 
@@ -966,7 +984,63 @@ export default function Home() {
                         </div>
                     </div>
 
-                    {/* SECTION 5: UTILITIES LIST */}
+                    {/* SECTION 5: FLEET MANAGEMENT */}
+                    <div className="mt-32">
+                        <div className="text-center mb-16">
+                            <h3 className="text-3xl font-bold text-slate-900 dark:text-white mb-4">Fleet Management & Mesh Networking</h3>
+                            <p className="text-slate-600 dark:text-slate-400">Orchestrate dozens of servers as one. Encrypted mesh, leader election, federated updates, and zero-downtime migration.</p>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            {fleetFeatures.map((feat, i) => (
+                                <motion.div
+                                    key={i}
+                                    initial={{ opacity: 0, y: 15 }}
+                                    whileInView={{ opacity: 1, y: 0 }}
+                                    viewport={{ once: true }}
+                                    transition={{ delay: i * 0.05 }}
+                                    className="group relative bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-8 rounded-2xl hover:shadow-xl hover:border-emerald-500/30 transition-all overflow-hidden"
+                                >
+                                    <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/5 dark:bg-emerald-500/10 blur-[50px] rounded-full group-hover:bg-emerald-500/20 transition-colors pointer-events-none"></div>
+                                    <CardIllustration index={i + 20} />
+                                    <div className={`w-12 h-12 ${feat.bg} ${feat.color} rounded-xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform shadow-sm relative z-10`}>
+                                        <feat.icon className="w-6 h-6" />
+                                    </div>
+                                    <h4 className="text-xl font-bold text-slate-900 dark:text-white mb-3 relative z-10">{feat.title}</h4>
+                                    <p className="text-slate-600 dark:text-slate-400 leading-relaxed relative z-10">{feat.description}</p>
+                                </motion.div>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* SECTION 6: BILLING & LICENSING */}
+                    <div className="mt-32">
+                        <div className="text-center mb-16">
+                            <h3 className="text-3xl font-bold text-slate-900 dark:text-white mb-4">Billing, Licensing & Intelligence</h3>
+                            <p className="text-slate-600 dark:text-slate-400">Monetize your platform. Meter usage, validate licenses offline, back up to any cloud, and let AI analyze your code.</p>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            {billingLicensing.map((feat, i) => (
+                                <motion.div
+                                    key={i}
+                                    initial={{ opacity: 0, y: 15 }}
+                                    whileInView={{ opacity: 1, y: 0 }}
+                                    viewport={{ once: true }}
+                                    transition={{ delay: i * 0.05 }}
+                                    className="group relative bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-8 rounded-2xl hover:shadow-xl hover:border-emerald-500/30 transition-all overflow-hidden"
+                                >
+                                    <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/5 dark:bg-emerald-500/10 blur-[50px] rounded-full group-hover:bg-emerald-500/20 transition-colors pointer-events-none"></div>
+                                    <CardIllustration index={i + 24} />
+                                    <div className={`w-12 h-12 ${feat.bg} ${feat.color} rounded-xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform shadow-sm relative z-10`}>
+                                        <feat.icon className="w-6 h-6" />
+                                    </div>
+                                    <h4 className="text-xl font-bold text-slate-900 dark:text-white mb-3 relative z-10">{feat.title}</h4>
+                                    <p className="text-slate-600 dark:text-slate-400 leading-relaxed relative z-10">{feat.description}</p>
+                                </motion.div>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* SECTION 7: UTILITIES LIST */}
                     <div className="mt-32 mb-16 border-t border-slate-200 dark:border-slate-800 pt-24">
                         <div className="flex flex-col md:flex-row gap-16">
                             <div className="md:w-1/3">
