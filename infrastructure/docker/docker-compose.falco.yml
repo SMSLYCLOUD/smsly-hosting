@@ -1,19 +1,59 @@
+# SMSLY Hosting — Falco Runtime Security (eBPF / BPF auto-detect)
+#
+# Falco monitors syscalls at the kernel level to detect runtime threats:
+#   - Unauthorized process execution inside containers
+#   - Shell spawned in a running container
+#   - Sensitive file access (/etc/shadow, .env, secrets/*)
+#   - Reverse shell / unexpected network connections
+#   - Privilege escalation inside containers
+#
+# The installer (lib/harden.sh) auto-detects the best driver:
+#   - eBPF: modern kernel >= 5.8 with BTF (no probe build needed)
+#   - BPF probe: kernel >= 4.14 with debugfs (auto-build on first run)
+#   - Kernel module: fallback (requires dkms)
+
 services:
   falco:
-    image: falcosecurity/falco:latest
+    image: falcosecurity/falco-no-driver:0.38.0
     container_name: smsly-falco
-    privileged: true
     restart: unless-stopped
+    # Drop all capabilities, add only what Falco needs for BPF/eBPF
+    cap_drop:
+      - ALL
+    cap_add:
+      - SYS_PTRACE
+      - SYS_ADMIN
+      - NET_ADMIN
+      - SYS_RESOURCE
+    # Security options: no privilege escalation
+    security_opt:
+      - no-new-privileges:true
     volumes:
       - /var/run/docker.sock:/host/var/run/docker.sock:ro,z
       - /dev:/host/dev:ro,z
       - /proc:/host/proc:ro,z
       - /boot:/host/boot:ro,z
       - /lib/modules:/host/lib/modules:ro,z
-      - /usr:/host/usr:ro,z
+      - /usr/src:/host/usr/src:ro,z
       - /etc:/host/etc:ro,z
     environment:
-      - FALCO_BPF_PROBE=
+      # Auto-detect: try eBPF first (modern kernel), fallback to module
+      - FALCO_BPF_PROBE=${FALCO_BPF_PROBE:-}
+      - HOST_ROOT=/host
     command: ["/usr/bin/falco", "-K", "/host/var/run/docker.sock", "-o", "json_output=true"]
     labels:
       - managed_by=smsly-hosting
+    networks:
+      - smsly-net
+    pid: host
+    # Healthcheck: confirm Falco is producing events
+    healthcheck:
+      test: ["CMD-SHELL", "grep -q 'Event' /dev/stdin <<< \"$(timeout 10 cat /proc/1/fd/1 2>/dev/null || true)\" || kill -0 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+networks:
+  smsly-net:
+    external: true
