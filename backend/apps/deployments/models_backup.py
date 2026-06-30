@@ -109,6 +109,10 @@ class BackupSchedule(models.Model):
     enabled = models.BooleanField(default=True)  # type: ignore[var-annotated]
     last_run = models.DateTimeField(null=True)  # type: ignore[var-annotated]
     next_run = models.DateTimeField(null=True)  # type: ignore[var-annotated]
+    cloud_upload_enabled = models.BooleanField(  # type: ignore[var-annotated]
+        default=True,
+        help_text='When True, automatically upload backups to the configured cloud destination. Turn off to keep backups local-only even with credentials set.',
+    )
     # ── S3 / object storage destination (optional) ──────────────────────────
     storage_backend = models.CharField(  # type: ignore[var-annotated]
         max_length=20,
@@ -138,6 +142,10 @@ class SnapshotSchedule(models.Model):
     enabled = models.BooleanField(default=True)  # type: ignore[var-annotated]
     last_run = models.DateTimeField(null=True)  # type: ignore[var-annotated]
     next_run = models.DateTimeField(null=True)  # type: ignore[var-annotated]
+    cloud_upload_enabled = models.BooleanField(  # type: ignore[var-annotated]
+        default=True,
+        help_text='When True, automatically upload snapshots to the configured cloud destination. Turn off to keep snapshots local-only even with credentials set.',
+    )
     # ── S3 / object storage destination (optional) ──────────────────────────
     storage_backend = models.CharField(  # type: ignore[var-annotated]
         max_length=20,

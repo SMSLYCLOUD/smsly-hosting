@@ -483,8 +483,13 @@ class BackupService:
             backup.save()
             self._prune_old_backups(ServiceBackup, service_id=service.id)
 
-            # Upload to S3 if a cloud destination is configured
-            _upload_backup_to_cloud(backup, filepath, service.name)
+            # Upload to S3 if a cloud destination is configured.
+            # Cloud failure is non-fatal — backup stays local and logs an alert.
+            cloud_result = _upload_backup_to_cloud(backup, filepath, service.name)
+            if not cloud_result["uploaded"] and cloud_result["reason"]:
+                backup.metadata["cloud_upload_error"] = cloud_result["reason"]
+                backup.save(update_fields=['metadata'])
+                _alert_cloud_upload_failed(backup, cloud_result)
 
             # Clean up temp image if we created one
             if image_tag and image_tag.startswith("backup/"):
@@ -548,28 +553,8 @@ class BackupService:
 
         is_remote = server_obj is not None and not server_obj.is_primary
 
-        # Stop the running service to prevent data corruption during volume restore
-        _stop_service_for_restore(target_service, is_remote)
-
-        if is_remote:
-            # Create a pre-restore backup snapshot
-            logger.info(f"Creating pre-restore snapshot for remote service {target_service.name}")
-            try:
-                self.backup_service(target_service.id, backup_type='PRE_TRANSFER')
-            except Exception as e:
-                logger.warning(f"Failed to create pre-restore snapshot: {e}")
-                if raise_on_snapshot_failure:
-                    raise RuntimeError(
-                        f"Pre-restore snapshot failed: {e}. Refusing to restore "
-                        "because the active state would be lost on a corrupt restore."
-                    ) from e
-
-            archive_path, cleanup_archive = self._prepare_archive_for_restore(backup)
-            temp_dir = os.path.join(os.path.dirname(archive_path), f"restore_{uuid.uuid4().hex}")
-            os.makedirs(temp_dir, exist_ok=True)
-            return self._restore_remote_service(backup, target_service, server_obj, temp_dir, archive_path, cleanup_archive)
-
-        # Create a pre-restore backup snapshot to ensure we don't lose the active state in case of failure
+        # Create pre-restore safety snapshot BEFORE stopping the container
+        # so the running service can be backed up while it's still alive.
         logger.info(f"Creating pre-restore snapshot for service {target_service.name}")
         try:
             self.backup_service(target_service.id, backup_type='PRE_TRANSFER')
@@ -580,6 +565,15 @@ class BackupService:
                     f"Pre-restore snapshot failed: {e}. Refusing to restore "
                     "because the active state would be lost on a corrupt restore."
                 ) from e
+
+        # Stop the running service to prevent data corruption during volume restore
+        _stop_service_for_restore(target_service, is_remote)
+
+        if is_remote:
+            archive_path, cleanup_archive = self._prepare_archive_for_restore(backup)
+            temp_dir = os.path.join(os.path.dirname(archive_path), f"restore_{uuid.uuid4().hex}")
+            os.makedirs(temp_dir, exist_ok=True)
+            return self._restore_remote_service(backup, target_service, server_obj, temp_dir, archive_path, cleanup_archive)
 
         archive_path, cleanup_archive = self._prepare_archive_for_restore(backup)
         temp_dir = os.path.join(os.path.dirname(archive_path), f"restore_{uuid.uuid4().hex}")
@@ -638,7 +632,11 @@ class BackupService:
 
                         if restored_image:
                             target_service.docker_image = restored_image
-                            target_service.deploy_type = 'DOCKER' # Switch to docker deploy
+                            # Only switch deploy_type if the service has no
+                            # explicit deploy configuration yet. Preserve
+                            # COMPOSE/FUNCTION/UPLOAD modes set by the owner.
+                            if target_service.deploy_type not in ('COMPOSE', 'FUNCTION', 'UPLOAD', 'GIT'):
+                                target_service.deploy_type = 'DOCKER'
                             target_service.save()
 
             # 4. Restore Volumes
@@ -893,10 +891,14 @@ class BackupService:
                 target_service.save()
 
             else:
-                logger.warning(f"Could not resolve provider to queue deployment for restored service {target_service.id}")
-                # Ensure service is marked as active even if provider resolution fails
+                logger.warning(f"Could not resolve provider to queue deployment for restored remote service {target_service.id}")
                 target_service.status = Service.Status.ACTIVE
                 target_service.save()
+                _emergency_restart_remote_container(target_service, server)
+                # Emergency restart: volumes are restored but no deploy was
+                # queued. Try to restart the stopped container directly so
+                # the service isn't left dead.
+                _emergency_restart_container(target_service)
 
             return True
 
@@ -1137,7 +1139,8 @@ class BackupService:
                 if metadata.get('docker_image'):
                     restored_image = metadata['docker_image']
                     target_service.docker_image = restored_image
-                    target_service.deploy_type = 'DOCKER'
+                    if target_service.deploy_type not in ('COMPOSE', 'FUNCTION', 'UPLOAD', 'GIT'):
+                        target_service.deploy_type = 'DOCKER'
                     target_service.save()
 
             # 4. Restore Volumes remotely
@@ -1564,8 +1567,13 @@ class BackupService:
             backup.save()
             self._prune_old_backups(ServerBackup)
 
-            # Upload to S3 if a cloud destination is configured
-            _upload_backup_to_cloud(backup, filepath, 'server')
+            # Upload to S3 if a cloud destination is configured.
+            # Cloud failure is non-fatal — backup stays local and logs an alert.
+            cloud_result = _upload_backup_to_cloud(backup, filepath, 'server')
+            if not cloud_result["uploaded"] and cloud_result["reason"]:
+                backup.metadata["cloud_upload_error"] = cloud_result["reason"]
+                backup.save(update_fields=['metadata'])
+                _alert_cloud_upload_failed(backup, cloud_result)
 
             return backup
 
@@ -2649,6 +2657,43 @@ def _stop_service_for_restore(service, is_remote):
         logger.warning("Could not stop service %s before restore: %s", service.name, exc)
 
 
+def _emergency_restart_container(service):
+    """Last-resort restart of a stopped container after restore.
+
+    Called when provider resolution fails after volumes/db have been
+    restored — without this the service would silently stay dead.
+    """
+    container_name = service.name
+    try:
+        import docker as _docker
+        client = _docker.from_env()
+        ctr = client.containers.get(container_name)
+        ctr.start()
+        logger.info("Emergency restart: started container %s", container_name)
+    except docker.errors.NotFound:
+        logger.warning("Emergency restart: container %s not found — service will stay stopped", container_name)
+    except Exception as exc:
+        logger.warning("Emergency restart failed for %s: %s", container_name, exc)
+
+
+def _emergency_restart_remote_container(service, server):
+    """Last-resort restart of a stopped container on a remote server after restore."""
+    container_name = service.name
+    try:
+        from apps.deployments.services.ssh_client import SSHClient
+        ssh = SSHClient(
+            ip=server.host, password=server.ssh_password,
+            user=server.ssh_user, port=server.ssh_port,
+            key_content=server.ssh_key, wg_address=server.wg_address,
+        )
+        ssh.connect()
+        ssh.exec_command(f"docker start {container_name} 2>/dev/null || true", raise_on_error=False)
+        ssh.close()
+        logger.info("Emergency remote restart: started container %s on %s", container_name, server.host)
+    except Exception as exc:
+        logger.warning("Emergency remote restart failed for %s on %s: %s", container_name, getattr(server, 'host', '?'), exc)
+
+
 def backup_addon(addon_id: str) -> str | None:
     """Back up a single addon (Postgres/MySQL/Redis/Mongo). Returns path to dump file or None."""
     import docker as _docker
@@ -2948,12 +2993,37 @@ def _upload_backup_to_cloud(backup, filepath, service_name):
     """Upload a backup to cloud storage and track metadata on the backup record.
     
     Accepts either a ServiceBackup or ServerBackup instance. Updates cloud_*
-    fields on success. Returns True if uploaded, False if skipped or failed.
+    fields on success. Returns a dict::
+
+        {"uploaded": True/False, "reason": "...", "bucket": "...", "key": "..."}
+
+    Respects the ``cloud_upload_enabled`` flag on the matching BackupSchedule —
+    if the schedule exists and has it set to False, cloud upload is skipped
+    even when credentials are configured.
     """
+    result: dict[str, Any] = {"uploaded": False, "reason": "", "bucket": "", "key": ""}
     try:
         from apps.deployments.models_backup import BackupSchedule
         service_id = getattr(backup, 'service_id', None)
         dest = getattr(backup, 'cloud_destination', None)
+
+        # Check schedule for cloud_upload_enabled toggle
+        if service_id:
+            sched = BackupSchedule.objects.filter(
+                service_id=service_id, enabled=True,
+            ).first()
+        else:
+            sched = BackupSchedule.objects.filter(
+                is_server_wide=True, enabled=True,
+            ).first()
+
+        if sched is not None and not sched.cloud_upload_enabled:
+            result["reason"] = "cloud_upload_enabled=False on schedule"
+            logger.info(
+                "Cloud upload skipped for %s: %s",
+                service_name, result["reason"],
+            )
+            return result
         
         if dest:
             s3_bucket = dest.bucket
@@ -2962,16 +3032,9 @@ def _upload_backup_to_cloud(backup, filepath, service_name):
             s3_access_key = dest.access_key
             s3_secret_key = dest.secret_key
         else:
-            if service_id:
-                sched = BackupSchedule.objects.filter(
-                    service_id=service_id, enabled=True, storage_backend='s3',
-                ).first()
-            else:
-                sched = BackupSchedule.objects.filter(
-                    is_server_wide=True, enabled=True, storage_backend='s3',
-                ).first()
-            if not sched or not sched.s3_bucket or not sched.s3_access_key:
-                return False
+            if not sched or sched.storage_backend != 's3' or not sched.s3_bucket or not sched.s3_access_key:
+                result["reason"] = "No S3 destination configured"
+                return result
             s3_bucket = sched.s3_bucket
             s3_endpoint = sched.s3_endpoint
             s3_region = sched.s3_region
@@ -2985,28 +3048,108 @@ def _upload_backup_to_cloud(backup, filepath, service_name):
             max_bytes = _DEFAULT_MAX_BACKUP_SIZE
         file_size = os.path.getsize(filepath)
         if max_bytes > 0 and file_size > max_bytes:
-            logger.warning(
-                "Skipping S3 upload for %s: size %d bytes exceeds "
-                "BACKUP_MAX_SIZE_BYTES (%d bytes).",
-                service_name, file_size, max_bytes,
-            )
-            return False
+            result["reason"] = f"Backup size ({file_size} bytes) exceeds BACKUP_MAX_SIZE_BYTES ({max_bytes} bytes)"
+            logger.warning("Skipping S3 upload for %s: %s", service_name, result["reason"])
+            return result
 
-        s3_key = f"smsly-backups/{service_name}/{os.path.basename(filepath)}"
+        result["bucket"] = s3_bucket
+        result["key"] = f"smsly-backups/{service_name}/{os.path.basename(filepath)}"
         ok = upload_backup_to_s3(
-            filepath, s3_bucket, s3_key,
+            filepath, s3_bucket, result["key"],
             endpoint=s3_endpoint, region=s3_region,
             access_key=s3_access_key, secret_key=s3_secret_key,
         )
         if ok:
             backup.cloud_uploaded = True
             backup.cloud_bucket = s3_bucket
-            backup.cloud_key = s3_key
+            backup.cloud_key = result["key"]
             backup.save(update_fields=['cloud_uploaded', 'cloud_bucket', 'cloud_key'])
-        return ok
+            result["uploaded"] = True
+        else:
+            result["reason"] = "S3 upload returned failure — check credentials, network, or bucket permissions"
+        return result
     except Exception as exc:
+        result["reason"] = str(exc)
         logger.warning("Cloud upload skipped for %s: %s", service_name, exc)
-    return False
+    return result
+
+
+def _alert_cloud_upload_failed(backup, cloud_result: dict):
+    """Log audit event and create in-app notification when cloud upload fails.
+
+    Cloud failure is non-fatal — the backup was saved locally — but the
+    operator needs to know so they can investigate and retry.
+    """
+    try:
+        from django.utils import timezone as tz
+
+        backup_type = "server" if getattr(backup, 'services_included', None) is not None else "service"
+        service_id = getattr(backup, 'service_id', None)
+        backup_id = str(getattr(backup, 'id', ''))
+        bucket = cloud_result.get('bucket', '')
+        key = cloud_result.get('key', '')
+        reason = cloud_result.get('reason', 'unknown')
+
+        from apps.deployments.utils import log_event
+        log_event(
+            action='BACKUP_CLOUD_UPLOAD_FAILED',
+            target=f'{backup_type.capitalize()} backup {backup_id}',
+            actor='system',
+            metadata={
+                'backup_id': backup_id,
+                'backup_type': backup_type,
+                'service_id': str(service_id) if service_id else None,
+                'bucket': bucket,
+                'key': key,
+                'reason': reason,
+                'timestamp': tz.now().isoformat(),
+            },
+        )
+
+        # Create in-app notification if the backup belongs to a service
+        from apps.deployments.models import Service
+        if service_id:
+            try:
+                svc = Service.objects.select_related('owner').only(
+                    'name', 'owner',
+                ).get(id=service_id)
+            except Service.DoesNotExist:
+                svc = None
+            if svc and svc.owner:
+                try:
+                    from apps.notifications.models import Notification
+                    Notification.objects.create(
+                        user=svc.owner,
+                        title='Cloud backup upload failed',
+                        message=(
+                            f"Backup of '{svc.name}' completed locally but "
+                            f"could not be uploaded to cloud storage "
+                            f"({cloud_result.get('bucket', 'S3')}). "
+                            f"Reason: {reason}. The backup is safe on the "
+                            f"local server."
+                        ),
+                        event_type='backup_cloud_failed',
+                    )
+                except Exception:
+                    pass
+
+            # Also dispatch alert to configured channels via Celery
+            try:
+                from apps.deployments.tasks_alerts import (
+                    _send_alerts_for_backup_cloud_failure,
+                )
+                _send_alerts_for_backup_cloud_failure.delay(
+                    service_id=str(service_id),
+                    backup_id=backup_id,
+                    reason=str(reason),
+                    bucket=str(bucket),
+                    key=str(key),
+                )
+            except Exception:
+                pass
+
+    except Exception as exc:
+        logger.warning("Failed to create cloud upload alert: %s", exc)
 
 
 def _resolve_cloud_config(backup):

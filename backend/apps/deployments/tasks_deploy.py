@@ -1320,26 +1320,31 @@ def _handle_failure(task, deployment, error_msg, reason):
             deployment.save()
             broadcast_status(deployment)
 
-            # Cleanup orphaned container if one was created
+            # Cleanup orphaned container if one was created.
+            # Only remove green_container_id (candidate container that never
+            # went live). Do NOT remove container_id blindly — it may point
+            # to the currently-live production container if the failure
+            # happened after cutover (e.g. route check failure).
             try:
-                if deployment.green_container_id or deployment.container_id:
+                if deployment.green_container_id:
                     import docker
                     client = docker.from_env()
-                    c_ids_to_remove = [id for id in [deployment.green_container_id, deployment.container_id] if id]
-                    cleaned_any = False
-                    for c_id in set(c_ids_to_remove):
-                        try:
-                            container = client.containers.get(c_id)
-                            container.remove(force=True)
-                            logger.info(f"Cleaned up orphaned container {c_id} for failed deployment {deployment.id}")
-                            cleaned_any = True
-                        except docker.errors.NotFound:
-                            pass
-                        except Exception as e:
-                            logger.warning(f"Failed to cleanup container {c_id}: {e}")
-                    if cleaned_any:
+                    try:
+                        container = client.containers.get(deployment.green_container_id)
+                        container.remove(force=True)
+                        logger.info(
+                            "Cleaned up orphaned green container %s for failed deployment %s",
+                            deployment.green_container_id, deployment.id,
+                        )
                         deployment.build_logs += "\n🧹 Cleaned up orphaned container resources.\n"
                         deployment.save(update_fields=['build_logs'])
+                    except docker.errors.NotFound:
+                        pass
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to cleanup green container %s: %s",
+                            deployment.green_container_id, e,
+                        )
             except Exception as e:
                 logger.warning(f"Docker client error during failure cleanup: {e}")
 

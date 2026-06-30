@@ -540,3 +540,64 @@ def _send_discord_alert(message, env_map):
     except Exception as exc:
         logger.warning("Discord alert failed: %s", exc)
         return {"ok": False, "reason": str(exc)}
+
+
+@shared_task
+def _send_alerts_for_backup_cloud_failure(service_id: str, backup_id: str, reason: str, bucket: str, key: str):
+    """Dispatch alerts when a backup succeeded locally but cloud upload failed.
+
+    Sends in-app notification, email, and optional SMS/chat channels.
+    Cloud failure is non-fatal but the operator needs visibility.
+    """
+    from apps.deployments.models import Service
+
+    try:
+        svc = Service.objects.select_related('owner').only('name', 'owner').get(id=service_id)
+    except Service.DoesNotExist:
+        logger.warning("Service %s not found for cloud backup failure alert", service_id)
+        return {"status": "skipped", "reason": "service_not_found"}
+
+    owner = svc.owner
+    env_map = _load_service_env(svc)
+    dashboard_url = _get_dashboard_url()
+
+    title = f"Cloud backup upload failed for {svc.name}"
+    subject = f"[SMSLY Hosting] {title}"
+    message = (
+        f"SMSLY Hosting Alert\n"
+        f"Service: {svc.name}\n"
+        f"Backup ID: {backup_id}\n"
+        f"Status: Local backup completed, cloud upload FAILED\n"
+        f"Bucket: {bucket}\n"
+        f"Key: {key}\n"
+        f"Reason: {reason}\n"
+        f"The backup is safe on the local server.\n"
+        f"View details: {dashboard_url}/services/{service_id}"
+    )
+
+    channel_results: dict[str, Any] = {}
+
+    if _service_flag(env_map, "JULES_NOTIFY_IN_APP", default=True):
+        channel_results["in_app"] = _create_in_app_notification(
+            owner, title=title, message=message,
+            event_type="backup_cloud_failed",
+        )
+
+    if _service_flag(env_map, "JULES_NOTIFY_EMAIL", default=True):
+        channel_results["email"] = _send_email_alert(owner, subject, message, env_map)
+
+    if _service_flag(env_map, "JULES_NOTIFY_SMS", default=True):
+        channel_results["sms"] = _send_sms_alert(owner, svc, message, env_map)
+
+    if _service_flag(env_map, "JULES_NOTIFY_SLACK", default=False):
+        channel_results["slack"] = _send_slack_alert(message, env_map)
+
+    if _service_flag(env_map, "JULES_NOTIFY_DISCORD", default=False):
+        channel_results["discord"] = _send_discord_alert(message, env_map)
+
+    delivered = [name for name, r in channel_results.items() if r.get("ok")]
+    return {
+        "status": "ok" if delivered else "no_channels",
+        "delivered_channels": delivered,
+        "channels": channel_results,
+    }
