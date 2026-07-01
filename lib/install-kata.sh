@@ -9,76 +9,66 @@
 # ============================================================
 set -euo pipefail
 
-if [ "$EUID" -ne 0 ]; then
-    echo "ERROR: Must run as root"
-    exit 1
-fi
+main() {
+    [ "$EUID" -eq 0 ] || { echo "ERROR: Must run as root"; return 1; }
+    command -v kata-runtime &>/dev/null && echo "  kata-runtime already installed — skipping" && return 0
+    [ -e /dev/kvm ] || {
+        echo "  KVM not available (/dev/kvm missing) — skipping Kata Containers."
+        echo "  gVisor (runsc) will be used for container sandboxing instead."
+        echo "  To enable Kata later: enable virtualization in BIOS, then run:"
+        echo "    modprobe kvm_intel   # Intel"
+        echo "    modprobe kvm_amd     # AMD"
+        echo "    sudo bash lib/install-kata.sh"
+        return 0
+    }
 
-# Already installed? Nothing to do.
-if command -v kata-runtime &>/dev/null; then
-    echo "  kata-runtime already installed — skipping"
-    exit 0
-fi
+    local ARCH
+    ARCH="$(uname -m)"
+    case "$ARCH" in
+        x86_64)  KATA_ARCH="amd64" ;;
+        aarch64) KATA_ARCH="arm64" ;;
+        *)       echo "ERROR: Unsupported architecture: $ARCH"; return 1 ;;
+    esac
 
-if [ ! -e /dev/kvm ]; then
-    echo "  KVM not available (/dev/kvm missing) — skipping Kata Containers."
-    echo "  gVisor (runsc) will be used for container sandboxing instead."
-    echo "  To enable Kata later: enable virtualization in BIOS, then run:"
-    echo "    modprobe kvm_intel   # Intel"
-    echo "    modprobe kvm_amd     # AMD"
-    echo "    sudo bash lib/install-kata.sh"
-    exit 0
-fi
+    local KATA_VERSION="${KATA_VERSION:-latest}"
+    if [ "$KATA_VERSION" = "latest" ]; then
+        KATA_VERSION="$(curl -fsSL -o /dev/null -w '%{url_effective}' \
+            "https://github.com/kata-containers/kata-containers/releases/latest" 2>/dev/null \
+            | sed 's|.*/||' || true)"
+        KATA_VERSION="${KATA_VERSION:-3.14.0}"
+    fi
 
-# Resolve latest Kata release from GitHub API if not pinned.
-if [ -z "${KATA_VERSION:-}" ] || [ "$KATA_VERSION" = "latest" ]; then
-    KATA_VERSION="$(curl -fsSL -o /dev/null -w '%{url_effective}' \
-        "https://github.com/kata-containers/kata-containers/releases/latest" 2>/dev/null \
-        | sed 's|.*/||' || true)"
-    # Fallback to a known-stable version if API is unreachable
-    KATA_VERSION="${KATA_VERSION:-3.14.0}"
-fi
-ARCH="$(uname -m)"
-case "$ARCH" in
-    x86_64)  KATA_ARCH="amd64" ;;
-    aarch64) KATA_ARCH="arm64" ;;
-    *)       echo "ERROR: Unsupported architecture: $ARCH"; exit 1 ;;
-esac
+    local KATA_TARBALL="kata-static-${KATA_VERSION}-${KATA_ARCH}.tar.xz"
+    local KATA_URL="https://github.com/kata-containers/kata-containers/releases/download/${KATA_VERSION}/${KATA_TARBALL}"
 
-KATA_TARBALL="kata-static-${KATA_VERSION}-${KATA_ARCH}.tar.xz"
-KATA_URL="https://github.com/kata-containers/kata-containers/releases/download/${KATA_VERSION}/${KATA_TARBALL}"
+    echo "=== Installing Kata Containers ${KATA_VERSION} ==="
 
-echo "=== Installing Kata Containers ${KATA_VERSION} ==="
+    cd /tmp
+    echo "  Downloading ${KATA_URL}..."
+    if ! curl -fsSL "$KATA_URL" -o "$KATA_TARBALL"; then
+        echo "ERROR: Failed to download Kata tarball"
+        echo "  URL: $KATA_URL"
+        return 1
+    fi
 
-cd /tmp
-echo "  Downloading ${KATA_URL}..."
-if ! curl -fsSL "$KATA_URL" -o "$KATA_TARBALL"; then
-    echo "ERROR: Failed to download Kata tarball"
-    echo "  URL: $KATA_URL"
-    echo "  Check the version or network connectivity."
-    exit 1
-fi
+    echo "  Validating tarball contents..."
+    if tar -tJf "$KATA_TARBALL" | grep -qE '^/|^\.\./|\.\./'; then
+        echo "ERROR: tarball contains unsafe paths (absolute or path traversal)"
+        return 1
+    fi
 
-# Validate tarball: reject absolute paths and path traversal
-echo "  Validating tarball contents..."
-if tar -tJf "$KATA_TARBALL" | grep -qE '^/|^\.\./|\.\./'; then
-    echo "ERROR: tarball contains unsafe paths (absolute or path traversal)"
-    exit 1
-fi
+    echo "  Extracting..."
+    tar -xJf "$KATA_TARBALL" -C /
 
-echo "  Extracting..."
-tar -xJf "$KATA_TARBALL" -C /
+    local DAEMON_JSON="/etc/docker/daemon.json"
+    if [ ! -f "$DAEMON_JSON" ]; then
+        echo '{}' > "$DAEMON_JSON"
+    fi
 
-# Register with Docker
-DAEMON_JSON="/etc/docker/daemon.json"
-if [ ! -f "$DAEMON_JSON" ]; then
-    echo '{}' > "$DAEMON_JSON"
-fi
-
-if command -v kata-runtime &>/dev/null; then
-    KATA_PATH="$(command -v kata-runtime)"
-
-    python3 -c "
+    if command -v kata-runtime &>/dev/null; then
+        local KATA_PATH
+        KATA_PATH="$(command -v kata-runtime)"
+        python3 -c "
 import json, sys
 with open('$DAEMON_JSON') as f:
     cfg = json.load(f)
@@ -88,25 +78,26 @@ cfg.setdefault('runtimes', {})['kata-runtime'] = {
 with open('$DAEMON_JSON', 'w') as f:
     json.dump(cfg, f, indent=2)
 "
-    echo "  Added kata-runtime to Docker daemon.json"
-else
-    echo "ERROR: kata-runtime binary not found after extraction"
-    exit 1
-fi
+        echo "  Added kata-runtime to Docker daemon.json"
+    else
+        echo "ERROR: kata-runtime binary not found after extraction"
+        return 1
+    fi
 
-# Set up systemd
-if command -v systemctl &>/dev/null; then
-    systemctl daemon-reload
-    systemctl restart docker
-    echo "  Docker restarted with kata-runtime support"
-fi
+    if command -v systemctl &>/dev/null; then
+        systemctl daemon-reload
+        systemctl restart docker
+        echo "  Docker restarted with kata-runtime support"
+    fi
 
-sleep 3
+    sleep 3
 
-# Verify
-if kata-runtime kata-check --verbose 2>/dev/null; then
-    echo "=== Kata Containers ${KATA_VERSION} installed successfully ==="
-else
-    echo "WARNING: kata-check reported issues. KVM and hardware nesting required."
-    echo "  Check: kata-runtime kata-check --verbose"
-fi
+    if kata-runtime kata-check --verbose 2>/dev/null; then
+        echo "=== Kata Containers ${KATA_VERSION} installed successfully ==="
+    else
+        echo "WARNING: kata-check reported issues. KVM and hardware nesting required."
+        echo "  Check: kata-runtime kata-check --verbose"
+    fi
+}
+
+[ "${BASH_SOURCE[0]}" = "$0" ] && main "$@"

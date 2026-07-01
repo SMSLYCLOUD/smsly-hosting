@@ -9,89 +9,86 @@
 # ============================================================
 set -euo pipefail
 
-# Already installed? Nothing to do.
-if command -v runsc &>/dev/null; then
-    echo "  runsc already installed — skipping"
-    exit 0
-fi
+main() {
+    local rc=0
 
-ARCH="$(uname -m)"
-case "$ARCH" in
-    x86_64)  ARCH="amd64" ;;
-    aarch64) ARCH="arm64" ;;
-    *)       echo "ERROR: Unsupported architecture: $ARCH"; exit 1 ;;
-esac
+    command -v runsc &>/dev/null && echo "  runsc already installed — skipping" && return 0
 
-echo "=== Installing gVisor (runsc) ==="
+    local ARCH
+    ARCH="$(uname -m)"
+    case "$ARCH" in
+        x86_64)  ARCH="amd64" ;;
+        aarch64) ARCH="arm64" ;;
+        *)       echo "ERROR: Unsupported architecture: $ARCH"; return 1 ;;
+    esac
 
-# ---- Prefer apt (reliable) over the legacy download bucket (often dead) ----
-_install_via_apt() {
-    apt-get update -qq
-    apt-get install -y -qq apt-transport-https ca-certificates curl gnupg 2>/dev/null
-    curl -fsSL https://gvisor.dev/archive.key | gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg 2>/dev/null
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" \
-        > /etc/apt/sources.list.d/gvisor.list
-    apt-get update -qq
-    apt-get install -y -qq runsc
-    command -v runsc &>/dev/null
-}
+    echo "=== Installing gVisor (runsc) ==="
 
-if _install_via_apt; then
-    echo "  Installed via apt"
-    SKIP_DOWNLOAD=true
-fi
+    # ---- Prefer apt (reliable) over the legacy download bucket (often dead) ----
+    _install_via_apt() {
+        apt-get update -qq
+        apt-get install -y -qq apt-transport-https ca-certificates curl gnupg 2>/dev/null
+        curl -fsSL https://gvisor.dev/archive.key | gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg 2>/dev/null
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" \
+            > /etc/apt/sources.list.d/gvisor.list
+        apt-get update -qq
+        apt-get install -y -qq runsc
+        command -v runsc &>/dev/null
+    }
 
-# ---- Fall back to direct download if apt failed (legacy bucket) ----
-download_via_curl() {
-    local base_url="$1"
-    local tmp
-    tmp="$(mktemp -d)"
-
-    curl -fsSL "${base_url}/runsc" -o "${tmp}/runsc" || return 1
-    curl -fsSL "${base_url}/runsc.sha512" -o "${tmp}/runsc.sha512" || return 1
-    (cd "$tmp" && sha512sum -c runsc.sha512) || return 1
-    chmod +x "${tmp}/runsc"
-    mv "${tmp}/runsc" /usr/local/bin/runsc
-
-    # containerd shim (optional — best-effort)
-    if curl -fsSL "${base_url}/containerd-shim-runsc-v1" -o "${tmp}/containerd-shim-runsc-v1" && \
-       curl -fsSL "${base_url}/containerd-shim-runsc-v1.sha512" -o "${tmp}/containerd-shim-runsc-v1.sha512"; then
-        (cd "$tmp" && sha512sum -c containerd-shim-runsc-v1.sha512) && {
-            chmod +x "${tmp}/containerd-shim-runsc-v1"
-            mv "${tmp}/containerd-shim-runsc-v1" /usr/local/bin/containerd-shim-runsc-v1
-        }
+    if _install_via_apt; then
+        echo "  Installed via apt"
+        SKIP_DOWNLOAD=true
     fi
 
-    rm -rf "$tmp"
-    return 0
-}
+    # ---- Fall back to direct download if apt failed (legacy bucket) ----
+    download_via_curl() {
+        local base_url="$1"
+        local tmp
+        tmp="$(mktemp -d)"
 
-if [ -z "${SKIP_DOWNLOAD:-}" ]; then
-    for url in \
-        "https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}" \
-        "https://storage.googleapis.com/gvisor/releases/nightly/latest/${ARCH}" \
-        "https://storage.googleapis.com/gvisor/releases/master/latest/${ARCH}"; do
-        if download_via_curl "$url"; then
-            echo "  Installed from ${url}"
-            SKIP_DOWNLOAD=true
-            break
+        curl -fsSL "${base_url}/runsc" -o "${tmp}/runsc" || return 1
+        curl -fsSL "${base_url}/runsc.sha512" -o "${tmp}/runsc.sha512" || return 1
+        (cd "$tmp" && sha512sum -c runsc.sha512) || return 1
+        chmod +x "${tmp}/runsc"
+        mv "${tmp}/runsc" /usr/local/bin/runsc
+
+        # containerd shim (optional — best-effort)
+        if curl -fsSL "${base_url}/containerd-shim-runsc-v1" -o "${tmp}/containerd-shim-runsc-v1" && \
+           curl -fsSL "${base_url}/containerd-shim-runsc-v1.sha512" -o "${tmp}/containerd-shim-runsc-v1.sha512"; then
+            (cd "$tmp" && sha512sum -c containerd-shim-runsc-v1.sha512) && {
+                chmod +x "${tmp}/containerd-shim-runsc-v1"
+                mv "${tmp}/containerd-shim-runsc-v1" /usr/local/bin/containerd-shim-runsc-v1
+            }
         fi
-    done
-fi
 
-if ! command -v runsc &>/dev/null; then
-    echo "ERROR: gVisor installation failed (both apt and download)"
-    exit 1
-fi
+        rm -rf "$tmp"
+        return 0
+    }
 
-# ---- Docker runtime registration ----
-DAEMON_JSON="/etc/docker/daemon.json"
-if [ ! -f "$DAEMON_JSON" ]; then
-    echo '{}' > "$DAEMON_JSON"
-fi
+    if [ -z "${SKIP_DOWNLOAD:-}" ]; then
+        for url in \
+            "https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}" \
+            "https://storage.googleapis.com/gvisor/releases/nightly/latest/${ARCH}" \
+            "https://storage.googleapis.com/gvisor/releases/master/latest/${ARCH}"; do
+            if download_via_curl "$url"; then
+                echo "  Installed from ${url}"
+                SKIP_DOWNLOAD=true
+                break
+            fi
+        done
+    fi
 
-if ! grep -q '"runsc"' "$DAEMON_JSON" 2>/dev/null; then
-    python3 -c "
+    command -v runsc &>/dev/null || { echo "ERROR: gVisor installation failed"; return 1; }
+
+    # ---- Docker runtime registration ----
+    DAEMON_JSON="/etc/docker/daemon.json"
+    if [ ! -f "$DAEMON_JSON" ]; then
+        echo '{}' > "$DAEMON_JSON"
+    fi
+
+    if ! grep -q '"runsc"' "$DAEMON_JSON" 2>/dev/null; then
+        python3 -c "
 import json
 with open('$DAEMON_JSON') as f:
     cfg = json.load(f)
@@ -101,21 +98,24 @@ cfg.setdefault('runtimes', {})['runsc'] = {
 with open('$DAEMON_JSON', 'w') as f:
     json.dump(cfg, f, indent=2)
 "
-    echo "  Added runsc runtime to Docker daemon.json"
-fi
+        echo "  Added runsc runtime to Docker daemon.json"
+    fi
 
-# Restart Docker
-if command -v systemctl &>/dev/null; then
-    systemctl daemon-reload
-    systemctl restart docker
-    echo "  Docker restarted with runsc support"
-fi
+    # Restart Docker
+    if command -v systemctl &>/dev/null; then
+        systemctl daemon-reload
+        systemctl restart docker
+        echo "  Docker restarted with runsc support"
+    fi
 
-# Verify
-sleep 3
-if runsc --version &>/dev/null; then
-    echo "=== gVisor (runsc) installed successfully ==="
-else
-    echo "ERROR: runsc verification failed"
-    exit 1
-fi
+    # Verify
+    sleep 3
+    if runsc --version &>/dev/null; then
+        echo "=== gVisor (runsc) installed successfully ==="
+    else
+        echo "ERROR: runsc verification failed"
+        return 1
+    fi
+}
+
+[ "${BASH_SOURCE[0]}" = "$0" ] && main "$@"

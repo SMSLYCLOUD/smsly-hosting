@@ -351,12 +351,18 @@ _harden_falco_verify() {
 _harden_container_runtime_bootstrap() {
     local install_dir="${INSTALL_DIR:-/opt/smsly-hosting}"
 
-    # Try gVisor first (lighter, no KVM required)
+    # gVisor first (lighter, no KVM required)
     if ! command -v runsc &>/dev/null; then
         if [ -f "$install_dir/lib/install-gvisor.sh" ]; then
             echo -e "${BLUE}  → [harden] gVisor (runsc) not detected — installing...${NC}"
             bash "$install_dir/lib/install-gvisor.sh" || true
         fi
+    fi
+
+    # If gVisor is now installed (was just installed or already present),
+    # skip Kata entirely — no point running two sandboxing runtimes.
+    if command -v runsc &>/dev/null; then
+        return 0
     fi
 
     # Try Kata if KVM is available

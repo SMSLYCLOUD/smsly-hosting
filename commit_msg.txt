@@ -1,7 +1,10 @@
-fix: kata installer exits 0 when KVM is unavailable
+fix: prevent install scripts from aborting installer and skip Kata when gVisor present
 
-install-kata.sh exits with code 1 when /dev/kvm is missing, which causes
-the parent installer to abort even though this is a skip, not a failure.
-Changed to exit 0 with an informational message.
+- Wrapped install-gvisor.sh and install-kata.sh in main() with
+  BASH_SOURCE guard so they're safe to source (install.sh lib loop)
+  without terminating the process
+- Added both to install.sh's lib skip pattern
+- Added early return in harden.sh: if gVisor is/was installed, skip Kata
+  entirely — no point running two sandboxing runtimes
 
 Co-authored-by: CommandCodeBot <noreply@commandcode.ai>
