@@ -40,7 +40,7 @@ services:
       # Auto-detect: try eBPF first (modern kernel), fallback to module
       - FALCO_BPF_PROBE=${FALCO_BPF_PROBE:-}
       - HOST_ROOT=/host
-    command: ["/usr/bin/falco", "-K", "/host/var/run/docker.sock", "-o", "json_output=true"]
+    command: ["/usr/bin/falco", "-o", "json_output=true"]
     labels:
       - managed_by=smsly-hosting
     networks:

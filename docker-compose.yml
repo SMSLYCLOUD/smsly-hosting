@@ -657,7 +657,7 @@ services:
     networks:
       - smsly-net
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:9234/health || exit 1"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9234/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
