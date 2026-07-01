@@ -43,6 +43,35 @@ if [ -n "$UPDATE_MODE" ]; then
         harden_security_bootstrap
     fi
 
+    # ─── Registry TLS cert check ─────────────────────────────────────────
+    # Regenerate + restart if the cert and key don't match, so the
+    # registry container doesn't crash-loop with "private key does not
+    # match public key".
+    _registry_cert_ok() {
+        [ -f "$INSTALL_DIR/certs/registry.key" ] || return 1
+        [ -f "$INSTALL_DIR/certs/registry.crt" ] || return 1
+        local _cmod _kmod
+        _cmod="$(openssl x509 -in "$INSTALL_DIR/certs/registry.crt" -noout -modulus 2>/dev/null | openssl sha256)" || return 1
+        _kmod="$(openssl rsa  -in "$INSTALL_DIR/certs/registry.key" -noout -modulus 2>/dev/null | openssl sha256)" || return 1
+        [ "$_cmod" = "$_kmod" ]
+    }
+    if [ -f "$INSTALL_DIR/certs/registry.crt" ] && ! _registry_cert_ok; then
+        echo -e "${BLUE}  → Registry TLS cert/key mismatch — regenerating...${NC}"
+        local _tmp
+        _tmp="$(mktemp -d)"
+        openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+            -keyout "${_tmp}/registry.key" \
+            -out    "${_tmp}/registry.crt" \
+            -subj "/CN=registry" 2>/dev/null && {
+            mv "${_tmp}/registry.key" "$INSTALL_DIR/certs/registry.key"
+            mv "${_tmp}/registry.crt" "$INSTALL_DIR/certs/registry.crt"
+            chmod 644 "$INSTALL_DIR/certs/registry.crt" "$INSTALL_DIR/certs/registry.key"
+            echo -e "${BLUE}  → Restarting registry container...${NC}"
+            docker restart smsly-hosting-registry-1 2>/dev/null || true
+        } || true
+        rm -rf "$_tmp" 2>/dev/null || true
+    fi
+
     # ─── Git Safety ──────────────────────────────────────────────────────────
     # Prevents "dubious ownership" errors on production VPS
     git config --global --add safe.directory "$INSTALL_DIR" 2>/dev/null || true

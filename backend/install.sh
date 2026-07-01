@@ -3358,9 +3358,10 @@ recover_runtime_stack() {
             echo -e "${YELLOW}        -keyout $INSTALL_DIR/certs/registry.key \\${NC}"
             echo -e "${YELLOW}        -out    $INSTALL_DIR/certs/registry.crt \\${NC}"
             echo -e "${YELLOW}        -subj '/CN=registry'${NC}"
+        else
+            echo -e "${BLUE}      Restarting registry container to pick up new TLS certs...${NC}"
+            docker restart smsly-hosting-registry-1 2>/dev/null || true
         fi
-        echo -e "${BLUE}      Restarting registry container to pick up new TLS certs...${NC}"
-        docker restart smsly-hosting-registry-1 2>/dev/null || true
     fi
     if [ ! -f "$INSTALL_DIR/auth/htpasswd" ] || [ -z "${REGISTRY_PASSWORD:-}" ] || [ -z "${REGISTRY_USER:-}" ]; then
         REGISTRY_PASS="${REGISTRY_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_urlsafe(18))" 2>/dev/null || openssl rand -hex 12 2>/dev/null || echo 'auto-generated-change-me')}"
@@ -5804,10 +5805,10 @@ if ! _registry_certs_ok; then
         echo -e "${YELLOW}        -keyout $INSTALL_DIR/certs/registry.key \\${NC}"
         echo -e "${YELLOW}        -out    $INSTALL_DIR/certs/registry.crt \\${NC}"
         echo -e "${YELLOW}        -subj '/CN=registry'${NC}"
-        return 1
+    else
+        echo -e "${BLUE}    Restarting registry container to pick up new TLS certs...${NC}"
+        docker restart smsly-hosting-registry-1 2>/dev/null || true
     fi
-    echo -e "${BLUE}    Restarting registry container to pick up new TLS certs...${NC}"
-    docker restart smsly-hosting-registry-1 2>/dev/null || true
 fi
 if [ ! -f "$INSTALL_DIR/auth/htpasswd" ] || [ -z "${REGISTRY_PASSWORD:-}" ] || [ -z "${REGISTRY_USER:-}" ]; then
     REGISTRY_PASS="${REGISTRY_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_urlsafe(18))" 2>/dev/null || openssl rand -hex 12 2>/dev/null || echo 'auto-generated-change-me')}"

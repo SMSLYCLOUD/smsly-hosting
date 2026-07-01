@@ -70,6 +70,12 @@ findtime = 300
 maxretry = 300
 bantime = 600
 JAIL_EOF
+    # Create the http-get-dos filter that jail.local references
+    [ -f /etc/fail2ban/filter.d/http-get-dos.conf ] || cat <<'FILTER_EOF' > /etc/fail2ban/filter.d/http-get-dos.conf
+[Definition]
+failregex = ^<HOST> -.*"(GET|POST).*HTTP.*" 200 .*$
+ignoreregx =
+FILTER_EOF
 
     systemctl enable fail2ban >/dev/null 2>&1 || true
     # Fire-and-forget: start in background, don't wait for ready
@@ -237,21 +243,18 @@ _harden_falco_bootstrap() {
     local compose_file="$INSTALL_DIR/infrastructure/docker/docker-compose.falco.yml"
     [ -f "$compose_file" ] || return 1
 
-    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "smsly-falco"; then
-        return 0
-    fi
-
     # Auto-detect best driver
     if [ -f /sys/kernel/btf/vmlinux ]; then
         export FALCO_BPF_PROBE=""
     fi
 
-    # Fire-and-forget
+    # Fire-and-forget: always recreate so config changes (e.g. command flags)
+    # take effect even if the container is already running.
     (
         docker compose \
             --env-file "$INSTALL_DIR/.env" \
             -f "$compose_file" \
-            up -d --pull always 2>/dev/null || true
+            up -d --force-recreate --pull always 2>/dev/null || true
     ) &
 }
 
