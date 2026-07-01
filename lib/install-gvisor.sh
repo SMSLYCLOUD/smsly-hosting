@@ -9,7 +9,12 @@
 # ============================================================
 set -euo pipefail
 
-GVISOR_VERSION="${GVISOR_VERSION:-latest}"
+# Already installed? Nothing to do.
+if command -v runsc &>/dev/null; then
+    echo "  runsc already installed — skipping"
+    exit 0
+fi
+
 ARCH="$(uname -m)"
 case "$ARCH" in
     x86_64)  ARCH="amd64" ;;
@@ -19,7 +24,24 @@ esac
 
 echo "=== Installing gVisor (runsc) ==="
 
-# ---- Try direct download first (legacy bucket) ----
+# ---- Prefer apt (reliable) over the legacy download bucket (often dead) ----
+_install_via_apt() {
+    apt-get update -qq
+    apt-get install -y -qq apt-transport-https ca-certificates curl gnupg 2>/dev/null
+    curl -fsSL https://gvisor.dev/archive.key | gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg 2>/dev/null
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" \
+        > /etc/apt/sources.list.d/gvisor.list
+    apt-get update -qq
+    apt-get install -y -qq runsc
+    command -v runsc &>/dev/null
+}
+
+if _install_via_apt; then
+    echo "  Installed via apt"
+    SKIP_DOWNLOAD=true
+fi
+
+# ---- Fall back to direct download if apt failed (legacy bucket) ----
 download_via_curl() {
     local base_url="$1"
     local tmp
@@ -44,46 +66,22 @@ download_via_curl() {
     return 0
 }
 
-DL_OK=false
-# Try specific release URL first
-RELEASE_URL="https://storage.googleapis.com/gvisor/releases/release/${GVISOR_VERSION}/${ARCH}"
-if [ "$GVISOR_VERSION" != "latest" ] && download_via_curl "$RELEASE_URL"; then
-    DL_OK=true
-    echo "  Installed from release ${GVISOR_VERSION}"
-fi
-# Try latest release
-if [ "$DL_OK" = false ] && download_via_curl "https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}"; then
-    DL_OK=true
-    echo "  Installed from latest release"
-fi
-# Try nightly
-if [ "$DL_OK" = false ] && download_via_curl "https://storage.googleapis.com/gvisor/releases/nightly/latest/${ARCH}"; then
-    DL_OK=true
-    echo "  Installed from nightly"
-fi
-# Try master
-if [ "$DL_OK" = false ] && download_via_curl "https://storage.googleapis.com/gvisor/releases/master/latest/${ARCH}"; then
-    DL_OK=true
-    echo "  Installed from master"
+if [ -z "${SKIP_DOWNLOAD:-}" ]; then
+    for url in \
+        "https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}" \
+        "https://storage.googleapis.com/gvisor/releases/nightly/latest/${ARCH}" \
+        "https://storage.googleapis.com/gvisor/releases/master/latest/${ARCH}"; do
+        if download_via_curl "$url"; then
+            echo "  Installed from ${url}"
+            SKIP_DOWNLOAD=true
+            break
+        fi
+    done
 fi
 
-# ---- Fall back to apt if all downloads failed ----
-if [ "$DL_OK" = false ]; then
-    echo "  Binary download failed — trying apt repository..."
-    if ! command -v runsc &>/dev/null; then
-        apt-get update -qq
-        apt-get install -y -qq apt-transport-https ca-certificates curl gnupg 2>/dev/null
-        curl -fsSL https://gvisor.dev/archive.key | gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg 2>/dev/null
-        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" \
-            > /etc/apt/sources.list.d/gvisor.list
-        apt-get update -qq
-        apt-get install -y -qq runsc
-    fi
-    if ! command -v runsc &>/dev/null; then
-        echo "ERROR: gVisor installation failed (both download and apt)"
-        exit 1
-    fi
-    echo "  Installed via apt"
+if ! command -v runsc &>/dev/null; then
+    echo "ERROR: gVisor installation failed (both apt and download)"
+    exit 1
 fi
 
 # ---- Docker runtime registration ----
