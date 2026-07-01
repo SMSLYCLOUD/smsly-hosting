@@ -142,7 +142,8 @@ safe_update_post_verify() {
     local core=(smsly-hosting-db-1 smsly-hosting-redis-1 smsly-hosting-rabbitmq-1
                 smsly-hosting-backend-1 smsly-hosting-frontend-1 smsly-hosting-caddy-1
                 smsly-hosting-celery-1 smsly-hosting-celery-beat-1
-                smsly-hosting-socket-proxy-1)
+                smsly-hosting-socket-proxy-1 smsly-hosting-registry-1
+                smsly-hosting-pgcat-1)
     local observability=(smsly-loki smsly-prometheus smsly-grafana smsly-promtail
                          smsly-docker-labels)
 
