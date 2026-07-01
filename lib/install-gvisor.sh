@@ -17,36 +17,76 @@ case "$ARCH" in
     *)       echo "ERROR: Unsupported architecture: $ARCH"; exit 1 ;;
 esac
 
-GVISOR_URL="https://storage.googleapis.com/gvisor/releases/release/${GVISOR_VERSION}/${ARCH}"
+echo "=== Installing gVisor (runsc) ==="
 
-echo "=== Installing gVisor (runsc) ${GVISOR_VERSION} ==="
+# ---- Try direct download first (legacy bucket) ----
+download_via_curl() {
+    local base_url="$1"
+    local tmp
+    tmp="$(mktemp -d)"
 
-# Download runsc binary
-cd /tmp
-curl -fsSL "${GVISOR_URL}/runsc" -o runsc
-curl -fsSL "${GVISOR_URL}/runsc.sha512" -o runsc.sha512
-sha512sum -c runsc.sha512 || { echo "ERROR: Checksum verification failed"; exit 1; }
-chmod +x runsc
-mv runsc /usr/local/bin/runsc
+    curl -fsSL "${base_url}/runsc" -o "${tmp}/runsc" || return 1
+    curl -fsSL "${base_url}/runsc.sha512" -o "${tmp}/runsc.sha512" || return 1
+    (cd "$tmp" && sha512sum -c runsc.sha512) || return 1
+    chmod +x "${tmp}/runsc"
+    mv "${tmp}/runsc" /usr/local/bin/runsc
 
-# Register with Docker
-if [ ! -f /etc/docker/runsc.json ]; then
-    cat > /etc/docker/runsc.json <<'DOCKEREOF'
-{
-    "runtimes": {
-        "runsc": {
-            "path": "/usr/local/bin/runsc",
-            "runtimeArgs": [
-                "--platform=kvm"
-            ]
+    # containerd shim (optional — best-effort)
+    if curl -fsSL "${base_url}/containerd-shim-runsc-v1" -o "${tmp}/containerd-shim-runsc-v1" && \
+       curl -fsSL "${base_url}/containerd-shim-runsc-v1.sha512" -o "${tmp}/containerd-shim-runsc-v1.sha512"; then
+        (cd "$tmp" && sha512sum -c containerd-shim-runsc-v1.sha512) && {
+            chmod +x "${tmp}/containerd-shim-runsc-v1"
+            mv "${tmp}/containerd-shim-runsc-v1" /usr/local/bin/containerd-shim-runsc-v1
         }
-    }
+    fi
+
+    rm -rf "$tmp"
+    return 0
 }
-DOCKEREOF
-    echo "  Created /etc/docker/runsc.json"
+
+DL_OK=false
+# Try specific release URL first
+RELEASE_URL="https://storage.googleapis.com/gvisor/releases/release/${GVISOR_VERSION}/${ARCH}"
+if [ "$GVISOR_VERSION" != "latest" ] && download_via_curl "$RELEASE_URL"; then
+    DL_OK=true
+    echo "  Installed from release ${GVISOR_VERSION}"
+fi
+# Try latest release
+if [ "$DL_OK" = false ] && download_via_curl "https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}"; then
+    DL_OK=true
+    echo "  Installed from latest release"
+fi
+# Try nightly
+if [ "$DL_OK" = false ] && download_via_curl "https://storage.googleapis.com/gvisor/releases/nightly/latest/${ARCH}"; then
+    DL_OK=true
+    echo "  Installed from nightly"
+fi
+# Try master
+if [ "$DL_OK" = false ] && download_via_curl "https://storage.googleapis.com/gvisor/releases/master/latest/${ARCH}"; then
+    DL_OK=true
+    echo "  Installed from master"
 fi
 
-# Merge into daemon.json if not already present
+# ---- Fall back to apt if all downloads failed ----
+if [ "$DL_OK" = false ]; then
+    echo "  Binary download failed — trying apt repository..."
+    if ! command -v runsc &>/dev/null; then
+        apt-get update -qq
+        apt-get install -y -qq apt-transport-https ca-certificates curl gnupg 2>/dev/null
+        curl -fsSL https://gvisor.dev/archive.key | gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg 2>/dev/null
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" \
+            > /etc/apt/sources.list.d/gvisor.list
+        apt-get update -qq
+        apt-get install -y -qq runsc
+    fi
+    if ! command -v runsc &>/dev/null; then
+        echo "ERROR: gVisor installation failed (both download and apt)"
+        exit 1
+    fi
+    echo "  Installed via apt"
+fi
+
+# ---- Docker runtime registration ----
 DAEMON_JSON="/etc/docker/daemon.json"
 if [ ! -f "$DAEMON_JSON" ]; then
     echo '{}' > "$DAEMON_JSON"
@@ -66,15 +106,7 @@ with open('$DAEMON_JSON', 'w') as f:
     echo "  Added runsc runtime to Docker daemon.json"
 fi
 
-# Install containerd-shim-runsc-v1 for proper containerd integration
-cd /tmp
-curl -fsSL "${GVISOR_URL}/containerd-shim-runsc-v1" -o containerd-shim-runsc-v1
-curl -fsSL "${GVISOR_URL}/containerd-shim-runsc-v1.sha512" -o containerd-shim-runsc-v1.sha512
-sha512sum -c containerd-shim-runsc-v1.sha512 || { echo "ERROR: containerd-shim checksum verification failed"; exit 1; }
-chmod +x containerd-shim-runsc-v1
-mv containerd-shim-runsc-v1 /usr/local/bin/containerd-shim-runsc-v1
-
-# Set up systemd mount for /etc/docker/daemon.json
+# Restart Docker
 if command -v systemctl &>/dev/null; then
     systemctl daemon-reload
     systemctl restart docker
