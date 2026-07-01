@@ -346,7 +346,7 @@ export default function Home() {
                         transition={{ delay: 0.05, duration: 0.5 }}
                         className="text-sm md:text-base font-medium text-slate-500 dark:text-slate-400 mb-3 tracking-wide"
                     >
-                        What are you building?
+                        By SMSLYCLOUD · Infrastructure Trust Ecosystem
                     </motion.p>
 
                     <motion.h1
@@ -355,9 +355,9 @@ export default function Home() {
                         transition={{ delay: 0.1, duration: 0.5 }}
                         className="text-4xl md:text-6xl lg:text-7xl font-extrabold text-slate-900 dark:text-white tracking-tight leading-none mb-6"
                     >
-                        Deploy your entire software ecosystem <br className="hidden md:block" />
+                        The sovereign PaaS for <br className="hidden md:block" />
                         <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-600 via-teal-500 to-cyan-500">
-                            from one control grid.
+                            modern infrastructure.
                         </span>
                     </motion.h1>
 
@@ -367,17 +367,16 @@ export default function Home() {
                         transition={{ delay: 0.2, duration: 0.5 }}
                         className="mt-6 text-lg md:text-xl text-slate-600 dark:text-slate-300 max-w-3xl mx-auto leading-relaxed font-light"
                     >
-                        Grid is a free, open-source PaaS. Deploy complete software ecosystems on infrastructure you control. <br />
-                        <strong>Connect your VPS and deploy connected apps, services, databases, workers, AI auto-remediation, tunnels, and multi-server clusters without DevOps pain.</strong>
+                        Grid is an open-source Platform-as-a-Service built by SMSLYCLOUD. An infrastructure trust ecosystem serving modern internet businesses across communications, identity, deployment, and growth automation.
                     </motion.p>
 
                     <motion.p
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ delay: 0.25, duration: 0.5 }}
-                        className="mt-4 text-lg md:text-xl font-semibold text-transparent bg-clip-text bg-gradient-to-r from-violet-600 via-purple-500 to-fuchsia-500"
+                        className="mt-4 text-base md:text-lg text-slate-500 dark:text-slate-400 max-w-2xl mx-auto"
                     >
-                        Grid eliminates the fear of microservices.
+                        Connect your VPS. Deploy connected apps, services, databases, workers, AI auto-remediation, tunnels, and multi-server clusters. No DevOps pain.
                     </motion.p>
 
                     <motion.div
@@ -473,165 +472,95 @@ export default function Home() {
 
 
 
-            {/* BUILT BY SMSLYCLOUD */}
-            <section className="py-20 md:py-32 bg-white dark:bg-slate-950 overflow-hidden border-t border-slate-200 dark:border-slate-800">
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                    <div className="flex flex-col lg:flex-row items-center gap-12 lg:gap-20">
-                        <div className="lg:w-1/2">
+            {/* STORYTELLING FEATURES — Narrative Journey */}
+            <StoryTellingSection />
+
+            {/* THE SMSLYCLOUD ECOSYSTEM — Galaxy background + Red Supergiant */}
+            <section className="relative py-20 md:py-32 overflow-hidden">
+                <div className="absolute inset-0 galaxy-bg" />
+                <div className="stars-layer" />
+                <div className="stars-twinkle" />
+                <div className="nebula-patch w-[600px] h-[400px] bg-indigo-600 top-[10%] left-[5%] opacity-15" />
+                <div className="nebula-patch w-[500px] h-[500px] bg-purple-600 bottom-[5%] right-[10%] opacity-12" style={{ animationDelay: '-15s' }} />
+                <div className="galaxy-arm w-[900px] h-[900px] border border-indigo-500/15 top-[-10%] left-[10%]" />
+                <div className="dust-lane w-[80%] top-[50%] left-[10%]" />
+                <motion.div
+                    className="cosmic-body cosmic-quasar w-[340px] h-[340px] md:w-[480px] md:h-[480px] bottom-[8%] right-[-3%] hidden md:block"
+                    animate={{ y: [0, -15, 0] }}
+                    transition={{ duration: 16, repeat: Infinity, ease: 'easeInOut' }}
+                />
+
+                <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                    <div className="text-center mb-16 md:mb-20">
+                        <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs md:text-sm font-bold rounded-full mb-6">
+                            <Rocket className="w-3 h-3 md:w-3.5 md:h-3.5" />
+                            The Ecosystem Behind Grid
+                        </div>
+                        <h2 className="text-3xl md:text-5xl font-extrabold text-white mb-6 tracking-tight">
+                            Secured by SMSLYCLOUD
+                        </h2>
+                        <p className="text-base md:text-xl text-slate-400 max-w-3xl mx-auto leading-relaxed">
+                            Grid is one product in the SMSLYCLOUD infrastructure trust ecosystem —
+                            building the tools modern internet businesses need to communicate, verify, deploy, and grow.
+                        </p>
+                    </div>
+
+                    <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 md:gap-8 mb-16">
+                        {ecosystemServices.map((cat, i) => (
                             <motion.div
+                                key={i}
                                 initial={{ opacity: 0, y: 20 }}
                                 whileInView={{ opacity: 1, y: 0 }}
                                 viewport={{ once: true }}
+                                transition={{ delay: i * 0.1 }}
+                                className="flex flex-col bg-slate-900/40 backdrop-blur-sm p-8 rounded-2xl border border-slate-700/30 hover:border-slate-600/80 transition-all group overflow-hidden relative"
                             >
-                                <div className="inline-flex items-center gap-2 px-3 py-1 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs md:text-sm font-medium rounded-full mb-6">
-                                    <Rocket className="w-3 h-3 md:w-3.5 md:h-3.5" />
-                                    Secured by SMSLYCLOUD
+                                <CardIllustration index={i + 22} />
+                                <div className={`w-12 h-12 rounded-xl ${cat.bg} ${cat.color} flex items-center justify-center mb-6 group-hover:scale-110 transition-transform relative z-10`}>
+                                    <cat.icon className="w-6 h-6" />
                                 </div>
-                                <h2 className="text-3xl md:text-4xl lg:text-5xl font-extrabold text-slate-900 dark:text-white mb-6 tracking-tight leading-tight">
-                                    Grid is secured by the SMSLYCLOUD infrastructure trust layer.
-                                </h2>
-                                <p className="text-base md:text-lg text-slate-600 dark:text-slate-400 mb-8 leading-relaxed">
-                                    Grid comes from SMSLYCLOUD, an infrastructure trust ecosystem building the tools modern internet businesses need to communicate, verify, deploy, and grow.
-                                </p>
-                                <p className="text-sm md:text-base text-slate-500 dark:text-slate-500 mb-8 leading-relaxed italic">
-                                    &quot;Grid is one product in a wider SMSLYCLOUD mission: make serious internet infrastructure easier, safer, and more accessible.&quot;
-                                </p>
-                                <Link 
-                                    href="https://smsly.cloud" 
-                                    target="_blank" 
-                                    rel="noopener noreferrer"
-                                    className="inline-flex items-center gap-2 px-6 py-3 bg-emerald-50 dark:bg-emerald-950/20 text-emerald-600 dark:text-emerald-400 font-bold rounded-xl border border-emerald-100 dark:border-emerald-800/50 hover:bg-emerald-100 dark:hover:bg-emerald-900/30 transition-all mb-10"
-                                >
-                                    Explore SMSLYCLOUD <ArrowUpRight className="w-4 h-4" />
-                                </Link>
+                                <h3 className="text-xl font-bold text-white mb-6">{cat.category}</h3>
+                                <ul className="space-y-6 flex-1">
+                                    {cat.services.map((svc, j) => (
+                                        <li key={j} className="relative pl-4 border-l-2 border-slate-700 hover:border-emerald-500 transition-colors">
+                                            <h4 className="font-bold text-sm text-white mb-1">{svc.name}</h4>
+                                            <p className="text-xs text-slate-400 leading-normal">{svc.desc}</p>
+                                        </li>
+                                    ))}
+                                </ul>
                             </motion.div>
-                            
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                                {smslycloudPillars.map((pillar, i) => (
-                                    <motion.div
-                                        key={i}
-                                        initial={{ opacity: 0, x: -20 }}
-                                        whileInView={{ opacity: 1, x: 0 }}
-                                        viewport={{ once: true }}
-                                        transition={{ delay: i * 0.1 }}
-                                        className="flex items-start gap-3 group"
-                                    >
-                                        <div className={`p-2 rounded-lg ${pillar.bg} ${pillar.color} group-hover:scale-110 transition-transform`}>
-                                            <pillar.icon className="w-5 h-5" />
-                                        </div>
-                                        <div>
-                                            <h4 className="font-bold text-sm md:text-base text-slate-900 dark:text-white mb-1">{pillar.title}</h4>
-                                            <p className="text-xs md:text-sm text-slate-500 dark:text-slate-400">{pillar.description}</p>
-                                        </div>
-                                    </motion.div>
-                                ))}
-                            </div>
-                        </div>
+                        ))}
+                    </div>
 
-                        <div className="lg:w-1/2 relative">
-                            {/* Visual element representing the ecosystem - using existing styles */}
-                            <motion.div
-                                initial={{ opacity: 0, scale: 0.95 }}
-                                whileInView={{ opacity: 1, scale: 1 }}
-                                viewport={{ once: true }}
-                                className="relative p-1 bg-gradient-to-br from-emerald-500/20 via-teal-500/20 to-blue-500/20 rounded-[2.5rem] overflow-hidden"
-                            >
-                                <div className="bg-white dark:bg-slate-900 rounded-[2.3rem] p-8 md:p-12 relative overflow-hidden">
-                                    <div className="absolute top-0 right-0 p-8 opacity-10">
-                                        <Globe className="w-64 h-64 text-slate-400" />
-                                    </div>
-                                    
-                                    <div className="relative z-10">
-                                        <div className="text-emerald-500 font-bold tracking-widest uppercase text-xs mb-4">Infrastructure Ecosystem</div>
-                                        <h3 className="text-2xl md:text-3xl font-extrabold text-slate-900 dark:text-white mb-6 leading-tight">Built for founders, scaled for the internet.</h3>
-                                        
-                                        <div className="space-y-6">
-                                            <div className="flex items-center gap-4 p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-100 dark:border-slate-800 transform hover:translate-x-2 transition-transform">
-                                                <div className="w-10 h-10 rounded-full bg-blue-500 flex items-center justify-center text-white shadow-lg shadow-blue-500/20">
-                                                    <MessageSquare className="w-5 h-5" />
-                                                </div>
-                                                <div>
-                                                    <div className="font-bold text-sm text-slate-900 dark:text-white">Communication APIs</div>
-                                                    <div className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Messaging & OTP</div>
-                                                </div>
-                                            </div>
-                                            
-                                            <div className="flex items-center gap-4 p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-100 dark:border-slate-800 translate-x-4 md:translate-x-8 transform hover:translate-x-10 transition-transform">
-                                                <div className="w-10 h-10 rounded-full bg-emerald-500 flex items-center justify-center text-white shadow-lg shadow-emerald-500/20">
-                                                    <Fingerprint className="w-5 h-5" />
-                                                </div>
-                                                <div>
-                                                    <div className="font-bold text-sm text-slate-900 dark:text-white">Identity & Trust</div>
-                                                    <div className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Security & Verification</div>
-                                                </div>
-                                            </div>
-
-                                            <div className="flex items-center gap-4 p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-100 dark:border-slate-800 transform hover:translate-x-2 transition-transform">
-                                                <div className="w-10 h-10 rounded-full bg-indigo-500 flex items-center justify-center text-white shadow-lg shadow-indigo-500/20">
-                                                    <Cloud className="w-5 h-5" />
-                                                </div>
-                                                <div>
-                                                    <div className="font-bold text-sm text-slate-900 dark:text-white">Deployment</div>
-                                                    <div className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Grid by CloudNeuron</div>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </motion.div>
-                        </div>
+                    <div className="text-center">
+                        <Link
+                            href="https://smsly.cloud"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-2 px-6 py-3 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-bold rounded-xl hover:bg-emerald-500/20 transition-all"
+                        >
+                            Explore SMSLYCLOUD <ArrowUpRight className="w-4 h-4" />
+                        </Link>
                     </div>
                 </div>
             </section>
- 
-             {/* THE TRUST LAYER ECOSYSTEM GRID */}
-             <section className="py-20 md:py-32 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800">
-                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                     <div className="text-center mb-16 md:mb-20">
-                         <h2 className="text-3xl md:text-5xl font-extrabold text-slate-900 dark:text-white mb-6 tracking-tight">
-                             The Trust Layer for the Internet
-                         </h2>
-                         <p className="text-base md:text-xl text-slate-600 dark:text-slate-400 max-w-3xl mx-auto leading-relaxed">
-                             SMSLYCLOUD provides the essential infrastructure for modern internet businesses — 
-                             from zero-trust security to real-time deepfake detection and global communications.
-                         </p>
-                     </div>
- 
-                     <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 md:gap-8">
-                         {ecosystemServices.map((cat, i) => (
-                             <motion.div
-                                 key={i}
-                                 initial={{ opacity: 0, y: 20 }}
-                                 whileInView={{ opacity: 1, y: 0 }}
-                                 viewport={{ once: true }}
-                                 transition={{ delay: i * 0.1 }}
-                                 className="flex flex-col bg-white dark:bg-slate-800 p-8 rounded-[2rem] border border-slate-200 dark:border-slate-700 shadow-sm hover:shadow-xl hover:shadow-emerald-500/5 transition-all group overflow-hidden relative"
-                             >
-                                 <CardIllustration index={i + 22} />
-                                 <div className={`w-12 h-12 rounded-xl ${cat.bg} ${cat.color} flex items-center justify-center mb-6 group-hover:scale-110 transition-transform relative z-10`}>
-                                     <cat.icon className="w-6 h-6" />
-                                 </div>
-                                 <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-6">{cat.category}</h3>
-                                 <ul className="space-y-6 flex-1">
-                                     {cat.services.map((svc, j) => (
-                                         <li key={j} className="relative pl-4 border-l-2 border-slate-100 dark:border-slate-700 hover:border-emerald-500 transition-colors">
-                                             <h4 className="font-bold text-sm text-slate-900 dark:text-white mb-1">{svc.name}</h4>
-                                             <p className="text-xs text-slate-500 dark:text-slate-400 leading-normal">{svc.desc}</p>
-                                         </li>
-                                     ))}
-                                 </ul>
-                             </motion.div>
-                         ))}
-                     </div>
-                 </div>
-             </section>
 
-            {/* BATTLE CARDS COMPARISON */}
-            <section className="py-16 md:py-24 bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800">
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            {/* BATTLE CARDS COMPARISON — Space bg + Binary Star */}
+            <section className="relative py-16 md:py-24 overflow-hidden">
+                <div className="absolute inset-0 space-bg" />
+                <div className="stars-layer" />
+                <div className="stars-twinkle" />
+                <div className="nebula-patch w-[400px] h-[300px] bg-rose-600 top-[10%] right-[5%] opacity-10" />
+                <motion.div
+                    className="cosmic-body cosmic-neutronstar w-[300px] h-[300px] md:w-[440px] md:h-[440px] bottom-[5%] right-[8%] hidden md:block"
+                    animate={{ y: [0, -10, 0] }}
+                    transition={{ duration: 14, repeat: Infinity, ease: 'easeInOut' }}
+                />
+
+                <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                     <div className="text-center mb-12 md:mb-16">
-                        <h2 className="text-2xl md:text-4xl lg:text-5xl font-extrabold text-slate-900 dark:text-white mb-4 md:mb-6">Stop Paying the &quot;Cloud Tax&quot;</h2>
-                        <p className="text-base md:text-xl text-slate-600 dark:text-slate-400 max-w-2xl mx-auto">
+                        <h2 className="text-2xl md:text-4xl lg:text-5xl font-extrabold text-white mb-4 md:mb-6">Stop Paying the &quot;Cloud Tax&quot;</h2>
+                        <p className="text-base md:text-xl text-slate-400 max-w-2xl mx-auto">
                             Grid runs on <strong>your infrastructure</strong>, saving you up to 90% on compute costs compared to managed services.
                         </p>
                     </div>
@@ -644,7 +573,7 @@ export default function Home() {
                                 whileInView={{ opacity: 1, y: 0 }}
                                 viewport={{ once: true }}
                                 transition={{ delay: i * 0.1 }}
-                                className={`relative p-6 md:p-8 rounded-2xl md:rounded-3xl bg-white dark:bg-slate-800 border-2 ${card.highlight ? 'border-emerald-500 shadow-xl shadow-emerald-500/10' : 'border-slate-100 dark:border-slate-700'} flex flex-col`}
+                                className={`relative p-6 md:p-8 rounded-2xl md:rounded-3xl bg-slate-900/40 backdrop-blur-sm border-2 ${card.highlight ? 'border-emerald-500 shadow-xl shadow-emerald-500/10' : 'border-slate-700/50'} flex flex-col`}
                             >
                                 {card.highlight && (
                                     <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-1 bg-emerald-500 text-white text-[10px] md:text-xs font-bold uppercase tracking-widest rounded-full shadow-md">
@@ -653,24 +582,24 @@ export default function Home() {
                                 )}
 
                                 <div className="mb-4 md:mb-6 flex items-center justify-between">
-                                    <div className={`p-2 md:p-3 rounded-xl md:rounded-2xl ${card.highlight ? 'bg-emerald-100 dark:bg-emerald-900/30' : 'bg-slate-100 dark:bg-slate-700/50'}`}>
-                                        <card.logo className={`w-6 h-6 md:w-8 md:h-8 ${card.textColor}`} />
+                                    <div className={`p-2 md:p-3 rounded-xl md:rounded-2xl ${card.highlight ? 'bg-emerald-500/20' : 'bg-slate-800/50'}`}>
+                                        <card.logo className={`w-6 h-6 md:w-8 md:h-8 ${card.highlight ? 'text-emerald-400' : card.textColor}`} />
                                     </div>
-                                    <h3 className="text-lg md:text-xl font-bold text-slate-900 dark:text-white">{card.name}</h3>
+                                    <h3 className="text-lg md:text-xl font-bold text-white">{card.name}</h3>
                                 </div>
 
                                 <div className="mb-6 md:mb-8">
-                                    <span className="text-3xl md:text-4xl font-extrabold text-slate-900 dark:text-white">{card.price}</span>
-                                    <span className="block text-xs md:text-sm text-slate-500 dark:text-slate-400 mt-1">{card.priceDetail}</span>
+                                    <span className="text-3xl md:text-4xl font-extrabold text-white">{card.price}</span>
+                                    <span className="block text-xs md:text-sm text-slate-400 mt-1">{card.priceDetail}</span>
                                 </div>
 
                                 <ul className="space-y-3 md:space-y-4 mb-6 md:mb-8 flex-1">
                                     {card.features.map((feat, j) => (
-                                        <li key={j} className="flex items-center gap-2 md:gap-3 text-xs md:text-sm font-medium text-slate-600 dark:text-slate-300">
+                                        <li key={j} className="flex items-center gap-2 md:gap-3 text-xs md:text-sm font-medium text-slate-300">
                                             {card.highlight ? (
                                                 <CheckCircle2 className="w-4 h-4 md:w-5 md:h-5 text-emerald-500 flex-shrink-0" />
                                             ) : (
-                                                <XCircle className="w-4 h-4 md:w-5 md:h-5 text-slate-400 flex-shrink-0" />
+                                                <XCircle className="w-4 h-4 md:w-5 md:h-5 text-slate-600 flex-shrink-0" />
                                             )}
                                             {feat}
                                         </li>
@@ -682,7 +611,7 @@ export default function Home() {
                                     className={`w-full py-2.5 md:py-3 rounded-lg md:rounded-xl text-sm md:text-base font-bold text-center transition-all ${
                                         card.highlight
                                         ? 'bg-emerald-500 hover:bg-emerald-600 text-white shadow-md hover:shadow-emerald-500/20'
-                                        : 'bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-300'
+                                        : 'bg-slate-800 hover:bg-slate-700 text-slate-300'
                                     }`}
                                 >
                                     {card.highlight ? 'Install Grid' : (card.name.includes("Vercel") ? 'View Comparison' : 'View Pricing')}
@@ -693,23 +622,30 @@ export default function Home() {
                 </div>
             </section>
 
-            {/* STORYTELLING FEATURES — Narrative Journey */}
-            <StoryTellingSection />
 
 
+            {/* DEVELOPER EXPERIENCE & CLI — Space bg with Uranus */}
+            <section className="relative py-16 md:py-32 overflow-hidden">
+                <div className="absolute inset-0 space-bg" />
+                <div className="stars-layer" />
+                <div className="stars-twinkle" />
+                <div className="nebula-patch w-[500px] h-[400px] bg-cyan-600 bottom-[10%] left-[5%] opacity-12" style={{ animationDelay: '-8s' }} />
+                <motion.div
+                    className="cosmic-body cosmic-blazar w-[280px] h-[280px] md:w-[400px] md:h-[400px] bottom-[8%] left-[5%] hidden md:block"
+                    animate={{ y: [0, -12, 0] }}
+                    transition={{ duration: 16, repeat: Infinity, ease: 'easeInOut' }}
+                />
 
-            {/* DEVELOPER EXPERIENCE & CLI */}
-            <section className="py-16 md:py-32 bg-white dark:bg-slate-950 overflow-hidden">
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                     <div className="flex flex-col lg:flex-row items-center gap-12 lg:gap-20">
                         <div className="lg:w-1/2">
-                            <div className="inline-flex items-center gap-2 px-3 py-1 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs md:text-sm font-medium rounded-full mb-6 md:mb-8">
+                            <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs md:text-sm font-bold rounded-full mb-6 md:mb-8">
                                 <Terminal className="w-3 h-3 md:w-3.5 md:h-3.5" />
                                 Developer First Experience
                             </div>
-                            <h2 className="text-3xl md:text-4xl lg:text-5xl font-extrabold text-slate-900 dark:text-white mb-6 md:mb-8 tracking-tight">Power at Your Fingertips</h2>
-                            <p className="text-base md:text-lg text-slate-600 dark:text-slate-400 mb-8 md:mb-10 leading-relaxed">
-                                Control your entire infrastructure from the command line. The <code className="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded font-mono text-emerald-600 dark:text-emerald-400">grid</code> CLI gives you instant access to logs, deployments, and secrets.
+                            <h2 className="text-3xl md:text-4xl lg:text-5xl font-extrabold text-white mb-6 md:mb-8 tracking-tight">Power at Your Fingertips</h2>
+                            <p className="text-base md:text-lg text-slate-400 mb-8 md:mb-10 leading-relaxed">
+                                Control your entire infrastructure from the command line. The <code className="bg-slate-800 px-1 py-0.5 rounded font-mono text-emerald-400">grid</code> CLI gives you instant access to logs, deployments, and secrets.
                             </p>
 
                             <div className="flex flex-col gap-6">
@@ -791,27 +727,37 @@ export default function Home() {
 
 
 
-            {/* ENTERPRISE SECURITY */}
-            <section className="py-16 md:py-32 bg-white dark:bg-slate-950 overflow-hidden border-t border-slate-200 dark:border-slate-800">
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            {/* ENTERPRISE SECURITY — Space bg with Pluto */}
+            <section className="relative py-16 md:py-32 overflow-hidden">
+                <div className="absolute inset-0 space-bg" />
+                <div className="stars-layer" />
+                <div className="stars-twinkle" />
+                <div className="nebula-patch w-[400px] h-[350px] bg-rose-600 top-[15%] right-[8%] opacity-10" style={{ animationDelay: '-12s' }} />
+                <motion.div
+                    className="cosmic-body cosmic-androgiant w-[350px] h-[350px] md:w-[500px] md:h-[500px] bottom-[5%] right-[3%] hidden md:block"
+                    animate={{ y: [0, -10, 0] }}
+                    transition={{ duration: 18, repeat: Infinity, ease: 'easeInOut' }}
+                />
+
+                <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                     <div className="flex flex-col lg:flex-row items-center gap-12 lg:gap-20">
                         <div className="lg:w-1/2">
-                            <div className="inline-flex items-center gap-2 px-3 py-1 bg-rose-100 dark:bg-rose-900/30 text-rose-700 dark:text-rose-300 text-xs md:text-sm font-medium rounded-full mb-6">
+                            <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs md:text-sm font-bold rounded-full mb-6">
                                 <Shield className="w-3 h-3 md:w-3.5 md:h-3.5" />
                                 Enterprise Security
                             </div>
-                            <h2 className="text-3xl md:text-4xl lg:text-5xl font-extrabold mb-6 tracking-tight text-slate-900 dark:text-white">Hardened for Production</h2>
-                            <p className="text-base md:text-lg text-slate-600 dark:text-slate-400 mb-8 leading-relaxed">
+                            <h2 className="text-3xl md:text-4xl lg:text-5xl font-extrabold mb-6 tracking-tight text-white">Hardened for Production</h2>
+                            <p className="text-base md:text-lg text-slate-400 mb-8 leading-relaxed">
                                 Don&apos;t compromise on compliance. Grid wraps your Docker clusters in military-grade WireGuard VPNs, powered by Grid&apos;s orchestration engine.
                             </p>
                             <ul className="space-y-4 mb-8">
-                                <li className="flex items-center gap-3 text-slate-700 dark:text-slate-300">
+                                <li className="flex items-center gap-3 text-slate-300">
                                     <CheckCircle2 className="w-5 h-5 text-emerald-500" /> End-to-end VPN mesh across regions
                                 </li>
-                                <li className="flex items-center gap-3 text-slate-700 dark:text-slate-300">
+                                <li className="flex items-center gap-3 text-slate-300">
                                     <CheckCircle2 className="w-5 h-5 text-emerald-500" /> Comprehensive Audit Logs for every action
                                 </li>
-                                <li className="flex items-center gap-3 text-slate-700 dark:text-slate-300">
+                                <li className="flex items-center gap-3 text-slate-300">
                                     <CheckCircle2 className="w-5 h-5 text-emerald-500" /> Zero-Trust Addon architecture
                                 </li>
                             </ul>
@@ -821,10 +767,10 @@ export default function Home() {
                                 <motion.div
                                     key={i}
                                     whileHover={{ scale: 1.02 }}
-                                    className="p-6 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl flex flex-col items-center justify-center text-center"
+                                    className="p-6 bg-slate-900/40 backdrop-blur-sm border border-slate-700/30 rounded-2xl flex flex-col items-center justify-center text-center hover:border-emerald-500/30 transition-colors"
                                 >
                                     <std.icon className="w-8 h-8 text-emerald-500 mb-4" />
-                                    <h4 className="font-bold text-slate-900 dark:text-white">{std.name}</h4>
+                                    <h4 className="font-bold text-white">{std.name}</h4>
                                 </motion.div>
                             ))}
                         </div>
@@ -832,13 +778,22 @@ export default function Home() {
                 </div>
             </section>
 
-            {/* CTA SECTION */}
-            <section className="py-20 md:py-32 bg-slate-950 text-white overflow-hidden relative border-t border-emerald-900/50">
-                <div className="absolute inset-0 bg-gradient-to-br from-emerald-900/20 to-slate-900/20" />
-                <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-emerald-500/50 to-transparent" />
+            {/* CTA SECTION — Space bg + Supernova */}
+            <section className="relative py-20 md:py-32 overflow-hidden">
+                <div className="absolute inset-0 space-bg" />
+                <div className="stars-layer" />
+                <div className="stars-twinkle" />
+                <div className="nebula-patch w-[700px] h-[500px] bg-emerald-600 top-[20%] left-[20%] opacity-10" />
+                <div className="nebula-patch w-[500px] h-[400px] bg-indigo-600 bottom-[10%] right-[10%] opacity-8" style={{ animationDelay: '-15s' }} />
+                <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-emerald-500/30 to-transparent" />
+                <motion.div
+                    className="cosmic-body cosmic-protostar w-[350px] h-[350px] md:w-[500px] md:h-[500px] top-[10%] right-[10%] hidden md:block"
+                    animate={{ y: [0, -10, 0] }}
+                    transition={{ duration: 14, repeat: Infinity, ease: 'easeInOut' }}
+                />
 
-                <div className="relative max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-                    <h2 className="text-3xl md:text-5xl lg:text-6xl font-extrabold mb-6 md:mb-8 tracking-tight">Ready to Transform Your Workflow?</h2>
+                <div className="relative z-10 max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+                    <h2 className="text-3xl md:text-5xl lg:text-6xl font-extrabold mb-6 md:mb-8 tracking-tight text-white">Ready to Transform Your Workflow?</h2>
                     <p className="text-lg md:text-xl lg:text-2xl mb-10 md:mb-12 text-slate-400 max-w-3xl mx-auto font-light">
                         Deploy your first cluster in minutes. 100% free and open-source.
                     </p>
@@ -847,7 +802,6 @@ export default function Home() {
                             Install Grid Now <ArrowRight className="w-4 h-4 md:w-5 md:h-5" />
                         </Link>
                     </div>
-
                 </div>
             </section>
         </main>
