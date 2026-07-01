@@ -4,8 +4,8 @@ Views for scoped Docker network configuration.
 
 from rest_framework import permissions, viewsets
 
-from ..models_network_scope import ScopedNetwork
-from ..serializers_network_scope import ScopedNetworkSerializer
+from .models_network_scope import ScopedNetwork
+from .serializers_network_scope import ScopedNetworkSerializer
 
 
 class ScopedNetworkViewSet(viewsets.ModelViewSet):

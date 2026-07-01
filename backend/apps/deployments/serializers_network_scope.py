@@ -4,7 +4,7 @@ Serializers for scoped network configuration.
 
 from rest_framework import serializers
 
-from ..models_network_scope import ScopedNetwork
+from .models_network_scope import ScopedNetwork
 
 
 class ScopedNetworkSerializer(serializers.ModelSerializer):
