@@ -15,11 +15,13 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 if [ ! -e /dev/kvm ]; then
-    echo "ERROR: KVM not available (/dev/kvm missing)."
-    echo "  Enable virtualization in BIOS/UEFI and load the kvm module:"
+    echo "  KVM not available (/dev/kvm missing) — skipping Kata Containers."
+    echo "  gVisor (runsc) will be used for container sandboxing instead."
+    echo "  To enable Kata later: enable virtualization in BIOS, then run:"
     echo "    modprobe kvm_intel   # Intel"
     echo "    modprobe kvm_amd     # AMD"
-    exit 1
+    echo "    sudo bash lib/install-kata.sh"
+    exit 0
 fi
 
 # Resolve latest Kata release from GitHub API if not pinned.
