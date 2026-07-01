@@ -1,0 +1,7 @@
+fix: kata installer exits 0 when KVM is unavailable
+
+install-kata.sh exits with code 1 when /dev/kvm is missing, which causes
+the parent installer to abort even though this is a skip, not a failure.
+Changed to exit 0 with an informational message.
+
+Co-authored-by: CommandCodeBot <noreply@commandcode.ai>

@@ -3341,14 +3341,25 @@ recover_runtime_stack() {
     if ! _registry_certs_ok; then
         echo -e "${BLUE}      Generating self-signed TLS cert for registry...${NC}"
         _tmp_dir="$(mktemp -d)"
-        openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+        if openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
             -keyout "${_tmp_dir}/registry.key" \
             -out    "${_tmp_dir}/registry.crt" \
-            -subj "/CN=registry" 2>/dev/null || true
-        mv "${_tmp_dir}/registry.key" "$INSTALL_DIR/certs/registry.key" 2>/dev/null || true
-        mv "${_tmp_dir}/registry.crt" "$INSTALL_DIR/certs/registry.crt" 2>/dev/null || true
+            -subj "/CN=registry" 2>/dev/null; then
+            mv "${_tmp_dir}/registry.key" "$INSTALL_DIR/certs/registry.key"
+            mv "${_tmp_dir}/registry.crt" "$INSTALL_DIR/certs/registry.crt"
+            chmod 644 "$INSTALL_DIR/certs/registry.crt" "$INSTALL_DIR/certs/registry.key"
+        else
+            echo -e "${YELLOW}    ⚠ openssl failed — is it installed?${NC}"
+        fi
         rm -rf "$_tmp_dir" 2>/dev/null || true
-        chmod 644 "$INSTALL_DIR/certs/registry.crt" "$INSTALL_DIR/certs/registry.key" 2>/dev/null || true
+        if ! _registry_certs_ok; then
+            echo -e "${RED}    ✗ Registry TLS cert/key still missing or mismatched${NC}"
+            echo -e "${YELLOW}      Manual fix: openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \\${NC}"
+            echo -e "${YELLOW}        -keyout $INSTALL_DIR/certs/registry.key \\${NC}"
+            echo -e "${YELLOW}        -out    $INSTALL_DIR/certs/registry.crt \\${NC}"
+            echo -e "${YELLOW}        -subj '/CN=registry'${NC}"
+            return 1
+        fi
     fi
     if [ ! -f "$INSTALL_DIR/auth/htpasswd" ] || [ -z "${REGISTRY_PASSWORD:-}" ] || [ -z "${REGISTRY_USER:-}" ]; then
         REGISTRY_PASS="${REGISTRY_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_urlsafe(18))" 2>/dev/null || openssl rand -hex 12 2>/dev/null || echo 'auto-generated-change-me')}"
@@ -5775,15 +5786,25 @@ _registry_certs_ok() {
 if ! _registry_certs_ok; then
     echo -e "${BLUE}    Generating self-signed TLS cert for registry...${NC}"
     _tmp_dir="$(mktemp -d)"
-    openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+    if openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
         -keyout "${_tmp_dir}/registry.key" \
         -out    "${_tmp_dir}/registry.crt" \
-        -subj "/CN=registry" 2>/dev/null || \
-        echo -e "${YELLOW}    ⚠ Failed to generate registry cert (openssl missing?)${NC}"
-    mv "${_tmp_dir}/registry.key" "$INSTALL_DIR/certs/registry.key" 2>/dev/null || true
-    mv "${_tmp_dir}/registry.crt" "$INSTALL_DIR/certs/registry.crt" 2>/dev/null || true
+        -subj "/CN=registry" 2>/dev/null; then
+        mv "${_tmp_dir}/registry.key" "$INSTALL_DIR/certs/registry.key"
+        mv "${_tmp_dir}/registry.crt" "$INSTALL_DIR/certs/registry.crt"
+        chmod 644 "$INSTALL_DIR/certs/registry.crt" "$INSTALL_DIR/certs/registry.key"
+    else
+        echo -e "${YELLOW}    ⚠ openssl failed — is it installed?${NC}"
+    fi
     rm -rf "$_tmp_dir" 2>/dev/null || true
-    chmod 644 "$INSTALL_DIR/certs/registry.crt" "$INSTALL_DIR/certs/registry.key" 2>/dev/null || true
+    if ! _registry_certs_ok; then
+        echo -e "${RED}    ✗ Registry TLS cert/key still missing or mismatched${NC}"
+        echo -e "${YELLOW}      Manual fix: openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \\${NC}"
+        echo -e "${YELLOW}        -keyout $INSTALL_DIR/certs/registry.key \\${NC}"
+        echo -e "${YELLOW}        -out    $INSTALL_DIR/certs/registry.crt \\${NC}"
+        echo -e "${YELLOW}        -subj '/CN=registry'${NC}"
+        return 1
+    fi
 fi
 if [ ! -f "$INSTALL_DIR/auth/htpasswd" ] || [ -z "${REGISTRY_PASSWORD:-}" ] || [ -z "${REGISTRY_USER:-}" ]; then
     REGISTRY_PASS="${REGISTRY_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_urlsafe(18))" 2>/dev/null || openssl rand -hex 12 2>/dev/null || echo 'auto-generated-change-me')}"

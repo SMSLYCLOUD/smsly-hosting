@@ -1001,16 +1001,17 @@ _registry_tls_ok() {
 }
 
 if ! _registry_tls_ok; then
-    _regen_registry_tls || true
-fi
-# Post-regen sanity check — fail loudly if the regen also failed so
-# the registry container doesn't crash-loop forever with the same error.
-if ! _registry_tls_ok; then
-    echo -e "${RED}    ✗ Registry TLS cert/key still mismatched or missing after regen attempt${NC}"
-    echo -e "${YELLOW}      Manual fix on host: openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \\${NC}"
-    echo -e "${YELLOW}        -keyout /opt/smsly-hosting/certs/registry.key \\${NC}"
-    echo -e "${YELLOW}        -out    /opt/smsly-hosting/certs/registry.crt \\${NC}"
-    echo -e "${YELLOW}        -subj '/CN=registry'${NC}"
+    _regen_registry_tls
+    # Post-regen sanity check — hard-fail so the registry container
+    # doesn't crash-loop forever with the same error.
+    if ! _registry_tls_ok; then
+        echo -e "${RED}    ✗ Registry TLS cert/key still mismatched or missing after regen attempt${NC}"
+        echo -e "${YELLOW}      Manual fix on host: openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \\${NC}"
+        echo -e "${YELLOW}        -keyout /opt/smsly-hosting/certs/registry.key \\${NC}"
+        echo -e "${YELLOW}        -out    /opt/smsly-hosting/certs/registry.crt \\${NC}"
+        echo -e "${YELLOW}        -subj '/CN=registry'${NC}"
+        return 1
+    fi
 fi
 if [ ! -f "$INSTALL_DIR/auth/htpasswd" ] || [ -z "${REGISTRY_PASSWORD:-}" ] || [ -z "${REGISTRY_USER:-}" ]; then
     REGISTRY_PASS="${REGISTRY_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_urlsafe(18))" 2>/dev/null || openssl rand -hex 12 2>/dev/null || echo 'auto-generated-change-me')}"

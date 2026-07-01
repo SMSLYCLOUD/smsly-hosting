@@ -243,7 +243,15 @@ recover_runtime_stack() {
         [ "$_cmod" = "$_kmod" ]
     }
     if ! _registry_tls_ok; then
-        _regen_registry_tls || true
+        _regen_registry_tls
+        if ! _registry_tls_ok; then
+            echo -e "${RED}    ✗ Registry TLS cert/key still mismatched after regen attempt${NC}"
+            echo -e "${YELLOW}      Manual fix: openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \\${NC}"
+            echo -e "${YELLOW}        -keyout $INSTALL_DIR/certs/registry.key \\${NC}"
+            echo -e "${YELLOW}        -out    $INSTALL_DIR/certs/registry.crt \\${NC}"
+            echo -e "${YELLOW}        -subj '/CN=registry'${NC}"
+            return 1
+        fi
     fi
     if [ ! -f "$INSTALL_DIR/auth/htpasswd" ] || [ -z "${REGISTRY_PASSWORD:-}" ] || [ -z "${REGISTRY_USER:-}" ]; then
         REGISTRY_PASS="${REGISTRY_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_urlsafe(18))" 2>/dev/null || openssl rand -hex 12 2>/dev/null || echo 'auto-generated-change-me')}"
