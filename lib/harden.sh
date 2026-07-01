@@ -350,27 +350,40 @@ _harden_falco_verify() {
 
 _harden_container_runtime_bootstrap() {
     local install_dir="${INSTALL_DIR:-/opt/smsly-hosting}"
+    local env_file="$install_dir/.env"
 
-    # gVisor first (lighter, no KVM required)
+    # If CONTAINER_RUNTIME is already persisted in .env, skip detection.
+    # The user can clear it to re-detect.
+    if [ -f "$env_file" ] && grep -q '^CONTAINER_RUNTIME=' "$env_file" 2>/dev/null; then
+        return 0
+    fi
+
+    # Try Kata first (stronger isolation, requires KVM)
+    if [ -e /dev/kvm ] && ! command -v kata-runtime &>/dev/null; then
+        if [ -f "$install_dir/lib/install-kata.sh" ]; then
+            echo -e "${BLUE}  → [harden] Kata Containers (KVM available) — installing...${NC}"
+            bash "$install_dir/lib/install-kata.sh" || true
+        fi
+    fi
+
+    if command -v kata-runtime &>/dev/null; then
+        env_set_value "$env_file" "CONTAINER_RUNTIME" "kata"
+        echo -e "${BLUE}  → [harden] Persisted CONTAINER_RUNTIME=kata in .env${NC}"
+        return 0
+    fi
+
+    # Fall back to gVisor (lighter, no KVM required)
     if ! command -v runsc &>/dev/null; then
         if [ -f "$install_dir/lib/install-gvisor.sh" ]; then
-            echo -e "${BLUE}  → [harden] gVisor (runsc) not detected — installing...${NC}"
+            echo -e "${BLUE}  → [harden] gVisor (runsc) — installing...${NC}"
             bash "$install_dir/lib/install-gvisor.sh" || true
         fi
     fi
 
-    # If gVisor is now installed (was just installed or already present),
-    # skip Kata entirely — no point running two sandboxing runtimes.
     if command -v runsc &>/dev/null; then
+        env_set_value "$env_file" "CONTAINER_RUNTIME" "runsc"
+        echo -e "${BLUE}  → [harden] Persisted CONTAINER_RUNTIME=runsc in .env${NC}"
         return 0
-    fi
-
-    # Try Kata if KVM is available
-    if [ -e /dev/kvm ] && ! command -v kata-runtime &>/dev/null; then
-        if [ -f "$install_dir/lib/install-kata.sh" ]; then
-            echo -e "${BLUE}  → [harden] Kata Containers not detected (KVM available) — installing...${NC}"
-            bash "$install_dir/lib/install-kata.sh" || true
-        fi
     fi
 }
 
