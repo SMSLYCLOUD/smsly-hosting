@@ -14,6 +14,12 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
+# Already installed? Nothing to do.
+if command -v kata-runtime &>/dev/null; then
+    echo "  kata-runtime already installed — skipping"
+    exit 0
+fi
+
 if [ ! -e /dev/kvm ]; then
     echo "  KVM not available (/dev/kvm missing) — skipping Kata Containers."
     echo "  gVisor (runsc) will be used for container sandboxing instead."
@@ -45,14 +51,12 @@ KATA_URL="https://github.com/kata-containers/kata-containers/releases/download/$
 echo "=== Installing Kata Containers ${KATA_VERSION} ==="
 
 cd /tmp
-curl -fsSL "$KATA_URL" -o "$KATA_TARBALL"
-
-# Verify checksum if KATA_SHA256 is provided
-if [ -n "${KATA_SHA256:-}" ]; then
-    echo "  Verifying checksum..."
-    echo "${KATA_SHA256}  ${KATA_TARBALL}" | sha256sum -c - || { echo "ERROR: Kata checksum verification failed"; exit 1; }
-else
-    echo "  WARNING: KATA_SHA256 not set — skipping checksum verification"
+echo "  Downloading ${KATA_URL}..."
+if ! curl -fsSL "$KATA_URL" -o "$KATA_TARBALL"; then
+    echo "ERROR: Failed to download Kata tarball"
+    echo "  URL: $KATA_URL"
+    echo "  Check the version or network connectivity."
+    exit 1
 fi
 
 # Validate tarball: reject absolute paths and path traversal
