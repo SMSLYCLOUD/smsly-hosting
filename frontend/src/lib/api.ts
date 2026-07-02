@@ -686,6 +686,15 @@ export const servicesApi = {
       });
       downloadBlob(response.data, path);
   },
+  uploadVolumeFile: async (serviceId: string, volumeId: string, path: string, file: File): Promise<{ message: string; path: string }> => {
+      const formData = new FormData();
+      formData.append('path', path);
+      formData.append('file', file);
+      const response = await api.post(`/services/${serviceId}/volumes/${volumeId}/upload/`, formData, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      return response.data;
+  },
   browseFiles: async (serviceId: string, path: string = '/app'): Promise<{ path: string; files: any[] }> => {
       const response = await api.get(`/services/${serviceId}/file-browse/`, { params: { path } });
       return response.data;
@@ -757,8 +766,8 @@ export const blueprintsApi = {
     const response = await api.get(`/blueprints/${id}/`);
     return response.data;
   },
-  deploy: async (id: string): Promise<any> => {
-    const response = await api.post(`/blueprints/${id}/one_click_deploy/`);
+  deploy: async (id: string, providerId?: string): Promise<any> => {
+    const response = await api.post('/blueprints/deploy/', { blueprint_id: id, provider_id: providerId || "" });
     return response.data;
   },
 };
@@ -1290,6 +1299,8 @@ export const serversApi = {
     const res = await api.post(`/servers/${id}/update-server/`);
     return res.data;
   },
+  runDiagnostics: (id: string) => api.post(`/servers/${id}/diagnostics/`),
+  triggerHealing: (id: string, payload?: any) => api.post(`/servers/${id}/heal/`, payload || {}),
 };
 
 // ─── Multi-Deploy API ───────────────────────────────────────────────────────
@@ -1315,6 +1326,14 @@ export const deployApi = {
       if (registry.password) payload.registry_password = registry.password;
     }
     const res = await api.post(`/services/${serviceId}/multi-deploy/`, payload, requestConfig);
+    return res.data;
+  },
+  agentReady: async (id: string): Promise<any> => {
+    const res = await api.post(`/servers/${id}/agent-ready/`);
+    return res.data;
+  },
+  agentHeartbeat: async (id: string, payload?: any): Promise<any> => {
+    const res = await api.post(`/servers/${id}/agent-heartbeat/`, payload || {});
     return res.data;
   },
 };
@@ -2078,7 +2097,7 @@ export const cloudProviderApi = {
 
 export const ecosystemApi = {
   bulkUpdateEnvironment: (data: { app_ids: string[]; env_vars: Record<string, string> }) =>
-    api.post('/cloud/ecosystem/bulk-update-environment/', data).then(r => r.data),
+    api.post('/cloud/ecosystem/bulk-env/', data).then(r => r.data),
   cachedScan: () => api.get('/cloud/ecosystem/cached-scan/').then(r => r.data.has_cache ? r.data.plan : null),
 };
 
@@ -2303,4 +2322,20 @@ export const scopedRegistryApi = {
     const response = await api.get('/registry-scopes/resolve/', { params });
     return response.data;
   }
+};
+
+export const networkScopesApi = {
+  list: async () => {
+    const res = (await api.get('/network-scopes/')).data;
+    return Array.isArray(res) ? res : (res?.results || res || []);
+  },
+  create: async (data: any) => (await api.post('/network-scopes/', data)).data,
+  delete: async (id: string) => (await api.delete(`/network-scopes/${id}/`)).data,
+};
+
+export const infisicalApi = {
+  sync: async (data?: { direction?: 'push' | 'pull'; workspace?: string }) => {
+    const response = await api.post('/platform-config/sync-infisical/', data || {});
+    return response.data;
+  },
 };

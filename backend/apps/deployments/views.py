@@ -1525,7 +1525,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         on the specified branch with a unique subdomain.
         """
         parent = self.get_object()
-        branch = request.data.get('branch')
+        branch = request.data.get('branch') or request.data.get('branch_name')
         pr_number = request.data.get('pr_number')
 
         if not branch:
@@ -1650,12 +1650,17 @@ class ServiceViewSet(viewsets.ModelViewSet):
             latest_deploy = deploys[0] if deploys else None
             data.append({
                 'id': str(preview.id),
+                'service': str(parent.id),
                 'name': preview.name,
                 'branch': preview.branch,
+                'branch_name': preview.branch,
+                'commit_sha': latest_deploy.commit_hash if latest_deploy else '',
                 'pr_number': preview.pr_number,
                 'preview_url': preview.service_url,
                 'health_status': preview.health_status,
+                'status': latest_deploy.status if latest_deploy else (preview.health_status or 'UNKNOWN'),
                 'created_at': preview.created_at.isoformat(),
+                'updated_at': preview.updated_at.isoformat() if hasattr(preview, 'updated_at') and preview.updated_at else preview.created_at.isoformat(),
                 'latest_deployment': {
                     'id': str(latest_deploy.id),
                     'status': latest_deploy.status,
@@ -1665,15 +1670,15 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
         return Response({'count': len(data), 'results': data})
 
-    @action(detail=True, methods=['delete'], url_path='destroy-preview')
+    @action(detail=True, methods=['delete', 'post'], url_path='destroy-preview')
     def destroy_preview(self, request, pk=None):
         """
         Destroy a preview environment.
-        DELETE /api/v1/services/{id}/destroy-preview/
+        DELETE/POST /api/v1/services/{id}/destroy-preview/
         Body: { "preview_id": "uuid" }
         """
         parent = self.get_object()
-        preview_id = request.data.get('preview_id')
+        preview_id = request.data.get('preview_id') or request.query_params.get('preview_id')
 
         if not preview_id:
             return Response(
@@ -4893,6 +4898,8 @@ class DomainConfigView(GenericAPIView):
             'enable_legacy_tunnel_api': config.enable_legacy_tunnel_api,
             'smsly_strict_ssh_host_key_check': config.smsly_strict_ssh_host_key_check,
             'enable_crowdsec_waf': config.enable_crowdsec_waf,
+            'trivy_enabled': config.trivy_enabled,
+            'trivy_fail_on_severity': config.trivy_fail_on_severity,
             'updated_at': config.updated_at,
         })
 
@@ -5056,6 +5063,13 @@ class DomainConfigView(GenericAPIView):
             for _field in ('smsly_disable_tier_gates', 'enable_legacy_tunnel_api', 'smsly_strict_ssh_host_key_check'):
                 if _field in data:
                     setattr(config, _field, _parse_bool(data.get(_field)))
+            # Security Scanning
+            if 'trivy_enabled' in data:
+                config.trivy_enabled = _parse_bool(data.get('trivy_enabled'))
+            if 'trivy_fail_on_severity' in data:
+                val = str(data.get('trivy_fail_on_severity') or 'CRITICAL').strip().upper()
+                if val in ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL'):
+                    config.trivy_fail_on_severity = val
 
             # Validate: wildcard requires Cloudflare token
             if config.wildcard_subdomains and config.use_ssl and not config.cloudflare_api_token:
@@ -6832,3 +6846,243 @@ class RegistryCredentialViewSet(viewsets.ModelViewSet):
         except Exception as e:
             logger.exception("Registry connection test failed")
             return Response({'status': 'error', 'message': 'Connection test failed. Please verify your credentials.'}, status=400)
+
+
+class SecurityStatusView(GenericAPIView):
+    """
+    Return live system security & hardening status.
+
+    GET /api/v1/system/security-status/
+
+    Reports the status of all active security layers:
+      - Container isolation (gVisor / Kata / runc)
+      - Mandatory access control (AppArmor, seccomp)
+      - Runtime protection (no-new-privileges, capability drops)
+      - Threat detection (Falco, CrowdSec, auditd)
+      - Network security (UFW, fail2ban)
+      - Vulnerability management (Trivy)
+      - Kernel hardening (sysctl)
+    """
+    serializer_class = EmptySerializer
+    permission_classes = [permissions.IsAdminUser]
+
+    def get(self, request):
+        from apps.deployments.models_core import PlatformConfig
+        from apps.deployments.services.container_runtime import (
+            detect_best_runtime,
+            _kata_available,
+            _runsc_available,
+            is_sandboxed_runtime,
+        )
+
+        config = PlatformConfig.load()
+        runtime = detect_best_runtime()
+
+        # ── Container runtime ──────────────────────────────────────
+        container_runtime = {
+            "active": runtime,
+            "sandboxed": is_sandboxed_runtime(runtime),
+            "kata_available": _kata_available(),
+            "gvisor_available": _runsc_available(),
+        }
+
+        # ── AppArmor ────────────────────────────────────────────────
+        apparmor = {"enabled": False, "profiles_loaded": 0}
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["aa-status", "--enabled"],
+                capture_output=True, text=True, timeout=5,
+            )
+            apparmor["enabled"] = result.returncode == 0
+            if apparmor["enabled"]:
+                count_result = subprocess.run(
+                    ["aa-status", "--profiled"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                try:
+                    apparmor["profiles_loaded"] = int(
+                        (count_result.stdout or "").strip()
+                    )
+                except (ValueError, TypeError):
+                    apparmor["profiles_loaded"] = -1
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            apparmor["enabled"] = False
+
+        # ── seccomp ─────────────────────────────────────────────────
+        seccomp = {"enabled": False}
+        try:
+            seccomp_result = subprocess.run(
+                ["docker", "info", "--format", "{{json .SecurityOptions}}"],
+                capture_output=True, text=True, timeout=10,
+            )
+            seccomp["enabled"] = "seccomp" in (seccomp_result.stdout or "")
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            seccomp["enabled"] = False
+
+        # ── Falco ───────────────────────────────────────────────────
+        falco = {"running": False, "container": "smsly-falco"}
+        try:
+            ps_result = subprocess.run(
+                ["docker", "ps", "--filter", f"name={falco['container']}",
+                 "--format", "{{.Status}}"],
+                capture_output=True, text=True, timeout=10,
+            )
+            falco["running"] = "Up" in (ps_result.stdout or "")
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            falco["running"] = False
+
+        # ── CrowdSec ────────────────────────────────────────────────
+        crowdsec = {
+            "enabled": config.enable_crowdsec_waf,
+            "running": False,
+            "container": "smsly-crowdsec",
+        }
+        if crowdsec["enabled"]:
+            try:
+                ps_result = subprocess.run(
+                    ["docker", "ps", "--filter", f"name={crowdsec['container']}",
+                     "--format", "{{.Status}}"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                crowdsec["running"] = "Up" in (ps_result.stdout or "")
+            except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+                crowdsec["running"] = False
+
+        # ── UFW ─────────────────────────────────────────────────────
+        ufw = {"active": False}
+        try:
+            ufw_result = subprocess.run(
+                ["ufw", "status"],
+                capture_output=True, text=True, timeout=5,
+            )
+            ufw["active"] = "Status: active" in (ufw_result.stdout or "")
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            ufw["active"] = False
+
+        # ── fail2ban ────────────────────────────────────────────────
+        fail2ban = {"active": False}
+        try:
+            f2b_result = subprocess.run(
+                ["fail2ban-client", "ping"],
+                capture_output=True, text=True, timeout=5,
+            )
+            fail2ban["active"] = "pong" in (f2b_result.stdout or "")
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            fail2ban["active"] = False
+
+        # ── auditd ──────────────────────────────────────────────────
+        auditd = {"active": False}
+        try:
+            audit_result = subprocess.run(
+                ["systemctl", "is-active", "auditd"],
+                capture_output=True, text=True, timeout=5,
+            )
+            auditd["active"] = (audit_result.stdout or "").strip() == "active"
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            auditd["active"] = False
+
+        # ── Docker socket proxy ─────────────────────────────────────
+        socket_proxy = {"enabled": False}
+        try:
+            sp_result = subprocess.run(
+                ["docker", "ps", "--filter", "name=socket-proxy",
+                 "--format", "{{.Status}}"],
+                capture_output=True, text=True, timeout=10,
+            )
+            socket_proxy["enabled"] = "Up" in (sp_result.stdout or "")
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            socket_proxy["enabled"] = False
+
+        # ── Trivy ───────────────────────────────────────────────────
+        trivy = {
+            "enabled": config.trivy_enabled,
+            "fail_on_severity": config.trivy_fail_on_severity,
+            "installed": False,
+        }
+        try:
+            trivy_result = subprocess.run(
+                ["trivy", "--version"],
+                capture_output=True, text=True, timeout=5,
+            )
+            trivy["installed"] = trivy_result.returncode == 0
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            trivy["installed"] = False
+
+        # ── Kernel hardening ────────────────────────────────────────
+        kernel = {"enabled": False}
+        try:
+            kptr = subprocess.run(
+                ["sysctl", "-n", "kernel.kptr_restrict"],
+                capture_output=True, text=True, timeout=5,
+            )
+            kernel["enabled"] = (kptr.stdout or "").strip() == "2"
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            kernel["enabled"] = False
+
+        # ── no-new-privileges (system-level) ────────────────────────
+        no_new_privs = {"enabled": True}  # enforced per-container via security_opt
+
+        return Response({
+            "container_runtime": container_runtime,
+            "apparmor": apparmor,
+            "seccomp": seccomp,
+            "no_new_privileges": no_new_privs,
+            "falco": falco,
+            "crowdsec": crowdsec,
+            "ufw": ufw,
+            "fail2ban": fail2ban,
+            "auditd": auditd,
+            "docker_socket_proxy": socket_proxy,
+            "trivy": trivy,
+            "kernel_hardening": kernel,
+        })
+
+
+class PlatformConfigViewSet(viewsets.GenericViewSet):
+    """
+    ViewSet for platform-wide configurations and Infisical secret synchronization.
+    """
+    serializer_class = EmptySerializer
+    permission_classes = [permissions.IsAdminUser]
+
+    def get_queryset(self):
+        from apps.deployments.models_core import PlatformConfig
+        return PlatformConfig.objects.all()
+
+    @action(detail=False, methods=["post"], url_path="sync-infisical")
+    def sync_infisical(self, request):
+        from apps.deployments.services.infisical import (
+            get_infisical_client,
+            get_or_create_workspace,
+            push_platform_config_to_infisical,
+            pull_platform_config_from_infisical,
+        )
+        client = get_infisical_client()
+        if not client:
+            return Response(
+                {"status": "error", "message": "Infisical client not configured or unreachable."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        ws_id = get_or_create_workspace(client)
+        if not ws_id:
+            return Response(
+                {"status": "error", "message": "Failed to resolve Infisical workspace."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        pull_res = pull_platform_config_from_infisical(client, ws_id)
+        push_res = push_platform_config_to_infisical(client, ws_id)
+
+        pushed = push_res.get("synced", [])
+        pulled = pull_res.get("synced", [])
+        failed = push_res.get("failed", []) + pull_res.get("failed", [])
+
+        return Response({
+            "status": "success" if not failed else "partial",
+            "synced_count": len(pushed) + len(pulled),
+            "pushed": pushed,
+            "pulled": pulled,
+            "failed": failed,
+        })
+

@@ -7,7 +7,7 @@ import {
     ArrowLeft, Server, RefreshCw, Loader2, CheckCircle2, XCircle, Globe,
     Wifi, WifiOff, Monitor, ArrowUpRight, Pencil, Save, X, Rocket,
     Square, RotateCcw, Plus, Trash2, Shield, Copy, ExternalLink,
-    Activity, Clock, ChevronDown, ChevronRight, AlertCircle
+    Activity, Clock, ChevronDown, ChevronRight, AlertCircle, Wrench
 } from 'lucide-react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { serversApi, ManagedServer } from '@/lib/api';
@@ -98,6 +98,8 @@ export default function ServerDetailPage() {
     const [saving, setSaving] = useState(false);
     const [checking, setChecking] = useState(false);
     const [updating, setUpdating] = useState(false);
+    const [diagnosing, setDiagnosing] = useState(false);
+    const [healing, setHealing] = useState(false);
 
     // Services state
     const [services, setServices] = useState<RemoteService[]>([]);
@@ -215,6 +217,43 @@ export default function ServerDetailPage() {
             toast({ title: 'Failed to trigger update', variant: 'destructive' });
         }
         setUpdating(false);
+    };
+
+    const handleRunDiagnostics = async () => {
+        setDiagnosing(true);
+        try {
+            const res = await serversApi.runDiagnostics(serverId);
+            const d = res?.data || res;
+            toast({
+                title: 'Diagnostics Complete',
+                description: `Docker: ${d.docker_running ? 'Running' : 'Stopped'}, Disk: ${d.disk_usage_pct}%, Mem: ${d.memory_usage_pct}%`,
+            });
+        } catch {
+            toast({ title: 'Diagnostics failed', variant: 'destructive' });
+        }
+        setDiagnosing(false);
+    };
+
+    const handleTriggerHealing = async () => {
+        if (!await confirm({
+            title: 'Trigger Node Healing?',
+            message: 'This will attempt automated self-healing (restarting containers or Docker stack) on the remote node.',
+            variant: 'warning',
+            confirmText: 'Heal Now'
+        })) return;
+
+        setHealing(true);
+        try {
+            await serversApi.triggerHealing(serverId, { action: 'restart_stack' });
+            toast({
+                title: 'Healing Triggered',
+                description: 'Automated recovery action executed on remote node.',
+            });
+            fetchServer();
+        } catch {
+            toast({ title: 'Healing failed', variant: 'destructive' });
+        }
+        setHealing(false);
     };
 
     const handleSaveName = async () => {
@@ -426,6 +465,22 @@ export default function ServerDetailPage() {
                                 >
                                     {updating ? <Loader2 size={14} className="animate-spin" /> : <Rocket size={14} />}
                                     Update Grid
+                                </button>
+                                <button
+                                    onClick={handleRunDiagnostics}
+                                    disabled={diagnosing || server.status === 'OFFLINE'}
+                                    className="px-3 py-2 rounded-lg border border-purple-500/30 text-purple-500 text-sm flex items-center gap-2 hover:bg-purple-500/10 transition-colors disabled:opacity-50"
+                                >
+                                    {diagnosing ? <Loader2 size={14} className="animate-spin" /> : <Activity size={14} />}
+                                    Diagnostics
+                                </button>
+                                <button
+                                    onClick={handleTriggerHealing}
+                                    disabled={healing || server.status === 'OFFLINE'}
+                                    className="px-3 py-2 rounded-lg border border-amber-500/30 text-amber-500 text-sm flex items-center gap-2 hover:bg-amber-500/10 transition-colors disabled:opacity-50"
+                                >
+                                    {healing ? <Loader2 size={14} className="animate-spin" /> : <Wrench size={14} />}
+                                    Heal Node
                                 </button>
                             {server.api_url && (
                                 <a

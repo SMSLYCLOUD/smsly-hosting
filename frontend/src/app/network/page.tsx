@@ -8,7 +8,7 @@ import {
     Network, Plus, Trash2, RefreshCw, Loader2, Shield,
     Wifi, WifiOff, Globe, ChevronDown, Zap, ArrowRight
 } from 'lucide-react';
-import api from '@/lib/api';
+import api, { networkScopesApi } from '@/lib/api';
 
 interface Peer {
     id: string;
@@ -60,14 +60,25 @@ export default function NetworkPage() {
     const [newMeshSubnet, setNewMeshSubnet] = useState('10.100.0.0/24');
     const [selectedServerId, setSelectedServerId] = useState('');
 
+    const [activeTab, setActiveTab] = useState<'vpn' | 'scoped'>('vpn');
+    const [scopedNetworks, setScopedNetworks] = useState<any[]>([]);
+    const [showCreateScopedForm, setShowCreateScopedForm] = useState(false);
+    const [newScopedName, setNewScopedName] = useState('smsly-net-isolated');
+    const [newScopedDriver, setNewScopedDriver] = useState('bridge');
+    const [newScopedIsolated, setNewScopedIsolated] = useState(true);
+    const [newScopedSubnet, setNewScopedSubnet] = useState('');
+    const [creatingScoped, setCreatingScoped] = useState(false);
+
     const fetchData = useCallback(async () => {
         try {
-            const [meshRes, serverRes] = await Promise.all([
+            const [meshRes, serverRes, scopedRes] = await Promise.all([
                 api.get('/mesh/'),
                 api.get('/servers/'),
+                networkScopesApi.list().catch(() => []),
             ]);
             setMeshes(Array.isArray(meshRes.data) ? meshRes.data : meshRes.data.results || []);
             setServers(Array.isArray(serverRes.data) ? serverRes.data : serverRes.data.results || []);
+            setScopedNetworks(Array.isArray(scopedRes) ? scopedRes : scopedRes?.results || []);
         } catch (err) {
             console.error('Failed to load mesh data:', err);
         } finally {
@@ -199,6 +210,37 @@ export default function NetworkPage() {
         return servers.filter(s => !peerServerIds.has(s.id));
     };
 
+    const createScopedNetwork = async () => {
+        setCreatingScoped(true);
+        try {
+            await networkScopesApi.create({
+                network_name: newScopedName,
+                driver: newScopedDriver,
+                isolated: newScopedIsolated,
+                subnet: newScopedSubnet || undefined,
+                scope_type: 'project',
+            });
+            toast({ title: 'Scoped Network Created', description: `Created network "${newScopedName}"` });
+            setShowCreateScopedForm(false);
+            fetchData();
+        } catch (err: any) {
+            toast({ title: 'Error', description: err?.response?.data?.detail || 'Failed to create scoped network', variant: 'destructive' });
+        } finally {
+            setCreatingScoped(false);
+        }
+    };
+
+    const deleteScopedNetwork = async (id: string) => {
+        if (!confirm('Delete this scoped network bridge?')) return;
+        try {
+            await networkScopesApi.delete(id);
+            toast({ title: 'Scoped Network Deleted' });
+            fetchData();
+        } catch (err: any) {
+            toast({ title: 'Error', description: 'Failed to delete scoped network', variant: 'destructive' });
+        }
+    };
+
     return (
         <DashboardShell>
             <div className="flex-1 p-8 relative z-10">
@@ -215,26 +257,64 @@ export default function NetworkPage() {
                             </p>
                         </div>
                         <div className="flex gap-2">
-                            <Button
-                                variant="outline"
-                                onClick={oneClickMesh}
-                                disabled={oneClicking || loading}
-                            >
-                                {oneClicking ? <Loader2 size={14} className="animate-spin mr-2" /> : <Zap size={14} className="mr-2" />}
-                                One-click Mesh
-                            </Button>
-                            <Button
-                                onClick={() => setShowCreateForm(!showCreateForm)}
-                                className="bg-gradient-to-r from-purple-500 to-indigo-600 text-white shadow-lg shadow-purple-500/25"
-                            >
-                                <Plus size={14} className="mr-2" />
-                                Create Mesh
-                            </Button>
+                            {activeTab === 'vpn' ? (
+                                <>
+                                    <Button
+                                        variant="outline"
+                                        onClick={oneClickMesh}
+                                        disabled={oneClicking || loading}
+                                    >
+                                        {oneClicking ? <Loader2 size={14} className="animate-spin mr-2" /> : <Zap size={14} className="mr-2" />}
+                                        One-click Mesh
+                                    </Button>
+                                    <Button
+                                        onClick={() => setShowCreateForm(!showCreateForm)}
+                                        className="bg-gradient-to-r from-purple-500 to-indigo-600 text-white shadow-lg shadow-purple-500/25"
+                                    >
+                                        <Plus size={14} className="mr-2" />
+                                        Create Mesh
+                                    </Button>
+                                </>
+                            ) : (
+                                <Button
+                                    onClick={() => setShowCreateScopedForm(!showCreateScopedForm)}
+                                    className="bg-gradient-to-r from-purple-500 to-indigo-600 text-white shadow-lg shadow-purple-500/25"
+                                >
+                                    <Plus size={14} className="mr-2" />
+                                    Create Scoped Bridge
+                                </Button>
+                            )}
                         </div>
                     </div>
 
-                    {/* Create Form */}
-                    {showCreateForm && (
+                    {/* Tabs */}
+                    <div className="flex border-b border-border pb-2 gap-4">
+                        <button
+                            onClick={() => setActiveTab('vpn')}
+                            className={`pb-2 px-4 font-medium text-sm transition-colors border-b-2 ${
+                                activeTab === 'vpn'
+                                    ? 'border-purple-500 text-foreground'
+                                    : 'border-transparent text-muted-foreground hover:text-foreground'
+                            }`}
+                        >
+                            VPN Mesh (WireGuard)
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('scoped')}
+                            className={`pb-2 px-4 font-medium text-sm transition-colors border-b-2 ${
+                                activeTab === 'scoped'
+                                    ? 'border-purple-500 text-foreground'
+                                    : 'border-transparent text-muted-foreground hover:text-foreground'
+                            }`}
+                        >
+                            Scoped Networks (Docker Bridges)
+                        </button>
+                    </div>
+
+                    {activeTab === 'vpn' && (
+                        <>
+                            {/* Create Form */}
+                            {showCreateForm && (
                         <div className="bg-card border border-border rounded-xl p-6 space-y-4">
                             <h2 className="text-lg font-semibold flex items-center gap-2">
                                 <Shield className="text-purple-500" size={18} />
@@ -459,6 +539,93 @@ export default function NetworkPage() {
                             </div>
                         );
                     })}
+                        </>
+                    )}
+
+                    {activeTab === 'scoped' && (
+                        <div className="space-y-6">
+                            {showCreateScopedForm && (
+                                <div className="bg-card border border-border rounded-xl p-6 space-y-4">
+                                    <h2 className="text-lg font-semibold flex items-center gap-2">
+                                        <Shield className="text-purple-500" size={18} />
+                                        New Scoped Docker Bridge
+                                    </h2>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="text-xs font-medium text-muted-foreground">Network Name</label>
+                                            <input
+                                                value={newScopedName}
+                                                onChange={e => setNewScopedName(e.target.value)}
+                                                placeholder="smsly-net-isolated"
+                                                className="w-full mt-1 px-3 py-2 rounded-lg bg-background border border-border text-sm"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs font-medium text-muted-foreground">Subnet (optional)</label>
+                                            <input
+                                                value={newScopedSubnet}
+                                                onChange={e => setNewScopedSubnet(e.target.value)}
+                                                placeholder="172.20.0.0/16"
+                                                className="w-full mt-1 px-3 py-2 rounded-lg bg-background border border-border text-sm"
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-2 pt-2">
+                                        <input
+                                            type="checkbox"
+                                            id="isolated-check"
+                                            checked={newScopedIsolated}
+                                            onChange={e => setNewScopedIsolated(e.target.checked)}
+                                            className="rounded border-border"
+                                        />
+                                        <label htmlFor="isolated-check" className="text-sm font-medium">Isolated Bridge Network (Prevent cross-scope traffic)</label>
+                                    </div>
+                                    <div className="flex justify-end gap-2 pt-2">
+                                        <Button variant="ghost" onClick={() => setShowCreateScopedForm(false)}>Cancel</Button>
+                                        <Button onClick={createScopedNetwork} disabled={creatingScoped} className="bg-purple-600 hover:bg-purple-700 text-white">
+                                            {creatingScoped ? <Loader2 size={14} className="animate-spin mr-2" /> : <Plus size={14} className="mr-2" />}
+                                            Create Network
+                                        </Button>
+                                    </div>
+                                </div>
+                            )}
+
+                            {scopedNetworks.length === 0 ? (
+                                <div className="text-center py-12 bg-card border border-border rounded-xl">
+                                    <Network className="mx-auto text-muted-foreground mb-3" size={32} />
+                                    <h3 className="text-base font-semibold">No Scoped Networks configured</h3>
+                                    <p className="text-sm text-muted-foreground mt-1">Create an isolated Docker bridge network for projects or teams.</p>
+                                </div>
+                            ) : (
+                                <div className="grid gap-4">
+                                    {scopedNetworks.map(net => (
+                                        <div key={net.id} className="bg-card border border-border rounded-xl p-6 flex items-center justify-between">
+                                            <div>
+                                                <div className="flex items-center gap-2">
+                                                    <h3 className="font-semibold text-lg">{net.network_name || 'Unnamed Scope Network'}</h3>
+                                                    <span className="px-2 py-0.5 rounded text-xs font-medium bg-purple-500/10 text-purple-500 border border-purple-500/20 uppercase">
+                                                        {net.driver || 'bridge'}
+                                                    </span>
+                                                    {net.isolated && (
+                                                        <span className="px-2 py-0.5 rounded text-xs font-medium bg-amber-500/10 text-amber-500 border border-amber-500/20">
+                                                            Isolated
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <div className="text-sm text-muted-foreground mt-1 flex items-center gap-4">
+                                                    <span>Scope: <strong className="text-foreground">{net.scope_name || net.scope_type}</strong></span>
+                                                    {net.subnet && <span>Subnet: <code>{net.subnet}</code></span>}
+                                                </div>
+                                            </div>
+                                            <Button variant="ghost" size="icon" onClick={() => deleteScopedNetwork(net.id)} className="text-destructive hover:bg-destructive/10">
+                                                <Trash2 size={16} />
+                                            </Button>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </div>
             </div>
         </DashboardShell>

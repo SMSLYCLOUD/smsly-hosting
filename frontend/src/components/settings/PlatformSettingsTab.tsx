@@ -8,12 +8,13 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/components/ui/use-toast";
 import { Loader2, Save, Server, Shield, Globe, Database, Activity, CreditCard } from "lucide-react";
-import api from "@/lib/api";
+import api, { infisicalApi } from "@/lib/api";
 
 export function PlatformSettingsTab() {
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [syncingInfisical, setSyncingInfisical] = useState(false);
   const [config, setConfig] = useState<any>({});
 
   const fetchConfig = async () => {
@@ -51,6 +52,22 @@ export function PlatformSettingsTab() {
       });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleSyncInfisical = async () => {
+    try {
+      setSyncingInfisical(true);
+      const res = await infisicalApi.sync({ direction: "push", workspace: "smsly-platform" });
+      toast({ title: "Infisical Sync Success", description: res.message || `Synced ${res.synced_count || 0} secrets.` });
+    } catch (err: any) {
+      toast({
+        title: "Infisical Sync Failed",
+        description: err?.response?.data?.message || err?.response?.data?.error || "Failed to sync secrets with Infisical.",
+        variant: "destructive",
+      });
+    } finally {
+      setSyncingInfisical(false);
     }
   };
 
@@ -313,6 +330,73 @@ export function PlatformSettingsTab() {
                 onCheckedChange={(v) => handleChange("smsly_strict_ssh_host_key_check", v)}
               />
             </div>
+          </CardContent>
+        </Card>
+
+        {/* Security Scanning */}
+        <Card className="md:col-span-2">
+          <CardHeader>
+            <CardTitle className="flex items-center space-x-2">
+              <Shield className="h-5 w-5" />
+              <span>Security Scanning</span>
+            </CardTitle>
+            <CardDescription>Configure Trivy container image vulnerability scanning on build.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between rounded-lg border p-4">
+              <div className="space-y-0.5">
+                <Label className="text-base">Trivy Scanning Enabled</Label>
+                <p className="text-sm text-muted-foreground">Scan container images for vulnerabilities during build.</p>
+              </div>
+              <Switch
+                checked={config.trivy_enabled ?? true}
+                onCheckedChange={(v) => handleChange("trivy_enabled", v)}
+              />
+            </div>
+            {config.trivy_enabled !== false && (
+              <div className="space-y-2">
+                <Label>Fail Build On Severity</Label>
+                <select
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  value={config.trivy_fail_on_severity || "CRITICAL"}
+                  onChange={(e) => handleChange("trivy_fail_on_severity", e.target.value)}
+                >
+                  <option value="LOW">Low</option>
+                  <option value="MEDIUM">Medium</option>
+                  <option value="HIGH">High</option>
+                  <option value="CRITICAL">Critical</option>
+                </select>
+                <p className="text-sm text-muted-foreground">
+                  Builds are blocked when vulnerabilities at or above this severity are found.
+                </p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="border-border">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Shield className="h-5 w-5 text-purple-500" />
+              Infisical Secret Synchronization
+            </CardTitle>
+            <CardDescription>
+              Synchronize platform configuration and environment variables with Infisical secret management service.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <Label className="text-base font-medium">Sync Platform Secrets</Label>
+              <p className="text-sm text-muted-foreground">Push active platform configuration values and encryption keys to Infisical.</p>
+            </div>
+            <Button
+              onClick={handleSyncInfisical}
+              disabled={syncingInfisical}
+              className="bg-purple-600 hover:bg-purple-700 text-white"
+            >
+              {syncingInfisical && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Sync Secrets Now
+            </Button>
           </CardContent>
         </Card>
       </div>

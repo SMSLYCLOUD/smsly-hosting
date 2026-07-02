@@ -18,7 +18,9 @@ from .views import (
     ServiceViewSet,
     SessionTokenView,
     SystemConfigView,
+    SecurityStatusView,
     RegistryCredentialViewSet,
+    PlatformConfigViewSet,
 )
 from .views_registry_scope import ScopedRegistryViewSet
 from .views_network_scope import ScopedNetworkViewSet
@@ -101,6 +103,7 @@ router.register(r'database-replicas', DatabaseReplicaViewSet, basename='database
 router.register(r'registry-credentials', RegistryCredentialViewSet, basename='registry-credential')
 router.register(r'registry-scopes', ScopedRegistryViewSet, basename='registry-scope')
 router.register(r'network-scopes', ScopedNetworkViewSet, basename='network-scope')
+router.register(r'platform-config', PlatformConfigViewSet, basename='platform-config')
 
 # Nested Router
 # /api/v1/services/{service_pk}/metrics/
@@ -159,6 +162,7 @@ urlpatterns = [
     path('webhooks/bitbucket/', BitbucketWebhookView.as_view(), name='bitbucket-webhook'),
     path('services/<uuid:service_id>/health/webhook/', ServiceHealthWebhookView.as_view(), name='service-health-webhook'),
     path('system/config/', SystemConfigView.as_view(), name='system-config'),
+    path('system/security-status/', SecurityStatusView.as_view(), name='security-status'),
     path('system/domain-config/', DomainConfigView.as_view(), name='domain-config'),
     path('system/route-recheck/', RouteRecheckView.as_view(), name='route-recheck'),
     path('platform/resources/', PlatformResourcesView.as_view(), name='platform-resources'),
