@@ -410,8 +410,10 @@ class PipelineManager:
 
     def _setup(self):
         """Initialize build environment."""
-        # Use a persistent path keyed by service ID to enable "git pull" for redeployments.
-        self.build_dir = self._ensure_build_dir(f"svc_{self.service.id}")
+        # Use a deployment-scoped path to prevent concurrent deployments for the
+        # same service from clashing over the same directory (race condition that
+        # produces "destination path already exists" clone errors).
+        self.build_dir = self._ensure_build_dir(f"svc_{self.service.id}_dep_{self.deployment.id}")
         self.deployment.pipeline_stages = []
         update_stage(self.deployment, 'Clone', 'pending')
         update_stage(self.deployment, 'Build', 'pending')
@@ -512,26 +514,31 @@ class PipelineManager:
         self._inject_dotenv_from_repo()
 
     def _clone_with_github_token(self, repo_url: str, branch: str, token: str | None, target_dir: str, target_commit: str | None = None):
-        """Clone repository directly without using repo cache."""
+        """Clone repository into *target_dir* using an atomic clone-then-rename strategy.
+
+        Clones into a uniquely-named temporary sibling directory first, then
+        renames it into *target_dir*.  This prevents a concurrent deployment for
+        the same service from racing into a half-written clone directory and
+        hitting ``fatal: destination path already exists``.
+        """
         build_path = Path(target_dir)
-        if build_path.exists():
-            try:
-                shutil.rmtree(build_path)
-            except (OSError, PermissionError) as exc:
-                logger.warning("Could not rmtree %s (%s), trying ignore_errors", build_path, exc)
-                shutil.rmtree(build_path, ignore_errors=True)
+        parent = build_path.parent
         try:
-            build_path.parent.mkdir(parents=True, exist_ok=True)
+            parent.mkdir(parents=True, exist_ok=True)
         except (OSError, PermissionError) as exc:
-            logger.warning("Could not mkdir in %s (%s), falling back to temp dir", build_path.parent, exc)
-            fallback_root = Path(tempfile.gettempdir()) / 'smsly-builds'
-            fallback_root.mkdir(parents=True, exist_ok=True)
-            build_path = fallback_root / build_path.name
-            if build_path.exists():
-                shutil.rmtree(build_path, ignore_errors=True)
+            logger.warning("Could not mkdir in %s (%s), falling back to temp dir", parent, exc)
+            parent = Path(tempfile.gettempdir()) / 'smsly-builds'
+            parent.mkdir(parents=True, exist_ok=True)
+            build_path = parent / build_path.name
             self.build_dir = str(build_path)
             if hasattr(self, 'source_dir') and self.source_dir:
                 self.source_dir = str(build_path)
+
+        # Clone into a unique temp dir inside the same parent, then atomically
+        # rename into the final location.  This means:
+        #   * No other process ever sees a half-written clone.
+        #   * If the clone fails, the stale temp dir is cleaned up, not target_dir.
+        tmp_path = Path(tempfile.mkdtemp(dir=str(parent), prefix=f".clone_tmp_{build_path.name}_"))
 
         env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
         askpass_path = None
@@ -566,7 +573,7 @@ class PipelineManager:
             remote_url = repo_url
 
         clone_cmd = [
-            "git", "clone", "--branch", branch, "--single-branch", remote_url, str(build_path)
+            "git", "clone", "--branch", branch, "--single-branch", remote_url, str(tmp_path)
         ]
         try:
             subprocess.run(
@@ -581,19 +588,29 @@ class PipelineManager:
                 checkout_cmd = ["git", "checkout", target_commit]
                 subprocess.run(
                     checkout_cmd,
-                    cwd=str(build_path),
+                    cwd=str(tmp_path),
                     check=True,
                     capture_output=True,
                     text=True,
                     timeout=60,
                     env=env,
                 )
+            # Atomically promote tmp_path → build_path
+            if build_path.exists():
+                shutil.rmtree(build_path, ignore_errors=True)
+            tmp_path.rename(build_path)
+            tmp_path = None  # ownership transferred
         except subprocess.CalledProcessError as exc:
             details = self._format_git_clone_error(exc, token)
             raise RuntimeError(details) from exc
         finally:
             if askpass_path and askpass_path.exists():
-                askpass_path.unlink()
+                try:
+                    askpass_path.unlink()
+                except OSError:
+                    pass
+            if tmp_path is not None and tmp_path.exists():
+                shutil.rmtree(tmp_path, ignore_errors=True)
 
     def _format_git_clone_error(self, exc: subprocess.CalledProcessError, token: str | None) -> str:
         """Return a concise, redacted clone failure with Git's real stderr."""
