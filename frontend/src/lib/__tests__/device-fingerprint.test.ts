@@ -90,11 +90,28 @@ function stubScreen(overrides: Record<string, unknown> = {}) {
   return base;
 }
 
+function stubMatchMedia(): void {
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    value: vi.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  });
+}
+
 describe('collectDeepFingerprint', () => {
   beforeEach(() => {
     stubNavigator();
     stubScreen();
-    // matchMedia is already stubbed in src/test/setup.ts.
+    stubCanvasContext();
+    stubMatchMedia();
   });
 
   afterEach(() => {

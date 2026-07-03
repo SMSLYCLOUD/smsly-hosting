@@ -18,7 +18,7 @@ describe('FloatingAILoader', () => {
     const isForwardRef = (x: any) =>
       typeof x === 'object' && x !== null && x.$$typeof;
     const isFunction = typeof FloatingAILoader === 'function';
-    expect(isFunction || isForwardRef(FloatingAILoader)).toBe(true);
+    expect(Boolean(isFunction || isForwardRef(FloatingAILoader))).toBe(true);
   });
 
   it('renders the loading skeleton initially', () => {

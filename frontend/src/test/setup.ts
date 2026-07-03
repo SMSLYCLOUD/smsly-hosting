@@ -57,6 +57,18 @@ if (typeof window !== 'undefined') {
     (window as unknown as { ResizeObserver: typeof MockResizeObserver }).ResizeObserver =
       MockResizeObserver;
   }
+
+  if (!window.requestIdleCallback) {
+    (window as any).requestIdleCallback = vi.fn((cb: any) => {
+      return setTimeout(() => cb({ didTimeout: false, timeRemaining: () => 50 }), 0);
+    });
+  }
+
+  if (!window.cancelIdleCallback) {
+    (window as any).cancelIdleCallback = vi.fn((id: any) => {
+      clearTimeout(id);
+    });
+  }
 }
 
 // next/navigation mock — the App Router hooks are referenced by

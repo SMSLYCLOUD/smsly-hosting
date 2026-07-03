@@ -16,7 +16,7 @@ export const downloadBlob = (data: any, path: string) => {
     link.setAttribute('download', path.split('/').pop() || 'file');
     document.body.appendChild(link);
     link.click();
-    link.remove();
+    document.body.removeChild(link);
     window.URL.revokeObjectURL(url);
 };
 

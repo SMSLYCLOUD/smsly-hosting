@@ -136,9 +136,8 @@ describe('ConfirmProvider / useConfirm', () => {
 
     // Find the button that will resolve true (the "Delete" / Confirm button).
     const confirmBtn = await screen.findByRole('button', { name: /delete/i });
-    // Destructive buttons in our ui/button get the destructive CVA variant which
-    // sets bg-destructive class.
-    expect(confirmBtn.className).toContain('bg-destructive');
+    // Destructive buttons get the bg-red-600 class.
+    expect(confirmBtn.className).toContain('bg-red-600');
   });
 
   it('accepts a plain string as a shorthand for { message }', async () => {
