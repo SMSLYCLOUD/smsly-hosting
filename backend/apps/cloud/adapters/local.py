@@ -151,9 +151,26 @@ class LocalAdapter(BaseCloudAdapter):
         except Exception as e:
             logger.warning(f"Kubernetes client not available: {e}")
 
+    def _resolve_network_name(self) -> str:
+        """Resolve the scoped Docker network name for the current service."""
+        network_name = os.getenv('DOCKER_NETWORK', 'smsly-net')
+        try:
+            from apps.deployments.models import Service as _Svc
+            _svc = _Svc.objects.filter(id=self.service_id).select_related('project__team__organization').first() if hasattr(self, 'service_id') and hasattr(self, '_service') else None
+            if _svc is None and hasattr(self, 'service_id'):
+                _svc = self._service if hasattr(self, '_service') else None
+            if _svc and hasattr(_svc, 'project') and _svc.project:
+                from apps.deployments.models_network_scope import ScopedNetwork
+                network_name = ScopedNetwork.resolve_network_name(_svc.project)
+        except Exception:
+            pass
+        return network_name
+
     def _get_traefik_labels(self, name: str, host_rule: str, port: str,
-                            is_public: bool = True) -> dict[str, str]:
+                            is_public: bool = True, network_name: str | None = None) -> dict[str, str]:
         """Generate consistent Traefik labels for routing."""
+        if not network_name:
+            network_name = self._resolve_network_name()
         router_name = name.replace('.', '-').replace('_', '-')
 
         enable_tls = (
@@ -163,7 +180,7 @@ class LocalAdapter(BaseCloudAdapter):
 
         labels = {
             'traefik.enable': str(is_public).lower(),
-            'traefik.docker.network': network_name if isinstance(network_name, str) else os.getenv('DOCKER_NETWORK', 'smsly-net'),
+            'traefik.docker.network': network_name,
             f'traefik.http.routers.{router_name}.rule': host_rule,
             f'traefik.http.services.{router_name}.loadbalancer.server.port': str(port),
             f'traefik.http.routers.{router_name}.priority': '100',
@@ -263,17 +280,7 @@ class LocalAdapter(BaseCloudAdapter):
         serving while the green candidate is warming up.
         """
         # Resolve scoped network for this service
-        network_name = os.getenv('DOCKER_NETWORK', 'smsly-net')
-        try:
-            from apps.deployments.models import Service as _Svc
-            _svc = _Svc.objects.filter(id=self.service_id).select_related('project__team__organization').first() if hasattr(self, 'service_id') and hasattr(self, '_service') else None
-            if _svc is None and hasattr(self, 'service_id'):
-                _svc = self._service if hasattr(self, '_service') else None
-            if _svc and hasattr(_svc, 'project') and _svc.project:
-                from apps.deployments.models_network_scope import ScopedNetwork
-                network_name = ScopedNetwork.resolve_network_name(_svc.project)
-        except Exception:
-            pass
+        network_name = self._resolve_network_name()
 
         if not self.docker_client:
             raise RuntimeError("Docker client not available")
@@ -424,7 +431,7 @@ class LocalAdapter(BaseCloudAdapter):
             # Green candidates should not receive traffic until promotion.
             labels['traefik.enable'] = 'false'
         else:
-            labels.update(self._get_traefik_labels(name, host_rule, port, is_public))
+            labels.update(self._get_traefik_labels(name, host_rule, port, is_public, network_name=network_name))
             self._apply_router_special_labels(labels, name, env)
             if platform_hc_enabled and hc_primary_path:
                 labels[f'traefik.http.services.{router_name}.loadbalancer.healthcheck.path'] = hc_primary_path
@@ -637,7 +644,7 @@ class LocalAdapter(BaseCloudAdapter):
         4. Remove old backup only after successful cutover.
         If any step fails, restore the previous live container name.
         """
-        network_name = os.getenv('DOCKER_NETWORK', 'smsly-net')
+        network_name = self._resolve_network_name()
 
         try:
             if self.docker_client is None:
@@ -678,7 +685,7 @@ class LocalAdapter(BaseCloudAdapter):
             'managed_by': 'smsly-hosting',
         }
         # Add core routing labels
-        live_labels.update(self._get_traefik_labels(name, host_rule, port, is_public))
+        live_labels.update(self._get_traefik_labels(name, host_rule, port, is_public, network_name=network_name))
         promoted_env = {}
         for item in green_env:
             key, _sep, value = str(item).partition("=")

@@ -1120,21 +1120,21 @@ function TopologyVisualization() {
                     ))}
 
                     {/* Animated data pulses along edges */}
-                    <motion.circle r="3" fill="#22d3ee"
+                    <motion.circle r="3" fill="#22d3ee" cx={140} cy={80}
                         animate={{
                             cx: [140, 220, 300],
                             cy: [80, 60, 80],
                         }}
                         transition={{ duration: 3, repeat: Infinity, ease: 'linear' }}
                     />
-                    <motion.circle r="2.5" fill="#a78bfa"
+                    <motion.circle r="2.5" fill="#a78bfa" cx={460} cy={80}
                         animate={{
                             cx: [460, 380, 300],
                             cy: [80, 160, 240],
                         }}
                         transition={{ duration: 3.5, repeat: Infinity, ease: 'linear', delay: 0.8 }}
                     />
-                    <motion.circle r="2" fill="#fbbf24"
+                    <motion.circle r="2" fill="#fbbf24" cx={460} cy={200}
                         animate={{
                             cx: [460, 380, 300],
                             cy: [200, 140, 80],
