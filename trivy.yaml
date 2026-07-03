@@ -18,10 +18,12 @@ severity:
   - CRITICAL
   - HIGH
 
-vulnerability:
-  type:
+pkg:
+  types:
     - os
     - library
+
+vulnerability:
   ignore-unfixed: false
 
 misconfiguration:
