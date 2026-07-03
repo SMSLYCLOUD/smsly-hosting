@@ -62,7 +62,8 @@ if [ -n "$UPDATE_MODE" ]; then
         openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
             -keyout "${_tmp}/registry.key" \
             -out    "${_tmp}/registry.crt" \
-            -subj "/CN=registry" 2>/dev/null && {
+            -subj "/CN=registry" \
+            -addext "subjectAltName=DNS:registry,DNS:localhost,IP:127.0.0.1,IP:10.100.0.1" 2>/dev/null && {
             mv "${_tmp}/registry.key" "$INSTALL_DIR/certs/registry.key"
             mv "${_tmp}/registry.crt" "$INSTALL_DIR/certs/registry.crt"
             chmod 644 "$INSTALL_DIR/certs/registry.crt"

@@ -426,10 +426,8 @@ services:
     image: registry:2.8.3
     restart: unless-stopped
     ports:
-      # Localhost for master's own builds, VPN mesh for nodes.
-      # NOT exposed to the public internet.
-      - "127.0.0.1:5000:5000"
-      - "10.100.0.1:5000:5000"
+      # Localhost by default; set REGISTRY_BIND_IP=0.0.0.0 or 10.100.0.1 in .env for multi-node mesh
+      - "${REGISTRY_BIND_IP:-127.0.0.1}:5000:5000"
     environment:
       REGISTRY_AUTH_HTPASSWD_REALM: registry-realm
       REGISTRY_AUTH_HTPASSWD_PATH: /auth/htpasswd

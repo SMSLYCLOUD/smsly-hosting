@@ -157,6 +157,15 @@ PY
 }
 
 _registry_self_heal() {
+    # Ensure 'registry' hostname resolves to localhost on the host OS for local pulls/pushes
+    if [ -f "/etc/hosts" ] && ! grep -q -w "registry" /etc/hosts 2>/dev/null; then
+        if [ "$EUID" -eq 0 ] 2>/dev/null || [ "$(id -u 2>/dev/null)" -eq 0 ]; then
+            echo "127.0.0.1 registry" >> /etc/hosts 2>/dev/null || true
+        elif command -v sudo >/dev/null 2>&1; then
+            echo "127.0.0.1 registry" | sudo tee -a /etc/hosts >/dev/null 2>&1 || true
+        fi
+    fi
+
     local env_file="${1:-/opt/smsly-hosting/.env}"
     [ -f "$env_file" ] || return 0
 
