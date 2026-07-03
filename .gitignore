@@ -144,4 +144,6 @@ _vps_fix.py
 ecosystem-env*.json
 test_out.txt
 SMSLYCLOUD/
+.kimchi/
+playwright-report/
 
