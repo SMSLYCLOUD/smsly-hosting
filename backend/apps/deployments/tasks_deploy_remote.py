@@ -16,6 +16,8 @@ from apps.deployments.services.remote_orchestrator import RemoteOrchestrator  # 
 from apps.deployments.utils import (  # noqa: E402
     append_log,
     broadcast_status,
+    log_exhaustive_remote_orchestration_diagnostics,
+    log_exhaustive_self_heal_diagnostics,
     update_stage,
 )
 
@@ -70,6 +72,7 @@ def _handle_remote_deployment_legacy(deployment, server):
         return
 
     append_log(deployment, f"🚀 Remote deployment triggered: {remote_dep_id}\n")
+    log_exhaustive_remote_orchestration_diagnostics(deployment, server, remote_dep_id, status="TRIGGERED")
 
     # 3. Polling Loop
     max_retries = 90  # 15 minutes (10s intervals)
@@ -91,6 +94,7 @@ def _handle_remote_deployment_legacy(deployment, server):
             update_stage(deployment, 'Remote Deploy', 'success')
             broadcast_status(deployment)
             append_log(deployment, "✅ Remote deployment successful!\n")
+            log_exhaustive_remote_orchestration_diagnostics(deployment, server, remote_dep_id, status="SUCCESS ✅")
             return
 
         if status in (Deployment.Status.FAILED, Deployment.Status.BUILD_FAILED, Deployment.Status.CANCELLED):
@@ -221,6 +225,7 @@ def _handle_remote_deployment(deployment, server, skip_review=False, image_name=
     deployment.started_at = deployment.started_at or timezone.now()
     deployment.save(update_fields=['remote_deployment_id', 'status', 'started_at', 'updated_at'])
     append_log(deployment, f"Remote deployment triggered: {remote_dep_id}\n")
+    log_exhaustive_remote_orchestration_diagnostics(deployment, server, remote_dep_id, status="TRIGGERED")
     _poll_remote_deployment(
         deployment,
         orchestrator,
@@ -442,6 +447,7 @@ def _poll_remote_deployment(
                         update_stage(deployment, 'Remote Deploy', 'success')
                         broadcast_status(deployment)
                         append_log(deployment, "Remote deployment completed and VERIFIED successfully.\n")
+                        log_exhaustive_remote_orchestration_diagnostics(deployment, orchestrator.server, remote_dep_id, status="VERIFIED ACTIVE ✅")
                         return
                     else:
                         raise ValueError(f"Service status is {status_data.get('status')}, expected running.")
@@ -618,6 +624,13 @@ def self_heal_remote_deployment(self, deployment_id: str, server_id: str):
         append_log(deployment, f"[Self-Heal] Action: {result.action_taken.value}\n")
         append_log(deployment, f"[Self-Heal] Success: {result.success}\n")
         append_log(deployment, f"[Self-Heal] Details: {result.details}\n")
+        log_exhaustive_self_heal_diagnostics(
+            deployment,
+            result.action_taken.value if hasattr(result.action_taken, 'value') else str(result.action_taken),
+            result.success,
+            result.details,
+            next_action=result.next_action.value if hasattr(result, 'next_action') and hasattr(result.next_action, 'value') else str(getattr(result, 'next_action', 'None'))
+        )
 
         if result.success:
             append_log(deployment, f"[Self-Heal] Recovery succeeded: {result.action_taken.value}\n")

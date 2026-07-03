@@ -20,6 +20,7 @@ from apps.deployments.utils import (  # noqa: E402
     append_log,
     broadcast_status,
     is_deployment_local,
+    log_exhaustive_deployment_diagnostics,
 )
 
 from .tasks_deploy_local import _docker_safe_segment  # noqa: E402
@@ -116,6 +117,7 @@ def _build_uploaded_source(deployment, service) -> str:
 
         append_log(deployment, f"Extracting uploaded source from {zip_path}...\n")
         _safe_extract_zip(zip_path, source_dir)
+        log_exhaustive_deployment_diagnostics(deployment, service, source_dir)
 
         # Normalize archives that contain a single top-level folder.
         entries = [

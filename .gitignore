@@ -147,3 +147,9 @@ SMSLYCLOUD/
 .kimchi/
 playwright-report/
 
+# Standalone PXE/HTTP Boot Server project & OS disk images
+infrastructure/pxe-server/
+*.iso
+*.wim
+*.esd
+*.sdi

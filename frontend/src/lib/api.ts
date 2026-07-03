@@ -150,6 +150,15 @@ function normalizeDeployTarget(targetServerId?: string | null): { specified: boo
 
 api.interceptors.request.use((config) => {
   if (typeof window === 'undefined') return config;
+
+  const activeTeamId = localStorage.getItem('smsly_active_team');
+  if (activeTeamId && activeTeamId !== 'null' && activeTeamId !== 'undefined' && activeTeamId !== '') {
+    if (!config.headers) {
+      config.headers = {} as any;
+    }
+    (config.headers as any)['X-Team-ID'] = activeTeamId;
+  }
+
   if ((config as any)?._skipRemoteProxy) return config;
 
   const activeServer = localStorage.getItem('smsly_active_server');
@@ -491,6 +500,15 @@ export const servicesApi = {
       body.target_server_id = target.value;
     }
     const response = await api.post(`/services/${id}/deploy/`, body, { _skipRemoteProxy: true });
+    return response.data;
+  },
+  uploadDeploy: async (id: string, file: File, onUploadProgress?: (progressEvent: any) => void): Promise<any> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await api.post(`/services/${id}/upload-deploy/`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      onUploadProgress
+    });
     return response.data;
   },
   restart: async (id: string, forceRebuild: boolean = false): Promise<any> => {

@@ -36,7 +36,7 @@ from apps.deployments.models_addons import Addon  # noqa: E402
 from apps.deployments.models_storage import Volume  # noqa: E402
 from apps.deployments.services.pipeline import PipelineError, PipelineManager  # noqa: E402
 from apps.deployments.services.remote_orchestrator import RemoteOrchestrator  # noqa: E402
-from apps.deployments.utils import append_log, broadcast_status, update_stage  # noqa: E402
+from apps.deployments.utils import append_log, broadcast_status, log_exhaustive_runtime_activation_diagnostics, update_stage  # noqa: E402
 
 from .tasks_ai_router import _cleanup_shared_ollama_if_unused  # noqa: E402
 from .tasks_build import _build_function, _build_uploaded_source  # noqa: E402
@@ -875,6 +875,7 @@ def _deploy_container(deployment, provider, image_name):
                 f"Container: {container_name}\n"
             )
 
+            log_exhaustive_runtime_activation_diagnostics(deployment, service, container_name, promotion_type="Compose Stack")
             _sync_service_dns_to_node(deployment, service)
 
             _post_deploy_monitor.delay(
@@ -1076,6 +1077,7 @@ def _deploy_container(deployment, provider, image_name):
         service.active_runtime_id = resource.resource_id
         service.save(update_fields=['active_target_type', 'active_host_ip', 'active_runtime_id'])
 
+        log_exhaustive_runtime_activation_diagnostics(deployment, service, resource.resource_id, target_ip="127.0.0.1", promotion_type="Local Direct / Blue-Green")
 
         update_stage(
             deployment,

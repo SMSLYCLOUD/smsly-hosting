@@ -40,6 +40,13 @@ from apps.deployments.utils import (
     get_default_env_value,
     get_github_oauth_token_for_user,
     is_deployment_local,
+    log_exhaustive_addon_provisioning_diagnostics,
+    log_exhaustive_build_diagnostics,
+    log_exhaustive_clone_diagnostics,
+    log_exhaustive_deployment_diagnostics,
+    log_exhaustive_env_diagnostics,
+    log_exhaustive_network_and_routing_diagnostics,
+    log_exhaustive_push_diagnostics,
     parse_ai_resource_recommendation,
     redact_values,
     update_stage,
@@ -160,6 +167,7 @@ class PipelineManager:
                 self._auto_provision_addons()
             self._build_image()
             self._push_image()
+            log_exhaustive_network_and_routing_diagnostics(self.deployment, self.service)
             if not self.image_name:
                 raise PipelineError("Pipeline completed without producing an image")
             return self.image_name
@@ -234,6 +242,7 @@ class PipelineManager:
 
             self._build_image()
             self._push_image()
+            log_exhaustive_network_and_routing_diagnostics(self.deployment, self.service)
             if not self.image_name:
                 raise PipelineError("Build phase completed without producing an image")
             return self.image_name
@@ -431,6 +440,7 @@ class PipelineManager:
                 re.IGNORECASE,
             )
         ]
+        log_exhaustive_deployment_diagnostics(self.deployment, self.service, self.build_dir)
 
     def _check_cancellation(self, stage_name: str):
         """Check if user cancelled deployment."""
@@ -505,6 +515,7 @@ class PipelineManager:
                 self.deployment,
                 f"✓ Cloned successfully. Commit: {self.deployment.commit_hash[:7]}\n"
             )
+            log_exhaustive_clone_diagnostics(self.deployment, self.service.repository_url, requested_branch, self.source_dir)
 
         except Exception as e:
             update_stage(self.deployment, 'Clone', 'failed')
@@ -1161,6 +1172,7 @@ class PipelineManager:
                 append_log(self.deployment, f"\n🔧 Auto-injected {injected_count} env vars.\n")
 
             self._inject_proxy_runtime_defaults(scan_result)
+            log_exhaustive_env_diagnostics(self.deployment, self.service, "Auto-Scan / Manifest")
 
         except Exception as e: # pylint: disable=broad-exception-caught
             logger.warning("Env injection failed: %s", e)
@@ -1467,6 +1479,7 @@ class PipelineManager:
                     f"\n✅ All {len(detected_types)} detected addons "
                     f"already provisioned.\n"
                 )
+                log_exhaustive_addon_provisioning_diagnostics(self.deployment, sorted(list(detected_types)))
                 return
 
             append_log(
@@ -1544,6 +1557,7 @@ class PipelineManager:
                         "Auto-provision %s failed: %s", addon_type, e
                     )
 
+            log_exhaustive_addon_provisioning_diagnostics(self.deployment, sorted(list(detected_types)))
         except Exception as e:  # pylint: disable=broad-exception-caught
             logger.warning("Auto-addon provisioning failed: %s", e)
 
@@ -1684,6 +1698,9 @@ class PipelineManager:
             else:
                 # AUTO or other
                 use_docker = bool(dockerfile_path)
+
+            builder_label = "docker" if use_docker else str(self.service.buildpack or "nixpacks").lower()
+            log_exhaustive_build_diagnostics(self.deployment, builder_label, context_dir)
 
             if use_docker:
                 if not dockerfile_path:
@@ -2829,6 +2846,7 @@ class PipelineManager:
             if pushed_to_registry:
                 update_stage(self.deployment, 'Push', 'success')
                 append_log(self.deployment, f"✓ Pushed: {remote_tag}\n")
+                log_exhaustive_push_diagnostics(self.deployment, registry_url, remote_tag)
             else:
                 if push_error:
                     append_log(self.deployment, f"Registry error details: {push_error}\n")

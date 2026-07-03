@@ -96,17 +96,35 @@ def user_is_owner_or_team_member(user, service_or_project) -> bool:
     ).exists()
 
 
-def get_team_q_filter(user, prefix: str = "") -> Q:
+def get_team_q_filter(user, prefix: str = "", request=None, team_id=None) -> Q:
     """Return a Q filter for queryset scoping.
 
     Returns a filter that matches resources owned by *user* or
     belonging to a project whose team includes *user* (any role).
     Superusers see all resources (no filtering).
     """
-    if user.is_superuser:
-        return Q()
     from .models import TeamMember
     from django.utils import timezone
+
+    if team_id is None and request is not None:
+        team_id = (
+            request.headers.get('X-Team-ID')
+            or request.GET.get('team_id')
+            or getattr(request, 'query_params', {}).get('team_id')
+        )
+
+    if team_id is not None and str(team_id).strip() != "" and str(team_id).strip().lower() not in ('null', 'undefined', 'none'):
+        is_authorized = user.is_superuser or TeamMember.objects.filter(
+            team_id=team_id, user=user, is_active=True,
+        ).exclude(
+            expires_at__isnull=False, expires_at__lt=timezone.now(),
+        ).exists()
+        if is_authorized:
+            return Q(**{f"{prefix}project__team_id": team_id}) | Q(**{f"{prefix}owner": user, f"{prefix}project__isnull": True})
+
+    if user.is_superuser:
+        return Q()
+
     team_ids = TeamMember.objects.filter(
         user=user, is_active=True,
     ).exclude(

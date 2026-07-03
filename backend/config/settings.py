@@ -596,6 +596,7 @@ INSTALLED_APPS = [
     'apps.autoscaler',
     'apps.licensing',
     'apps.permissions',
+    'apps.mcp',
 ]
 
 if IS_AGENT_MODE:

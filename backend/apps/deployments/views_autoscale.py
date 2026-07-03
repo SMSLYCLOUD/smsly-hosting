@@ -8,6 +8,7 @@ from apps.deployments.models_core import ManagedServer, Service
 from apps.deployments.models_replica import ServiceReplica
 from apps.deployments.services.node_scorer import NodeScorer
 from apps.deployments.services.spawning_service import SpawningService
+from apps.teams.permissions import get_team_q_filter
 
 
 class ServiceReplicaSerializer(serializers.ModelSerializer):
@@ -48,14 +49,20 @@ class ScalingViewSet(viewsets.GenericViewSet):
         always agree on the recommendation.
         """
         from apps.autoscaler.engine.pipeline import analyze_only
-        service = Service.objects.get(id=pk, owner=request.user)
+        if request.user.is_superuser:
+            service = Service.objects.get(id=pk)
+        else:
+            service = Service.objects.get(get_team_q_filter(request.user, request=request), id=pk)
         result = analyze_only(service)
         return Response(result)
 
     @action(detail=True, methods=['get', 'put'])
     def alert_config(self, request, pk=None):
         """Get or update per-service autoscaler alert thresholds."""
-        service = get_object_or_404(Service, id=pk, owner=request.user)
+        if request.user.is_superuser:
+            service = get_object_or_404(Service, id=pk)
+        else:
+            service = get_object_or_404(Service, get_team_q_filter(request.user, request=request), id=pk)
         if request.method == 'GET':
             return Response(service.alert_config or {})
         serializer = AlertConfigSerializer(data=request.data)
@@ -69,7 +76,10 @@ class ScalingViewSet(viewsets.GenericViewSet):
     @action(detail=True, methods=['post'])
     def spawn(self, request, pk=None):
         """Manually spawn a replica on the best available node."""
-        service = Service.objects.get(id=pk, owner=request.user)
+        if request.user.is_superuser:
+            service = Service.objects.get(id=pk)
+        else:
+            service = Service.objects.get(get_team_q_filter(request.user, request=request), id=pk)
 
         candidates = ManagedServer.objects.filter(
             status=ManagedServer.Status.ONLINE,
@@ -106,10 +116,15 @@ class ScalingViewSet(viewsets.GenericViewSet):
         service_id = request.GET.get('service')
         if not service_id:
             return Response({'error': '?service=UUID required'}, status=400)
-        replicas = ServiceReplica.objects.filter(
-            service__id=service_id,
-            service__owner=request.user,
-        ).order_by('-created_at')
+        if request.user.is_superuser:
+            replicas = ServiceReplica.objects.filter(
+                service__id=service_id,
+            ).order_by('-created_at')
+        else:
+            replicas = ServiceReplica.objects.filter(
+                get_team_q_filter(request.user, prefix='service__', request=request),
+                service__id=service_id,
+            ).order_by('-created_at')
         return Response(ServiceReplicaSerializer(replicas, many=True).data)
 
     @action(detail=False, methods=['delete'])
@@ -118,9 +133,15 @@ class ScalingViewSet(viewsets.GenericViewSet):
         replica_id = request.GET.get('id')
         if not replica_id:
             return Response({'error': '?id=UUID required'}, status=400)
-        replica = ServiceReplica.objects.get(
-            id=replica_id, service__owner=request.user, status='RUNNING',
-        )
+        if request.user.is_superuser:
+            replica = ServiceReplica.objects.get(
+                id=replica_id, status='RUNNING',
+            )
+        else:
+            replica = ServiceReplica.objects.get(
+                get_team_q_filter(request.user, prefix='service__', request=request),
+                id=replica_id, status='RUNNING',
+            )
         spawner = SpawningService()
         try:
             spawner.destroy(replica)

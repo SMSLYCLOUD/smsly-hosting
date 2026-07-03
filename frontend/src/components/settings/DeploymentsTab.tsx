@@ -4,7 +4,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { servicesApi, serversApi, Deployment, ManagedServer } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { GitCommit, RotateCcw, Clock, CheckCircle2, XCircle, Loader2, ChevronDown, ChevronRight, Rocket, Brain, Timer, Ban, Eye, CheckCheck, Trash2, ArrowUpCircle, Server } from 'lucide-react';
+import { Progress } from '@/components/ui/progress';
+import { GitCommit, RotateCcw, Clock, CheckCircle2, XCircle, Loader2, ChevronDown, ChevronRight, Rocket, Brain, Timer, Ban, Eye, CheckCheck, Trash2, ArrowUpCircle, Server, UploadCloud } from 'lucide-react';
 import { toast } from '@/components/ui/use-toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { formatDistanceToNow } from 'date-fns';
@@ -19,6 +20,8 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
     const [expandedId, setExpandedId] = useState<string | null>(null);
     const [expandedDetails, setExpandedDetails] = useState<Record<string, any>>({});
     const [redeploying, setRedeploying] = useState(false);
+    const [uploading, setUploading] = useState(false);
+    const [uploadProgress, setUploadProgress] = useState(0);
     const [cancellingId, setCancellingId] = useState<string | null>(null);
     const [approvingId, setApprovingId] = useState<string | null>(null);
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -77,6 +80,43 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
             console.error(err);
             toast({ title: "Redeploy failed", variant: "destructive" });
             setRedeploying(false);
+        }
+    };
+
+    const handleUploadDeploy = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        try {
+            setUploading(true);
+            setUploadProgress(0);
+            await servicesApi.uploadDeploy(serviceId, file, (progressEvent: any) => {
+                if (progressEvent.total) {
+                    const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+                    setUploadProgress(percent);
+                }
+            });
+            toast({ title: "Upload deploy triggered", description: `Uploaded ${file.name} (100%) and started deployment.` });
+            setTimeout(() => { void loadDeployments(); setUploading(false); setUploadProgress(0); }, 2000);
+        } catch (err: any) {
+            console.error(err);
+            const msg = err?.response?.data?.error || err?.message || "Upload deploy failed";
+            toast({ title: msg, variant: "destructive" });
+            setUploading(false);
+            setUploadProgress(0);
+        } finally {
+            e.target.value = '';
+        }
+    };
+
+    const getDeploymentProgress = (status: string) => {
+        switch (status) {
+            case 'QUEUED': return 15;
+            case 'REVIEW': return 35;
+            case 'BUILDING': return 65;
+            case 'DEPLOYING': return 85;
+            case 'ACTIVE': return 100;
+            case 'SUCCESS': return 100;
+            default: return 0;
         }
     };
 
@@ -295,15 +335,39 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
                             <Button
                                 size="sm"
                                 onClick={handleRedeploy}
-                                disabled={redeploying}
+                                disabled={redeploying || uploading}
                                 className="gap-2"
                             >
                                 {redeploying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Rocket className="w-4 h-4" />}
                                 {redeploying ? 'Deploying...' : 'Redeploy'}
                             </Button>
+                            <label className={`inline-flex items-center justify-center gap-2 rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-input bg-background hover:bg-accent hover:text-accent-foreground h-9 px-3 cursor-pointer ${uploading ? 'opacity-50 pointer-events-none' : ''}`}>
+                                <input
+                                    type="file"
+                                    accept=".zip,.tar.gz,.tgz"
+                                    onChange={handleUploadDeploy}
+                                    disabled={uploading}
+                                    className="hidden"
+                                />
+                                {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <UploadCloud className="w-4 h-4 text-primary" />}
+                                {uploading ? 'Uploading...' : 'Upload & Deploy'}
+                            </label>
                         </div>
                     </div>
                 </div>
+
+                {uploading && (
+                    <div className="p-4 bg-muted/20 border-b border-border space-y-2 animate-in fade-in">
+                        <div className="flex justify-between text-sm font-medium">
+                            <span className="flex items-center gap-2">
+                                <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                                Uploading & Deploying Service Archive...
+                            </span>
+                            <span className="font-bold text-primary">{uploadProgress}%</span>
+                        </div>
+                        <Progress value={uploadProgress} className="h-2 w-full" />
+                    </div>
+                )}
 
                 <div className="divide-y divide-border">
                     {deployments.length === 0 ? (
@@ -315,6 +379,8 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
                             const isExpanded = expandedId === d.id;
                             const isLive = d.status === 'ACTIVE' && idx === deployments.findIndex(x => x.status === 'ACTIVE');
                             const details = expandedDetails[d.id] || d;
+                            const deployPercent = getDeploymentProgress(d.status);
+                            const isDeploying = ['QUEUED', 'REVIEW', 'BUILDING', 'DEPLOYING'].includes(d.status);
                             return (
                                 <div key={d.id}>
                                     {/* Clickable Row */}
@@ -336,7 +402,7 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
                                             <div className="bg-muted p-2 rounded-full">
                                                 {getStatusIcon(d.status)}
                                             </div>
-                                            <div>
+                                            <div className="flex-1 min-w-0">
                                                 <div className="flex items-center gap-2">
                                                     {isLive ? (
                                                         <span className="text-sm font-bold uppercase px-2.5 py-0.5 rounded text-[10px] border bg-emerald-500 text-white border-emerald-600 flex items-center gap-1.5">
@@ -353,12 +419,21 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
                                                     </span>
                                                 </div>
                                                 <div className="flex items-center gap-2 mt-1">
-                                                    <GitCommit className="w-4 h-4 text-muted-foreground" />
+                                                    {d.commit_message?.includes('Upload') || d.commit_hash?.startsWith('upload-') ? <UploadCloud className="w-4 h-4 text-primary" /> : <GitCommit className="w-4 h-4 text-muted-foreground" />}
                                                     <span className="font-mono text-sm">{d.commit_hash.substring(0, 7)}</span>
                                                     <span className="text-sm text-muted-foreground truncate max-w-[200px] md:max-w-[400px]">
                                                         {d.commit_message || 'No commit message'}
                                                     </span>
                                                 </div>
+                                                {isDeploying && (
+                                                    <div className="w-full mt-2.5 space-y-1 pr-4">
+                                                        <div className="flex justify-between text-[11px] font-medium text-muted-foreground">
+                                                            <span>Deploying ({d.status})...</span>
+                                                            <span className="text-primary font-bold">{deployPercent}%</span>
+                                                        </div>
+                                                        <Progress value={deployPercent} className="h-1.5 w-full bg-secondary" />
+                                                    </div>
+                                                )}
                                             </div>
                                         </div>
 

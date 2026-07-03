@@ -819,7 +819,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         if user.is_superuser or is_remote_sync_request(self.request):
             return self.queryset.all().select_related('project').prefetch_related('deployments')
         return self.queryset.filter(
-            get_team_q_filter(user)
+            get_team_q_filter(user, request=self.request)
         ).select_related('project').prefetch_related('deployments')
 
     def _is_remote_sync_request(self):
@@ -3745,7 +3745,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             base_qs = base_qs.filter(service__project_id=project_id)
 
         return base_qs.filter(
-            get_team_q_filter(self.request.user, prefix='service__')
+            get_team_q_filter(self.request.user, prefix='service__', request=self.request)
         ).distinct()
 
     def _is_remote_sync_request(self):
@@ -5422,7 +5422,7 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
             pass
         else:
             qs = qs.filter(
-                get_team_q_filter(self.request.user, prefix='service__')
+                get_team_q_filter(self.request.user, prefix='service__', request=self.request)
             ).distinct()
 
         qs = qs.order_by('-created_at')
@@ -6064,7 +6064,7 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
         """
         from django.db.models import Q
         qs = ServiceBackup.objects.filter(
-            get_team_q_filter(request.user, prefix='service__')
+            get_team_q_filter(request.user, prefix='service__', request=request)
         ).filter(
             # Restore-related backups have specific markers in error_message
             error_message__icontains='restored'
@@ -6109,7 +6109,7 @@ class ServiceSnapshotViewSet(viewsets.ModelViewSet):
 
         if not (self.request.user.is_superuser or is_remote_sync_request(self.request)):
             qs = qs.filter(
-                get_team_q_filter(self.request.user, prefix='service__')
+                get_team_q_filter(self.request.user, prefix='service__', request=self.request)
             ).distinct()
 
         project_id = self.request.query_params.get('project_id')
@@ -6680,7 +6680,7 @@ class SnapshotScheduleViewSet(viewsets.ModelViewSet):
         qs = self.queryset
         if not (self.request.user.is_superuser or is_remote_sync_request(self.request)):
             qs = qs.filter(
-                get_team_q_filter(self.request.user, prefix='service__')
+                get_team_q_filter(self.request.user, prefix='service__', request=self.request)
             ).distinct()
         service_id = self.request.query_params.get('service')
         if service_id:
@@ -6746,7 +6746,7 @@ class BackupScheduleViewSet(viewsets.ModelViewSet):
         qs = self.queryset
         if not (self.request.user.is_superuser or is_remote_sync_request(self.request)):
             qs = qs.filter(
-                get_team_q_filter(self.request.user, prefix='service__')
+                get_team_q_filter(self.request.user, prefix='service__', request=self.request)
             ).distinct()
         service_id = self.request.query_params.get('service')
         if service_id:
