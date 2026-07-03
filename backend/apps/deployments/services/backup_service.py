@@ -178,6 +178,14 @@ class BackupService:
                 key = getattr(settings, "BACKUP_ENCRYPTION_KEY", "").strip()
             except ImportError:
                 pass
+        if not key:
+            try:
+                from apps.deployments.models_backup import BackupEncryptionKey
+                active = BackupEncryptionKey.objects.filter(is_active=True).first()
+                if active and active.key_material_encrypted:
+                    key = active.key_material_encrypted.strip()
+            except Exception:
+                pass
         return key
     def __init__(self):
         try:
@@ -1933,16 +1941,23 @@ class BackupService:
 
     @staticmethod
     def lookup_key_by_id(key_id: str) -> str | None:
-        """Return the Fernet key material for a registered key_id, or None.
+        """Return the Fernet key material for a registered key_id or fingerprint, or None.
 
         Used by the decrypt path when the env key's fingerprint does
         not match the V2 header — i.e. the backup was encrypted on a
         different master and the operator has already imported the
         source key.
         """
+        if not key_id:
+            return None
         try:
+            from django.db.models import Q
             from apps.deployments.models_backup import BackupEncryptionKey
-            row = BackupEncryptionKey.objects.filter(key_id=key_id).first()
+            row = (
+                BackupEncryptionKey.objects
+                .filter(Q(key_id=key_id) | Q(fingerprint=key_id))
+                .first()
+            )
             if row is None:
                 return None
             return row.key_material_encrypted
@@ -2181,6 +2196,40 @@ class BackupService:
         return BackupService._decrypt_legacy_fernet_backup(path, key)
 
     @staticmethod
+    def can_decrypt_backup(path: str, passed_key: str = None) -> bool:
+        """Return True if this master has an encryption key capable of decrypting path."""
+        try:
+            if not path or not os.path.exists(path) or not path.endswith('.enc'):
+                return True
+            header = BackupService.read_v2_header(path)
+            if not header:
+                return bool(BackupService._get_encryption_key() or passed_key)
+            header_fingerprint = header.get('fingerprint', '')
+            header_key_id = header.get('key_id', '')
+
+            for key in (passed_key, BackupService._get_encryption_key()):
+                if key:
+                    try:
+                        if BackupService.compute_backup_key_fingerprint(key) == header_fingerprint:
+                            return True
+                    except Exception:
+                        pass
+
+            if header_key_id and BackupService.lookup_key_by_id(header_key_id):
+                return True
+            if header_fingerprint and BackupService.lookup_key_by_id(header_fingerprint):
+                return True
+            try:
+                from apps.deployments.models_backup import BackupEncryptionKey
+                if BackupEncryptionKey.objects.filter(fingerprint=header_fingerprint).exists():
+                    return True
+            except Exception:
+                pass
+            return False
+        except Exception:
+            return bool(BackupService._get_encryption_key() or passed_key)
+
+    @staticmethod
     def _resolve_key_for_v2(path: str, passed_key: str) -> tuple[bytes, str]:
         """Resolve the raw 32-byte AES key for a V2 backup.
 
@@ -2207,20 +2256,50 @@ class BackupService:
         header_fingerprint_hex = header_fingerprint.hex()
         header_key_id_hex = header_key_id.hex()
 
-        passed_fingerprint = BackupService.compute_backup_key_fingerprint(passed_key)
-        if passed_fingerprint == header_fingerprint_hex:
-            return BackupService._decode_backup_key(passed_key), header_fingerprint_hex
+        if passed_key:
+            try:
+                passed_fingerprint = BackupService.compute_backup_key_fingerprint(passed_key)
+                if passed_fingerprint == header_fingerprint_hex:
+                    return BackupService._decode_backup_key(passed_key), header_fingerprint_hex
+            except Exception:
+                pass
 
-        imported_key_material = BackupService.lookup_key_by_id(header_key_id_hex)
-        if imported_key_material is not None:
-            imported_fingerprint = BackupService.compute_backup_key_fingerprint(
-                imported_key_material
-            )
-            if imported_fingerprint == header_fingerprint_hex:
+        active_key = BackupService._get_encryption_key()
+        if active_key and active_key != passed_key:
+            try:
+                active_fingerprint = BackupService.compute_backup_key_fingerprint(active_key)
+                if active_fingerprint == header_fingerprint_hex:
+                    return BackupService._decode_backup_key(active_key), header_fingerprint_hex
+            except Exception:
+                pass
+
+        for search_id in (header_key_id_hex, header_fingerprint_hex):
+            if not search_id:
+                continue
+            imported_key_material = BackupService.lookup_key_by_id(search_id)
+            if imported_key_material is not None:
+                try:
+                    imported_fingerprint = BackupService.compute_backup_key_fingerprint(
+                        imported_key_material
+                    )
+                    if imported_fingerprint == header_fingerprint_hex:
+                        return (
+                            BackupService._decode_backup_key(imported_key_material),
+                            header_fingerprint_hex,
+                        )
+                except Exception:
+                    pass
+
+        try:
+            from apps.deployments.models_backup import BackupEncryptionKey
+            row = BackupEncryptionKey.objects.filter(fingerprint=header_fingerprint_hex).first()
+            if row and row.key_material_encrypted:
                 return (
-                    BackupService._decode_backup_key(imported_key_material),
+                    BackupService._decode_backup_key(row.key_material_encrypted),
                     header_fingerprint_hex,
                 )
+        except Exception:
+            pass
 
         raise UnknownBackupKeyIdError(
             key_id=header_key_id_hex,

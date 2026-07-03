@@ -825,7 +825,8 @@ def _find_cloned_source_for_repo(repo: str, service_name: str) -> str | None:
     candidates = []
 
     # Priority 1: SMSLY_BUILDS_DIR (where the platform clones repos for building)
-    builds_root = _os.environ.get("SMSLY_BUILDS_DIR", "/opt/smsly-hosting/builds")
+    from apps.deployments.services.pipeline import _get_builds_root
+    builds_root = _get_builds_root()
     for build_candidate in [
         _os.path.join(builds_root, f"svc_{service_name}"),
         _os.path.join(builds_root, f"svc_{repo_short}"),

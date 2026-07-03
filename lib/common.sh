@@ -560,10 +560,8 @@ ensure_infrastructure_permissions() {
     mkdir -p "$prometheus_targets_dir"
 
     # UID 1000 is the "smsly" user inside the containers.
+    # Note: Never chown to host username "smsly:smsly" because host UID may not be 1000.
     _chown_owner="1000:1000"
-    if id smsly >/dev/null 2>&1; then
-        _chown_owner="smsly:smsly"
-    fi
     for _dir in "$caddy_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir"; do
         if [ -d "$_dir" ]; then
             if ! chown -R "$_chown_owner" "$_dir" 2>/dev/null; then

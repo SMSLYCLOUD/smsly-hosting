@@ -1395,12 +1395,8 @@ def _handle_failure(task, deployment, error_msg, reason):
                     logger.debug("Jules auto-fix skipped: service has no repository_url")
                 else:
                     # Derive repo_path from standard build location
-                    _builds_root = (
-                        os.environ.get("SMSLY_BUILDS_DIR")
-                        or "/opt/smsly-hosting/builds"
-                    )
-                    if not os.path.isdir(_builds_root):
-                        _builds_root = os.path.join(tempfile.gettempdir(), "smsly-builds")
+                    from apps.deployments.services.pipeline import _get_builds_root
+                    _builds_root = _get_builds_root()
                     repo_path = os.path.join(_builds_root, f"svc_{service.id}")
                     if not os.path.isdir(repo_path):
                         repo_path = ""

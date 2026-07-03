@@ -51,37 +51,51 @@ logger = logging.getLogger(__name__)
 # Persistent build directory root.
 # Uses env var or a sensible default. Avoids /tmp which the OS may clean
 # between the analysis and build phases of a 2-phase deploy.
+def _is_dir_writable(path: str) -> bool:
+    """Verify that path exists and can actually be written to by the current process."""
+    try:
+        os.makedirs(path, exist_ok=True)
+        probe = os.path.join(path, f".perm_probe_{os.getpid()}_{id(path)}")
+        with open(probe, "w") as f:
+            f.write("ok")
+        try:
+            os.remove(probe)
+        except OSError:
+            pass
+        return True
+    except (OSError, PermissionError):
+        return False
+
+
 def _resolve_builds_root():
     """Determine best writable directory for build artifacts."""
     explicit = os.environ.get('SMSLY_BUILDS_DIR')
-    if explicit:
-        try:
-            os.makedirs(explicit, exist_ok=True)
-            return explicit
-        except OSError:
-            pass
+    if explicit and _is_dir_writable(explicit):
+        return explicit
 
     # Prefer /opt path on Linux servers
     preferred = '/opt/smsly-hosting/builds'
-    try:
-        os.makedirs(preferred, exist_ok=True)
+    if _is_dir_writable(preferred):
         return preferred
-    except OSError:
-        pass
 
     # Fallback: persistent subdir in system temp
     fallback = os.path.join(tempfile.gettempdir(), 'smsly-builds')
-    os.makedirs(fallback, exist_ok=True)
+    try:
+        os.makedirs(fallback, exist_ok=True)
+    except OSError:
+        pass
     return fallback
+
 
 def _get_builds_root():
     """Lazy accessor for BUILDS_ROOT — evaluated at call time so env var
-    changes (SMSLY_BUILDS_DIR) are picked up without a process restart."""
+    changes (SMSLY_BUILDS_DIR) or permission changes are picked up without a restart."""
     root = getattr(_get_builds_root, '_cached', None)
-    if root is None:
+    if root is None or not _is_dir_writable(root):
         root = _resolve_builds_root()
         _get_builds_root._cached = root
     return root
+
 
 _BUILDS_ROOT = _get_builds_root()
 
@@ -240,9 +254,7 @@ class PipelineManager:
         saved_build = meta.get('build_dir', '')
 
         # Restore build_dir
-        self.build_dir = saved_build or os.path.join(
-            _BUILDS_ROOT, f"build_{self.deployment.id}"
-        )
+        self.build_dir = saved_build or self._ensure_build_dir(f"build_{self.deployment.id}")
 
         # Restore source_dir — prefer saved path from repo cache
         if saved_source and os.path.isdir(saved_source):
@@ -270,8 +282,7 @@ class PipelineManager:
                 self.deployment,
                 "ℹ️ Build directory from analysis phase not found locally. Re-cloning repository for build phase...\n"
             )
-            self.build_dir = os.path.join(_BUILDS_ROOT, f"build_{self.deployment.id}")
-            os.makedirs(self.build_dir, exist_ok=True)
+            self.build_dir = self._ensure_build_dir(f"build_{self.deployment.id}")
             self.source_dir = self.build_dir
             self._clone_repo()
 
@@ -280,7 +291,7 @@ class PipelineManager:
                 self.deployment,
                 "Build source from review phase is unavailable locally. Re-cloning repository for build phase...\n"
             )
-            self.build_dir = os.path.join(_BUILDS_ROOT, f"svc_{self.service.id}")
+            self.build_dir = self._ensure_build_dir(f"svc_{self.service.id}")
             self.source_dir = None
             self._clone_repo()
 
@@ -294,6 +305,35 @@ class PipelineManager:
                 re.IGNORECASE,
             )
         ]
+
+    def _ensure_build_dir(self, dir_name: str) -> str:
+        """Ensure build directory exists and is writable, with automatic fallback to temp dir."""
+        root = _get_builds_root()
+        path = os.path.join(root, dir_name)
+        try:
+            os.makedirs(path, exist_ok=True)
+            probe = os.path.join(path, f".probe_{os.getpid()}")
+            with open(probe, "w") as f:
+                f.write("ok")
+            try:
+                os.remove(probe)
+            except OSError:
+                pass
+            return path
+        except (OSError, PermissionError) as exc:
+            logger.warning("Build dir %s not writable (%s), falling back to temp dir", path, exc)
+            fallback_root = os.path.join(tempfile.gettempdir(), 'smsly-builds')
+            try:
+                os.makedirs(fallback_root, exist_ok=True)
+            except OSError:
+                pass
+            _get_builds_root._cached = fallback_root
+            fallback_path = os.path.join(fallback_root, dir_name)
+            try:
+                os.makedirs(fallback_path, exist_ok=True)
+            except OSError:
+                pass
+            return fallback_path
 
     @staticmethod
     def _source_tree_available(source_dir: str | None) -> bool:
@@ -371,9 +411,7 @@ class PipelineManager:
     def _setup(self):
         """Initialize build environment."""
         # Use a persistent path keyed by service ID to enable "git pull" for redeployments.
-        self.build_dir = os.path.join(_BUILDS_ROOT, f"svc_{self.service.id}")
-        # Ensure directory exists but do NOT wipe it (to allow git pull)
-        os.makedirs(self.build_dir, exist_ok=True)
+        self.build_dir = self._ensure_build_dir(f"svc_{self.service.id}")
         self.deployment.pipeline_stages = []
         update_stage(self.deployment, 'Clone', 'pending')
         update_stage(self.deployment, 'Build', 'pending')
@@ -477,8 +515,23 @@ class PipelineManager:
         """Clone repository directly without using repo cache."""
         build_path = Path(target_dir)
         if build_path.exists():
-            shutil.rmtree(build_path)
-        build_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                shutil.rmtree(build_path)
+            except (OSError, PermissionError) as exc:
+                logger.warning("Could not rmtree %s (%s), trying ignore_errors", build_path, exc)
+                shutil.rmtree(build_path, ignore_errors=True)
+        try:
+            build_path.parent.mkdir(parents=True, exist_ok=True)
+        except (OSError, PermissionError) as exc:
+            logger.warning("Could not mkdir in %s (%s), falling back to temp dir", build_path.parent, exc)
+            fallback_root = Path(tempfile.gettempdir()) / 'smsly-builds'
+            fallback_root.mkdir(parents=True, exist_ok=True)
+            build_path = fallback_root / build_path.name
+            if build_path.exists():
+                shutil.rmtree(build_path, ignore_errors=True)
+            self.build_dir = str(build_path)
+            if hasattr(self, 'source_dir') and self.source_dir:
+                self.source_dir = str(build_path)
 
         env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
         askpass_path = None

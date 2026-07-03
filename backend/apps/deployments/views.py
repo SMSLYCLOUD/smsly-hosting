@@ -5531,35 +5531,31 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
                 BackupService,
                 UnknownBackupKeyIdError,
             )
-            env_key = os.environ.get('BACKUP_ENCRYPTION_KEY', '').strip()
-            if not env_key and not key_provided:
-                # No local key and no key supplied in the request —
-                # check if an imported key matches the backup's key_id.
+            if not BackupService.can_decrypt_backup(backup.file_path, passed_key=key_provided):
                 try:
                     header = BackupService.read_v2_header(backup.file_path)
-                    header_key_id = header['key_id']
-                    if not BackupService.lookup_key_by_id(header_key_id):
-                        return Response(
-                            {
-                                'error': (
-                                    'Encryption key required. This backup '
-                                    'was encrypted on a different '
-                                    'master. Import the key or '
-                                    'provide it in the request.'
-                                ),
-                                'error_code': 'ENCRYPTION_KEY_REQUIRED',
-                                'key_id': header_key_id,
-                                'remediation': (
-                                    'POST /api/v1/backups/import-key/ with '
-                                    'key_id and key_material from '
-                                    'the source master, or send '
-                                    '"encryption_key" in the '
-                                    'restore request body, or '
-                                    'upload a key_file JSON.'
-                                ),
-                            },
-                            status=status.HTTP_400_BAD_REQUEST,
-                        )
+                    header_key_id = header.get('key_id', 'unknown')
+                    return Response(
+                        {
+                            'error': (
+                                'Encryption key required. This backup '
+                                'was encrypted on a different '
+                                'master. Import the key or '
+                                'provide it in the request.'
+                            ),
+                            'error_code': 'ENCRYPTION_KEY_REQUIRED',
+                            'key_id': header_key_id,
+                            'remediation': (
+                                'POST /api/v1/backups/import-key/ with '
+                                'key_id and key_material from '
+                                'the source master, or send '
+                                '"encryption_key" in the '
+                                'restore request body, or '
+                                'upload a key_file JSON.'
+                            ),
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
                 except (OSError, ValueError):
                     pass
 
@@ -5828,7 +5824,7 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
                 return Response({'error': 'File not found'}, status=status.HTTP_404_NOT_FOUND)
 
         from .services.backup_service import BackupService, UnknownBackupKeyIdError
-        key = os.environ.get("BACKUP_ENCRYPTION_KEY", "").strip()
+        key = BackupService._get_encryption_key()
 
         # If the file is encrypted, we must decrypt it for the user to download
         if file_path.endswith('.enc') and key:
@@ -6276,30 +6272,28 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
                 BackupService,
                 UnknownBackupKeyIdError,
             )
-            env_key = os.environ.get('BACKUP_ENCRYPTION_KEY', '').strip()
-            if not env_key and not key_provided:
+            if not BackupService.can_decrypt_backup(backup.file_path, passed_key=key_provided):
                 try:
                     header = BackupService.read_v2_header(backup.file_path)
-                    header_key_id = header['key_id']
-                    if not BackupService.lookup_key_by_id(header_key_id):
-                        return Response(
-                            {
-                                'error': (
-                                    'Encryption key required. This backup '
-                                    'was encrypted on a different master. '
-                                    'Import the key or provide it in the request.'
-                                ),
-                                'error_code': 'ENCRYPTION_KEY_REQUIRED',
-                                'key_id': header_key_id,
-                                'remediation': (
-                                    'POST /api/v1/server/backups/import-key/ with '
-                                    'key_id and key_material from the source master, '
-                                    'or send "encryption_key" in the restore request body, '
-                                    'or upload a key_file JSON.'
-                                ),
-                            },
-                            status=status.HTTP_400_BAD_REQUEST,
-                        )
+                    header_key_id = header.get('key_id', 'unknown')
+                    return Response(
+                        {
+                            'error': (
+                                'Encryption key required. This backup '
+                                'was encrypted on a different master. '
+                                'Import the key or provide it in the request.'
+                            ),
+                            'error_code': 'ENCRYPTION_KEY_REQUIRED',
+                            'key_id': header_key_id,
+                            'remediation': (
+                                'POST /api/v1/server/backups/import-key/ with '
+                                'key_id and key_material from the source master, '
+                                'or send "encryption_key" in the restore request body, '
+                                'or upload a key_file JSON.'
+                            ),
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
                 except (OSError, ValueError):
                     pass
 
@@ -6352,7 +6346,7 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
                 return Response({'error': 'Backup file not found on disk.'}, status=status.HTTP_404_NOT_FOUND)
 
         from .services.backup_service import BackupService, UnknownBackupKeyIdError
-        key = os.environ.get("BACKUP_ENCRYPTION_KEY", "").strip()
+        key = BackupService._get_encryption_key()
 
         # If the file is encrypted, we must decrypt it for the user to download
         if file_path.endswith('.enc') and key:

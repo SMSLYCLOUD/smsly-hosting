@@ -508,9 +508,9 @@ class ServerTransferService:
 
         local_path = backup.file_path
         if local_path.endswith(".enc"):
-            key = os.environ.get("BACKUP_ENCRYPTION_KEY", "").strip()
+            key = BackupService._get_encryption_key()
             if not key:
-                raise ValueError("Encrypted backup detected but BACKUP_ENCRYPTION_KEY is not set.")
+                raise ValueError("Encrypted backup detected but no backup encryption key is configured.")
             try:
                 local_path = BackupService.decrypt_backup(local_path, key)
             except UnknownBackupKeyIdError as exc:
@@ -543,7 +543,7 @@ class ServerTransferService:
         """
         if self.transfer.transfer_type != 'FULL':
             return None
-        key_material = os.environ.get("BACKUP_ENCRYPTION_KEY", "").strip()
+        key_material = BackupService._get_encryption_key()
         if not key_material:
             return None
         try:
