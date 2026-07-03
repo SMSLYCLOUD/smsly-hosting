@@ -782,6 +782,10 @@ class PipelineManager:
                 injected = self._inject_manifest_env_vars(resolved_env, resolver)
 
                 if resolver.unresolved_vars:
+                    # Persist so review_summary exposes them to the auto-fill API action.
+                    _rs = self.deployment.review_summary or {}
+                    _rs['unresolved_external_vars'] = resolver.unresolved_vars
+                    self.deployment.review_summary = _rs
                     append_log(
                         self.deployment,
                         f"  ⚠️ {len(resolver.unresolved_vars)} unresolved required var(s): "

@@ -658,6 +658,9 @@ class ManifestEnvResolver:
         if mock_value:
             return mock_value
 
+        # 13. External-required var — cannot be auto-generated; mark as unresolved.
+        #     generate_placeholder_for_external() can later produce a safe
+        #     placeholder when the operator clicks "Auto-fill external vars".
         self.unresolved_vars.append(var_name)
         return ""
 
@@ -792,6 +795,99 @@ class ManifestEnvResolver:
             var_name, self.service_name,
         )
         return ""  # let it stay unresolved — we couldn't even mock it
+
+    # ── External-required var placeholder generation ───────────────────────
+
+    @staticmethod
+    def generate_placeholder_for_external(var_name: str) -> str:
+        """Generate a safe, clearly-labelled placeholder for an external-required var.
+
+        Called by the ``fill_external_env`` API action so operators can
+        auto-fill all unresolved vars with values that are:
+          * clearly labelled as placeholders (``REPLACE_ME__`` prefix)
+          * structurally correct for the expected format
+          * safe to deploy with (non-empty, non-secret leaking)
+
+        The operator MUST replace these before going to production.
+        """
+        name = var_name.upper()
+
+        # ── AI / LLM model identifiers ────────────────────────────────────
+        if "MODEL" in name and any(p in name for p in ("ALIBABA", "OPENAI", "ANTHROPIC", "GEMINI", "CLAUDE", "GPT", "LLM", "AI_")):
+            return "REPLACE_ME__ai-model-name"
+        if "MODEL" in name:
+            return "REPLACE_ME__model-name"
+
+        # ── Cloud provider account IDs ────────────────────────────────────
+        if "CLOUDFLARE" in name and "ACCOUNT" in name:
+            return "REPLACE_ME__cloudflare-account-id"
+        if "CLOUDFLARE" in name and "ZONE" in name:
+            return "REPLACE_ME__cloudflare-zone-id"
+        if "CLOUDFLARE" in name:
+            return "REPLACE_ME__cloudflare-value"
+        if "AWS_ACCOUNT" in name:
+            return "REPLACE_ME__aws-account-id"
+        if "GCP_PROJECT" in name or "GOOGLE_PROJECT" in name:
+            return "REPLACE_ME__gcp-project-id"
+        if "AZURE_SUBSCRIPTION" in name:
+            return "REPLACE_ME__azure-subscription-id"
+
+        # ── Payment providers ────────────────────────────────────────────
+        if "PAYPAL" in name and ("CLIENT" in name or "APP" in name):
+            return "REPLACE_ME__paypal-client-id"
+        if "PAYPAL" in name and "WEBHOOK" in name:
+            return "REPLACE_ME__paypal-webhook-id"
+        if "PAYPAL" in name:
+            return "REPLACE_ME__paypal-value"
+        if "STRIPE" in name and "PUBLISHABLE" in name:
+            return "pk_test_REPLACE_ME"
+        if "STRIPE" in name and "WEBHOOK" in name:
+            return "whsec_REPLACE_ME"
+        if "STRIPE" in name:
+            return "sk_test_REPLACE_ME"
+        if "COINBASE" in name:
+            return "REPLACE_ME__coinbase-api-key"
+
+        # ── Messaging / telephony ────────────────────────────────────────
+        if "TWILIO" in name and "WHATSAPP" in name and "FROM" in name:
+            return "whatsapp:+15005550006"  # Twilio WhatsApp sandbox sender
+        if "TWILIO" in name and "FROM" in name:
+            return "+15005550006"
+        if "TWILIO" in name and "SID" in name:
+            return "AC" + "0" * 32  # clearly fake SID
+        if "TWILIO" in name:
+            return "REPLACE_ME__twilio-value"
+        if "VONAGE" in name or "NEXMO" in name:
+            return "REPLACE_ME__vonage-api-key"
+        if "SENDGRID" in name:
+            return "SG.REPLACE_ME"
+        if "MAILGUN" in name:
+            return "REPLACE_ME__mailgun-api-key"
+        if "POSTMARK" in name:
+            return "REPLACE_ME__postmark-api-token"
+
+        # ── Social / OAuth ───────────────────────────────────────────────
+        if "GITHUB" in name and "CLIENT" in name:
+            return "REPLACE_ME__github-client-id"
+        if "GOOGLE" in name and "CLIENT" in name:
+            return "REPLACE_ME__google-client-id"
+        if "FACEBOOK" in name or "META" in name:
+            return "REPLACE_ME__meta-app-id"
+        if "LINKEDIN" in name:
+            return "REPLACE_ME__linkedin-client-id"
+        if "TWITTER" in name or "X_API" in name:
+            return "REPLACE_ME__twitter-api-key"
+
+        # ── Generic ID / secret patterns ─────────────────────────────────
+        if name.endswith("_ID") or name.endswith("_ACCOUNT_ID"):
+            return f"REPLACE_ME__{var_name.lower().replace('_', '-')}"
+        if name.endswith("_SECRET") or name.endswith("_KEY") or name.endswith("_TOKEN"):
+            return f"REPLACE_ME__{var_name.lower().replace('_', '-')}"
+        if "WEBHOOK" in name:
+            return f"REPLACE_ME__{var_name.lower().replace('_', '-')}"
+
+        # ── Fallback ─────────────────────────────────────────────────────
+        return f"REPLACE_ME__{var_name.lower().replace('_', '-')}"
 
     # ── Service URL resolution ───────────────────────────────────────────
 

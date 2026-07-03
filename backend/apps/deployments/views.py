@@ -4293,6 +4293,63 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             'created_at': deployment.created_at.isoformat(),
         })
 
+    @action(detail=True, methods=['post'], url_path='fill-external-env')
+    def fill_external_env(self, request, pk=None):
+        """
+        Auto-fills unresolved external environment variables with safe placeholders.
+        POST /api/v1/deployments/{id}/fill-external-env/
+        """
+        deployment = self.get_object()
+
+        if deployment.status != Deployment.Status.REVIEW:
+            return Response(
+                {'error': f'Deployment is in {deployment.status} status, '
+                          'not awaiting review.'},
+                status=status.HTTP_409_CONFLICT)
+
+        summary = deployment.review_summary or {}
+        unresolved_vars = summary.get('unresolved_external_vars', [])
+        
+        if not unresolved_vars:
+            return Response({'message': 'No unresolved external variables found.'})
+
+        from apps.deployments.services.manifest_env_resolver import ManifestEnvResolver
+        from apps.deployments.models import EnvironmentVariable
+
+        injected = 0
+        for var_name in unresolved_vars:
+            key_upper = var_name.strip().upper()
+            if not key_upper:
+                continue
+            
+            # Check if user already set it
+            if EnvironmentVariable.objects.filter(service=deployment.service, key=key_upper).exists():
+                continue
+
+            placeholder = ManifestEnvResolver.generate_placeholder_for_external(var_name)
+            
+            is_secret = any(hint in key_upper for hint in ["SECRET", "TOKEN", "PASSWORD", "PRIVATE_KEY", "API_KEY"])
+            
+            EnvironmentVariable.objects.create(
+                service=deployment.service,
+                key=key_upper,
+                value=placeholder,
+                is_secret=is_secret,
+            )
+            injected += 1
+
+        # Clear the unresolved vars from the summary so it doesn't prompt again
+        if 'unresolved_external_vars' in summary:
+            del summary['unresolved_external_vars']
+            deployment.review_summary = summary
+            deployment.build_logs += f"\n✅ Auto-filled {injected} external variables with placeholders.\n"
+            deployment.save(update_fields=['review_summary', 'build_logs'])
+
+        return Response({
+            'message': f'Auto-filled {injected} variables with placeholders.',
+            'injected_count': injected,
+        })
+
     @action(detail=True, methods=['post'])
     def approve(self, request, pk=None):
         """
