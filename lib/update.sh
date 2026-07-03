@@ -55,9 +55,9 @@ if [ -n "$UPDATE_MODE" ]; then
         _kmod="$(openssl rsa  -in "$INSTALL_DIR/certs/registry.key" -noout -modulus 2>/dev/null | openssl sha256)" || return 1
         [ "$_cmod" = "$_kmod" ]
     }
-    if [ -f "$INSTALL_DIR/certs/registry.crt" ] && ! _registry_cert_ok; then
-        echo -e "${BLUE}  → Registry TLS cert/key mismatch — regenerating...${NC}"
-        local _tmp
+    if ! _registry_cert_ok; then
+        echo -e "${BLUE}  → Registry TLS cert/key missing or mismatch — generating...${NC}"
+        mkdir -p "$INSTALL_DIR/certs"
         _tmp="$(mktemp -d)"
         openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
             -keyout "${_tmp}/registry.key" \
@@ -72,6 +72,23 @@ if [ -n "$UPDATE_MODE" ]; then
             docker restart smsly-hosting-registry-1 2>/dev/null || true
         } || true
         rm -rf "$_tmp" 2>/dev/null || true
+    fi
+    mkdir -p "$INSTALL_DIR/auth"
+    if [ ! -f "$INSTALL_DIR/auth/htpasswd" ] || [ -z "${REGISTRY_PASSWORD:-}" ] || [ -z "${REGISTRY_USER:-}" ]; then
+        echo -e "${BLUE}  → Ensuring registry htpasswd authentication exists...${NC}"
+        REGISTRY_PASS="${REGISTRY_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_urlsafe(18))" 2>/dev/null || openssl rand -hex 12 2>/dev/null || echo 'auto-generated-change-me')}"
+        if command -v htpasswd >/dev/null 2>&1; then
+            htpasswd -Bbn "${REGISTRY_USER:-smsly-registry}" "$REGISTRY_PASS" > "$INSTALL_DIR/auth/htpasswd"
+        else
+            python3 -c "
+import bcrypt, sys
+pw = sys.argv[1] if len(sys.argv) > 1 else '$REGISTRY_PASS'
+print('${REGISTRY_USER:-smsly-registry}:' + bcrypt.hashpw(pw.encode(), bcrypt.gensalt(10)).decode())
+" "$REGISTRY_PASS" > "$INSTALL_DIR/auth/htpasswd" 2>/dev/null || true
+        fi
+        env_set_value "$INSTALL_DIR/.env" "REGISTRY_USER" "${REGISTRY_USER:-smsly-registry}" 2>/dev/null || true
+        env_set_value "$INSTALL_DIR/.env" "REGISTRY_PASSWORD" "$REGISTRY_PASS" 2>/dev/null || true
+        chmod 600 "$INSTALL_DIR/auth/htpasswd" 2>/dev/null || true
     fi
 
     # ─── Git Safety ──────────────────────────────────────────────────────────

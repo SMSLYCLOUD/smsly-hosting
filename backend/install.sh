@@ -5102,8 +5102,7 @@ else
         CLONE_SUCCESS=true
     else
         echo -e "${RED}  ✗ Git clone failed for $SMSLY_BRANCH. SSL verification is always enforced.${NC}"
-            CLONE_SUCCESS=true
-        fi
+        CLONE_SUCCESS=false
     fi
     if [ "$CLONE_SUCCESS" = "true" ] && [ -f /tmp/smsly-env-backup ]; then
         cp /tmp/smsly-env-backup "$INSTALL_DIR/.env"
