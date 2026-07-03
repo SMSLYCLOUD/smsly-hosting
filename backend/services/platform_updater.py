@@ -123,14 +123,30 @@ def _wait_for_watcher(update_record) -> bool:
     """Wait until the host watcher reports success/failure for this update."""
     deadline = time.monotonic() + UPDATE_WATCHER_TIMEOUT
     saw_running = False
+    last_log_pos = 0
+    install_log_path = UPDATE_WATCH_DIR / "install.log"
+
+    def _sync_install_logs():
+        nonlocal last_log_pos
+        if install_log_path.exists():
+            try:
+                with open(install_log_path, "r", encoding="utf-8", errors="replace") as f:
+                    f.seek(last_log_pos)
+                    chunk = f.read()
+                    if chunk:
+                        last_log_pos = f.tell()
+                        update_record.append_log(chunk)
+            except Exception as exc:
+                logger.debug("Error reading install.log: %s", exc)
 
     while time.monotonic() < deadline:
+        _sync_install_logs()
         status = _parse_status_file()
         request_id = status.get('request_id')
         state = status.get('state')
 
         if request_id and request_id != str(update_record.id):
-            time.sleep(5)
+            time.sleep(3)
             continue
 
         if state in {'running', 'success', 'failed'}:
@@ -145,8 +161,10 @@ def _wait_for_watcher(update_record) -> bool:
             update_record.progress_percent = min(max(update_record.progress_percent, 60), 85)
             update_record.save(update_fields=['status', 'current_step', 'progress_percent'])
         elif state == 'success':
+            _sync_install_logs()
             return True
         elif state == 'failed':
+            _sync_install_logs()
             update_record.error_message = status.get('message') or 'Host watcher reported update failure.'
             update_record.save(update_fields=['error_message'])
             return False
@@ -154,8 +172,9 @@ def _wait_for_watcher(update_record) -> bool:
             update_record.append_log('Update flag was consumed; waiting for watcher status...')
             saw_running = True
 
-        time.sleep(5)
+        time.sleep(3)
 
+    _sync_install_logs()
     update_record.error_message = 'Timed out waiting for host update watcher status.'
     update_record.save(update_fields=['error_message'])
     return False

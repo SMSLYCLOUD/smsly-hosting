@@ -96,7 +96,7 @@ def user_is_owner_or_team_member(user, service_or_project) -> bool:
     ).exists()
 
 
-def get_team_q_filter(user) -> Q:
+def get_team_q_filter(user, prefix: str = "") -> Q:
     """Return a Q filter for queryset scoping.
 
     Returns a filter that matches resources owned by *user* or
@@ -112,7 +112,10 @@ def get_team_q_filter(user) -> Q:
     ).exclude(
         expires_at__isnull=False, expires_at__lt=timezone.now(),
     ).values_list('team_id', flat=True)
-    return Q(owner=user) | Q(project__team_id__in=list(team_ids))
+    owner_kw = f"{prefix}owner"
+    team_kw = f"{prefix}project__team_id__in"
+    return Q(**{owner_kw: user}) | Q(**{team_kw: list(team_ids)})
+
 
 
 def assert_can_write(user, service_or_project, action='modify'):

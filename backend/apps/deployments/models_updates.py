@@ -66,12 +66,56 @@ class PlatformUpdate(models.Model):
     class Meta:
         ordering = ['-created_at']
 
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        update_fields = kwargs.get('update_fields')
+        if update_fields is None or any(f in update_fields for f in ('status', 'current_step', 'progress_percent', 'error_message')):
+            self.broadcast_status()
+
     def append_log(self, message: str):
-        """Thread-safe log append."""
+        """Thread-safe log append with real-time channel broadcasting."""
         import datetime
         ts = datetime.datetime.now().strftime('%H:%M:%S')
-        self.logs += f"[{ts}] {message}\n"
-        self.save(update_fields=['logs'])
+        lines = message.splitlines()
+        formatted = "".join(f"[{ts}] {line}\n" for line in lines if line.strip())
+        if not formatted:
+            return
+        self.logs += formatted
+        super().save(update_fields=['logs'])
+        try:
+            from asgiref.sync import async_to_sync
+            from channels.layers import get_channel_layer
+            channel_layer = get_channel_layer()
+            if channel_layer:
+                async_to_sync(channel_layer.group_send)(
+                    f"platform_update_{self.id}",
+                    {
+                        "type": "log_message",
+                        "log": formatted,
+                    }
+                )
+        except Exception:
+            pass
+
+    def broadcast_status(self):
+        """Broadcast state updates via channels."""
+        try:
+            from asgiref.sync import async_to_sync
+            from channels.layers import get_channel_layer
+            channel_layer = get_channel_layer()
+            if channel_layer:
+                async_to_sync(channel_layer.group_send)(
+                    f"platform_update_{self.id}",
+                    {
+                        "type": "status_message",
+                        "status": self.status,
+                        "current_step": self.current_step,
+                        "progress_percent": self.progress_percent,
+                        "error_message": self.error_message,
+                    }
+                )
+        except Exception:
+            pass
 
     def __str__(self):
         return f"Update {self.id} ({self.status})"

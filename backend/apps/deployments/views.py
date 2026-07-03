@@ -777,6 +777,19 @@ def _looks_masked_secret(value: str) -> bool:
     return bool(_MASKED_SECRET_PATTERN.match(str(value or '').strip()))
 
 
+def is_remote_sync_request(request):
+    """Check if the request is an authenticated inter-node remote sync request."""
+    if not request or not hasattr(request, 'headers'):
+        return False
+    token = getattr(request, 'auth', None)
+    authenticator = getattr(request, 'successful_authenticator', None)
+    authenticator_name = authenticator.__class__.__name__ if authenticator else ''
+    is_hmac_remote_sync = authenticator_name == 'RemoteSyncHMACAuthentication'
+    is_api_token = hasattr(token, 'prefix')
+    has_header = request.headers.get('X-SMSLY-Remote-Sync') == '1'
+    return has_header and (is_api_token or is_hmac_remote_sync)
+
+
 class ServiceViewSet(viewsets.ModelViewSet):
     """
     Service Management and Nested Resources.
@@ -803,24 +816,14 @@ class ServiceViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if not user or not user.is_authenticated:
             return self.queryset.none()
+        if user.is_superuser or is_remote_sync_request(self.request):
+            return self.queryset.all().select_related('project').prefetch_related('deployments')
         return self.queryset.filter(
             get_team_q_filter(user)
         ).select_related('project').prefetch_related('deployments')
 
     def _is_remote_sync_request(self):
-        logger.debug("Checking remote sync request...")
-        token = getattr(self.request, 'auth', None)
-        authenticator = getattr(self.request, 'successful_authenticator', None)
-        authenticator_name = authenticator.__class__.__name__ if authenticator else ''
-        is_hmac_remote_sync = authenticator_name == 'RemoteSyncHMACAuthentication'
-
-        # The token could be named 'node:Node-IP' or 'Primary-admin' (from installer).
-        # Since the token is a secure APIToken (hasattr prefix), and it's sending
-        # the X-SMSLY-Remote-Sync header, we can trust it.
-        is_api_token = hasattr(token, 'prefix')
-
-        has_header = self.request.headers.get('X-SMSLY-Remote-Sync') == '1'
-        return has_header and (is_api_token or is_hmac_remote_sync)
+        return is_remote_sync_request(self.request)
 
     def perform_create(self, serializer):
         project = serializer.validated_data.get('project')
@@ -3734,7 +3737,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
                 'green_container_id',
                 'container_id',
             )
-        if self.request.user.is_superuser:
+        if self.request.user.is_superuser or is_remote_sync_request(self.request):
             return base_qs.all()
 
         project_id = self.request.query_params.get('project_id')
@@ -3742,9 +3745,11 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             base_qs = base_qs.filter(service__project_id=project_id)
 
         return base_qs.filter(
-            Q(service__owner=self.request.user) |
-            Q(service__project__team__members__user=self.request.user)
+            get_team_q_filter(self.request.user, prefix='service__')
         ).distinct()
+
+    def _is_remote_sync_request(self):
+        return is_remote_sync_request(self.request)
 
     @action(detail=True, methods=['post'])
     def rollback(self, request, pk=None):
@@ -4429,10 +4434,19 @@ class DeploymentViewSet(viewsets.ModelViewSet):
                     data['id'] = str(deployment.id)
                     return Response(data)
 
+                err_detail = f"HTTP {resp.status_code if resp else 'None'}"
+                if resp and resp.content:
+                    try:
+                        err_json = resp.json()
+                        err_text = err_json.get("message") or err_json.get("detail") or str(err_json)
+                        if err_text:
+                            err_detail = f"HTTP {resp.status_code}: {err_text}"
+                    except Exception:
+                        pass
                 return Response({
                     'id': str(deployment.id),
                     'runtime_logs': '',
-                    'message': f"Failed to fetch logs from remote node: HTTP {resp.status_code if resp else 'None'}",
+                    'message': f"Failed to fetch logs from remote node: {err_detail}",
                 })
             except Exception as e:
                 logger.warning("Failed to proxy runtime logs to remote node: %s", e)
@@ -4484,10 +4498,13 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             })
         except Exception as e:
             logger.warning("Failed to fetch runtime logs for %s: %s", pk, e)
+            err_msg = str(e)
+            if any(term in err_msg.lower() for term in ["nameresolutionerror", "socket-proxy", "connection", "maxretryerror", "getaddrinfo"]):
+                err_msg = "Cannot connect to Docker daemon or socket-proxy. Please verify Docker is running and reachable."
             return Response({
                 'id': str(deployment.id),
                 'runtime_logs': '',
-                'message': f'Could not fetch runtime logs: {e!s}',
+                'message': f'Could not fetch runtime logs: {err_msg}',
             })
 
     @action(detail=True, methods=['post'])
@@ -5344,9 +5361,11 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
             # happen given the viewset's IsAuthenticated default, but cheap
             # to guard against future regressions).
             return qs.none()
+        elif self.request.user.is_superuser or is_remote_sync_request(self.request):
+            pass
         else:
             qs = qs.filter(
-                Q(service__owner=self.request.user) | Q(service__project__team__members__user=self.request.user)
+                get_team_q_filter(self.request.user, prefix='service__')
             ).distinct()
 
         qs = qs.order_by('-created_at')
@@ -5988,7 +6007,7 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
         """
         from django.db.models import Q
         qs = ServiceBackup.objects.filter(
-            Q(service__owner=request.user) | Q(service__project__team__members__user=request.user)
+            get_team_q_filter(request.user, prefix='service__')
         ).filter(
             # Restore-related backups have specific markers in error_message
             error_message__icontains='restored'
@@ -6031,9 +6050,10 @@ class ServiceSnapshotViewSet(viewsets.ModelViewSet):
         if not self.request.user.is_authenticated:
             return qs.none()
 
-        qs = qs.filter(
-            Q(service__owner=self.request.user) | Q(service__project__team__members__user=self.request.user)
-        ).distinct()
+        if not (self.request.user.is_superuser or is_remote_sync_request(self.request)):
+            qs = qs.filter(
+                get_team_q_filter(self.request.user, prefix='service__')
+            ).distinct()
 
         project_id = self.request.query_params.get('project_id')
         if project_id:
@@ -6601,10 +6621,9 @@ class SnapshotScheduleViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = self.queryset
-        if not self.request.user.is_superuser:
+        if not (self.request.user.is_superuser or is_remote_sync_request(self.request)):
             qs = qs.filter(
-                Q(service__owner=self.request.user) |
-                Q(service__project__team__members__user=self.request.user)
+                get_team_q_filter(self.request.user, prefix='service__')
             ).distinct()
         service_id = self.request.query_params.get('service')
         if service_id:
@@ -6668,10 +6687,9 @@ class BackupScheduleViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = self.queryset
-        if not self.request.user.is_superuser:
+        if not (self.request.user.is_superuser or is_remote_sync_request(self.request)):
             qs = qs.filter(
-                Q(service__owner=self.request.user) |
-                Q(service__project__team__members__user=self.request.user)
+                get_team_q_filter(self.request.user, prefix='service__')
             ).distinct()
         service_id = self.request.query_params.get('service')
         if service_id:

@@ -92,14 +92,18 @@ while true; do
             sudo screen -ls | grep "Grid-install" | cut -d. -f1 | awk '{print $1}' | xargs sudo kill -9 2>/dev/null || true
             sudo screen -wipe > /dev/null 2>&1 || true
 
+            rm -f "$WATCH_DIR/install.log" 2>/dev/null || true
+            touch "$WATCH_DIR/install.log" 2>/dev/null || true
+            chmod 666 "$WATCH_DIR/install.log" 2>/dev/null || true
+
             set +e
             if command -v screen >/dev/null 2>&1; then
                 # -D -m keeps this watcher process attached to the command lifetime while
                 # still providing a named screen session for host-side inspection.
-                sudo screen -S Grid-install -D -m bash -c "bash install.sh $FLAGS --non-interactive >> /var/log/smsly-install.log 2>&1"
+                sudo screen -S Grid-install -D -m bash -c "bash install.sh $FLAGS --non-interactive 2>&1 | tee -a /var/log/smsly-install.log \"$WATCH_DIR/install.log\""
                 exit_code=$?
             else
-                sudo bash install.sh $FLAGS --non-interactive >> /var/log/smsly-install.log 2>&1
+                sudo bash install.sh $FLAGS --non-interactive 2>&1 | tee -a /var/log/smsly-install.log "$WATCH_DIR/install.log"
                 exit_code=$?
             fi
             set -e

@@ -1313,3 +1313,133 @@ class BackupProgressConsumer(AsyncWebsocketConsumer):
         except Token.DoesNotExist:
             cache.set(cache_key, True, 300)
             return None
+
+
+class PlatformUpdateConsumer(AsyncWebsocketConsumer):
+    """
+    Real-time platform update progress and terminal log streaming consumer.
+    URL: ws/platform-updates/<update_id>/?token=xxx
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.update_id = None
+        self.group_name = None
+        self.user = None
+
+    async def connect(self):
+        self.update_id = self.scope['url_route']['kwargs']['update_id']
+        await self.accept()
+
+        try:
+            query_string = self.scope.get('query_string', b'').decode()
+            token_key = None
+            for param in query_string.split('&'):
+                if param.startswith('token='):
+                    token_key = param.split('=', 1)[1]
+                    break
+
+            if not token_key:
+                subprotocols = self.scope.get('subprotocols') or []
+                for proto in subprotocols:
+                    if proto.startswith('token.'):
+                        token_key = proto[len('token.'):]
+                        break
+                    if proto != 'token' and proto:
+                        token_key = proto
+                        break
+
+            if not token_key:
+                await self.send(text_data=json.dumps({'error': 'Missing token'}))
+                await self.close(code=4001)
+                return
+
+            self.user = await self._authenticate_token(token_key)
+            if not self.user or not (self.user.is_staff or self.user.is_superuser):
+                await self.send(text_data=json.dumps({'error': 'Admin access required'}))
+                await self.close(code=4003)
+                return
+
+            self.group_name = f"platform_update_{self.update_id}"
+            await self.channel_layer.group_add(self.group_name, self.channel_name)
+
+            update_data = await self._get_update_data()
+            if update_data:
+                await self.send(text_data=json.dumps({
+                    "type": "initial_state",
+                    "status": update_data["status"],
+                    "progress_percent": update_data["progress_percent"],
+                    "current_step": update_data["current_step"],
+                    "logs": update_data["logs"],
+                }))
+                if update_data["logs"]:
+                    b64_msg = base64.b64encode(update_data["logs"].encode('utf-8')).decode('ascii')
+                    await self.send(text_data=json.dumps({
+                        "type": "terminal_stream",
+                        "message": b64_msg,
+                        "log": update_data["logs"],
+                    }))
+        except Exception as e:
+            logger.error("Error in PlatformUpdateConsumer connect: %s", e)
+            await self.close(code=4000)
+
+    async def disconnect(self, close_code):
+        if self.group_name and self.channel_layer:
+            await self.channel_layer.group_discard(self.group_name, self.channel_name)
+
+    async def log_message(self, event):
+        """Handler for broadcasted log messages."""
+        log_text = event.get("log", "")
+        if log_text:
+            b64_msg = base64.b64encode(log_text.encode('utf-8')).decode('ascii')
+            await self.send(text_data=json.dumps({
+                "type": "terminal_stream",
+                "message": b64_msg,
+                "log": log_text,
+            }))
+
+    async def status_message(self, event):
+        """Handler for broadcasted status updates."""
+        await self.send(text_data=json.dumps({
+            "type": "status_change",
+            "status": event.get("status"),
+            "current_step": event.get("current_step"),
+            "progress_percent": event.get("progress_percent"),
+            "error_message": event.get("error_message", ""),
+        }))
+
+    @database_sync_to_async
+    def _authenticate_token(self, token_key):
+        import hashlib
+        from django.core.cache import cache
+        from rest_framework.authtoken.models import Token
+        if not token_key or not isinstance(token_key, str):
+            return None
+        if len(token_key) != 40 or not all(c in '0123456789abcdef' for c in token_key):
+            return None
+        cache_key = f'invalid_token:{hashlib.sha256(token_key.encode()).hexdigest()}'
+        if cache.get(cache_key):
+            return None
+        try:
+            token = Token.objects.select_related('user').get(key=token_key)
+            if not token.user.is_active:
+                cache.set(cache_key, True, 300)
+                return None
+            return token.user
+        except Token.DoesNotExist:
+            cache.set(cache_key, True, 300)
+            return None
+
+    @database_sync_to_async
+    def _get_update_data(self):
+        from .models_updates import PlatformUpdate
+        try:
+            update = PlatformUpdate.objects.get(id=self.update_id)
+            return {
+                "status": update.status,
+                "progress_percent": update.progress_percent,
+                "current_step": update.current_step,
+                "logs": update.logs,
+            }
+        except PlatformUpdate.DoesNotExist:
+            return None
+

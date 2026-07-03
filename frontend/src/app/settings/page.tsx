@@ -28,6 +28,7 @@ import { RegistryCredentialsTab } from "@/components/settings/RegistryCredential
 import { ScopedRegistryTab } from "@/components/settings/ScopedRegistryTab";
 import BackupKeysTab from "@/components/settings/BackupKeysTab";
 import { Switch } from "@/components/ui/switch";
+import UpdateTerminalStream from "@/components/terminal/UpdateTerminalStream";
 import { cn } from "@/lib/utils";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 
@@ -1573,6 +1574,9 @@ export default function SettingsPage() {
                        {renderMaintenanceButtonContent("update", "Update Platform")}
                      </Button>
                    </div>
+                   {maintenanceTasks.update.taskId && (
+                     <UpdateTerminalStream updateId={maintenanceTasks.update.taskId} />
+                   )}
                  </div>
                  
                  {/* Cancel button */}

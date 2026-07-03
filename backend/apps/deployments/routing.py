@@ -13,6 +13,8 @@ websocket_urlpatterns = [
             consumers.ServiceStatusConsumer.as_asgi()),
     re_path(r'ws/backup-progress/(?P<backup_id>[-\w]+)/$',
             consumers.BackupProgressConsumer.as_asgi()),
+    re_path(r'ws/platform-updates/(?P<update_id>[-\w]+)/$',
+            consumers.PlatformUpdateConsumer.as_asgi()),
     # Also support paths with /api/v1/ prefix for compatibility
     re_path(r'api/v1/ws/terminal/(?P<deployment_id>[-\w]+)/$',
             consumers.TerminalConsumer.as_asgi()),
@@ -22,4 +24,6 @@ websocket_urlpatterns = [
             consumers.ServiceStatusConsumer.as_asgi()),
     re_path(r'api/v1/ws/backup-progress/(?P<backup_id>[-\w]+)/$',
             consumers.BackupProgressConsumer.as_asgi()),
+    re_path(r'api/v1/ws/platform-updates/(?P<update_id>[-\w]+)/$',
+            consumers.PlatformUpdateConsumer.as_asgi()),
 ]
