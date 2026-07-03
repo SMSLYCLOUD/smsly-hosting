@@ -224,9 +224,44 @@ class LocalAdapter(BaseCloudAdapter):
         return self.docker_client is not None
 
     def pull_image(self, image: str) -> bool:
-        """Pull image from registry."""
+        """Pull image from registry.
+
+        For images tagged against a loopback registry (127.0.0.1:*, localhost:*)
+        the pull is intentionally skipped: the registry is on the *host* network
+        and is unreachable from inside the backend container.  Instead, we verify
+        that the image is already present in the local Docker cache — it will have
+        been tagged there during the build/push phase.
+        """
         if not self.docker_client:
             return True
+
+        # Detect loopback-registry images and skip the pull attempt.
+        # The registry runs on the host but binds to 127.0.0.1, so a pull from
+        # inside the container would always time-out/fail even when the image
+        # is already present locally.
+        _loopback_prefixes = ('127.0.0.1:', 'localhost:')
+        if any(image.startswith(p) for p in _loopback_prefixes):
+            try:
+                self.docker_client.images.get(image)
+                logger.info("Loopback-registry image %s found in local cache — skipping pull", image)
+                return True
+            except docker.errors.ImageNotFound:
+                # Image not in local cache — try to retag from the unqualified local name.
+                # e.g. "127.0.0.1:5000/smsly/app:abc" -> "smsly/app:abc"
+                parts = image.split('/', 1)
+                local_name = parts[1] if len(parts) > 1 else image
+                try:
+                    local_img = self.docker_client.images.get(local_name)
+                    local_img.tag(image)
+                    logger.info("Retagged local %s -> %s for loopback registry", local_name, image)
+                    return True
+                except docker.errors.ImageNotFound:
+                    logger.error("Loopback-registry image %s not found in local cache", image)
+                    return False
+            except Exception as e:
+                logger.error("Error checking local cache for %s: %s", image, e)
+                return False
+
         try:
             logger.info("Pulling image: %s", image)
             # Authenticate via client.login() instead of the unreliable

@@ -2786,9 +2786,16 @@ class PipelineManager:
             )
             self.image_name = remote_tag
 
-            # Determine if push reached the registry
-            registry_prefix = registry_url
-            pushed_to_registry = bool(registry_prefix and remote_tag.startswith(registry_prefix))
+            # Determine if push reached the registry.
+            # push_image() strips http(s):// from the URL when forming the tag,
+            # so normalise registry_url the same way before comparing.
+            _norm_prefix = registry_url or ""
+            for _scheme in ('https://', 'http://'):
+                if _norm_prefix.startswith(_scheme):
+                    _norm_prefix = _norm_prefix[len(_scheme):]
+            # Strip trailing slash so "127.0.0.1:5000/" and "127.0.0.1:5000" both work.
+            _norm_prefix = _norm_prefix.rstrip('/')
+            pushed_to_registry = bool(_norm_prefix and remote_tag.startswith(_norm_prefix))
 
             if pushed_to_registry:
                 update_stage(self.deployment, 'Push', 'success')
