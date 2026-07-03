@@ -84,14 +84,15 @@ export interface PermissionState {
  */
 export function usePermissions(): PermissionState {
   const auth = useContext(AuthContext);
-
-  const permissions: string[] = auth?.user?.permissions ?? [];
-  const teamRoles: TeamRole[] = (auth?.user?.roles?.teams ?? []) as TeamRole[];
-  const orgRoles: OrgRole[] = (auth?.user?.roles?.orgs ?? []) as OrgRole[];
-  const isSuperuser = auth?.user?.is_superuser ?? false;
-  const isStaff = auth?.user?.is_staff ?? false;
+  const user = auth?.user;
 
   return useMemo(() => {
+    const permissions: string[] = user?.permissions ?? [];
+    const teamRoles: TeamRole[] = (user?.roles?.teams ?? []) as TeamRole[];
+    const orgRoles: OrgRole[] = (user?.roles?.orgs ?? []) as OrgRole[];
+    const isSuperuser = user?.is_superuser ?? false;
+    const isStaff = user?.is_staff ?? false;
+
     const has = (code: string): boolean => {
       if (isSuperuser) return true;
       return permissions.includes(code);
@@ -122,5 +123,5 @@ export function usePermissions(): PermissionState {
       isTeamAdmin,
       isOrgOwner,
     };
-  }, [permissions, teamRoles, orgRoles, isSuperuser, isStaff]);
+  }, [user]);
 }
