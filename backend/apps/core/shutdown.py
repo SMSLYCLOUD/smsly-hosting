@@ -117,10 +117,19 @@ class GracefulShutdownMiddleware:
         if self.shutdown_handler.is_shutting_down:
             if not request.path.startswith('/health'):
                 from django.http import JsonResponse
-                return JsonResponse(
-                    {"error": "Service is shutting down", "retry_after": 30},
-                    status=503
+                # Use the same envelope as smsly_exception_handler so the
+                # frontend has one shape for all error responses. Retry-After
+                # header tells clients (and load balancers) when to retry.
+                response = JsonResponse(
+                    {
+                        "error": "Service is shutting down",
+                        "code": "service_shutting_down",
+                        "status": 503,
+                    },
+                    status=503,
                 )
+                response["Retry-After"] = "30"
+                return response
 
         self.shutdown_handler.request_started()
         try:

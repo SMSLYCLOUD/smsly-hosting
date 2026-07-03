@@ -2612,10 +2612,10 @@ if [ "${FIX_DOMAIN_MODE:-false}" = "true" ]; then
     echo -e "${BLUE}  → Pulling latest installer code...${NC}"
     git config --global --add safe.directory "$INSTALL_DIR" 2>/dev/null || true
     if ! git fetch origin main 2>/dev/null; then
-        git -c http.sslVerify=false fetch origin main 2>/dev/null || true
+        echo -e "${RED}  ✗ Git fetch failed for main. SSL verification is always enforced.${NC}"
     fi
     if ! git checkout -B main origin/main 2>/dev/null; then
-        git -c http.sslVerify=false checkout -B main origin/main 2>/dev/null || true
+        echo -e "${RED}  ✗ Git checkout failed for main.${NC}"
     fi
     echo -e "${GREEN}  ✓ Code updated${NC}"
 
@@ -3780,22 +3780,14 @@ if ! is_checkpoint_done "update_git_synced"; then
     GIT_UPDATE_OK=true
 
     if ! git fetch origin "$SMSLY_BRANCH" >/dev/null 2>&1; then
-        echo -e "${YELLOW}  ⚠️ Standard Git fetch failed. Retrying with http.sslVerify=false...${NC}"
-        if ! git -c http.sslVerify=false fetch origin "$SMSLY_BRANCH" >/dev/null 2>&1; then
-            echo -e "${YELLOW}  ⚠️ Git fetch failed for $SMSLY_BRANCH.${NC}"
-            GIT_UPDATE_OK=false
-        fi
+        echo -e "${RED}  ✗ Git fetch failed for $SMSLY_BRANCH. SSL verification is always enforced — check network or CA certificates.${NC}"
+        GIT_UPDATE_OK=false
     fi
 
     if [ "$GIT_UPDATE_OK" = "true" ]; then
         if ! git checkout -B "$SMSLY_BRANCH" "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
-            echo -e "${YELLOW}  ⚠️ Standard Git checkout failed. Retrying with http.sslVerify=false...${NC}"
-            if ! git -c http.sslVerify=false checkout -B "$SMSLY_BRANCH" "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
-                echo -e "${YELLOW}  ⚠️ Git reset failed.${NC}"
-                GIT_UPDATE_OK=false
-            else
-                git -c http.sslVerify=false branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
-            fi
+            echo -e "${RED}  ✗ Git checkout failed for $SMSLY_BRANCH.${NC}"
+            GIT_UPDATE_OK=false
         else
             git branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
         fi
@@ -5096,10 +5088,7 @@ if [ -d "$INSTALL_DIR/.git" ]; then
         git stash push --include-untracked -m "install-sync-$(date +%s)" >/dev/null 2>&1 || true
     fi
     if ! git fetch origin "$SMSLY_BRANCH" >/dev/null 2>&1 || ! git reset --hard "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
-        echo -e "${YELLOW}  ⚠️ Standard Git update failed. Retrying with http.sslVerify=false...${NC}"
-        if ! git -c http.sslVerify=false fetch origin "$SMSLY_BRANCH" >/dev/null 2>&1 || ! git -c http.sslVerify=false reset --hard "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
-            echo -e "${YELLOW}  ⚠️ Git update failed. The installer repository is public; check network/DNS access to GitHub and branch name.${NC}"
-        fi
+        echo -e "${RED}  ✗ Git update failed for $SMSLY_BRANCH. SSL verification is always enforced — check network or CA certificates.${NC}"
     fi
 else
     echo -e "${BLUE}  → Cloning repository ($SMSLY_BRANCH)...${NC}"
@@ -5112,8 +5101,7 @@ else
     if git clone -b "$SMSLY_BRANCH" "$SMSLY_GIT_REMOTE" "$INSTALL_DIR"; then
         CLONE_SUCCESS=true
     else
-        echo -e "${YELLOW}  ⚠️ Standard Git clone failed. Retrying with http.sslVerify=false...${NC}"
-        if git -c http.sslVerify=false clone -b "$SMSLY_BRANCH" "$SMSLY_GIT_REMOTE" "$INSTALL_DIR"; then
+        echo -e "${RED}  ✗ Git clone failed for $SMSLY_BRANCH. SSL verification is always enforced.${NC}"
             CLONE_SUCCESS=true
         fi
     fi
@@ -5362,7 +5350,7 @@ if [ "$(pwd)" != "$INSTALL_DIR" ]; then
              echo -e "${BLUE}  → Updating existing repository...${NC}"
              cd "$INSTALL_DIR"
              if ! git pull origin "$SMSLY_BRANCH" >/dev/null 2>&1; then
-                 git -c http.sslVerify=false pull origin "$SMSLY_BRANCH" >/dev/null 2>&1 || true
+                 echo -e "${RED}  ✗ Git pull failed for $SMSLY_BRANCH. SSL verification is always enforced.${NC}"
              fi
         else
              echo -e "${BLUE}  → Cloning repository...${NC}"
@@ -5371,7 +5359,7 @@ if [ "$(pwd)" != "$INSTALL_DIR" ]; then
              fi
              rm -rf "$INSTALL_DIR"
              if ! git clone -b "$SMSLY_BRANCH" "${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}" "$INSTALL_DIR"; then
-                 git -c http.sslVerify=false clone -b "$SMSLY_BRANCH" "${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}" "$INSTALL_DIR"
+                 echo -e "${RED}  ✗ Git clone failed for $SMSLY_BRANCH. SSL verification is always enforced.${NC}"
              fi
              cd "$INSTALL_DIR"
              if [ -f /tmp/smsly-env-backup ]; then
@@ -5391,10 +5379,9 @@ if [ ! -d ".git" ] && [ -n "${SMSLY_GIT_REMOTE:-}" ]; then
     git checkout -b "$SMSLY_BRANCH" >/dev/null 2>&1 || true
     git remote add origin "$SMSLY_GIT_REMOTE"
     if ! git fetch origin "$SMSLY_BRANCH" -q --depth=1; then
-        git -c http.sslVerify=false fetch origin "$SMSLY_BRANCH" -q --depth=1 || true
+        echo -e "${YELLOW}  ⚠ Git fetch failed — repository will be unlinked from remote (SSL verification enforced)${NC}"
     fi
-    git branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || \
-    git -c http.sslVerify=false branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
+    git branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
     # We don't reset --hard here to avoid losing the bundled files we just copied,
     # but the repo is now linked for future updates.
     echo -e "${GREEN}  ✓ Git origin set to ${SMSLY_GIT_REMOTE}${NC}"

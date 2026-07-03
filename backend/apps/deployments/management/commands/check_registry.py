@@ -32,9 +32,14 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("--json", action="store_true", help="Output as JSON.")
         parser.add_argument("--verbose", action="store_true", help="Verbose output.")
+        parser.add_argument(
+            "--insecure",
+            action="store_true",
+            help="Skip SSL certificate verification (useful for self-signed certs).",
+        )
 
     def handle(self, *args, **options):
-        results = self._run_diagnostics(options["verbose"])
+        results = self._run_diagnostics(options["verbose"], insecure=options.get("insecure", False))
         if options["json"]:
             self.stdout.write(json.dumps(results, indent=2, default=str))
         else:
@@ -44,7 +49,7 @@ class Command(BaseCommand):
         if not all_ok:
             sys.exit(1)
 
-    def _run_diagnostics(self, verbose: bool) -> dict:
+    def _run_diagnostics(self, verbose: bool, insecure: bool = False) -> dict:
         from urllib.parse import urlparse
 
         registry = os.environ.get("CONTAINER_REGISTRY_URL", "").strip()
@@ -101,8 +106,10 @@ class Command(BaseCommand):
                 import ssl
 
                 ctx = ssl.create_default_context()
-                ctx.check_hostname = False
-                ctx.verify_mode = ssl.CERT_NONE
+                if insecure:
+                    # Explicitly requested: skip cert validation for self-signed registries
+                    ctx.check_hostname = False
+                    ctx.verify_mode = ssl.CERT_NONE
 
                 req = urllib.request.Request(url, method="HEAD")
                 resp = urllib.request.urlopen(req, timeout=5, context=ctx)

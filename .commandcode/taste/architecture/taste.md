@@ -1,0 +1,8 @@
+# architecture
+- The SMSLYCLOUD/ directory belongs to the parent company and is separate from the smsly-hosting (CloudNeuron) PaaS open-source project — do not treat it as part of the same product. Confidence: 0.65
+- New installer functionality goes into separate files under lib/ and is sourced/linked from install.sh, not added directly to install.sh. Confidence: 0.75
+- Kubernetes-related code (Helm charts, PodSecurity helpers, k8s templates) is no longer used — skip all k8s fixes and do not spend time on k8s-related work. Confidence: 0.70
+- Do not modify SSH authentication settings (PasswordAuthentication, PermitRootLogin) in harden.sh — the platform manages SSH auth via scope key after provisioning. Confidence: 0.70
+- Authentication uses DRF Token model (rest_framework.authtoken.models.Token), not djangorestframework-simplejwt. Do not import from rest_framework_simplejwt — it is not installed. Confidence: 0.75
+- Container runtime bootstrap in harden.sh should try Kata first (requires KVM), fall back to gVisor, and persist the chosen runtime to CONTAINER_RUNTIME in .env so subsequent runs skip detection entirely. Confidence: 0.75
+- Installer scripts should never block or abort the PaaS update — warn loudly about failures but always let the update proceed (do not use `return 1` or `exit 1` on recoverable failures). Even `exit 1` in sub-scripts called with `|| true` can affect the update flow — all exit codes in the install chain must be traced. Even `exit 0` in sub-scripts causes the parent installer to terminate early, preventing the rest of the update from running. Confidence: 0.88

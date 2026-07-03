@@ -4,7 +4,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { Topology3D } from '@/components/topology/Topology3D';
 import { CanvasSchematic } from '@/components/topology/CanvasSchematic';
 import { SolarSystemView } from '@/components/topology/SolarSystemView';
-import CityTopologyView from '@/components/topology/CityTopologyView';
+import { CityTopologyView } from '@/components/topology/CityTopologyView';
 import { EcosystemTopology } from '@/components/topology/EcosystemTopology';
 import { Network, Map as MapIcon, Orbit, Building, Trash2, Loader2, Layers } from 'lucide-react';
 import { RequiresTier } from '@/components/licensing/RequiresTier';

@@ -117,6 +117,14 @@ services:
       REGISTRY_HTTP_TLS_KEY: /certs/registry.key
       REGISTRY_AUTH_HTPASSWD_REALM: registry-realm
       REGISTRY_AUTH_HTPASSWD_PATH: /auth/htpasswd
+      # Token auth — enables per-user RBAC via the Django token endpoint.
+      # Docker clients receiving 401 with this realm will call back to the
+      # Django backend for a scoped token. Falls back to htpasswd if the
+      # token endpoint is unreachable.
+      REGISTRY_AUTH_TOKEN_REALM: http://backend:8000/api/v1/registry/auth/
+      REGISTRY_AUTH_TOKEN_SERVICE: container-registry
+      REGISTRY_AUTH_TOKEN_ISSUER: smsly-platform
+      REGISTRY_AUTH_TOKEN_ROOTCERTBUNDLE: /etc/ssl/certs/ca-certificates.crt
     volumes:
       - registry_data:/var/lib/registry
       - ./certs:/certs:ro,z
@@ -806,7 +814,7 @@ services:
     tmpfs:
       - /tmp
     command:
-      - --addr=tcp://0.0.0.0:1234
+      - --addr=tcp://127.0.0.1:1234
     healthcheck:
       test: ["CMD", "buildctl", "debug", "workers"]
       interval: 30s

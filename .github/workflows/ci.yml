@@ -210,5 +210,99 @@ jobs:
       - name: Install safety
         run: pip install safety
       - name: Run safety
+        # safety uses a different CVE DB than pip-audit — informational only
+        # since pip-audit --strict (sca job) is the primary blocking gate.
         run: safety check --file backend/requirements.txt --json
         continue-on-error: true
+
+  sbom:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    steps:
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+      - name: Generate backend SBOM
+        uses: aquasecurity/trivy-action@7c62194b1f09d5f3cb5df92e2c1af313850846b4 # master
+        with:
+          scan-type: fs
+          scan-ref: backend/
+          format: cyclonedx
+          output: sbom-backend.json
+      - name: Generate frontend SBOM
+        uses: aquasecurity/trivy-action@7c62194b1f09d5f3cb5df92e2c1af313850846b4
+        with:
+          scan-type: fs
+          scan-ref: frontend/
+          format: cyclonedx
+          output: sbom-frontend.json
+      - name: Set up Cosign
+        uses: sigstore/cosign-installer@59acb6260d86c0f8a58fa4c3ddb032a715305043 # v3.5.0
+      - name: Sign SBOMs with Cosign
+        run: |
+          for sbom in sbom-*.json; do
+            cosign sign-blob --yes "$sbom" \
+              --output-signature "$sbom.sig" \
+              --output-certificate "$sbom.cert"
+          done
+      - name: Upload SBOMs and signatures
+        uses: actions/upload-artifact@v4
+        with:
+          name: sboms
+          path: |
+            sbom-*.json
+            sbom-*.json.sig
+            sbom-*.json.cert
+
+  security-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: smsly_hosting
+          POSTGRES_USER: smsly_admin
+          POSTGRES_PASSWORD: test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U smsly_admin -d smsly_hosting"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis
+        ports:
+          - 6379:6379
+    steps:
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+      - name: Set up Python
+        uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c # v4
+        with:
+          python-version: "3.12"
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+      - name: Run security tests
+        working-directory: ./backend
+        env:
+          DATABASE_URL: postgres://smsly_admin:test_password@localhost:5432/smsly_hosting
+          DJANGO_SETTINGS_MODULE: config.settings
+          SECRET_KEY: "ci-secret-key-must-be-long-enough-for-checks"
+          DEBUG: "False"
+          USE_SSL: "True"
+          FIELD_ENCRYPTION_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+        run: |
+          pytest -v --tb=short --import-mode=importlib \
+            apps/core/tests_security.py \
+            apps/core/tests/test_ssrf_validator.py \
+            apps/core/tests_rate_limits.py \
+            apps/deployments/tests/test_security.py \
+            apps/deployments/tests/test_security_fixes.py \
+            apps/deployments/tests/test_authentication_hardening.py

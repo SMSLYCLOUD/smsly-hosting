@@ -35,10 +35,20 @@ class RateLimitMiddleware:
                 ip = self._get_client_ip(request)
                 if not self._check_rate_limit(ip):
                     logger.warning("Rate limit exceeded for IP %s", ip)
-                    return JsonResponse(
-                        {"error": "Too Many Requests", "retry_after": self.window},
+                    # Match the envelope used by smsly_exception_handler so
+                    # clients have one shape for all 429s regardless of
+                    # which layer (DRF throttle vs this middleware) returned
+                    # the response. Retry-After header is RFC 6585 required.
+                    response = JsonResponse(
+                        {
+                            "error": "Too Many Requests",
+                            "code": "throttled",
+                            "status": 429,
+                        },
                         status=429,
                     )
+                    response["Retry-After"] = str(self.window)
+                    return response
 
         response = self.get_response(request)
         return response

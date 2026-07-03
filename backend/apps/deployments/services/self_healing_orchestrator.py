@@ -855,11 +855,24 @@ class SelfHealingOrchestrator:
         # Remove old container if it exists
         self._exec(f"docker rm -f {shlex.quote(service_name)}", timeout=30)
 
+        # Detect sandboxed container runtime (gVisor/Kata)
+        from .container_runtime import get_runtime_for_container
+        runtime = get_runtime_for_container(service_name=service_name)
+        runtime_flag = f"--runtime {runtime}" if runtime else ""
+
         # Run the container with the same network as the compose stack
         port = getattr(deployment.service, "port", 8000) or 8000
+        mem_mb = getattr(deployment.service, "memory_mb", 2048) or 2048
+        cpus = getattr(deployment.service, "cpu_cores", 1.0) or 1.0
+        sec_flags = (
+            "--security-opt no-new-privileges:true --security-opt apparmor=docker-default "
+            "--cap-drop=ALL --cap-add=NET_BIND_SERVICE --cap-add=CHOWN --cap-add=SETUID --cap-add=SETGID "
+            f"--memory={mem_mb}m --cpus={cpus} --pids-limit=1024 "
+        )
         run_cmd = (
             f"docker run -d --name {shlex.quote(service_name)} "
-            f"--security-opt no-new-privileges:true --security-opt apparmor=docker-default "
+            f"{sec_flags}"
+            f"{runtime_flag} "
             f"--network smsly-net --restart unless-stopped "
             f"-p {port}:{port} "
             f"{shlex.quote(docker_image)}"

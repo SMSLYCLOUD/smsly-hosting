@@ -233,7 +233,7 @@ export default function AiDocsPage() {
 
                     <h3>Failure Handling</h3>
                     <p>Every external call (Jules API, GitHub API, <code>git push</code>) is wrapped in <code>backoff.on_exception(backoff.expo, Exception, max_tries=5, factor=2)</code>. If the auto-fix fails at any step, the task logs the error and returns a structured <code>FixResult(success=False, error=...)</code> payload — it never crashes the Celery worker.</p>
-                    <p>The history of auto-fix attempts is exposed via <code>GET /api/v1/jules/history/&#123;service_id&#125;/</code>.</p>
+                    <p>The history of auto-fix attempts is exposed via <code>GET /api/v1/ai/jules-history/&#123;service_id&#125;/</code>.</p>
 
                     <h2 id="prompt-injection" className="text-2xl font-bold flex items-center gap-2">
                         <Shield className="w-5 h-5 text-purple-600" /> Prompt Injection Policy
@@ -290,7 +290,7 @@ export default function AiDocsPage() {
                     <p>Returns detected patterns (CRASH_LOOP, OOM_KILLED, DB_CONNECTION_TIMEOUT, etc.) and a confidence score per pattern.</p>
 
                     <h3>Jules history for a service</h3>
-                    <CodeBlock>{`curl -sS http://localhost:8000/api/v1/jules/history/9c8b4b1a-7d1c-4a2b-9a55-2e8c3d4f9b21/ \\
+                    <CodeBlock>{`curl -sS http://localhost:8000/api/v1/ai/jules-history/9c8b4b1a-7d1c-4a2b-9a55-2e8c3d4f9b21/ \\
   -H "Authorization: Token $SMSLY_TOKEN"`}</CodeBlock>
 
                     <div className="not-prose mt-4 p-4 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-start gap-3">
@@ -335,7 +335,7 @@ export default function AiDocsPage() {
                     <p>The user has hit their <code>UserAICap.daily_cost_cap_usd</code>. Either wait until tomorrow or raise the cap in a Django shell.</p>
 
                     <h3>&quot;Jules auto-fix did not create a PR&quot;</h3>
-                    <p>Inspect <code>GET /api/v1/jules/history/&#123;service_id&#125;/</code> for the failure reason. The most common cause is that the suggested fix exceeded <code>MAX_FILES_PER_JULES_PR</code> (5) or <code>MAX_BYTES_PER_JULES_PR</code> (50000).</p>
+                    <p>Inspect <code>GET /api/v1/ai/jules-history/&#123;service_id&#125;/</code> for the failure reason. The most common cause is that the suggested fix exceeded <code>MAX_FILES_PER_JULES_PR</code> (5) or <code>MAX_BYTES_PER_JULES_PR</code> (50000).</p>
 
                     <h3>&quot;Provider &apos;jules&apos; not in JULES_ALLOWED_HOSTS&quot;</h3>
                     <p>The platform&apos;s <code>JULES_ALLOWED_HOSTS</code> setting is missing the host portion of <code>jules_base_url</code>. Default is <code>[&apos;api.jules.google.com&apos;]</code>. If you self-host Jules, add the host to the allowlist in <code>.env</code>:</p>

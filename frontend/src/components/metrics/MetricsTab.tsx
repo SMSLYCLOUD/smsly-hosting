@@ -4,7 +4,14 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { servicesApi } from '@/lib/api';
 import { Card } from '@/components/ui/card';
 import { Activity, Cpu, HardDrive, Network, Database, RefreshCw } from 'lucide-react';
-import { XAxis, YAxis, CartesianGrid, Tooltip, Area, AreaChart } from 'recharts';
+import dynamic from 'next/dynamic';
+import { Skeleton } from '@/components/ui/skeleton';
+const XAxis = dynamic(() => import('recharts').then(m => m.XAxis), { ssr: false, loading: () => <Skeleton className="h-4 w-full" /> });
+const YAxis = dynamic(() => import('recharts').then(m => m.YAxis), { ssr: false, loading: () => <Skeleton className="h-4 w-full" /> });
+const CartesianGrid = dynamic(() => import('recharts').then(m => m.CartesianGrid), { ssr: false, loading: () => <Skeleton className="h-4 w-full" /> });
+const Tooltip = dynamic(() => import('recharts').then(m => m.Tooltip), { ssr: false, loading: () => <Skeleton className="h-4 w-full" /> });
+const Area = dynamic(() => import('recharts').then(m => m.Area), { ssr: false, loading: () => <Skeleton className="h-4 w-full" /> });
+const AreaChart = dynamic(() => import('recharts').then(m => m.AreaChart), { ssr: false, loading: () => <Skeleton className="h-4 w-full" /> });
 import { ChartContainer } from '@/components/ui/chart-container';
 
 interface MetricPoint {

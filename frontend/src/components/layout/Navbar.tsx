@@ -10,7 +10,7 @@ import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { ModeToggle } from '@/components/ui/mode-toggle';
 import { NotificationsDropdown } from './NotificationsDropdown';
-import { motion, AnimatePresence } from 'framer-motion';
+import { m, AnimatePresence } from 'framer-motion';
 import { api } from '@/lib/api';
 import { logout as performLogout } from '@/lib/auth';
 
@@ -238,7 +238,7 @@ export function Navbar() {
 
                 <AnimatePresence>
                 {isUserMenuOpen && (
-                    <motion.div
+                    <m.div
                         id="user-menu"
                         initial={{ opacity: 0, y: 10, scale: 0.95 }}
                         animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -262,7 +262,7 @@ export function Navbar() {
                         >
                             <LogOut size={14} /> Log out
                         </button>
-                    </motion.div>
+                    </m.div>
                 )}
                 </AnimatePresence>
              </div>
@@ -347,7 +347,7 @@ export function Navbar() {
       {/* Mobile Menu Dropdown */}
       <AnimatePresence>
         {isMenuOpen && (
-            <motion.div
+            <m.div
                 id="mobile-menu"
                 initial={{ opacity: 0, height: 0 }}
                 animate={{ opacity: 1, height: 'auto' }}
@@ -391,7 +391,7 @@ export function Navbar() {
                         )}
                     </div>
                 </div>
-            </motion.div>
+            </m.div>
         )}
       </AnimatePresence>
     </nav>

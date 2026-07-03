@@ -269,7 +269,7 @@ export default function IntelligenceDocsPage() {
                                 <tr><td className="p-3 font-mono">/api/v1/ai/anomalies/</td><td className="p-3">GET</td><td className="p-3">Last 100 <code>AuditLog</code> rows with <code>actor in [&apos;AI_REMEDIATOR&apos;, &apos;AI_REVIEWER&apos;]</code>.</td></tr>
                                 <tr><td className="p-3 font-mono">/api/v1/ai/cost-estimate/</td><td className="p-3">POST</td><td className="p-3">Estimates the LLM cost of a proposed prompt (no actual call).</td></tr>
                                 <tr><td className="p-3 font-mono">/api/v1/ai/analyze/</td><td className="p-3">POST</td><td className="p-3">Run a one-shot log analysis on a deployment.</td></tr>
-                                <tr><td className="p-3 font-mono">/api/v1/jules/history/&#123;service_id&#125;/</td><td className="p-3">GET</td><td className="p-3">Returns the auto-fix history for a service.</td></tr>
+                                <tr><td className="p-3 font-mono">/api/v1/ai/jules-history/&#123;service_id&#125;/</td><td className="p-3">GET</td><td className="p-3">Returns the auto-fix history for a service.</td></tr>
                             </tbody>
                         </table>
                     </div>

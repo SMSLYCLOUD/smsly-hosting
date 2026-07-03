@@ -1,5 +1,5 @@
 import { SpaceOpsProvider } from "@/context/SpaceOpsContext";
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 import { ThemeProvider } from "@/components/theme-provider";
@@ -8,21 +8,35 @@ import { Toaster } from "@/components/ui/toaster";
 import { ConfirmProvider } from "@/components/ui/confirm-dialog";
 import { TierProvider } from "@/context/TierContext";
 import { PoweredByBadge } from "@/components/licensing/PoweredByBadge";
+import { LazyMotion, domAnimation } from "framer-motion";
 
 export const metadata: Metadata = {
   title: "Grid — Free Open-Source PaaS for Ecosystem Deployment",
   description: "Grid is a free, open-source PaaS powered by CloudNeuron. Deploy apps, services, databases, workers, queues, SSL, backups, and multi-server infrastructure on your own VPS.",
   icons: {
-    icon: "/images/mini_logo.png",
-    apple: "/images/mini_logo.png",
+    icon: "/images/logo.svg",
+    apple: "/images/logo.svg",
   },
 };
 
-import { FloatingAI } from "@/components/ai/FloatingAI";
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  themeColor: "#0a0c10",
+};
+
+import { LazyMount } from "@/components/LazyMount";
 import { ThreeCompat } from "@/components/three-compat";
 import { SpaceOpsBackground } from "@/components/effects/SpaceOpsBackground";
 import { Navbar } from "@/components/layout/Navbar";
 import { Footer } from "@/components/layout/Footer";
+import FloatingAILoader from "@/components/ai/FloatingAILoader";
+
+// FloatingAI ships in a deferred chunk so it never blocks first paint.
+// ``next/dynamic({ ssr: false })`` is not allowed in Server Components in
+// Next.js 15, so the actual ``dynamic()`` call lives in the Client
+// Component ``components/ai/FloatingAILoader.tsx`` and we render it here
+// inside the existing ``<LazyMount>`` idle-callback boundary.
 
 export default function RootLayout({
   children,
@@ -39,6 +53,7 @@ export default function RootLayout({
             disableTransitionOnChange
           >
             <AuthProvider>
+              <LazyMotion features={domAnimation}>
               <TierProvider>
                 <ConfirmProvider>
                   <SpaceOpsProvider>
@@ -50,13 +65,16 @@ export default function RootLayout({
                     </div>
                     <Footer />
                   </main>
-                  <FloatingAI />
+                  <LazyMount>
+                    <FloatingAILoader />
+                  </LazyMount>
                   <ThreeCompat />
                   <PoweredByBadge />
                   <Toaster />
                   </SpaceOpsProvider>
                 </ConfirmProvider>
               </TierProvider>
+              </LazyMotion>
             </AuthProvider>
         </ThemeProvider>
       </body>

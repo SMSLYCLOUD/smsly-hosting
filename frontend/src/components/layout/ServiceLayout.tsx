@@ -35,7 +35,7 @@ export function ServiceLayout({ service, activeTab, setActiveTab, children }: Se
         { id: 'addons', label: 'Addons', icon: Puzzle },
         { id: 'storage', label: 'Storage', icon: HardDrive },
         { id: 'env', label: 'Variables', icon: Database },
-        { id: 'ai-insights', label: 'AI Insights', icon: Sparkles },
+        { id: 'ai-insights', label: 'Insights', icon: Sparkles },
         ...(isAiRouter ? [{ id: 'router', label: 'AI Router', icon: Route }] : []),
         { id: 'domains', label: 'Domains', icon: Globe },
         { id: 'metrics', label: 'Metrics', icon: BarChart3 },

@@ -199,10 +199,7 @@ if [ -d "$INSTALL_DIR/.git" ]; then
         git stash push --include-untracked -m "install-sync-$(date +%s)" >/dev/null 2>&1 || true
     fi
     if ! git fetch origin "$SMSLY_BRANCH" >/dev/null 2>&1 || ! git reset --hard "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
-        echo -e "${YELLOW}  ⚠️ Standard Git update failed. Retrying with http.sslVerify=false...${NC}"
-        if ! git -c http.sslVerify=false fetch origin "$SMSLY_BRANCH" >/dev/null 2>&1 || ! git -c http.sslVerify=false reset --hard "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
-            echo -e "${YELLOW}  ⚠️ Git update failed. The installer repository is public; check network/DNS access to GitHub and branch name.${NC}"
-        fi
+        echo -e "${RED}  ✗ Git update failed for $SMSLY_BRANCH. SSL verification is always enforced — check network or CA certificates.${NC}"
     fi
 else
     echo -e "${BLUE}  → Cloning repository ($SMSLY_BRANCH)...${NC}"
@@ -215,10 +212,7 @@ else
     if git clone -b "$SMSLY_BRANCH" "$SMSLY_GIT_REMOTE" "$INSTALL_DIR"; then
         CLONE_SUCCESS=true
     else
-        echo -e "${YELLOW}  ⚠️ Standard Git clone failed. Retrying with http.sslVerify=false...${NC}"
-        if git -c http.sslVerify=false clone -b "$SMSLY_BRANCH" "$SMSLY_GIT_REMOTE" "$INSTALL_DIR"; then
-            CLONE_SUCCESS=true
-        fi
+        echo -e "${RED}  ✗ Git clone failed. SSL verification is always enforced — check network or CA certificates.${NC}"
     fi
     if [ "$CLONE_SUCCESS" = "true" ] && [ -f /tmp/smsly-env-backup ]; then
         cp /tmp/smsly-env-backup "$INSTALL_DIR/.env"
@@ -471,7 +465,7 @@ if [ "$(pwd)" != "$INSTALL_DIR" ]; then
              echo -e "${BLUE}  → Updating existing repository...${NC}"
              cd "$INSTALL_DIR"
              if ! git pull origin "$SMSLY_BRANCH" >/dev/null 2>&1; then
-                 git -c http.sslVerify=false pull origin "$SMSLY_BRANCH" >/dev/null 2>&1 || true
+                 echo -e "${RED}  ✗ Git pull failed for $SMSLY_BRANCH. SSL verification is always enforced.${NC}"
              fi
         else
              echo -e "${BLUE}  → Cloning repository...${NC}"
@@ -480,7 +474,7 @@ if [ "$(pwd)" != "$INSTALL_DIR" ]; then
              fi
              rm -rf "$INSTALL_DIR"
              if ! git clone -b "$SMSLY_BRANCH" "${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}" "$INSTALL_DIR"; then
-                 git -c http.sslVerify=false clone -b "$SMSLY_BRANCH" "${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}" "$INSTALL_DIR"
+                 echo -e "${RED}  ✗ Git clone failed for $SMSLY_BRANCH. SSL verification is always enforced.${NC}"
              fi
              cd "$INSTALL_DIR"
              if [ -f /tmp/smsly-env-backup ]; then
@@ -500,10 +494,9 @@ if [ ! -d ".git" ] && [ -n "${SMSLY_GIT_REMOTE:-}" ]; then
     git checkout -b "$SMSLY_BRANCH" >/dev/null 2>&1 || true
     git remote add origin "$SMSLY_GIT_REMOTE"
     if ! git fetch origin "$SMSLY_BRANCH" -q --depth=1; then
-        git -c http.sslVerify=false fetch origin "$SMSLY_BRANCH" -q --depth=1 || true
+        echo -e "${YELLOW}  ⚠ Git fetch failed — repository will be unlinked from remote (SSL verification enforced)${NC}"
     fi
-    git branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || \
-    git -c http.sslVerify=false branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
+    git branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
     # We don't reset --hard here to avoid losing the bundled files we just copied,
     # but the repo is now linked for future updates.
     echo -e "${GREEN}  ✓ Git origin set to ${SMSLY_GIT_REMOTE}${NC}"
@@ -1056,6 +1049,18 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
     compose_stack_build --no-cache
     DEPLOY_RC=$?
     if [ "$DEPLOY_RC" -eq 0 ]; then
+        # Scan freshly built images for vulnerabilities
+        if command -v trivy >/dev/null 2>&1; then
+            echo -e "${BLUE}  → Scanning built images for vulnerabilities...${NC}"
+            for _trivy_img in backend frontend; do
+                _trivy_tag="smsly/${_trivy_img}:latest"
+                if docker image inspect "$_trivy_tag" >/dev/null 2>&1; then
+                    echo -e "${BLUE}    ↳ Scanning $_trivy_tag...${NC}"
+                    trivy image --severity CRITICAL,HIGH --exit-code 0 --no-progress "$_trivy_tag" 2>/dev/null || true
+                fi
+            done
+            unset _trivy_img _trivy_tag
+        fi
         compose_stack_up --remove-orphans
         DEPLOY_RC=$?
     fi

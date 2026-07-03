@@ -1,13 +1,71 @@
 """Auto-scaling replica spawner: create/destroy container replicas on remote nodes."""
 import contextlib
+import json
 import logging
 import shlex
 
 from django.utils import timezone
 
+from .container_runtime import get_runtime_for_container
+from .network_scope import ensure_scoped_network, apply_egress_restrictions
 from .ssh_client import SSHClient
 
 logger = logging.getLogger(__name__)
+
+
+def _scoped_network_for(service) -> str:
+    """Get or create an isolated network for a user service.
+
+    Returns the network name.  The container is attached to this network
+    instead of the shared smsly-net, providing per-service isolation.
+    """
+    short_id = str(service.id).replace("-", "")[:12]
+    net_name = f"smsly-svc-{short_id}"
+    ensure_scoped_network({
+        "name": net_name,
+        "driver": "bridge",
+        "internal": False,
+        "enable_ipv6": False,
+    })
+    # Restrict egress — only allow DNS + internet, block other user services
+    apply_egress_restrictions(net_name, ["0.0.0.0/0"])
+    return net_name
+
+
+def _connect_to_traefik_network(container_id: str) -> None:
+    """Connect a container to the shared smsly-net so Traefik can route to it."""
+    import docker
+    try:
+        client = docker.from_env()
+        traefik_net = client.networks.get("smsly-net")
+        try:
+            traefik_net.connect(container_id)
+        except docker.errors.APIError:
+            pass  # already connected
+    except docker.errors.NotFound:
+        logger.debug("smsly-net not found — Traefik routing will not be available")
+    except Exception:
+        logger.exception("Failed to connect container to Traefik network")
+
+
+def _detect_remote_runtime(ssh) -> str | None:
+    """Detect sandboxed container runtime on a remote node via SSH.
+
+    Returns ``--runtime runsc``, ``--runtime kata-runtime``, or empty string.
+    """
+    try:
+        out, _, _ = ssh.exec_command(
+            "docker info --format '{{json .Runtimes}}'",
+            raise_on_error=False,
+        )
+        runtimes = json.loads(out.strip() or "{}")
+        if "kata-runtime" in runtimes:
+            return "--runtime kata-runtime"
+        if "runsc" in runtimes:
+            return "--runtime runsc"
+    except Exception:
+        logger.debug("Remote runtime detection failed, falling back to runc")
+    return ""
 
 
 class SpawningService:
@@ -54,13 +112,15 @@ class SpawningService:
 
         port = str(service.internal_port or 8000)
         domain = service.public_domain or f"{name}.localhost"
-        net = "smsly-net"
+        scoped_net = _scoped_network_for(service)
+        net = scoped_net  # primary network — isolate from other services
+        traefik_net = "smsly-net"  # secondary — for Traefik auto-discovery
         router = name.replace('.', '-').replace('_', '-')
 
-        # Traefik labels — identical routing, Traefik round-robins
+        # Traefik labels — point Traefik at the smsly-net interface
         labels = [
             "traefik.enable=true",
-            f"traefik.docker.network={net}",
+            f"traefik.docker.network={traefik_net}",
             f"traefik.http.routers.{router}.rule=Host(`{domain}`)",
             f"traefik.http.routers.{router}.entrypoints=web",
             f"traefik.http.services.{router}.loadbalancer.server.port={port}",
@@ -87,15 +147,29 @@ class SpawningService:
             reg_url = shlex.quote(service.registry_credential.registry_url.replace("https://", "").replace("http://", "").split("/")[0])
             login_cmd = f"echo {password} | docker login --username {user} --password-stdin {reg_url}; "
 
+        # Detect sandboxed runtime on the remote node
+        runtime_flag = _detect_remote_runtime(ssh)
+
+        mem_mb = getattr(service, 'memory_mb', 2048) or 2048
+        cpus = getattr(service, 'cpu_cores', 1.0) or 1.0
+        sec_flags = (
+            "--security-opt no-new-privileges:true --security-opt apparmor=docker-default "
+            "--cap-drop=ALL --cap-add=NET_BIND_SERVICE --cap-add=CHOWN --cap-add=SETUID --cap-add=SETGID "
+            f"--memory={mem_mb}m --cpus={cpus} --pids-limit=1024 "
+        )
+
         cmd = (
             f"{login_cmd}"
             f"docker pull {shlex.quote(image)} 2>/dev/null; "
             f"docker rm -f {shlex.quote(name)} 2>/dev/null; "
             f"docker run -d --name {shlex.quote(name)} "
-            f"--security-opt no-new-privileges:true --security-opt apparmor=docker-default "
+            f"{sec_flags}"
+            f"{runtime_flag} "
             f"--restart unless-stopped --network {shlex.quote(net)} "
             f"{label_args} {env_args} "
-            f"{shlex.quote(image)}"
+            f"{shlex.quote(image)}; "
+            # Connect to Traefik network for public routing (secondary network)
+            f"docker network connect {shlex.quote(traefik_net)} {shlex.quote(name)} 2>/dev/null; "
         )
 
         _out, err, exit_code = ssh.exec_command(cmd, raise_on_error=False)
@@ -166,12 +240,14 @@ class SpawningService:
 
         port = str(service.internal_port or 8000)
         domain = service.public_domain or f"{name}.localhost"
-        net = "smsly-net"
+        scoped_net = _scoped_network_for(service)
+        net = scoped_net
+        traefik_net = "smsly-net"
         router = name.replace('.', '-').replace('_', '-')
 
         labels = {
             "traefik.enable": "true",
-            "traefik.docker.network": net,
+            "traefik.docker.network": traefik_net,
             f"traefik.http.routers.{router}.rule": f"Host(`{domain}`)",
             f"traefik.http.routers.{router}.entrypoints": "web",
             f"traefik.http.services.{router}.loadbalancer.server.port": port,
@@ -194,6 +270,11 @@ class SpawningService:
                 logger.warning("Local docker login failed: %s", e)
 
         env_vars = {ev.key: ev.value for ev in service.env_vars.all()}
+
+        mem_mb = getattr(service, 'memory_mb', 2048) or 2048
+        cpus = getattr(service, 'cpu_cores', 1.0) or 1.0
+        runtime = get_runtime_for_container(service_name=service.name)
+
         container = client.containers.run(
             image=image,
             name=name,
@@ -202,7 +283,15 @@ class SpawningService:
             network=net,
             labels=labels,
             environment=env_vars,
+            security_opt=["no-new-privileges:true", "apparmor:docker-default"],
+            cap_drop=["ALL"],
+            cap_add=["NET_BIND_SERVICE", "CHOWN", "SETUID", "SETGID"],
+            mem_limit=f"{mem_mb}m",
+            nano_cpus=int(float(cpus) * 1e9),
+            pids_limit=1024,
+            runtime=runtime,
         )
+        _connect_to_traefik_network(container.id)
         replica.container_id = container.id[:64]
         replica.container_name = name
         replica.status = 'RUNNING'

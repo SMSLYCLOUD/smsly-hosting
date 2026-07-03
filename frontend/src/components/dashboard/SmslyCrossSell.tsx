@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { MessageSquare, Fingerprint, TrendingUp, ArrowUpRight } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { m, AnimatePresence } from 'framer-motion';
 
 const products = [
     {
@@ -54,7 +54,7 @@ export function SmslyCrossSell() {
 
     return (
         <AnimatePresence mode="wait">
-            <motion.div
+            <m.div
                 key={product.id}
                 initial={{ opacity: 0, y: -6 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -76,7 +76,7 @@ export function SmslyCrossSell() {
                 >
                     {product.cta} <ArrowUpRight className="w-3 h-3" />
                 </a>
-            </motion.div>
+            </m.div>
         </AnimatePresence>
     );
 }

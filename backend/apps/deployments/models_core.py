@@ -986,6 +986,12 @@ class PlatformConfig(models.Model):
         help_text="SHA-256 hash of the 12-word recovery phrase (salted). "
                   "Used as last-resort admin account access if all trusted devices are lost.",
     )
+    trivy_enabled = models.BooleanField(
+        default=True,
+        help_text="Enable Trivy container image vulnerability scanning on build")
+    trivy_fail_on_severity = models.CharField(
+        max_length=16, default='CRITICAL',
+        help_text="Minimum severity that blocks the build: LOW, MEDIUM, HIGH, CRITICAL")
 
     # ── Billing ──────────────────────────────────────────────────────────
     billing_currency = models.CharField(

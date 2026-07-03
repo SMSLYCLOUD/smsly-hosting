@@ -634,6 +634,13 @@ if not CADDY_ASK_SECRET and not IS_TESTING:
 # verification is bypassed.
 CADDY_DAILY_CERT_CAP = int(config('CADDY_DAILY_CERT_CAP', default=20))
 
+# Trivy container image vulnerability scanning.
+# TRIVY_ENABLED: Set to ``false`` to skip scanning entirely.
+# TRIVY_FAIL_ON_SEVERITY: Minimum severity that blocks the build.
+#   Accepts: low, medium, high, critical.
+TRIVY_ENABLED = _env_bool('TRIVY_ENABLED', default='True')
+TRIVY_FAIL_ON_SEVERITY = str(config('TRIVY_FAIL_ON_SEVERITY', default='CRITICAL')).strip().upper()
+
 # Backup encryption. BACKUP_REQUIRE_ENCRYPTION is auto-enabled in production
 # (DEBUG=False) so backups are never silently written in cleartext.
 BACKUP_REQUIRE_ENCRYPTION = _env_bool(

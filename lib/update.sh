@@ -65,7 +65,8 @@ if [ -n "$UPDATE_MODE" ]; then
             -subj "/CN=registry" 2>/dev/null && {
             mv "${_tmp}/registry.key" "$INSTALL_DIR/certs/registry.key"
             mv "${_tmp}/registry.crt" "$INSTALL_DIR/certs/registry.crt"
-            chmod 644 "$INSTALL_DIR/certs/registry.crt" "$INSTALL_DIR/certs/registry.key"
+            chmod 644 "$INSTALL_DIR/certs/registry.crt"
+            chmod 600 "$INSTALL_DIR/certs/registry.key"
             echo -e "${BLUE}  → Restarting registry container...${NC}"
             docker restart smsly-hosting-registry-1 2>/dev/null || true
         } || true
@@ -137,22 +138,14 @@ if ! is_checkpoint_done "update_git_synced"; then
     GIT_UPDATE_OK=true
 
     if ! git fetch origin "$SMSLY_BRANCH" >/dev/null 2>&1; then
-        echo -e "${YELLOW}  ⚠️ Standard Git fetch failed. Retrying with http.sslVerify=false...${NC}"
-        if ! git -c http.sslVerify=false fetch origin "$SMSLY_BRANCH" >/dev/null 2>&1; then
-            echo -e "${YELLOW}  ⚠️ Git fetch failed for $SMSLY_BRANCH.${NC}"
-            GIT_UPDATE_OK=false
-        fi
+        echo -e "${RED}  ✗ Git fetch failed for $SMSLY_BRANCH. SSL verification is always enforced — check network or CA certificates.${NC}"
+        GIT_UPDATE_OK=false
     fi
 
     if [ "$GIT_UPDATE_OK" = "true" ]; then
         if ! git checkout -B "$SMSLY_BRANCH" "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
-            echo -e "${YELLOW}  ⚠️ Standard Git checkout failed. Retrying with http.sslVerify=false...${NC}"
-            if ! git -c http.sslVerify=false checkout -B "$SMSLY_BRANCH" "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
-                echo -e "${YELLOW}  ⚠️ Git reset failed.${NC}"
-                GIT_UPDATE_OK=false
-            else
-                git -c http.sslVerify=false branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
-            fi
+            echo -e "${RED}  ✗ Git checkout failed for $SMSLY_BRANCH.${NC}"
+            GIT_UPDATE_OK=false
         else
             git branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
         fi
@@ -306,6 +299,7 @@ fi
              "AUTOSCALER_API_TOKEN|$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
              "FRP_AUTH_TOKEN|$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
              "PGCAT_ADMIN_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(24))" 2>/dev/null || true)"
+             "REGISTRY_HTTP_SECRET|$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
              "BACKUP_ENCRYPTION_KEY|$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null || openssl rand -base64 32)"
          )
          for _entry in "${_env_generators[@]}"; do
@@ -653,6 +647,16 @@ fi
             ;;
     esac
 
+    # ─── Infisical secret sync ──────────────────────────────────────────────
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "smsly-infisical"; then
+        echo -e "${BLUE}  → Syncing platform secrets to Infisical...${NC}"
+        backend_container="$(resolve_container_target "smsly-hosting-backend-1")"
+        if [ -n "$backend_container" ]; then
+            docker exec "$backend_container" python manage.py sync_infisical_secrets --push 2>/dev/null || \
+                echo -e "${YELLOW}  ⚠ Infisical sync failed (non-fatal — secrets remain in .env)${NC}"
+        fi
+    fi
+
     # ─── Observability Stack Update (master mode only) ──────────────────────
     if [ "$MODE_AGENT_LITE" != "true" ] && [ "$MODE_NODE" != "true" ]; then
         echo -e "${BLUE}  → Updating observability stack...${NC}"
@@ -688,6 +692,20 @@ fi
     fi
 
     set_checkpoint "update_containers_rebuilt"
+fi
+
+# ─── Vulnerability scan of freshly built images ────────────────────────
+if command -v trivy >/dev/null 2>&1; then
+    echo -e "${BLUE}  → Scanning rebuilt images for vulnerabilities...${NC}"
+    for _trivy_img in backend frontend; do
+        _trivy_tag="smsly/${_trivy_img}:latest"
+        if docker image inspect "$_trivy_tag" >/dev/null 2>&1; then
+            echo -e "${BLUE}    ↳ Scanning $_trivy_tag...${NC}"
+            trivy image --severity CRITICAL,HIGH --exit-code 1 --no-progress "$_trivy_tag" 2>/dev/null || \
+                echo -e "${YELLOW}    ⚠ $_trivy_tag has CRITICAL/HIGH vulnerabilities — review output above${NC}"
+        fi
+    done
+    unset _trivy_img _trivy_tag
 fi
 
 # ─── Safe Update: Post-Deploy Verification ─────────────────────────────
@@ -1388,6 +1406,14 @@ RESTORE_EOF
     # ─── Security verify ──────────────────────────────────────────────────
     if [ -f "$INSTALL_DIR/lib/harden.sh" ]; then
         harden_security_verify
+    fi
+
+    # ─── Image signature verification ────────────────────────────────────
+    if command -v cosign >/dev/null 2>&1 && [ -f "$INSTALL_DIR/scripts/cosign-verify.sh" ]; then
+        echo -e "${BLUE}  → Verifying production image signatures...${NC}"
+        source "$INSTALL_DIR/scripts/cosign-verify.sh"
+        cosign_verify_image "smsly/backend:latest" || \
+            echo -e "${YELLOW}  ⚠ Backend image signature verification failed (non-fatal on existing installs)${NC}"
     fi
 
     echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"

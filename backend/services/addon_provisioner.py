@@ -719,6 +719,16 @@ class AddonProvisioner:
             '--name', container_name,
             '--network', self.network_name,
             '--restart', 'unless-stopped',
+            '--security-opt', 'no-new-privileges:true',
+            '--security-opt', 'apparmor=docker-default',
+            '--cap-drop=ALL',
+            '--cap-add=NET_BIND_SERVICE',
+            '--cap-add=CHOWN',
+            '--cap-add=SETUID',
+            '--cap-add=SETGID',
+            '--cap-add=DAC_OVERRIDE',
+            '--cap-add=FOWNER',
+            '--pids-limit', '1024',
         ]
 
         if addon_type == 'POSTGRES':

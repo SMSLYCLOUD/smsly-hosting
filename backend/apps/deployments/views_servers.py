@@ -1794,12 +1794,66 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            from .models import ScopedRegistry
+            # Per-registry ownership check.
+            #
+            # Before this filter, any authenticated user could POST a list of
+            # active ScopedRegistry UUIDs and attach them to their own server.
+            # The node installer would then ``docker login`` with credentials
+            # belonging to a different tenant. Restrict to registries whose
+            # GenericForeignKey scope (Organization / Team / Project) is one
+            # the requesting user has a relationship with.
+            from django.contrib.contenttypes.models import ContentType
+            from django.db.models import Q
 
-            registries = ScopedRegistry.objects.filter(id__in=registry_ids, is_active=True)
+            from apps.organizations.models import Organization, OrganizationMembership
+            from apps.teams.models import Team, TeamMember
+
+            from .models import ScopedRegistry
+            from .models_core import Project
+            from .models_project import ProjectMember
+
+            user_org_ids = set(
+                OrganizationMembership.objects
+                .filter(user=request.user)
+                .values_list("organization_id", flat=True)
+            ) | set(
+                Organization.objects.filter(owner=request.user).values_list("id", flat=True)
+            )
+            user_team_ids = set(
+                TeamMember.objects
+                .filter(user=request.user, is_active=True)
+                .values_list("team_id", flat=True)
+            )
+            # Team owners also reach team-scoped registries.
+            user_team_ids |= set(
+                Team.objects.filter(owner=request.user).values_list("id", flat=True)
+            )
+            user_project_ids = set(
+                Project.objects.filter(owner=request.user).values_list("id", flat=True)
+            ) | set(
+                ProjectMember.objects.filter(user=request.user).values_list("project_id", flat=True)
+            )
+
+            org_ct = ContentType.objects.get_for_model(Organization)
+            team_ct = ContentType.objects.get_for_model(Team)
+            project_ct = ContentType.objects.get_for_model(Project)
+
+            accessible_scopes = (
+                Q(content_type=org_ct, object_id__in=user_org_ids)
+                | Q(content_type=team_ct, object_id__in=user_team_ids)
+                | Q(content_type=project_ct, object_id__in=user_project_ids)
+            )
+
+            registries = (
+                ScopedRegistry.objects
+                .filter(id__in=registry_ids, is_active=True)
+                .filter(accessible_scopes)
+            )
             if len(registries) != len(registry_ids):
+                # Collapse "missing / inactive / inaccessible" into one opaque
+                # 400 so users cannot enumerate which IDs exist by probing.
                 return Response(
-                    {"error": "One or more registry IDs are invalid or inactive"},
+                    {"error": "One or more registry IDs are invalid, inactive, or inaccessible"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
@@ -1888,7 +1942,7 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    @action(detail=True, methods=["get"])
+    @action(detail=True, methods=["get", "post"])
     def diagnostics(self, request, pk=None):
         """
         Get current diagnostics for a remote server.

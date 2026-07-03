@@ -6,23 +6,22 @@ import { useEffect, useRef, useCallback } from 'react';
  * Universal auto-refresh hook for making any data-fetching component live.
  * Calls `fetchFn` immediately and then every `intervalMs` milliseconds.
  * Automatically pauses when the tab is hidden and resumes when visible.
- * 
- * @param fetchFn - The data-fetching function to call
+ *
+ * @param fetchFn   - The data-fetching function to call. Wrap in useCallback to avoid
+ *                    unnecessary interval restarts — its latest reference is always used
+ *                    via an internal ref so the interval itself is stable.
  * @param intervalMs - Polling interval in milliseconds (default: 5000)
- * @param deps - Dependencies array (re-creates the interval when these change)
  */
 export function useLiveData(
     fetchFn: () => Promise<void> | void,
     intervalMs: number = 5000,
-    deps: any[] = []
 ) {
     const intervalRef = useRef<NodeJS.Timeout | null>(null);
+    // Always keep a ref to the latest fetchFn so the interval closure never goes stale
     const fetchRef = useRef(fetchFn);
-
-    // Keep fetchRef current without re-creating interval
     useEffect(() => {
         fetchRef.current = fetchFn;
-    }, [fetchFn]);
+    }); // intentionally no deps — always syncs to latest fetchFn without restarting interval
 
     const startPolling = useCallback(() => {
         if (intervalRef.current) clearInterval(intervalRef.current);
@@ -61,6 +60,5 @@ export function useLiveData(
             stopPolling();
             document.removeEventListener('visibilitychange', handleVisibility);
         };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [startPolling, stopPolling, ...deps]);
+    }, [startPolling, stopPolling]); // stable: only re-runs when intervalMs changes
 }

@@ -1757,6 +1757,9 @@ class PipelineManager:
                 with open(compose_path, "r", encoding="utf-8") as f:
                     user_compose = yaml.safe_load(f) or {}
                     if "services" in user_compose and isinstance(user_compose["services"], dict):
+                        # Detect sandboxed container runtime
+                        from apps.deployments.services.container_runtime import detect_best_runtime
+                        compose_runtime = detect_best_runtime()
                         for svc_name in user_compose["services"].keys():
                             if svc_name not in override_payload["services"]:
                                 override_payload["services"][svc_name] = {}
@@ -1764,17 +1767,29 @@ class PipelineManager:
                                 "no-new-privileges:true",
                                 "apparmor:docker-default"
                             ]
+                            if compose_runtime and compose_runtime != "runc":
+                                override_payload["services"][svc_name]["runtime"] = compose_runtime
             except Exception as e:
                 # Fallback to just securing the main service if parsing fails
-                override_payload["services"][main_service]["security_opt"] = [
+                details = {"security_opt": [
                     "no-new-privileges:true",
                     "apparmor:docker-default"
-                ]
+                ]}
+                from apps.deployments.services.container_runtime import detect_best_runtime
+                compose_runtime = detect_best_runtime()
+                if compose_runtime and compose_runtime != "runc":
+                    details["runtime"] = compose_runtime
+                override_payload["services"][main_service] = details
         else:
-            override_payload["services"][main_service]["security_opt"] = [
+            details = {"security_opt": [
                 "no-new-privileges:true",
                 "apparmor:docker-default"
-            ]
+            ]}
+            from apps.deployments.services.container_runtime import detect_best_runtime
+            compose_runtime = detect_best_runtime()
+            if compose_runtime and compose_runtime != "runc":
+                details["runtime"] = compose_runtime
+            override_payload["services"][main_service] = details
 
         with open(override_path, "w", encoding="utf-8") as handle:
             yaml.safe_dump(override_payload, handle, sort_keys=False)

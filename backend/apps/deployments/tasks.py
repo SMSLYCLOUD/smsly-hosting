@@ -850,6 +850,18 @@ def _build_runtime_env(service: Service, image_name: str | None = None) -> dict:
     else:
         env_vars.pop('CUSTOM_DOMAINS', None)
 
+    # Inject Infisical env vars for secret management
+    try:
+        from .services.infisical import get_infisical_client, get_or_create_workspace, inject_infisical_env_for_service
+        _client = get_infisical_client()
+        if _client is not None:
+            _ws_id = get_or_create_workspace(_client)
+            if _ws_id:
+                infisical_vars = inject_infisical_env_for_service(str(service.id), _client, _ws_id)
+                env_vars.update(infisical_vars)
+    except Exception:
+        pass  # Infisical is optional — user containers work without it
+
     return env_vars
 
 

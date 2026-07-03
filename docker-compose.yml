@@ -411,19 +411,12 @@ services:
   # ============================================================
   # SECURITY MODEL: all nodes (master + workers + lite agents) reach
   # the master via the WireGuard VPN (see wg_address on ManagedServer).
-  # The VPN is the security boundary — port 5000 is bound to 0.0.0.0
-  # but the only routable path from any node is via wg0.
+  # The VPN is the security boundary — port 5000 is bound to localhost
+  # and wireguard mesh only.  The only routable path from any node is via wg0.
   #
-  # No htpasswd: VPN auth is sufficient. Keeping htpasswd would force
-  # every node to configure docker credentials for every image pull,
-  # and the registry's TLS cert would also need to be trusted on every
-  # node. The VPN already provides both authentication and encryption.
-  #
-  # TLS is kept (REGISTRY_HTTP_TLS_*) so the registry encrypts traffic
-  # inside the VPN (defense in depth) and the cert can be reused by
-  # Traefik for the public registry.<DOMAIN> route. Nodes that prefer
-  # plaintext can use --insecure-registry=registry.<DOMAIN> or the
-  # raw port 5000 over the VPN.
+  # HTPasswd auth is configured so an accidental 0.0.0.0 exposure is
+  # still protected.  Nodes authenticate with the shared smsly-registry
+  # credential from .env.
   # ============================================================
   registry:
     security_opt:
@@ -438,13 +431,14 @@ services:
       - "127.0.0.1:5000:5000"
       - "10.100.0.1:5000:5000"
     environment:
-      # No REGISTRY_AUTH — anonymous pulls are fine inside the VPN.
-      # Remove the env vars and the auth/htpasswd volume mount.
+      REGISTRY_AUTH_HTPASSWD_REALM: registry-realm
+      REGISTRY_AUTH_HTPASSWD_PATH: /auth/htpasswd
       REGISTRY_HTTP_TLS_CERTIFICATE: /certs/registry.crt
       REGISTRY_HTTP_TLS_KEY: /certs/registry.key
     volumes:
       - registry_data:/var/lib/registry
       - ./certs:/certs:ro,z
+      - ./auth:/auth:ro,z
     healthcheck:
       # The registry:2.8.3 image is scratch-based with no shell and no
       # 'health' subcommand. The actual registry process health is

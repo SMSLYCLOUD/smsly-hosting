@@ -220,6 +220,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             'status': dep.status,
             'commit_hash': dep.commit_hash or '',
             'created_at': dep.created_at.isoformat() if dep.created_at else None,
+            'vulnerability_report': dep.vulnerability_report,
         }
 
     def get_node_metadata(self, obj: Service) -> dict:

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { m, AnimatePresence } from 'framer-motion';
 import { X, Send, Bot, User, Loader2, MessageSquare } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
@@ -34,7 +34,15 @@ export function FloatingAI() {
   };
 
   useEffect(() => {
-    scrollToBottom();
+    if (typeof window === 'undefined') return;
+    type IdleScheduler = (cb: () => void, opts?: { timeout: number }) => number;
+    const w = window as unknown as { requestIdleCallback?: IdleScheduler };
+    if (typeof w.requestIdleCallback === 'function') {
+      w.requestIdleCallback(() => scrollToBottom(), { timeout: 2000 });
+    } else {
+      setTimeout(() => scrollToBottom(), 2000);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages]);
 
   useEffect(() => {
@@ -119,7 +127,7 @@ export function FloatingAI() {
       {/* Floating Toggle Button */}
       <AnimatePresence>
         {!isOpen && (
-          <motion.button
+          <m.button
             initial={{ scale: 0, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0, opacity: 0 }}
@@ -128,14 +136,14 @@ export function FloatingAI() {
             aria-label="Open Assistant"
           >
             <MessageSquare size={24} />
-          </motion.button>
+          </m.button>
         )}
       </AnimatePresence>
 
       {/* Chat Panel */}
       <AnimatePresence>
         {isOpen && (
-          <motion.div
+          <m.div
             initial={{ opacity: 0, y: 20, scale: 0.95 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 20, scale: 0.95 }}
@@ -230,7 +238,7 @@ export function FloatingAI() {
                 </Button>
               </div>
             </div>
-          </motion.div>
+          </m.div>
         )}
       </AnimatePresence>
     </>

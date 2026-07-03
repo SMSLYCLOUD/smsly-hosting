@@ -187,8 +187,20 @@ class BuildManager:
         """
         Run Trivy vulnerability scan on the Docker image.
         Falls back to skip if Trivy is not installed.
+        Respects settings.TRIVY_ENABLED and settings.TRIVY_FAIL_ON_SEVERITY.
         """
-        self._log(f"Running vulnerability scan on {image_tag}...")
+        if not getattr(settings, 'TRIVY_ENABLED', True):
+            self._log("Trivy scanning is disabled (TRIVY_ENABLED=false). Skipping.")
+            return
+
+        fail_on = getattr(settings, 'TRIVY_FAIL_ON_SEVERITY', 'CRITICAL').upper()
+        severities = ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+        if fail_on not in severities:
+            logger.warning("Invalid TRIVY_FAIL_ON_SEVERITY=%r — falling back to CRITICAL", fail_on)
+            fail_on = "CRITICAL"
+
+        fail_idx = severities.index(fail_on)
+        severity_arg = ",".join(severities[fail_idx:])
 
         try:
             # Check if Trivy is available
@@ -211,7 +223,7 @@ class BuildManager:
                 [
                     "trivy", "image",
                     "--format", "json",
-                    "--severity", "CRITICAL,HIGH,MEDIUM,LOW",
+                    "--severity", severity_arg,
                     "--timeout", "5m",
                     image_tag
                 ],
@@ -246,11 +258,12 @@ class BuildManager:
                     self._log(
                         f"Scan complete: {vulns['critical']} critical, {vulns['high']} high, {vulns['medium']} medium, {vulns['low']} low")
 
-                    if vulns['critical'] > 0:
+                    fail_count = vulns.get(fail_on.lower(), 0)
+                    if fail_count > 0:
                         self._log(
-                            f"WARNING: Found {vulns['critical']} CRITICAL vulnerabilities!")
+                            f"WARNING: Found {fail_count} {fail_on} vulnerabilities!")
                     else:
-                        self._log("Security scan passed (no critical issues).")
+                        self._log(f"Security scan passed (no {fail_on} issues).")
 
                 except json.JSONDecodeError:
                     self._log("Failed to parse Trivy output. Raw output saved.")

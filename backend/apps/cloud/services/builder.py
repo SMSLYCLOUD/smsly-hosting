@@ -200,10 +200,20 @@ class NixpacksBuilder:
                 logger.info(f"Nixpacks stdout:\n{process.stdout[-2000:]}")
             if process.stderr:
                 logger.info(f"Nixpacks stderr:\n{process.stderr[-2000:]}")
+
+            # ─── Batch K: security scan with Trivy ──────────────────
+            # Scan the freshly built image for vulnerabilities.
+            # Controlled by settings.TRIVY_ENABLED and
+            # settings.TRIVY_FAIL_ON_SEVERITY.
+            scan_result = None
+            if getattr(settings, 'TRIVY_ENABLED', True):
+                scan_result = NixpacksBuilder.scan_image(image_name)
+
             return {
                 "image_name": image_name,
                 "stdout": process.stdout or "",
                 "stderr": process.stderr or "",
+                "scan_result": scan_result,
             }
 
         except _CalledProcessError as e:
@@ -240,10 +250,15 @@ class NixpacksBuilder:
                                 "BUILDX_BUILDER": fallback_name,
                             },
                         )
+                        # Also scan the retry-built image
+                        scan_result = None
+                        if getattr(settings, 'TRIVY_ENABLED', True):
+                            scan_result = NixpacksBuilder.scan_image(image_name)
                         return {
                             "image_name": image_name,
                             "stdout": retry.stdout or "",
                             "stderr": retry.stderr or "",
+                            "scan_result": scan_result,
                         }
                     except subprocess.CalledProcessError as retry_exc:
                         logger.error(
@@ -369,18 +384,32 @@ class NixpacksBuilder:
     def scan_image(image_name: str) -> dict[str, Any]:
         """
         Scans the image using Trivy.
+
         Returns a report dictionary.
-        Raises error if CRITICAL vulnerabilities found.
+        Raises ``RuntimeError`` if vulnerabilities are found at or above
+        ``settings.TRIVY_FAIL_ON_SEVERITY`` (default: ``CRITICAL``).
         """
         logger.info(f"Scanning image {image_name} for vulnerabilities...")
 
-        # Ensure trivy is installed (or use docker to run trivy)
-        # Using subprocess assuming trivy binary is present
+        fail_on = getattr(settings, 'TRIVY_FAIL_ON_SEVERITY', 'CRITICAL').upper()
+        severities = ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+        if fail_on not in severities:
+            logger.warning(
+                "Invalid TRIVY_FAIL_ON_SEVERITY=%r — falling back to CRITICAL. "
+                "Accepted values: %s",
+                fail_on, ', '.join(severities),
+            )
+            fail_on = "CRITICAL"
+
+        # Build severity list from fail_on up to CRITICAL
+        fail_idx = severities.index(fail_on)
+        severity_arg = ",".join(severities[fail_idx:])
+
         command = [
             "trivy",
             "image",
             "--format", "json",
-            "--severity", "CRITICAL,HIGH",
+            "--severity", severity_arg,
             image_name
         ]
 
@@ -399,20 +428,26 @@ class NixpacksBuilder:
 
             report = json.loads(result.stdout)
 
-            # Check for Criticals
-            critical_count = 0
+            # Check for vulnerabilities at or above the threshold
+            fail_count = 0
             for result_item in report.get('Results', []):
                 for vuln in result_item.get('Vulnerabilities', []):
-                    if vuln['Severity'] == 'CRITICAL':
-                        critical_count += 1
+                    if vuln['Severity'] == fail_on:
+                        fail_count += 1
 
-            if critical_count > 0:
-                msg = f"Security Scan Failed: Found {critical_count} CRITICAL vulnerabilities."
+            if fail_count > 0:
+                msg = (
+                    f"Security Scan Failed: Found {fail_count} {fail_on} "
+                    f"vulnerabilit{'y' if fail_count == 1 else 'ies'}."
+                )
                 logger.error(msg)
                 raise RuntimeError(msg)
 
             return report
 
         except FileNotFoundError:
-            logger.warning("WARNING: Trivy binary not found — image built WITHOUT security scan. Install Trivy for vulnerability scanning.")
+            logger.warning(
+                "WARNING: Trivy binary not found — image built WITHOUT "
+                "security scan. Install Trivy for vulnerability scanning."
+            )
             return {"status": "unscanned", "reason": "trivy_missing"}

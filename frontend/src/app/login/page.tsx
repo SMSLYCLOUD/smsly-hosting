@@ -60,10 +60,23 @@ export default function LoginPage() {
         // Full reload avoids Next.js route-cache edge cases around auth redirects.
         window.location.assign("/dashboard");
       } else {
-        const errorData = await response.json();
+        const errorData = await response.json().catch(() => ({}));
+        // Rate-limit responses use the shared {error, code, status} envelope
+        // with code="throttled" and an optional wait_seconds field. Show a
+        // distinct message instead of the generic "wrong password" fallback.
+        if (response.status === 429 || errorData?.code === "throttled") {
+          const waitSec = Number(errorData?.wait_seconds);
+          setError(
+            Number.isFinite(waitSec) && waitSec > 0
+              ? `Too many login attempts. Please wait ${Math.ceil(waitSec / 60)} minute(s) before trying again.`
+              : "Too many login attempts. Please wait a moment before trying again."
+          );
+          return;
+        }
         setError(
           errorData.non_field_errors?.[0] ||
             errorData.detail ||
+            errorData.error ||
             "Invalid username/email or password"
         );
       }

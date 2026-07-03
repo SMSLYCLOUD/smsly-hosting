@@ -21,6 +21,7 @@ from rest_framework.exceptions import (
     AuthenticationFailed,
     NotAuthenticated,
     PermissionDenied,
+    Throttled,
     ValidationError,
 )
 from rest_framework.views import exception_handler as drf_exception_handler
@@ -100,6 +101,32 @@ def smsly_exception_handler(exc, context):
     if isinstance(exc, ValidationError):
         errors = _coerce_errors(response.data)
         code = "validation_error"
+    elif isinstance(exc, Throttled):
+        # Surface the retry-after value as a structured field so clients
+        # don't have to regex-parse the human-readable detail string.
+        # ``wait`` is a float seconds value set by DRF's Throttled exception;
+        # the Retry-After header is also set here defensively (DRF's default
+        # handler does the same, but custom exception handlers can drop it
+        # if they rebuild response.data carelessly).
+        wait = getattr(exc, "wait", None)
+        errors = _coerce_errors(detail or "Too Many Requests")
+        code = "throttled"
+        if wait is not None:
+            try:
+                response["Retry-After"] = str(int(wait))
+            except (TypeError, ValueError):
+                pass
+        response.data = {
+            "error": errors,
+            "code": code,
+            "status": response.status_code,
+        }
+        if wait is not None:
+            try:
+                response.data["wait_seconds"] = int(wait)
+            except (TypeError, ValueError):
+                pass
+        return response
     elif isinstance(exc, (AuthenticationFailed, NotAuthenticated)):
         errors = _coerce_errors(detail or "Authentication required.")
         code = "unauthenticated"

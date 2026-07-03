@@ -2,9 +2,11 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { api } from "@/lib/api";
-import { Brain, Sparkles, AlertTriangle, CheckCircle2, Loader2, GitBranch, Clock, Wrench, XCircle, TrendingUp, Cpu, Gauge, BarChart3 } from "lucide-react";
+import { Brain, Sparkles, AlertTriangle, CheckCircle2, Loader2, GitBranch, Clock, Wrench, XCircle, TrendingUp, Cpu, Gauge, BarChart3, Shield } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { SecurityStatusTab } from "@/components/insights/SecurityStatusTab";
 
 interface JulesEntry {
   deployment_id: string;
@@ -78,10 +80,18 @@ export function AIInsightsTab({ serviceId }: { serviceId: string }) {
           <Brain className="w-6 h-6 text-violet-500" />
         </div>
         <div>
-          <h2 className="text-lg font-bold">AI Insights & Auto-Fix</h2>
-          <p className="text-sm text-muted-foreground">Jules auto-fix history, scaling analysis, and real-time health.</p>
+          <h2 className="text-lg font-bold">Insights & Auto-Fix</h2>
+          <p className="text-sm text-muted-foreground">AI diagnostics, scaling analysis, and system security status.</p>
         </div>
       </div>
+
+      <Tabs defaultValue="ai" className="w-full">
+        <TabsList>
+          <TabsTrigger value="ai"><Brain className="w-4 h-4 mr-1" /> AI Insights</TabsTrigger>
+          <TabsTrigger value="security"><Shield className="w-4 h-4 mr-1" /> Security</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="ai" className="space-y-6 mt-6">
 
       {/* ── Live Scaling Analysis ────────────────────────────────── */}
       {scaleAnalysis && (
@@ -226,6 +236,12 @@ export function AIInsightsTab({ serviceId }: { serviceId: string }) {
           </div>
         </div>
       )}
+        </TabsContent>
+
+        <TabsContent value="security" className="mt-6">
+          <SecurityStatusTab serviceId={serviceId} />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

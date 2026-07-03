@@ -1372,6 +1372,7 @@ if os.path.exists(services_dir):
         CHUNK_SIZE = 4 * 1024 * 1024  # 4MB chunks (base64 expands ~33%)
         with open(local_path, 'rb') as f:
             offset = 0
+            chunk_index = 0
             while True:
                 chunk = f.read(CHUNK_SIZE)
                 if not chunk:
@@ -1380,8 +1381,11 @@ if os.path.exists(services_dir):
                 self._node_api_request('incoming/upload-file', body={
                     'path': remote_backup,
                     'content_base64': b64,
+                    'offset': offset,
+                    'chunk_index': chunk_index,
                 })
                 offset += len(chunk)
+                chunk_index += 1
                 self._log(f"  Uploaded {offset}/{file_size} bytes")
 
         self._update(65, 'Extracting backup on target...')

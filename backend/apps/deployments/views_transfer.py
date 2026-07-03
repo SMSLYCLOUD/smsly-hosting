@@ -827,11 +827,45 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         if not raw or len(raw) < 10:
             return Response({'error': 'Empty or invalid file data'}, status=status.HTTP_400_BAD_REQUEST)
 
+        offset = 0
+        chunk_index = 0
+        append_flag = False
+
+        if isinstance(request.data, dict):
+            try:
+                offset = int(request.data.get('offset', 0) or 0)
+            except (ValueError, TypeError):
+                offset = 0
+            try:
+                chunk_index = int(request.data.get('chunk_index', 0) or request.data.get('chunk', 0) or 0)
+            except (ValueError, TypeError):
+                chunk_index = 0
+            append_flag = bool(request.data.get('append', False))
+
+        try:
+            header_offset = int(request.headers.get('X-Chunk-Offset', 0) or 0)
+            if header_offset > 0:
+                offset = header_offset
+        except (ValueError, TypeError):
+            pass
+
+        try:
+            header_chunk = int(request.headers.get('X-Chunk-Index', 0) or request.headers.get('X-Chunk', 0) or 0)
+            if header_chunk > 0:
+                chunk_index = header_chunk
+        except (ValueError, TypeError):
+            pass
+
+        if str(request.headers.get('X-Append', '')).lower() in ('true', '1', 'yes'):
+            append_flag = True
+
+        mode = 'ab' if (offset > 0 or chunk_index > 0 or append_flag) else 'wb'
+
         try:
             os.makedirs(os.path.dirname(dest_path) or '/tmp', exist_ok=True)
-            with open(dest_path, 'wb') as f:
+            with open(dest_path, mode) as f:
                 f.write(raw)
-            return Response({'status': 'written', 'path': dest_path, 'size': len(raw)})
+            return Response({'status': 'written', 'path': dest_path, 'size': len(raw), 'mode': mode})
         except Exception as e:
             logger.exception("Incoming write-file failed")
             return Response({'error': 'An internal error occurred. Please check server logs.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

@@ -41,14 +41,65 @@ jobs:
       - name: Checkout
         uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
 
+      - name: Set up Cosign
+        uses: sigstore/cosign-installer@59acb6260d86c0f8a58fa4c3ddb032a715305043 # v3.5.0
+
+      - name: Build backend image
+        run: docker build -t smsly/backend:latest -f backend/Dockerfile backend/
+
+      - name: Build frontend image
+        run: docker build -t smsly/frontend:latest -f frontend/Dockerfile frontend/
+
+      - name: Run Trivy vulnerability scan (backend)
+        uses: aquasecurity/trivy-action@7c62194b1f09d5f3cb5df92e2c1af313850846b4 # master
+        with:
+          image-ref: smsly/backend:latest
+          format: sarif
+          output: trivy-backend.sarif
+          exit-code: 1
+          severity: CRITICAL,HIGH
+
+      - name: Run Trivy vulnerability scan (frontend)
+        uses: aquasecurity/trivy-action@7c62194b1f09d5f3cb5df92e2c1af313850846b4
+        with:
+          image-ref: smsly/frontend:latest
+          format: sarif
+          output: trivy-frontend.sarif
+          exit-code: 1
+          severity: CRITICAL,HIGH
+
+      - name: Upload Trivy SARIF results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-backend.sarif
+
+      - name: Sign and verify backend
+        run: |
+          cosign sign --yes smsly/backend:latest
+          cosign verify \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "https://github.com/${{ github.repository }}/.github/workflows/deploy-helm.yml@${{ github.ref }}" \
+            smsly/backend:latest
+
+      - name: Sign and verify frontend
+        run: |
+          cosign sign --yes smsly/frontend:latest
+          cosign verify \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "https://github.com/${{ github.repository }}/.github/workflows/deploy-helm.yml@${{ github.ref }}" \
+            smsly/frontend:latest
+
       - name: Configure SSH
-        # TODO: ssh-keyscan at deploy time is a TOCTOU risk — an attacker who
-        # controls DNS/BGP could inject a rogue host key.  For stronger
-        # guarantees, pin the expected SSH host key fingerprint in a repository
-        # secret (e.g. VPS_SSH_HOST_KEY) and write it directly to known_hosts.
         run: |
           mkdir -p ~/.ssh
-          ssh-keyscan -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
+          if [ -n "${{ secrets.VPS_SSH_HOST_KEY }}" ]; then
+            echo "${{ secrets.VPS_SSH_HOST_KEY }}" >> ~/.ssh/known_hosts
+          else
+            # ssh-keyscan at deploy time is a TOCTOU risk — pin VPS_SSH_HOST_KEY
+            # as a repository secret to eliminate it.
+            ssh-keyscan -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
+          fi
 
       - name: Deploy via deploy-agent
         uses: appleboy/ssh-action@8faa84277b88b6cd1455986f459aa66cf72bc8a3 # v1.2.1
@@ -75,7 +126,18 @@ jobs:
 
             echo "=== Running health check ==="
             sleep 10
+            curl -sf --connect-timeout 10 --max-time 10 http://localhost/health || \
+              { echo "WARNING: curl health check failed — checking K8s rollout status"; }
             kubectl wait --for=condition=available --timeout=120s \
               -n smsly-system deployment -l app.kubernetes.io/instance=smsly-hosting
+
+            echo "=== Verifying image signatures on cluster ==="
+            if [ -f scripts/cosign-verify.sh ]; then
+              source scripts/cosign-verify.sh
+              cosign_verify_image "smsly/backend:latest" || { echo "FATAL: Backend image signature verification failed"; exit 1; }
+              cosign_verify_image "smsly/frontend:latest" || { echo "FATAL: Frontend image signature verification failed"; exit 1; }
+            else
+              echo "WARNING: cosign-verify.sh not found — skipping signature verification"
+            fi
 
             echo "=== Deploy complete ==="

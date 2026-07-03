@@ -14,7 +14,7 @@
 
 services:
   falco:
-    image: falcosecurity/falco-no-driver:0.38.0
+    image: falcosecurity/falco:0.38.0
     container_name: smsly-falco
     restart: unless-stopped
     # Drop all capabilities, add only what Falco needs for BPF/eBPF

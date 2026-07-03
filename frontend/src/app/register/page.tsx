@@ -58,6 +58,18 @@ export default function RegisterPage() {
 
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
+        // Rate-limit responses use the shared {error, code, status} envelope
+        // with code="throttled" and an optional wait_seconds field. Show a
+        // distinct message instead of the generic "check your input" fallback.
+        if (response.status === 429 || payload?.code === "throttled") {
+          const waitSec = Number(payload?.wait_seconds);
+          setError(
+            Number.isFinite(waitSec) && waitSec > 0
+              ? `Too many registration attempts. Please wait ${Math.ceil(waitSec / 60)} minute(s) before trying again.`
+              : "Too many registration attempts. Please wait a moment before trying again."
+          );
+          return;
+        }
         const message =
           payload?.detail ||
           payload?.non_field_errors?.[0] ||
@@ -65,6 +77,7 @@ export default function RegisterPage() {
           payload?.email?.[0] ||
           payload?.password1?.[0] ||
           payload?.password2?.[0] ||
+          payload?.error ||
           "Registration failed. Please check your input.";
         setError(String(message));
         return;

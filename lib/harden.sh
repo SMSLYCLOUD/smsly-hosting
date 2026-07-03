@@ -3,11 +3,12 @@
 # SMSLY Hosting — Security Hardening & Self-Healing Module
 # =============================================================================
 # Two-phase design:
-#   1. harden_security_bootstrap  → install + start everything; return quickly.
-#   2. harden_security_verify     → confirm everything came up. Report.
+#   1. harden_security_bootstrap  → install + start everything; block until done.
+#   2. harden_security_verify     → confirm everything is up. Report.
 #
 # Called from install.sh --update, --refresh, and fresh install.
-# Never blocks deployment. Install & start are fire-and-forget.
+# Blocks until each layer is installed and started; failures are logged but
+# do not halt deployment (caller receives a non-zero exit, decides what to do).
 # =============================================================================
 set +e
 
@@ -78,8 +79,12 @@ ignoreregx =
 FILTER_EOF
 
     systemctl enable fail2ban >/dev/null 2>&1 || true
-    # Fire-and-forget: start in background, don't wait for ready
-    systemctl restart fail2ban >/dev/null 2>&1 &
+    # Blocking start — wait for service to be ready
+    systemctl restart fail2ban >/dev/null 2>&1 || true
+    for _i in $(seq 1 10); do
+        fail2ban-client ping >/dev/null 2>&1 && break
+        sleep 1
+    done
 }
 
 _harden_ufw_bootstrap() {
@@ -110,14 +115,19 @@ _harden_ufw_bootstrap() {
         ip link show "$iface" >/dev/null 2>&1 || continue
         ufw allow in on "$iface" >/dev/null 2>&1 || true
     done
-    ufw --force enable >/dev/null 2>&1 &
+    ufw --force enable >/dev/null 2>&1 || true
+    # Verify it actually came up
+    for _i in $(seq 1 5); do
+        ufw status 2>/dev/null | grep -qi "active" && break
+        sleep 2
+    done
 }
 
 _harden_apparmor_bootstrap() {
     command -v aa-status >/dev/null 2>&1 || apt_run apt-get install -y apparmor apparmor-utils 2>/dev/null || true
     command -v aa-status >/dev/null 2>&1 || return 1
     systemctl enable apparmor >/dev/null 2>&1 || true
-    systemctl start apparmor >/dev/null 2>&1 &
+    systemctl start apparmor >/dev/null 2>&1 || true
 }
 
 _harden_auditd_bootstrap() {
@@ -138,7 +148,7 @@ _harden_auditd_bootstrap() {
 AUDIT_EOF
     fi
     systemctl enable auditd >/dev/null 2>&1 || true
-    systemctl restart auditd >/dev/null 2>&1 &
+    systemctl restart auditd >/dev/null 2>&1 || true
 }
 
 _harden_kernel_bootstrap() {
@@ -222,6 +232,24 @@ with open('$daemon_cfg','w') as f: json.dump(cfg, f, indent=2)
             changed=true
         fi
     }
+
+    # Restart Docker if config changed AND no SMSLY containers are running
+    # (doing so live would kill production).
+    if [ "$changed" = "true" ]; then
+        local _smsly_ctrs
+        _smsly_ctrs="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c smsly || true)"
+        if [ "$_smsly_ctrs" -eq 0 ]; then
+            _harden_log info "Docker daemon config changed — restarting Docker..."
+            systemctl restart docker 2>/dev/null || true
+            for _i in $(seq 1 30); do
+                docker info >/dev/null 2>&1 && break
+                sleep 2
+            done
+            _harden_log ok "Docker daemon restarted with security config"
+        else
+            _harden_log warn "Docker daemon config changed but $_smsly_ctrs SMSLY containers are running — deferring restart (apply on next daemon reload)"
+        fi
+    fi
 }
 
 _harden_crowdsec_bootstrap() {
@@ -230,13 +258,15 @@ _harden_crowdsec_bootstrap() {
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "smsly-crowdsec"; then
         return 0  # already up
     fi
-    # Fire-and-forget: start in background (image pull may take time)
-    (
-        docker compose \
-            --env-file "$INSTALL_DIR/.env" \
-            -f "$COMPOSE_FILE" \
-            up -d crowdsec 2>/dev/null || true
-    ) &
+    # Blocking start — wait for container to be healthy
+    docker compose \
+        --env-file "$INSTALL_DIR/.env" \
+        -f "$COMPOSE_FILE" \
+        up -d crowdsec 2>/dev/null || true
+    for _i in $(seq 1 15); do
+        docker ps --format '{{.Names}}' 2>/dev/null | grep -q "smsly-crowdsec" && break
+        sleep 2
+    done
 }
 
 _harden_falco_bootstrap() {
@@ -248,14 +278,15 @@ _harden_falco_bootstrap() {
         export FALCO_BPF_PROBE=""
     fi
 
-    # Fire-and-forget: always recreate so config changes (e.g. command flags)
-    # take effect even if the container is already running.
-    (
-        docker compose \
-            --env-file "$INSTALL_DIR/.env" \
-            -f "$compose_file" \
-            up -d --force-recreate --pull always 2>/dev/null || true
-    ) &
+    # Blocking start — always recreate so config changes take effect
+    docker compose \
+        --env-file "$INSTALL_DIR/.env" \
+        -f "$compose_file" \
+        up -d --force-recreate --pull always 2>/dev/null || true
+    for _i in $(seq 1 15); do
+        docker ps --format '{{.Names}}' 2>/dev/null | grep -q "smsly-falco" && break
+        sleep 2
+    done
 }
 
 # ─── PHASE 2: Verify — check everything came up, report status ────────────────
@@ -333,9 +364,9 @@ _harden_crowdsec_verify() {
         _harden_log warn "crowdsec — container not running"
         return 1
     fi
-    # Refresh hub in background, don't block verification
-    docker exec smsly-crowdsec cscli hub update 2>/dev/null &
-    docker exec smsly-crowdsec cscli hub upgrade 2>/dev/null &
+    # Refresh hub — blocking, log failure instead of swallowing it
+    docker exec smsly-crowdsec cscli hub update 2>/dev/null || _harden_log warn "crowdsec hub update failed"
+    docker exec smsly-crowdsec cscli hub upgrade 2>/dev/null || _harden_log warn "crowdsec hub upgrade failed"
     _harden_log ok "crowdsec deployed"
     return 0
 }
@@ -420,20 +451,118 @@ _harden_container_runtime_verify() {
     return "$found"
 }
 
+# ─── Trivy Vulnerability Scanner ──────────────────────────────────────────────
+
+_harden_trivy_bootstrap() {
+    if command -v trivy >/dev/null 2>&1; then
+        return 0  # already installed
+    fi
+
+    _harden_log info "Installing Trivy vulnerability scanner..."
+    local trivy_version="v0.54.1"
+    local arch
+    arch="$(uname -m)"
+    case "$arch" in
+        x86_64)  arch="64bit" ;;
+        aarch64) arch="ARM64" ;;
+        *)       _harden_log warn "Trivy — unsupported architecture: $arch"; return 1 ;;
+    esac
+
+    local deb_url="https://github.com/aquasecurity/trivy/releases/download/${trivy_version}/trivy_${trivy_version#v}_Linux-${arch}.deb"
+    local tmp_deb
+    tmp_deb="$(mktemp /tmp/trivy.XXXXXX.deb)"
+
+    if ! curl -fsSL "$deb_url" -o "$tmp_deb" 2>/dev/null; then
+        _harden_log warn "Trivy — download failed"
+        rm -f "$tmp_deb"
+        return 1
+    fi
+
+    if ! dpkg -i "$tmp_deb" 2>/dev/null; then
+        # Fix missing deps and retry
+        apt-get install -f -y 2>/dev/null || true
+        dpkg -i "$tmp_deb" 2>/dev/null || {
+            _harden_log warn "Trivy — installation failed"
+            rm -f "$tmp_deb"
+            return 1
+        }
+    fi
+    rm -f "$tmp_deb"
+
+    if command -v trivy >/dev/null 2>&1; then
+        _harden_log ok "Trivy ${trivy_version} installed"
+        return 0
+    fi
+    return 1
+}
+
+_harden_trivy_verify() {
+    if command -v trivy >/dev/null 2>&1; then
+        local ver
+        ver="$(trivy --version 2>/dev/null | head -1 || true)"
+        _harden_log ok "Trivy available: ${ver}"
+        return 0
+    fi
+    _harden_log warn "Trivy — not installed (image vulnerability scanning unavailable)"
+    return 1
+}
+
+# ─── Infisical Secret Management ──────────────────────────────────────────────
+
+_harden_infisical_bootstrap() {
+    local infisical_script="$INSTALL_DIR/lib/infisical.sh"
+    if [ ! -f "$infisical_script" ]; then
+        _harden_log info "Infisical script not found — skipping"
+        return 0
+    fi
+    # Source Infisical functions and bootstrap
+    # shellcheck disable=SC1090
+    source "$infisical_script" 2>/dev/null || {
+        _harden_log warn "Failed to source infisical.sh"
+        return 1
+    }
+    if ! command -v infisical_bootstrap >/dev/null 2>&1; then
+        _harden_log warn "infisical_bootstrap function not found"
+        return 1
+    fi
+    infisical_bootstrap 2>/dev/null || {
+        _harden_log warn "Infisical bootstrap had issues"
+        return 1
+    }
+    return 0
+}
+
+_harden_infisical_verify() {
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "smsly-infisical"; then
+        _harden_log ok "Infisical running"
+        return 0
+    fi
+    _harden_log warn "Infisical — container not running"
+    return 1
+}
+
 # ─── Public Entry Points ──────────────────────────────────────────────────────
 
 harden_security_bootstrap() {
-    echo -e "${BLUE}  → [harden] Bootstrapping security stack (fire-and-forget)...${NC}"
-    _harden_fail2ban_bootstrap
-    _harden_ufw_bootstrap
-    _harden_apparmor_bootstrap
-    _harden_auditd_bootstrap
+    echo -e "${BLUE}  → [harden] Bootstrapping security stack (blocking)...${NC}"
+    local _harden_failures=0
+    _harden_fail2ban_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
+    _harden_ufw_bootstrap        || { _harden_failures=$((_harden_failures + 1)); }
+    _harden_apparmor_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
+    _harden_auditd_bootstrap     || { _harden_failures=$((_harden_failures + 1)); }
     _harden_kernel_bootstrap
     _harden_docker_daemon_bootstrap
-    _harden_crowdsec_bootstrap
-    _harden_falco_bootstrap
+    _harden_crowdsec_bootstrap   || { _harden_failures=$((_harden_failures + 1)); }
+    _harden_falco_bootstrap      || { _harden_failures=$((_harden_failures + 1)); }
     _harden_container_runtime_bootstrap
-    echo -e "${GREEN}  ✓ [harden] Bootstrap dispatched — verifying later${NC}"
+    _harden_trivy_bootstrap      || { _harden_failures=$((_harden_failures + 1)); }
+    _harden_infisical_bootstrap  || { _harden_failures=$((_harden_failures + 1)); }
+    if [ "$_harden_failures" -gt 0 ]; then
+        echo -e "${YELLOW}  ⚠ [harden] $_harden_failures layer(s) had issues — verify will report details${NC}"
+    else
+        echo -e "${GREEN}  ✓ [harden] Bootstrap complete — all layers started${NC}"
+    fi
+    return "$_harden_failures"
 }
 
 harden_security_verify() {
@@ -453,14 +582,16 @@ harden_security_verify() {
     _harden_crowdsec_verify   || { ((failures++)); true; }; ((checks++))
     _harden_falco_verify      || { ((failures++)); true; }; ((checks++))
     _harden_container_runtime_verify || { ((failures++)); true; }; ((checks++))
+    _harden_trivy_verify      || { ((failures++)); true; }; ((checks++))
+    _harden_infisical_verify   || { ((failures++)); true; }; ((checks++))
 
     local passed=$((checks - failures))
     echo ""
     if [ "$failures" -eq 0 ]; then
         echo -e "${GREEN}  All $passed/$checks security checks passed${NC}"
     else
-        echo -e "${YELLOW}  Security: $passed/$checks passed, $failures with warnings${NC}"
-        echo -e "${YELLOW}  Warnings are non-blocking — review above${NC}"
+        echo -e "${RED}  Security: $passed/$checks passed, $failures FAILED${NC}"
+        echo -e "${YELLOW}  Review failures above — run 'sudo bash install.sh --debug' for details${NC}"
     fi
     echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
     echo ""

@@ -1,7 +1,9 @@
 'use client';
 
 import React, { useState } from 'react';
-import Editor from "@monaco-editor/react";
+import dynamic from 'next/dynamic';
+import { Skeleton } from '@/components/ui/skeleton';
+const Editor = dynamic(() => import('@monaco-editor/react'), { ssr: false, loading: () => <Skeleton className="h-[400px] w-full" /> });
 import { Service, servicesApi } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { Button } from '@/components/ui/button';

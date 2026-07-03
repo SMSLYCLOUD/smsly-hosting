@@ -134,6 +134,13 @@ export function Starfield({ visualState }: StarfieldProps) {
     let whiteHoleParticles: {x: number, y: number, angle: number, speed: number, dist: number, r: number}[] = [];
 
     const isReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const mobileQuery = window.matchMedia('(max-width: 768px)');
+    let isMobile = mobileQuery.matches;
+    const onMobileChange = (e: MediaQueryListEvent) => {
+      isMobile = e.matches;
+      resize(); // re-seed the canvas for the new viewport
+    };
+    mobileQuery.addEventListener('change', onMobileChange);
 
     const resize = () => {
       c.width = window.innerWidth;
@@ -159,56 +166,68 @@ export function Starfield({ visualState }: StarfieldProps) {
 
       // Seed asteroids (8-12)
       asteroids = [];
-      for (let i = 0; i < 10; i++) {
-        const a = makeAsteroid(W, H);
-        a.x = rand(50, W - 50); // spread across screen initially
-        asteroids.push(a);
+      if (!isMobile) {
+        for (let i = 0; i < 10; i++) {
+          const a = makeAsteroid(W, H);
+          a.x = rand(50, W - 50); // spread across screen initially
+          asteroids.push(a);
+        }
       }
 
       // Seed satellites (3-4)
       satellites = [];
-      for (let i = 0; i < 4; i++) {
-        const s = makeSatellite(W, H);
-        s.x = rand(50, W - 50);
-        satellites.push(s);
+      if (!isMobile) {
+        for (let i = 0; i < 4; i++) {
+          const s = makeSatellite(W, H);
+          s.x = rand(50, W - 50);
+          satellites.push(s);
+        }
       }
 
       // Aurora bands (4-6 layered)
-      auroras = [
-        { y: H * 0.12, amplitude: 25, wavelength: 0.004, speed: 0.0004 * m, color: [0, 255, 120], opacity: 0.06, baseOpacity: 0.06, thickness: 50, phase: 0, baseSpeed: 0.0004 * m },
-        { y: H * 0.18, amplitude: 30, wavelength: 0.003, speed: 0.0003 * m, color: [0, 200, 255], opacity: 0.04, baseOpacity: 0.04, thickness: 40, phase: 1, baseSpeed: 0.0003 * m },
-        { y: H * 0.25, amplitude: 20, wavelength: 0.005, speed: 0.00035 * m, color: [120, 0, 255], opacity: 0.035, baseOpacity: 0.035, thickness: 35, phase: 2, baseSpeed: 0.00035 * m },
-        { y: H * 0.14, amplitude: 35, wavelength: 0.0025, speed: 0.00045 * m, color: [0, 255, 200], opacity: 0.045, baseOpacity: 0.045, thickness: 45, phase: 3, baseSpeed: 0.00045 * m },
-        { y: H * 0.22, amplitude: 18, wavelength: 0.006, speed: 0.0005 * m, color: [255, 80, 200], opacity: 0.025, baseOpacity: 0.025, thickness: 30, phase: 4, baseSpeed: 0.0005 * m },
-      ];
+      if (!isMobile) {
+        auroras = [
+          { y: H * 0.12, amplitude: 25, wavelength: 0.004, speed: 0.0004 * m, color: [0, 255, 120], opacity: 0.06, baseOpacity: 0.06, thickness: 50, phase: 0, baseSpeed: 0.0004 * m },
+          { y: H * 0.18, amplitude: 30, wavelength: 0.003, speed: 0.0003 * m, color: [0, 200, 255], opacity: 0.04, baseOpacity: 0.04, thickness: 40, phase: 1, baseSpeed: 0.0003 * m },
+          { y: H * 0.25, amplitude: 20, wavelength: 0.005, speed: 0.00035 * m, color: [120, 0, 255], opacity: 0.035, baseOpacity: 0.035, thickness: 35, phase: 2, baseSpeed: 0.00035 * m },
+          { y: H * 0.14, amplitude: 35, wavelength: 0.0025, speed: 0.00045 * m, color: [0, 255, 200], opacity: 0.045, baseOpacity: 0.045, thickness: 45, phase: 3, baseSpeed: 0.00045 * m },
+          { y: H * 0.22, amplitude: 18, wavelength: 0.006, speed: 0.0005 * m, color: [255, 80, 200], opacity: 0.025, baseOpacity: 0.025, thickness: 30, phase: 4, baseSpeed: 0.0005 * m },
+        ];
+      }
 
       // Solar system — big, bold, center-right
       const minDim = Math.min(W, H);
-      solar = {
-        cx: W * 0.55,
-        cy: H * 0.48,
-        starRadius: minDim * 0.045,
-        planets: [
-          { orbitRadius: minDim * 0.09, angle: rand(0, Math.PI * 2), speed: 0.0008 * m, baseSpeed: 0.0008 * m, size: minDim * 0.008, color: [180, 120, 80], glowColor: [200, 150, 100], name: 'Mercury' },
-          { orbitRadius: minDim * 0.14, angle: rand(0, Math.PI * 2), speed: 0.0006 * m, baseSpeed: 0.0006 * m, size: minDim * 0.013, color: [220, 180, 100], glowColor: [240, 200, 120], name: 'Venus' },
-          { orbitRadius: minDim * 0.20, angle: rand(0, Math.PI * 2), speed: 0.0005 * m, baseSpeed: 0.0005 * m, size: minDim * 0.014, color: [60, 140, 220], glowColor: [80, 160, 255], name: 'Earth' },
-          { orbitRadius: minDim * 0.26, angle: rand(0, Math.PI * 2), speed: 0.0004 * m, baseSpeed: 0.0004 * m, size: minDim * 0.011, color: [200, 80, 50], glowColor: [230, 100, 60], name: 'Mars' },
-          { orbitRadius: minDim * 0.35, angle: rand(0, Math.PI * 2), speed: 0.00025 * m, baseSpeed: 0.00025 * m, size: minDim * 0.028, color: [200, 170, 120], glowColor: [220, 190, 140], name: 'Jupiter' },
-          { orbitRadius: minDim * 0.43, angle: rand(0, Math.PI * 2), speed: 0.00018 * m, baseSpeed: 0.00018 * m, size: minDim * 0.024, color: [210, 190, 140], glowColor: [230, 210, 160], name: 'Saturn', hasRing: true, ringColor: [200, 180, 130] },
-          { orbitRadius: minDim * 0.52, angle: rand(0, Math.PI * 2), speed: 0.00012 * m, baseSpeed: 0.00012 * m, size: minDim * 0.020, color: [140, 220, 230], glowColor: [160, 240, 250], name: 'Uranus', hasRing: true, ringColor: [150, 210, 220] },
-          { orbitRadius: minDim * 0.60, angle: rand(0, Math.PI * 2), speed: 0.00009 * m, baseSpeed: 0.00009 * m, size: minDim * 0.018, color: [60, 100, 220], glowColor: [80, 120, 255], name: 'Neptune' },
-          { orbitRadius: minDim * 0.30, angle: rand(0, Math.PI * 2), speed: 0.00035 * m, baseSpeed: 0.00035 * m, size: minDim * 0.006, color: [160, 160, 150], glowColor: [180, 180, 170], name: 'Ceres' },
-          { orbitRadius: minDim * 0.68, angle: rand(0, Math.PI * 2), speed: 0.00007 * m, baseSpeed: 0.00007 * m, size: minDim * 0.007, color: [190, 170, 150], glowColor: [210, 190, 170], name: 'Pluto' },
-        ],
-      };
+      if (!isMobile) {
+        solar = {
+          cx: W * 0.55,
+          cy: H * 0.48,
+          starRadius: minDim * 0.045,
+          planets: [
+            { orbitRadius: minDim * 0.09, angle: rand(0, Math.PI * 2), speed: 0.0008 * m, baseSpeed: 0.0008 * m, size: minDim * 0.008, color: [180, 120, 80], glowColor: [200, 150, 100], name: 'Mercury' },
+            { orbitRadius: minDim * 0.14, angle: rand(0, Math.PI * 2), speed: 0.0006 * m, baseSpeed: 0.0006 * m, size: minDim * 0.013, color: [220, 180, 100], glowColor: [240, 200, 120], name: 'Venus' },
+            { orbitRadius: minDim * 0.20, angle: rand(0, Math.PI * 2), speed: 0.0005 * m, baseSpeed: 0.0005 * m, size: minDim * 0.014, color: [60, 140, 220], glowColor: [80, 160, 255], name: 'Earth' },
+            { orbitRadius: minDim * 0.26, angle: rand(0, Math.PI * 2), speed: 0.0004 * m, baseSpeed: 0.0004 * m, size: minDim * 0.011, color: [200, 80, 50], glowColor: [230, 100, 60], name: 'Mars' },
+            { orbitRadius: minDim * 0.35, angle: rand(0, Math.PI * 2), speed: 0.00025 * m, baseSpeed: 0.00025 * m, size: minDim * 0.028, color: [200, 170, 120], glowColor: [220, 190, 140], name: 'Jupiter' },
+            { orbitRadius: minDim * 0.43, angle: rand(0, Math.PI * 2), speed: 0.00018 * m, baseSpeed: 0.00018 * m, size: minDim * 0.024, color: [210, 190, 140], glowColor: [230, 210, 160], name: 'Saturn', hasRing: true, ringColor: [200, 180, 130] },
+            { orbitRadius: minDim * 0.52, angle: rand(0, Math.PI * 2), speed: 0.00012 * m, baseSpeed: 0.00012 * m, size: minDim * 0.020, color: [140, 220, 230], glowColor: [160, 240, 250], name: 'Uranus', hasRing: true, ringColor: [150, 210, 220] },
+            { orbitRadius: minDim * 0.60, angle: rand(0, Math.PI * 2), speed: 0.00009 * m, baseSpeed: 0.00009 * m, size: minDim * 0.018, color: [60, 100, 220], glowColor: [80, 120, 255], name: 'Neptune' },
+            { orbitRadius: minDim * 0.30, angle: rand(0, Math.PI * 2), speed: 0.00035 * m, baseSpeed: 0.00035 * m, size: minDim * 0.006, color: [160, 160, 150], glowColor: [180, 180, 170], name: 'Ceres' },
+            { orbitRadius: minDim * 0.68, angle: rand(0, Math.PI * 2), speed: 0.00007 * m, baseSpeed: 0.00007 * m, size: minDim * 0.007, color: [190, 170, 150], glowColor: [210, 190, 170], name: 'Pluto' },
+          ],
+        };
+      }
 
-      for(let i=0; i<150; i++) {
-        blackHoleParticles.push({
-          x: 0, y: 0, angle: rand(0, Math.PI * 2), speed: rand(1, 4), dist: rand(20, minDim), r: rand(1, 3)
-        });
-        whiteHoleParticles.push({
-          x: 0, y: 0, angle: rand(0, Math.PI * 2), speed: rand(1, 4), dist: rand(5, 50), r: rand(1, 3)
-        });
+      blackHoleParticles = [];
+      whiteHoleParticles = [];
+      if (!isMobile) {
+        for(let i=0; i<150; i++) {
+          blackHoleParticles.push({
+            x: 0, y: 0, angle: rand(0, Math.PI * 2), speed: rand(1, 4), dist: rand(20, minDim), r: rand(1, 3)
+          });
+          whiteHoleParticles.push({
+            x: 0, y: 0, angle: rand(0, Math.PI * 2), speed: rand(1, 4), dist: rand(5, 50), r: rand(1, 3)
+          });
+        }
       }
     };
 
@@ -581,10 +600,14 @@ export function Starfield({ visualState }: StarfieldProps) {
       ctx.clearRect(0, 0, W, H);
 
       // 1. Aurora (behind everything)
-      for (const a of auroras) drawAurora(a, t, state);
+      if (!isMobile) {
+        for (const a of auroras) drawAurora(a, t, state);
+      }
 
       // 2. Solar system (behind stars, big and bold)
-      drawSolarSystem(t, state);
+      if (!isMobile) {
+        drawSolarSystem(t, state);
+      }
 
       // 2. Stars
       let i = 0;
@@ -618,67 +641,75 @@ export function Starfield({ visualState }: StarfieldProps) {
       }
 
       // 3. Asteroids
-      let targetAsteroids = Math.floor(10 * state.particleDensity);
-      for (let i = asteroids.length - 1; i >= 0; i--) {
-        const a = asteroids[i];
-        a.x += a.baseVx * state.baseSpeedMultiplier;
-        a.y += a.baseVy * state.baseSpeedMultiplier + Math.sin(t * 0.0008 + i) * 0.08;
-        a.rot += a.rs * state.baseSpeedMultiplier;
-        drawAsteroid(a, state);
-        if (a.x < -80 || a.x > W + 80 || a.y < -80 || a.y > H + 80) {
-          asteroids[i] = makeAsteroid(W, H);
+      if (!isMobile) {
+        let targetAsteroids = Math.floor(10 * state.particleDensity);
+        for (let i = asteroids.length - 1; i >= 0; i--) {
+          const a = asteroids[i];
+          a.x += a.baseVx * state.baseSpeedMultiplier;
+          a.y += a.baseVy * state.baseSpeedMultiplier + Math.sin(t * 0.0008 + i) * 0.08;
+          a.rot += a.rs * state.baseSpeedMultiplier;
+          drawAsteroid(a, state);
+          if (a.x < -80 || a.x > W + 80 || a.y < -80 || a.y > H + 80) {
+            asteroids[i] = makeAsteroid(W, H);
+          }
         }
+        while (asteroids.length < targetAsteroids) asteroids.push(makeAsteroid(W, H));
+        if (asteroids.length > targetAsteroids) asteroids.length = targetAsteroids;
       }
-      while (asteroids.length < targetAsteroids) asteroids.push(makeAsteroid(W, H));
-      if (asteroids.length > targetAsteroids) asteroids.length = targetAsteroids;
 
       // 4. Satellites
-      let targetSatellites = Math.floor(4 * state.particleDensity);
-      for (let i = satellites.length - 1; i >= 0; i--) {
-        const s = satellites[i];
-        s.x += s.baseVx * state.baseSpeedMultiplier;
-        s.y += s.baseVy * state.baseSpeedMultiplier;
-        s.angle += s.rotSpeed * state.baseSpeedMultiplier;
-        drawSatellite(s, t, state);
-        if (s.x < -60 || s.x > W + 60) {
-          satellites[i] = makeSatellite(W, H);
+      if (!isMobile) {
+        let targetSatellites = Math.floor(4 * state.particleDensity);
+        for (let i = satellites.length - 1; i >= 0; i--) {
+          const s = satellites[i];
+          s.x += s.baseVx * state.baseSpeedMultiplier;
+          s.y += s.baseVy * state.baseSpeedMultiplier;
+          s.angle += s.rotSpeed * state.baseSpeedMultiplier;
+          drawSatellite(s, t, state);
+          if (s.x < -60 || s.x > W + 60) {
+            satellites[i] = makeSatellite(W, H);
+          }
         }
+        while (satellites.length < targetSatellites) satellites.push(makeSatellite(W, H));
+        if (satellites.length > targetSatellites) satellites.length = targetSatellites;
       }
-      while (satellites.length < targetSatellites) satellites.push(makeSatellite(W, H));
-      if (satellites.length > targetSatellites) satellites.length = targetSatellites;
 
       // 5. Meteors (shooting stars)
-      const meteorInterval = (4000 + Math.random() * 4000) / (state.meteorFrequency || 0.1);
-      if (t - lastMeteor > meteorInterval) {
-        if (meteors.length < 5) {
-          meteors.push(makeMeteor(W, H));
-          lastMeteor = t;
+      if (!isMobile) {
+        const meteorInterval = (4000 + Math.random() * 4000) / (state.meteorFrequency || 0.1);
+        if (t - lastMeteor > meteorInterval) {
+          if (meteors.length < 5) {
+            meteors.push(makeMeteor(W, H));
+            lastMeteor = t;
+          }
         }
-      }
-      for (let i = meteors.length - 1; i >= 0; i--) {
-        const m = meteors[i];
-        const currentSpeed = m.baseSpeed * state.baseSpeedMultiplier;
-        m.x += Math.cos(m.angle) * currentSpeed;
-        m.y += Math.sin(m.angle) * currentSpeed;
-        m.life += state.baseSpeedMultiplier;
-        drawMeteor(m);
-        if (m.life >= m.max) meteors.splice(i, 1);
+        for (let i = meteors.length - 1; i >= 0; i--) {
+          const m = meteors[i];
+          const currentSpeed = m.baseSpeed * state.baseSpeedMultiplier;
+          m.x += Math.cos(m.angle) * currentSpeed;
+          m.y += Math.sin(m.angle) * currentSpeed;
+          m.life += state.baseSpeedMultiplier;
+          drawMeteor(m);
+          if (m.life >= m.max) meteors.splice(i, 1);
+        }
       }
 
       // 6. Comets
-      const cometInterval = (30000 + Math.random() * 30000) / (state.cometFrequency || 0.1);
-      if (t - lastComet > cometInterval) {
-        if (comets.length < 3) {
-          comets.push(makeComet(W, H));
-          lastComet = t;
+      if (!isMobile) {
+        const cometInterval = (30000 + Math.random() * 30000) / (state.cometFrequency || 0.1);
+        if (t - lastComet > cometInterval) {
+          if (comets.length < 3) {
+            comets.push(makeComet(W, H));
+            lastComet = t;
+          }
         }
-      }
-      for (let i = comets.length - 1; i >= 0; i--) {
-        const co = comets[i];
-        co.x += co.baseVx * state.baseSpeedMultiplier;
-        co.y += co.baseVy * state.baseSpeedMultiplier;
-        drawComet(co);
-        if (co.x > W + co.tailLen + 50) comets.splice(i, 1);
+        for (let i = comets.length - 1; i >= 0; i--) {
+          const co = comets[i];
+          co.x += co.baseVx * state.baseSpeedMultiplier;
+          co.y += co.baseVy * state.baseSpeedMultiplier;
+          drawComet(co);
+          if (co.x > W + co.tailLen + 50) comets.splice(i, 1);
+        }
       }
 
       raf = requestAnimationFrame(draw);
@@ -687,7 +718,11 @@ export function Starfield({ visualState }: StarfieldProps) {
     resize();
     raf = requestAnimationFrame(draw);
     window.addEventListener('resize', resize);
-    return () => { cancelAnimationFrame(raf); window.removeEventListener('resize', resize); };
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener('resize', resize);
+      mobileQuery.removeEventListener('change', onMobileChange);
+    };
   }, []);
 
   return (
