@@ -133,7 +133,7 @@ echo -e "${BLUE}[3/5] Syncing PlatformConfig in database...${NC}"
 BACKEND_CONTAINER=$(docker compose -f "$COMPOSE_FILE" ps -q backend 2>/dev/null || true)
 if [ -z "$BACKEND_CONTAINER" ]; then
     echo -e "${YELLOW}  ⚠ Backend container not running. Starting stack...${NC}"
-    docker compose -f "$COMPOSE_FILE" up -d db pgcat redis rabbitmq socket-proxy 2>/dev/null || true
+    docker compose -f "$COMPOSE_FILE" up -d db $(grep -q "^  *pgcat:" "${COMPOSE_FILE:-docker-compose.prod.yml}" 2>/dev/null && echo "pgcat") redis rabbitmq socket-proxy 2>/dev/null || true
     sleep 10
     docker compose -f "$COMPOSE_FILE" up -d backend 2>/dev/null || true
     sleep 15

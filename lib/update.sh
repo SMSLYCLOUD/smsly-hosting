@@ -401,14 +401,14 @@ fi
                 sync_agent_lite_rabbitmq_password
             elif [ "$MODE_NODE" = "true" ]; then
                 stop_node_excluded_services
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db pgcat redis rabbitmq socket-proxy registry route-fallback traefik
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db $(get_pgcat_if_exists) redis rabbitmq socket-proxy registry route-fallback traefik
             else
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db pgcat redis socket-proxy
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db $(get_pgcat_if_exists) redis socket-proxy
             fi
             # Stop backend, celery & pgcat so their DB connections don't block
             # migrations (ALTER TABLE requires exclusive locks).
             echo -e "${BLUE}  → Stopping backend, celery & pgcat for migrations...${NC}"
-            docker compose -f "$COMPOSE_FILE" stop backend celery celery-deploy celery-fast celery-beat pgcat 2>/dev/null || true
+            docker compose -f "$COMPOSE_FILE" stop backend celery celery-deploy celery-fast celery-beat $(get_pgcat_if_exists) 2>/dev/null || true
 
             echo -e "${BLUE}  → Running migrations...${NC}"
             run_backend_migrations --root || {
@@ -418,7 +418,7 @@ fi
             }
 
             echo -e "${BLUE}  → Starting backend & pgcat...${NC}"
-            docker compose -f "$COMPOSE_FILE" up -d --no-deps pgcat 2>/dev/null || true
+            if [ -n "$(get_pgcat_if_exists)" ]; then docker compose -f "$COMPOSE_FILE" up -d --no-deps pgcat 2>/dev/null || true; fi
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate backend
             else
@@ -485,7 +485,7 @@ fi
             # 2. Stop backend, celery & pgcat so their DB connections don't block
             #    migrations (ALTER TABLE requires exclusive locks).
             echo -e "${BLUE}  → Stopping backend, celery & pgcat for migrations...${NC}"
-            docker compose -f "$COMPOSE_FILE" stop backend celery celery-deploy celery-fast celery-beat pgcat 2>/dev/null || true
+            docker compose -f "$COMPOSE_FILE" stop backend celery celery-deploy celery-fast celery-beat $(get_pgcat_if_exists) 2>/dev/null || true
 
             # 3. Run migrations
             echo -e "${BLUE}  → Running migrations...${NC}"
@@ -497,7 +497,7 @@ fi
 
             # 4. Start pgcat & backend (picks up Python code changes from mounted volume)
             echo -e "${BLUE}  → Starting pgcat & backend...${NC}"
-            docker compose -f "$COMPOSE_FILE" up -d --no-deps pgcat 2>/dev/null || true
+            if [ -n "$(get_pgcat_if_exists)" ]; then docker compose -f "$COMPOSE_FILE" up -d --no-deps pgcat 2>/dev/null || true; fi
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 docker compose -f "$COMPOSE_FILE" up -d --remove-orphans redis rabbitmq socket-proxy
                 sync_agent_lite_rabbitmq_password
@@ -581,7 +581,7 @@ fi
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --remove-orphans $CORE_SERVICES
             elif [ "$MODE_NODE" = "true" ]; then
                 stop_node_excluded_services
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db pgcat redis rabbitmq socket-proxy registry route-fallback traefik
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db $(get_pgcat_if_exists) redis rabbitmq socket-proxy registry route-fallback traefik
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps --remove-orphans $CORE_SERVICES
             else
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps --remove-orphans $CORE_SERVICES
@@ -601,7 +601,7 @@ fi
             # 8. Stop backend, celery & pgcat so their DB connections don't block
             #    migrations (ALTER TABLE requires exclusive locks).
             echo -e "${BLUE}  → Stopping backend, celery & pgcat for migrations...${NC}"
-            docker compose -f "$COMPOSE_FILE" stop backend celery celery-deploy celery-fast celery-beat pgcat 2>/dev/null || true
+            docker compose -f "$COMPOSE_FILE" stop backend celery celery-deploy celery-fast celery-beat $(get_pgcat_if_exists) 2>/dev/null || true
 
             # 9. Run migrations
             echo -e "${BLUE}  → Running migrations...${NC}"
@@ -612,9 +612,9 @@ fi
                 sync_agent_lite_rabbitmq_password
             elif [ "$MODE_NODE" = "true" ]; then
                 stop_node_excluded_services
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db pgcat redis rabbitmq socket-proxy registry route-fallback traefik
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db $(get_pgcat_if_exists) redis rabbitmq socket-proxy registry route-fallback traefik
             else
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db pgcat redis socket-proxy
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db $(get_pgcat_if_exists) redis socket-proxy
             fi
             run_backend_migrations --root || {
                 echo -e "${YELLOW}  ⚠ Migration failed — retrying in 15s...${NC}"
@@ -624,7 +624,7 @@ fi
 
             # 10. Start pgcat & backend
             echo -e "${BLUE}  → Starting pgcat & backend...${NC}"
-            docker compose -f "$COMPOSE_FILE" up -d --no-deps pgcat 2>/dev/null || true
+            if [ -n "$(get_pgcat_if_exists)" ]; then docker compose -f "$COMPOSE_FILE" up -d --no-deps pgcat 2>/dev/null || true; fi
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate backend
             else

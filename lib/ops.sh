@@ -275,9 +275,9 @@ print('${REGISTRY_USER:-smsly-registry}:' + bcrypt.hashpw(pw.encode(), bcrypt.ge
         wait_for_container_ready "smsly-hosting-redis-1" 120 || true
         sync_agent_lite_rabbitmq_password
     else
-        docker compose -f "$COMPOSE_FILE" up -d db pgcat redis rabbitmq socket-proxy registry || true
+        docker compose -f "$COMPOSE_FILE" up -d db $(get_pgcat_if_exists) redis rabbitmq socket-proxy registry || true
         wait_for_container_ready "smsly-hosting-db-1" 120 || true
-        wait_for_container_ready "smsly-hosting-pgcat-1" 120 || true
+        if [ -n "$(get_pgcat_if_exists)" ]; then wait_for_container_ready "smsly-hosting-pgcat-1" 120 || true; fi
         wait_for_container_ready "smsly-hosting-redis-1" 120 || true
     fi
 

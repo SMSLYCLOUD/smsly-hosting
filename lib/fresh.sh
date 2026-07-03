@@ -1156,7 +1156,7 @@ else
 fi
 
 # ─── Ensure PgCat is fresh and connected ──────────────────────────────────────
-if docker compose -f "$COMPOSE_FILE" ps pgcat >/dev/null 2>&1; then
+if [ -f "${COMPOSE_FILE:-docker-compose.prod.yml}" ] && grep -q "^  *pgcat:" "${COMPOSE_FILE:-docker-compose.prod.yml}" 2>/dev/null && docker compose -f "$COMPOSE_FILE" ps pgcat >/dev/null 2>&1; then
     echo -e "${BLUE}  → Restarting PgCat balancer...${NC}"
     docker compose -f "$COMPOSE_FILE" restart pgcat >/dev/null 2>&1
     sleep 5
@@ -1173,7 +1173,7 @@ sleep 5
     # a SELECT — holds a shared lock that blocks the ACCESS EXCLUSIVE
     # lock an ALTER TABLE needs.  Celery, backend health checks, and
     # PgCat connection pools all compete with the migration.
-    MIGRATION_STOPPED_SVCS="backend celery celery-deploy celery-fast celery-beat pgcat"
+    MIGRATION_STOPPED_SVCS="backend celery celery-deploy celery-fast celery-beat $(grep -q "^  *pgcat:" "${COMPOSE_FILE:-docker-compose.prod.yml}" 2>/dev/null && echo "pgcat")"
     echo -e "${BLUE}    Stopping ${MIGRATION_STOPPED_SVCS} to prevent lock contention...${NC}"
     docker compose -f "$COMPOSE_FILE" stop ${MIGRATION_STOPPED_SVCS} >/dev/null 2>&1 || true
     sleep 3

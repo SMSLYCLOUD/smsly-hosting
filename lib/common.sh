@@ -203,7 +203,7 @@ run_backend_migrations() {
     # After fixing permissions, reload pgcat so newly created/fixed node agent
     # users are picked up into the pool config. Critical for agent-lite nodes
     # that connect through pgcat and would otherwise get "No pool configured".
-    if [ "$MODE_AGENT_LITE" != "true" ] && docker compose -f "$COMPOSE_FILE" ps pgcat 2>/dev/null | grep -q "Up"; then
+    if [ "$MODE_AGENT_LITE" != "true" ] && [ -n "$(get_pgcat_if_exists)" ] && docker compose -f "$COMPOSE_FILE" ps pgcat 2>/dev/null | grep -q "Up"; then
         echo -e "${BLUE}  -> Reloading PgCat to pick up node agent pools...${NC}"
         docker compose -f "$COMPOSE_FILE" restart pgcat >/dev/null 2>&1
         sleep 5
@@ -447,6 +447,13 @@ ensure_update_networks() {
     docker network inspect smsly-net >/dev/null 2>&1 || docker network create smsly-net >/dev/null 2>&1 || true
     docker network inspect smsly-proxy >/dev/null 2>&1 || docker network create smsly-proxy >/dev/null 2>&1 || true
     docker network inspect socket-proxy >/dev/null 2>&1 || docker network create --driver bridge --internal socket-proxy >/dev/null 2>&1 || true
+}
+
+get_pgcat_if_exists() {
+    local compose_target="${COMPOSE_FILE:-docker-compose.prod.yml}"
+    if [ -f "$compose_target" ] && grep -q "^  *pgcat:" "$compose_target" 2>/dev/null; then
+        echo "pgcat"
+    fi
 }
 
 compose_stack_services() {

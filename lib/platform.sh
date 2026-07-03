@@ -570,8 +570,13 @@ ensure_env_runtime_defaults() {
     fi
 
     if [ -n "$postgres_password" ]; then
-        # Route through PgCat for connection pooling
-        expected_database_url="postgresql://smsly_admin:${postgres_password}@pgcat:5432/smsly_hosting"
+        # Route through PgCat for connection pooling (if pgcat service exists in COMPOSE_FILE)
+        local compose_target="${COMPOSE_FILE:-docker-compose.prod.yml}"
+        if [ -f "$compose_target" ] && grep -q "^  *pgcat:" "$compose_target" 2>/dev/null; then
+            expected_database_url="postgresql://smsly_admin:${postgres_password}@pgcat:5432/smsly_hosting"
+        else
+            expected_database_url="postgresql://smsly_admin:${postgres_password}@db:5432/smsly_hosting"
+        fi
         current_database_url="$(env_get_value "$env_file" "DATABASE_URL")"
 
         # [EDGE NODE] Override for Lite Agent mode
@@ -629,8 +634,8 @@ ensure_env_runtime_defaults() {
             env_set_value "$env_file" "MODE" "$node_env_mode"
         fi
 
-        # Migrate legacy @db:5432 URLs to @pgcat:5432
-        if [[ "$current_database_url" =~ @db:5432 ]] && [ "$MODE_AGENT_LITE" != "true" ]; then
+        # Migrate legacy @db:5432 URLs to @pgcat:5432 (only if pgcat is in COMPOSE_FILE)
+        if [[ "$current_database_url" =~ @db:5432 ]] && [ "$MODE_AGENT_LITE" != "true" ] && [ -f "$compose_target" ] && grep -q "^  *pgcat:" "$compose_target" 2>/dev/null; then
             echo -e "${BLUE}  -> Migrating DATABASE_URL from db to pgcat${NC}"
             local migrated_url="${current_database_url/@db:5432/@pgcat:5432}"
             env_set_value "$env_file" "DATABASE_URL" "$migrated_url"
@@ -638,13 +643,19 @@ ensure_env_runtime_defaults() {
             echo -e "${GREEN}  OK DATABASE_URL migrated to pgcat${NC}"
         fi
 
-        # Migrate legacy @pgbouncer:5432 URLs to @pgcat:5432
+        # Migrate legacy @pgbouncer:5432 URLs to @pgcat:5432 (or @db:5432 if no pgcat)
         if [[ "$current_database_url" =~ @pgbouncer:5432 ]]; then
-            echo -e "${BLUE}  -> Migrating DATABASE_URL from pgbouncer to pgcat${NC}"
-            local migrated_url="${current_database_url/@pgbouncer:5432/@pgcat:5432}"
+            local migrated_url
+            if [ -f "$compose_target" ] && grep -q "^  *pgcat:" "$compose_target" 2>/dev/null; then
+                echo -e "${BLUE}  -> Migrating DATABASE_URL from pgbouncer to pgcat${NC}"
+                migrated_url="${current_database_url/@pgbouncer:5432/@pgcat:5432}"
+            else
+                echo -e "${BLUE}  -> Migrating DATABASE_URL from pgbouncer to db${NC}"
+                migrated_url="${current_database_url/@pgbouncer:5432/@db:5432}"
+            fi
             env_set_value "$env_file" "DATABASE_URL" "$migrated_url"
             current_database_url="$migrated_url"
-            echo -e "${GREEN}  OK DATABASE_URL migrated to pgcat${NC}"
+            echo -e "${GREEN}  OK DATABASE_URL migrated${NC}"
         fi
 
         # NOTE: Removed no-op pgcat→pgcat migration block (was a no-op that
