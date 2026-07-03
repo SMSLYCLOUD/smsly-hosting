@@ -2010,7 +2010,20 @@ def _build_uploaded_source(deployment, service) -> str:
 
         env_map = {env.key: env.value for env in service.env_vars.all()}
         dockerfile_path = os.path.join(source_dir, "Dockerfile")
-        if service.buildpack == "DOCKER" and os.path.isfile(dockerfile_path):
+        has_dockerfile = os.path.isfile(dockerfile_path)
+        
+        if service.buildpack == 'DOCKER':
+            use_docker = True
+        elif service.buildpack == 'NIXPACKS':
+            use_docker = False
+        elif service.buildpack == 'STATIC':
+            use_docker = False
+        else:
+            use_docker = has_dockerfile
+
+        if use_docker:
+            if not has_dockerfile:
+                raise ValueError("Build strategy is docker but no Dockerfile was found.")
             append_log(deployment, "Building uploaded source with Dockerfile...\n")
             try:
                 subprocess.run(
@@ -2024,7 +2037,13 @@ def _build_uploaded_source(deployment, service) -> str:
                 append_log(deployment, f"{exc.stdout or ''}\n{exc.stderr or ''}\n")
                 raise
         else:
-            append_log(deployment, "Building uploaded source with Nixpacks...\n")
+            if service.buildpack == 'STATIC':
+                append_log(deployment, "Building uploaded source for Static Site (via Nixpacks)...\n")
+            elif service.buildpack == 'NIXPACKS':
+                append_log(deployment, "Building uploaded source with Nixpacks...\n")
+            else:
+                append_log(deployment, "Building uploaded source with Nixpacks fallback...\n")
+            
             NixpacksBuilder.build_image(
                 source_dir=source_dir,
                 image_name=image_name,

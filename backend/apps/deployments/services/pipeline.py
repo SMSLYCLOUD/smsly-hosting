@@ -1674,24 +1674,32 @@ class PipelineManager:
 
             # Dockerfile detection
             dockerfile_path = self._find_dockerfile(context_dir)
-            use_docker = bool(dockerfile_path) and self.service.buildpack != 'STATIC'
+            
+            if self.service.buildpack == 'DOCKER':
+                use_docker = True
+            elif self.service.buildpack == 'NIXPACKS':
+                use_docker = False
+            elif self.service.buildpack == 'STATIC':
+                use_docker = False
+            else:
+                # AUTO or other
+                use_docker = bool(dockerfile_path)
 
             if use_docker:
-                if self.service.buildpack == 'NIXPACKS':
-                    append_log(
-                        self.deployment,
-                        "Build strategy: docker (Dockerfile detected, overriding nixpacks)\n",
-                    )
-                else:
-                    append_log(self.deployment, "Build strategy: docker\n")
-                self._build_with_docker(context_dir, dockerfile_path)
-            else:
-                if self.service.buildpack == 'DOCKER':
+                if not dockerfile_path:
                     raise BuildError(
                         "Build strategy is docker but no Dockerfile was found. "
                         "Nixpacks fallback is disabled for Docker-selected services."
                     )
-                append_log(self.deployment, "Build strategy: nixpacks fallback\n")
+                append_log(self.deployment, "Build strategy: docker\n")
+                self._build_with_docker(context_dir, dockerfile_path)
+            else:
+                if self.service.buildpack == 'NIXPACKS':
+                    append_log(self.deployment, "Build strategy: nixpacks\n")
+                elif self.service.buildpack == 'STATIC':
+                    append_log(self.deployment, "Build strategy: static (via nixpacks)\n")
+                else:
+                    append_log(self.deployment, "Build strategy: nixpacks fallback\n")
                 self._build_with_nixpacks(context_dir)
 
             update_stage(
