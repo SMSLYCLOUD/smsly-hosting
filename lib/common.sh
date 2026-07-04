@@ -883,8 +883,8 @@ restart_edge_stack() {
     if [ "$MODE_AGENT_LITE" != "true" ]; then
         non_traefik_services="socket-proxy route-fallback"
     fi
-    docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps $non_traefik_services >/dev/null 2>&1 || \
-        docker compose -f "$COMPOSE_FILE" up -d --force-recreate $non_traefik_services >/dev/null 2>&1 || true
+    docker compose -f "$COMPOSE_FILE" up -d --no-deps $non_traefik_services >/dev/null 2>&1 || \
+        docker compose -f "$COMPOSE_FILE" up -d $non_traefik_services >/dev/null 2>&1 || true
 
     # Force-recreate ONLY Traefik (not socket-proxy) to trigger full container
     # re-discovery. Traefik v3.x removed pollInterval; a fresh start against a

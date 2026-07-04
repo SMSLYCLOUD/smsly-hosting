@@ -226,7 +226,7 @@ urlpatterns = [
     # Device trust — hardware fingerprint-based device enrollment
     path('devices/register/', register_device, name='device-register'),
     path('devices/', list_devices, name='device-list'),
-    path('devices/<uuid:device_id>/revoke/', revoke_device, name='device-revoke'),
+    path('devices/<int:device_id>/revoke/', revoke_device, name='device-revoke'),
     # Recovery phrase — 12-word BIP39 last-resort account recovery
     path('auth/recovery/generate/', recovery_phrase_generate, name='recovery-generate'),
     path('auth/recovery/verify/', recovery_phrase_verify, name='recovery-verify'),

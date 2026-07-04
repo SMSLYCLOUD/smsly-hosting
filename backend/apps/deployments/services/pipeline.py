@@ -167,6 +167,7 @@ class PipelineManager:
                 self._auto_provision_addons()
             self._build_image()
             self._push_image()
+            self._sign_image()
             log_exhaustive_network_and_routing_diagnostics(self.deployment, self.service)
             if not self.image_name:
                 raise PipelineError("Pipeline completed without producing an image")
@@ -242,6 +243,7 @@ class PipelineManager:
 
             self._build_image()
             self._push_image()
+            self._sign_image()
             log_exhaustive_network_and_routing_diagnostics(self.deployment, self.service)
             if not self.image_name:
                 raise PipelineError("Build phase completed without producing an image")
@@ -2945,6 +2947,76 @@ class PipelineManager:
         except Exception as e:
             update_stage(self.deployment, 'Push', 'failed')
             raise SystemError(f"Registry push failed: {e}") from e
+
+    def _sign_image(self):
+        """Sign the deployed image with Cosign (keyless Sigstore or private key).
+
+        Runs after a successful push. Non-fatal if cosign is not installed or
+        signing fails — the image is still deployed but a warning is logged.
+        """
+        if not self.image_name:
+            return
+
+        from apps.deployments.utils import find_binary
+
+        cosign_bin = find_binary("cosign")
+        if not cosign_bin:
+            append_log(
+                self.deployment,
+                "Cosign not installed — skipping image signing. "
+                "Install Cosign for cryptographic image attestation.\n",
+            )
+            return
+
+        update_stage(self.deployment, 'Sign', 'running')
+        self._check_cancellation('Sign')
+
+        try:
+            key_path = os.environ.get("COSIGN_PRIVATE_KEY_PATH") or os.environ.get("COSIGN_KEY")
+            if key_path and os.path.exists(key_path):
+                cmd = [cosign_bin, "sign", "--key", key_path, "--tlog-upload=false", self.image_name]
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                if result.returncode == 0:
+                    append_log(self.deployment, f"Image signed with Cosign (private key): {self.image_name}\n")
+                else:
+                    append_log(
+                        self.deployment,
+                        f"Cosign key signing failed (exit {result.returncode}): "
+                        f"{(result.stderr or result.stdout or '').strip()[:200]}\n"
+                    )
+            else:
+                cmd = [cosign_bin, "sign", "--yes", self.image_name]
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                if result.returncode == 0:
+                    append_log(self.deployment, f"Image signed with Cosign (keyless/Sigstore): {self.image_name}\n")
+                else:
+                    append_log(
+                        self.deployment,
+                        f"Cosign keyless signing failed (exit {result.returncode}): "
+                        f"{(result.stderr or result.stdout or '').strip()[:200]}\n"
+                    )
+
+            verify_cmd = [cosign_bin, "verify",
+                          "--certificate-oidc-issuer", "https://token.actions.githubusercontent.com",
+                          self.image_name]
+            vresult = subprocess.run(verify_cmd, capture_output=True, text=True, timeout=30)
+            if vresult.returncode == 0:
+                append_log(self.deployment, "Cosign signature verification PASSED.\n")
+            else:
+                append_log(
+                    self.deployment,
+                    f"Cosign verification returned code {vresult.returncode} "
+                    f"(non-fatal for local-only images).\n",
+                )
+
+            update_stage(self.deployment, 'Sign', 'success')
+
+        except subprocess.TimeoutExpired:
+            append_log(self.deployment, "Cosign signing timed out (60s). Skipping.\n")
+            update_stage(self.deployment, 'Sign', 'skipped')
+        except Exception as e:
+            append_log(self.deployment, f"Cosign signing error (non-fatal): {e!s}\n")
+            update_stage(self.deployment, 'Sign', 'skipped')
 
     def _cleanup(self):
         """Remove temp artifacts."""
