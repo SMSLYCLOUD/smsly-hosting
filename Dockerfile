@@ -7,7 +7,7 @@
 #   INSTALL_BUILD_DEPS  Install Docker CLI + buildx + nixpacks (default: true).
 #                       Required for addon provisioning and runtime container builds.
 
-FROM node:20-bookworm-slim AS frontend_builder
+FROM node:26-bookworm-slim AS frontend_builder
 WORKDIR /frontend
 
 ARG NEXT_PUBLIC_API_URL=/api/v1
