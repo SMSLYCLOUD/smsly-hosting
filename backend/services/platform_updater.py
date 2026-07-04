@@ -195,6 +195,13 @@ def perform_update(update_record) -> bool:
     from apps.deployments.models_updates import PlatformUpdate
     from django.db import transaction
 
+    if update_record.status != 'PENDING':
+        logger.warning(
+            "Refusing perform_update on record %s (status=%s): not PENDING. Preventing restart loop.",
+            update_record.id, update_record.status,
+        )
+        return False
+
     with transaction.atomic():
         active_updates = PlatformUpdate.objects.select_for_update().filter(
             status__in=['PENDING', 'PULLING', 'BACKING_UP', 'MIGRATING', 'RESTARTING', 'HEALTH_CHECK']
@@ -272,6 +279,13 @@ def perform_update(update_record) -> bool:
 def _rollback(update_record) -> bool:
     """Roll back to the previous git commit captured in snapshot_data."""
     from apps.core.services.audit_service import AuditService
+
+    if update_record.status in {'ROLLED_BACK', 'FAILED'}:
+        logger.warning(
+            "Refusing _rollback on record %s (status=%s): already in terminal state.",
+            update_record.id, update_record.status,
+        )
+        return False
 
     prev_commit = (update_record.snapshot_data or {}).get('commit', '')
     if not prev_commit:

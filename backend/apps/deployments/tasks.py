@@ -4298,7 +4298,7 @@ def rollback_transfer_task(self, transfer_id):
         cache.delete(lock_key)
 
 
-@shared_task(bind=True, max_retries=0)
+@shared_task(bind=True, max_retries=0, acks_late=False, reject_on_worker_lost=False)
 def platform_update_task(self, update_id: str):
     """Execute platform update in background."""
     from services.platform_updater import perform_update
@@ -4310,10 +4310,17 @@ def platform_update_task(self, update_id: str):
     except PlatformUpdate.DoesNotExist:
         return
 
+    if update.status != 'PENDING':
+        logger.warning(
+            "Platform update %s is already in state %s; skipping re-execution to prevent restart loop.",
+            update_id, update.status,
+        )
+        return
+
     perform_update(update)
 
 
-@shared_task(bind=True, max_retries=0)
+@shared_task(bind=True, max_retries=0, acks_late=False, reject_on_worker_lost=False)
 def platform_rollback_task(self, update_id: str):
     """Execute platform rollback in background (avoids blocking the request thread)."""
     from services.platform_updater import _rollback
@@ -4323,6 +4330,13 @@ def platform_rollback_task(self, update_id: str):
     try:
         update = PlatformUpdate.objects.get(id=update_id)
     except PlatformUpdate.DoesNotExist:
+        return
+
+    if update.status in {'ROLLED_BACK', 'FAILED'}:
+        logger.warning(
+            "Platform rollback %s is already in terminal state %s; skipping re-execution.",
+            update_id, update.status,
+        )
         return
 
     _rollback(update)
