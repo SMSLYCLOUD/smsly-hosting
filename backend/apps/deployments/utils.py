@@ -1089,45 +1089,47 @@ def log_exhaustive_push_diagnostics(deployment, registry_url, image_name):
     """Log container registry push, Trivy CVE scanning, and Cosign image attestation/signing."""
     trivy_bin = find_binary("trivy")
     if trivy_bin:
-        trivy_status = f"Active scan via {trivy_bin} — checking image payload for CVEs..."
+        trivy_status = f"Active scan via {trivy_bin}"
         try:
             res = subprocess.run(
-                [trivy_bin, "image", "--insecure", "--scanners", "vuln", "--severity", "CRITICAL", "--no-progress", "--ignore-unfixed", image_name],
+                [trivy_bin, "image", "--insecure", "--scanners", "vuln", "--severity", "CRITICAL,HIGH", "--no-progress", image_name],
                 capture_output=True, text=True, timeout=120
             )
             if res.returncode == 0:
-                if "CRITICAL: 0" in res.stdout or "Total: 0" in res.stdout or not res.stdout.strip():
-                    trivy_outcome = "0 Critical blockers detected. Security baseline PASSED ✅"
+                if "Total: 0" in res.stdout or not res.stdout.strip():
+                    trivy_outcome = "0 Critical/High CVEs detected"
                 else:
-                    trivy_outcome = "Scan completed. No blocking critical CVEs found ✅"
+                    trivy_outcome = "Scan completed — review output for details"
             else:
                 err_msg = (res.stderr or res.stdout or '').strip().replace('\n', ' ')
-                trivy_outcome = f"Scan returned code {res.returncode}: {err_msg[:120]} (Baseline verified) ✅"
+                trivy_outcome = f"Scan returned code {res.returncode}: {err_msg[:120]}"
         except Exception as e:
-            trivy_outcome = f"Scan timeout/error ({e}). Security baseline verified ✅"
+            trivy_outcome = f"Scan timeout/error: {e}"
     else:
-        trivy_status = "Trivy CLI not detected in systemd/worker PATH — skipping active image CVE scan"
-        trivy_outcome = "Baseline security pass (Ensure Trivy is in PATH for active CVE blocking) ✅"
+        trivy_status = "Trivy CLI not found in PATH"
+        trivy_outcome = "SKIPPED — Trivy not installed"
 
     cosign_bin = find_binary("cosign")
     if cosign_bin:
-        cosign_status = f"Sigstore / Cosign detected ({cosign_bin}) — image attestation enabled"
+        cosign_status = f"Cosign detected ({cosign_bin})"
         try:
             key_path = os.environ.get("COSIGN_PRIVATE_KEY_PATH") or os.environ.get("COSIGN_KEY")
             if key_path and os.path.exists(key_path):
-                res = subprocess.run([cosign_bin, "sign", "--key", key_path, "--tlog-upload=false", image_name], capture_output=True, text=True, timeout=30)
-                if res.returncode == 0:
-                    cosign_outcome = "Image digest cryptographically signed with local private key ✅"
-                else:
-                    cosign_outcome = f"Key signing returned code {res.returncode}. Provenance attestation logged ℹ️"
+                cosign_status += " — private key mode"
             else:
-                res = subprocess.run([cosign_bin, "triangulate", image_name], capture_output=True, text=True, timeout=10)
-                cosign_outcome = "Local container digest verified; keyless attestation ready (OIDC/Key optional) ✅"
+                cosign_status += " — keyless/Sigstore mode"
+            res = subprocess.run([cosign_bin, "verify", "--certificate-oidc-issuer",
+                                  "https://token.actions.githubusercontent.com", image_name],
+                                 capture_output=True, text=True, timeout=15)
+            if res.returncode == 0:
+                cosign_outcome = "Signature verification PASSED"
+            else:
+                cosign_outcome = f"Verification returned code {res.returncode} (image may not be signed yet)"
         except Exception as e:
-            cosign_outcome = f"Attestation check completed ({e}). Provenance verified ✅"
+            cosign_outcome = f"Verification check failed: {e}"
     else:
-        cosign_status = "Cosign CLI not detected in systemd/worker PATH"
-        cosign_outcome = "Keyless image attestation skipped (Install Cosign for cryptographic image signing) ℹ️"
+        cosign_status = "Cosign CLI not found in PATH"
+        cosign_outcome = "SKIPPED — Cosign not installed"
 
 
     log_lines = [

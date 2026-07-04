@@ -14,6 +14,16 @@ from .models_core import TrustedDevice
 logger = logging.getLogger(__name__)
 
 
+def _device_trust_enforced():
+    """Check if device trust enforcement is enabled in PlatformConfig."""
+    try:
+        from .models_core import PlatformConfig
+        config = PlatformConfig.load()
+        return getattr(config, 'enforce_device_trust', False)
+    except Exception:
+        return False
+
+
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
 def register_device(request):
@@ -26,15 +36,7 @@ def register_device(request):
 
     POST body:
       {
-        "fingerprint": {
-          "canvas": "sha256hash...",
-          "platform": "Win32",
-          "cpu_cores": 8,
-          "screen": "1920x1080",
-          "timezone": -60,
-          "languages": ["en-US"],
-          "fonts": ["Arial", "Helvetica", ...]
-        },
+        "fingerprint": { ... },
         "label": "Work Laptop"  // optional
       }
     """
@@ -45,11 +47,9 @@ def register_device(request):
         return Response({'error': 'Device fingerprint is required'},
                         status=status.HTTP_400_BAD_REQUEST)
 
-    # Compute a stable hash from the fingerprint components
     raw = json.dumps(fingerprint, sort_keys=True, separators=(',', ':'))
     fingerprint_hash = hashlib.sha256(raw.encode()).hexdigest()
 
-    # Check if this exact fingerprint was already enrolled
     existing = TrustedDevice.objects.filter(
         user=request.user,
         fingerprint_hash=fingerprint_hash,
@@ -60,33 +60,46 @@ def register_device(request):
         existing.label = label or existing.label
         existing.ip_address = request.META.get('REMOTE_ADDR', '')
         existing.user_agent = request.META.get('HTTP_USER_AGENT', '')[:1000]
-        existing.save(update_fields=['last_seen_at', 'label', 'ip_address', 'user_agent'])
+        existing.fingerprint_data = fingerprint
+        existing.save(update_fields=[
+            'last_seen_at', 'label', 'ip_address', 'user_agent', 'fingerprint_data',
+        ])
         return Response({
             'device_token': existing.device_token,
             'is_new': False,
             'message': 'Device already trusted',
         })
 
-    # Generate a cryptographically random device token
     device_token = secrets.token_urlsafe(48)
 
     TrustedDevice.objects.create(
         user=request.user,
         device_token=device_token,
         fingerprint_hash=fingerprint_hash,
+        fingerprint_data=fingerprint,
         label=label,
         ip_address=request.META.get('REMOTE_ADDR', ''),
         user_agent=request.META.get('HTTP_USER_AGENT', '')[:1000],
     )
 
+    enforced = _device_trust_enforced()
+    if enforced:
+        message = (
+            'Device registered successfully. This device is now trusted. '
+            'Include the device_token as X-Device-Token header on subsequent requests.'
+        )
+    else:
+        message = (
+            'Device registered. Note: device trust is currently in Beta and is NOT '
+            'enforced. Enable "Enforce Device Trust" in Platform Settings to require '
+            'device registration for all API access.'
+        )
+
     return Response({
         'device_token': device_token,
         'is_new': True,
-        'message': (
-            'Device registered. Note: device trust is OPTIONAL — it is NOT '
-            'enforced by the platform. It only helps you recognize your own '
-            'devices. No access restrictions are applied based on this fingerprint.'
-        ),
+        'enforced': enforced,
+        'message': message,
     }, status=status.HTTP_201_CREATED)
 
 
@@ -98,10 +111,12 @@ def list_devices(request):
     return Response({
         'devices': [
             {
-                'id': str(d.id),
+                'id': d.id,
                 'label': d.label,
                 'fingerprint_hash': d.fingerprint_hash[:16] + '...',
                 'ip_address': d.ip_address,
+                'user_agent': d.user_agent[:100],
+                'trust_score': d.trust_score,
                 'last_seen_at': d.last_seen_at.isoformat() if d.last_seen_at else None,
                 'created_at': d.created_at.isoformat(),
             }

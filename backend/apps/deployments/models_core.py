@@ -993,6 +993,12 @@ class PlatformConfig(models.Model):
         max_length=16, default='CRITICAL',
         help_text="Minimum severity that blocks the build: LOW, MEDIUM, HIGH, CRITICAL")
 
+    # ── Device Trust (Beta) ────────────────────────────────────────────
+    enforce_device_trust = models.BooleanField(
+        default=False,
+        help_text="[Beta] When enabled, unrecognized devices must register before accessing the platform. "
+                  "Requires browser fingerprint collection on the frontend.")
+
     # ── Billing ──────────────────────────────────────────────────────────
     billing_currency = models.CharField(
         max_length=10, blank=True, default='USD',

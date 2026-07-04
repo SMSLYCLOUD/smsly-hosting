@@ -188,6 +188,7 @@ class BuildManager:
         Run Trivy vulnerability scan on the Docker image.
         Falls back to skip if Trivy is not installed.
         Respects settings.TRIVY_ENABLED and settings.TRIVY_FAIL_ON_SEVERITY.
+        Raises BuildError when vulnerabilities at or above the threshold are found.
         """
         if not getattr(settings, 'TRIVY_ENABLED', True):
             self._log("Trivy scanning is disabled (TRIVY_ENABLED=false). Skipping.")
@@ -222,7 +223,7 @@ class BuildManager:
             return
 
         try:
-            # Run Trivy scan with JSON output
+            self._log(f"Running Trivy security scan (severity >= {fail_on})...")
             result = subprocess.run(
                 [
                     trivy_bin, "image",
@@ -233,7 +234,7 @@ class BuildManager:
                 ],
                 capture_output=True,
                 text=True,
-                timeout=600  # 10 minute timeout
+                timeout=600
             )
 
             if result.returncode == 0 or result.stdout:
@@ -242,33 +243,40 @@ class BuildManager:
                     scan_results = json.loads(result.stdout)
                     vulns = {"critical": 0, "high": 0, "medium": 0, "low": 0}
 
-                    # Parse vulnerability counts from Trivy JSON output
                     for result_item in scan_results.get("Results", []):
                         for vuln in result_item.get("Vulnerabilities", []):
                             severity = vuln.get("Severity", "").lower()
                             if severity in vulns:
                                 vulns[severity] += 1
 
-                    # Store full report for detailed view
                     self.deployment.vulnerability_report = {
                         "summary": vulns,
                         "scan_time": time.strftime("%Y-%m-%d %H:%M:%S"),
-                        "image": image_tag
+                        "image": image_tag,
+                        "fail_on": fail_on,
+                        "passed": False,
                     }
                     self.deployment.save(
                         update_fields=['vulnerability_report'])
 
-                    # Log summary
                     self._log(
-                        f"Scan complete: {vulns['critical']} critical, {vulns['high']} high, {vulns['medium']} medium, {vulns['low']} low")
+                        f"Trivy scan: {vulns['critical']} critical, {vulns['high']} high, "
+                        f"{vulns['medium']} medium, {vulns['low']} low")
 
                     blocking_severities = [s.lower() for s in severities[fail_idx:]]
                     fail_count = sum(vulns.get(s, 0) for s in blocking_severities)
                     if fail_count > 0:
-                        self._log(
-                            f"WARNING: Found {fail_count} blocking vulnerabilities at or above {fail_on}!")
-                    else:
-                        self._log(f"Security scan passed (no {fail_on} issues).")
+                        self.deployment.vulnerability_report["passed"] = False
+                        self.deployment.save(update_fields=['vulnerability_report'])
+                        raise BuildError(
+                            f"Security scan FAILED: {fail_count} vulnerabilities at or above "
+                            f"{fail_on} severity. Image: {image_tag}. "
+                            f"Fix the vulnerabilities or adjust TRIVY_FAIL_ON_SEVERITY in Platform Settings."
+                        )
+
+                    self.deployment.vulnerability_report["passed"] = True
+                    self.deployment.save(update_fields=['vulnerability_report'])
+                    self._log(f"Security scan passed (no {fail_on}+ issues found).")
 
                 except json.JSONDecodeError:
                     self._log("Failed to parse Trivy output. Raw output saved.")
@@ -277,8 +285,10 @@ class BuildManager:
                     self.deployment.save(
                         update_fields=['vulnerability_report'])
             else:
-                self._log(f"Trivy scan failed: {result.stderr[:500]}")
+                self._log(f"Trivy scan failed to execute: {result.stderr[:500]}")
 
+        except BuildError:
+            raise
         except subprocess.TimeoutExpired:
             self._log("Security scan timed out after 10 minutes.")
         except Exception as e:

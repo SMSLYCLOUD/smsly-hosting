@@ -694,6 +694,7 @@ MIDDLEWARE = [
     'apps.permissions.middleware.PermissionAuditMiddleware',
     'apps.core.middleware.security.SecurityMiddleware',  # Zero Trust HMAC V2
     'apps.core.middleware.ratelimit.RateLimitMiddleware', # App-layer Rate Limiting
+    'apps.core.middleware.device_trust.DeviceTrustMiddleware', # [Beta] Device trust enforcement
     'apps.licensing.middleware.TierLimitsMiddleware', # License Tier Enforcement
     'allauth.account.middleware.AccountMiddleware',
     'django_prometheus.middleware.PrometheusAfterMiddleware',

@@ -4955,6 +4955,7 @@ class DomainConfigView(GenericAPIView):
             'enable_crowdsec_waf': config.enable_crowdsec_waf,
             'trivy_enabled': config.trivy_enabled,
             'trivy_fail_on_severity': config.trivy_fail_on_severity,
+            'enforce_device_trust': config.enforce_device_trust,
             'updated_at': config.updated_at,
         })
 
@@ -5125,6 +5126,9 @@ class DomainConfigView(GenericAPIView):
                 val = str(data.get('trivy_fail_on_severity') or 'CRITICAL').strip().upper()
                 if val in ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL'):
                     config.trivy_fail_on_severity = val
+            # Device Trust (Beta)
+            if 'enforce_device_trust' in data:
+                config.enforce_device_trust = _parse_bool(data.get('enforce_device_trust'))
 
             # Validate: wildcard requires Cloudflare token
             if config.wildcard_subdomains and config.use_ssl and not config.cloudflare_api_token:
@@ -7076,6 +7080,20 @@ class SecurityStatusView(GenericAPIView):
         # ── no-new-privileges (system-level) ────────────────────────
         no_new_privs = {"enabled": True}  # enforced per-container via security_opt
 
+        # ── Device Trust (Beta) ────────────────────────────────────
+        device_trust = {
+            "enabled": config.enforce_device_trust,
+            "beta": True,
+            "registered_devices": 0,
+        }
+        try:
+            from apps.deployments.models_core import TrustedDevice
+            device_trust["registered_devices"] = TrustedDevice.objects.filter(
+                is_active=True
+            ).count()
+        except Exception:
+            pass
+
         return Response({
             "container_runtime": container_runtime,
             "apparmor": apparmor,
@@ -7088,6 +7106,7 @@ class SecurityStatusView(GenericAPIView):
             "auditd": auditd,
             "docker_socket_proxy": socket_proxy,
             "trivy": trivy,
+            "device_trust": device_trust,
             "kernel_hardening": kernel,
         })
 
