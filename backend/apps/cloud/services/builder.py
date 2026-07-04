@@ -420,10 +420,13 @@ class NixpacksBuilder:
         command = [
             trivy_bin,
             "image",
+            "--insecure",
+            "--scanners", "vuln",
             "--format", "json",
             "--severity", severity_arg,
             image_name
         ]
+
 
         try:
             result = subprocess.run(

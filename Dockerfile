@@ -42,7 +42,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     gcc git libpq-dev postgresql-client \
     supervisor gettext-base gnupg libstdc++6
 
-# --- Optional: Docker CLI + buildx + nixpacks (only for runtime container provisioning) ---
+# --- Optional: Docker CLI + buildx + nixpacks + trivy + cosign (for runtime container provisioning & security scanning) ---
 RUN if [ "$INSTALL_BUILD_DEPS" = "true" ]; then \
       install -m 0755 -d /etc/apt/keyrings \
       && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
@@ -52,7 +52,11 @@ RUN if [ "$INSTALL_BUILD_DEPS" = "true" ]; then \
       && apt-get update \
       && apt-get install -y --no-install-recommends docker-ce-cli docker-buildx-plugin \
       && rm -rf /var/lib/apt/lists/* \
-      && curl -sL https://nixpacks.com/install.sh | bash; \
+      && curl -sL https://nixpacks.com/install.sh | bash \
+      && curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | bash -s -- -b /usr/local/bin \
+      && COSIGN_ARCH=$(dpkg --print-architecture | sed 's/x86_64/amd64/;s/aarch64/arm64/') \
+      && curl -sSL -o /usr/local/bin/cosign "https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-${COSIGN_ARCH}" \
+      && chmod +x /usr/local/bin/cosign; \
     fi
 
 # --- Caddy: reverse proxy for monolithic mode ---

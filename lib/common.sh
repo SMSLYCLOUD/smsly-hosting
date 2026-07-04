@@ -1151,3 +1151,17 @@ sync_agent_lite_rabbitmq_password() {
     echo -e "${RED}  ERROR Lite Agent RabbitMQ password sync failed${NC}"
     return 1
 }
+
+ensure_security_tools() {
+    if ! command -v trivy >/dev/null 2>&1; then
+        echo -e "${BLUE}  → Installing Trivy vulnerability scanner...${NC}"
+        curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin 2>/dev/null || true
+    fi
+    if ! command -v cosign >/dev/null 2>&1; then
+        echo -e "${BLUE}  → Installing Cosign image attestation utility...${NC}"
+        local cosign_arch
+        cosign_arch="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
+        curl -sSL -o /usr/local/bin/cosign "https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-${cosign_arch}" 2>/dev/null && chmod +x /usr/local/bin/cosign || true
+    fi
+}
+

@@ -36,6 +36,8 @@ if [ -n "$UPDATE_MODE" ]; then
     check_hardware
     check_caddy_conflict
     ensure_system_swap
+    ensure_security_tools || true
+
 
     # ─── Security: bootstrap (fire-and-forget) ────────────────────────────
     if [ -f "$INSTALL_DIR/lib/harden.sh" ]; then

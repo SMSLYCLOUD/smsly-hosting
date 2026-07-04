@@ -365,6 +365,10 @@ if command -v docker &> /dev/null; then
     configure_docker_mirror
 fi
 
+# Ensure security tools (Trivy and Cosign) are installed for image scanning
+ensure_security_tools || true
+
+
 # Ensure WireGuard mesh interface exists (master gets 10.100.0.1, nodes get
 # a placeholder that will be updated by WireGuardService after provisioning).
 ensure_wireguard_mesh() {
