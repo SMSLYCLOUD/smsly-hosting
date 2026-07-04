@@ -6,6 +6,8 @@
 # FRESH INSTALL — Full setup from scratch
 # =============================================================================
 
+export PATH="/usr/local/bin:$PATH"
+
 # ─── Interactive Setup (Step 0) ──────────────────────────────────────────────
 if [ "$NON_INTERACTIVE" != "true" ] && [ -e /dev/tty ]; then
     # Agent Lite Selection
@@ -1061,7 +1063,7 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
                 _trivy_tag="smsly/${_trivy_img}:latest"
                 if docker image inspect "$_trivy_tag" >/dev/null 2>&1; then
                     echo -e "${BLUE}    ↳ Scanning $_trivy_tag...${NC}"
-                    trivy image --severity CRITICAL,HIGH --exit-code 0 --no-progress "$_trivy_tag" 2>/dev/null || true
+                    trivy image --insecure --scanners vuln --severity CRITICAL,HIGH --exit-code 0 --no-progress "$_trivy_tag" 2>/dev/null || echo -e "${YELLOW}    ⚠ $_trivy_tag scan reported warnings — review output above${NC}"
                 fi
             done
             unset _trivy_img _trivy_tag

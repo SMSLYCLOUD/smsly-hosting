@@ -33,6 +33,8 @@
 
 set -euo pipefail
 
+export PATH="/usr/local/bin:$PATH"
+
 # ─── Defaults for unset env vars (prevents set -u crashes) ────────────────────
 export SMSLY_SERVICE_PROXY_UPSTREAM=${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
 
@@ -397,6 +399,21 @@ ensure_local_ignores() {
             echo -e "${BLUE}  → Added builds/ and caddy-config/ to local .gitignore to prevent Git stash hangs${NC}"
         fi
     fi
+}
+
+ensure_security_tools() {
+    export PATH="/usr/local/bin:$PATH"
+    if ! command -v trivy >/dev/null 2>&1 && [ ! -x "/usr/local/bin/trivy" ]; then
+        echo -e "${BLUE}  → Installing Trivy vulnerability scanner...${NC}"
+        curl -sfL --connect-timeout 15 --max-time 120 https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin 2>/dev/null || true
+    fi
+    if ! command -v cosign >/dev/null 2>&1 && [ ! -x "/usr/local/bin/cosign" ]; then
+        echo -e "${BLUE}  → Installing Cosign image attestation utility...${NC}"
+        local cosign_arch
+        cosign_arch="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
+        curl -sfL --connect-timeout 15 --max-time 120 -o /usr/local/bin/cosign "https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-${cosign_arch}" 2>/dev/null && chmod +x /usr/local/bin/cosign || true
+    fi
+    return 0
 }
 
 # ─── Pre-flight Validators ──────────────────────────────────────────────────
@@ -2640,7 +2657,7 @@ if [ "${FIX_DOMAIN_MODE:-false}" = "true" ]; then
     export NO_SCREEN=true
     export DOMAIN="$FIX_DOMAIN"
     export USE_SSL="true"
-    exec bash "$SCRIPT_PATH" --update --no-screen "$@"
+    exec env PATH="/usr/local/bin:$PATH" bash "$SCRIPT_PATH" --update --no-screen "$@"
 fi
 
 # =============================================================================
@@ -3836,7 +3853,7 @@ fi
         # Release the lock before re-exec so the new process can acquire it.
         # Closing FD 9 releases the flock.
         exec 9>&- 2>/dev/null || true
-        exec bash "$SCRIPT_PATH" --no-screen "$@"
+        exec env SMSLY_REEXEC=1 NO_SCREEN=true SKIP_SCREEN=1 SMSLY_PRE_UPDATE_HEAD="$PRE_UPDATE_HEAD" PATH="/usr/local/bin:$PATH" bash "$SCRIPT_PATH" --no-screen "$@"
     fi
 
     echo -e "${BLUE}  → Applying platform/domain overrides...${NC}"

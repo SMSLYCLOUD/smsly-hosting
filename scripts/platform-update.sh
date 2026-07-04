@@ -7,6 +7,8 @@
 
 set -euo pipefail
 
+export PATH="/usr/local/bin:$PATH"
+
 WATCH_DIR="${1:-/opt/smsly-hosting/caddy-config}"
 UPDATE_FLAG="$WATCH_DIR/.update"
 STATUS_FILE="$WATCH_DIR/.update.status"
@@ -100,10 +102,10 @@ while true; do
             if command -v screen >/dev/null 2>&1; then
                 # -D -m keeps this watcher process attached to the command lifetime while
                 # still providing a named screen session for host-side inspection.
-                sudo screen -S Grid-install -D -m bash -c "bash install.sh $FLAGS --non-interactive 2>&1 | tee -a /var/log/smsly-install.log \"$WATCH_DIR/install.log\""
+                sudo screen -S Grid-install -D -m bash -c "export PATH=\"/usr/local/bin:\$PATH\"; bash install.sh $FLAGS --non-interactive 2>&1 | tee -a /var/log/smsly-install.log \"$WATCH_DIR/install.log\""
                 exit_code=$?
             else
-                sudo bash install.sh $FLAGS --non-interactive 2>&1 | tee -a /var/log/smsly-install.log "$WATCH_DIR/install.log"
+                sudo env PATH="/usr/local/bin:$PATH" bash install.sh $FLAGS --non-interactive 2>&1 | tee -a /var/log/smsly-install.log "$WATCH_DIR/install.log"
                 exit_code=$?
             fi
             set -e

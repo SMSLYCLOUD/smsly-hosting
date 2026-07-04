@@ -10,6 +10,8 @@
 
 set -euo pipefail
 
+export PATH="/usr/local/bin:$PATH"
+
 # ─── Defaults for unset env vars ─────────────────────────────────────────────
 export SMSLY_SERVICE_PROXY_UPSTREAM=${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
 export SMSLY_BRANCH="${SMSLY_BRANCH:-main}"
