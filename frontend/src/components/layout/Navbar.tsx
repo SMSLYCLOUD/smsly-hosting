@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { featureFlags } from '@/lib/featureFlags';
 import { shouldShowAllNav } from '@/lib/nav-visibility';
 import { usePathname, useRouter } from 'next/navigation';
-import { Settings, Menu, X, Home, LogOut, Rocket, CreditCard, Sparkles, Monitor, Radio, Brain, Archive, Shield, Layout, FolderKanban, Activity, Zap, Gauge, Network, FileCode, ArrowLeftRight, GitCompare } from 'lucide-react';
+import { Settings, Menu, X, Home, LogOut, Rocket, CreditCard, Sparkles, Monitor, Radio, Brain, Archive, Shield, Layout, FolderKanban, Activity, Zap, Gauge, Network, FileCode, ArrowLeftRight, GitCompare, Plug } from 'lucide-react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { ModeToggle } from '@/components/ui/mode-toggle';
@@ -108,6 +108,7 @@ export function Navbar() {
     { href: '/functions', label: 'Functions', icon: Zap, tier: 'tertiary' },
     { href: '/templates', label: 'Templates', icon: FileCode, tier: 'tertiary' },
     { href: '/transfers', label: 'Transfers', icon: ArrowLeftRight, tier: 'tertiary' },
+    { href: '/mcp', label: 'MCP Server', icon: Plug, tier: 'tertiary' },
     { href: '/settings', label: 'Settings', icon: Settings, tier: 'tertiary' },
     { href: '/status', label: 'System Status', icon: Activity, tier: 'tertiary' },
   ];

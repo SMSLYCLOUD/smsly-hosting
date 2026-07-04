@@ -41,6 +41,7 @@ export const PROTECTED_PREFIXES = [
   "/replication",
   "/restore",
   "/addons",
+  "/mcp",
   "/settings",
 ] as const;
 

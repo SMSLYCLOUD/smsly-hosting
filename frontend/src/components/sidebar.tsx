@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, PlusCircle, Settings, Box, Brain,
   Server, Rocket, Globe, ChevronDown, Wifi, WifiOff,
-  ExternalLink, Radio, Scaling, ArrowLeftRight, ShieldCheck
+  ExternalLink, Radio, Scaling, ArrowLeftRight, ShieldCheck, Plug
 } from "lucide-react";
 import { api, serversApi, type ManagedServer } from "@/lib/api";
 import TeamSwitcher from "@/components/team-switcher";
@@ -39,7 +39,7 @@ export function Sidebar() {
 
   // Auto-expand infra section if user is on an infra page
   React.useEffect(() => {
-    const infraPaths = ["/servers", "/autoscaler", "/tunnels", "/ecosystem", "/intelligence"];
+    const infraPaths = ["/servers", "/autoscaler", "/tunnels", "/ecosystem", "/intelligence", "/mcp"];
     if (infraPaths.some(p => pathname?.startsWith(p))) {
       setInfraOpen(true);
     }
@@ -84,6 +84,7 @@ export function Sidebar() {
     { label: "Tunnels",      icon: Radio,   href: "/tunnels" },
     { label: "Ecosystem",    icon: Globe,   href: "/ecosystem" },
     { label: "Intelligence", icon: Brain,   href: "/intelligence" },
+    { label: "MCP Server",   icon: Plug,    href: "/mcp" },
   ];
 
   const utilRoutes = [

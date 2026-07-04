@@ -208,7 +208,52 @@ def redact_values(text: str, values: list[str]) -> str:
     return redacted
 
 
+def get_github_token_for_repo(user, repo_full_name: str) -> str | None:
+    """
+    Return the best available GitHub token for accessing *repo_full_name*.
+
+    Priority:
+      1. GitHub App installation token — repo-scoped, 1-hour expiry (preferred).
+         Requires ``GITHUB_APP_ID`` and ``GITHUB_APP_PRIVATE_KEY`` in settings.
+      2. User OAuth token — falls back gracefully when the App is not configured
+         or fails to issue a token.
+      3. None — anonymous access (public repos only).
+
+    This is the canonical token accessor for all Git operations inside the
+    platform (clone, Docker build secrets, webhook setup). Callers should
+    **not** call ``get_github_oauth_token_for_user`` directly for new code.
+
+    Args:
+        user: Django user instance (used for OAuth fallback).
+        repo_full_name: ``"owner/repo"``, e.g. ``"SMSLYCLOUD/smsly-shared"``.
+                        If empty or malformed, skips the App call and falls
+                        back to the user OAuth token directly.
+    """
+    # Guard: skip the App call if repo_full_name is unusable.
+    # This happens when the URL parser couldn't extract owner/repo cleanly.
+    _repo = (repo_full_name or "").strip()
+    if not _repo or "/" not in _repo or len(_repo.split("/")) < 2:
+        return get_github_oauth_token_for_user(user)
+
+    # Prefer GitHub App installation token (enterprise-grade, repo-scoped)
+    try:
+        from apps.deployments.services.github_app import get_installation_token_for_repo
+        app_token = get_installation_token_for_repo(_repo)
+        if app_token:
+            return app_token
+    except Exception as exc:
+        logger.warning(
+            "GitHub App token fetch failed for %s, falling back to OAuth: %s",
+            _repo,
+            exc,
+        )
+
+    # Fall back to user's stored OAuth token
+    return get_github_oauth_token_for_user(user)
+
+
 def get_github_oauth_token_for_user(user):
+
     """
     Return the linked GitHub OAuth token for the given user (if connected).
     Automatically refreshes expired tokens using the stored refresh token.

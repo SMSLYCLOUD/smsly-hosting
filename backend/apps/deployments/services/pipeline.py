@@ -466,23 +466,29 @@ class PipelineManager:
                 if (parsed.scheme in ("http", "https") and
                         (parsed.hostname or "").lower().endswith("github.com")):
                     service_owner = getattr(self.service, "owner", None)
-                    repo_token = get_github_oauth_token_for_user(service_owner)
+                    # Use the priority chain: GitHub App token > user OAuth token > None.
+                    # Falls back gracefully when App is not configured.
+                    repo_full_name = "/".join(
+                        (parsed.path or "").lstrip("/").rstrip(".git").split("/")[:2]
+                    )
+                    from apps.deployments.utils import get_github_token_for_repo
+                    repo_token = get_github_token_for_repo(service_owner, repo_full_name)
                     if repo_token:
                         append_log(
                             self.deployment,
-                            "Using linked GitHub account for private repo access...\n"
+                            "GitHub credentials resolved for private repo access...\n"
                         )
                     else:
                         logger.warning(
-                            "No GitHub OAuth token found for service owner %s (service: %s). "
-                            "User may need to reconnect GitHub account.",
+                            "No GitHub token found for service owner %s (service: %s). "
+                            "Configure a GitHub App or connect a GitHub account.",
                             service_owner.id if service_owner else "None",
                             self.service.id
                         )
                         append_log(
                             self.deployment,
-                            "⚠ No GitHub token available. If this is a private repo, "
-                            "please reconnect your GitHub account in Settings.\n"
+                            "⚠ No GitHub credentials available. If this is a private repo, "
+                            "connect your GitHub account in Settings or configure a GitHub App.\n"
                         )
             except Exception as exc:
                 logger.warning("Error retrieving GitHub token: %s", exc)
@@ -2238,7 +2244,8 @@ class PipelineManager:
         )
 
         # Smart build-arg detection: only pass non-secret build-args.
-        # Secrets are injected at runtime, never baked into the image.
+        # Secrets are injected at runtime via BuildKit --mount=type=secret,
+        # never baked into the image or visible in docker history.
         from apps.cloud.services.build_constants import is_secret_env_var
 
         env_map = {env.key: env.value for env in self.service.env_vars.all()}
@@ -2256,6 +2263,45 @@ class PipelineManager:
             for k, v in env_map.items():
                 if k.startswith(("NEXT_PUBLIC_", "VITE_", "PUBLIC_")):
                     build_args_dict[k] = v
+
+        # ── BuildKit secret resolution ──────────────────────────────────────
+        # If the Dockerfile declares ARG GITHUB_TOKEN, the build-arg filter
+        # above deliberately drops it (ends in _TOKEN = secret).  Instead we
+        # resolve a proper token here and inject it as a BuildKit secret mount
+        # so it never appears in image layers or docker history.
+        #
+        # Token priority (see utils.get_github_token_for_repo):
+        #   1. GitHub App installation token — repo-scoped, 1-hour expiry
+        #   2. Service owner's OAuth token — broad fallback
+        #   3. None — Dockerfile anonymous-install fallback path
+        build_secrets: dict[str, str] = {}
+        if defined_args and "GITHUB_TOKEN" in defined_args:
+            try:
+                from apps.deployments.utils import get_github_token_for_repo
+                # Determine which shared repo the Dockerfile needs access to.
+                # Defaults to smsly-shared; overridable via service env var.
+                shared_repo = env_map.get(
+                    "SMSLY_SHARED_REPO", "SMSLYCLOUD/smsly-shared"
+                )
+                service_owner = getattr(self.service, "owner", None)
+                gh_token = get_github_token_for_repo(service_owner, shared_repo)
+                if gh_token:
+                    build_secrets["github_token"] = gh_token
+                    append_log(
+                        self.deployment,
+                        "GitHub token resolved via App/OAuth — "
+                        "will be injected as BuildKit secret (not a build-arg).\n",
+                    )
+                else:
+                    append_log(
+                        self.deployment,
+                        "⚠ No GitHub token available — private pip installs may fail. "
+                        "Configure GITHUB_APP_ID/GITHUB_APP_PRIVATE_KEY or connect GitHub.\n",
+                    )
+            except Exception as _exc:
+                logger.warning(
+                    "Failed to resolve GitHub token for build secrets: %s", _exc
+                )
 
         # Pre-flight: remove any orphaned buildkit containers that can
         # block the Docker build (common after a previous build crash/timeout).
@@ -2339,6 +2385,7 @@ class PipelineManager:
             tag=image_name,
             buildargs=build_args_dict,
             cache_from=cache_from,
+            secrets=build_secrets,
         )
 
     def _build_via_docker_py(
@@ -2348,6 +2395,7 @@ class PipelineManager:
         tag: str,
         buildargs: dict,
         cache_from: list,
+        secrets: dict[str, str] | None = None,
     ):
         """Build a Docker image via the docker-py SDK.
 
@@ -2363,9 +2411,17 @@ class PipelineManager:
         behaviour of one redacted ``append_log`` call at the end).
         BuildKit cache errors get the same prune-and-retry treatment
         as the old ``_run_subprocess`` path.
+
+        ``secrets`` is a ``{secret_id: secret_value}`` dict.  Each entry is
+        written to a chmod-600 tmpfile which is passed to the Docker daemon as
+        a BuildKit secret mount (``--secret id=<id>,src=<path>``).  The files
+        are deleted unconditionally in a ``finally`` block — even on build
+        failure or cache-error retry — so secret material never persists on
+        disk beyond the build lifetime.
         """
         import io
         import tarfile
+        import tempfile
 
         from apps.cloud.docker_client import get_docker_client
 
@@ -2377,71 +2433,109 @@ class PipelineManager:
         if dockerfile_rel.startswith(".."):
             dockerfile_rel = os.path.basename(dockerfile_path)
 
-        max_attempts = 2
-        for attempt in range(1, max_attempts + 1):
-            # Build a fresh tar of the build context on each attempt;
-            # the buffer is consumed by the SDK and can't be re-read.
-            tar_buffer = io.BytesIO()
-            with tarfile.open(fileobj=tar_buffer, mode="w") as tar:
-                tar.add(context_dir, arcname=".")
-            tar_buffer.seek(0)
-
-            try:
-                client = get_docker_client()
-                _image, build_log = client.images.build(
-                    fileobj=tar_buffer,
-                    custom_context=True,
-                    tag=tag,
-                    dockerfile=dockerfile_rel,
-                    buildargs=buildargs or None,
-                    cache_from=cache_from or None,
-                    rm=True,
-                    forcerm=True,
+        # ── BuildKit secret tmpfiles ────────────────────────────────────────
+        # Write each secret to a chmod-600 tmpfile so the Docker daemon can
+        # mount it as an in-memory secret during the build.
+        # The files are ALWAYS deleted in the finally block — even on retry
+        # or exception.
+        secret_file_paths: dict[str, str] = {}  # id -> tmpfile path
+        try:
+            for secret_id, secret_value in (secrets or {}).items():
+                fd, tmppath = tempfile.mkstemp(
+                    prefix=f".smsly-bksecret-{secret_id}-",
+                    dir=tempfile.gettempdir(),
                 )
-            except Exception as exc:
-                err_str = str(exc) or type(exc).__name__
-                redacted_err = redact_values(err_str, self.secret_values)
-                # BuildKit cache corruption -> prune and retry once,
-                # mirroring the previous _run_subprocess path.
-                if (
-                    is_buildkit_cache_error(redacted_err)
-                    and attempt < max_attempts
-                ):
-                    append_log(
-                        self.deployment,
-                        "BuildKit cache corruption detected. "
-                        "Pruning cache and retrying once...\n",
+                try:
+                    os.chmod(tmppath, 0o600)
+                    with os.fdopen(fd, "w") as fh:
+                        fh.write(secret_value)
+                    fd = -1  # ownership transferred to fdopen
+                except Exception:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
+                    raise
+                secret_file_paths[secret_id] = tmppath
+
+            # Build docker-py secrets list: [{"id": id, "src": path}, ...]
+            docker_secrets = [
+                {"id": sid, "src": spath}
+                for sid, spath in secret_file_paths.items()
+            ] or None
+
+            max_attempts = 2
+            for attempt in range(1, max_attempts + 1):
+                # Build a fresh tar of the build context on each attempt;
+                # the buffer is consumed by the SDK and can't be re-read.
+                tar_buffer = io.BytesIO()
+                with tarfile.open(fileobj=tar_buffer, mode="w") as tar:
+                    tar.add(context_dir, arcname=".")
+                tar_buffer.seek(0)
+
+                try:
+                    client = get_docker_client()
+                    build_kwargs: dict = dict(
+                        fileobj=tar_buffer,
+                        custom_context=True,
+                        tag=tag,
+                        dockerfile=dockerfile_rel,
+                        buildargs=buildargs or None,
+                        cache_from=cache_from or None,
+                        rm=True,
+                        forcerm=True,
                     )
-                    prune_buildkit_cache()
-                    continue
-                append_log(self.deployment, redacted_err)
-                if is_buildkit_cache_error(redacted_err):
-                    raise BuildError(
-                        "Docker cache corruption detected after "
-                        "automatic recovery attempt."
-                    ) from exc
-                raise BuildError("Docker build failed") from exc
+                    if docker_secrets:
+                        build_kwargs["secrets"] = docker_secrets
+                    _image, build_log = client.images.build(**build_kwargs)
+                except Exception as exc:
+                    err_str = str(exc) or type(exc).__name__
+                    redacted_err = redact_values(err_str, self.secret_values)
+                    # BuildKit cache corruption -> prune and retry once
+                    if (
+                        is_buildkit_cache_error(redacted_err)
+                        and attempt < max_attempts
+                    ):
+                        append_log(
+                            self.deployment,
+                            "BuildKit cache corruption detected. "
+                            "Pruning cache and retrying once...\n",
+                        )
+                        prune_buildkit_cache()
+                        continue
+                    append_log(self.deployment, redacted_err)
+                    if is_buildkit_cache_error(redacted_err):
+                        raise BuildError(
+                            "Docker cache corruption detected after "
+                            "automatic recovery attempt."
+                        ) from exc
+                    raise BuildError("Docker build failed") from exc
 
-            # Build started OK -- drain the build log generator to
-            # capture the streamed output, then redacted-log it to the
-            # deploy transaction in a single append (matches the old
-            # subprocess behaviour and avoids one DB write per line).
-            log_chunks = []
-            for entry in build_log:
-                if not isinstance(entry, dict):
-                    continue
-                if entry.get("error"):
-                    raise BuildError(entry["error"].strip())
-                if entry.get("stream"):
-                    log_chunks.append(entry["stream"])
+                # Drain the build log generator
+                log_chunks = []
+                for entry in build_log:
+                    if not isinstance(entry, dict):
+                        continue
+                    if entry.get("error"):
+                        raise BuildError(entry["error"].strip())
+                    if entry.get("stream"):
+                        log_chunks.append(entry["stream"])
 
-            full_log = "".join(log_chunks)
-            redacted = redact_values(full_log, self.secret_values)
-            if len(redacted) > 20000:
-                redacted = redacted[-20000:] + "\n...(truncated)"
-            if redacted:
-                append_log(self.deployment, redacted)
-            return
+                full_log = "".join(log_chunks)
+                redacted = redact_values(full_log, self.secret_values)
+                if len(redacted) > 20000:
+                    redacted = redacted[-20000:] + "\n...(truncated)"
+                if redacted:
+                    append_log(self.deployment, redacted)
+                return
+
+        finally:
+            # Unconditionally delete all secret tmpfiles on any exit path
+            for tmppath in secret_file_paths.values():
+                try:
+                    os.unlink(tmppath)
+                except OSError:
+                    pass
 
     def _ensure_docker_driver(self):
         """

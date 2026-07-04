@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import {
   Shield, ShieldCheck, ShieldX, Cpu, Lock, Eye,
   AlertTriangle, CheckCircle2, XCircle, Loader2,
@@ -31,7 +31,7 @@ export function SecurityStatusTab({ serviceId }: { serviceId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [latestDeployId, setLatestDeployId] = useState<string | null>(null);
 
-  const fetchScan = async () => {
+  const fetchScan = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -51,9 +51,9 @@ export function SecurityStatusTab({ serviceId }: { serviceId: string }) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [serviceId]);
 
-  useEffect(() => { fetchScan(); }, [serviceId]);
+  useEffect(() => { fetchScan(); }, [fetchScan]);
 
   if (loading) {
     return (

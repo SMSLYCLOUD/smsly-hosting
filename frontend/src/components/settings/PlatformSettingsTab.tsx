@@ -29,9 +29,9 @@ export function PlatformSettingsTab() {
     }
   };
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     fetchConfig();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleChange = (field: string, value: any) => {

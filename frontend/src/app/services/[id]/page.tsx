@@ -5,7 +5,7 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useParams, useSearchParams } from 'next/navigation';
 import ScalingTab from '@/components/settings/ScalingTab';
 import { ServiceLayout } from '@/components/layout/ServiceLayout';
-import { Activity, Shield, Terminal, Zap, DollarSign, Globe, Rocket, Loader2 as Spinner, Server, Wrench } from 'lucide-react';
+import { Activity, Shield, Terminal, Zap, DollarSign, Globe, Rocket, Loader2 as Spinner, Server, Wrench, FolderKanban, Box, Container, RotateCcw, ShieldCheck, Plug } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import { Skeleton } from '@/components/ui/skeleton';
 const Editor = dynamic(() => import('@monaco-editor/react'), { ssr: false, loading: () => <Skeleton className="h-[400px] w-full" /> });
@@ -426,6 +426,29 @@ export default function ServiceDetailPage() {
                         </p>
                     </div>
 
+                    {/* Project */}
+                    {service.project && (
+                        <div className="col-span-1 md:col-span-4 bg-gradient-to-r from-emerald-500/5 to-transparent border border-emerald-500/10 p-6 rounded-xl shadow-sm">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-4">
+                                    <div className="w-12 h-12 rounded-xl bg-emerald-500/10 flex items-center justify-center text-2xl">
+                                        {service.project_emoji || <FolderKanban className="w-6 h-6 text-emerald-500" />}
+                                    </div>
+                                    <div>
+                                        <p className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Project</p>
+                                        <a
+                                            href={`/project/${service.project}`}
+                                            className="text-lg font-bold text-foreground hover:text-emerald-400 transition-colors flex items-center gap-2"
+                                        >
+                                            {service.project_name || 'Unnamed Project'}
+                                            <Globe className="w-3.5 h-3.5 text-emerald-500" />
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     <div className="col-span-1 md:col-span-4 bg-card border border-border p-8 rounded-xl shadow-sm h-fit">
                         <h3 className="font-bold mb-6 text-lg text-foreground">Configuration</h3>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-x-10 gap-y-5 text-sm">
@@ -585,6 +608,98 @@ export default function ServiceDetailPage() {
                             <div className="flex justify-between border-b border-border pb-3">
                                 <span className="text-muted-foreground font-medium">Deploy Type</span>
                                 <span className="font-mono text-foreground">{service.deploy_type || 'GIT'}</span>
+                            </div>
+                            <div className="flex justify-between border-b border-border pb-3">
+                                <span className="text-muted-foreground font-medium">Buildpack</span>
+                                <span className="font-mono text-foreground">{service.buildpack || 'DOCKER'}</span>
+                            </div>
+                            <div className="flex justify-between border-b border-border pb-3">
+                                <span className="text-muted-foreground font-medium">Internal Port</span>
+                                <span className="font-mono text-foreground">{service.internal_port ?? 8000}</span>
+                            </div>
+                            {service.docker_image && (
+                            <div className="flex justify-between border-b border-border pb-3">
+                                <span className="text-muted-foreground font-medium">Docker Image</span>
+                                <span className="font-mono text-xs text-foreground truncate ml-4 max-w-[300px]">{service.docker_image}</span>
+                            </div>
+                            )}
+                            {service.build_command && (
+                            <div className="flex justify-between border-b border-border pb-3">
+                                <span className="text-muted-foreground font-medium">Build Command</span>
+                                <span className="font-mono text-xs text-foreground truncate ml-4 max-w-[300px]">{service.build_command}</span>
+                            </div>
+                            )}
+                            {service.start_command && (
+                            <div className="flex justify-between border-b border-border pb-3">
+                                <span className="text-muted-foreground font-medium">Start Command</span>
+                                <span className="font-mono text-xs text-foreground truncate ml-4 max-w-[300px]">{service.start_command}</span>
+                            </div>
+                            )}
+                            <div className="flex justify-between border-b border-border pb-3">
+                                <span className="text-muted-foreground font-medium">Root Directory</span>
+                                <span className="font-mono text-foreground">{service.root_directory || '/'}</span>
+                            </div>
+                            <div className="flex justify-between border-b border-border pb-3">
+                                <span className="text-muted-foreground font-medium">Auto Restart</span>
+                                <span className={`text-xs font-semibold px-2 py-1 rounded ${
+                                    service.auto_restart !== false ? 'bg-emerald-500/10 text-emerald-500' : 'bg-zinc-500/10 text-zinc-400'
+                                }`}>
+                                    {service.auto_restart !== false ? 'Enabled' : 'Disabled'}
+                                </span>
+                            </div>
+                            <div className="flex justify-between border-b border-border pb-3">
+                                <span className="text-muted-foreground font-medium">Auto Rollback</span>
+                                <span className={`text-xs font-semibold px-2 py-1 rounded ${
+                                    service.auto_rollback_enabled !== false ? 'bg-emerald-500/10 text-emerald-500' : 'bg-zinc-500/10 text-zinc-400'
+                                }`}>
+                                    {service.auto_rollback_enabled !== false ? 'Enabled' : 'Disabled'}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Registry & Scopes */}
+                    <div className="col-span-1 md:col-span-4 bg-card border border-border p-6 rounded-xl shadow-sm">
+                        <h3 className="font-bold mb-4 text-lg text-foreground flex items-center gap-2">
+                            <Container className="w-5 h-5 text-cyan-500" /> Registry &amp; Scopes
+                        </h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-10 gap-y-4 text-sm">
+                            {service.docker_image && (
+                                <div className="flex justify-between border-b border-border pb-3">
+                                    <span className="text-muted-foreground font-medium">Docker Image</span>
+                                    <span className="font-mono text-xs text-foreground truncate ml-4 max-w-[250px]">{service.docker_image}</span>
+                                </div>
+                            )}
+                            <div className="flex justify-between border-b border-border pb-3">
+                                <span className="text-muted-foreground font-medium">Provider</span>
+                                <span className="font-mono text-foreground capitalize">{service.provider || 'Local'}</span>
+                            </div>
+                            {service.region && (
+                                <div className="flex justify-between border-b border-border pb-3">
+                                    <span className="text-muted-foreground font-medium">Region</span>
+                                    <span className="font-mono text-foreground">{service.region}</span>
+                                </div>
+                            )}
+                            <div className="flex justify-between border-b border-border pb-3">
+                                <span className="text-muted-foreground font-medium">Server</span>
+                                <span className="font-mono text-foreground text-xs truncate ml-4 max-w-[250px]">
+                                    {service.node_metadata?.name || service.server_id || 'Not assigned'}
+                                </span>
+                            </div>
+                            {service.project && (
+                                <div className="flex justify-between border-b border-border pb-3">
+                                    <span className="text-muted-foreground font-medium">Scope</span>
+                                    <a href={`/project/${service.project}`} className="text-primary hover:underline flex items-center gap-1">
+                                        <FolderKanban className="w-3 h-3" />
+                                        {service.project_name || 'Project'}
+                                    </a>
+                                </div>
+                            )}
+                            <div className="flex justify-between border-b border-border pb-3">
+                                <span className="text-muted-foreground font-medium">Registry Credentials</span>
+                                <a href={`/settings?tab=registry`} className="text-xs text-primary hover:underline flex items-center gap-1">
+                                    <Shield className="w-3 h-3" /> Manage
+                                </a>
                             </div>
                         </div>
                     </div>

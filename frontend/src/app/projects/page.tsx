@@ -8,15 +8,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { projectsApi, Project } from '@/lib/api';
+import { PROJECT_EMOJI_OPTIONS, PROJECT_COLOR_OPTIONS } from '@/lib/project-constants';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { Button } from '@/components/ui/button';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Plus, FolderOpen, Settings2, Trash2, X, Palette } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
-
-const EMOJI_OPTIONS = ['📦', '🚀', '🌐', '⚡', '🛡️', '🧪', '🎯', '💎', '🔥', '🧠', '🤖', '📊'];
-const COLOR_OPTIONS = ['#6366f1', '#10b981', '#3b82f6', '#ef4444', '#f59e0b', '#ec4899', '#8b5cf6', '#06b6d4', '#14b8a6', '#f97316'];
 
 const STATUS_COLORS: Record<string, string> = {
   ACTIVE: '#10b981',
@@ -165,7 +163,7 @@ export default function ProjectsPage() {
                 {/* Emoji picker */}
                 <label className="block text-sm font-medium text-zinc-400 mb-1.5">Icon</label>
                 <div className="flex flex-wrap gap-2 mb-4">
-                  {EMOJI_OPTIONS.map(emoji => (
+                  {PROJECT_EMOJI_OPTIONS.map(emoji => (
                     <button
                       key={emoji}
                       type="button"
@@ -186,7 +184,7 @@ export default function ProjectsPage() {
                   <Palette className="w-3.5 h-3.5" /> Accent Color
                 </label>
                 <div className="flex flex-wrap gap-2 mb-6">
-                  {COLOR_OPTIONS.map(color => (
+                  {PROJECT_COLOR_OPTIONS.map(color => (
                     <button
                       key={color}
                       type="button"

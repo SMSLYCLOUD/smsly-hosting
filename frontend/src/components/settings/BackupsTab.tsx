@@ -71,7 +71,7 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
         } else {
             setCloudBackupList([]);
         }
-    }, [cloudRestorePromptOpen, cloudRestoreForm.cloud_storage_id, cloudBackupPrefix]);
+    }, [cloudRestorePromptOpen, cloudRestoreForm.cloud_storage_id, cloudBackupPrefix, serviceId]);
 
     // Encryption key prompt (shown when restoring a cross-master backup)
     const [keyPromptOpen, setKeyPromptOpen] = useState(false);

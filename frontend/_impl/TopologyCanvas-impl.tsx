@@ -173,6 +173,7 @@ export function TopologyCanvas({ plan, servers, callbacks }: any) {
 
     setNodes(layoutedNodes);
     setEdges(layoutedEdges);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plan, servers, setNodes, setEdges]); // Note: callbacks intentionally excluded – they are event handlers and must not trigger graph re-layout
 
   const onLayout = useCallback(

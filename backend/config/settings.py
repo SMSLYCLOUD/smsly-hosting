@@ -529,6 +529,25 @@ GITLAB_OAUTH_CALLBACK_URL = config('GITLAB_OAUTH_CALLBACK_URL', default=None)
 BITBUCKET_OAUTH_CALLBACK_URL = config('BITBUCKET_OAUTH_CALLBACK_URL', default=None)
 GOOGLE_OAUTH_CALLBACK_URL = config('GOOGLE_OAUTH_CALLBACK_URL', default=None)
 
+# ── GitHub App (enterprise git authentication) ─────────────────────────────
+# Used to generate short-lived, repo-scoped installation tokens for:
+#   • Cloning private repositories during builds
+#   • Injecting tokens as BuildKit secrets for `pip install git+https://...`
+#   • Any other GitHub API calls that benefit from App-level auth
+#
+# Optional — the platform falls back to user OAuth tokens when unset.
+# Register at: https://github.com/organizations/SMSLYCLOUD/settings/apps/new
+#   Required permissions: Repository > Contents: Read-only
+#   Installation scope:   Only "SMSLYCLOUD" org, select repos (smsly-shared)
+#
+GITHUB_APP_ID = config('GITHUB_APP_ID', default='')
+# The PEM private key downloaded from the GitHub App settings page.
+# Supports escaped \n sequences (common in .env files) or real newlines.
+_GITHUB_APP_PRIVATE_KEY_RAW = config('GITHUB_APP_PRIVATE_KEY', default='')
+GITHUB_APP_PRIVATE_KEY = _GITHUB_APP_PRIVATE_KEY_RAW.replace('\\n', '\n').strip()
+
+
+
 # Stripe Billing (optional but required for paid plans)
 STRIPE_SECRET_KEY = config('STRIPE_SECRET_KEY', default='')
 STRIPE_WEBHOOK_SECRET = config('STRIPE_WEBHOOK_SECRET', default='')

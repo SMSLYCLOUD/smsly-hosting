@@ -7,13 +7,15 @@
 
 import React, { useState, useEffect, useCallback, Suspense } from 'react';
 import { useRouter, useParams, useSearchParams } from 'next/navigation';
-import { projectsApi, servicesApi, Project, Service } from '@/lib/api';
+import { projectsApi, servicesApi, teamsApi, projectMembersApi, Project, Service, Team, ProjectMember } from '@/lib/api';
+import { PROJECT_EMOJI_OPTIONS, PROJECT_COLOR_OPTIONS } from '@/lib/project-constants';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { Button } from '@/components/ui/button';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ArrowLeft, Plus, FolderOpen, Settings2,
   GitBranch, Globe, Layers, Trash2, X, Save, RefreshCcw, Server,
+  UserPlus, Mail, Shield, Users, Loader2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/components/ui/use-toast';
@@ -29,9 +31,6 @@ const STATUS_COLORS: Record<string, string> = {
   CANCELLED: '#f97316',
   UNKNOWN: '#6366f1',
 };
-
-const EMOJI_OPTIONS = ['📦', '🚀', '🌐', '⚡', '🛡️', '🧪', '🎯', '💎', '🔥', '🧠', '🤖', '📊'];
-const COLOR_OPTIONS = ['#6366f1', '#10b981', '#3b82f6', '#ef4444', '#f59e0b', '#ec4899', '#8b5cf6', '#06b6d4', '#14b8a6', '#f97316'];
 
 function ProjectDetailContent() {
   const router = useRouter();
@@ -57,11 +56,21 @@ function ProjectDetailContent() {
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
 
+  // Team & Members
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [editTeamId, setEditTeamId] = useState<string | null>(null);
+  const [members, setMembers] = useState<ProjectMember[]>([]);
+  const [membersLoading, setMembersLoading] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteRole, setInviteRole] = useState<string>('MEMBER');
+  const [inviting, setInviting] = useState(false);
+
   const load = useCallback(async () => {
     try {
-      const [proj, svcs] = await Promise.all([
+      const [proj, svcs, teamList] = await Promise.all([
         projectsApi.get(projectId),
         projectsApi.services(projectId),
+        teamsApi.list().catch(() => []),
       ]);
       setProject(proj);
       setServices(svcs);
@@ -69,6 +78,7 @@ function ProjectDetailContent() {
       setEditDesc(proj.description || '');
       setEditEmoji(proj.icon_emoji);
       setEditColor(proj.color);
+      setTeams(teamList);
     } catch (err) {
       console.error('Failed to load project:', err);
       toast({ title: 'Error', description: 'Failed to load project', variant: 'destructive' });
@@ -127,6 +137,60 @@ function ProjectDetailContent() {
       toast({ title: 'Error', description: 'Failed to update project', variant: 'destructive' });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const loadMembers = useCallback(async () => {
+    setMembersLoading(true);
+    try {
+      const data = await projectMembersApi.list(projectId);
+      setMembers(data);
+    } catch {
+      setMembers([]);
+    } finally {
+      setMembersLoading(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    if (tab === 'settings') {
+      loadMembers();
+    }
+  }, [tab, loadMembers]);
+
+  const handleInviteMember = async () => {
+    if (!inviteEmail.trim()) return;
+    setInviting(true);
+    try {
+      await projectMembersApi.invite(projectId, inviteEmail.trim(), inviteRole);
+      toast({ title: 'Member invited', description: `${inviteEmail} added as ${inviteRole}` });
+      setInviteEmail('');
+      loadMembers();
+    } catch (err: any) {
+      toast({ title: 'Error', description: err?.response?.data?.error || 'Failed to invite member', variant: 'destructive' });
+    } finally {
+      setInviting(false);
+    }
+  };
+
+  const handleRemoveMember = async (memberId: string, username: string) => {
+    if (!await confirm({ title: 'Remove member?', message: `Remove ${username} from this project?`, variant: 'destructive', confirmText: 'Remove' })) return;
+    try {
+      await projectMembersApi.remove(projectId, memberId);
+      setMembers(prev => prev.filter(m => m.id !== memberId));
+      toast({ title: 'Member removed' });
+    } catch {
+      toast({ title: 'Error', description: 'Failed to remove member', variant: 'destructive' });
+    }
+  };
+
+  const handleChangeRole = async (memberId: string, role: string) => {
+    try {
+      await projectMembersApi.changeRole(projectId, memberId, role);
+      setMembers(prev => prev.map(m => m.id === memberId ? { ...m, role: role as ProjectMember['role'] } : m));
+      toast({ title: 'Role updated' });
+    } catch {
+      toast({ title: 'Error', description: 'Failed to update role', variant: 'destructive' });
     }
   };
 
@@ -399,73 +463,190 @@ function ProjectDetailContent() {
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            className="max-w-lg space-y-6"
+            className="max-w-2xl space-y-8"
           >
-            <div>
-              <label className="block text-sm font-medium text-zinc-400 mb-1.5">Project Name</label>
-              <input
-                value={editName}
-                onChange={e => setEditName(e.target.value)}
-                className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              />
-            </div>
+            {/* General Settings */}
+            <div className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-6 space-y-5">
+              <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                <Settings2 className="w-4 h-4 text-zinc-400" /> General
+              </h3>
 
-            <div>
-              <label className="block text-sm font-medium text-zinc-400 mb-1.5">Description</label>
-              <textarea
-                value={editDesc}
-                onChange={e => setEditDesc(e.target.value)}
-                rows={3}
-                className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
-              />
-            </div>
+              <div>
+                <label className="block text-sm font-medium text-zinc-400 mb-1.5">Project Name</label>
+                <input
+                  value={editName}
+                  onChange={e => setEditName(e.target.value)}
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
 
-            <div>
-              <label className="block text-sm font-medium text-zinc-400 mb-1.5">Icon</label>
-              <div className="flex flex-wrap gap-2">
-                {EMOJI_OPTIONS.map(emoji => (
-                  <button
-                    key={emoji}
-                    type="button"
-                    onClick={() => setEditEmoji(emoji)}
-                    className={`text-xl w-10 h-10 rounded-lg flex items-center justify-center transition-all ${
-                      editEmoji === emoji
-                        ? 'bg-indigo-500/20 ring-2 ring-indigo-500 scale-110'
-                        : 'bg-zinc-800 hover:bg-zinc-700'
-                    }`}
-                  >
-                    {emoji}
-                  </button>
-                ))}
+              <div>
+                <label className="block text-sm font-medium text-zinc-400 mb-1.5">Description</label>
+                <textarea
+                  value={editDesc}
+                  onChange={e => setEditDesc(e.target.value)}
+                  rows={3}
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-zinc-400 mb-1.5">Icon</label>
+                <div className="flex flex-wrap gap-1.5">
+                  {PROJECT_EMOJI_OPTIONS.map(emoji => (
+                    <button
+                      key={emoji}
+                      type="button"
+                      onClick={() => setEditEmoji(emoji)}
+                      className={`text-lg w-9 h-9 rounded-lg flex items-center justify-center transition-all ${
+                        editEmoji === emoji
+                          ? 'bg-indigo-500/20 ring-2 ring-indigo-500 scale-110'
+                          : 'bg-zinc-800 hover:bg-zinc-700'
+                      }`}
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-zinc-400 mb-1.5">Accent Color</label>
+                <div className="flex flex-wrap gap-2">
+                  {PROJECT_COLOR_OPTIONS.map(color => (
+                    <button
+                      key={color}
+                      type="button"
+                      onClick={() => setEditColor(color)}
+                      className={`w-8 h-8 rounded-full transition-all ${
+                        editColor === color ? 'ring-2 ring-white scale-110' : 'hover:scale-105'
+                      }`}
+                      style={{ backgroundColor: color }}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              {/* Team */}
+              <div>
+                <label className="block text-sm font-medium text-zinc-400 mb-1.5">Team</label>
+                <select
+                  value={editTeamId || ''}
+                  onChange={e => setEditTeamId(e.target.value || null)}
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  <option value="">No team (personal project)</option>
+                  {teams.map(team => (
+                    <option key={team.id} value={team.id}>{team.name} ({team.members_count} members)</option>
+                  ))}
+                </select>
+                <p className="text-xs text-zinc-500 mt-1">Assign this project to a team for shared access.</p>
               </div>
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-zinc-400 mb-1.5">Color</label>
-              <div className="flex flex-wrap gap-2">
-                {COLOR_OPTIONS.map(color => (
-                  <button
-                    key={color}
-                    type="button"
-                    onClick={() => setEditColor(color)}
-                    className={`w-8 h-8 rounded-full transition-all ${
-                      editColor === color ? 'ring-2 ring-white scale-110' : 'hover:scale-105'
-                    }`}
-                    style={{ backgroundColor: color }}
+            {/* Project Members */}
+            <div className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                  <Users className="w-4 h-4 text-zinc-400" /> Members
+                </h3>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={loadMembers}
+                  className="text-zinc-400 hover:text-white"
+                >
+                  <RefreshCcw className="w-3.5 h-3.5 mr-1" /> Refresh
+                </Button>
+              </div>
+
+              {membersLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="w-5 h-5 animate-spin text-zinc-500" />
+                </div>
+              ) : members.length > 0 ? (
+                <div className="space-y-2">
+                  {members.map(member => (
+                    <div
+                      key={member.id}
+                      className="flex items-center justify-between rounded-lg border border-zinc-800 bg-zinc-900/40 px-4 py-3"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full bg-indigo-500/10 flex items-center justify-center text-sm font-bold text-indigo-400">
+                          {member.username.charAt(0).toUpperCase()}
+                        </div>
+                        <div>
+                          <div className="text-sm font-medium text-white">{member.username}</div>
+                          <div className="text-xs text-zinc-500">{member.email}</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={member.role}
+                          onChange={e => handleChangeRole(member.id, e.target.value)}
+                          className="rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-300 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                        >
+                          <option value="ADMIN">Admin</option>
+                          <option value="MEMBER">Member</option>
+                          <option value="VIEWER">Viewer</option>
+                        </select>
+                        <button
+                          onClick={() => handleRemoveMember(member.id, member.username)}
+                          className="p-1.5 rounded-md text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-all"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-zinc-500 text-center py-4">No members loaded. Click refresh to load project members.</p>
+              )}
+
+              {/* Invite */}
+              <div className="border-t border-zinc-800 pt-4">
+                <label className="block text-sm font-medium text-zinc-400 mb-2">Invite Member</label>
+                <div className="flex gap-2">
+                  <input
+                    value={inviteEmail}
+                    onChange={e => setInviteEmail(e.target.value)}
+                    placeholder="user@example.com"
+                    className="flex-1 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   />
-                ))}
+                  <select
+                    value={inviteRole}
+                    onChange={e => setInviteRole(e.target.value)}
+                    className="rounded-lg border border-zinc-700 bg-zinc-800 px-2 py-2 text-sm text-zinc-300 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  >
+                    <option value="MEMBER">Member</option>
+                    <option value="ADMIN">Admin</option>
+                    <option value="VIEWER">Viewer</option>
+                  </select>
+                  <Button
+                    onClick={handleInviteMember}
+                    disabled={!inviteEmail.trim() || inviting}
+                    size="sm"
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold"
+                  >
+                    {inviting ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserPlus className="w-4 h-4" />}
+                  </Button>
+                </div>
               </div>
             </div>
 
-            <div className="flex items-center gap-3 pt-4 border-t border-zinc-800">
-              <Button
-                onClick={handleSaveSettings}
-                disabled={saving || !editName.trim()}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold"
-              >
-                <Save className="w-4 h-4 mr-1" />
-                {saving ? 'Saving...' : 'Save Changes'}
-              </Button>
+            {/* Save & Delete */}
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Button
+                  onClick={handleSaveSettings}
+                  disabled={saving || !editName.trim()}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold"
+                >
+                  <Save className="w-4 h-4 mr-1" />
+                  {saving ? 'Saving...' : 'Save Changes'}
+                </Button>
+              </div>
               <Button
                 variant="destructive"
                 onClick={async () => {

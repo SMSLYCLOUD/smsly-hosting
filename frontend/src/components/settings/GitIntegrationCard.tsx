@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -29,7 +29,7 @@ export function GitIntegrationCard({ provider }: GitIntegrationCardProps) {
   const [data, setData] = useState<GitConnection | null>(null);
   const [connectError, setConnectError] = useState<string | null>(null);
 
-  const fetchStatus = async () => {
+  const fetchStatus = useCallback(async () => {
     setLoading(true);
     try {
       const res = await api.get(`/integrations/${provider}/`);
@@ -39,11 +39,11 @@ export function GitIntegrationCard({ provider }: GitIntegrationCardProps) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [provider]);
 
   useEffect(() => {
     fetchStatus();
-  }, [provider]);
+  }, [fetchStatus]);
 
   const startConnectFlow = async () => {
     setConnectError(null);
@@ -108,6 +108,7 @@ export function GitIntegrationCard({ provider }: GitIntegrationCardProps) {
               <div className="flex flex-col gap-4">
                 <div className="flex items-center gap-3 p-3 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-100 dark:border-slate-800">
                   {data.account.avatar_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
                     <img src={data.account.avatar_url} alt="Avatar" className="w-10 h-10 rounded-full bg-slate-200" />
                   ) : (
                     <div className="w-10 h-10 rounded-full bg-slate-200 dark:bg-slate-800 flex items-center justify-center">

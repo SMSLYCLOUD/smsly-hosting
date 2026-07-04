@@ -2,8 +2,10 @@ import hashlib
 import logging
 import os
 import shutil
+import subprocess
 import tempfile
 import time
+from urllib.parse import urlparse
 
 from celery import shared_task
 from django.conf import settings
@@ -48,6 +50,8 @@ def _make_clone_database_name(source_db_name: str, branch_name: str, commit_sha:
 
 def _copy_environment_variables(source: Service, target: Service) -> None:
     for env in source.env_vars.all():
+        if env.source == 'ADDON':
+            continue
         EnvironmentVariable.objects.update_or_create(
             service=target,
             key=env.key,
@@ -58,6 +62,87 @@ def _copy_environment_variables(source: Service, target: Service) -> None:
                 'source': env.source,
             },
         )
+
+
+def _addon_container_name(addon: Addon) -> str:
+    return f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
+
+
+def _docker_exec(container_name: str, cmd: list[str], timeout: int = 300) -> tuple[int, str, str]:
+    full_cmd = ['docker', 'exec', container_name] + cmd
+    proc = subprocess.run(full_cmd, capture_output=True, text=True, timeout=timeout)
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def _clone_mysql_data(source_addon: Addon, target_addon: Addon) -> None:
+    src_name = _addon_container_name(source_addon)
+    dst_name = _addon_container_name(target_addon)
+    src_db = urlparse(source_addon.connection_url).path.lstrip('/') if source_addon.connection_url else None
+    if not src_db:
+        return
+    rc, dump, err = _docker_exec(src_name, [
+        'mysqldump', '--single-transaction', '--quick', '--no-autocommit', src_db,
+    ])
+    if rc != 0:
+        logger.warning("mysqldump failed for %s: %s", source_addon.id, err[:200])
+        return
+    rc2, _, err2 = _docker_exec(dst_name, ['mysql'], timeout=600)
+    if rc2 != 0:
+        logger.warning("mysql restore failed for %s: %s", target_addon.id, err2[:200])
+        return
+    subprocess.run(
+        ['docker', 'exec', '-i', dst_name, 'mysql'],
+        input=dump.encode(), capture_output=True, timeout=600,
+    )
+
+
+def _clone_mongodb_data(source_addon: Addon, target_addon: Addon) -> None:
+    src_name = _addon_container_name(source_addon)
+    dst_name = _addon_container_name(target_addon)
+    rc, dump, err = _docker_exec(src_name, ['mongodump', '--archive', '--gzip'])
+    if rc != 0:
+        logger.warning("mongodump failed for %s: %s", source_addon.id, err[:200])
+        return
+    subprocess.run(
+        ['docker', 'exec', '-i', dst_name, 'mongorestore', '--archive', '--gzip', '--drop'],
+        input=dump.encode(), capture_output=True, timeout=600,
+    )
+
+
+def _clone_redis_data(source_addon: Addon, target_addon: Addon) -> None:
+    src_name = _addon_container_name(source_addon)
+    dst_name = _addon_container_name(target_addon)
+    rc, dump, err = _docker_exec(src_name, ['redis-cli', '--rdb', '/tmp/preview-dump.rdb'])
+    if rc != 0:
+        logger.warning("redis RDB dump failed for %s: %s", source_addon.id, err[:200])
+        return
+    _docker_exec(dst_name, ['cp', '/tmp/preview-dump.rdb', f'{dst_name}:/tmp/'])
+    _docker_exec(dst_name, ['redis-cli', 'FLUSHALL'])
+    _docker_exec(dst_name, ['redis-cli', '--pipe'], timeout=600)
+    subprocess.run(
+        ['docker', 'exec', '-i', dst_name, 'redis-cli', '--pipe'],
+        input=dump.encode(), capture_output=True, timeout=600,
+    )
+
+
+def _clone_addon_data(source_addon: Addon, target_addon: Addon) -> None:
+    addon_type = source_addon.addon_type
+    logger.info("Cloning data for %s addon %s -> %s", addon_type, source_addon.id, target_addon.id)
+    try:
+        if addon_type in (Addon.Type.POSTGRES,):
+            return
+        elif addon_type in (Addon.Type.MYSQL, Addon.Type.MARIADB, Addon.Type.PERCONA):
+            _clone_mysql_data(source_addon, target_addon)
+        elif addon_type in (Addon.Type.MONGODB,):
+            _clone_mongodb_data(source_addon, target_addon)
+        elif addon_type in (Addon.Type.REDIS, Addon.Type.KEYDB, Addon.Type.VALKEY, Addon.Type.DRAGONFLYDB):
+            _clone_redis_data(source_addon, target_addon)
+        else:
+            logger.info("No data clone implemented for %s; provisioning fresh", addon_type)
+    except subprocess.TimeoutExpired:
+        logger.warning("Data clone timed out for %s addon %s", addon_type, source_addon.id)
+    except Exception as e:
+        logger.warning("Data clone failed for %s addon %s: %s", addon_type, source_addon.id, e)
 
 
 def _upsert_preview_environment_variables(preview: PreviewEnvironment, target: Service) -> None:
@@ -157,6 +242,10 @@ def _sync_preview_addons(preview: PreviewEnvironment, transient_service: Service
         new_addon.coolify_uuid = cid
         new_addon.status = Addon.Status.ACTIVE
         new_addon.save(update_fields=['connection_url', 'coolify_uuid', 'status', 'updated_at'])
+
+        if addon.addon_type != Addon.Type.POSTGRES:
+            _clone_addon_data(addon, new_addon)
+
         _inject_addon_credentials(new_addon)
 
 

@@ -111,6 +111,7 @@ const PROXY_BYPASS_PREFIXES = [
   '/licensing/',
   '/ai/',
   '/cloud/',
+  '/cloud-storage/',
   '/mesh/',
   '/clusters/',
   '/replication/',
@@ -1894,6 +1895,34 @@ export const projectsApi = {
   syncEnvs: async (id: string): Promise<any> => {
     const response = await api.post(`/projects/${id}/sync-envs/`);
     return response.data;
+  },
+};
+
+export interface ProjectMember {
+  id: string;
+  user: number;
+  username: string;
+  email: string;
+  role: 'ADMIN' | 'MEMBER' | 'VIEWER';
+  permissions: string[];
+  expires_at: string | null;
+  joined_at: string;
+}
+
+export const projectMembersApi = {
+  list: async (projectId: string): Promise<ProjectMember[]> => {
+    const response = await api.get(`/projects/${projectId}/members/`);
+    return Array.isArray(response.data) ? response.data : (response.data?.results || []);
+  },
+  invite: async (projectId: string, email: string, role: string = 'MEMBER'): Promise<ProjectMember> => {
+    const response = await api.post(`/projects/${projectId}/members/invite/`, { email, role });
+    return response.data;
+  },
+  remove: async (projectId: string, memberId: string): Promise<void> => {
+    await api.post(`/projects/${projectId}/members/${memberId}/remove/`);
+  },
+  changeRole: async (projectId: string, memberId: string, role: string): Promise<void> => {
+    await api.post(`/projects/${projectId}/members/${memberId}/change-role/`, { role });
   },
 };
 
