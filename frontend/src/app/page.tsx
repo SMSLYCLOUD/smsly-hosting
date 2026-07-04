@@ -6,6 +6,7 @@ import Image from 'next/image';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { CloudHeroAnimation } from '@/components/animations/CloudHeroAnimation';
+import { ParallaxLayer } from '@/components/animations/ParallaxLayer';
 import {
     ArrowRight,
     Zap,
@@ -406,7 +407,7 @@ export default function Home() {
                 </div>
 
                 {/* Floating Elements (Decorations) */}
-                <div className="absolute bottom-20 left-10 hidden xl:block pointer-events-none">
+                <ParallaxLayer speed={0.2} className="absolute bottom-20 left-10 hidden xl:block pointer-events-none">
                     <motion.div
                         animate={{ y: [0, -15, 0], rotate: [0, 5, 0] }}
                         transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
@@ -415,8 +416,8 @@ export default function Home() {
                         <GitBranch className="w-8 h-8 text-emerald-600 dark:text-emerald-400" />
                         <div className="mt-2 text-xs font-mono font-bold text-slate-500">git push origin main</div>
                     </motion.div>
-                </div>
-                <div className="absolute top-40 right-20 hidden xl:block pointer-events-none">
+                </ParallaxLayer>
+                <ParallaxLayer speed={0.35} className="absolute top-40 right-20 hidden xl:block pointer-events-none">
                     <motion.div
                         animate={{ y: [0, 20, 0], rotate: [0, -5, 0] }}
                         transition={{ duration: 5, repeat: Infinity, ease: "easeInOut", delay: 1 }}
@@ -425,10 +426,10 @@ export default function Home() {
                         <Cpu className="w-8 h-8 text-violet-500" />
                         <div className="mt-2 text-xs font-mono font-bold text-slate-500">Auto-Scaling: ON</div>
                     </motion.div>
-                </div>
+                </ParallaxLayer>
             </section>
 
-            {/* VIDEO DEMO SECTION */}
+            {/* INTERACTIVE CLOUD GRID SHOWCASE SECTION */}
             <section className="relative -mt-12 md:-mt-24 z-20 px-4 sm:px-6 lg:px-8 max-w-5xl mx-auto mb-16 md:mb-24">
                 <motion.div 
                     initial={{ opacity: 0, y: 40 }}
@@ -437,18 +438,83 @@ export default function Home() {
                     className="bg-slate-900 rounded-2xl md:rounded-[2rem] p-2 md:p-4 shadow-2xl border border-slate-800 relative group overflow-hidden"
                 >
                     <div className="absolute inset-0 bg-gradient-to-tr from-emerald-500/20 to-blue-500/20 opacity-0 group-hover:opacity-100 transition-opacity duration-700 pointer-events-none" />
-                    <div className="aspect-video bg-black rounded-xl md:rounded-[1.5rem] overflow-hidden relative flex items-center justify-center border border-slate-800">
-                        {/* Placeholder for video */}
-                        <video 
-                            className="w-full h-full object-cover"
-                            controls
-                            preload="metadata"
-                            poster="/images/video-placeholder.jpg" // Add your poster image to public/images/
-                        >
-                            {/* Replace with your actual video source */}
-                            <source src="/videos/grid-demo.mp4" type="video/mp4" />
-                            Your browser does not support the video tag.
-                        </video>
+                    <div className="bg-black/90 rounded-xl md:rounded-[1.5rem] overflow-hidden relative border border-slate-800/80 p-4 md:p-8">
+                        {/* Terminal / Showcase Header */}
+                        <div className="flex items-center justify-between pb-4 mb-6 border-b border-slate-800/80 text-xs text-slate-400">
+                            <div className="flex items-center gap-2">
+                                <div className="w-3 h-3 rounded-full bg-rose-500/80" />
+                                <div className="w-3 h-3 rounded-full bg-yellow-500/80" />
+                                <div className="w-3 h-3 rounded-full bg-emerald-500/80" />
+                                <span className="ml-2 font-mono text-slate-300 font-bold flex items-center gap-1.5">
+                                    <Terminal className="w-3.5 h-3.5 text-emerald-400 inline" /> smsly-cloud@grid-orchestrator ~ live-session
+                                </span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-950/60 border border-emerald-800/50 text-emerald-400 font-mono text-[10px]">
+                                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                                    ACTIVE MESH
+                                </span>
+                            </div>
+                        </div>
+
+                        {/* Interactive Showcase Content Grid */}
+                        <div className="grid md:grid-cols-12 gap-6 items-center">
+                            {/* Terminal Logs Simulation */}
+                            <div className="md:col-span-7 bg-slate-950/90 rounded-lg p-4 font-mono text-xs text-slate-300 space-y-2.5 border border-slate-900 shadow-inner">
+                                <div className="flex items-center gap-2 text-slate-500">
+                                    <span>$ smsly deploy --ecosystem production --auto-scope</span>
+                                </div>
+                                <div className="flex items-center gap-2 text-cyan-400">
+                                    <span>[00:00.12] ⚙️ Initializing isolated project scope & DB addons...</span>
+                                </div>
+                                <div className="flex items-center gap-2 text-emerald-400">
+                                    <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                                    <span>[00:00.45] PostgreSQL & Redis bound to anchor service network</span>
+                                </div>
+                                <div className="flex items-center gap-2 text-emerald-400">
+                                    <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                                    <span>[00:00.89] Smart deployment queue filled 14 missing env secrets (48-char URL safe)</span>
+                                </div>
+                                <div className="flex items-center gap-2 text-emerald-400">
+                                    <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                                    <span>[00:01.24] Zero-downtime rolling deployment complete across 24 edge regions</span>
+                                </div>
+                                <div className="pt-2 border-t border-slate-900/80 flex items-center justify-between text-slate-400 text-[11px]">
+                                    <span>Status: <strong className="text-emerald-400">Healthy</strong></span>
+                                    <span>Latency: <strong className="text-cyan-400">18ms</strong></span>
+                                </div>
+                            </div>
+
+                            {/* Status Stats Badges */}
+                            <div className="md:col-span-5 grid grid-cols-2 gap-3 font-sans">
+                                <div className="bg-slate-900/60 p-3.5 rounded-xl border border-slate-800/60">
+                                    <div className="text-slate-400 text-[11px] font-medium flex items-center gap-1.5 mb-1">
+                                        <Activity className="w-3.5 h-3.5 text-emerald-400" /> Mesh Uptime
+                                    </div>
+                                    <div className="text-lg font-bold text-white">99.998%</div>
+                                    <div className="text-[10px] text-emerald-400 mt-0.5">0 incidents today</div>
+                                </div>
+                                <div className="bg-slate-900/60 p-3.5 rounded-xl border border-slate-800/60">
+                                    <div className="text-slate-400 text-[11px] font-medium flex items-center gap-1.5 mb-1">
+                                        <Globe className="w-3.5 h-3.5 text-cyan-400" /> Global PoPs
+                                    </div>
+                                    <div className="text-lg font-bold text-white">24 Active</div>
+                                    <div className="text-[10px] text-cyan-400 mt-0.5">Sub-50ms routing</div>
+                                </div>
+                                <div className="bg-slate-900/60 p-3.5 rounded-xl border border-slate-800/60 col-span-2 flex items-center justify-between">
+                                    <div className="flex items-center gap-2.5">
+                                        <div className="w-8 h-8 rounded-lg bg-violet-500/10 border border-violet-500/20 flex items-center justify-center">
+                                            <Cpu className="w-4 h-4 text-violet-400" />
+                                        </div>
+                                        <div>
+                                            <div className="text-xs font-bold text-white">Auto-Scaler Intelligence</div>
+                                            <div className="text-[10px] text-slate-400">Reactive container scaling active</div>
+                                        </div>
+                                    </div>
+                                    <span className="px-2 py-1 rounded bg-violet-500/10 text-violet-300 font-mono text-[10px] font-bold">READY</span>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </motion.div>
             </section>
@@ -480,8 +546,12 @@ export default function Home() {
                 <div className="absolute inset-0 galaxy-bg" />
                 <div className="stars-layer" />
                 <div className="stars-twinkle" />
-                <div className="nebula-patch w-[600px] h-[400px] bg-indigo-600 top-[10%] left-[5%] opacity-15" />
-                <div className="nebula-patch w-[500px] h-[500px] bg-purple-600 bottom-[5%] right-[10%] opacity-12" style={{ animationDelay: '-15s' }} />
+                <ParallaxLayer speed={0.15} className="absolute inset-0 pointer-events-none">
+                    <div className="nebula-patch w-[600px] h-[400px] bg-indigo-600 top-[10%] left-[5%] opacity-15" />
+                </ParallaxLayer>
+                <ParallaxLayer speed={-0.1} className="absolute inset-0 pointer-events-none">
+                    <div className="nebula-patch w-[500px] h-[500px] bg-purple-600 bottom-[5%] right-[10%] opacity-12" style={{ animationDelay: '-15s' }} />
+                </ParallaxLayer>
                 <div className="galaxy-arm w-[900px] h-[900px] border border-indigo-500/15 top-[-10%] left-[10%]" />
                 <div className="dust-lane w-[80%] top-[50%] left-[10%]" />
                 <motion.div
@@ -550,7 +620,9 @@ export default function Home() {
                 <div className="absolute inset-0 space-bg" />
                 <div className="stars-layer" />
                 <div className="stars-twinkle" />
-                <div className="nebula-patch w-[400px] h-[300px] bg-rose-600 top-[10%] right-[5%] opacity-10" />
+                <ParallaxLayer speed={0.15} className="absolute inset-0 pointer-events-none">
+                    <div className="nebula-patch w-[400px] h-[300px] bg-rose-600 top-[10%] right-[5%] opacity-10" />
+                </ParallaxLayer>
                 <motion.div
                     className="cosmic-body cosmic-neutronstar w-[300px] h-[300px] md:w-[440px] md:h-[440px] bottom-[5%] right-[8%] hidden md:block"
                     animate={{ y: [0, -10, 0] }}
@@ -629,7 +701,9 @@ export default function Home() {
                 <div className="absolute inset-0 space-bg" />
                 <div className="stars-layer" />
                 <div className="stars-twinkle" />
-                <div className="nebula-patch w-[500px] h-[400px] bg-cyan-600 bottom-[10%] left-[5%] opacity-12" style={{ animationDelay: '-8s' }} />
+                <ParallaxLayer speed={-0.12} className="absolute inset-0 pointer-events-none">
+                    <div className="nebula-patch w-[500px] h-[400px] bg-cyan-600 bottom-[10%] left-[5%] opacity-12" style={{ animationDelay: '-8s' }} />
+                </ParallaxLayer>
                 <motion.div
                     className="cosmic-body cosmic-blazar w-[280px] h-[280px] md:w-[400px] md:h-[400px] bottom-[8%] left-[5%] hidden md:block"
                     animate={{ y: [0, -12, 0] }}
@@ -732,7 +806,9 @@ export default function Home() {
                 <div className="absolute inset-0 space-bg" />
                 <div className="stars-layer" />
                 <div className="stars-twinkle" />
-                <div className="nebula-patch w-[400px] h-[350px] bg-rose-600 top-[15%] right-[8%] opacity-10" style={{ animationDelay: '-12s' }} />
+                <ParallaxLayer speed={0.2} className="absolute inset-0 pointer-events-none">
+                    <div className="nebula-patch w-[400px] h-[350px] bg-rose-600 top-[15%] right-[8%] opacity-10" style={{ animationDelay: '-12s' }} />
+                </ParallaxLayer>
                 <motion.div
                     className="cosmic-body cosmic-androgiant w-[350px] h-[350px] md:w-[500px] md:h-[500px] bottom-[5%] right-[3%] hidden md:block"
                     animate={{ y: [0, -10, 0] }}
@@ -783,8 +859,12 @@ export default function Home() {
                 <div className="absolute inset-0 space-bg" />
                 <div className="stars-layer" />
                 <div className="stars-twinkle" />
-                <div className="nebula-patch w-[700px] h-[500px] bg-emerald-600 top-[20%] left-[20%] opacity-10" />
-                <div className="nebula-patch w-[500px] h-[400px] bg-indigo-600 bottom-[10%] right-[10%] opacity-8" style={{ animationDelay: '-15s' }} />
+                <ParallaxLayer speed={0.1} className="absolute inset-0 pointer-events-none">
+                    <div className="nebula-patch w-[700px] h-[500px] bg-emerald-600 top-[20%] left-[20%] opacity-10" />
+                </ParallaxLayer>
+                <ParallaxLayer speed={-0.08} className="absolute inset-0 pointer-events-none">
+                    <div className="nebula-patch w-[500px] h-[400px] bg-indigo-600 bottom-[10%] right-[10%] opacity-8" style={{ animationDelay: '-15s' }} />
+                </ParallaxLayer>
                 <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-emerald-500/30 to-transparent" />
                 <motion.div
                     className="cosmic-body cosmic-protostar w-[350px] h-[350px] md:w-[500px] md:h-[500px] top-[10%] right-[10%] hidden md:block"

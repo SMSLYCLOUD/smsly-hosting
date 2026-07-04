@@ -791,19 +791,42 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
 
         try:
             plan_record = EcosystemPlan.objects.get(id=plan_id, user=request.user)
-            if project and not plan_record.project:
+            if not project and plan_record.project:
+                project = plan_record.project
+            elif project and not plan_record.project:
                 plan_record.project = project
         except EcosystemPlan.DoesNotExist:
+            plan_record = None
+
+        if not project:
+            services_plan = plan.get("services", []) if isinstance(plan, dict) else []
+            proj_name = str(
+                (plan.get("project_name") if isinstance(plan, dict) else None)
+                or (plan.get("name") if isinstance(plan, dict) else None)
+                or (services_plan[0].get("repo", "").split("/")[-1] if services_plan and isinstance(services_plan, list) and services_plan[0].get("repo") else "")
+                or "Ecosystem Cluster"
+            ).strip()
+            if not proj_name:
+                proj_name = "Ecosystem Cluster"
+            project = Project.objects.create(
+                owner=request.user,
+                name=proj_name[:100],
+                description="Auto-created by zero-config ecosystem deployment.",
+            )
+
+        if plan_record:
+            if not plan_record.project:
+                plan_record.project = project
+            plan_record.plan = plan
+            plan_record.status = EcosystemPlan.Status.DEPLOYING
+            plan_record.save()
+        else:
             plan_record = EcosystemPlan.objects.create(
                 user=request.user,
                 project=project,
                 plan=plan,
                 status=EcosystemPlan.Status.DEPLOYING,
             )
-        else:
-            plan_record.plan = plan
-            plan_record.status = EcosystemPlan.Status.DEPLOYING
-            plan_record.save()
 
         task = ecosystem_deploy_task.delay(
             str(request.user.id),

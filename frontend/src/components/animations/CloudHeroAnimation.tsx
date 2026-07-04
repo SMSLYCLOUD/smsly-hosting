@@ -58,7 +58,7 @@ export function CloudHeroAnimation() {
         ? (70 + Math.random() * 80)
         : (30 + Math.random() * 50);
 
-    const blobCount = 3 + Math.floor(Math.random() * 10);
+    const blobCount = 3 + Math.floor(Math.random() * 4);
     const blobs: { ox: number; oy: number; r: number }[] = [];
     blobs.push({ ox: 0, oy: 0, r: radius * (0.6 + Math.random() * 0.4) });
     for (let i = 1; i < blobCount; i++) {
@@ -114,11 +114,11 @@ export function CloudHeroAnimation() {
       birds.length = 0;
       particles.length = 0;
 
-      const count = 8 + Math.floor(Math.random() * 7);
+      const count = 5 + Math.floor(Math.random() * 3);
       for (let i = 0; i < count; i++) clouds.push(createCloud(w, h));
 
-      // Raindrops
-      for (let i = 0; i < 60; i++) {
+      // Raindrops (optimized count for 60fps)
+      for (let i = 0; i < 25; i++) {
         raindrops.push({
           x: Math.random() * w,
           y: Math.random() * h,
@@ -141,8 +141,8 @@ export function CloudHeroAnimation() {
         });
       }
 
-      // Floating light particles (pollen / dust motes)
-      for (let i = 0; i < 30; i++) {
+      // Floating light particles (optimized count for 60fps)
+      for (let i = 0; i < 15; i++) {
         particles.push({
           x: Math.random() * w,
           y: Math.random() * h,
@@ -505,15 +505,14 @@ export function CloudHeroAnimation() {
     };
 
     const handleMouse = (e: MouseEvent) => {
-      const rect = canvas.getBoundingClientRect();
-      mouseRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      mouseRef.current = { x: e.offsetX, y: e.offsetY };
     };
     const handleLeave = () => { mouseRef.current = { x: -1000, y: -1000 }; };
 
     init();
     animate();
-    canvas.addEventListener('mousemove', handleMouse);
-    canvas.addEventListener('mouseleave', handleLeave);
+    canvas.addEventListener('mousemove', handleMouse, { passive: true });
+    canvas.addEventListener('mouseleave', handleLeave, { passive: true });
     window.addEventListener('resize', init);
 
     return () => {

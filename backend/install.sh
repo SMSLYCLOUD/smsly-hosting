@@ -2850,7 +2850,17 @@ ensure_container_on_network() {
 
     docker container inspect "$container_name" >/dev/null 2>&1 || return 0
     docker network inspect "$network_name" >/dev/null 2>&1 || return 0
-    docker network connect "$network_name" "$container_name" >/dev/null 2>&1 || true
+
+    local alias_flag=""
+    if [[ "$raw_target" == *"socket-proxy"* || "$container_name" == *"socket-proxy"* ]]; then
+        alias_flag="--alias socket-proxy"
+    elif [[ "$raw_target" == *"traefik"* || "$container_name" == *"traefik"* ]]; then
+        alias_flag="--alias traefik"
+    elif [[ "$raw_target" == *"route-fallback"* || "$container_name" == *"route-fallback"* ]]; then
+        alias_flag="--alias route-fallback"
+    fi
+
+    docker network connect $alias_flag "$network_name" "$container_name" >/dev/null 2>&1 || true
 }
 
 # ─── Shared Caddy Safety Function ────────────────────────────────────────────
@@ -3066,6 +3076,7 @@ restart_edge_stack() {
     # If run before 'up -d', Docker Compose will forcefully strip 'smsly-proxy' 
     # since it's not defined in the compose file's networks block.
     ensure_container_on_network "smsly-net" "smsly-hosting-traefik-1"
+    ensure_container_on_network "smsly-net" "smsly-hosting-socket-proxy-1"
     if [ "$MODE_AGENT_LITE" != "true" ]; then
         ensure_container_on_network "smsly-net" "smsly-hosting-route-fallback-1"
     fi
@@ -3171,6 +3182,7 @@ refresh_runtime_services() {
     ensure_container_on_network "smsly-net" "smsly-hosting-route-fallback-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-traefik-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-frps-1"
+    ensure_container_on_network "smsly-net" "smsly-hosting-socket-proxy-1"
     ensure_container_on_network "smsly-proxy" "smsly-hosting-traefik-1"
     ensure_container_on_network "smsly-proxy" "smsly-hosting-socket-proxy-1"
 
@@ -3195,6 +3207,7 @@ refresh_runtime_services() {
 
         ensure_container_on_network "smsly-net" "smsly-hosting-route-fallback-1"
         ensure_container_on_network "smsly-net" "smsly-hosting-traefik-1"
+        ensure_container_on_network "smsly-net" "smsly-hosting-socket-proxy-1"
         ensure_container_on_network "smsly-proxy" "smsly-hosting-traefik-1"
         ensure_container_on_network "smsly-proxy" "smsly-hosting-socket-proxy-1"
 
@@ -4169,6 +4182,7 @@ fi
                 #    which works on running containers. No restart needed.
                 echo -e "${BLUE}    ↳ Reconnecting proxy network...${NC}"
                 for ctr in smsly-hosting-traefik-1 smsly-hosting-socket-proxy-1; do
+                    ensure_container_on_network "smsly-net" "$ctr"
                     ensure_container_on_network "smsly-proxy" "$ctr"
                 done
             fi

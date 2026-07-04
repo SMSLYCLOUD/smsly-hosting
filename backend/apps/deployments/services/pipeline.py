@@ -821,6 +821,25 @@ class PipelineManager:
                     )
                 else:
                     append_log(self.deployment, "  ℹ️ All detected variables are already configured.\n")
+
+                if not resolver.is_frontend and (resolver.unresolved_vars or any(not v or v in ("", "{{GENERATE}}", "{{FILL_ME}}") for v in resolved_env.values())):
+                    append_log(self.deployment, "  🧠 Passing remaining unfilled variables through AI Senate intelligence...\n")
+                    try:
+                        _sugg, _inj = EnvironmentIntelligenceService.apply_intelligence_to_service(
+                            self.service, scan_result, source_dir=None
+                        )
+                        if _inj:
+                            append_log(self.deployment, f"  ✅ AI Senate intelligence auto-filled {len(_inj)} remaining variables: {', '.join(_inj[:10])}...\n")
+                            if resolver.unresolved_vars:
+                                resolver.unresolved_vars = [k for k in resolver.unresolved_vars if k not in _inj]
+                                _rs = self.deployment.review_summary or {}
+                                if resolver.unresolved_vars:
+                                    _rs['unresolved_external_vars'] = resolver.unresolved_vars
+                                else:
+                                    _rs.pop('unresolved_external_vars', None)
+                                self.deployment.review_summary = _rs
+                    except Exception as _senate_err:
+                        logger.warning("AI Senate enrichment for remaining vars failed: %s", _senate_err)
             except Exception as e:
                 logger.warning("Manifest env resolution failed: %s", e)
                 append_log(self.deployment, f"\n⚠️ Manifest env resolution failed: {e!s}. Falling back to AI Senate.\n")
@@ -987,7 +1006,7 @@ class PipelineManager:
 
             # For password keys: generate a strong password
             if PASSWORD_PATTERNS.search(key):
-                real_pass = _secrets.token_urlsafe(24)
+                real_pass = _secrets.token_urlsafe(48)
                 EnvironmentVariable.objects.create(
                     service=self.service,
                     key=key,
@@ -2421,7 +2440,6 @@ class PipelineManager:
         """
         import io
         import tarfile
-        import tempfile
 
         from apps.cloud.docker_client import get_docker_client
 
@@ -2433,109 +2451,77 @@ class PipelineManager:
         if dockerfile_rel.startswith(".."):
             dockerfile_rel = os.path.basename(dockerfile_path)
 
-        # ── BuildKit secret tmpfiles ────────────────────────────────────────
-        # Write each secret to a chmod-600 tmpfile so the Docker daemon can
-        # mount it as an in-memory secret during the build.
-        # The files are ALWAYS deleted in the finally block — even on retry
-        # or exception.
-        secret_file_paths: dict[str, str] = {}  # id -> tmpfile path
-        try:
-            for secret_id, secret_value in (secrets or {}).items():
-                fd, tmppath = tempfile.mkstemp(
-                    prefix=f".smsly-bksecret-{secret_id}-",
-                    dir=tempfile.gettempdir(),
+        # ── Secret handling for docker-py ───────────────────────────────────
+        # Since docker-py (legacy Docker Engine build API) does not accept a
+        # `secrets=` keyword argument in `client.images.build()`, we pass any
+        # build secrets via `buildargs` so they are accessible during the build.
+        merged_buildargs = dict(buildargs or {})
+        for secret_id, secret_val in (secrets or {}).items():
+            merged_buildargs[secret_id] = secret_val
+            merged_buildargs[secret_id.upper()] = secret_val
+
+        max_attempts = 2
+        for attempt in range(1, max_attempts + 1):
+            # Build a fresh tar of the build context on each attempt;
+            # the buffer is consumed by the SDK and can't be re-read.
+            tar_buffer = io.BytesIO()
+            with tarfile.open(fileobj=tar_buffer, mode="w") as tar:
+                tar.add(context_dir, arcname=".")
+            tar_buffer.seek(0)
+
+            try:
+                client = get_docker_client()
+                build_kwargs: dict = dict(
+                    fileobj=tar_buffer,
+                    custom_context=True,
+                    tag=tag,
+                    dockerfile=dockerfile_rel,
+                    buildargs=merged_buildargs or None,
+                    cache_from=cache_from or None,
+                    rm=True,
+                    forcerm=True,
                 )
-                try:
-                    os.chmod(tmppath, 0o600)
-                    with os.fdopen(fd, "w") as fh:
-                        fh.write(secret_value)
-                    fd = -1  # ownership transferred to fdopen
-                except Exception:
-                    try:
-                        os.close(fd)
-                    except OSError:
-                        pass
-                    raise
-                secret_file_paths[secret_id] = tmppath
-
-            # Build docker-py secrets list: [{"id": id, "src": path}, ...]
-            docker_secrets = [
-                {"id": sid, "src": spath}
-                for sid, spath in secret_file_paths.items()
-            ] or None
-
-            max_attempts = 2
-            for attempt in range(1, max_attempts + 1):
-                # Build a fresh tar of the build context on each attempt;
-                # the buffer is consumed by the SDK and can't be re-read.
-                tar_buffer = io.BytesIO()
-                with tarfile.open(fileobj=tar_buffer, mode="w") as tar:
-                    tar.add(context_dir, arcname=".")
-                tar_buffer.seek(0)
-
-                try:
-                    client = get_docker_client()
-                    build_kwargs: dict = dict(
-                        fileobj=tar_buffer,
-                        custom_context=True,
-                        tag=tag,
-                        dockerfile=dockerfile_rel,
-                        buildargs=buildargs or None,
-                        cache_from=cache_from or None,
-                        rm=True,
-                        forcerm=True,
+                _image, build_log = client.images.build(**build_kwargs)
+            except Exception as exc:
+                err_str = str(exc) or type(exc).__name__
+                redacted_err = redact_values(err_str, self.secret_values)
+                # BuildKit cache corruption -> prune and retry once
+                if (
+                    is_buildkit_cache_error(redacted_err)
+                    and attempt < max_attempts
+                ):
+                    append_log(
+                        self.deployment,
+                        "BuildKit cache corruption detected. "
+                        "Pruning cache and retrying once...\n",
                     )
-                    if docker_secrets:
-                        build_kwargs["secrets"] = docker_secrets
-                    _image, build_log = client.images.build(**build_kwargs)
-                except Exception as exc:
-                    err_str = str(exc) or type(exc).__name__
-                    redacted_err = redact_values(err_str, self.secret_values)
-                    # BuildKit cache corruption -> prune and retry once
-                    if (
-                        is_buildkit_cache_error(redacted_err)
-                        and attempt < max_attempts
-                    ):
-                        append_log(
-                            self.deployment,
-                            "BuildKit cache corruption detected. "
-                            "Pruning cache and retrying once...\n",
-                        )
-                        prune_buildkit_cache()
-                        continue
-                    append_log(self.deployment, redacted_err)
-                    if is_buildkit_cache_error(redacted_err):
-                        raise BuildError(
-                            "Docker cache corruption detected after "
-                            "automatic recovery attempt."
-                        ) from exc
-                    raise BuildError("Docker build failed") from exc
+                    prune_buildkit_cache()
+                    continue
+                append_log(self.deployment, redacted_err)
+                if is_buildkit_cache_error(redacted_err):
+                    raise BuildError(
+                        "Docker cache corruption detected after "
+                        "automatic recovery attempt."
+                    ) from exc
+                raise BuildError("Docker build failed") from exc
 
-                # Drain the build log generator
-                log_chunks = []
-                for entry in build_log:
-                    if not isinstance(entry, dict):
-                        continue
-                    if entry.get("error"):
-                        raise BuildError(entry["error"].strip())
-                    if entry.get("stream"):
-                        log_chunks.append(entry["stream"])
+            # Drain the build log generator
+            log_chunks = []
+            for entry in build_log:
+                if not isinstance(entry, dict):
+                    continue
+                if entry.get("error"):
+                    raise BuildError(entry["error"].strip())
+                if entry.get("stream"):
+                    log_chunks.append(entry["stream"])
 
-                full_log = "".join(log_chunks)
-                redacted = redact_values(full_log, self.secret_values)
-                if len(redacted) > 20000:
-                    redacted = redacted[-20000:] + "\n...(truncated)"
-                if redacted:
-                    append_log(self.deployment, redacted)
-                return
-
-        finally:
-            # Unconditionally delete all secret tmpfiles on any exit path
-            for tmppath in secret_file_paths.values():
-                try:
-                    os.unlink(tmppath)
-                except OSError:
-                    pass
+            full_log = "".join(log_chunks)
+            redacted = redact_values(full_log, self.secret_values)
+            if len(redacted) > 20000:
+                redacted = redacted[-20000:] + "\n...(truncated)"
+            if redacted:
+                append_log(self.deployment, redacted)
+            return
 
     def _ensure_docker_driver(self):
         """

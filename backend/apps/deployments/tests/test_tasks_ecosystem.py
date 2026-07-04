@@ -609,11 +609,12 @@ class EcosystemDeployTaskTests(TestCase):
         self.assertEqual(port, 8080)
 
     @patch("apps.deployments.tasks_ecosystem._queue_wave", return_value=1)
-    def test_addon_reuse_user_wide(self, _queue_wave):
-        """Verify that deploying new services reuses existing user-wide active addons."""
+    @patch("services.addon_provisioner.provision", return_value=("mock-cid", "postgresql://new-user:new-pass@new-db:5432/app"))
+    def test_addon_no_reuse_user_wide(self, _provision, _queue_wave):
+        """Verify that deploying new ecosystem services does NOT reuse unrelated existing user-wide addons."""
         from apps.deployments.models_addons import Addon
 
-        # Create an existing active addon for the user
+        # Create an existing active addon for an unrelated service of the user
         existing_service = Service.objects.create(
             owner=self.user,
             name="core-service",
@@ -648,7 +649,7 @@ class EcosystemDeployTaskTests(TestCase):
         self.assertEqual(result["failed"], 0)
         new_svc = Service.objects.get(owner=self.user, name="new-api")
         db_url_env = EnvironmentVariable.objects.get(service=new_svc, key="DATABASE_URL")
-        self.assertEqual(db_url_env.value, "postgresql://reused-user:reused-pass@reused-db:5432/app")
+        self.assertEqual(db_url_env.value, "postgresql://new-user:new-pass@new-db:5432/app")
 
     def test_heuristic_analysis_is_dynamic(self):
         """Heuristic analysis detects Dockerfile if present, otherwise defaults to nixpacks."""

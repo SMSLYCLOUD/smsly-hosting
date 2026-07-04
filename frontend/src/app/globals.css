@@ -405,18 +405,24 @@
   border-radius: 50%;
   pointer-events: none;
   filter: blur(80px);
+  will-change: transform;
+  transform: translateZ(0);
+  backface-visibility: hidden;
   animation: nebula-drift 30s ease-in-out infinite alternate;
 }
 @keyframes nebula-drift {
-  0% { transform: translate(0, 0) scale(1); opacity: 0.15; }
-  50% { transform: translate(20px, -10px) scale(1.1); opacity: 0.25; }
-  100% { transform: translate(-10px, 15px) scale(0.95); opacity: 0.15; }
+  0% { transform: translate3d(0, 0, 0) scale(1); opacity: 0.15; }
+  50% { transform: translate3d(20px, -10px, 0) scale(1.1); opacity: 0.25; }
+  100% { transform: translate3d(-10px, 15px, 0) scale(0.95); opacity: 0.15; }
 }
 
 /* All cosmic bodies are absolute-positioned divs */
 .cosmic-body {
   position: absolute;
   pointer-events: none;
+  will-change: transform;
+  transform: translateZ(0);
+  backface-visibility: hidden;
 }
 
 /* ===== 1. BLACK HOLE ===== */

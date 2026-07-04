@@ -44,6 +44,7 @@ const API_V1_PREFIXES = [
   '/api/v1/notifications',
   '/api/v1/observability',
   '/api/v1/database-replicas',
+  '/api/v1/cloud-storage',
 ]
 
 const API_V1_EXACT_PATHS = [

@@ -7070,12 +7070,15 @@ class SecurityStatusView(GenericAPIView):
             "installed": False,
         }
         try:
-            trivy_result = subprocess.run(
-                ["trivy", "--version"],
-                capture_output=True, text=True, timeout=5,
-            )
-            trivy["installed"] = trivy_result.returncode == 0
-        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            from apps.deployments.utils import find_binary
+            trivy_bin = find_binary("trivy")
+            if trivy_bin:
+                trivy_result = subprocess.run(
+                    [trivy_bin, "--version"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                trivy["installed"] = trivy_result.returncode == 0
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError, ImportError):
             trivy["installed"] = False
 
         # ── Kernel hardening ────────────────────────────────────────

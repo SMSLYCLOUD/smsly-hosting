@@ -405,8 +405,20 @@ class NixpacksBuilder:
         fail_idx = severities.index(fail_on)
         severity_arg = ",".join(severities[fail_idx:])
 
+        try:
+            from apps.deployments.utils import find_binary
+            trivy_bin = find_binary("trivy")
+            if not trivy_bin:
+                raise FileNotFoundError("trivy binary not found in PATH or standard directories")
+        except Exception:
+            logger.warning(
+                "WARNING: Trivy binary not found — image built WITHOUT "
+                "security scan. Install Trivy for vulnerability scanning."
+            )
+            return {"status": "unscanned", "reason": "trivy_missing"}
+
         command = [
-            "trivy",
+            trivy_bin,
             "image",
             "--format", "json",
             "--severity", severity_arg,
@@ -432,13 +444,13 @@ class NixpacksBuilder:
             fail_count = 0
             for result_item in report.get('Results', []):
                 for vuln in result_item.get('Vulnerabilities', []):
-                    if vuln['Severity'] == fail_on:
+                    if vuln.get('Severity', '').upper() in severities[fail_idx:]:
                         fail_count += 1
 
             if fail_count > 0:
                 msg = (
-                    f"Security Scan Failed: Found {fail_count} {fail_on} "
-                    f"vulnerabilit{'y' if fail_count == 1 else 'ies'}."
+                    f"Security Scan Failed: Found {fail_count} blocking "
+                    f"vulnerabilit{'y' if fail_count == 1 else 'ies'} (at or above {fail_on})."
                 )
                 logger.error(msg)
                 raise RuntimeError(msg)

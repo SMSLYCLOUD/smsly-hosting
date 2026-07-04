@@ -377,6 +377,29 @@ class PostgresSnapshotManager:
                          str(e), exc_info=True)
             return False
 
+    def create_empty_database(self, db_name: str) -> bool:
+        """Create a fresh, empty database without cloning production data."""
+        _validate_db_name(db_name)
+        maintenance_url = self._get_maintenance_url()
+        try:
+            from psycopg2 import sql as pg_sql
+            drop_query = pg_sql.SQL("DROP DATABASE IF EXISTS {};").format(
+                pg_sql.Identifier(db_name)
+            )
+            drop_sql = self._format_sql(drop_query)
+            self._run_psql(maintenance_url, drop_sql, check=False)
+
+            create_query = pg_sql.SQL("CREATE DATABASE {};").format(
+                pg_sql.Identifier(db_name)
+            )
+            create_sql = self._format_sql(create_query)
+            self._run_psql(maintenance_url, create_sql, check=True)
+            logger.info("Created empty preview database %s", db_name)
+            return True
+        except Exception as e:
+            logger.error("create_empty_database error: %s", str(e), exc_info=True)
+            return False
+
     def destroy_clone(self, clone_db_name: str) -> bool:
         _validate_db_name(clone_db_name)
         if 'prod' in clone_db_name.lower() or 'main' in clone_db_name.lower():

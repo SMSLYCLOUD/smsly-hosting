@@ -769,25 +769,31 @@ def _resolve_from_manifest_or_fallback(
                 else:
                     manifest_resolved[key] = value
 
+            for unres_k in getattr(resolver, "unresolved_vars", []):
+                if unres_k not in manifest_resolved:
+                    manifest_resolved[unres_k] = ""
+
             logger.info(
                 "Manifest resolver filled %d vars for %s (stack=%s)",
                 len(manifest_resolved), service_name, resolver.stack,
             )
-            return manifest_resolved
+            resolved_env = manifest_resolved
 
         except Exception as exc:
             logger.warning(
                 "Manifest resolver failed for %s: %s; falling back to placeholder + AI Senate",
                 service_name, exc,
             )
+            resolved_env = None
 
-    # Fallback: original placeholder resolution + AI Senate
-    env_vars = _normalize_env_vars(svc_plan.get("env_vars", {}))
-    resolved_env = _resolve_env_placeholders(
-        env_vars, created_services,
-        shared_addons=shared_addons,
-        shared_secrets=shared_secrets,
-    )
+    if resolved_env is None:
+        # Fallback: original placeholder resolution
+        env_vars = _normalize_env_vars(svc_plan.get("env_vars", {}))
+        resolved_env = _resolve_env_placeholders(
+            env_vars, created_services,
+            shared_addons=shared_addons,
+            shared_secrets=shared_secrets,
+        )
 
     _is_frontend = stack in {"nextjs", "nuxt"} or "frontend" in service_name.lower()
     if getattr(settings, "SENATE_ENABLED", True) and not _is_frontend:
@@ -1753,6 +1759,42 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
         except Project.DoesNotExist:
             pass  # project_id is advisory — services will be created without project
 
+    if not project and plan_id:
+        from apps.deployments.models_ecosystem import EcosystemPlan
+        try:
+            _plan_rec = EcosystemPlan.objects.get(id=plan_id)
+            if _plan_rec.project:
+                project = _plan_rec.project
+        except Exception:
+            pass
+
+    if not project:
+        from apps.deployments.models_core import Project
+        proj_name = str(
+            plan.get("project_name")
+            or plan.get("name")
+            or (services_plan[0].get("repo", "").split("/")[-1] if services_plan and services_plan[0].get("repo") else "")
+            or "Ecosystem Cluster"
+        ).strip()
+        if not proj_name:
+            proj_name = "Ecosystem Cluster"
+        project = Project.objects.create(
+            owner=user,
+            name=proj_name[:100],
+            description="Auto-created by zero-config ecosystem deployment.",
+        )
+        logger.info("Auto-created project '%s' (%s) for ecosystem deployment", project.name, project.id)
+
+    if plan_id:
+        from apps.deployments.models_ecosystem import EcosystemPlan
+        try:
+            _plan_rec = EcosystemPlan.objects.get(id=plan_id)
+            if project and not _plan_rec.project:
+                _plan_rec.project = project
+                _plan_rec.save(update_fields=["project", "updated_at"])
+        except Exception:
+            pass
+
     # 1. Parse and validate manifest if provided, bulk verify env before continuing
     manifest_content = plan.get("manifest")
     if manifest_content:
@@ -1857,11 +1899,15 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             existing_svc = Service.objects.filter(owner=user, name=anchor_name).first()
             if existing_svc:
                 addon_anchor_service = existing_svc
+                if project and addon_anchor_service.project != project:
+                    addon_anchor_service.project = project
+                    addon_anchor_service.save(update_fields=["project", "updated_at"])
             else:
                 final_anchor_name = _next_available_service_name(Service, anchor_name)
                 addon_anchor_service = Service.objects.create(
                     name=final_anchor_name,
                     owner=user,
+                    project=project,
                     repository_url=_repository_url(repo),
                     branch=anchor_branch,
                     internal_port=anchor_port,
@@ -1886,16 +1932,6 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
         for addon_type in required_addons:
             if addon_type not in supported_addons:
                 logger.warning("Ecosystem addon %s is not supported; skipping", addon_type)
-                continue
-
-            existing_addon = Addon.objects.filter(
-                service__owner=user,
-                addon_type=addon_type,
-                status=Addon.Status.ACTIVE,
-            ).exclude(connection_url__exact='').first()
-            if existing_addon:
-                provisioned_addon_urls[addon_type] = existing_addon.connection_url
-                logger.info("Reusing existing user-wide %s addon: %s", addon_type, existing_addon.id)
                 continue
 
             existing_addon = Addon.objects.filter(service=addon_anchor_service, addon_type=addon_type).first()
@@ -1968,6 +2004,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                 Service.objects.create(
                     name=requested_name,
                     owner=user,
+                    project=project,
                     repository_url=_repository_url(repo),
                     branch=str(
                         svc_plan.get("branch")
@@ -2005,6 +2042,9 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                     server=server,
                 )
                 _rollback_services.append(str(service.id))
+            elif project and service.project != project:
+                service.project = project
+                service.save(update_fields=["project", "updated_at"])
 
             service_profile = {**svc_plan, "repo": repo}
             if target_is_local and server is None:

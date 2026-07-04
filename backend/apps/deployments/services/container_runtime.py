@@ -52,31 +52,46 @@ def detect_best_runtime() -> str:
 
 
 def _kata_available() -> bool:
-    """Check if kata-runtime is installed and KVM is available."""
-    if not shutil.which("kata-runtime"):
-        return False
-    if not os.path.exists("/dev/kvm"):
-        return False
+    """Check if kata-runtime is installed and available."""
     try:
+        from apps.deployments.utils import find_binary
+        docker_bin = find_binary("docker") or "docker"
         result = subprocess.run(
-            ["kata-runtime", "kata-check", "--verbose"],
+            [docker_bin, "info", "--format", "{{json .Runtimes}}"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0 and ("kata-runtime" in result.stdout or "kata" in result.stdout):
+            return True
+        kata_bin = find_binary("kata-runtime")
+        if not kata_bin:
+            return False
+        if not os.path.exists("/dev/kvm"):
+            return False
+        result = subprocess.run(
+            [kata_bin, "kata-check", "--verbose"],
             capture_output=True, text=True, timeout=15,
         )
         return result.returncode == 0
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError, ImportError):
         return False
 
 
 def _runsc_available() -> bool:
-    """Check if gVisor (runsc) runtime is registered with Docker."""
+    """Check if gVisor (runsc) runtime is available."""
     try:
+        from apps.deployments.utils import find_binary
+        docker_bin = find_binary("docker") or "docker"
         result = subprocess.run(
-            ["docker", "info", "--format", "{{json .Runtimes}}"],
+            [docker_bin, "info", "--format", "{{json .Runtimes}}"],
             capture_output=True, text=True, timeout=10,
         )
-        return "runsc" in result.stdout
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        if "runsc" in result.stdout:
+            return True
+        if find_binary("runsc"):
+            return True
         return False
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError, ImportError):
+        return bool(shutil.which("runsc") or os.path.exists("/usr/local/bin/runsc") or os.path.exists("/usr/bin/runsc"))
 
 
 def is_sandboxed_runtime(runtime: str | None) -> bool:

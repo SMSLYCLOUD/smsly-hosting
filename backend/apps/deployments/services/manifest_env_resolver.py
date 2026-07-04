@@ -347,12 +347,17 @@ _HEURISTIC_DEFAULTS: dict[str, str] = {
     "OTEL_EXPORTER_OTLP_ENDPOINT": "",
     # Rust
     "RUST_LOG": "info",
-    # Vault
+    # Vault (HashiCorp / Infiscial)
     "VAULT_ADDR": "",
     "VAULT_TOKEN": "{{GENERATED}}",
     "VAULT_DEV_ROOT_TOKEN_ID": "{{GENERATED}}",
     "VAULT_DEV_LISTEN_ADDRESS": "0.0.0.0:8200",
     "VAULT_API_ADDR": "",
+    "INFISCIAL_TOKEN": "{{GENERATED}}",
+    "INFISCIAL_PROJECT_ID": "",
+    "INFISCIAL_SITE_URL": "https://app.infiscial.com",
+    "INFISCIAL_ENVIRONMENT": "production",
+    "INFISCIAL_API_URL": "https://api.infiscial.com",
     # S3
     "S3_BUCKET": "",
     "S3_BUCKET_NAME": "",

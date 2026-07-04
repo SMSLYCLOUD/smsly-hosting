@@ -11,9 +11,64 @@ from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from django.conf import settings
 
+from apps.deployments.middleware import get_user_from_token
 from apps.deployments.utils import log_event
 
 logger = logging.getLogger(__name__)
+
+
+@database_sync_to_async
+def authenticate_ws_token(token_key: str):
+    """
+    Validate WS token against DRF Tokens and APITokens, returning the active User if valid.
+    """
+    import hashlib
+    from django.core.cache import cache
+    from rest_framework.authtoken.models import Token
+
+    if not token_key or not isinstance(token_key, str):
+        return None
+
+    cache_key = f'invalid_token:{hashlib.sha256(token_key.encode()).hexdigest()}'
+    if cache.get(cache_key):
+        return None
+
+    try:
+        # Check standard DRF Token first
+        token = Token.objects.select_related('user').get(key=token_key)
+        if token.user.is_active:
+            return token.user
+    except Token.DoesNotExist:
+        # Check custom APIToken (CLI-style access)
+        try:
+            from apps.deployments.api_token_auth import APIToken
+            token_hash = hashlib.sha256(token_key.encode()).hexdigest()
+            api_token = APIToken.objects.select_related('user').get(
+                token_hash=token_hash, is_active=True
+            )
+            if api_token.user.is_active:
+                return api_token.user
+        except Exception:
+            pass
+
+    cache.set(cache_key, True, 300)
+    return None
+
+
+def get_websocket_subprotocol(scope):
+    """
+    Return the subprotocol to negotiate during WebSocket accept().
+    When XtermConsole or a browser client requests subprotocols (e.g. ['token', '<wsToken>']),
+    RFC 6455 requires the server to echo the accepted subprotocol in Sec-WebSocket-Protocol.
+    Failing to do so causes the browser to close the connection immediately with code 1006.
+    """
+    subprotocols = scope.get('subprotocols') or []
+    if 'token' in subprotocols:
+        return 'token'
+    for p in subprotocols:
+        if p and p.startswith('token.'):
+            return p
+    return subprotocols[0] if subprotocols else None
 
 
 class TerminalConsumer(AsyncWebsocketConsumer):
@@ -124,10 +179,10 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 await self.close(code=4003)
                 return
 
-            # Accept the WS with the negotiated 'token' subprotocol so
+            # Accept the WS with the negotiated subprotocol so
             # the client can verify the handshake honored the marker.
             # The actual auth key is never echoed in the response.
-            await self.accept(subprotocol='token')
+            await self.accept(subprotocol=get_websocket_subprotocol(self.scope))
             self._accepted = True
 
             # ── INITIALIZE ──
@@ -642,60 +697,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             logger.error("Error starting exec: %s", e)
             return False
 
-    @database_sync_to_async
-    def _authenticate_token(self, token_key):
-        """Validate token and return user with enhanced error handling."""
-        import hashlib
-
-        from django.core.cache import cache
-        from rest_framework.authtoken.models import Token
-
-        if not token_key or not isinstance(token_key, str):
-            logger.warning("Invalid token format: %s", type(token_key))
-            return None
-
-        # Basic token format validation (should be 40 chars hex)
-        if len(token_key) != 40 or not all(c in '0123456789abcdef' for c in token_key):
-            logger.warning("Token format validation failed: %s", token_key[:10] + '...')
-            return None
-
-        # Check for common invalid token patterns
-        if token_key.startswith('0') * 40 or token_key == '0' * 40:
-            logger.warning("Invalid token pattern detected")
-            return None
-
-        # Use cache to reduce database load for invalid tokens
-        cache_key = f'invalid_token:{hashlib.sha256(token_key.encode()).hexdigest()}'
-        if cache.get(cache_key):
-            logger.info("Token found in invalid cache: %s", token_key[:10] + '...')
-            return None
-
-        try:
-            token = Token.objects.select_related('user').get(key=token_key)
-
-            # Additional validation: check if user is active
-            if not token.user.is_active:
-                logger.warning("User account inactive for token: %s", token_key[:10] + '...')
-                cache.set(cache_key, True, 300)  # Cache for 5 minutes
-                return None
-
-            # Check if user has required permissions
-            if not token.user.has_perm('deployments.view_deployment'):
-                logger.warning("User lacks required permissions for token: %s", token_key[:10] + '...')
-                cache.set(cache_key, True, 300)  # Cache for 5 minutes
-                return None
-
-            logger.debug("Token validated successfully for user: %s", token.user.username)
-            return token.user
-
-        except Token.DoesNotExist:
-            logger.warning("Token not found: %s", token_key[:10] + '...')
-            # Cache the invalid token to prevent repeated database hits
-            cache.set(cache_key, True, 300)  # Cache for 5 minutes
-            return None
-        except Exception as e:
-            logger.error("Error during token authentication: %s", e, exc_info=True)
-            return None
+    async def _authenticate_token(self, token_key):
+        return await authenticate_ws_token(token_key)
 
     @database_sync_to_async
     def _verify_ownership(self):
@@ -759,7 +762,7 @@ class BuildLogConsumer(AsyncWebsocketConsumer):
         self.deployment_id = self.scope['url_route']['kwargs']['deployment_id']
 
         # ── ACCEPT IMMEDIATELY: Prevent proxy timeouts during auth ──
-        await self.accept()
+        await self.accept(subprotocol=get_websocket_subprotocol(self.scope))
 
         try:
             # Authenticate
@@ -861,60 +864,8 @@ class BuildLogConsumer(AsyncWebsocketConsumer):
 
     # ── Database helpers ────────────────────────────────────────────────
 
-    @database_sync_to_async
-    def _authenticate_token(self, token_key):
-        """Validate token and return user with enhanced error handling."""
-        import hashlib
-
-        from django.core.cache import cache
-        from rest_framework.authtoken.models import Token
-
-        if not token_key or not isinstance(token_key, str):
-            logger.warning("Invalid token format: %s", type(token_key))
-            return None
-
-        # Basic token format validation (should be 40 chars hex)
-        if len(token_key) != 40 or not all(c in '0123456789abcdef' for c in token_key):
-            logger.warning("Token format validation failed: %s", token_key[:10] + '...')
-            return None
-
-        # Check for common invalid token patterns
-        if token_key.startswith('0') * 40 or token_key == '0' * 40:
-            logger.warning("Invalid token pattern detected")
-            return None
-
-        # Use cache to reduce database load for invalid tokens
-        cache_key = f'invalid_token:{hashlib.sha256(token_key.encode()).hexdigest()}'
-        if cache.get(cache_key):
-            logger.info("Token found in invalid cache: %s", token_key[:10] + '...')
-            return None
-
-        try:
-            token = Token.objects.select_related('user').get(key=token_key)
-
-            # Additional validation: check if user is active
-            if not token.user.is_active:
-                logger.warning("User account inactive for token: %s", token_key[:10] + '...')
-                cache.set(cache_key, True, 300)  # Cache for 5 minutes
-                return None
-
-            # Check if user has required permissions
-            if not token.user.has_perm('deployments.view_deployment'):
-                logger.warning("User lacks required permissions for token: %s", token_key[:10] + '...')
-                cache.set(cache_key, True, 300)  # Cache for 5 minutes
-                return None
-
-            logger.debug("Token validated successfully for user: %s", token.user.username)
-            return token.user
-
-        except Token.DoesNotExist:
-            logger.warning("Token not found: %s", token_key[:10] + '...')
-            # Cache the invalid token to prevent repeated database hits
-            cache.set(cache_key, True, 300)  # Cache for 5 minutes
-            return None
-        except Exception as e:
-            logger.error("Error during token authentication: %s", e, exc_info=True)
-            return None
+    async def _authenticate_token(self, token_key):
+        return await authenticate_ws_token(token_key)
 
     @database_sync_to_async
     def _verify_ownership(self):
@@ -1119,77 +1070,8 @@ class ServiceStatusConsumer(AsyncWebsocketConsumer):
             'updated_at': event.get('updated_at', ''),
         }))
 
-    @database_sync_to_async
-    def _authenticate_token(self, token_key):
-        """Validate token and return user with enhanced error handling."""
-        import hashlib
-
-        from django.contrib.auth import get_user_model
-        from django.core import signing
-        from django.core.cache import cache
-
-        if not token_key or not isinstance(token_key, str):
-            logger.warning("Invalid token format: %s", type(token_key))
-            return None
-
-        User = get_user_model()
-
-        # 1. Try to decode as a short-lived signed token (frontend WebSocket auth)
-        try:
-            # Token valid for 60 seconds
-            data = signing.loads(token_key, salt='ws-terminal', max_age=60)
-            user = User.objects.get(id=data['user_id'])
-            if user.is_active and user.has_perm('deployments.view_deployment'):
-                return user
-        except Exception:
-            # Not a signed token, proceed to check if it's a DRF token
-            pass
-
-        # 2. Fallback to checking if it's a long-lived DRF token
-        from rest_framework.authtoken.models import Token
-
-        # Basic token format validation (should be 40 chars hex)
-        if len(token_key) != 40 or not all(c in '0123456789abcdef' for c in token_key):
-            logger.warning("Token format validation failed: %s", token_key[:10] + '...')
-            return None
-
-        # Check for common invalid token patterns
-        if token_key.startswith('0') * 40 or token_key == '0' * 40:
-            logger.warning("Invalid token pattern detected")
-            return None
-
-        # Use cache to reduce database load for invalid tokens
-        cache_key = f'invalid_token:{hashlib.sha256(token_key.encode()).hexdigest()}'
-        if cache.get(cache_key):
-            logger.info("Token found in invalid cache: %s", token_key[:10] + '...')
-            return None
-
-        try:
-            token = Token.objects.select_related('user').get(key=token_key)
-
-            # Additional validation: check if user is active
-            if not token.user.is_active:
-                logger.warning("User account inactive for token: %s", token_key[:10] + '...')
-                cache.set(cache_key, True, 300)  # Cache for 5 minutes
-                return None
-
-            # Check if user has required permissions
-            if not token.user.has_perm('deployments.view_deployment'):
-                logger.warning("User lacks required permissions for token: %s", token_key[:10] + '...')
-                cache.set(cache_key, True, 300)  # Cache for 5 minutes
-                return None
-
-            logger.debug("Token validated successfully for user: %s", token.user.username)
-            return token.user
-
-        except Token.DoesNotExist:
-            logger.warning("Token not found: %s", token_key[:10] + '...')
-            # Cache the invalid token to prevent repeated database hits
-            cache.set(cache_key, True, 300)  # Cache for 5 minutes
-            return None
-        except Exception as e:
-            logger.error("Error during token authentication: %s", e, exc_info=True)
-            return None
+    async def _authenticate_token(self, token_key):
+        return await authenticate_ws_token(token_key)
 
     @database_sync_to_async
     def _get_user_services(self):
@@ -1248,7 +1130,7 @@ class BackupProgressConsumer(AsyncWebsocketConsumer):
 
     async def connect(self):
         self.backup_id = self.scope['url_route']['kwargs']['backup_id']
-        await self.accept()
+        await self.accept(subprotocol=get_websocket_subprotocol(self.scope))
         try:
             query_string = self.scope.get('query_string', b'').decode()
             token_key = None
@@ -1292,27 +1174,8 @@ class BackupProgressConsumer(AsyncWebsocketConsumer):
             'timestamp': event.get('timestamp', ''),
         }))
 
-    @database_sync_to_async
-    def _authenticate_token(self, token_key):
-        import hashlib
-        from django.core.cache import cache
-        from rest_framework.authtoken.models import Token
-        if not token_key or not isinstance(token_key, str):
-            return None
-        if len(token_key) != 40 or not all(c in '0123456789abcdef' for c in token_key):
-            return None
-        cache_key = f'invalid_token:{hashlib.sha256(token_key.encode()).hexdigest()}'
-        if cache.get(cache_key):
-            return None
-        try:
-            token = Token.objects.select_related('user').get(key=token_key)
-            if not token.user.is_active:
-                cache.set(cache_key, True, 300)
-                return None
-            return token.user
-        except Token.DoesNotExist:
-            cache.set(cache_key, True, 300)
-            return None
+    async def _authenticate_token(self, token_key):
+        return await authenticate_ws_token(token_key)
 
 
 class PlatformUpdateConsumer(AsyncWebsocketConsumer):
@@ -1328,36 +1191,47 @@ class PlatformUpdateConsumer(AsyncWebsocketConsumer):
 
     async def connect(self):
         self.update_id = self.scope['url_route']['kwargs']['update_id']
-        await self.accept()
 
         try:
-            query_string = self.scope.get('query_string', b'').decode()
+            subprotocols = self.scope.get('subprotocols') or []
             token_key = None
-            for param in query_string.split('&'):
-                if param.startswith('token='):
-                    token_key = param.split('=', 1)[1]
+            for proto in subprotocols:
+                if not proto:
+                    continue
+                if proto.startswith('token.'):
+                    token_key = proto[len('token.'):]
                     break
+                if proto != 'token':
+                    token_key = proto
+                    break
+            if not token_key and len(subprotocols) == 1 and subprotocols[0] and subprotocols[0] != 'token':
+                token_key = subprotocols[0]
 
             if not token_key:
-                subprotocols = self.scope.get('subprotocols') or []
-                for proto in subprotocols:
-                    if proto.startswith('token.'):
-                        token_key = proto[len('token.'):]
-                        break
-                    if proto != 'token' and proto:
-                        token_key = proto
+                query_string = self.scope.get('query_string', b'').decode()
+                for param in query_string.split('&'):
+                    if param.startswith('token='):
+                        token_key = param.split('=', 1)[1]
                         break
 
-            if not token_key:
-                await self.send(text_data=json.dumps({'error': 'Missing token'}))
+            if token_key:
+                self.user = await self._authenticate_token(token_key)
+            else:
+                user = self.scope.get('user')
+                if user and getattr(user, 'is_authenticated', False) and getattr(user, 'is_active', False):
+                    self.user = user
+
+            if not self.user or not getattr(self.user, 'is_authenticated', False):
+                logger.warning("PlatformUpdateConsumer rejected: Unauthenticated connection for update %s", self.update_id)
                 await self.close(code=4001)
                 return
 
-            self.user = await self._authenticate_token(token_key)
-            if not self.user or not (self.user.is_staff or self.user.is_superuser):
-                await self.send(text_data=json.dumps({'error': 'Admin access required'}))
+            if not (self.user.is_staff or self.user.is_superuser):
+                logger.warning("PlatformUpdateConsumer rejected: Admin access required for update %s", self.update_id)
                 await self.close(code=4003)
                 return
+
+            await self.accept(subprotocol=get_websocket_subprotocol(self.scope))
 
             self.group_name = f"platform_update_{self.update_id}"
             await self.channel_layer.group_add(self.group_name, self.channel_name)
@@ -1366,12 +1240,12 @@ class PlatformUpdateConsumer(AsyncWebsocketConsumer):
             if update_data:
                 await self.send(text_data=json.dumps({
                     "type": "initial_state",
-                    "status": update_data["status"],
-                    "progress_percent": update_data["progress_percent"],
-                    "current_step": update_data["current_step"],
-                    "logs": update_data["logs"],
+                    "status": update_data.get("status", ""),
+                    "progress_percent": update_data.get("progress_percent", 0),
+                    "current_step": update_data.get("current_step", ""),
+                    "logs": update_data.get("logs", ""),
                 }))
-                if update_data["logs"]:
+                if update_data.get("logs"):
                     b64_msg = base64.b64encode(update_data["logs"].encode('utf-8')).decode('ascii')
                     await self.send(text_data=json.dumps({
                         "type": "terminal_stream",
@@ -1379,8 +1253,9 @@ class PlatformUpdateConsumer(AsyncWebsocketConsumer):
                         "log": update_data["logs"],
                     }))
         except Exception as e:
-            logger.error("Error in PlatformUpdateConsumer connect: %s", e)
-            await self.close(code=4000)
+            logger.error("Error in PlatformUpdateConsumer connect: %s", e, exc_info=True)
+            with contextlib.suppress(Exception):
+                await self.close(code=4000)
 
     async def disconnect(self, close_code):
         if self.group_name and self.channel_layer:
@@ -1407,27 +1282,8 @@ class PlatformUpdateConsumer(AsyncWebsocketConsumer):
             "error_message": event.get("error_message", ""),
         }))
 
-    @database_sync_to_async
-    def _authenticate_token(self, token_key):
-        import hashlib
-        from django.core.cache import cache
-        from rest_framework.authtoken.models import Token
-        if not token_key or not isinstance(token_key, str):
-            return None
-        if len(token_key) != 40 or not all(c in '0123456789abcdef' for c in token_key):
-            return None
-        cache_key = f'invalid_token:{hashlib.sha256(token_key.encode()).hexdigest()}'
-        if cache.get(cache_key):
-            return None
-        try:
-            token = Token.objects.select_related('user').get(key=token_key)
-            if not token.user.is_active:
-                cache.set(cache_key, True, 300)
-                return None
-            return token.user
-        except Token.DoesNotExist:
-            cache.set(cache_key, True, 300)
-            return None
+    async def _authenticate_token(self, token_key):
+        return await authenticate_ws_token(token_key)
 
     @database_sync_to_async
     def _get_update_data(self):

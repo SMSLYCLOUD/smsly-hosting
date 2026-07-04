@@ -203,9 +203,13 @@ class BuildManager:
         severity_arg = ",".join(severities[fail_idx:])
 
         try:
-            # Check if Trivy is available
+            from apps.deployments.utils import find_binary
+            trivy_bin = find_binary("trivy")
+            if not trivy_bin:
+                self._log("WARNING: Trivy not installed — image built WITHOUT security scan. Install Trivy for vulnerability scanning.")
+                return
             result = subprocess.run(
-                ["trivy", "--version"],
+                [trivy_bin, "--version"],
                 capture_output=True,
                 text=True,
                 timeout=10
@@ -213,7 +217,7 @@ class BuildManager:
             if result.returncode != 0:
                 self._log("WARNING: Trivy not available — image built WITHOUT security scan.")
                 return
-        except (FileNotFoundError, subprocess.TimeoutExpired):
+        except (FileNotFoundError, subprocess.TimeoutExpired, ImportError):
             self._log("WARNING: Trivy not installed — image built WITHOUT security scan. Install Trivy for vulnerability scanning.")
             return
 
@@ -221,7 +225,7 @@ class BuildManager:
             # Run Trivy scan with JSON output
             result = subprocess.run(
                 [
-                    "trivy", "image",
+                    trivy_bin, "image",
                     "--format", "json",
                     "--severity", severity_arg,
                     "--timeout", "5m",
@@ -258,10 +262,11 @@ class BuildManager:
                     self._log(
                         f"Scan complete: {vulns['critical']} critical, {vulns['high']} high, {vulns['medium']} medium, {vulns['low']} low")
 
-                    fail_count = vulns.get(fail_on.lower(), 0)
+                    blocking_severities = [s.lower() for s in severities[fail_idx:]]
+                    fail_count = sum(vulns.get(s, 0) for s in blocking_severities)
                     if fail_count > 0:
                         self._log(
-                            f"WARNING: Found {fail_count} {fail_on} vulnerabilities!")
+                            f"WARNING: Found {fail_count} blocking vulnerabilities at or above {fail_on}!")
                     else:
                         self._log(f"Security scan passed (no {fail_on} issues).")
 

@@ -159,7 +159,7 @@ def _upsert_preview_environment_variables(preview: PreviewEnvironment, target: S
             defaults={
                 'value': value,
                 'is_secret': key in secret_keys or key.endswith('_PASSWORD') or key.endswith('_URL'),
-                'is_locked': True,
+                'is_locked': False,
                 'source': 'SYSTEM',
             },
         )
@@ -244,7 +244,8 @@ def _sync_preview_addons(preview: PreviewEnvironment, transient_service: Service
         new_addon.save(update_fields=['connection_url', 'coolify_uuid', 'status', 'updated_at'])
 
         if addon.addon_type != Addon.Type.POSTGRES:
-            _clone_addon_data(addon, new_addon)
+            logger.info("Option A enterprise preview: skipping production data clone for %s; provisioning fresh empty database.", addon.addon_type)
+            # _clone_addon_data(addon, new_addon)
 
         _inject_addon_credentials(new_addon)
 
@@ -359,11 +360,11 @@ def create_database_clone_job(preview_id: str):
 
             preview.status = PreviewEnvironment.Status.DB_CLONE_CREATING
             preview.save()
-            logger.error("CLONE_TASK >>> calling create_clone...")
+            logger.error("CLONE_TASK >>> calling create_empty_database...")
 
             db_manager = PostgresSnapshotManager(admin_db_url=pg_addon.connection_url)
-            success = db_manager.create_clone(clone.source_database_name, clone.clone_database_name, allow_production_disruption=False)
-            logger.error(f"CLONE_TASK >>> create_clone returned: {success}")
+            success = db_manager.create_empty_database(clone.clone_database_name)
+            logger.error(f"CLONE_TASK >>> create_empty_database returned: {success}")
 
             if success:
                 clone.status = DatabaseClone.Status.READY
@@ -645,8 +646,7 @@ def provision_preview_service_job(preview_id: str):
             transient_service.compose_main_service = parent.compose_main_service
             transient_service.save()
 
-        # 2. Sync environment variables and isolated preview overrides.
-        _copy_environment_variables(parent, transient_service)
+        # 2. Sync environment variables and isolated preview overrides (Enterprise Option A: clean start, no parent env copy).
         _upsert_preview_environment_variables(preview, transient_service)
 
         # 3. Duplicate/provision addons before deployment so injected URLs exist.
