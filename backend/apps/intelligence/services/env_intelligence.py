@@ -245,9 +245,23 @@ class EnvironmentIntelligenceService:
         if source_dir:
             return cls.apply_manifest_to_service(service, source_dir)
 
-        env_context = scan_results.get('env_vars_context', {})
-        stack = scan_results.get('stack', '')
+        env_context = dict(scan_results.get('env_vars_context', {}))
+        stack = scan_results.get('stack', '') or getattr(service, 'stack', '') or ''
         service_name = service.name
+
+        # Ensure any unfilled or placeholder environment variables on the service are added to env_context for resolution
+        placeholders = {"", "{{GENERATE}}", "{{FILL_ME}}", "CHANGEME", "TODO", "YOUR_API_KEY", "YOUR_SECRET_KEY"}
+        for ev in service.environment_variables.all():
+            val_str = str(ev.value or "").strip()
+            if (
+                val_str in placeholders
+                or val_str.startswith("REPLACE_WITH_")
+                or val_str.startswith("YOUR_")
+                or "<CHANGE_ME" in val_str
+                or (val_str.startswith("{{") and val_str.endswith("}}"))
+            ):
+                if ev.key not in env_context:
+                    env_context[ev.key] = [f"Unfilled required environment variable on service {service_name}"]
 
         suggestions = cls.resolve_environment(env_context, stack, service_name)
 
@@ -261,7 +275,7 @@ class EnvironmentIntelligenceService:
                 key=key,
                 defaults={
                     'value': val,
-                    'is_secret': any(k in key.upper() for k in ["SECRET", "KEY", "TOKEN"]),
+                    'is_secret': any(k in key.upper() for k in ["SECRET", "KEY", "TOKEN", "PASSWORD"]),
                     'source': 'SYSTEM'
                 }
             )
@@ -270,7 +284,14 @@ class EnvironmentIntelligenceService:
                 if getattr(ev, 'is_locked', False):
                     continue
 
-                if not ev.value or "<CHANGE_ME" in str(ev.value):
+                val_str = str(ev.value or "").strip()
+                if (
+                    val_str in placeholders
+                    or val_str.startswith("REPLACE_WITH_")
+                    or val_str.startswith("YOUR_")
+                    or "<CHANGE_ME" in val_str
+                    or (val_str.startswith("{{") and val_str.endswith("}}"))
+                ):
                     ev.value = val
                     ev.save()
                     injected.append(key)

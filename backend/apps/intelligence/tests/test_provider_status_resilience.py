@@ -41,7 +41,7 @@ class AIProviderStatusResilienceTests(TestCase):
         license_obj.max_team_members = 100
         license_obj.save(update_fields=["tier", "is_valid", "max_services", "max_team_members"])
 
-        self.user = User.objects.create_user(
+        self.user = User.objects.create_superuser(
             username="airesilience2",
             email="airesilience2@example.com",
             password="password123",

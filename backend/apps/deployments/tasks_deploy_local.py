@@ -392,22 +392,22 @@ def _smart_derive_database_vars(env_vars: dict):
         if not parsed.hostname:
             return
 
-        env_vars.setdefault('DB_HOST', parsed.hostname)
-        env_vars.setdefault('DB_PORT', str(parsed.port or 5432))
-        env_vars.setdefault('DB_USER', parsed.username or 'postgres')
-        env_vars.setdefault('DB_NAME', parsed.path.lstrip('/') or 'postgres')
+        env_vars['DB_HOST'] = parsed.hostname
+        env_vars['DB_PORT'] = str(parsed.port or 5432)
+        env_vars['DB_USER'] = parsed.username or 'postgres'
+        env_vars['DB_NAME'] = parsed.path.lstrip('/') or 'postgres'
 
         if parsed.password:
-            env_vars.setdefault('DB_PASSWORD', parsed.password)
-            env_vars.setdefault('MARKETER_DB_PASSWORD', parsed.password)
+            env_vars['DB_PASSWORD'] = parsed.password
+            env_vars['MARKETER_DB_PASSWORD'] = parsed.password
 
         # Postgres-specific aliases some frameworks use
-        env_vars.setdefault('POSTGRES_HOST', parsed.hostname)
-        env_vars.setdefault('POSTGRES_PORT', str(parsed.port or 5432))
-        env_vars.setdefault('POSTGRES_USER', parsed.username or 'postgres')
-        env_vars.setdefault('POSTGRES_DB', parsed.path.lstrip('/') or 'postgres')
+        env_vars['POSTGRES_HOST'] = parsed.hostname
+        env_vars['POSTGRES_PORT'] = str(parsed.port or 5432)
+        env_vars['POSTGRES_USER'] = parsed.username or 'postgres'
+        env_vars['POSTGRES_DB'] = parsed.path.lstrip('/') or 'postgres'
         if parsed.password:
-            env_vars.setdefault('POSTGRES_PASSWORD', parsed.password)
+            env_vars['POSTGRES_PASSWORD'] = parsed.password
     except Exception:
         pass  # Don't block deploy if URL parsing fails
 
@@ -421,8 +421,8 @@ def _smart_derive_redis_vars(env_vars: dict):
 
     try:
         # Celery broker and result backend default to the Redis URL
-        env_vars.setdefault('CELERY_BROKER_URL', redis_url)
-        env_vars.setdefault('CELERY_RESULT_BACKEND', redis_url)
+        env_vars['CELERY_BROKER_URL'] = redis_url
+        env_vars['CELERY_RESULT_BACKEND'] = redis_url
 
         # Some apps use numbered Redis databases for separation
         parsed = urlparse(redis_url)
@@ -436,7 +436,7 @@ def _smart_derive_redis_vars(env_vars: dict):
                 env_vars['CELERY_RESULT_BACKEND'] = f"{base}/1"
 
         # Cache URL alias
-        env_vars.setdefault('CACHE_URL', redis_url)
+        env_vars['CACHE_URL'] = redis_url
     except Exception:
         pass  # Don't block deploy if URL parsing fails
 

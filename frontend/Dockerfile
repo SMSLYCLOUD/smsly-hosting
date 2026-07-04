@@ -40,4 +40,8 @@ EXPOSE 3000
 # Wrapper adds resilience against client-abort ECONNRESET/EPIPE errors.
 COPY --chown=nextjs:nodejs start.js ./start.js
 
+# Healthcheck for frontend application
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD node -e "require('http').get('http://127.0.0.1:3000/', (r) => {if (r.statusCode !== 200) throw new Error(r.statusCode)})" || exit 1
+
 CMD ["node", "start.js"]

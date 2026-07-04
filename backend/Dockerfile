@@ -55,6 +55,9 @@ RUN chmod +x entrypoint.sh && \
 
 # Use Entrypoint (handles migrations + static files)
 ENTRYPOINT ["./entrypoint.sh"]
+# Healthcheck for container orchestration
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://127.0.0.1:8000/healthz || exit 1
 # Default CMD: gunicorn for backend. Celery/celery-beat override via docker-compose command:
 # Use ASGI so Django Channels WebSockets work consistently (dev + prod).
 CMD ["gunicorn", "--bind", "0.0.0.0:8000", "config.asgi:application", "--workers", "4", "--worker-class", "uvicorn.workers.UvicornWorker", "--timeout", "600"]

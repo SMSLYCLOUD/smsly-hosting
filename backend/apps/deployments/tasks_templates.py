@@ -29,7 +29,7 @@ from apps.deployments.utils import (  # noqa: E402
 )
 
 from .tasks_ai_router import _ensure_shared_ollama_cpp, _pull_ollama_models_into_shared  # noqa: E402
-from .tasks_deploy import smart_deploy_task  # noqa: E402
+from .tasks_deploy import enqueue_smart_deploy_task  # noqa: E402
 
 
 @shared_task(bind=True, max_retries=0)
@@ -527,7 +527,7 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
                     commit_hash='template',
                     commit_message=f"Auto-companion Template: {c_template_id}"
                 )
-                smart_deploy_task.delay(deployment_id=str(c_deployment.id), provider_id=str(provider.id))
+                enqueue_smart_deploy_task(deployment_id=str(c_deployment.id), provider_id=str(provider.id))
 
             if companion_service_ids:
                 try:
@@ -574,7 +574,7 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
             commit_hash='template',
             commit_message=f"Template: {template_id}"
         )
-        smart_deploy_task.delay(deployment_id=str(deployment.id), provider_id=str(provider.id))
+        enqueue_smart_deploy_task(deployment_id=str(deployment.id), provider_id=str(provider.id))
 
         # Post-deploy hook: if prisma migrate requested, annotate deployment for follow-up
         if any(ev.key == "RUN_PRISMA_MIGRATE" and ev.value.lower() in {"1", "true", "yes"} for ev in service.env_vars.all()):

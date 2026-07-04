@@ -185,7 +185,7 @@ class ProductionDeploymentPipeline:
             from apps.deployments.services.safedeploy.migration_environment import (
                 build_migration_environment,
             )
-            mig_env = build_migration_environment(cloned_path, prod_db_url, service_env_vars, block_addon_urls=False)
+            mig_env = build_migration_environment(cloned_path, prod_db_url, service_env_vars, block_addon_urls=True)
             if not mig_env.ok:
                 raise Exception(f"Migration environment setup failed: {mig_env.error}")
 
@@ -305,7 +305,7 @@ class ProductionDeploymentPipeline:
             from apps.deployments.services.safedeploy.migration_environment import (
                 build_migration_environment,
             )
-            mig_env = build_migration_environment(cloned_path, prod_db_url, service_env_vars, block_addon_urls=False)
+            mig_env = build_migration_environment(cloned_path, prod_db_url, service_env_vars, block_addon_urls=True)
             if not mig_env.ok:
                 logger.error("Rollback venv setup failed: %s", mig_env.error)
                 return False
@@ -413,7 +413,7 @@ class ProductionDeploymentPipeline:
             from apps.deployments.services.safedeploy.migration_environment import (
                 build_migration_environment,
             )
-            mig_env = build_migration_environment(cloned_path, prod_db_url, service_env_vars, block_addon_urls=False)
+            mig_env = build_migration_environment(cloned_path, prod_db_url, service_env_vars, block_addon_urls=True)
             if not mig_env.ok:
                 deployment.status = Deployment.Status.FAILED
                 deployment.save()

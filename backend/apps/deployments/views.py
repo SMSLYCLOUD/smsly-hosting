@@ -1595,17 +1595,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     pr_number=pr_number,
                 )
 
-                # Copy env vars from parent (skip any already created by signals e.g. SMSLY_API_KEY)
-                for env in parent.env_vars.all():
-                    EnvironmentVariable.objects.get_or_create(
-                        service=preview,
-                        key=env.key,
-                        defaults={
-                            'value': env.value,
-                            'is_secret': env.is_secret,
-                            'source': env.source,
-                        }
-                    )
+                # Option A enterprise preview: clean start, do not copy parent env vars to prevent leaks and blast radius
 
                 # Create and trigger deployment
                 deployment = Deployment.objects.create(
@@ -2767,28 +2757,19 @@ class ServiceViewSet(viewsets.ModelViewSet):
             for svc in services_qs:
                 try:
                     if action == 'deploy':
-                        # Queue a smart_deploy_task for each service
-                        from apps.deployments.tasks import smart_deploy_task
-                        smart_deploy_task.delay(str(svc.id))
+                        # Queue a smart_deploy_task for each service via smart deployment queue
+                        from apps.deployments.models import Deployment
+                        from apps.deployments.tasks_deploy import enqueue_smart_deploy_task
+                        dep = Deployment.objects.create(service=svc, status=Deployment.Status.QUEUED, commit_message="Bulk deploy action")
+                        enqueue_smart_deploy_task(str(dep.id), str(svc.provider.id) if svc.provider else None)
                     elif action == 'cancel':
                         # Cancel any queued or building deployments
                         from apps.deployments.models import Deployment
                         Deployment.objects.filter(service=svc, status__in=[Deployment.Status.QUEUED, Deployment.Status.BUILDING]).update(status=Deployment.Status.CANCELLED)
                     elif action == 'senate':
-                        # Trigger AI Senate env enrichment (re‑use existing logic)
-                        from apps.intelligence.services.env_intelligence import (
-                            EnvironmentIntelligenceService,
-                        )
-                        env_context = {}  # placeholder – real implementation would gather context
-                        suggestions = EnvironmentIntelligenceService.resolve_environment(env_context, svc.stack or '', svc.name)
-                        import re
-
-                        from apps.deployments.models import EnvironmentVariable
-                        for k, v in suggestions.items():
-                            if not re.match(r'^[A-Za-z0-9_][A-Za-z0-9_.-]*$', k):
-                                logger.warning("Skipping invalid env var key from Senate: %s", k)
-                                continue
-                            EnvironmentVariable.objects.update_or_create(service=svc, key=k, defaults={'value': v, 'is_secret': False})
+                        # Trigger AI Senate env enrichment using enhanced apply_intelligence_to_service
+                        from apps.intelligence.services.env_intelligence import EnvironmentIntelligenceService
+                        EnvironmentIntelligenceService.apply_intelligence_to_service(svc, scan_results={})
                     results.append({"id": str(svc.id), "status": "ok"})
                 except Exception as exc:
                     logger.error("Bulk action %s failed for service %s: %s", action, svc.id, exc)

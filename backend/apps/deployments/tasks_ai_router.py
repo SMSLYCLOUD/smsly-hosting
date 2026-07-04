@@ -207,14 +207,14 @@ def _ensure_shared_ollama_cpp(service, provider) -> str | None:
         )
 
         # Trigger deployment
-        from .tasks_deploy import smart_deploy_task  # noqa: E402
+        from .tasks_deploy import enqueue_smart_deploy_task  # noqa: E402
         deployment = Deployment.objects.create(
             service=shared,
             status='QUEUED',
             commit_hash='template',
             commit_message='Shared Ollama CPP (auto-deployed)'
         )
-        smart_deploy_task.delay(
+        enqueue_smart_deploy_task(
             deployment_id=str(deployment.id),
             provider_id=str(provider.id)
         )

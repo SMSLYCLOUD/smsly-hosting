@@ -245,6 +245,14 @@ def build_migration_environment(
     # These keys will be set to their real preview values later by
     # provision_preview_service_job when the container actually starts.
     addon_env_keys_blocklist = {
+        "POSTGRES_URL", "POSTGRES_HOST", "POSTGRES_PORT", "POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB", "POSTGRESQL_URL",
+        "PGHOST", "PGPORT", "PGUSER", "PGPASSWORD", "PGDATABASE",
+        "DB_URL", "DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME",
+        "DATABASE_HOST", "DATABASE_PORT", "DATABASE_USER", "DATABASE_PASSWORD", "DATABASE_NAME",
+        "DIRECT_URL", "DIRECT_DATABASE_URL", "SHADOW_DATABASE_URL", "SQLALCHEMY_DATABASE_URI",
+        "MYSQL_HOST", "MYSQL_PORT", "MYSQL_USER", "MYSQL_PASSWORD", "MYSQL_DATABASE",
+        "MONGO_HOST", "MONGO_PORT", "MONGO_USER", "MONGO_PASSWORD", "MONGO_DB",
+        "REDIS_URI", "RABBITMQ_PORT", "RABBITMQ_USER", "RABBITMQ_PASSWORD",
         "REDIS_URL", "REDIS_HOST", "REDIS_PORT", "REDIS_PASSWORD",
         "RABBITMQ_URL", "RABBITMQ_HOST", "AMQP_URL",
         "MYSQL_URL", "MONGODB_URI", "MONGODB_URL",

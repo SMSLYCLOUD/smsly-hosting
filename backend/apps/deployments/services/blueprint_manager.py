@@ -10,7 +10,7 @@ from apps.cloud.models import CloudProvider
 from apps.deployments.models import Deployment, EnvironmentVariable, Service
 from apps.deployments.models_addons import Addon
 from apps.deployments.tasks_addons import provision_addon_task
-from apps.deployments.tasks_deploy import smart_deploy_task
+from apps.deployments.tasks_deploy import enqueue_smart_deploy_task
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +93,7 @@ class BlueprintManager:
             )
 
             # Trigger
-            smart_deploy_task.delay(str(deployment.id), str(self.provider.id))
+            enqueue_smart_deploy_task(str(deployment.id), str(self.provider.id))
             logger.info(f"Scheduled deployment for {service.name}")
 
         return True

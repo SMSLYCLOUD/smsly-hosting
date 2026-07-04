@@ -95,6 +95,20 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
         else:
             provider = CloudProvider.objects.get(id=provider_id)
 
+        # Smart Deployment Queue / Intelligence Integration:
+        # Before executing build or deployment, ensure remaining/placeholder environment variables are filled by AI Senate
+        if not getattr(deployment, 'is_rollback', False) and getattr(settings, "SENATE_ENABLED", True):
+            try:
+                from apps.intelligence.services.env_intelligence import EnvironmentIntelligenceService
+                _sugg, _inj = EnvironmentIntelligenceService.apply_intelligence_to_service(service, scan_results={})
+                if _inj:
+                    logger.info("Smart Deployment Queue: AI Senate auto-filled %d remaining environment variables for %s: %s", len(_inj), service.name, ", ".join(_inj))
+                    if deployment.build_logs is not None:
+                        deployment.build_logs = f"{deployment.build_logs}\n🧠 Smart Deployment Queue: AI Senate auto-filled {len(_inj)} remaining environment variables.\n"
+                        deployment.save(update_fields=["build_logs"])
+            except Exception as _senate_err:
+                logger.warning("Smart Deployment Queue env enrichment failed for %s: %s", service.name, _senate_err)
+
         is_delegated = deployment.source_node is not None
 
         if not skip_review and getattr(service, 'safedeploy_enabled', False) \
