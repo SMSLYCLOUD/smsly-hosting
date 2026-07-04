@@ -1377,6 +1377,18 @@ RESTORE_EOF
         fi
     fi
 
+    # ─── Ensure platform update watcher and caddy watcher services exist ───
+    if [ -f "$INSTALL_DIR/scripts/smsly-update-watcher.service" ]; then
+        echo -e "${BLUE}  → Ensuring platform update and Caddy config watcher services...${NC}"
+        chmod +x "$INSTALL_DIR/scripts/platform-update.sh" "$INSTALL_DIR/scripts/caddy-reload.sh" 2>/dev/null || true
+        cp "$INSTALL_DIR/scripts/smsly-update-watcher.service" /etc/systemd/system/smsly-update-watcher.service 2>/dev/null || true
+        cp "$INSTALL_DIR/scripts/caddy-watcher.service" /etc/systemd/system/caddy-watcher.service 2>/dev/null || true
+        systemctl daemon-reload 2>/dev/null || true
+        systemctl enable smsly-update-watcher caddy-watcher 2>/dev/null || true
+        systemctl restart smsly-update-watcher caddy-watcher 2>/dev/null || true
+        echo -e "${GREEN}  ✓ smsly-update-watcher and caddy-watcher services updated and started${NC}"
+    fi
+
     # ─── Ensure WireGuard mesh service is enabled ───────────────────────────
     if [ -d /etc/wireguard ]; then
         for wg_conf in /etc/wireguard/*.conf; do

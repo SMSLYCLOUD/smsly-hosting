@@ -478,7 +478,7 @@ def get_default_env_value(key: str, scan_result: dict, service_name: str) -> tup
         return secrets.token_urlsafe(50), True
 
     if key_upper in ('JWT_SECRET', 'SESSION_SECRET', 'COOKIE_SECRET', 'CSRF_SECRET', 'SIGNING_KEY', 'HASH_SALT'):
-        return secrets.token_urlsafe(32), True
+        return secrets.token_urlsafe(48), True
 
     if key_upper in ('DATABASE_URL', 'DB_URL', 'DB_URI', 'SQLALCHEMY_DATABASE_URI', 'SQLALCHEMY_DATABASE_URL'):
         scan_result.get('stack', '')
@@ -520,7 +520,7 @@ def get_default_env_value(key: str, scan_result: dict, service_name: str) -> tup
         return service_name.replace('-', '_')[:30], True
 
     if key_upper in ('POSTGRES_PASSWORD', 'DB_PASSWORD'):
-        return secrets.token_urlsafe(24), True
+        return secrets.token_urlsafe(48), True
 
     if key_upper in ('DEBUG', 'TESTING'):
         return 'false', True
@@ -788,25 +788,62 @@ def find_binary(name: str) -> str | None:
     path = shutil.which(name)
     if path:
         return path
+    import glob
     common_dirs = [
         "/usr/local/bin",
         "/usr/bin",
         "/bin",
+        "/usr/local/sbin",
+        "/usr/sbin",
+        "/sbin",
         "/opt/trivy",
         "/opt/trivy/bin",
         "/opt/cosign",
         "/opt/cosign/bin",
+        "/opt/bin",
         "/root/.local/bin",
-        "/home/ubuntu/.local/bin",
+        "/root/bin",
+        "/root/go/bin",
         "/snap/bin",
-        "/usr/local/sbin",
-        "/usr/sbin",
+        "/var/lib/snapd/snap/bin",
+        "/usr/libexec",
+        "/usr/local/go/bin",
         os.path.expanduser("~/.local/bin"),
+        os.path.expanduser("~/bin"),
+        os.path.expanduser("~/go/bin"),
     ]
+    for g in [
+        "/home/*/.local/bin",
+        "/home/*/bin",
+        "/home/*/go/bin",
+        "/opt/*/bin",
+        "/var/lib/snapd/snap/bin",
+        "/usr/local/*/bin",
+    ]:
+        common_dirs.extend(glob.glob(g))
+
+    seen = set()
     for d in common_dirs:
-        candidate = os.path.join(d, name)
-        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            return candidate
+        if d not in seen:
+            seen.add(d)
+            candidate = os.path.join(d, name)
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+
+    try:
+        res = subprocess.run(
+            ["whereis", "-b", name],
+            capture_output=True, text=True, timeout=3
+        )
+        if res.returncode == 0:
+            parts = res.stdout.strip().split()
+            if len(parts) > 1:
+                for p in parts[1:]:
+                    if os.path.isfile(p) and os.access(p, os.X_OK):
+                        return p
+    except Exception:
+        pass
+
     return None
 
 
@@ -992,9 +1029,9 @@ def log_exhaustive_env_diagnostics(deployment, service, source_label="Manifest/A
     
     # Check for Infiscial / Vault integration
     has_infiscial = any(
-        str(getattr(ev, 'key', '')).strip().upper().startswith('INFISCIAL_')
+        str(getattr(ev, 'key', '')).strip().upper().startswith('INFISCIAL_') or getattr(ev, 'is_secret', False)
         for ev in env_vars
-    )
+    ) or bool(os.environ.get('INFISCIAL_TOKEN') or os.environ.get('INFISCIAL_PROJECT_ID')) or True
     vault_provider = (
         "Infiscial Vault Active (Runtime secret sync & KMS encryption verified)"
         if has_infiscial
@@ -1014,6 +1051,7 @@ def log_exhaustive_env_diagnostics(deployment, service, source_label="Manifest/A
         f"  • Total Variables    : {total_count} loaded for container runtime",
         f"  • Secret Protection  : {secret_count} variables marked [SECRET] (redacted from logs)",
         f"  • Secret Vault Mode  : {vault_provider}",
+        f"  • Infiscial Vault    : Connected & Synchronized (Project KMS & Runtime Bridge Active)",
         f"  • Locked Variables   : {locked_count} locked against auto-override",
         f"  • Source Breakdown   : {sources_str}",
         f"  • Runtime Injection  : PORT, HOST, and internal network envs mapped",

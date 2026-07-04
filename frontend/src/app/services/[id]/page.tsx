@@ -3,6 +3,7 @@ import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { servicesApi, serversApi, Service, Deployment, EnvVar, ManagedServer } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useParams, useSearchParams } from 'next/navigation';
+import { getWsUrl } from '@/lib/websocket';
 import ScalingTab from '@/components/settings/ScalingTab';
 import { ServiceLayout } from '@/components/layout/ServiceLayout';
 import { Activity, Shield, Terminal, Zap, DollarSign, Globe, Rocket, Loader2 as Spinner, Server, Wrench, FolderKanban, Box, Container, RotateCcw, ShieldCheck, Plug } from 'lucide-react';
@@ -1031,12 +1032,7 @@ export default function ServiceDetailPage() {
                         // format — see backend/apps/deployments/
                         // consumers.py:32-41 and :83-96.
 
-                        const proto =
-                            typeof window !== 'undefined' && window.location.protocol === 'https:'
-                                ? 'wss'
-                                : 'ws';
-                        const host = typeof window !== 'undefined' ? window.location.host : 'localhost';
-                        const wsUrl = `${proto}://${host}/ws/terminal/${deploymentId}/`;
+                        const wsUrl = getWsUrl(`/ws/terminal/${deploymentId}/`);
 
                         if (!wsToken) {
                             return (

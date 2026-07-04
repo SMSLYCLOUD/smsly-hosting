@@ -6176,11 +6176,11 @@ EOF
         fi
     fi
 
-    # Cleanup legacy host-side services if they exist
-    echo -e "${BLUE}  → Cleaning up legacy host-side Caddy services (if any)...${NC}"
-    true caddy-watcher smsly-update-watcher 2>/dev/null || true
-    true caddy-watcher smsly-update-watcher 2>/dev/null || true
-    rm -f /etc/systemd/system/caddy.service /etc/systemd/system/caddy-watcher.service /etc/systemd/system/smsly-update-watcher.service
+    # Cleanup legacy host-side bare-metal Caddy server if it exists
+    echo -e "${BLUE}  → Cleaning up legacy host-side Caddy service (if any)...${NC}"
+    systemctl stop caddy 2>/dev/null || true
+    systemctl disable caddy 2>/dev/null || true
+    rm -f /etc/systemd/system/caddy.service
     systemctl daemon-reload
 
     set_checkpoint "caddy_configured"
@@ -6693,6 +6693,18 @@ if [ -f "$INSTALL_DIR/scripts/monitor_infra.sh" ]; then
     systemctl enable smsly-infra-monitor.timer 2>/dev/null || true
     systemctl restart smsly-infra-monitor.timer 2>/dev/null || true
     echo -e "${GREEN}  ✓ smsly-infra-monitor timer installed and started${NC}"
+fi
+
+# Install platform update watcher and caddy watcher services
+if [ -f "$INSTALL_DIR/scripts/smsly-update-watcher.service" ]; then
+    echo -e "${BLUE}  → Installing platform update and Caddy config watcher services...${NC}"
+    chmod +x "$INSTALL_DIR/scripts/platform-update.sh" "$INSTALL_DIR/scripts/caddy-reload.sh" 2>/dev/null || true
+    cp "$INSTALL_DIR/scripts/smsly-update-watcher.service" /etc/systemd/system/smsly-update-watcher.service 2>/dev/null || true
+    cp "$INSTALL_DIR/scripts/caddy-watcher.service" /etc/systemd/system/caddy-watcher.service 2>/dev/null || true
+    systemctl daemon-reload
+    systemctl enable smsly-update-watcher caddy-watcher 2>/dev/null || true
+    systemctl restart smsly-update-watcher caddy-watcher 2>/dev/null || true
+    echo -e "${GREEN}  ✓ smsly-update-watcher and caddy-watcher services installed and started${NC}"
 fi
 
 # -----------------------------------------------------------------------------

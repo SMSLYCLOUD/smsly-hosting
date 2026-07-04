@@ -588,7 +588,7 @@ class AddonProvisioner:
         if generic_config and generic_config.get('auth'):
             is_passworded = True
 
-        password = secrets.token_urlsafe(24) if is_passworded else ''
+        password = secrets.token_urlsafe(48) if is_passworded else ''
 
         if generic_config:
             container_id, connection_url = self._provision_generic(addon_type, container_name, password, cast(int, port), alias_name, cast(dict, generic_config), public_domain=public_domain)
@@ -711,7 +711,7 @@ class AddonProvisioner:
         )
         if generic_config and generic_config.get('auth'):
             is_passworded = True
-        password = secrets.token_urlsafe(24) if is_passworded else ''
+        password = secrets.token_urlsafe(48) if is_passworded else ''
 
         # Build the docker run command for the remote node
         cmd_parts = [

@@ -124,6 +124,7 @@ def _wait_for_watcher(update_record) -> bool:
     deadline = time.monotonic() + UPDATE_WATCHER_TIMEOUT
     saw_running = False
     last_log_pos = 0
+    wait_cycles = 0
     install_log_path = UPDATE_WATCH_DIR / "install.log"
 
     def _sync_install_logs():
@@ -171,6 +172,14 @@ def _wait_for_watcher(update_record) -> bool:
         elif not UPDATE_FLAG.exists() and not saw_running:
             update_record.append_log('Update flag was consumed; waiting for watcher status...')
             saw_running = True
+        elif UPDATE_FLAG.exists() and not saw_running:
+            wait_cycles += 1
+            if wait_cycles == 5:
+                update_record.append_log('⏳ Waiting for host service (smsly-update-watcher) to detect update request...')
+            elif wait_cycles == 15:
+                update_record.append_log('⚠️ Host update watcher has not responded after 45 seconds. Verify that smsly-update-watcher.service is running on the host OS (sudo systemctl enable --now smsly-update-watcher).')
+            elif wait_cycles == 30:
+                update_record.append_log('⚠️ Still waiting for host watcher. If running inside a container without host systemd integration, run self-update manually on the host: sudo bash install.sh --update')
 
         time.sleep(3)
 

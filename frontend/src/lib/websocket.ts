@@ -137,20 +137,21 @@ export function useWebSocket(options: UseWebSocketOptions) {
   };
 }
 
-// Service status hook for dashboard
-function getWsUrl(path: string): string {
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL;
-  // If relative URL (e.g. '/api/v1'), derive WebSocket URL from current page origin
-  if (apiUrl && apiUrl.startsWith('/')) {
-    const proto = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const host = typeof window !== 'undefined' ? window.location.host : 'localhost:8000';
-    return `${proto}://${host}${path}`;
+// Service status hook for dashboard and WebSocket URL resolver
+export function getWsUrl(path: string): string {
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || process.env.NEXT_PUBLIC_API_BASE;
+  if (apiUrl && !apiUrl.startsWith('/')) {
+    const baseUrl = apiUrl.replace(/\/api\/v\d+\/?$/, '').replace(/\/+$/, '');
+    const wsScheme = baseUrl.startsWith('https') ? 'wss' : 'ws';
+    const hostPart = baseUrl.replace(/^https?:\/\//, '');
+    return `${wsScheme}://${hostPart}${path}`;
   }
-  const resolved = apiUrl || 'http://localhost:8001/api/v1';
-  const baseUrl = resolved.replace(/\/api\/v1\/?$/, '');
-  const wsScheme = baseUrl.startsWith('https') ? 'wss' : 'ws';
-  const hostPart = baseUrl.replace(/^https?:\/\//, '');
-  return `${wsScheme}://${hostPart}${path}`;
+  const proto = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss' : 'ws';
+  let host = typeof window !== 'undefined' ? window.location.host : 'localhost:8000';
+  if (typeof window !== 'undefined' && (window.location.port === '3000' || window.location.port === '3001')) {
+    host = `${window.location.hostname}:8000`;
+  }
+  return `${proto}://${host}${path}`;
 }
 
 export function useServiceStatusUpdates(userId: string) {

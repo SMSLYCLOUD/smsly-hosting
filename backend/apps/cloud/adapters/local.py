@@ -1210,7 +1210,7 @@ EOF
                     network_name, driver="bridge")
 
             # Generate secure random password
-            db_password = secrets.token_urlsafe(24)
+            db_password = secrets.token_urlsafe(48)
             db_user = "smsly_user"
 
             self.docker_client.containers.run(

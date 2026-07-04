@@ -1,7 +1,17 @@
 import logging
-import logging
 import os
 import re
+
+
+def _get_service_db_url(svc) -> str | None:
+    db_url = None
+    for env_var in svc.env_vars.all():
+        if env_var.key in ('DATABASE_URL', 'POSTGRES_URL', 'DB_URL', 'DIRECT_DATABASE_URL', 'SQLALCHEMY_DATABASE_URI'):
+            db_url = env_var.value
+            break
+        if not db_url and str(env_var.value).startswith('postgresql://'):
+            db_url = env_var.value
+    return db_url
 
 from django.conf import settings
 from django.db import models, transaction
@@ -162,10 +172,7 @@ class ProductionDeploymentPipeline:
             if not cloned_path:
                 raise Exception("Failed to clone repository for migration phase")
 
-            prod_db_url = None
-            for env_var in svc.env_vars.all():
-                if env_var.key == 'DATABASE_URL':
-                    prod_db_url = env_var.value
+            prod_db_url = _get_service_db_url(svc)
 
             if not prod_db_url:
                 raise Exception("No DATABASE_URL configured on service")
@@ -286,10 +293,7 @@ class ProductionDeploymentPipeline:
             if not cloned_path:
                 return False
 
-            prod_db_url = None
-            for env_var in svc.env_vars.all():
-                if env_var.key == 'DATABASE_URL':
-                    prod_db_url = env_var.value
+            prod_db_url = _get_service_db_url(svc)
             if not prod_db_url:
                 return False
 
@@ -397,10 +401,7 @@ class ProductionDeploymentPipeline:
                 deployment.save()
                 return
 
-            prod_db_url = None
-            for env_var in svc.env_vars.all():
-                if env_var.key == 'DATABASE_URL':
-                    prod_db_url = env_var.value
+            prod_db_url = _get_service_db_url(svc)
             if not prod_db_url:
                 return
 

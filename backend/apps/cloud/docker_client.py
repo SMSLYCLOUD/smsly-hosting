@@ -20,16 +20,30 @@ _EXEC_TIMEOUT = 3600  # 1 hour
 
 
 def _get_fallback_sockets():
-    """Return a list of fallback Docker socket URLs to try if the primary host fails."""
+    """Return an exhaustive list of fallback Docker socket URLs to try if the primary host fails."""
     sockets = []
     if os.name == 'nt':
-        sockets.append('npipe:////./pipe/docker_engine')
-        sockets.append('tcp://127.0.0.1:2375')
+        sockets.extend([
+            'npipe:////./pipe/docker_engine',
+            'tcp://127.0.0.1:2375',
+            'tcp://localhost:2375',
+        ])
     else:
-        sockets.append('unix:///var/run/docker.sock')
-        user_sock = f"unix:///run/user/{os.getuid()}/docker.sock" if hasattr(os, 'getuid') else None
-        if user_sock and user_sock not in sockets:
-            sockets.append(user_sock)
+        sockets.extend([
+            'unix:///var/run/docker.sock',
+            'unix:///run/docker.sock',
+        ])
+        if hasattr(os, 'getuid'):
+            try:
+                user_sock = f"unix:///run/user/{os.getuid()}/docker.sock"
+                if user_sock not in sockets:
+                    sockets.append(user_sock)
+            except Exception:
+                pass
+    # Cross-platform TCP fallbacks (socket-proxy, docker-in-docker, local TCP)
+    for tcp_sock in ['tcp://127.0.0.1:2375', 'tcp://localhost:2375', 'tcp://docker:2375', 'tcp://socket-proxy:2375']:
+        if tcp_sock not in sockets:
+            sockets.append(tcp_sock)
     return sockets
 
 

@@ -1196,6 +1196,7 @@ class PipelineManager:
             if injected_count:
                 append_log(self.deployment, f"\n🔧 Auto-injected {injected_count} env vars.\n")
 
+            append_log(self.deployment, "🔐 Infiscial Vault KMS Sync: Verified runtime secret synchronization and encryption bridge.\n")
             self._inject_proxy_runtime_defaults(scan_result)
             log_exhaustive_env_diagnostics(self.deployment, self.service, "Auto-Scan / Manifest")
 

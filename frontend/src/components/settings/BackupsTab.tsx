@@ -9,6 +9,7 @@ import { Loader2, Download, RotateCcw, Trash2, Plus, Clock, Save, AlertCircle, C
 import { useToast } from '@/components/ui/use-toast';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import api from '@/lib/api';
+import { getWsUrl } from '@/lib/websocket';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 
 interface Schedule {
@@ -486,9 +487,7 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
         // backend/apps/deployments/middleware.py for the matching
         // server-side change.
 
-        const proto = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss' : 'ws';
-        const host = typeof window !== 'undefined' ? window.location.host : 'localhost';
-        const wsUrl = `${proto}://${host}/ws/build-logs/${deploymentId}/`;
+        const wsUrl = getWsUrl(`/ws/build-logs/${deploymentId}/`);
 
         try {
             const ws = new WebSocket(wsUrl);
@@ -541,10 +540,8 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
     const connectBackupProgressWebSocket = (backupId: string) => {
         if (progressWsRef.current?.readyState === WebSocket.OPEN) return;
 
-        const proto = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss' : 'ws';
-        const host = typeof window !== 'undefined' ? window.location.host : 'localhost';
         const token = typeof document !== 'undefined' ? document.cookie.replace(/(?:(?:^|.*;\s*)auth_token\s*=\s*([^;]*).*$)|^.*$/, '$1') : '';
-        const wsUrl = `${proto}://${host}/ws/backup-progress/${backupId}/${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+        const wsUrl = getWsUrl(`/ws/backup-progress/${backupId}/${token ? `?token=${encodeURIComponent(token)}` : ''}`);
 
         try {
             const ws = new WebSocket(wsUrl);

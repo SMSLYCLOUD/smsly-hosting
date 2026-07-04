@@ -1,0 +1,15 @@
+[Unit]
+Description=SMSLY Hosting Caddy Config Watcher
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=/bin/bash /opt/smsly-hosting/scripts/caddy-reload.sh /opt/smsly-hosting/caddy-config
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

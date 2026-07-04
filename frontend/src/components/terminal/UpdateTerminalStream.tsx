@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { Terminal as TerminalIcon, ShieldCheck } from 'lucide-react';
+import { getWsUrl } from '@/lib/websocket';
 
 const XtermConsole = dynamic(() => import('@/components/terminal/XtermConsole'), { ssr: false });
 
@@ -35,9 +36,7 @@ export default function UpdateTerminalStream({ updateId }: UpdateTerminalStreamP
     return () => { cancelled = true; };
   }, [updateId, wsToken]);
 
-  const proto = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss' : 'ws';
-  const host = typeof window !== 'undefined' ? window.location.host : 'localhost';
-  const wsUrl = `${proto}://${host}/ws/platform-updates/${updateId}/`;
+  const wsUrl = getWsUrl(`/ws/platform-updates/${updateId}/`);
 
   return (
     <div className="mt-4 rounded-lg border border-zinc-800 bg-[#09090b] shadow-xl overflow-hidden animate-in fade-in duration-300">

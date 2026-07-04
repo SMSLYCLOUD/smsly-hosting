@@ -1,0 +1,16 @@
+[Unit]
+Description=SMSLY Hosting Platform Update Watcher
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=/bin/bash /opt/smsly-hosting/scripts/platform-update.sh /opt/smsly-hosting/caddy-config
+Restart=always
+RestartSec=10
+TimeoutStopSec=600
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
