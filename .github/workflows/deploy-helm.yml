@@ -39,7 +39,7 @@ jobs:
       packages: write
     steps:
       - name: Checkout
-        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Set up Cosign
         uses: sigstore/cosign-installer@59acb6260d86c0f8a58fa4c3ddb032a715305043 # v3.5.0
