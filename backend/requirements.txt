@@ -160,7 +160,7 @@ django-otp>=1.5.0
 qrcode[pil]>=7.4.0
 
 # --- Dev dependencies ---
-coverage[toml]>=7.6
+coverage[toml]>=7.14.1
 pytest-cov>=5.0
 pytest-xdist>=3.6
 pytest-mock>=3.14
