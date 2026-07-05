@@ -1112,7 +1112,7 @@ if d and d != 'localhost':
     FAIL_COUNT=0
 
     # ── Check 1: Backend API health (docker exec into backend container) ──
-    EP1_FALLBACK_URL="http://127.0.0.1:8090/health"
+    EP1_FALLBACK_URL="http://127.0.0.1:8000/health"
     _LITE_HOST_HEADER=""
     if [ "$MODE_AGENT_LITE" = "true" ]; then
         _ep1_domain="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]' || true)"

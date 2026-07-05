@@ -3458,7 +3458,7 @@ debug_platform_status() {
     echo ""
 
     echo "---- Local Health ----"
-    curl -iSsf http://127.0.0.1:8090/health 2>/dev/null | head -20 || echo "http://127.0.0.1:8090/health failed"
+    curl -iSsf http://127.0.0.1:8000/health 2>/dev/null | head -20 || echo "http://127.0.0.1:8000/health failed"
     echo ""
 
     echo "---- Backend DNS Checks ----"
@@ -3588,7 +3588,7 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
     FAIL_COUNT=0
 
     # Backend health (internal) — docker exec into backend container
-    EP1_FALLBACK_URL="http://127.0.0.1:8090/health"
+    EP1_FALLBACK_URL="http://127.0.0.1:8000/health"
     _LITE_HOST_HEADER=""
     if [ "$MODE_AGENT_LITE" = "true" ]; then
         _ep1_domain="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]' || true)"
@@ -4655,7 +4655,7 @@ if d and d != 'localhost':
     FAIL_COUNT=0
 
     # ── Check 1: Backend API health (docker exec into backend container) ──
-    EP1_FALLBACK_URL="http://127.0.0.1:8090/health"
+    EP1_FALLBACK_URL="http://127.0.0.1:8000/health"
     _LITE_HOST_HEADER=""
     if [ "$MODE_AGENT_LITE" = "true" ]; then
         _ep1_domain="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]' || true)"
@@ -6582,7 +6582,7 @@ for attempt in $(seq 1 $MAX_ATTEMPTS); do
     if docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health/live >/dev/null 2>&1; then
         HEALTH_OK=true
         break
-    elif curl -sfL --max-time 5 http://127.0.0.1:8090/health/live >/dev/null 2>&1; then
+    elif curl -sfL --max-time 5 http://127.0.0.1:8000/health/live >/dev/null 2>&1; then
         HEALTH_OK=true
         break
     fi
@@ -6595,7 +6595,7 @@ if [ "$HEALTH_OK" = "true" ]; then
     echo -e "${GREEN}  ✓ Health Check Passed!${NC}"
     READY_OK=false
     docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health/ready >/dev/null 2>&1 && READY_OK=true
-    if ! $READY_OK && ! curl -sfL --max-time 5 http://127.0.0.1:8090/health/ready >/dev/null 2>&1; then
+    if ! $READY_OK && ! curl -sfL --max-time 5 http://127.0.0.1:8000/health/ready >/dev/null 2>&1; then
         echo -e "${YELLOW}  ⚠ Readiness endpoint is still warming; continuing because liveness passed.${NC}"
     fi
     VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))

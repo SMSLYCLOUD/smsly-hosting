@@ -1821,7 +1821,7 @@ for attempt in $(seq 1 $MAX_ATTEMPTS); do
     if docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health/live >/dev/null 2>&1; then
         HEALTH_OK=true
         break
-    elif curl -sfL --max-time 5 http://127.0.0.1:8090/health/live >/dev/null 2>&1; then
+    elif curl -sfL --max-time 5 http://127.0.0.1:8000/health/live >/dev/null 2>&1; then
         HEALTH_OK=true
         break
     fi
@@ -1834,7 +1834,7 @@ if [ "$HEALTH_OK" = "true" ]; then
     echo -e "${GREEN}  ✓ Health Check Passed!${NC}"
     READY_OK=false
     docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health/ready >/dev/null 2>&1 && READY_OK=true
-    if ! $READY_OK && ! curl -sfL --max-time 5 http://127.0.0.1:8090/health/ready >/dev/null 2>&1; then
+    if ! $READY_OK && ! curl -sfL --max-time 5 http://127.0.0.1:8000/health/ready >/dev/null 2>&1; then
         echo -e "${YELLOW}  ⚠ Readiness endpoint is still warming; continuing because liveness passed.${NC}"
     fi
     VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))

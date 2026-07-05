@@ -322,7 +322,7 @@ debug_platform_status() {
     echo ""
 
     echo "---- Local Health ----"
-    curl -iSsf http://127.0.0.1:8090/health 2>/dev/null | head -20 || echo "http://127.0.0.1:8090/health failed"
+    curl -iSsf http://127.0.0.1:8000/health 2>/dev/null | head -20 || echo "http://127.0.0.1:8000/health failed"
     echo ""
 
     echo "---- Backend DNS Checks ----"
@@ -476,7 +476,7 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
     FAIL_COUNT=0
 
     # Backend health (internal) — docker exec into backend container
-    EP1_FALLBACK_URL="http://127.0.0.1:8090/health"
+    EP1_FALLBACK_URL="http://127.0.0.1:8000/health"
     _LITE_HOST_HEADER=""
     if [ "$MODE_AGENT_LITE" = "true" ]; then
         _ep1_domain="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]' || true)"

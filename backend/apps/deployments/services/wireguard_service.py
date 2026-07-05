@@ -222,6 +222,12 @@ class WireGuardService:
         """
         from apps.deployments.models_mesh import WireGuardPeer
 
+        if not peer.private_key:
+            raise ValueError(
+                f"Cannot build config for {peer}: private key is empty "
+                "(server-managed key — config is not stored on master)"
+            )
+
         mesh = peer.mesh
         other_peers = WireGuardPeer.objects.filter(
             mesh=mesh, is_active=True,
@@ -556,9 +562,17 @@ class WireGuardService:
         3. Write /etc/wireguard/wg0.conf
         4. Restart WireGuard interface
 
-        Server-managed peers (empty private key) still get deployed — the
-        [Interface] section simply omits PrivateKey so the node keeps its own.
+        Peers whose private key is empty (server-managed) are skipped —
+        their key was fetched from the existing server install and the config
+        is managed locally on that server.
         """
+        if not peer.private_key:
+            logger.info(
+                "Skipping config deploy to %s (private key is server-managed)",
+                peer,
+            )
+            return
+
         config = cls.build_wg_config(peer)
         mesh = peer.mesh
         iface = cls.validate_interface_name(mesh.interface_name)

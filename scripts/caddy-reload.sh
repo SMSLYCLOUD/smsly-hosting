@@ -150,7 +150,7 @@ normalize_caddy_candidate() {
             cat <<'CADDY_GLOBAL'
 {
     on_demand_tls {
-        ask http://localhost:8090/api/v1/services/check-domain/
+        ask http://localhost:8000/api/v1/services/check-domain/
     }
 }
 
@@ -165,7 +165,7 @@ CADDY_GLOBAL
     tls {
         on_demand
     }
-    reverse_proxy localhost:8090
+    reverse_proxy localhost:8000
 }
 CADDY_HTTPS_FALLBACK
 }

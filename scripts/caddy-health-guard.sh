@@ -92,7 +92,7 @@ normalize_caddy_candidate() {
             cat <<'CADDY_GLOBAL'
 {
     on_demand_tls {
-        ask http://localhost:8090/api/v1/services/check-domain/
+        ask http://localhost:8000/api/v1/services/check-domain/
     }
 }
 
@@ -107,7 +107,7 @@ CADDY_GLOBAL
     tls {
         on_demand
     }
-    reverse_proxy localhost:8090
+    reverse_proxy localhost:8000
 }
 CADDY_HTTPS_FALLBACK
 }
@@ -139,12 +139,12 @@ write_safe_fallback() {
     cat > "$candidate" <<CADDY_SAFE
 {
     on_demand_tls {
-        ask http://localhost:8090/api/v1/services/check-domain/
+        ask http://localhost:8000/api/v1/services/check-domain/
     }
 }
 
 ${domain} {
-    reverse_proxy localhost:8090
+    reverse_proxy localhost:8000
     encode gzip
     log {
         output file /var/log/caddy/access.log
@@ -155,11 +155,11 @@ ${domain} {
     tls {
         on_demand
     }
-    reverse_proxy localhost:8090
+    reverse_proxy localhost:8000
 }
 
 :80 {
-    reverse_proxy localhost:8090
+    reverse_proxy localhost:8000
 }
 CADDY_SAFE
 

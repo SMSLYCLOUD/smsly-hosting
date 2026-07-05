@@ -57,7 +57,7 @@ for svc in queryset.exclude(public_domain__isnull=True).exclude(public_domain=''
 # Individual service domains get SSL via Let's Encrypt HTTP-01 challenge.
 # Set CLOUDFLARE_API_TOKEN in .env and run --update to re-enable wildcard SSL.
 ${domain} {
-    reverse_proxy localhost:8090
+    reverse_proxy localhost:8000
     encode gzip
     log {
         output file /var/log/caddy/access.log
@@ -67,7 +67,7 @@ ${domain} {
 :80 {
     handle {
         rewrite * /notice
-        reverse_proxy localhost:8090
+        reverse_proxy localhost:8000
     }
 }
 
@@ -77,7 +77,7 @@ SAFECADDY
         cat > /opt/smsly-hosting/caddy-config/Caddyfile <<SAFECADDY
 # Auto-generated safe fallback (reason: $reason)
 :80 {
-    reverse_proxy localhost:8090
+    reverse_proxy localhost:8000
     encode gzip
     log {
         output file /var/log/caddy/access.log

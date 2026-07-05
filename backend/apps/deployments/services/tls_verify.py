@@ -98,12 +98,23 @@ def _check_pin_after_handshake(response, expected_fingerprint_hex: str) -> None:
         )
 
 
+def _is_wireguard_ip(address: str) -> bool:
+    """Check if an IP address is in the WireGuard mesh range (10.100.0.0/24)."""
+    try:
+        return ipaddress.ip_address(address.strip()) in ipaddress.ip_network("10.100.0.0/24")
+    except ValueError:
+        return False
+
+
 def resolve_tls_verify(managed_server) -> tuple[bool, str | None]:
     """Return ``(verify, fingerprint_hex)`` for a given ManagedServer.
 
     - If the server has a ``tls_cert_sha256`` pin set, return
       ``(True, fingerprint)``. The caller should use
       ``_check_pin_after_handshake`` to validate the pin.
+    - If the server has an ``wg_address`` in the 10.100.0.0/24 mesh
+      range, return ``(False, None)`` — traffic never leaves the
+      encrypted WireGuard tunnel.
     - If the server has ``verify_tls=True`` (the default), return
       ``(True, None)``.
     - If the server has ``verify_tls=False``, only honor that if
@@ -114,10 +125,11 @@ def resolve_tls_verify(managed_server) -> tuple[bool, str | None]:
     fingerprint = (getattr(managed_server, "tls_cert_sha256", "") or "").strip()
     if fingerprint:
         return False, fingerprint
+    wg_address = (getattr(managed_server, "wg_address", "") or "").strip()
+    if wg_address and _is_wireguard_ip(wg_address):
+        return False, None
     if getattr(managed_server, "verify_tls", True):
         return True, None
-    # Server wants to skip cert verification. Only honor that if the
-    # operator has explicitly opted in.
     if _allow_insecure_inter_node_tls():
         return False, None
     return True, None  # refuse the insecure request
