@@ -114,7 +114,7 @@ python-dateutil==2.9.0.post0
 python-decouple==3.8
 python-json-logger==4.1.0
 PyYAML==6.0.3
-redis==7.1.0
+redis==8.0.0
 referencing==0.37.0
 requests==2.34.2
 requests-oauthlib==2.0.0
