@@ -66,7 +66,7 @@ sync_cloudflare_token() {
 
     if [ -f "$TOKEN_FILE" ]; then
         NEW_TOKEN=$(cat "$TOKEN_FILE")
-        if [ -n "$NEW_TOKEN" ]; then
+        if [ -n "$NEW_TOKEN" ] && echo "$NEW_TOKEN" | grep -qE '^[A-Za-z0-9._-]+$'; then
             # Check if override needs updating
             CURRENT_TOKEN=""
             if [ -f "$OVERRIDE_CONF" ]; then
@@ -89,8 +89,10 @@ ENVEOF
                 export CLOUDFLARE_API_TOKEN="$NEW_TOKEN"
             fi
             rm -f "$CANDIDATE_CADDY"
-        else
+        elif [ -z "$NEW_TOKEN" ]; then
             clear_cloudflare_override
+        else
+            echo "$LOG_PREFIX ERROR: Cloudflare token contains invalid characters; skipping sync"
         fi
         # Remove token file after processing (security: don't leave on disk)
         rm -f "$TOKEN_FILE"
@@ -198,11 +200,6 @@ apply_validated_caddyfile() {
     cp "$CADDY_CONF" "$LAST_GOOD_CONF" 2>/dev/null || true
     rm -f "$previous"
     return 0
-
-    echo "$LOG_PREFIX ERROR: Caddy reload failed after applying candidate; restoring previous config"
-    restore_previous_caddyfile "$previous"
-    rm -f "$previous"
-    return 1
 }
 
 while true; do

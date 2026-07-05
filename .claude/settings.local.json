@@ -54,7 +54,10 @@
       "Bash(npx next *)",
       "Bash(node -e ' *)",
       "Bash(taskkill //F //IM node.exe)",
-      "Bash(rm -rf .next)"
+      "Bash(rm -rf .next)",
+      "Bash(git merge *)",
+      "Bash(git checkout *)",
+      "Bash(node *)"
     ]
   }
 }

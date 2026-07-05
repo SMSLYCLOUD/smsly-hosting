@@ -209,7 +209,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-smsly_hosting}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -287,7 +287,7 @@ services:
       - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets:z
     # SECURITY: removed `./:/platform-src:ro` — see celery-deploy comment above.
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     env_file:
       - .env
     environment:
@@ -390,7 +390,7 @@ services:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api/v1}
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       # Base URL only (Next rewrites append /api/* and /accounts/* paths)
       - INTERNAL_API_URL=http://backend:8000
@@ -578,9 +578,7 @@ services:
     # extra rights, so this is materially less powerful than full privileged
     # mode while still allowing cAdvisor to read container/host metrics.
     cap_add:
-      - SYS_PTRACE
-      - NET_ADMIN
-      - SYS_ADMIN
+      - DAC_READ_SEARCH
     security_opt:
       - no-new-privileges:true
     command:

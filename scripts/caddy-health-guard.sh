@@ -48,7 +48,7 @@ export_caddy_cloudflare_env() {
 sync_active_to_shared() {
     [ -f "$CADDY_CONF" ] || return 0
     mkdir -p "$WATCH_DIR" 2>/dev/null || true
-    install -m 0664 "$CADDY_CONF" "$WATCH_DIR/Caddyfile" 2>/dev/null || cp "$CADDY_CONF" "$WATCH_DIR/Caddyfile" 2>/dev/null || true
+    install -m 0640 "$CADDY_CONF" "$WATCH_DIR/Caddyfile" 2>/dev/null || cp "$CADDY_CONF" "$WATCH_DIR/Caddyfile" 2>/dev/null || true
     rm -f "$WATCH_DIR/.reload" 2>/dev/null || true
 }
 

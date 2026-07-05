@@ -177,20 +177,23 @@ class WireGuardService:
             ssh.connect()
 
             # 1. Add live peer (idempotent — wg set replaces existing peer with same key)
+            _pk = shlex.quote(peer_pubkey)
+            _ep = shlex.quote(peer_endpoint)
+            _ip = shlex.quote(peer_wg_ip)
             add_live = (
-                f"wg set wg0 peer {peer_pubkey} "
-                f"endpoint {peer_endpoint} "
-                f"allowed-ips {peer_wg_ip}/32 "
+                f"wg set wg0 peer {_pk} "
+                f"endpoint {_ep} "
+                f"allowed-ips {_ip}/32 "
                 "persistent-keepalive 25"
             )
             ssh.exec_command(add_live, timeout=15, raise_on_error=False)
 
             # 2. Persist to config file (skip if peer section already exists)
             persist = (
-                f"grep -q '^PublicKey = {peer_pubkey}$' /etc/wireguard/wg0.conf 2>/dev/null "
-                f"|| printf '\\n[Peer]\\nPublicKey = {peer_pubkey}\\n"
-                f"AllowedIPs = {peer_wg_ip}/32\\n"
-                f"Endpoint = {peer_endpoint}\\n"
+                f"grep -q '^PublicKey = {_pk}$' /etc/wireguard/wg0.conf 2>/dev/null "
+                f"|| printf '\\n[Peer]\\nPublicKey = {_pk}\\n"
+                f"AllowedIPs = {_ip}/32\\n"
+                f"Endpoint = {_ep}\\n"
                 f"PersistentKeepalive = 25\\n' >> /etc/wireguard/wg0.conf"
             )
             ssh.exec_command(persist, timeout=15, raise_on_error=False)

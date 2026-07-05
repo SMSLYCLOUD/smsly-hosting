@@ -22,8 +22,8 @@ if [ -n "$UPDATE_MODE" ]; then
     # writable by that user to allow the domain-config signal to sync back to .env.
     if [ -f "$INSTALL_DIR/.env" ]; then
         chown root:1000 "$INSTALL_DIR/.env" 2>/dev/null || true
-        chmod 664 "$INSTALL_DIR/.env" 2>/dev/null || true
-        echo -e "${BLUE}  → Fixed .env permissions to 664 (group-writable by container UID 1000)${NC}"
+        chmod 640 "$INSTALL_DIR/.env" 2>/dev/null || true
+        echo -e "${BLUE}  → Fixed .env permissions to 640 (readable by container UID 1000)${NC}"
     fi
 
     # ─── Pre-flight ──────────────────────────────────────────────────────────
@@ -79,7 +79,7 @@ if [ -n "$UPDATE_MODE" ]; then
     mkdir -p "$INSTALL_DIR/auth"
     if [ ! -f "$INSTALL_DIR/auth/htpasswd" ] || [ -z "${REGISTRY_PASSWORD:-}" ] || [ -z "${REGISTRY_USER:-}" ]; then
         echo -e "${BLUE}  → Ensuring registry htpasswd authentication exists...${NC}"
-        REGISTRY_PASS="${REGISTRY_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_urlsafe(18))" 2>/dev/null || openssl rand -hex 12 2>/dev/null || echo 'auto-generated-change-me')}"
+        REGISTRY_PASS="${REGISTRY_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_urlsafe(18))" 2>/dev/null || openssl rand -hex 12 2>/dev/null || { echo "ERROR: Cannot generate registry password" >&2; exit 1; })}"
         if command -v htpasswd >/dev/null 2>&1; then
             htpasswd -Bbn "${REGISTRY_USER:-smsly-registry}" "$REGISTRY_PASS" > "$INSTALL_DIR/auth/htpasswd"
         else
@@ -685,7 +685,7 @@ fi
         if ! chown -R 1000:1000 /opt/smsly-hosting/prometheus-targets 2>/dev/null; then
             echo -e "${YELLOW}  ⚠ Could not chown prometheus-targets to uid 1000${NC}"
         fi
-        chmod 2777 /opt/smsly-hosting/prometheus-targets 2>/dev/null || true
+        chmod 0755 /opt/smsly-hosting/prometheus-targets 2>/dev/null || true
         docker compose \
             --env-file /opt/smsly-hosting/.env \
             -f infrastructure/docker/docker-compose.observability.yml \
@@ -722,7 +722,7 @@ if command -v trivy >/dev/null 2>&1; then
         _trivy_tag="smsly/${_trivy_img}:latest"
         if docker image inspect "$_trivy_tag" >/dev/null 2>&1; then
             echo -e "${BLUE}    ↳ Scanning $_trivy_tag...${NC}"
-            trivy image --insecure --scanners vuln --severity CRITICAL,HIGH --exit-code 0 --no-progress "$_trivy_tag" 2>/dev/null || \
+            trivy image --scanners vuln --severity CRITICAL,HIGH --exit-code 0 --no-progress "$_trivy_tag" 2>/dev/null || \
                 echo -e "${YELLOW}    ⚠ $_trivy_tag scan reported warnings — review output above${NC}"
         fi
     done
@@ -844,7 +844,7 @@ if a_count > 0:
     # ─── Fix .env permissions (must be writable by Docker container UID 1000) ──
     if [ -f "$INSTALL_DIR/.env" ]; then
         chown root:1000 "$INSTALL_DIR/.env" 2>/dev/null || true
-        chmod 664 "$INSTALL_DIR/.env" 2>/dev/null || true
+        chmod 640 "$INSTALL_DIR/.env" 2>/dev/null || true
     fi
 
     # ─── Caddy: Generate self-signed cert + regenerate Caddyfile ──

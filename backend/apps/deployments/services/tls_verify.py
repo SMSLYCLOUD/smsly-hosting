@@ -21,9 +21,6 @@ import socket
 import ssl
 from urllib.parse import urlparse
 
-from django.conf import settings
-
-
 # SECURITY: helper used to read the platform-wide
 # ALLOW_INSECURE_INTER_NODE_TLS env flag. We re-read it on
 # every call (rather than capturing it at import time) so a
@@ -32,11 +29,7 @@ def _allow_insecure_inter_node_tls() -> bool:
     raw = os.environ.get("ALLOW_INSECURE_INTER_NODE_TLS", "false").strip().lower()
     if raw in ("1", "true", "yes", "on"):
         return True
-    # Honour the Django settings.DEBUG override too — when DEBUG
-    # is on, the platform is in development mode and skipping
-    # cert checks is acceptable (e.g. self-signed master in a
-    # local docker compose stack).
-    return bool(getattr(settings, "DEBUG", False))
+    return False
 
 
 def _build_ssl_context_for_pin(fingerprint_hex: str) -> ssl.SSLContext:
@@ -72,7 +65,7 @@ def _check_pin_after_handshake(response, expected_fingerprint_hex: str) -> None:
     
     connection = getattr(response.raw, "_connection", None)
     if connection is None:
-        return
+        raise ValueError("TLS pin check failed: no underlying connection available")
         
     pool = getattr(connection, "pool", None)
     sock = getattr(pool, "sock", None) if pool else None
@@ -83,13 +76,13 @@ def _check_pin_after_handshake(response, expected_fingerprint_hex: str) -> None:
         # the request's underlying urllib3 connection.
         try:
             peer = connection.sock.getpeercert(binary_form=True)
-        except Exception:
-            return
+        except Exception as exc:
+            raise ValueError(f"TLS pin check failed: unable to retrieve peer certificate: {exc}") from exc
     else:
         peer = sock.getpeercert(binary_form=True)
         
     if peer is None:
-        return
+        raise ValueError("TLS pin check failed: peer certificate is None")
     digest = hashlib.sha256(peer).hexdigest()
     if digest.lower() != expected_fingerprint_hex.lower():
         raise ssl.SSLError(
@@ -119,8 +112,8 @@ def resolve_tls_verify(managed_server) -> tuple[bool, str | None]:
       ``(True, None)``.
     - If the server has ``verify_tls=False``, only honor that if
       the platform-wide ``ALLOW_INSECURE_INTER_NODE_TLS`` env flag
-      is set, or if ``settings.DEBUG``. Otherwise return
-      ``(True, None)`` to refuse the insecure request.
+      is set. Otherwise return ``(True, None)`` to refuse the
+      insecure request.
     """
     fingerprint = (getattr(managed_server, "tls_cert_sha256", "") or "").strip()
     if fingerprint:
@@ -230,17 +223,15 @@ def _allow_insecure_env_set() -> bool:
     raw = os.environ.get(_ALLOW_INSECURE_ENV, "").strip().lower()
     if raw in ("1", "true", "yes", "on"):
         return True
-    # Honour Django DEBUG as a development-mode override, matching
-    # ``_allow_insecure_inter_node_tls`` above.
-    return bool(getattr(settings, "DEBUG", False))
+    return False
 
 
 def should_verify(url: str) -> bool:
     """Return ``True`` if the URL requires TLS verification.
 
     Returns ``False`` for plain HTTP, loopback / Docker-internal hosts, and
-    private IPs when ``ALLOW_INSECURE_INTER_NODE_TLS`` (or ``DEBUG``) is
-    set. Returns ``True`` for HTTPS public URLs.
+    private IPs when ``ALLOW_INSECURE_INTER_NODE_TLS`` is set.
+    Returns ``True`` for HTTPS public URLs.
     """
     parsed = urlparse(url or "")
     host = (parsed.hostname or "").lower()
