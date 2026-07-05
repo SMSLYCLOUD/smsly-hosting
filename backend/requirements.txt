@@ -151,7 +151,7 @@ yarl==1.22.0
 zope.interface==8.2
 zstandard==0.25.0
 filelock>=3.12
-psutil==6.1.1
+psutil==7.2.2
 pytest==8.3.3
 pytest-django==4.9.0
 dnspython==2.8.0
