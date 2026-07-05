@@ -391,7 +391,8 @@ def _get_available_memory_mb() -> int:
         import psutil
         return int(psutil.virtual_memory().available / (1024 * 1024))
     except ImportError:
-        return 9999
+        logger.warning("psutil unavailable — using conservative 512 MB memory estimate")
+        return 512
 
 
 def _has_enough_memory(min_free_mb: int = _MIN_FREE_MEMORY_MB) -> bool:
@@ -753,16 +754,13 @@ def _resolve_from_manifest_or_fallback(
 
             # Resolve addon placeholders in manifest-resolved values
             manifest_resolved: dict[str, str] = {}
+            _ADDON_PLACEHOLDERS = (
+                "{{POSTGRES_URL}}", "{{REDIS_URL}}", "{{RABBITMQ_URL}}",
+                "{{QDRANT_URL}}", "{{MYSQL_URL}}", "{{MONGODB_URL}}",
+                "{{ELASTICSEARCH_URL}}", "{{MINIO_URL}}", "{{MEMCACHED_URL}}",
+            )
             for key, value in resolved.items():
-                if "{{POSTGRES_URL}}" in str(value):
-                    manifest_resolved[key] = _resolve_env_placeholders(
-                        {key: value}, created_services, shared_addons, shared_secrets,
-                    ).get(key, value)
-                elif "{{REDIS_URL}}" in str(value):
-                    manifest_resolved[key] = _resolve_env_placeholders(
-                        {key: value}, created_services, shared_addons, shared_secrets,
-                    ).get(key, value)
-                elif "{{RABBITMQ_URL}}" in str(value):
+                if any(placeholder in str(value) for placeholder in _ADDON_PLACEHOLDERS):
                     manifest_resolved[key] = _resolve_env_placeholders(
                         {key: value}, created_services, shared_addons, shared_secrets,
                     ).get(key, value)
@@ -1729,6 +1727,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
         }
 
     services_plan = plan.get("services", [])
+    use_shared_addons = plan.get("use_shared_addons", True)
     if not isinstance(services_plan, list) or not services_plan:
         return {"error": "No services in deploy plan"}
 
@@ -1927,7 +1926,10 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                 created_services[alias] = addon_anchor_service
             break
 
-    if addon_anchor_service and required_addons:
+    if not use_shared_addons:
+        logger.info("Shared addons disabled — each service will provision its own addons independently")
+
+    if addon_anchor_service and required_addons and use_shared_addons:
         supported_addons = set(addon_provisioner.ADDON_IMAGES.keys())
         for addon_type in required_addons:
             if addon_type not in supported_addons:
@@ -2073,22 +2075,48 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             env_vars = _normalize_env_vars(svc_plan.get("env_vars", {}))
             service_addon_types = _service_plan_addon_types(svc_plan, plan.get("addons", []))
 
+            # When shared addons are disabled, provision each service's addons independently.
+            service_addon_urls: dict[str, str] = {}
+            if not use_shared_addons and service_addon_types:
+                supported_addons = set(addon_provisioner.ADDON_IMAGES.keys())
+                for addon_type in service_addon_types:
+                    if addon_type not in supported_addons:
+                        logger.warning("Ecosystem addon %s is not supported; skipping", addon_type)
+                        continue
+                    try:
+                        svc_addon = Addon.objects.create(
+                            service=service,
+                            name=f"{addon_type.lower()}-individual"[:255],
+                            addon_type=addon_type,
+                            status=Addon.Status.PROVISIONING,
+                        )
+                        _rollback_addons.append(str(svc_addon.id))
+                        _cid, url = addon_provisioner.provision(svc_addon)
+                        svc_addon.connection_url = url
+                        svc_addon.status = Addon.Status.ACTIVE
+                        svc_addon.save(update_fields=['connection_url', 'status', 'updated_at'])
+                        service_addon_urls[addon_type] = url
+                        logger.info("Provisioned individual addon %s for service %s", addon_type, service.name)
+                    except Exception as exc:
+                        logger.error("Failed to provision individual addon %s for %s: %s", addon_type, service.name, exc)
+
             # ── Manifest-backed env resolution (replaces AI hallucination) ──
             # When the source repo is available locally, read actual .env.example
             # and SECRETS-MANIFEST.yaml files to produce a fully resolved,
             # grounded env configuration. Falls back to placeholder resolution
             # + AI Senate only when source files are unavailable.
+            active_addon_urls = service_addon_urls if not use_shared_addons else provisioned_addon_urls
             resolved_env = _resolve_from_manifest_or_fallback(
                 repo=repo,
                 service_name=service.name,
                 entry=entry,
                 svc_plan=svc_plan,
                 created_services=created_services,
-                shared_addons=provisioned_addon_urls,
+                shared_addons=active_addon_urls,
                 shared_secrets=shared_secrets,
                 stack=stack,
             )
-            _inject_addon_env_defaults(resolved_env, service_addon_types, provisioned_addon_urls)
+            _inject_addon_env_defaults(resolved_env, service_addon_types, active_addon_urls)
 
             # Filter out Django/framework-specific vars from non-Django services.
             if stack not in {"django", "python"}:

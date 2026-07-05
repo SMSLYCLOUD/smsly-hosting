@@ -767,6 +767,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         plan_id = request.data.get('plan_id')
         plan = request.data.get('plan')
         project_id = request.data.get('project_id')
+        use_shared_addons = request.data.get('use_shared_addons', True)
         if not isinstance(plan, dict):
             return Response(
                 {'error': 'plan (object) is required'},
@@ -817,15 +818,18 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         if plan_record:
             if not plan_record.project:
                 plan_record.project = project
+            plan['use_shared_addons'] = use_shared_addons
             plan_record.plan = plan
             plan_record.status = EcosystemPlan.Status.DEPLOYING
-            plan_record.save()
+            plan_record.use_shared_addons = use_shared_addons
+            plan_record.save(update_fields=['plan', 'status', 'use_shared_addons', 'updated_at'])
         else:
             plan_record = EcosystemPlan.objects.create(
                 user=request.user,
                 project=project,
                 plan=plan,
                 status=EcosystemPlan.Status.DEPLOYING,
+                use_shared_addons=use_shared_addons,
             )
 
         task = ecosystem_deploy_task.delay(

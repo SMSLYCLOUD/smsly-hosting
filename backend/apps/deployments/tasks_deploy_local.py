@@ -871,7 +871,7 @@ def _link_ecosystem(service: Service, env_vars: dict):
     # If this service has a DATABASE_URL from its own addon, rewrite it
     # to target the correct per-service database.
     db_name = _infer_database_name(service)
-    if db_name and 'DATABASE_URL' in env_vars:
+    if db_name and 'DATABASE_URL' in env_vars and not svc_name.startswith('preview-'):
         try:
             old_url = env_vars['DATABASE_URL']
             new_url = rewrite_database_url(old_url, db_name)
@@ -887,7 +887,7 @@ def _link_ecosystem(service: Service, env_vars: dict):
 
     # If this service has NO DATABASE_URL but a sibling shares Postgres,
     # derive one from the shared addon.
-    if 'DATABASE_URL' not in env_vars and 'POSTGRES' in shared_addons:
+    if 'DATABASE_URL' not in env_vars and 'POSTGRES' in shared_addons and not svc_name.startswith('preview-'):
         try:
             base_url = shared_addons['POSTGRES']
             if db_name:
@@ -901,43 +901,45 @@ def _link_ecosystem(service: Service, env_vars: dict):
             logger.warning("Failed to inject shared DATABASE_URL: %s", exc)
 
     # ── 2. Cross-service URL resolution ──────────────────────────────
-    for env_key, match_patterns in _SERVICE_URL_PATTERNS.items():
-        if env_key in env_vars:
-            continue  # Don't override explicit values
+    if not svc_name.startswith('preview-'):
+        for env_key, match_patterns in _SERVICE_URL_PATTERNS.items():
+            if env_key in env_vars:
+                continue  # Don't override explicit values
 
-        for pattern in match_patterns:
-            matched_sib = None
-            for sib_name, sib_info in deployed.items():
-                if pattern in sib_name.lower():
-                    matched_sib = sib_info
-                    break
+            for pattern in match_patterns:
+                matched_sib = None
+                for sib_name, sib_info in deployed.items():
+                    if pattern in sib_name.lower():
+                        matched_sib = sib_info
+                        break
 
-            if matched_sib:
-                url = resolve_service_url(matched_sib)
-                env_vars[env_key] = url
-                logger.info(
-                    "Ecosystem: %s=%s (from sibling '%s')",
-                    env_key, url, matched_sib['name'],
-                )
-                break  # Resolved, move to next env_key
+                if matched_sib:
+                    url = resolve_service_url(matched_sib)
+                    env_vars[env_key] = url
+                    logger.info(
+                        "Ecosystem: %s=%s (from sibling '%s')",
+                        env_key, url, matched_sib['name'],
+                    )
+                    break  # Resolved, move to next env_key
 
     # ── 3. Shared secret propagation ─────────────────────────────────
-    for secret_key in _PROPAGATED_SECRETS:
-        if secret_key in env_vars:
-            continue  # Already set
+    if not svc_name.startswith('preview-'):
+        for secret_key in _PROPAGATED_SECRETS:
+            if secret_key in env_vars:
+                continue  # Already set
 
-        for sib_name in deployed:
-            try:
-                sib_val = get_sibling_env_value(service, sib_name, secret_key)
-                if sib_val:
-                    env_vars[secret_key] = sib_val
-                    logger.info(
-                        "Ecosystem: propagated %s from sibling '%s'",
-                        secret_key, sib_name,
-                    )
-                    break
-            except Exception:
-                continue
+            for sib_name in deployed:
+                try:
+                    sib_val = get_sibling_env_value(service, sib_name, secret_key)
+                    if sib_val:
+                        env_vars[secret_key] = sib_val
+                        logger.info(
+                            "Ecosystem: propagated %s from sibling '%s'",
+                            secret_key, sib_name,
+                        )
+                        break
+                except Exception:
+                    continue
 
     # ── 4. Redis DB isolation ────────────────────────────────────────
     redis_url = env_vars.get('REDIS_URL', '')

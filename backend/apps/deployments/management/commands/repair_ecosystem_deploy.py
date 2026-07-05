@@ -31,7 +31,6 @@ class Command(BaseCommand):
             return
 
         self.stdout.write(self.style.SUCCESS(f"Found {services.count()} services for project {project_id}"))
-        {s.name: s for s in services}
         user = services.first().owner
 
         issues_found = []

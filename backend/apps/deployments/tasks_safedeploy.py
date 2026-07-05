@@ -34,6 +34,20 @@ from apps.deployments.services.safedeploy.postgres_snapshot_manager import (
 
 logger = logging.getLogger(__name__)
 
+# Sensitive env vars that must NOT leak from parent to preview migration
+_MIGRATION_SENSITIVE_BLOCKLIST = {
+    'SECRET_KEY', 'DJANGO_SECRET_KEY', 'FIELD_ENCRYPTION_KEY',
+    'INTERNAL_API_SECRET', 'GATEWAY_SECRET', 'JWT_SECRET',
+    'SMSLY_ENCRYPTION_KEY', 'ENCRYPTION_KEY', 'SIGNING_KEY',
+    'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY',
+    'OPENAI_API_KEY', 'GEMINI_API_KEY', 'CLAUDE_API_KEY',
+    'ANTHROPIC_API_KEY', 'GROK_API_KEY',
+    'STRIPE_SECRET_KEY', 'PAYPAL_CLIENT_SECRET',
+    'TWILIO_AUTH_TOKEN', 'SENDGRID_API_KEY',
+    'REDIS_PASSWORD', 'RABBITMQ_PASSWORD',
+    'CELERY_BROKER_PASSWORD', 'BROKER_PASSWORD',
+}
+
 
 def _preview_service_name(preview: PreviewEnvironment) -> str:
     return f"preview-{preview.id.hex}"
@@ -228,11 +242,7 @@ def _sync_preview_addons(preview: PreviewEnvironment, transient_service: Service
             _inject_addon_credentials(new_addon)
             continue
 
-        if new_addon.status == Addon.Status.ACTIVE and new_addon.connection_url:
-            if update_fields:
-                new_addon.save(update_fields=list(set(update_fields)))
-            _inject_addon_credentials(new_addon)
-            continue
+        # Always provision fresh for preview environments — never reuse stale credentials
 
         if update_fields:
             new_addon.save(update_fields=list(set(update_fields)))
@@ -461,10 +471,11 @@ def run_migration_validation_job(preview_id: str):
             preview.save()
             return
 
-        # Collect all service env vars to pass to the migration environment
+        # Collect non-sensitive service env vars for the migration environment
         service_env_vars = {
             env_var.key: env_var.value
             for env_var in preview.service.env_vars.all()
+            if env_var.key.upper().replace('-', '_') not in _MIGRATION_SENSITIVE_BLOCKLIST
         }
 
         # Build isolated venv with dependencies installed and settings discovered

@@ -72,9 +72,23 @@ def build_ecosystem_graph(service) -> dict[str, Any]:
         for addon in sib.addons.filter(status='ACTIVE'):
             conn_url = addon.connection_url or ''
             sib_info['addons'][addon.addon_type] = conn_url
-            # First addon of each type becomes the shared reference
             if addon.addon_type not in graph['shared_addons'] and conn_url:
                 graph['shared_addons'][addon.addon_type] = conn_url
+            elif addon.addon_type in graph['shared_addons'] and conn_url:
+                # Multiple addons of same type — check if current service has a preference
+                current_addon_urls = {a.connection_url for a in service.addons.filter(status='ACTIVE', addon_type=addon.addon_type) if a.connection_url}
+                if current_addon_urls and conn_url in current_addon_urls:
+                    # This sibling's addon matches our own — prefer it
+                    graph['shared_addons'][addon.addon_type] = conn_url
+                    logger.info(
+                        "Ecosystem graph: preferred addon %s from '%s' (matches current service)",
+                        addon.addon_type, sib.name,
+                    )
+                else:
+                    logger.warning(
+                        "Ecosystem graph: duplicate addon %s from '%s' ignored (keeping '%s')",
+                        addon.addon_type, sib.name, graph['shared_addons'].get(addon.addon_type, ''),
+                    )
 
         graph['deployed'][sib.name] = sib_info
 

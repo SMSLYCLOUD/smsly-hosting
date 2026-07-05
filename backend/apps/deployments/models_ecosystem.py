@@ -28,6 +28,10 @@ class EcosystemPlan(models.Model):
         related_name='ecosystem_plans',
         help_text='Project this ecosystem plan belongs to. All created services are scoped to this project.',
     )
+    use_shared_addons = models.BooleanField(
+        default=True,
+        help_text='When True, addons (Postgres, Redis, etc.) are provisioned once and shared across all services. When False, each service provisions its own addons independently.',
+    )
 
     # Task IDs for resume
     scan_task_id = models.CharField(max_length=255, blank=True, null=True)  # type: ignore[var-annotated]
