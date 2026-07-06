@@ -76,6 +76,27 @@ def main():
     db_password = get_env_or_die("DB_PASSWORD")
     db_name = get_env_or_die("DB_NAME")
 
+    # ── Read replica hosts (remote or local) ──────────────────────────────────
+    # DB_REPLICA_HOSTS is a comma-separated list of "host:port" entries.
+    # When set, pgcat routes SELECTs to these replicas and writes to the primary.
+    # For maximum reliability, use remote replicas on a separate server.
+    raw_replicas = os.environ.get("DB_REPLICA_HOSTS", "").strip()
+    replica_servers = []
+    if raw_replicas:
+        for entry in raw_replicas.split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            if ":" in entry:
+                rhost, rport = entry.rsplit(":", 1)
+                try:
+                    rport = int(rport)
+                except ValueError:
+                    rport = 5432
+            else:
+                rhost, rport = entry, 5432
+            replica_servers.append((rhost, rport))
+
     admin_user = os.environ.get("PGCAT_ADMIN_USERNAME", "pgcat_admin")
     admin_pass = os.environ.get("PGCAT_ADMIN_PASSWORD")
     if not admin_pass or admin_pass == "pgcat_admin":
@@ -98,6 +119,12 @@ def main():
 
     node_users = _fetch_node_agent_users()
 
+    # Build the server list: primary + replicas
+    primary_server = f'["{db_host}", {db_port}, "primary"]'
+    replica_entries = [f'["{rh}", {rp}, "replica"]' for rh, rp in replica_servers]
+    all_servers = [primary_server] + replica_entries
+    servers_str = ",\n        ".join(all_servers)
+
     lines = [
         '[general]',
         f'host = "0.0.0.0"',
@@ -109,11 +136,23 @@ def main():
         'dns_cache_enabled = true',
         'dns_cache_ttl = 30000',
         '',
+        '# ── Query Parser (Read/Write Splitting) ──────────────────────────────────',
+        'query_parser_enabled = true',
+        'query_parser_read_write_splitting = true',
+        'primary_reads_enabled = true',
+        '',
+        '# ── Health Checks ────────────────────────────────────────────────────────',
+        'healthcheck_timeout = 5000',
+        'healthcheck_delay = 30000',
+        '',
+        '# ── Banning ──────────────────────────────────────────────────────────────',
+        'ban_time = 60',
+        '',
         '[pools.smsly_hosting]',
         'pool_mode = "transaction"',
         '',
         '[pools.smsly_hosting.shards.0]',
-        f'servers = [["{db_host}", {db_port}, "primary"]]',
+        f'servers = [{servers_str}]',
         f'database = "{db_name}"',
     ]
 
@@ -135,7 +174,7 @@ def main():
         'pool_mode = "session"',
         '',
         '[pools.smsly_hosting_session.shards.0]',
-        f'servers = [["{db_host}", {db_port}, "primary"]]',
+        f'servers = [{servers_str}]',
         f'database = "{db_name}"',
         f'[pools.smsly_hosting_session.users.{db_user}]',
         f'username = "{db_user}"',
@@ -155,7 +194,7 @@ def main():
     with open(out_path, "w") as f:
         f.write(toml_content)
 
-    print(f"Successfully rendered PgCat config to {out_path} with app pool={app_pool_size}, worker pool={worker_pool_size}, node agents={len(node_users)}")
+    print(f"Successfully rendered PgCat config to {out_path} with app pool={app_pool_size}, worker pool={worker_pool_size}, node agents={len(node_users)}, replicas={len(replica_servers)}")
 
 
 if __name__ == "__main__":
