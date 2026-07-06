@@ -217,6 +217,7 @@ services:
     image: redis:7-alpine
     container_name: smsly-redis-sentinel-1
     restart: unless-stopped
+    env_file: .env
     command: >
       sh -c '
       printf "sentinel monitor mymaster redis-primary 6379 2
@@ -252,6 +253,7 @@ services:
     image: redis:7-alpine
     container_name: smsly-redis-sentinel-2
     restart: unless-stopped
+    env_file: .env
     command: >
       sh -c '
       printf "sentinel monitor mymaster redis-primary 6379 2
@@ -287,6 +289,7 @@ services:
     image: redis:7-alpine
     container_name: smsly-redis-sentinel-3
     restart: unless-stopped
+    env_file: .env
     command: >
       sh -c '
       printf "sentinel monitor mymaster redis-primary 6379 2
