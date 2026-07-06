@@ -1502,6 +1502,90 @@ class AddonProvisioner:
 
         return {'running': False, 'status': 'unknown'}
 
+    def get_logs(self, container_name: str, tail: int = 200, follow: bool = False) -> str:
+        """Fetch recent logs from an addon container.
+
+        Args:
+            container_name: Docker container name (e.g. smsly-addon-postgres-<uuid>)
+            tail: Number of lines from the end to return (max 2000)
+            follow: If True, return a generator that yields log lines (for streaming)
+
+        Returns:
+            Log text string, or empty string if container not found.
+        """
+        tail = min(tail, 2000)
+        try:
+            if follow:
+                import subprocess
+                proc = subprocess.Popen(
+                    ['docker', 'logs', '--tail', str(tail), '-f', '--timestamps', container_name],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                )
+                return proc
+
+            result = subprocess.run(
+                ['docker', 'logs', '--tail', str(tail), '--timestamps', container_name],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            return result.stdout + result.stderr
+        except subprocess.TimeoutExpired:
+            logger.warning("Timeout fetching logs for %s", container_name)
+            return ''
+        except Exception as e:
+            logger.error("Failed to fetch logs for %s: %s", container_name, e)
+            return ''
+
+    def ensure_network_aliases(self, addon) -> list[str]:
+        """Verify and repair all network aliases for an addon container.
+
+        Returns the list of aliases that should be attached. Logs warnings
+        for any repairs performed so operators have visibility.
+        """
+        addon_type = addon.addon_type
+        service_name = addon.service.name
+        container_name = f"smsly-addon-{addon_type.lower()}-{addon.id}"
+        alias_name = str(getattr(addon, 'name', '') or f"{addon_type.lower()}-{service_name}").strip()
+
+        existing_url = str(getattr(addon, 'connection_url', '') or '').strip()
+        hostname_from_url = alias_name
+        if existing_url:
+            parsed = self._parse_connection_url(existing_url)
+            hostname_from_url = str(parsed.get('hostname') or alias_name).strip()
+
+        required_aliases = {alias_name}
+        if hostname_from_url and hostname_from_url != alias_name:
+            required_aliases.add(hostname_from_url)
+
+        # Read current aliases from Docker
+        try:
+            inspect_proc = subprocess.run(
+                ['docker', 'inspect', '-f',
+                 '{{range .NetworkSettings.Networks}}{{range .Aliases}}{{.}} {{end}}{{end}}',
+                 container_name],
+                capture_output=True, text=True, check=False,
+            )
+            current_aliases = set(inspect_proc.stdout.split()) if inspect_proc.returncode == 0 else set()
+        except Exception:
+            current_aliases = set()
+
+        missing = required_aliases - current_aliases
+        if missing:
+            logger.info(
+                "Repairing missing network aliases for %s: %s",
+                container_name, ', '.join(missing),
+            )
+            for alias in missing:
+                subprocess.run(
+                    ['docker', 'network', 'connect', '--alias', alias, self.network_name, container_name],
+                    capture_output=True, check=False,
+                )
+
+        return list(required_aliases)
+
 
     def _validate_backup_path(self, backup_path: str) -> str:
         """

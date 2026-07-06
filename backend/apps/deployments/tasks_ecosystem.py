@@ -799,14 +799,28 @@ def _resolve_from_manifest_or_fallback(
             from apps.intelligence.services.env_intelligence import (
                 EnvironmentIntelligenceService,
             )
-            _empty_vars = {
-                k: v for k, v in resolved_env.items()
-                if not v or v in ("", "{{GENERATE}}", "{{FILL_ME}}")
-                or str(v).startswith("REPLACE_WITH_")
-            }
-            if _empty_vars:
+            # Collect vars that need real production values:
+            # empty/placeholder, heuristic/mock, and unresolved.
+            _PLACEHOLDER_VALS = ("", "{{GENERATE}}", "{{FILL_ME}}", "CHANGEME", "TODO")
+            _MOCK_PATTERNS = ("localhost", "127.0.0.1", "mock", "test_", "fake_")
+            _needs_senate = {}
+            for k, v in resolved_env.items():
+                v_str = str(v or "").strip()
+                if v_str in _PLACEHOLDER_VALS or v_str.startswith("REPLACE_WITH_"):
+                    _needs_senate[k] = v
+                elif any(p in v_str.lower() for p in _MOCK_PATTERNS):
+                    _needs_senate[k] = v
+            # Also include unresolved and heuristic vars from manifest resolver
+            for k in getattr(resolver, 'unresolved_vars', []):
+                if k not in _needs_senate:
+                    _needs_senate[k] = ""
+            for k in getattr(resolver, 'heuristic_vars', []):
+                if k not in _needs_senate:
+                    _needs_senate[k] = resolved_env.get(k, "")
+
+            if _needs_senate:
                 senate_suggestions = EnvironmentIntelligenceService.resolve_environment(
-                    _empty_vars, stack, service_name,
+                    _needs_senate, stack, service_name,
                 )
                 for k, v in senate_suggestions.items():
                     if k in resolved_env and (not resolved_env[k] or resolved_env[k] in ("", "{{GENERATE}}", "{{FILL_ME}}")):

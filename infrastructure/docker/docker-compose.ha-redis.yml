@@ -88,7 +88,7 @@ services:
     restart: unless-stopped
     command: >
       sh -c '
-      printf "sentinel monitor smsly-redis redis-primary 6379 2\nsentinel auth-pass smsly-redis $${REDIS_PASSWORD}\nsentinel down-after-milliseconds smsly-redis 5000\nsentinel failover-timeout smsly-redis 15000\nsentinel parallel-syncs smsly-redis 1\nsentinel resolve-hostnames yes\nsentinel announce-hostnames yes\n" > /tmp/sentinel.conf
+      printf "sentinel monitor mymaster redis-primary 6379 2\nsentinel auth-pass mymaster $${REDIS_PASSWORD}\nsentinel down-after-milliseconds mymaster 5000\nsentinel failover-timeout mymaster 15000\nsentinel parallel-syncs mymaster 1\nsentinel resolve-hostnames yes\nsentinel announce-hostnames yes\n" > /tmp/sentinel.conf
       && redis-sentinel /tmp/sentinel.conf'
     networks:
       - smsly-net
@@ -108,7 +108,7 @@ services:
     restart: unless-stopped
     command: >
       sh -c '
-      printf "sentinel monitor smsly-redis redis-primary 6379 2\nsentinel auth-pass smsly-redis $${REDIS_PASSWORD}\nsentinel down-after-milliseconds smsly-redis 5000\nsentinel failover-timeout smsly-redis 15000\nsentinel parallel-syncs smsly-redis 1\nsentinel resolve-hostnames yes\nsentinel announce-hostnames yes\n" > /tmp/sentinel.conf
+      printf "sentinel monitor mymaster redis-primary 6379 2\nsentinel auth-pass mymaster $${REDIS_PASSWORD}\nsentinel down-after-milliseconds mymaster 5000\nsentinel failover-timeout mymaster 15000\nsentinel parallel-syncs mymaster 1\nsentinel resolve-hostnames yes\nsentinel announce-hostnames yes\n" > /tmp/sentinel.conf
       && redis-sentinel /tmp/sentinel.conf'
     networks:
       - smsly-net
@@ -128,7 +128,7 @@ services:
     restart: unless-stopped
     command: >
       sh -c '
-      printf "sentinel monitor smsly-redis redis-primary 6379 2\nsentinel auth-pass smsly-redis $${REDIS_PASSWORD}\nsentinel down-after-milliseconds smsly-redis 5000\nsentinel failover-timeout smsly-redis 15000\nsentinel parallel-syncs smsly-redis 1\nsentinel resolve-hostnames yes\nsentinel announce-hostnames yes\n" > /tmp/sentinel.conf
+      printf "sentinel monitor mymaster redis-primary 6379 2\nsentinel auth-pass mymaster $${REDIS_PASSWORD}\nsentinel down-after-milliseconds mymaster 5000\nsentinel failover-timeout mymaster 15000\nsentinel parallel-syncs mymaster 1\nsentinel resolve-hostnames yes\nsentinel announce-hostnames yes\n" > /tmp/sentinel.conf
       && redis-sentinel /tmp/sentinel.conf'
     networks:
       - smsly-net

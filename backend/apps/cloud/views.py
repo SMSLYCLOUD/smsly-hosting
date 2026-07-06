@@ -762,6 +762,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         isolation, permissions, and resource tracking.
         """
         from apps.deployments.models_ecosystem import EcosystemPlan
+        from apps.deployments.models_core import Project
         from apps.deployments.tasks_ecosystem import ecosystem_deploy_task
 
         plan_id = request.data.get('plan_id')
@@ -777,7 +778,6 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         # Resolve project — from explicit param, or from existing plan
         project = None
         if project_id:
-            from apps.deployments.models_core import Project
             try:
                 project = Project.objects.get(id=project_id)
                 if project.owner != request.user:

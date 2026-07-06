@@ -79,6 +79,22 @@ class BranchPreviewManager:
             env_vars['ALLOWED_HOSTS'] = domain
             env_vars['CSRF_TRUSTED_ORIGINS'] = preview.preview_url
 
+        # Prefer the preview addon's own DATABASE_URL (isolated container)
+        # over the clone URL (which shares the parent's DB server).
+        try:
+            from apps.deployments.models_addons import Addon
+            preview_pg = Addon.objects.filter(
+                service__name__startswith=f"preview-{preview.id.hex}",
+                addon_type=Addon.Type.POSTGRES,
+                status=Addon.Status.ACTIVE,
+            ).first()
+            if preview_pg and preview_pg.connection_url:
+                env_vars['DATABASE_URL'] = preview_pg.connection_url
+                return env_vars
+        except Exception:
+            pass
+
+        # Fallback: use clone URL if no preview addon found (legacy path)
         try:
             has_clone = hasattr(preview, 'database_clone') and preview.database_clone
         except Exception:

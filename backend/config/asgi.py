@@ -11,18 +11,23 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 django.setup()
 
 import apps.deployments.routing  # noqa: E402
-from apps.deployments.middleware import QueryStringAuthMiddleware  # noqa: E402
+from apps.deployments.middleware import (  # noqa: E402
+    QueryStringAuthMiddleware,
+    RedisResilientMiddleware,
+)
 from channels.auth import AuthMiddlewareStack  # noqa: E402
 from channels.routing import ProtocolTypeRouter, URLRouter  # noqa: E402
 from channels.security.websocket import AllowedHostsOriginValidator  # noqa: E402
 
 application = ProtocolTypeRouter({
     "http": get_asgi_application(),
-    "websocket": AllowedHostsOriginValidator(
-        AuthMiddlewareStack(
-            QueryStringAuthMiddleware(
-                URLRouter(
-                    apps.deployments.routing.websocket_urlpatterns
+    "websocket": RedisResilientMiddleware(
+        AllowedHostsOriginValidator(
+            AuthMiddlewareStack(
+                QueryStringAuthMiddleware(
+                    URLRouter(
+                        apps.deployments.routing.websocket_urlpatterns
+                    )
                 )
             )
         )

@@ -252,6 +252,61 @@ class AddonViewSet(viewsets.ModelViewSet):
                 'error': str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    @action(detail=True, methods=['get'])
+    def logs(self, request, pk=None):
+        """
+        Get runtime logs from the addon container.
+        GET /api/v1/addons/{id}/logs/?tail=200
+        """
+        addon = self.get_object()
+        container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
+
+        tail = int(request.query_params.get('tail', 200))
+        tail = min(tail, 2000)
+
+        from services.addon_provisioner import addon_provisioner
+
+        try:
+            log_text = addon_provisioner.get_logs(container_name, tail=tail)
+            return Response({
+                'id': str(addon.id),
+                'addon_type': addon.addon_type,
+                'container_name': container_name,
+                'status': addon.status,
+                'logs': log_text,
+            })
+        except Exception as e:
+            logger.error("Failed to fetch addon logs for %s: %s", pk, e)
+            return Response({
+                'id': str(addon.id),
+                'logs': '',
+                'message': f'Could not fetch addon logs: {e!s}',
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=['get'])
+    def network_check(self, request, pk=None):
+        """
+        Verify and repair network aliases for the addon container.
+        GET /api/v1/addons/{id}/network_check/
+        """
+        addon = self.get_object()
+        from services.addon_provisioner import addon_provisioner
+
+        try:
+            aliases = addon_provisioner.ensure_network_aliases(addon)
+            return Response({
+                'id': str(addon.id),
+                'container_name': f"smsly-addon-{addon.addon_type.lower()}-{addon.id}",
+                'aliases': aliases,
+                'status': addon.status,
+            })
+        except Exception as e:
+            logger.error("Network check failed for addon %s: %s", pk, e)
+            return Response({
+                'id': str(addon.id),
+                'error': str(e),
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
     @action(detail=True, methods=['post'])
     def backup(self, request, pk=None):
         """Trigger a backup for this addon."""

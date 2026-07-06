@@ -1615,20 +1615,20 @@ ensure_env_runtime_defaults() {
     fi
 
     if [ -n "$redis_password" ]; then
-        expected_redis_url="redis://:${redis_password}@redis:6379/0"
+        expected_redis_url="redis://:${redis_password}@redis-primary:6379/0"
         current_redis_url="$(env_get_value "$env_file" "REDIS_URL")"
         current_celery_broker_url="$(env_get_value "$env_file" "CELERY_BROKER_URL")"
 
         if [[ "$current_redis_url" == redis://redis:* ]]; then
             echo -e "${BLUE}  -> Fixing REDIS_URL to include authentication${NC}"
-            sed -i "s|^REDIS_URL=redis://redis:|REDIS_URL=redis://:${redis_password}@redis:|" "$env_file"
+            sed -i "s|^REDIS_URL=redis://redis:|REDIS_URL=redis://:${redis_password}@redis-primary:|" "$env_file"
             current_redis_url="$(env_get_value "$env_file" "REDIS_URL")"
             echo -e "${GREEN}  OK REDIS_URL updated with auth${NC}"
         fi
 
         env_ensure_var "$env_file" "REDIS_URL" "$expected_redis_url" "Redis connection string"
 
-        if [[ "$current_redis_url" =~ ^redis://:.*@redis:6379/0$ ]] && [ "$current_redis_url" != "$expected_redis_url" ]; then
+        if [[ "$current_redis_url" =~ ^redis://:.*@redis-primary:6379/0$ ]] && [ "$current_redis_url" != "$expected_redis_url" ]; then
             echo -e "${BLUE}  -> Syncing REDIS_URL with REDIS_PASSWORD${NC}"
             env_set_value "$env_file" "REDIS_URL" "$expected_redis_url"
             echo -e "${GREEN}  OK REDIS_URL synced${NC}"
@@ -5630,7 +5630,7 @@ REDIS_PASSWORD=$REDIS_PASSWORD
 RABBITMQ_PASSWORD=$RABBITMQ_PASSWORD
 RABBITMQ_DEFAULT_USER=smsly_user
 RABBITMQ_DEFAULT_PASS=$RABBITMQ_PASSWORD
-REDIS_URL=redis://:$REDIS_PASSWORD@redis:6379/0
+REDIS_URL=redis://:$REDIS_PASSWORD@redis-primary:6379/0
 REDIS_SOCKET_TIMEOUT=5
 CELERY_BROKER_URL=amqp://smsly_user:$RABBITMQ_PASSWORD@rabbitmq:5672//
 

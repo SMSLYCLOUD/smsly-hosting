@@ -5,7 +5,6 @@ import shutil
 import subprocess
 import tempfile
 import time
-from urllib.parse import urlparse
 
 from celery import shared_task
 from django.conf import settings
@@ -78,85 +77,13 @@ def _copy_environment_variables(source: Service, target: Service) -> None:
         )
 
 
-def _addon_container_name(addon: Addon) -> str:
-    return f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
-
-
-def _docker_exec(container_name: str, cmd: list[str], timeout: int = 300) -> tuple[int, str, str]:
-    full_cmd = ['docker', 'exec', container_name] + cmd
-    proc = subprocess.run(full_cmd, capture_output=True, text=True, timeout=timeout)
-    return proc.returncode, proc.stdout, proc.stderr
-
-
-def _clone_mysql_data(source_addon: Addon, target_addon: Addon) -> None:
-    src_name = _addon_container_name(source_addon)
-    dst_name = _addon_container_name(target_addon)
-    src_db = urlparse(source_addon.connection_url).path.lstrip('/') if source_addon.connection_url else None
-    if not src_db:
-        return
-    rc, dump, err = _docker_exec(src_name, [
-        'mysqldump', '--single-transaction', '--quick', '--no-autocommit', src_db,
-    ])
-    if rc != 0:
-        logger.warning("mysqldump failed for %s: %s", source_addon.id, err[:200])
-        return
-    rc2, _, err2 = _docker_exec(dst_name, ['mysql'], timeout=600)
-    if rc2 != 0:
-        logger.warning("mysql restore failed for %s: %s", target_addon.id, err2[:200])
-        return
-    subprocess.run(
-        ['docker', 'exec', '-i', dst_name, 'mysql'],
-        input=dump.encode(), capture_output=True, timeout=600,
-    )
-
-
-def _clone_mongodb_data(source_addon: Addon, target_addon: Addon) -> None:
-    src_name = _addon_container_name(source_addon)
-    dst_name = _addon_container_name(target_addon)
-    rc, dump, err = _docker_exec(src_name, ['mongodump', '--archive', '--gzip'])
-    if rc != 0:
-        logger.warning("mongodump failed for %s: %s", source_addon.id, err[:200])
-        return
-    subprocess.run(
-        ['docker', 'exec', '-i', dst_name, 'mongorestore', '--archive', '--gzip', '--drop'],
-        input=dump.encode(), capture_output=True, timeout=600,
-    )
-
-
-def _clone_redis_data(source_addon: Addon, target_addon: Addon) -> None:
-    src_name = _addon_container_name(source_addon)
-    dst_name = _addon_container_name(target_addon)
-    rc, dump, err = _docker_exec(src_name, ['redis-cli', '--rdb', '/tmp/preview-dump.rdb'])
-    if rc != 0:
-        logger.warning("redis RDB dump failed for %s: %s", source_addon.id, err[:200])
-        return
-    _docker_exec(dst_name, ['cp', '/tmp/preview-dump.rdb', f'{dst_name}:/tmp/'])
-    _docker_exec(dst_name, ['redis-cli', 'FLUSHALL'])
-    _docker_exec(dst_name, ['redis-cli', '--pipe'], timeout=600)
-    subprocess.run(
-        ['docker', 'exec', '-i', dst_name, 'redis-cli', '--pipe'],
-        input=dump.encode(), capture_output=True, timeout=600,
-    )
-
-
 def _clone_addon_data(source_addon: Addon, target_addon: Addon) -> None:
-    addon_type = source_addon.addon_type
-    logger.info("Cloning data for %s addon %s -> %s", addon_type, source_addon.id, target_addon.id)
-    try:
-        if addon_type in (Addon.Type.POSTGRES,):
-            return
-        elif addon_type in (Addon.Type.MYSQL, Addon.Type.MARIADB, Addon.Type.PERCONA):
-            _clone_mysql_data(source_addon, target_addon)
-        elif addon_type in (Addon.Type.MONGODB,):
-            _clone_mongodb_data(source_addon, target_addon)
-        elif addon_type in (Addon.Type.REDIS, Addon.Type.KEYDB, Addon.Type.VALKEY, Addon.Type.DRAGONFLYDB):
-            _clone_redis_data(source_addon, target_addon)
-        else:
-            logger.info("No data clone implemented for %s; provisioning fresh", addon_type)
-    except subprocess.TimeoutExpired:
-        logger.warning("Data clone timed out for %s addon %s", addon_type, source_addon.id)
-    except Exception as e:
-        logger.warning("Data clone failed for %s addon %s: %s", addon_type, source_addon.id, e)
+    """No-op. Data cloning between parent and preview is disabled to prevent
+    data leaks and reduce blast radius. Each preview gets fresh, empty addons."""
+    logger.info(
+        "Data clone skipped (disabled by design) for %s addon %s -> %s",
+        source_addon.addon_type, source_addon.id, target_addon.id,
+    )
 
 
 def _upsert_preview_environment_variables(preview: PreviewEnvironment, target: Service) -> None:
@@ -232,13 +159,18 @@ def _sync_preview_addons(preview: PreviewEnvironment, transient_service: Service
             new_addon.name = preview_addon_name
             update_fields.append('name')
 
-        if addon.addon_type == Addon.Type.POSTGRES and db_clone:
-            if db_clone.status != DatabaseClone.Status.READY:
-                raise RuntimeError("PostgreSQL clone is not ready")
-            new_addon.connection_url = db_clone.clone_database_url_secret_ref
+        if addon.addon_type == Addon.Type.POSTGRES:
+            # Provision a fresh, isolated PostgreSQL container for the preview.
+            # Never reuse the parent's DB server — the preview gets its own
+            # container with its own hostname, credentials, and empty database.
+            if update_fields:
+                new_addon.save(update_fields=list(set(update_fields)))
+
+            cid, url = addon_provisioner.provision(new_addon)
+            new_addon.connection_url = url
+            new_addon.coolify_uuid = cid
             new_addon.status = Addon.Status.ACTIVE
-            update_fields.extend(['connection_url', 'status'])
-            new_addon.save(update_fields=list(set(update_fields)) or None)
+            new_addon.save(update_fields=['connection_url', 'coolify_uuid', 'status', 'updated_at'])
             _inject_addon_credentials(new_addon)
             continue
 
@@ -252,10 +184,6 @@ def _sync_preview_addons(preview: PreviewEnvironment, transient_service: Service
         new_addon.coolify_uuid = cid
         new_addon.status = Addon.Status.ACTIVE
         new_addon.save(update_fields=['connection_url', 'coolify_uuid', 'status', 'updated_at'])
-
-        if addon.addon_type != Addon.Type.POSTGRES:
-            logger.info("Option A enterprise preview: skipping production data clone for %s; provisioning fresh empty database.", addon.addon_type)
-            # _clone_addon_data(addon, new_addon)
 
         _inject_addon_credentials(new_addon)
 
@@ -301,22 +229,25 @@ def create_preview_environment_job(preview_id: str):
 
 @shared_task
 def create_database_clone_job(preview_id: str):
+    """Provision an isolated preview PostgreSQL container (no data clone from production).
+
+    Instead of cloning production data, this provisions a fresh, empty
+    PostgreSQL container exclusively for the preview environment. Zero
+    data movement from production — no pg_dump, no CREATE TEMPLATE.
+    """
     try:
-        logger.error(f"CLONE_TASK >>> START preview_id={preview_id}")
+        logger.info("CLONE_TASK >>> START preview_id=%s", preview_id)
         preview = PreviewEnvironment.objects.get(id=preview_id)
-        logger.error(f"CLONE_TASK >>> preview found: status={preview.status} service={preview.service.id}")
+        logger.info("CLONE_TASK >>> preview found: status=%s service=%s", preview.status, preview.service.id)
 
         from django.core.cache import cache
         lock_key = f"preview_clone_lock:{preview.service_id}"
         if not cache.add(lock_key, str(preview.id), timeout=600):
             logger.warning("Another clone in progress for service %s, retrying in 30s", preview.service_id)
-            # Soft guard: re-queue with a delay because the task is not bound
-            # to self (would need bind=True for self.retry()).
             create_database_clone_job.apply_async(args=[preview_id], countdown=30)
             return
 
         try:
-            # Find the service's PostgreSQL addon to determine the source database name
             pg_addon = Addon.objects.filter(
                 service=preview.service,
                 addon_type=Addon.Type.POSTGRES,
@@ -324,7 +255,7 @@ def create_database_clone_job(preview_id: str):
             ).first()
 
             if not pg_addon:
-                logger.error("CLONE_TASK >>> No PostgreSQL addon for service %s, skipping DB clone", preview.service.id)
+                logger.info("CLONE_TASK >>> No PostgreSQL addon for service %s, skipping", preview.service.id)
                 validation, _ = MigrationValidation.objects.get_or_create(preview_environment=preview)
                 validation.status = MigrationValidation.Status.NOT_CONFIGURED
                 validation.summary = "No PostgreSQL addon configured; migration validation skipped."
@@ -334,69 +265,30 @@ def create_database_clone_job(preview_id: str):
                 run_preview_tests_job.delay(preview_id)
                 return
 
-            logger.error(f"CLONE_TASK >>> addon found: {pg_addon.id} url={pg_addon.connection_url[:60]}")
-
-            # Extract the actual database name from the addon's connection URL
-            from urllib.parse import urlparse
-            parsed = urlparse(pg_addon.connection_url)
-            source_db_name = parsed.path.lstrip('/') if parsed.path else None
-            if not source_db_name:
-                logger.error("CLONE_TASK >>> Could not determine database name from addon %s URL for service %s",
-                             pg_addon.id, preview.service.id)
-                preview.status = PreviewEnvironment.Status.DB_CLONE_FAILED
-                preview.error_message = "Could not determine source database name"
-                preview.save()
-                return
-
-            clone_db_name = _make_clone_database_name(source_db_name, preview.branch_name, preview.commit_sha)
-            logger.error(f"CLONE_TASK >>> source_db={source_db_name} clone_db={clone_db_name}")
-
-            clone, created = DatabaseClone.objects.get_or_create(
+            # Create a stub DatabaseClone record (no actual DB on parent server).
+            # The real isolated container is provisioned by _sync_preview_addons
+            # inside provision_preview_service_job.
+            clone, _ = DatabaseClone.objects.get_or_create(
                 preview_environment=preview,
                 defaults={
                     'service': preview.service,
                     'source_environment': 'production',
-                    'source_database_name': source_db_name,
-                    'clone_database_name': clone_db_name,
-                    'status': DatabaseClone.Status.CREATING,
+                    'source_database_name': '(isolated)',
+                    'clone_database_name': '(isolated)',
+                    'status': DatabaseClone.Status.READY,
                 },
             )
-            if not created:
-                clone.source_database_name = source_db_name
-                clone.clone_database_name = clone_db_name
-                clone.status = DatabaseClone.Status.CREATING
-                clone.error_message = ""
-                clone.save()
 
-            preview.status = PreviewEnvironment.Status.DB_CLONE_CREATING
+            # Provision the preview container + its own fresh PG addon first,
+            # then run migration validation against that isolated database.
+            preview.status = PreviewEnvironment.Status.PROVISIONING
             preview.save()
-            logger.error("CLONE_TASK >>> calling create_empty_database...")
+            provision_preview_service_job.delay(preview_id)
 
-            db_manager = PostgresSnapshotManager(admin_db_url=pg_addon.connection_url)
-            success = db_manager.create_empty_database(clone.clone_database_name)
-            logger.error(f"CLONE_TASK >>> create_empty_database returned: {success}")
-
-            if success:
-                clone.status = DatabaseClone.Status.READY
-                clone.clone_database_url_secret_ref = db_manager.get_clone_url(clone.clone_database_name)
-                clone.save()
-
-                preview.status = PreviewEnvironment.Status.MIGRATION_RUNNING
-                preview.save()
-                run_migration_validation_job.delay(preview_id)
-            else:
-                clone.status = DatabaseClone.Status.FAILED
-                clone.error_message = clone.error_message or "PostgresSnapshotManager.create_clone returned False"
-                clone.save()
-                preview.status = PreviewEnvironment.Status.DB_CLONE_FAILED
-                preview.error_message = clone.error_message
-                preview.save()
-                logger.error(f"CLONE_TASK >>> FAILED: {clone.error_message}")
         finally:
             cache.delete(lock_key)
     except Exception as e:
-        logger.error(f"CLONE_TASK >>> EXCEPTION: {e}", exc_info=True)
-        logger.error(f"Error in create_database_clone_job: {e}", exc_info=True)
+        logger.error("CLONE_TASK >>> EXCEPTION: %s", e, exc_info=True)
         try:
             p = PreviewEnvironment.objects.get(id=preview_id)
             p.status = PreviewEnvironment.Status.DB_CLONE_FAILED
@@ -430,19 +322,21 @@ def run_migration_validation_job(preview_id: str):
         if not cloned_path:
             raise Exception("Failed to clone repository")
 
-        try:
-            db_clone = preview.database_clone
-        except DatabaseClone.DoesNotExist:
-            db_clone = None
+        # Use the preview addon's own isolated database URL (never the parent's).
+        from apps.deployments.models_addons import Addon
+        preview_pg = Addon.objects.filter(
+            service__name__startswith=f"preview-{preview.id.hex}",
+            addon_type=Addon.Type.POSTGRES,
+            status=Addon.Status.ACTIVE,
+        ).first()
 
-        if not db_clone or db_clone.status != DatabaseClone.Status.READY:
-            from apps.deployments.models_addons import Addon
+        if not preview_pg or not preview_pg.connection_url:
             has_pg_addon = Addon.objects.filter(
                 service=preview.service, addon_type=Addon.Type.POSTGRES
             ).exists()
             if has_pg_addon:
                 validation.status = MigrationValidation.Status.FAILED
-                validation.error_message = "No ready database clone available"
+                validation.error_message = "No ready preview database available"
                 validation.save()
                 preview.status = PreviewEnvironment.Status.MIGRATION_FAILED
                 preview.save()
@@ -455,15 +349,15 @@ def run_migration_validation_job(preview_id: str):
                 run_preview_tests_job.delay(preview_id)
                 return
 
-        clone_url = db_clone.clone_database_url_secret_ref
+        db_url = preview_pg.connection_url
 
-        # Check production DB safety
+        # Safety: reject if the preview URL somehow matches production
         prod_db_url = None
         for env_var in preview.service.env_vars.all():
             if env_var.key == 'DATABASE_URL':
                 prod_db_url = env_var.value
 
-        if prod_db_url and clone_url == prod_db_url:
+        if prod_db_url and db_url == prod_db_url:
             validation.status = MigrationValidation.Status.FAILED
             validation.error_message = "SAFETY ABORT: Preview DB URL matched Production DB URL."
             validation.save()
@@ -479,7 +373,7 @@ def run_migration_validation_job(preview_id: str):
         }
 
         # Build isolated venv with dependencies installed and settings discovered
-        mig_env = build_migration_environment(cloned_path, clone_url, service_env_vars)
+        mig_env = build_migration_environment(cloned_path, db_url, service_env_vars)
         if not mig_env.ok:
             validation.status = MigrationValidation.Status.FAILED
             validation.error_message = f"Migration environment setup failed: {mig_env.error}"
@@ -586,9 +480,26 @@ def run_preview_tests_job(preview_id: str):
             artifact_type=DeploymentArtifact.ArtifactType.TEST_OUTPUT,
             content="Tests: skipped by configuration (not implemented for v1)"
         )
+
+        # Migration + tests passed — now trigger the actual deployment.
+        transient_service_name = _preview_service_name(preview)
+        transient_service = Service.objects.filter(name=transient_service_name, is_preview=True).first()
+        if not transient_service:
+            logger.error("No transient service found for preview %s, cannot deploy", preview_id)
+            return
+
+        deployment = Deployment.objects.create(
+            service=transient_service,
+            commit_hash=preview.commit_sha,
+            branch=preview.branch_name,
+            commit_message=f"SafeDeploy preview for {preview.branch_name}"
+        )
+        parent = preview.service
+        provider_id = str(parent.provider.id) if parent.provider else None
+        _dispatch_preview_deployment(deployment, provider_id)
+
         preview.status = PreviewEnvironment.Status.HEALTH_CHECK_RUNNING
         preview.save()
-        provision_preview_service_job.delay(preview_id)
     except Exception as e:
         logger.error(f"Error in run_preview_tests_job for {preview_id}: {e}", exc_info=True)
 
@@ -660,19 +571,32 @@ def provision_preview_service_job(preview_id: str):
         # 2. Sync environment variables and isolated preview overrides (Enterprise Option A: clean start, no parent env copy).
         _upsert_preview_environment_variables(preview, transient_service)
 
-        # 3. Duplicate/provision addons before deployment so injected URLs exist.
+        # 3. Provision addons — each gets its own fresh, isolated container (no parent data).
         _sync_preview_addons(preview, transient_service)
         _upsert_preview_environment_variables(preview, transient_service)
 
-        # 4. Trigger deployment on every run, including rebuilds.
-        deployment = Deployment.objects.create(
-            service=transient_service,
-            commit_hash=preview.commit_sha,
-            branch=preview.branch_name,
-            commit_message=f"SafeDeploy preview for {preview.branch_name}"
-        )
-        provider_id = str(parent.provider.id) if parent.provider else None
-        _dispatch_preview_deployment(deployment, provider_id)
+        # 3b. AI Senate: fill any remaining placeholder/mock env vars on the preview service.
+        #     Ensures the preview gets real production values, not parent heuristics.
+        if getattr(settings, "SENATE_ENABLED", True):
+            try:
+                from apps.intelligence.services.env_intelligence import EnvironmentIntelligenceService
+                _sugg, _inj = EnvironmentIntelligenceService.apply_intelligence_to_service(
+                    transient_service, scan_results={}
+                )
+                if _inj:
+                    logger.info(
+                        "SafeDeploy preview %s: AI Senate auto-filled %d env vars: %s",
+                        preview_id, len(_inj), ", ".join(_inj),
+                    )
+            except Exception as _senate_err:
+                logger.warning("SafeDeploy preview %s: AI Senate enrichment failed: %s", preview_id, _senate_err)
+
+        # 4. Run migration validation against the isolated preview database
+        #    (now that the fresh PG container exists). The deployment is triggered
+        #    only after migration validation and tests pass.
+        preview.status = PreviewEnvironment.Status.MIGRATION_RUNNING
+        preview.save()
+        run_migration_validation_job.delay(preview_id)
     except Exception as e:
         logger.error(f"Failed to provision preview environment {preview_id}: {e}", exc_info=True)
         try:
@@ -714,17 +638,29 @@ def destroy_preview_environment_job(preview_id: str):
         transient_service_name = _preview_service_name(preview)
         transient_service = Service.objects.filter(name=transient_service_name, is_preview=True).first()
         if transient_service:
+            # Deprovision the preview's own PostgreSQL addon container first
+            from apps.deployments.models_addons import Addon
+            preview_pg_addons = Addon.objects.filter(
+                service=transient_service,
+                addon_type=Addon.Type.POSTGRES,
+            )
+            for pg_addon in preview_pg_addons:
+                try:
+                    if pg_addon.coolify_uuid:
+                        addon_provisioner.deprovision_dispatch(pg_addon.coolify_uuid, pg_addon)
+                    else:
+                        container_name = f"smsly-addon-{pg_addon.addon_type.lower()}-{pg_addon.id}"
+                        subprocess.run(['docker', 'rm', '-f', container_name], capture_output=True, check=False)
+                except Exception as deprovision_exc:
+                    logger.warning("Failed to deprovision preview PG addon %s: %s", pg_addon.id, deprovision_exc)
+
             transient_service.status = Service.Status.DELETION_PENDING
             transient_service.save()
             from apps.deployments.tasks_deploy import delete_service_task
             delete_service_task.delay(str(transient_service.id))
-            # Allow time for the container to be torn down before destroying the DB.
-            # The container deletion is async via Celery; the DB destroy is sync.
-            # Without this gap, the next deploy to the same service name will
-            # create a fresh DB clone with no production data.
             time.sleep(5)
 
-        # 2. Destroy Database Clone
+        # 2. Destroy Database Clone (temp migration-validation DB on parent server)
         try:
             db_clone = preview.database_clone
         except DatabaseClone.DoesNotExist:

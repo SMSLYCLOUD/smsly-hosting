@@ -544,6 +544,7 @@ class ManifestEnvResolver:
         self.env_example_vars: dict[str, str] = {}
         self.secrets_manifest: dict[str, Any] = {"serves_as": [], "expects_from": []}
         self.unresolved_vars: list[str] = []
+        self.heuristic_vars: list[str] = []
         self.resolved_env: dict[str, str] = {}
 
     # ── Entry point ──────────────────────────────────────────────────────
@@ -596,12 +597,14 @@ class ManifestEnvResolver:
         if default_val == "":
             stack_default = self._get_stack_default(var_name)
             if stack_default is not None:
+                self.heuristic_vars.append(var_name)
                 return stack_default
 
         # 6. Heuristic defaults by key name
         if default_val == "":
             heuristic = self._get_heuristic_default(var_name)
             if heuristic is not None:
+                self.heuristic_vars.append(var_name)
                 return heuristic
 
         # 7. Secret pattern → auto-generate
@@ -656,11 +659,13 @@ class ManifestEnvResolver:
                 "ANOMALY_",
             )
         ):
+            self.heuristic_vars.append(var_name)
             return ""
 
         # 12. Last resort — generate mock/placeholder value from code context
         mock_value = self._generate_mock_for_var(var_name)
         if mock_value:
+            self.heuristic_vars.append(var_name)
             return mock_value
 
         # 13. External-required var — cannot be auto-generated; mark as unresolved.
@@ -970,6 +975,7 @@ class ManifestEnvResolver:
         for sub in ("backend", "app", "server", "src", "api"):
             candidates.append(os.path.join(self.source_dir, sub, ".env.example"))
             candidates.append(os.path.join(self.source_dir, sub, ".env.production"))
+            candidates.append(os.path.join(self.source_dir, sub, ".env"))
 
         seen: set[str] = set()
         for path in candidates:

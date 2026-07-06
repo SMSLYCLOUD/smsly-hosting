@@ -1,16 +1,37 @@
 services:
-  db:
+  # ── PostgreSQL HA (primary + replica) ──────────────────────────────────
+  postgres-primary:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
     image: postgres:16-alpine
+    container_name: smsly-postgres-primary
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-smsly_hosting}
       POSTGRES_USER: ${POSTGRES_USER:-smsly_admin}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD:?REPLICATION_PASSWORD must be set in .env}
     volumes:
-    - postgres_data:/var/lib/postgresql/data
+      - postgres-primary-data:/var/lib/postgresql/data
+      - ./infrastructure/docker/postgres/init-primary.sh:/docker-entrypoint-initdb.d/init-primary.sh:ro
+    command: >
+      postgres
+      -c wal_level=replica
+      -c max_wal_senders=10
+      -c max_replication_slots=10
+      -c wal_log_hints=on
+      -c hot_standby=on
+      -c wal_keep_size=1GB
+      -c wal_sender_timeout=60s
+      -c archive_mode=on
+      -c archive_command='mkdir -p /var/lib/postgresql/archive && cp %p /var/lib/postgresql/archive/%f'
+      -c max_connections=${DB_MAX_CONNECTIONS:-200}
+      -c shared_buffers=${DB_SHARED_BUFFERS:-256MB}
+      -c effective_cache_size=${DB_EFFECTIVE_CACHE_SIZE:-768MB}
+      -c work_mem=4MB
+      -c maintenance_work_mem=64MB
     healthcheck:
       test:
       - CMD-SHELL
@@ -19,7 +40,6 @@ services:
       timeout: 10s
       retries: 10
       start_period: 60s
-    command: -c max_connections=${DB_MAX_CONNECTIONS:-200}
     labels:
     - managed_by=smsly-hosting
     networks:
@@ -27,9 +47,52 @@ services:
     deploy:
       resources:
         reservations:
-          memory: ${DB_MEMORY_RESERVATION:-1G}
+          memory: ${DB_PRIMARY_RESERVATION:-2G}
         limits:
-          memory: ${DB_MEMORY_LIMIT:-4G}
+          memory: ${DB_PRIMARY_LIMIT:-8G}
+
+  postgres-replica:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
+    image: postgres:16-alpine
+    container_name: smsly-postgres-replica
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGUSER: replicator
+      PGPASSWORD: ${REPLICATION_PASSWORD}
+    volumes:
+      - postgres-replica-data:/var/lib/postgresql/data
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ ! -s /var/lib/postgresql/data/PG_VERSION ]; then
+          echo "Initializing replica from primary..."
+          pg_basebackup -h postgres-primary -D /var/lib/postgresql/data -U replicator -Fp -Xs -P -R
+        fi
+        exec docker-entrypoint.sh postgres -c hot_standby=on -c max_connections=300
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - PGPASSWORD="$${POSTGRES_PASSWORD}" pg_isready -U "$${POSTGRES_USER:-smsly_admin}" -d "$${POSTGRES_DB:-smsly_hosting}"
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    labels:
+    - managed_by=smsly-hosting
+    networks:
+    - smsly-net
+    deploy:
+      resources:
+        reservations:
+          memory: ${DB_REPLICA_RESERVATION:-1G}
+        limits:
+          memory: ${DB_REPLICA_LIMIT:-4G}
   pgcat:
     security_opt:
       - no-new-privileges:true
@@ -43,13 +106,11 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
       POSTGRES_DB: ${POSTGRES_DB:-smsly_hosting}
       PGCAT_ADMIN_PASSWORD: ${PGCAT_ADMIN_PASSWORD:?PGCAT_ADMIN_PASSWORD must be set in .env}
-      # Read-replica routing. When DB_REPLICA_HOSTS is set (e.g. to
-      # "db-replica:5432" after enabling docker-compose.replica.yml),
-      # pgcat routes SELECTs to the replica(s) and writes to the
-      # primary. Unset = single-node behaviour (all traffic to primary).
-      DB_REPLICA_HOSTS: ${DB_REPLICA_HOSTS:-}
+      DB_REPLICA_HOSTS: ${DB_REPLICA_HOSTS:-postgres-replica:5432}
     depends_on:
-      db:
+      postgres-primary:
+        condition: service_healthy
+      postgres-replica:
         condition: service_healthy
     healthcheck:
       test:
@@ -69,23 +130,33 @@ services:
       resources:
         limits:
           memory: ${PGCAT_MEMORY_LIMIT:-256M}
-  redis:
+  # ── Redis HA (primary + replica + 3 sentinels) ─────────────────────────
+  redis-primary:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
     image: redis:7-alpine
-    command: redis-server --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env} --maxmemory ${REDIS_MAXMEMORY:-400mb} --maxmemory-policy allkeys-lru --repl-backlog-size 64mb --repl-backlog-ttl 3600
+    container_name: smsly-redis-primary
     restart: unless-stopped
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
+      --maxmemory ${REDIS_MAXMEMORY:-400mb}
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+      --repl-backlog-size 64mb
+      --repl-backlog-ttl 3600
+      --min-replicas-to-write 1
+      --min-replicas-max-lag 10
     volumes:
-    - redis_data:/data
+      - redis-primary-data:/data
     healthcheck:
       test:
       - CMD-SHELL
       - redis-cli ${REDIS_PASSWORD:+-a $REDIS_PASSWORD} ping | grep PONG
       interval: 10s
-      timeout: 10s
-      retries: 10
-      start_period: 60s
+      timeout: 5s
+      retries: 5
     labels:
     - managed_by=smsly-hosting
     networks:
@@ -93,9 +164,156 @@ services:
     deploy:
       resources:
         reservations:
-          memory: ${REDIS_MEMORY_RESERVATION:-256M}
+          memory: ${REDIS_PRIMARY_RESERVATION:-256M}
         limits:
-          memory: ${REDIS_MEMORY_LIMIT:-512M}
+          memory: ${REDIS_PRIMARY_LIMIT:-1G}
+
+  redis-replica:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
+    image: redis:7-alpine
+    container_name: smsly-redis-replica
+    restart: unless-stopped
+    command: >
+      redis-server
+      --replicaof redis-primary 6379
+      --masterauth ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
+      --requirepass ${REDIS_PASSWORD}
+      --maxmemory ${REDIS_MAXMEMORY:-400mb}
+      --maxmemory-policy allkeys-lru
+      --replica-read-only yes
+      --repl-diskless-sync yes
+      --repl-diskless-sync-delay 5
+      --repl-ping-replica-period 5
+    volumes:
+      - redis-replica-data:/data
+    depends_on:
+      redis-primary:
+        condition: service_healthy
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - redis-cli ${REDIS_PASSWORD:+-a $REDIS_PASSWORD} ping | grep PONG
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    labels:
+    - managed_by=smsly-hosting
+    networks:
+    - smsly-net
+    deploy:
+      resources:
+        reservations:
+          memory: ${REDIS_REPLICA_RESERVATION:-128M}
+        limits:
+          memory: ${REDIS_REPLICA_LIMIT:-512M}
+
+  redis-sentinel-1:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
+    image: redis:7-alpine
+    container_name: smsly-redis-sentinel-1
+    restart: unless-stopped
+    command: >
+      sh -c '
+      printf "sentinel monitor mymaster redis-primary 6379 2
+      sentinel auth-pass mymaster $${REDIS_PASSWORD}
+      sentinel down-after-milliseconds mymaster 5000
+      sentinel failover-timeout mymaster 15000
+      sentinel parallel-syncs mymaster 1
+      sentinel resolve-hostnames yes
+      sentinel announce-hostnames yes
+      " > /tmp/sentinel.conf
+      && redis-sentinel /tmp/sentinel.conf'
+    depends_on:
+      - redis-primary
+      - redis-replica
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -p 26379 ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    labels:
+    - managed_by=smsly-hosting
+    networks:
+    - smsly-net
+    deploy:
+      resources:
+        limits:
+          memory: ${SENTINEL_MEMORY_LIMIT:-32M}
+
+  redis-sentinel-2:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
+    image: redis:7-alpine
+    container_name: smsly-redis-sentinel-2
+    restart: unless-stopped
+    command: >
+      sh -c '
+      printf "sentinel monitor mymaster redis-primary 6379 2
+      sentinel auth-pass mymaster $${REDIS_PASSWORD}
+      sentinel down-after-milliseconds mymaster 5000
+      sentinel failover-timeout mymaster 15000
+      sentinel parallel-syncs mymaster 1
+      sentinel resolve-hostnames yes
+      sentinel announce-hostnames yes
+      " > /tmp/sentinel.conf
+      && redis-sentinel /tmp/sentinel.conf'
+    depends_on:
+      - redis-primary
+      - redis-replica
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -p 26379 ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    labels:
+    - managed_by=smsly-hosting
+    networks:
+    - smsly-net
+    deploy:
+      resources:
+        limits:
+          memory: ${SENTINEL_MEMORY_LIMIT:-32M}
+
+  redis-sentinel-3:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
+    image: redis:7-alpine
+    container_name: smsly-redis-sentinel-3
+    restart: unless-stopped
+    command: >
+      sh -c '
+      printf "sentinel monitor mymaster redis-primary 6379 2
+      sentinel auth-pass mymaster $${REDIS_PASSWORD}
+      sentinel down-after-milliseconds mymaster 5000
+      sentinel failover-timeout mymaster 15000
+      sentinel parallel-syncs mymaster 1
+      sentinel resolve-hostnames yes
+      sentinel announce-hostnames yes
+      " > /tmp/sentinel.conf
+      && redis-sentinel /tmp/sentinel.conf'
+    depends_on:
+      - redis-primary
+      - redis-replica
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -p 26379 ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    labels:
+    - managed_by=smsly-hosting
+    networks:
+    - smsly-net
+    deploy:
+      resources:
+        limits:
+          memory: ${SENTINEL_MEMORY_LIMIT:-32M}
   registry:
     security_opt:
       - no-new-privileges:true
@@ -253,7 +471,7 @@ services:
     depends_on:
       pgcat:
         condition: service_healthy
-      redis:
+      redis-primary:
         condition: service_healthy
       socket-proxy:
         condition: service_healthy
@@ -339,7 +557,7 @@ services:
         condition: service_healthy
       backend:
         condition: service_healthy
-      redis:
+      redis-primary:
         condition: service_healthy
       socket-proxy:
         condition: service_healthy
@@ -381,13 +599,13 @@ services:
       BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
       # CELERY_ prefix is required for celery-redbeat to pick it up
       # (see backend/config/settings.py: CELERY_REDBEAT_REDIS_URL)
-      CELERY_REDBEAT_REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/3
+      CELERY_REDBEAT_REDIS_URL: redis://:${REDIS_PASSWORD}@redis-primary:6379/3
     depends_on:
       pgcat:
         condition: service_healthy
       backend:
         condition: service_healthy
-      redis:
+      redis-primary:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
@@ -468,7 +686,7 @@ services:
         condition: service_healthy
       backend:
         condition: service_healthy
-      redis:
+      redis-primary:
         condition: service_healthy
       socket-proxy:
         condition: service_healthy
@@ -518,7 +736,7 @@ services:
         condition: service_healthy
       backend:
         condition: service_healthy
-      redis:
+      redis-primary:
         condition: service_healthy
       socket-proxy:
         condition: service_healthy
@@ -858,8 +1076,10 @@ networks:
   smsly-proxy:
     external: true
 volumes:
-  postgres_data: null
-  redis_data: null
+  postgres-primary-data:
+  postgres-replica-data:
+  redis-primary-data:
+  redis-replica-data:
   registry_data: null
   docker_mirror_data: null
   static_volume: null

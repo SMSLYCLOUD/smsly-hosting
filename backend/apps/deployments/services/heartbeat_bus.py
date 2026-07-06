@@ -50,15 +50,23 @@ def _redis_url() -> str | None:
 
 def _get_redis():
     """Return a connected redis client, or ``None`` if redis is
-    unavailable. The redis client is created lazily and the import
-    is deferred to keep test environments that don't have redis
-    running from breaking.
+    unavailable.  Uses Sentinel when configured, otherwise falls back
+    to the standalone URL.
     """
     url = _redis_url()
     if not url:
         return None
     try:
         import redis
+        # Try Sentinel first — when SENTINEL_HOSTS is set, route through
+        # Sentinel for automatic master failover.
+        from config.redis_sentinel import get_master_connection, SENTINEL_ENABLED
+        if SENTINEL_ENABLED:
+            conn = get_master_connection(
+                password=getattr(settings, 'REDIS_PASSWORD', None),
+            )
+            if conn is not None:
+                return conn
         return redis.from_url(url, decode_responses=True)
     except Exception as exc:
         logger.warning("heartbeat_bus: redis unavailable: %s", exc)

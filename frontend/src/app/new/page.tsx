@@ -3,7 +3,7 @@
 import * as React from "react"
 import Image from 'next/image';
 import { useRouter } from "next/navigation"
-import { Github, Box, Layers, ArrowRight, Loader2, Search, Sparkles, Zap, Settings2, Rocket, CheckCircle2, Code2, Database, Globe, GitBranch, Key, SkipForward, Server, Monitor, Wifi, WifiOff, Filter, Tag, LayoutGrid, ListFilter } from "lucide-react"
+import { Github, Box, Layers, ArrowRight, Loader2, Search, Sparkles, Zap, Settings2, Rocket, CheckCircle2, Code2, Database, Globe, GitBranch, Key, SkipForward, Server, Monitor, Wifi, WifiOff, Filter, Tag, LayoutGrid, ListFilter, UploadCloud } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { DashboardShell } from "@/components/layout/DashboardShell"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { EnvVarEditor, type EnvVar } from "@/components/dashboard/env-var-editor"
 import { useToast } from "@/components/ui/use-toast"
 import { BuildpackSelector, BuildpackType } from "@/components/deployments/BuildpackSelector"
-import api, { serversApi, servicesApi, deployApi, projectsApi, registryCredentialsApi, ManagedServer, Project } from "@/lib/api"
+import api, { serversApi, servicesApi, deployApi, projectsApi, registryCredentialsApi, githubApi, gitlabApi, bitbucketApi, ManagedServer, Project } from "@/lib/api"
 import { templatesApi } from "@/lib/api"
 import { slugify } from "@/lib/utils"
 import { motion, AnimatePresence } from "framer-motion"
@@ -58,12 +58,18 @@ export default function NewServicePage() {
   const { toast } = useToast()
 
   const [step, setStep] = React.useState(1)
-  const [sourceType, setSourceType] = React.useState<"git" | "template" | "docker">("git")
+  const [sourceType, setSourceType] = React.useState<"git" | "template" | "docker" | "upload">("git")
   const [repoUrl, setRepoUrl] = React.useState("")
   const [selectedTemplate, setSelectedTemplate] = React.useState<string | null>(null)
   const [dockerImage, setDockerImage] = React.useState("")
   const [registryCredentials, setRegistryCredentials] = React.useState<any[]>([])
   const [registryCredentialId, setRegistryCredentialId] = React.useState<string>("none")
+
+  // Upload state
+  const [uploadFiles, setUploadFiles] = React.useState<FileList | null>(null)
+  const [uploading, setUploading] = React.useState(false)
+  const [uploadProgress, setUploadProgress] = React.useState<string>("")
+  const fileInputRef = React.useRef<HTMLInputElement>(null)
 
   // Config state
   const [name, setName] = React.useState("")
@@ -91,6 +97,10 @@ export default function NewServicePage() {
   const [gitCategories, setGitCategories] = React.useState<Record<string, any[]>>({})
   const [gitClusters, setGitClusters] = React.useState<any[]>([])
   const [selectedCategory, setSelectedCategory] = React.useState<string>("All")
+
+  // Branch fetching state
+  const [branches, setBranches] = React.useState<any[]>([])
+  const [loadingBranches, setLoadingBranches] = React.useState(false)
 
   // Templates from API
   const [templates, setTemplates] = React.useState<any[]>([])
@@ -137,6 +147,41 @@ export default function NewServicePage() {
     // Load registry credentials
     registryCredentialsApi.list().then(setRegistryCredentials).catch(() => {})
   }, [])
+
+  // Fetch branches from Git provider when a repo URL is entered
+  React.useEffect(() => {
+    if (!repoUrl || sourceType !== "git") {
+      setBranches([])
+      return
+    }
+    // Extract repo slug from URL (e.g. https://github.com/user/repo -> user/repo)
+    const match = repoUrl.match(/github\.com\/([^\/]+\/[^\/]+)/)
+      || repoUrl.match(/gitlab\.com\/([^\/]+\/[^\/]+)/)
+      || repoUrl.match(/bitbucket\.org\/([^\/]+\/[^\/]+)/)
+    if (!match) {
+      setBranches([])
+      return
+    }
+    let repo = match[1]
+    if (repo.endsWith('.git')) repo = repo.slice(0, -4)
+
+    setLoadingBranches(true)
+    const api = match[0].includes('github.com') ? githubApi
+      : match[0].includes('gitlab.com') ? gitlabApi
+      : bitbucketApi
+    api.branches(repo)
+      .then((data: any) => {
+        if (Array.isArray(data)) {
+          setBranches(data)
+          // Auto-select the first branch if current branch is empty or "main"
+          if (data.length > 0 && (!branch || branch === "main")) {
+            setBranch(data[0].name || data[0])
+          }
+        }
+      })
+      .catch(() => setBranches([]))
+      .finally(() => setLoadingBranches(false))
+  }, [repoUrl, sourceType, branch])
 
   const filteredRepos = gitRepos.filter(r => {
     const matchesSearch = !gitSearch || r.full_name?.toLowerCase().includes(gitSearch.toLowerCase()) || r.name?.toLowerCase().includes(gitSearch.toLowerCase())
@@ -197,6 +242,7 @@ export default function NewServicePage() {
       if (sourceType === "git" && !repoUrl) return
       if (sourceType === "template" && !selectedTemplate) return
       if (sourceType === "docker" && !dockerImage) return
+      if (sourceType === "upload" && (!uploadFiles || uploadFiles.length === 0)) return
 
       // Auto-generate name
       if (!name) {
@@ -209,6 +255,9 @@ export default function NewServicePage() {
         } else if (sourceType === "docker") {
           const imageName = dockerImage.split("/").pop()?.split(":")[0]
           setName(`${(imageName || "docker-service").replace(/[^a-zA-Z0-9-]/g, "-")}-${randomStr}`)
+        } else if (sourceType === "upload" && uploadFiles && uploadFiles.length > 0) {
+          const baseName = uploadFiles[0].name.replace(/\.(zip|tar\.gz|tgz)$/, "")
+          setName(`${baseName.replace(/[^a-zA-Z0-9-]/g, "-").toLowerCase()}-${randomStr}`)
         }
       }
 
@@ -302,17 +351,31 @@ export default function NewServicePage() {
       }
       if (!finalName) throw new Error("Service name is required")
 
+      // Validate upload file
+      if (sourceType === "upload") {
+        if (!uploadFiles || uploadFiles.length === 0) {
+          throw new Error("Please select an archive file to upload")
+        }
+        const file = uploadFiles[0]
+        if (!file.name.endsWith('.zip') && !file.name.endsWith('.tar.gz') && !file.name.endsWith('.tgz')) {
+          throw new Error("Invalid file format. Please upload a .zip or .tar.gz archive.")
+        }
+        if (file.size > 100 * 1024 * 1024) {
+          throw new Error("File too large. Maximum size is 100MB.")
+        }
+      }
+
       const finalRepo = sourceType === "template"
         ? templates.find(t => t.id === selectedTemplate || t.slug === selectedTemplate)?.repository_url || ''
         : repoUrl
 
-      const deployType = sourceType === "docker" ? "DOCKER" : "GIT"
+      const deployType = sourceType === "docker" || sourceType === "upload" ? "DOCKER" : "GIT"
 
       const service = await servicesApi.create({
           name: finalName,
-          deploy_type: deployType,
-          buildpack: sourceType === "docker" ? "DOCKER" : buildpack,
-          repository_url: sourceType === "docker" ? null : finalRepo,
+          deploy_type: sourceType === "upload" ? "UPLOAD" : deployType,
+          buildpack: sourceType === "docker" ? "DOCKER" : sourceType === "upload" ? "DOCKER" : buildpack,
+          repository_url: (sourceType === "docker" || sourceType === "upload") ? null : finalRepo,
           docker_image: sourceType === "docker" ? dockerImage : null,
           branch: branch || "main",
           cpu_cores: cpuCores,
@@ -331,6 +394,31 @@ export default function NewServicePage() {
             localOnlyRequest,
           )
         }
+      }
+
+      // Handle upload deploy
+      if (sourceType === "upload" && uploadFiles && uploadFiles.length > 0) {
+        setUploading(true)
+        setUploadProgress("Uploading archive...")
+        const file = uploadFiles[0]
+        const formData = new FormData()
+        formData.append('file', file)
+
+        await api.post(`/services/${service.id}/upload-deploy/`, formData, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+          _skipRemoteProxy: true,
+          onUploadProgress: (progressEvent: any) => {
+            const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total)
+            setUploadProgress(`Uploading... ${percent}%`)
+          },
+        } as any)
+
+        toast({
+          title: "🚀 Deploying!",
+          description: `Service created — deploying from ${file.name}.`,
+        })
+        setTimeout(() => router.push(`/services/${service.id}`), 2000)
+        return
       }
 
       // Trigger Multi-Deploy (local + selected remote servers)
@@ -422,7 +510,7 @@ export default function NewServicePage() {
                 exit={{ opacity: 0, x: -20 }}
                 className="space-y-6"
               >
-                <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-4 gap-4">
                   <Card
                     className={cn("cursor-pointer hover:border-primary transition-all", sourceType === "git" && "border-primary bg-primary/5")}
                     onClick={() => setSourceType("git")}
@@ -451,6 +539,16 @@ export default function NewServicePage() {
                       <Box className="h-8 w-8 mx-auto mb-2" />
                       <CardTitle className="text-base">Docker Image</CardTitle>
                       <CardDescription>Registry image</CardDescription>
+                    </CardHeader>
+                  </Card>
+                  <Card
+                    className={cn("cursor-pointer hover:border-primary transition-all", sourceType === "upload" && "border-primary bg-primary/5")}
+                    onClick={() => setSourceType("upload")}
+                  >
+                    <CardHeader className="p-6 text-center">
+                      <UploadCloud className="h-8 w-8 mx-auto mb-2" />
+                      <CardTitle className="text-base">Upload</CardTitle>
+                      <CardDescription>Deploy from local dir</CardDescription>
                     </CardHeader>
                   </Card>
                 </div>
@@ -548,9 +646,9 @@ export default function NewServicePage() {
                             ))}
                             {filteredRepos.length === 0 && (
                               <p className="text-sm text-muted-foreground text-center py-4">No repositories found</p>
-                            )}
-                          </div>
-                        )}
+                    )}
+                  </div>
+                )}
                         <div className="flex items-center gap-2 py-1">
                           <div className="flex-1 h-px bg-border" />
                           <span className="text-xs text-muted-foreground">or enter URL manually</span>
@@ -585,12 +683,83 @@ export default function NewServicePage() {
                     </div>
                     <div className="space-y-2">
                       <Label className="flex items-center gap-1.5"><GitBranch className="h-3.5 w-3.5" /> Branch</Label>
+                      {branches.length > 0 ? (
+                        <select
+                          value={branch}
+                          onChange={(e) => setBranch(e.target.value)}
+                          className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        >
+                          {branches.map((b: any) => (
+                            <option key={b.name || b} value={b.name || b}>{b.name || b}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <Input
+                          placeholder={loadingBranches ? "Loading branches..." : "main"}
+                          value={branch}
+                          onChange={(e) => setBranch(e.target.value)}
+                          disabled={loadingBranches}
+                        />
+                      )}
+                      <p className="text-xs text-muted-foreground">Branch, tag, or commit to deploy from. Defaults to <code>main</code>.</p>
+                    </div>
+                   </div>
+                )}
+
+                {sourceType === "upload" && (
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <Label className="flex items-center gap-1.5"><UploadCloud className="h-3.5 w-3.5" /> Upload Archive</Label>
+                      <p className="text-sm text-muted-foreground">
+                        Upload a <code>.zip</code> or <code>.tar.gz</code> of your project to deploy.
+                      </p>
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept=".zip,.tar.gz,.tgz"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0]
+                          if (file) {
+                            setUploadFiles(e.target.files)
+                            if (!name) {
+                              const baseName = file.name.replace(/\.(zip|tar\.gz|tgz)$/, "")
+                              setName(baseName.replace(/[^a-zA-Z0-9-]/g, "-").toLowerCase())
+                            }
+                          }
+                        }}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="w-full h-24 border-dashed"
+                        onClick={() => fileInputRef.current?.click()}
+                      >
+                        {uploadFiles && uploadFiles.length > 0 ? (
+                          <div className="flex flex-col items-center gap-1">
+                            <CheckCircle2 className="h-6 w-6 text-emerald-500" />
+                            <span className="text-sm font-medium">{uploadFiles[0].name}</span>
+                            <span className="text-xs text-muted-foreground">
+                              {(uploadFiles[0].size / 1024 / 1024).toFixed(1)} MB — Click to change
+                            </span>
+                          </div>
+                        ) : (
+                          <div className="flex flex-col items-center gap-1">
+                            <UploadCloud className="h-6 w-6 text-muted-foreground" />
+                            <span className="text-sm font-medium">Click to select archive</span>
+                            <span className="text-xs text-muted-foreground">.zip or .tar.gz up to 100MB</span>
+                          </div>
+                        )}
+                      </Button>
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="flex items-center gap-1.5"><GitBranch className="h-3.5 w-3.5" /> Branch</Label>
                       <Input
                         placeholder="main"
                         value={branch}
                         onChange={(e) => setBranch(e.target.value)}
                       />
-                      <p className="text-xs text-muted-foreground">Branch, tag, or commit to deploy from. Defaults to <code>main</code>.</p>
+                      <p className="text-xs text-muted-foreground">Branch name for this upload. Defaults to <code>main</code>.</p>
                     </div>
                   </div>
                 )}
@@ -927,7 +1096,19 @@ export default function NewServicePage() {
                   {sourceType === "git" && (
                   <div className="grid gap-2">
                     <Label className="flex items-center gap-1.5"><GitBranch className="h-3.5 w-3.5" /> Branch</Label>
-                    <Input value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="main" />
+                    {branches.length > 0 ? (
+                      <select
+                        value={branch}
+                        onChange={(e) => setBranch(e.target.value)}
+                        className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      >
+                        {branches.map((b: any) => (
+                          <option key={b.name || b} value={b.name || b}>{b.name || b}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <Input value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="main" />
+                    )}
                   </div>
                   )}
                   <div className="grid gap-2">
@@ -1074,7 +1255,9 @@ export default function NewServicePage() {
                           ? `Template: ${selectedTemplate}`
                           : sourceType === "docker"
                             ? `Docker: ${dockerImage}`
-                            : repoUrl}
+                            : sourceType === "upload"
+                              ? `Upload: ${uploadFiles?.[0]?.name || "archive"}`
+                              : repoUrl}
                       </div>
                       <div className="text-muted-foreground">Name</div>
                       <div className="font-medium">{name}</div>

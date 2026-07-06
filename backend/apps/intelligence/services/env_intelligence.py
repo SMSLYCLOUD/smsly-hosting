@@ -8,6 +8,20 @@ from apps.intelligence.providers import _cached_ask
 
 logger = logging.getLogger(__name__)
 
+# Vars managed by platform addon provisioning — AI Senate must NOT fill these.
+_PLATFORM_MANAGED_VARS = frozenset({
+    "DATABASE_URL", "POSTGRES_URL", "DB_URL", "DB_URI",
+    "SQLALCHEMY_DATABASE_URI", "SQLALCHEMY_DATABASE_URL",
+    "REDIS_URL", "REDIS_URI",
+    "CELERY_BROKER_URL", "BROKER_URL", "AMQP_URL",
+    "CELERY_RESULT_BACKEND", "RESULT_BACKEND",
+    "MONGODB_URI", "MONGO_URI", "MONGO_URL",
+    "MINIO_ENDPOINT", "S3_ENDPOINT_URL",
+    "DB_HOST", "DB_PORT", "DB_USER", "DB_NAME", "DB_PASSWORD",
+    "SQL_HOST", "POSTGRES_HOST", "POSTGRES_PORT", "POSTGRES_USER",
+    "POSTGRES_DB", "POSTGRES_PASSWORD",
+})
+
 class EnvironmentIntelligenceService:
     """
     Service that uses the AI Senate to intelligently fill environment variables
@@ -106,6 +120,9 @@ class EnvironmentIntelligenceService:
                 var_upper = var.upper()
                 # Skip PORT entirely — platform manages it
                 if var_upper == "PORT" or var_upper.endswith("_PORT"):
+                    continue
+                # Skip platform-managed vars (addon provisioning handles these)
+                if var_upper in _PLATFORM_MANAGED_VARS:
                     continue
                 # Config vars keep AI values
                 if any(p in var_upper for p in _CONFIG_PATTERNS):
@@ -249,17 +266,38 @@ class EnvironmentIntelligenceService:
         stack = scan_results.get('stack', '') or getattr(service, 'stack', '') or ''
         service_name = service.name
 
-        # Ensure any unfilled or placeholder environment variables on the service are added to env_context for resolution
-        placeholders = {"", "{{GENERATE}}", "{{FILL_ME}}", "CHANGEME", "TODO", "YOUR_API_KEY", "YOUR_SECRET_KEY"}
+        # Patterns indicating a var needs a real production value
+        _PLACEHOLDER_EXACT = {"", "{{GENERATE}}", "{{FILL_ME}}", "CHANGEME", "TODO", "YOUR_API_KEY", "YOUR_SECRET_KEY"}
+        _PLACEHOLDER_PREFIX = ("REPLACE_WITH_", "YOUR_", "REPLACE_ME__")
+        _PLACEHOLDER_IN = ("<CHANGE_ME",)
+        _MOCK_PATTERNS = (
+            "localhost", "127.0.0.1", "mock", "test_", "fake_", "example.com",
+            "sk_test_", "pk_test_", "whsec_REPLACE_ME",
+        )
+
+        def _needs_real_value(val: str) -> bool:
+            """Check if a value looks like a placeholder/mock that needs a real production value."""
+            v = val.strip()
+            if v in _PLACEHOLDER_EXACT:
+                return True
+            if v.startswith(_PLACEHOLDER_PREFIX):
+                return True
+            if any(p in v for p in _PLACEHOLDER_IN):
+                return True
+            if v.startswith("{{") and v.endswith("}}"):
+                return True
+            # Detect mock/heuristic values
+            v_lower = v.lower()
+            for pattern in _MOCK_PATTERNS:
+                if pattern in v_lower:
+                    return True
+            return False
+
+        # Ensure any unfilled, placeholder, or mock environment variables on the
+        # service are added to env_context for AI Senate resolution.
         for ev in service.environment_variables.all():
             val_str = str(ev.value or "").strip()
-            if (
-                val_str in placeholders
-                or val_str.startswith("REPLACE_WITH_")
-                or val_str.startswith("YOUR_")
-                or "<CHANGE_ME" in val_str
-                or (val_str.startswith("{{") and val_str.endswith("}}"))
-            ):
+            if _needs_real_value(val_str):
                 if ev.key not in env_context:
                     env_context[ev.key] = [f"Unfilled required environment variable on service {service_name}"]
 
@@ -285,13 +323,7 @@ class EnvironmentIntelligenceService:
                     continue
 
                 val_str = str(ev.value or "").strip()
-                if (
-                    val_str in placeholders
-                    or val_str.startswith("REPLACE_WITH_")
-                    or val_str.startswith("YOUR_")
-                    or "<CHANGE_ME" in val_str
-                    or (val_str.startswith("{{") and val_str.endswith("}}"))
-                ):
+                if _needs_real_value(val_str):
                     ev.value = val
                     ev.save()
                     injected.append(key)

@@ -1,11 +1,11 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Service, servicesApi } from '@/lib/api';
+import { Service, servicesApi, githubApi, gitlabApi, bitbucketApi } from '@/lib/api';
 import { useToast } from '@/components/ui/use-toast';
 import { BuildpackSelector, BuildpackType } from '@/components/deployments/BuildpackSelector';
 import { FolderRoot, Container, Layers, AlertTriangle, GitBranch, Github } from 'lucide-react';
@@ -23,6 +23,30 @@ export function BuildTab({ service }: BuildTabProps) {
   const [buildCommand, setBuildCommand] = useState(service.build_command || '');
   const [deployMode, setDeployMode] = useState<'SINGLE' | 'COMPOSE'>(service.deploy_mode || 'SINGLE');
   const [saving, setSaving] = useState(false);
+
+  // Branch fetching state
+  const [branches, setBranches] = useState<any[]>([]);
+  const [loadingBranches, setLoadingBranches] = useState(false);
+
+  useEffect(() => {
+    if (!repositoryUrl) return;
+    // Extract repo slug from URL
+    const match = repositoryUrl.match(/github\.com\/([^\/]+\/[^\/]+)/)
+      || repositoryUrl.match(/gitlab\.com\/([^\/]+\/[^\/]+)/)
+      || repositoryUrl.match(/bitbucket\.org\/([^\/]+\/[^\/]+)/);
+    if (!match) { setBranches([]); return; }
+    let repo = match[1];
+    if (repo.endsWith('.git')) repo = repo.slice(0, -4);
+
+    setLoadingBranches(true);
+    const api = match[0].includes('github.com') ? githubApi
+      : match[0].includes('gitlab.com') ? gitlabApi
+      : bitbucketApi;
+    api.branches(repo)
+      .then((data: any) => { if (Array.isArray(data)) setBranches(data); })
+      .catch(() => setBranches([]))
+      .finally(() => setLoadingBranches(false));
+  }, [repositoryUrl]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -91,12 +115,26 @@ export function BuildTab({ service }: BuildTabProps) {
                 <GitBranch className="h-3.5 w-3.5" />
                 Branch
               </Label>
-              <Input
-                id="branch"
-                value={branch}
-                onChange={(e) => setBranch(e.target.value)}
-                placeholder="main"
-              />
+              {branches.length > 0 ? (
+                <select
+                  id="branch"
+                  value={branch}
+                  onChange={(e) => setBranch(e.target.value)}
+                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                >
+                  {branches.map((b: any) => (
+                    <option key={b.name || b} value={b.name || b}>{b.name || b}</option>
+                  ))}
+                </select>
+              ) : (
+                <Input
+                  id="branch"
+                  value={branch}
+                  onChange={(e) => setBranch(e.target.value)}
+                  placeholder={loadingBranches ? "Loading branches..." : "main"}
+                  disabled={loadingBranches}
+                />
+              )}
               <p className="text-xs text-muted-foreground">
                 Branch, tag, or commit to deploy from. Defaults to <code>main</code>.
               </p>

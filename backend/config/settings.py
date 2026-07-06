@@ -1101,7 +1101,7 @@ def _resolve_redis_password() -> str:
 
 
 REDIS_PASSWORD = _resolve_redis_password()
-REDIS_HOST = config('REDIS_HOST', default='redis')
+REDIS_HOST = config('REDIS_HOST', default='redis-primary')
 REDIS_PORT = config('REDIS_PORT', default='6379')
 REDIS_SCHEME = config('REDIS_SCHEME', default='redis')
 
@@ -1109,6 +1109,28 @@ if REDIS_PASSWORD:
     _REDIS_BASE_URL = f"{REDIS_SCHEME}://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}"
 else:
     _REDIS_BASE_URL = f"{REDIS_SCHEME}://{REDIS_HOST}:{REDIS_PORT}"
+
+# ── Redis Sentinel (HA) ──────────────────────────────────────────────
+# When SENTINEL_HOSTS is set, all Redis connections route through
+# Sentinel for automatic master failover.  Sentinel runs as a separate
+# overlay (docker-compose.ha-redis.yml) and is not required — when
+# absent, standalone Redis is used as before.
+from config.redis_sentinel import (
+    SENTINEL_ENABLED,
+    SENTINEL_SERVICE_NAME,
+    sentinel_url,
+    sentinel_url_for_db,
+)
+if SENTINEL_ENABLED:
+    logger.info(
+        "Redis Sentinel enabled — service=%s hosts=%s",
+        SENTINEL_SERVICE_NAME,
+        os.environ.get('SENTINEL_HOSTS', ''),
+    )
+
+# Generic REDIS_URL — used by heartbeat_bus, tunnel storage, and other
+# consumers that need a single Redis connection (DB 0).
+REDIS_URL = config('REDIS_URL', default=sentinel_url_for_db(_REDIS_BASE_URL, 0, password=REDIS_PASSWORD))
 
 # Prefer explicit REDIS_URL override when provided; otherwise build from host/port.
 # Prefer explicit CELERY_BROKER_URL override; otherwise build from user/pass.
@@ -1166,13 +1188,7 @@ CELERY_TASK_ALWAYS_EAGER = IS_TESTING
 
 # Django cache: use Redis (needed for accurate /health cache checks + rate limits).
 # Use a dedicated DB index (2) to avoid colliding with Celery (0) / Channels (1).
-def _redis_url_with_db(base_url: str, db: int) -> str:
-    """Replace the DB number in a Redis URL (handles any DB suffix safely)."""
-    from urllib.parse import urlparse, urlunparse
-    parsed = urlparse(base_url)
-    return urlunparse(parsed._replace(path=f'/{db}'))
-
-REDIS_CACHE_URL = _redis_url_with_db(_REDIS_BASE_URL, 2)
+REDIS_CACHE_URL = config('REDIS_CACHE_URL', default=sentinel_url_for_db(_REDIS_BASE_URL, 2, password=REDIS_PASSWORD))
 
 # RedBeat (celery-beat scheduler) needs its own Redis DB. Build it from the
 # same _REDIS_BASE_URL so credentials/host stay in sync with the rest of the
@@ -1180,7 +1196,7 @@ REDIS_CACHE_URL = _redis_url_with_db(_REDIS_BASE_URL, 2)
 # CELERY_BROKER_URL (RabbitMQ AMQP), which makes redis-py raise:
 #   "Redis URL must specify one of the following schemes (redis://, ...)"
 # Operators can still override via the CELERY_REDBEAT_REDIS_URL env var.
-_REDBEAT_REDIS_URL = _redis_url_with_db(_REDIS_BASE_URL, 3)
+_REDBEAT_REDIS_URL = sentinel_url_for_db(_REDIS_BASE_URL, 3, password=REDIS_PASSWORD)
 CELERY_REDBEAT_REDIS_URL = config(
     'CELERY_REDBEAT_REDIS_URL',
     default=_REDBEAT_REDIS_URL,
@@ -1205,15 +1221,18 @@ else:
     }
 
 # Channels (WebSockets) - use Redis so Celery tasks can broadcast logs/status to live UIs.
-CHANNEL_REDIS_URL = config('REDIS_URL', default=f"{_REDIS_BASE_URL}/1")
-if isinstance(CHANNEL_REDIS_URL, str) and CHANNEL_REDIS_URL.endswith('/0'):
-    CHANNEL_REDIS_URL = CHANNEL_REDIS_URL[:-2] + '/1'
+# Uses a dedicated env var to avoid colliding with REDIS_URL (DB 0).
+CHANNEL_REDIS_URL = config('CHANNEL_REDIS_URL', default=sentinel_url_for_db(_REDIS_BASE_URL, 1, password=REDIS_PASSWORD))
 
 CHANNEL_LAYERS = {
     'default': {
         'BACKEND': 'channels_redis.core.RedisChannelLayer',
         'CONFIG': {
             'hosts': [CHANNEL_REDIS_URL],
+            'capacity': 1500,
+            'expiry': 10,
+            'group_expiry': 86400,
+            'symmetric_encryption': False,
         },
     },
 }

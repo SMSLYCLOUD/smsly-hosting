@@ -1,8 +1,59 @@
+import asyncio
+import contextlib
 import logging
 
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
+
+# Redis errors that can occur during WebSocket operations
+_REDIS_ERRORS = (
+    TimeoutError,
+    ConnectionError,
+    OSError,
+)
+
+
+class RedisResilientMiddleware:
+    """
+    ASGI middleware that wraps WebSocket consumers to handle Redis failures
+    gracefully. When Redis is unavailable (timeout, connection refused, etc.),
+    the consumer is closed with a specific code instead of crashing the ASGI
+    worker.
+
+    This prevents a single Redis hiccup from tearing down all active WebSocket
+    connections and ensures the backend process remains healthy.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "websocket":
+            return await self.app(scope, receive, send)
+
+        async def wrapped_receive():
+            try:
+                return await receive()
+            except _REDIS_ERRORS as exc:
+                logger.warning("Redis error during WS receive: %s", exc)
+                return {"type": "websocket.disconnect", "code": 4503}
+
+        async def wrapped_send(message):
+            try:
+                return await send(message)
+            except _REDIS_ERRORS as exc:
+                logger.warning("Redis error during WS send: %s", exc)
+                # Suppress send errors — the connection is already closing
+
+        try:
+            return await self.app(scope, wrapped_receive, wrapped_send)
+        except _REDIS_ERRORS as exc:
+            logger.error("Redis error in WS consumer: %s", exc)
+            # Attempt to close the WebSocket gracefully
+            with contextlib.suppress(Exception):
+                await send({"type": "websocket.close", "code": 4503})
+            return None
 
 class DynamicAllowedHostsMiddleware:
     """

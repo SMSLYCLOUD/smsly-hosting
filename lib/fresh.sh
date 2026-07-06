@@ -626,7 +626,7 @@ else
     SECRETS_GENERATED=false
     while IFS='=' read -r _smsly_secrets_key _smsly_secrets_val; do
         case "$_smsly_secrets_key" in
-            SECRET_KEY|FIELD_ENCRYPTION_KEY|POSTGRES_PASSWORD|REDIS_PASSWORD|RABBITMQ_PASSWORD|GATEWAY_SECRET|GITHUB_WEBHOOK_SECRET|AUTOSCALER_API_TOKEN|FRP_AUTH_TOKEN|PGCAT_ADMIN_PASSWORD)
+            SECRET_KEY|FIELD_ENCRYPTION_KEY|POSTGRES_PASSWORD|REDIS_PASSWORD|RABBITMQ_PASSWORD|GATEWAY_SECRET|GITHUB_WEBHOOK_SECRET|AUTOSCALER_API_TOKEN|FRP_AUTH_TOKEN|PGCAT_ADMIN_PASSWORD|REPLICATION_PASSWORD|SENTINEL_PASSWORD)
                 printf -v "$_smsly_secrets_key" '%s' "$_smsly_secrets_val"
                 ;;
         esac
@@ -646,14 +646,14 @@ else
     fi
     # Ensure all other secrets have fallback values just in case
     [ -n "${SECRET_KEY:-}" ] || SECRET_KEY="$(python3 -c "import secrets,string; chars=string.ascii_letters+string.digits; print(''.join(secrets.choice(chars) for _ in range(50)))" 2>/dev/null || true)"
-    [ -n "${POSTGRES_PASSWORD:-}" ] || POSTGRES_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || true)"
-    [ -n "${REDIS_PASSWORD:-}" ] || REDIS_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || true)"
-    [ -n "${RABBITMQ_PASSWORD:-}" ] || RABBITMQ_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || true)"
-    [ -n "${GATEWAY_SECRET:-}" ] || GATEWAY_SECRET="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
-    [ -n "${GITHUB_WEBHOOK_SECRET:-}" ] || GITHUB_WEBHOOK_SECRET="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
-    [ -n "${AUTOSCALER_API_TOKEN:-}" ] || AUTOSCALER_API_TOKEN="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
-    [ -n "${FRP_AUTH_TOKEN:-}" ] || FRP_AUTH_TOKEN="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
-    [ -n "${PGCAT_ADMIN_PASSWORD:-}" ] || PGCAT_ADMIN_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(24))" 2>/dev/null || true)"
+    [ -n "${POSTGRES_PASSWORD:-}" ] || POSTGRES_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
+    [ -n "${REDIS_PASSWORD:-}" ] || REDIS_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
+    [ -n "${RABBITMQ_PASSWORD:-}" ] || RABBITMQ_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
+    [ -n "${GATEWAY_SECRET:-}" ] || GATEWAY_SECRET="$(python3 -c "import secrets; print(secrets.token_hex(64))" 2>/dev/null || true)"
+    [ -n "${GITHUB_WEBHOOK_SECRET:-}" ] || GITHUB_WEBHOOK_SECRET="$(python3 -c "import secrets; print(secrets.token_hex(64))" 2>/dev/null || true)"
+    [ -n "${AUTOSCALER_API_TOKEN:-}" ] || AUTOSCALER_API_TOKEN="$(python3 -c "import secrets; print(secrets.token_hex(64))" 2>/dev/null || true)"
+    [ -n "${FRP_AUTH_TOKEN:-}" ] || FRP_AUTH_TOKEN="$(python3 -c "import secrets; print(secrets.token_hex(64))" 2>/dev/null || true)"
+    [ -n "${PGCAT_ADMIN_PASSWORD:-}" ] || PGCAT_ADMIN_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(48))" 2>/dev/null || true)"
     [ -n "${GRAFANA_PASSWORD:-}" ] || GRAFANA_PASSWORD="$(python3 -c "import secrets,string; print(''.join(secrets.choice(string.ascii_letters+string.digits+'-_') for _ in range(40)))" 2>/dev/null || openssl rand -base64 30 | tr -d '+/=' )"
     [ -n "${BACKUP_ENCRYPTION_KEY:-}" ] || BACKUP_ENCRYPTION_KEY="$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null || openssl rand -base64 32)"
     [ -n "${CROWDSEC_BOUNCER_KEY:-}" ] || CROWDSEC_BOUNCER_KEY="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
@@ -662,10 +662,10 @@ else
     # for convenience during initial provisioning. Operators managing trusted
     # environments with pre-populated known_hosts should set this to "true".
     [ -n "${SMSLY_STRICT_SSH_HOST_KEY_CHECK:-}" ] || SMSLY_STRICT_SSH_HOST_KEY_CHECK="false"
-    # Optional read-replica plumbing (only used when docker-compose.replica.yml
-    # is enabled). Initialize empty defaults so set -u doesn't trip on them
-    # later in the .env heredoc.
-    [ -n "${REPLICATION_PASSWORD:-}" ] || REPLICATION_PASSWORD=""
+    # Read-replica plumbing (used by pgcat for replica routing).
+    # Initialize empty defaults so set -u doesn't trip on them later.
+    [ -n "${REPLICATION_PASSWORD:-}" ] || REPLICATION_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
+    [ -n "${SENTINEL_PASSWORD:-}" ] || SENTINEL_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
     [ -n "${DB_REPLICA_HOSTS:-}" ] || DB_REPLICA_HOSTS=""
 
     # Validate Fernet key format
@@ -744,22 +744,23 @@ REDIS_PASSWORD=$REDIS_PASSWORD
 RABBITMQ_PASSWORD=$RABBITMQ_PASSWORD
 RABBITMQ_DEFAULT_USER=smsly_user
 RABBITMQ_DEFAULT_PASS=$RABBITMQ_PASSWORD
-REDIS_URL=redis://:$REDIS_PASSWORD@redis:6379/0
+REDIS_URL=redis://:$REDIS_PASSWORD@redis-primary:6379/0
 # CELERY_ prefix is required for celery-redbeat to read this (see
 # backend/config/settings.py: CELERY_REDBEAT_REDIS_URL). Without the prefix
 # redbeat falls back to CELERY_BROKER_URL (RabbitMQ AMQP) and redis-py
 # crashes with "Redis URL must specify one of the following schemes".
-CELERY_REDBEAT_REDIS_URL=redis://:$REDIS_PASSWORD@redis:6379/3
-# Optional PostgreSQL streaming-replication password. Required ONLY
-# when docker-compose.replica.yml is enabled (opt-in read replica).
-# Leave empty to skip replica setup. When set, the
-# render_pgcat_config.py generator automatically routes SELECTs to
-# the replica(s) listed in DB_REPLICA_HOSTS.
+CELERY_REDBEAT_REDIS_URL=redis://:$REDIS_PASSWORD@redis-primary:6379/3
+
+# ── Redis Sentinel (HA) ──────────────────────────────────────────────
+# When SENTINEL_HOSTS is set, all Redis connections route through
+# Sentinel for automatic master failover.  Set by the HA Redis overlay
+# (docker-compose.ha-redis.yml).  Leave empty for standalone Redis.
+SENTINEL_HOSTS=${SENTINEL_HOSTS:-}
+SENTINEL_SERVICE_NAME=${SENTINEL_SERVICE_NAME:-mymaster}
+SENTINEL_PASSWORD=${SENTINEL_PASSWORD:-}
+
+# ── PostgreSQL streaming replication ──────────────────────────────────
 REPLICATION_PASSWORD=${REPLICATION_PASSWORD:-}
-# Comma-separated list of read-replica endpoints. Used by pgcat
-# to route SELECTs to replicas. Default empty = single-node.
-# Example after enabling docker-compose.replica.yml:
-#   DB_REPLICA_HOSTS=db-replica:5432
 DB_REPLICA_HOSTS=${DB_REPLICA_HOSTS:-}
 REDIS_SOCKET_TIMEOUT=5
 CELERY_BROKER_URL=amqp://smsly_user:$RABBITMQ_PASSWORD@rabbitmq:5672//

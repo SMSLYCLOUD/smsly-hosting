@@ -39,6 +39,8 @@ SECRET_DEFINITIONS = [
     ("AUTOSCALER_API_TOKEN", 64, "Autoscaler API bearer token"),
     ("FRP_AUTH_TOKEN", 64, "FRP tunnel relay authentication token"),
     ("PGCAT_ADMIN_PASSWORD", 48, "PgCat administration password"),
+    ("REPLICATION_PASSWORD", 32, "PostgreSQL streaming replication password"),
+    ("SENTINEL_PASSWORD", 32, "Redis Sentinel authentication password"),
 ]
 
 

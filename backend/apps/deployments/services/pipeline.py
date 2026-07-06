@@ -824,22 +824,54 @@ class PipelineManager:
                 else:
                     append_log(self.deployment, "  ℹ️ All detected variables are already configured.\n")
 
-                if not resolver.is_frontend and (resolver.unresolved_vars or any(not v or v in ("", "{{GENERATE}}", "{{FILL_ME}}") for v in resolved_env.values())):
-                    append_log(self.deployment, "  🧠 Passing remaining unfilled variables through AI Senate intelligence...\n")
+                # Determine if AI Senate needs to fill vars the manifest
+                # resolver couldn't provide real values for.
+                _needs_senate = False
+                _senate_vars: list[str] = []
+                if not resolver.is_frontend:
+                    if resolver.unresolved_vars:
+                        _needs_senate = True
+                        _senate_vars.extend(resolver.unresolved_vars)
+                    if getattr(resolver, 'heuristic_vars', []):
+                        _needs_senate = True
+                        _senate_vars.extend(resolver.heuristic_vars)
+                    # Also check for empty/placeholder values the manifest
+                    # resolver returned but didn't inject (e.g. already existed
+                    # on the service with a placeholder).
+                    for _k, _v in resolved_env.items():
+                        if _k not in _senate_vars and (
+                            not _v or _v in ("", "{{GENERATE}}", "{{FILL_ME}}", "CHANGEME", "TODO")
+                        ):
+                            _needs_senate = True
+                            _senate_vars.append(_k)
+
+                    # No-manifest case: scanner detected env vars but manifest
+                    # resolver returned nothing. All detected vars need real values.
+                    if not _needs_senate and not resolved_env:
+                        _detected = scan_result.get('env_vars', [])
+                        if _detected:
+                            _needs_senate = True
+                            _senate_vars = list(_detected)
+
+                if _needs_senate:
+                    append_log(self.deployment, f"  🧠 AI Senate resolving {len(_senate_vars)} variables needing real values...\n")
                     try:
                         _sugg, _inj = EnvironmentIntelligenceService.apply_intelligence_to_service(
                             self.service, scan_result, source_dir=None
                         )
                         if _inj:
                             append_log(self.deployment, f"  ✅ AI Senate intelligence auto-filled {len(_inj)} remaining variables: {', '.join(_inj[:10])}...\n")
+                        else:
+                            append_log(self.deployment, "  ℹ️ AI Senate: all detected variables already have production values.\n")
+                        # Update unresolved list
+                        if resolver.unresolved_vars:
+                            resolver.unresolved_vars = [k for k in resolver.unresolved_vars if k not in (_inj or [])]
+                            _rs = self.deployment.review_summary or {}
                             if resolver.unresolved_vars:
-                                resolver.unresolved_vars = [k for k in resolver.unresolved_vars if k not in _inj]
-                                _rs = self.deployment.review_summary or {}
-                                if resolver.unresolved_vars:
-                                    _rs['unresolved_external_vars'] = resolver.unresolved_vars
-                                else:
-                                    _rs.pop('unresolved_external_vars', None)
-                                self.deployment.review_summary = _rs
+                                _rs['unresolved_external_vars'] = resolver.unresolved_vars
+                            else:
+                                _rs.pop('unresolved_external_vars', None)
+                            self.deployment.review_summary = _rs
                     except Exception as _senate_err:
                         logger.warning("AI Senate enrichment for remaining vars failed: %s", _senate_err)
             except Exception as e:
