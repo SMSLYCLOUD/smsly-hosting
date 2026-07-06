@@ -312,17 +312,19 @@ fi
          echo -e "${BLUE}[UPDATE] Verifying critical envs in $_env_file...${NC}"
          _missing_count=0
          # Each line: <VAR_NAME>=<generator>
-         _env_generators=(
-             "REDIS_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || true)"
-             "RABBITMQ_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || true)"
-             "GATEWAY_SECRET|$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
-             "GITHUB_WEBHOOK_SECRET|$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
-             "AUTOSCALER_API_TOKEN|$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
-             "FRP_AUTH_TOKEN|$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
-             "PGCAT_ADMIN_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(24))" 2>/dev/null || true)"
-             "REGISTRY_HTTP_SECRET|$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
-             "BACKUP_ENCRYPTION_KEY|$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null || openssl rand -base64 32)"
-         )
+          _env_generators=(
+              "REDIS_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || true)"
+              "RABBITMQ_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || true)"
+              "GATEWAY_SECRET|$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
+              "GITHUB_WEBHOOK_SECRET|$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
+              "AUTOSCALER_API_TOKEN|$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
+              "FRP_AUTH_TOKEN|$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
+              "PGCAT_ADMIN_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(24))" 2>/dev/null || true)"
+              "REGISTRY_HTTP_SECRET|$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
+              "BACKUP_ENCRYPTION_KEY|$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null || openssl rand -base64 32)"
+              "REPLICATION_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
+              "SENTINEL_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
+          )
          for _entry in "${_env_generators[@]}"; do
              _key="${_entry%%|*}"
              _generator="${_entry#*|}"

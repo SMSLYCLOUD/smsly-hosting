@@ -12,7 +12,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-smsly_admin}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
       POSTGRES_INITDB_ARGS: "--data-checksums"
-      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD:?REPLICATION_PASSWORD must be set in .env}
+      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD:-}
     volumes:
       - postgres-primary-data:/var/lib/postgresql/data
       - ./infrastructure/docker/postgres/init-primary.sh:/docker-entrypoint-initdb.d/init-primary.sh:ro
@@ -61,7 +61,7 @@ services:
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       PGUSER: replicator
-      PGPASSWORD: ${REPLICATION_PASSWORD}
+      PGPASSWORD: ${REPLICATION_PASSWORD:-}
     volumes:
       - postgres-replica-data:/var/lib/postgresql/data
     entrypoint: ["/bin/sh", "-c"]
