@@ -381,10 +381,11 @@ class ReplicationService:
 
         cls.validate_mesh_for_replication(mesh)
 
-        # If the cluster is already ACTIVE, we're doing a scale-out — etcd
-        # member state must be preserved by using ``--initial-cluster-state existing``
-        # for the net-new node.  Fresh deploys use ``new``.
-        is_fresh = mesh.replication_status not in ("ACTIVE", "FAILED")
+        # Only a truly fresh deploy (DISABLED) gets --initial-cluster-state new.
+        # Everything else (DEPLOYING, ACTIVE, FAILED) uses "existing" to
+        # preserve etcd state.  To rebuild a FAILED cluster from scratch,
+        # disable replication first (sets status → DISABLED), then deploy.
+        is_fresh = mesh.replication_status == "DISABLED"
 
         configs = cls.generate_patroni_compose(
             mesh, db_password, admin_password, replication_password,
