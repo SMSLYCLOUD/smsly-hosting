@@ -341,9 +341,11 @@ class BackupService:
                 'service_id': str(service.id),
                 'platform_domain': os.environ.get('DOMAIN', ''),
                 'deploy_type': service.deploy_type,
+                'buildpack': service.buildpack,
                 'env_vars': env_vars,
                 'secrets_included': include_secret_values,
                 'git_url': service.repository_url,
+                'branch': service.branch,
                 'public_domain': service.public_domain,
                 'created_at': str(timezone.now()),
                 'volumes': []
@@ -886,16 +888,31 @@ class BackupService:
                 enqueue_smart_deploy_task,
             )
 
+            # Restore source-code metadata so the deployment pulls the
+            # right repository and branch — critical for cross-server
+            # and cross-master restores.
+            restore_repo = metadata.get('git_url', '') or metadata.get('repository_url', '')
+            restore_branch = metadata.get('branch', '') or target_service.branch or 'main'
+            restore_buildpack = metadata.get('buildpack', '') or target_service.buildpack
+            if restore_repo:
+                target_service.repository_url = restore_repo
+            if restore_branch:
+                target_service.branch = restore_branch
+            if restore_buildpack and target_service.buildpack == 'NIXPACKS':
+                target_service.buildpack = restore_buildpack
+            if metadata.get('deploy_type') and target_service.deploy_type == 'GIT':
+                target_service.deploy_type = metadata['deploy_type']
+
             provider = _resolve_provider_for_service(target_service, prefer_local=True)
             if provider:
+                branch_ref = restore_branch or 'main'
                 deployment = Deployment.objects.create(
                     service=target_service,
                     status=Deployment.Status.QUEUED,
-                    commit_hash='latest',
-                    commit_message=f"Restored from backup {backup.id}",
+                    commit_hash=branch_ref,
+                    commit_message=f"Restored from backup {backup.id} (branch: {branch_ref})",
                 )
 
-                # Ensure the service is properly marked as active before deployment
                 target_service.status = Service.Status.ACTIVE
 
                 # ── Cross-platform restore: remap domain ──────────────
@@ -1045,9 +1062,11 @@ class BackupService:
                 'service_name': service.name,
                 'service_id': str(service.id),
                 'deploy_type': service.deploy_type,
+                'buildpack': service.buildpack,
                 'env_vars': env_vars,
                 'secrets_included': include_secret_values,
                 'git_url': service.repository_url,
+                'branch': service.branch,
                 'created_at': str(timezone.now()),
                 'volumes': volumes_meta
             }
@@ -1788,7 +1807,9 @@ class BackupService:
                     name=service_name,
                     owner=owner,
                     deploy_type=metadata.get('deploy_type', 'DOCKER'),
-                    repository_url=metadata.get('git_url', '')
+                    buildpack=metadata.get('buildpack', 'NIXPACKS'),
+                    repository_url=metadata.get('git_url', ''),
+                    branch=metadata.get('branch', 'main'),
                 )
 
             # Create a temporary ServiceBackup record pointing to this file
