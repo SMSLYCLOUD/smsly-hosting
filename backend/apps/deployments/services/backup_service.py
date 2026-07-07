@@ -1747,6 +1747,23 @@ class BackupService:
             with tarfile.open(archive_path, "r:gz") as tar:
                 _safe_tar_extractall(tar, temp_dir)
 
+            # Create pre-restore safety snapshots for each existing service
+            # BEFORE restoring the database — captures the live state in case
+            # the archive is corrupt or the wrong backup was selected.
+            if requesting_user_id:
+                from apps.deployments.models import Service
+                for service in Service.objects.all():
+                    try:
+                        self.backup_service(service.id, backup_type='PRE_TRANSFER')
+                        logger.info("Pre-restore snapshot created for service %s", service.name)
+                    except Exception as e:
+                        logger.warning("Pre-restore snapshot failed for service %s: %s", service.name, e)
+                        if raise_on_snapshot_failure:
+                            raise RuntimeError(
+                                f"Pre-restore snapshot failed for {service.name}: {e}. "
+                                "Refusing to restore."
+                            ) from e
+
             # Restore the PostgreSQL database from the bundled dump.
             db_dump = os.path.join(temp_dir, "db_dump.sql")
             if os.path.exists(db_dump) and os.path.getsize(db_dump) > 0:

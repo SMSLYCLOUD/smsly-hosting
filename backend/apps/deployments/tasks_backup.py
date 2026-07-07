@@ -336,10 +336,11 @@ def purge_user_backups_task(self, user_id, actor: str = 'system', force: bool = 
 
 @shared_task
 def cleanup_old_backups_task():
-    """Delete backups older than retention_days per schedule."""
+    """Delete backups older than retention_days per schedule, including cloud objects."""
     from datetime import timedelta
 
     from .models_backup import BackupSchedule, ServerBackup, ServiceBackup
+    from .services.backup_service import _resolve_cloud_config, delete_cloud_backup_object
 
     schedules = BackupSchedule.objects.filter(enabled=True)
     cleaned = 0
@@ -351,6 +352,14 @@ def cleanup_old_backups_task():
                     service=sched.service, created_at__lt=cutoff
                 ).exclude(backup_type='TRANSFER')
                 for b in old:
+                    # Delete the cloud object first (idempotent: already-gone = no-op).
+                    bucket, key, endpoint, region, access_key, secret_key = _resolve_cloud_config(b)
+                    if bucket and key:
+                        delete_cloud_backup_object(
+                            bucket, key,
+                            endpoint=endpoint, region=region,
+                            access_key=access_key, secret_key=secret_key,
+                        )
                     if b.file_path and os.path.exists(b.file_path):
                         os.remove(b.file_path)
                     b.delete()
@@ -358,6 +367,13 @@ def cleanup_old_backups_task():
             elif sched.is_server_wide:
                 old = ServerBackup.objects.filter(created_at__lt=cutoff)
                 for b in old:
+                    bucket, key, endpoint, region, access_key, secret_key = _resolve_cloud_config(b)
+                    if bucket and key:
+                        delete_cloud_backup_object(
+                            bucket, key,
+                            endpoint=endpoint, region=region,
+                            access_key=access_key, secret_key=secret_key,
+                        )
                     if b.file_path and os.path.exists(b.file_path):
                         os.remove(b.file_path)
                     b.delete()
