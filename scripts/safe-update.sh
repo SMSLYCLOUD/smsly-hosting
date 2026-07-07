@@ -93,7 +93,7 @@ safe_update_snapshot() {
     local prev_branch; prev_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
     local backup_file="$BACKUP_DIR/pre-update-$(date +%Y%m%d-%H%M%S).sql"
 
-    docker exec smsly-hosting-db-1 pg_dump -U smsly_admin smsly_hosting > "$backup_file" 2>/dev/null && \
+    docker exec smsly-postgres-primary pg_dump -U smsly_admin smsly_hosting > "$backup_file" 2>/dev/null && \
         _ok "DB backup: $(du -h "$backup_file" | cut -f1)" || \
         { _warn "DB backup failed — continuing without safety net"; backup_file=""; }
 
@@ -139,7 +139,7 @@ SNAPEOF
 safe_update_post_verify() {
     _step "Post-Deploy Health Check"
     local failed=0
-    local core=(smsly-hosting-db-1 smsly-hosting-redis-1 smsly-hosting-rabbitmq-1
+    local core=(smsly-postgres-primary smsly-redis-primary smsly-hosting-rabbitmq-1
                 smsly-hosting-backend-1 smsly-hosting-frontend-1 smsly-hosting-caddy-1
                 smsly-hosting-celery-1 smsly-hosting-celery-beat-1
                 smsly-hosting-socket-proxy-1 smsly-hosting-registry-1
@@ -238,7 +238,7 @@ safe_update_rollback() {
     # Restore DB if backed up
     if [ -n "${BACKUP_FILE:-}" ] && [ -f "$BACKUP_FILE" ]; then
         _warn "Restoring database from backup..."
-        docker exec -i smsly-hosting-db-1 psql -U smsly_admin smsly_hosting < "$BACKUP_FILE" >/dev/null 2>&1 && \
+        docker exec -i smsly-postgres-primary psql -U smsly_admin smsly_hosting < "$BACKUP_FILE" >/dev/null 2>&1 && \
             _ok "DB restored" || _warn "DB restore failed"
     fi
 

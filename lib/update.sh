@@ -575,9 +575,9 @@ fi
                 sync_agent_lite_rabbitmq_password
             elif [ "$MODE_NODE" = "true" ]; then
                 stop_node_excluded_services
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db $(get_pgcat_if_exists) redis rabbitmq socket-proxy registry route-fallback traefik
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_db_service) $(get_pgcat_if_exists) redis rabbitmq socket-proxy registry route-fallback traefik
             else
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db $(get_pgcat_if_exists) redis socket-proxy
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_db_service) $(get_pgcat_if_exists) redis socket-proxy
             fi
             # Stop backend, celery & pgcat so their DB connections don't block
             # migrations (ALTER TABLE requires exclusive locks).
@@ -755,7 +755,7 @@ fi
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --remove-orphans $CORE_SERVICES
             elif [ "$MODE_NODE" = "true" ]; then
                 stop_node_excluded_services
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db $(get_pgcat_if_exists) redis rabbitmq socket-proxy registry route-fallback traefik
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_db_service) $(get_pgcat_if_exists) redis rabbitmq socket-proxy registry route-fallback traefik
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps --remove-orphans $CORE_SERVICES
             else
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps --remove-orphans $CORE_SERVICES
@@ -786,9 +786,9 @@ fi
                 sync_agent_lite_rabbitmq_password
             elif [ "$MODE_NODE" = "true" ]; then
                 stop_node_excluded_services
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db $(get_pgcat_if_exists) redis rabbitmq socket-proxy registry route-fallback traefik
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_db_service) $(get_pgcat_if_exists) redis rabbitmq socket-proxy registry route-fallback traefik
             else
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db $(get_pgcat_if_exists) redis socket-proxy
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_db_service) $(get_pgcat_if_exists) redis socket-proxy
             fi
             run_backend_migrations --root || {
                 echo -e "${YELLOW}  ⚠ Migration failed — retrying in 15s...${NC}"
@@ -1512,7 +1512,7 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
 
     # ─── Re-apply OOM protection (scores reset when containers restart) ──────
     echo -e "${BLUE}  → Re-applying OOM protection for critical containers...${NC}"
-    oom_containers="smsly-hosting-backend-1 smsly-hosting-db-1 smsly-hosting-pgcat-1 smsly-hosting-celery-1 smsly-hosting-celery-deploy-1 smsly-hosting-celery-fast-1 smsly-hosting-celery-beat-1 smsly-hosting-socket-proxy-1"
+    oom_containers="smsly-hosting-backend-1 $(get_db_service | sed 's|^|smsly-hosting-|' || echo smsly-hosting-postgres-primary) smsly-hosting-pgcat-1 smsly-hosting-celery-1 smsly-hosting-celery-deploy-1 smsly-hosting-celery-fast-1 smsly-hosting-celery-beat-1 smsly-hosting-socket-proxy-1"
     if [ "$MODE_AGENT_LITE" = "true" ]; then
         oom_containers="smsly-hosting-backend-1 smsly-hosting-celery-worker-1 smsly-hosting-socket-proxy-1"
     fi

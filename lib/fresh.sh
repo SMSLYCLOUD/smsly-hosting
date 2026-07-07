@@ -1609,7 +1609,7 @@ echo -e "${BLUE}  → Setting OOM protection for critical containers...${NC}"
 if [ "$MODE_AGENT_LITE" = "true" ]; then
     CRITICAL_CONTAINERS=(smsly-hosting-traefik-1 smsly-hosting-backend-1 smsly-hosting-celery-worker-1 smsly-hosting-socket-proxy-1)
 else
-    CRITICAL_CONTAINERS=(smsly-hosting-backend-1 smsly-hosting-db-1 smsly-hosting-pgcat-1 smsly-hosting-celery-1 smsly-hosting-celery-deploy-1 smsly-hosting-celery-fast-1 smsly-hosting-celery-beat-1 smsly-hosting-socket-proxy-1)
+    CRITICAL_CONTAINERS=(smsly-hosting-backend-1 smsly-postgres-primary smsly-hosting-pgcat-1 smsly-hosting-celery-1 smsly-hosting-celery-deploy-1 smsly-hosting-celery-fast-1 smsly-hosting-celery-beat-1 smsly-hosting-socket-proxy-1)
 fi
 for CONTAINER in "${CRITICAL_CONTAINERS[@]}"; do
     resolved_container="$(resolve_container_target "$CONTAINER")"

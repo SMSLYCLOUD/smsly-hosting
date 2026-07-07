@@ -456,6 +456,19 @@ get_pgcat_if_exists() {
     fi
 }
 
+get_db_service() {
+    # Return the correct database service name for the current compose file.
+    # Returns:
+    #   "postgres-primary" for HA/prod compose (has pgcat)
+    #   "db"                 for legacy dev compose
+    local ct="${COMPOSE_FILE:-docker-compose.prod.yml}"
+    if [ -f "$ct" ] && grep -q "^  *pgcat:" "$ct" 2>/dev/null; then
+        echo "postgres-primary"
+    else
+        echo "db"
+    fi
+}
+
 compose_stack_services() {
     local services=""
     services="$(docker compose -f "$COMPOSE_FILE" config --services)" || return $?
