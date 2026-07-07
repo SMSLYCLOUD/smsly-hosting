@@ -359,45 +359,62 @@ fi
      # the operator hasn't explicitly picked a different one.
      _current_compose="$(env_get_value "$INSTALL_DIR/.env" "COMPOSE_FILE" 2>/dev/null || true)"
      if [ "$_current_compose" = "docker-compose.yml" ] && [ -f "$INSTALL_DIR/docker-compose.prod.yml" ]; then
-         # If the old db container still has data, migrate it FIRST before
-         # switching COMPOSE_FILE.  If migration fails, we keep the old
-         # compose so the platform continues working with the old db.
-         _has_old_db=false
-         if [ "$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -cx 'smsly-hosting-db-1' || echo 0)" -gt 0 ]; then
-             _has_old_db=true
+         # Check if postgres-primary already has migrated data (e.g. from a
+         # previous manual migration run).  If so, skip re-migration and
+         # switch COMPOSE_FILE immediately so the update pipeline can
+         # reach the correct DB hostname.
+         _already_migrated=false
+         if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx 'smsly-postgres-primary'; then
+             _tables=$(docker exec smsly-postgres-primary psql -U smsly_admin -d smsly_hosting -t -A \
+                 -c "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';" 2>/dev/null || echo 0)
+             if [ "${_tables:-0}" -gt 50 ]; then
+                 _already_migrated=true
+                 echo -e "${GREEN}  → postgres-primary already has $_tables tables — migration already done${NC}"
+             fi
          fi
 
-         if $_has_old_db; then
-             _mig_script="$INSTALL_DIR/scripts/migrate-db-to-ha.sh"
-             if [ -f "$_mig_script" ] && [ -x "$_mig_script" ]; then
-                 # Bring up the HA stack FIRST so postgres-primary/pgcat exist
-                 # before the migration script tries to dump into them.
-                 # We use -f docker-compose.prod.yml explicitly (not $COMPOSE_FILE
-                 # which still points to docker-compose.yml at this point).
-                 echo -e "${BLUE}  → Starting HA stack (postgres-primary, pgcat, redis-primary)...${NC}"
-                 docker compose -f "$INSTALL_DIR/docker-compose.prod.yml" \
-                     up -d --wait --wait-timeout 120 \
-                     postgres-primary postgres-replica pgcat redis-primary redis-replica \
-                     2>/dev/null || echo -e "${YELLOW}  ⚠ Some HA services may not be healthy yet${NC}"
-
-                 echo -e "${BLUE}  → Running data migration from old @db to postgres-primary...${NC}"
-                 if bash "$_mig_script"; then
-                     echo -e "${GREEN}  ✓ Data migration successful. Switching COMPOSE_FILE to prod (HA).${NC}"
-                     env_set_value "$INSTALL_DIR/.env" "COMPOSE_FILE" "docker-compose.prod.yml"
-                 else
-                     echo -e "${RED}  ✗ Data migration failed. Keeping COMPOSE_FILE=docker-compose.yml.${NC}"
-                     echo -e "${YELLOW}     Fix the migration issue and re-run update, or run:${NC}"
-                     echo -e "${YELLOW}     sudo bash scripts/migrate-db-to-ha.sh${NC}"
-                 fi
-             else
-                 echo -e "${YELLOW}  ⚠ migrate-db-to-ha.sh not found or not executable — skipping migration${NC}"
-                 echo -e "${YELLOW}  → Switching COMPOSE_FILE anyway (no old db data to lose)${NC}"
-                 env_set_value "$INSTALL_DIR/.env" "COMPOSE_FILE" "docker-compose.prod.yml"
-             fi
-         else
-             # No old db container — safe to switch immediately
+         if $_already_migrated; then
              echo -e "${YELLOW}  → Switching COMPOSE_FILE: docker-compose.yml → docker-compose.prod.yml${NC}"
              env_set_value "$INSTALL_DIR/.env" "COMPOSE_FILE" "docker-compose.prod.yml"
+         else
+             # If the old db container still has data, migrate it FIRST before
+             # switching COMPOSE_FILE.  If migration fails, we keep the old
+             # compose so the platform continues working with the old db.
+             _has_old_db=false
+             if [ "$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -cx 'smsly-hosting-db-1' || echo 0)" -gt 0 ]; then
+                 _has_old_db=true
+             fi
+
+             if $_has_old_db; then
+                 _mig_script="$INSTALL_DIR/scripts/migrate-db-to-ha.sh"
+                 if [ -f "$_mig_script" ] && [ -x "$_mig_script" ]; then
+                     # Bring up the HA stack FIRST so postgres-primary/pgcat exist
+                     # before the migration script tries to dump into them.
+                     echo -e "${BLUE}  → Starting HA stack (postgres-primary, pgcat, redis-primary)...${NC}"
+                     docker compose -f "$INSTALL_DIR/docker-compose.prod.yml" \
+                         up -d --wait --wait-timeout 120 \
+                         postgres-primary postgres-replica pgcat redis-primary redis-replica \
+                         2>/dev/null || echo -e "${YELLOW}  ⚠ Some HA services may not be healthy yet${NC}"
+
+                     echo -e "${BLUE}  → Running data migration from old @db to postgres-primary...${NC}"
+                     if bash "$_mig_script"; then
+                         echo -e "${GREEN}  ✓ Data migration successful. Switching COMPOSE_FILE to prod (HA).${NC}"
+                         env_set_value "$INSTALL_DIR/.env" "COMPOSE_FILE" "docker-compose.prod.yml"
+                     else
+                         echo -e "${RED}  ✗ Data migration failed. Keeping COMPOSE_FILE=docker-compose.yml.${NC}"
+                         echo -e "${YELLOW}     Fix the migration issue and re-run update, or run:${NC}"
+                         echo -e "${YELLOW}     sudo bash scripts/migrate-db-to-ha.sh${NC}"
+                     fi
+                 else
+                     echo -e "${YELLOW}  ⚠ migrate-db-to-ha.sh not found or not executable — skipping migration${NC}"
+                     echo -e "${YELLOW}  → Switching COMPOSE_FILE anyway (no old db data to lose)${NC}"
+                     env_set_value "$INSTALL_DIR/.env" "COMPOSE_FILE" "docker-compose.prod.yml"
+                 fi
+             else
+                 # No old db container — safe to switch immediately
+                 echo -e "${YELLOW}  → Switching COMPOSE_FILE: docker-compose.yml → docker-compose.prod.yml${NC}"
+                 env_set_value "$INSTALL_DIR/.env" "COMPOSE_FILE" "docker-compose.prod.yml"
+             fi
          fi
      fi
      unset _current_compose
