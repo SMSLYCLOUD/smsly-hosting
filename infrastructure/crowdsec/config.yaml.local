@@ -1,0 +1,11 @@
+# CrowdSec config overrides for SMSLY
+# Mounted at /etc/crowdsec/config.yaml.local to override the base config.
+# Enables Prometheus metrics endpoint on 0.0.0.0:6060 for Prometheus scraping.
+api:
+  server:
+    listen_uri: 0.0.0.0:8080
+prometheus:
+  enabled: true
+  level: full
+  listen_addr: 0.0.0.0
+  listen_port: 6060

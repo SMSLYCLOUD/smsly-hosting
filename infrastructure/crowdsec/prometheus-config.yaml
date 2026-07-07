@@ -1,7 +1,0 @@
-# CrowdSec Prometheus exporter configuration
-# Mounted at /etc/crowdsec/console.yaml in the container.
-# Exposes metrics at the configured port for Prometheus scraping.
-prometheus:
-  enabled: true
-  listen_addr: 0.0.0.0
-  listen_port: 6060

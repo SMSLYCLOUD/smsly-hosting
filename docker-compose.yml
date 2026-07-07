@@ -704,15 +704,15 @@ services:
     container_name: smsly-crowdsec
     restart: unless-stopped
     environment:
-      COLLECTIONS: "crowdsecurity/traefik crowdsecurity/http-cve crowdsecurity/base-http-scenarios crowdsecurity/prometheus"
+      COLLECTIONS: "crowdsecurity/traefik crowdsecurity/caddy crowdsecurity/http-cve crowdsecurity/base-http-scenarios crowdsecurity/prometheus"
       BOUNCER_KEY_traefik_bouncer: "${CROWDSEC_BOUNCER_KEY:-}"
     volumes:
       - crowdsec_data:/var/lib/crowdsec/data
       - crowdsec_config:/etc/crowdsec
       - ./infrastructure/crowdsec/acquis.yaml:/etc/crowdsec/acquis.yaml:ro,z
       - ./infrastructure/crowdsec/profiles.yaml:/etc/crowdsec/profiles.yaml:ro,z
-      - ./infrastructure/crowdsec/whitelists.yaml:/etc/crowdsec/postoverflows/s01_whitelist.yaml:ro,z
-      - ./infrastructure/crowdsec/prometheus-config.yaml:/etc/crowdsec/console.yaml:ro,z
+      - ./infrastructure/crowdsec/whitelists.yaml:/etc/crowdsec/parsers/s02-enrich/01-whitelists-acme.yaml:ro,z
+      - ./infrastructure/crowdsec/config.yaml.local:/etc/crowdsec/config.yaml.local:ro,z
       - traefik_logs:/var/log/traefik:ro
       - caddy_logs:/var/log/caddy:ro
     networks:

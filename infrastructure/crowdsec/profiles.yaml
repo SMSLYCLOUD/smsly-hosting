@@ -1,7 +1,7 @@
 name: default_ip_remediation
 #debug: true
 filters:
- - Alert.Remediation == true && Alert.GetScope() == "Ip" && Alert.GetMeta("http_path") != "/.well-known/acme-challenge/"
+ - Alert.Remediation == true && Alert.GetScope() == "Ip"
 decisions:
  - type: ban
    duration: 4h
@@ -10,7 +10,7 @@ decisions:
 name: scanner_ip_remediation
 #debug: true
 filters:
- - Alert.Remediation == true && Alert.GetScope() == "Ip" && Alert.GetScenario() contains "crowdsecurity/http-probing" && Alert.GetMeta("http_path") != "/.well-known/acme-challenge/"
+ - Alert.Remediation == true && Alert.GetScope() == "Ip" && Alert.GetScenario() contains "crowdsecurity/http-probing"
 decisions:
  - type: ban
    duration: 24h
