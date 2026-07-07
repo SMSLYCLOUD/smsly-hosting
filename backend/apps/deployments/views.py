@@ -1522,6 +1522,109 @@ class ServiceViewSet(viewsets.ModelViewSet):
             'message': f'Jules auto-fix triggered for deployment {deployment.id}.',
         })
 
+    @action(detail=True, methods=['get'], url_path='incident-report')
+    def incident_report(self, request, pk=None):
+        """Aggregate incident timeline, resource alerts, and health events.
+
+        GET /api/v1/services/{id}/incident-report/
+
+        Returns a consolidated timeline of deployment failures, resource
+        alerts, health transitions, and CrowdSec bans affecting this
+        service.
+        """
+        service = self.get_object()
+        from django.contrib.contenttypes.models import ContentType
+        from apps.notifications.models import ResourceAlert
+        from apps.deployments.models_audit import AuditLog
+
+        events: list = []
+
+        # 1. Failed deployments (last 30 days)
+        from apps.deployments.models_core import Deployment
+        failed_deploys = (
+            Deployment.objects
+            .filter(service=service, status__in=['FAILED', 'CANCELLED'])
+            .order_by('-created_at')[:20]
+        )
+        for d in failed_deploys:
+            events.append({
+                'type': 'deployment',
+                'severity': 'critical' if d.status == 'FAILED' else 'warning',
+                'timestamp': d.created_at.isoformat() if d.created_at else '',
+                'title': f"Deployment {d.status.lower()}",
+                'detail': d.commit_message or f"Deployment {d.id}",
+                'deployment_id': str(d.id),
+                'status': d.status,
+            })
+
+        # 2. Resource alerts
+        alerts = (
+            ResourceAlert.objects
+            .filter(service=service)
+            .order_by('-created_at')[:20]
+        )
+        for a in alerts:
+            events.append({
+                'type': 'resource_alert',
+                'severity': a.severity.lower(),
+                'timestamp': a.created_at.isoformat() if a.created_at else '',
+                'title': a.title or 'Resource alert',
+                'detail': a.message or '',
+                'acknowledged': a.acknowledged,
+                'alert_id': str(a.id),
+            })
+
+        # 3. Health transitions (from audit log)
+        service_content_type = ContentType.objects.get_for_model(service)
+        health_audits = (
+            AuditLog.objects
+            .filter(
+                action='HEALTH_TRANSITION',
+                metadata__contains={'service_id': str(service.id)},
+            )
+            .order_by('-timestamp')[:10]
+        )
+        for a in health_audits:
+            events.append({
+                'type': 'health',
+                'severity': 'warning',
+                'timestamp': a.timestamp.isoformat() if a.timestamp else '',
+                'title': a.metadata.get('previous', '') + ' → ' + a.metadata.get('current', ''),
+                'detail': a.metadata.get('message', ''),
+                'actor': a.actor,
+            })
+
+        # 4. CrowdSec bans (system-level, shown as context)
+        try:
+            import subprocess
+            bans_result = subprocess.run(
+                ['docker', 'exec', 'smsly-crowdsec',
+                 'cscli', 'decisions', 'list', '-o', 'json'],
+                capture_output=True, text=True, timeout=10,
+            )
+            if bans_result.returncode == 0:
+                import json
+                bans = json.loads(bans_result.stdout)
+                events.append({
+                    'type': 'waf_summary',
+                    'severity': 'info',
+                    'title': f"{len(bans) if isinstance(bans, list) else 0} active WAF bans",
+                    'detail': 'CrowdSec decisions currently enforcing',
+                    'timestamp': '',
+                })
+        except Exception:
+            pass
+
+        # Sort by timestamp descending, empty timestamps last
+        events.sort(key=lambda e: e['timestamp'] or '', reverse=True)
+
+        return Response({
+            'service_id': str(service.id),
+            'service_name': service.name,
+            'total_events': len(events),
+            'events': events,
+        })
+
     # ── Preview Environments ─────────────────────────────────────────────
     @action(detail=True, methods=['post'], url_path='create-preview')
     def create_preview(self, request, pk=None):

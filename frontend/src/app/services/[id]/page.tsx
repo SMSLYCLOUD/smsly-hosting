@@ -30,6 +30,7 @@ import { CloudStorageTab } from '@/components/settings/CloudStorageTab';
 import { PreviewsList } from '@/components/deployments/PreviewsList';
 import { SafeDeployPanel } from '@/components/deployments/SafeDeployPanel';
 import { DeploymentApprovalsPanel } from '@/components/deployments/DeploymentApprovalsPanel';
+import { IncidentReportTab } from '@/components/settings/IncidentReportTab';
 import { toast } from '@/components/ui/use-toast';
 import { ResourceAlerts } from '@/components/dashboard/ResourceAlerts';
 import { LogsView } from '@/components/logs/LogsView';
@@ -1002,6 +1003,8 @@ export default function ServiceDetailPage() {
             {activeTab === 'approvals' && <DeploymentApprovalsPanel serviceId={service.id} />}
 
             {activeTab === 'safedeploy' && <SafeDeployPanel serviceId={service.id} />}
+
+            {activeTab === 'incidents' && <IncidentReportTab serviceId={service.id} />}
 
             {activeTab === 'advanced' && <AdvancedTab service={service} />}
 

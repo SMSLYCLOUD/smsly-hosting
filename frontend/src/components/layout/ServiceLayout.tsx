@@ -2,7 +2,7 @@ import {
     ArrowLeft, GitCommit, Activity, Terminal, Shield, Settings,
     Clock, Globe, Database, List, Timer, HardDrive, Puzzle, Network, Route,
     HeartPulse, Cpu, BarChart3, Box, FolderOpen, ShieldCheck, Sparkles, FileSearch, Layers, Cloud,
-    CheckCircle2, Eye
+    CheckCircle2, Eye, Siren
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -51,6 +51,7 @@ export function ServiceLayout({ service, activeTab, setActiveTab, children }: Se
         { id: 'approvals', label: 'Approvals', icon: CheckCircle2 },
         { id: 'previews', label: 'Previews', icon: Eye },
         { id: 'safedeploy', label: 'SafeDeploy', icon: ShieldCheck },
+        { id: 'incidents', label: 'Incidents', icon: Siren },
         { id: 'settings', label: 'Settings', icon: Settings },
         { id: 'advanced', label: 'Advanced', icon: Shield },
     ];

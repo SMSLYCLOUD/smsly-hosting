@@ -544,6 +544,10 @@ export const servicesApi = {
     const response = await api.get(`/deployments/${id}/`);
     return response.data;
   },
+  getIncidentReport: async (serviceId: string): Promise<any> => {
+    const response = await api.get(`/services/${serviceId}/incident-report/`);
+    return response.data;
+  },
   rollback: async (deploymentId: string): Promise<DeploymentRollbackResponse> => {
     const response = await api.post<DeploymentRollbackResponse>(
       `/deployments/${deploymentId}/rollback/`,
@@ -640,6 +644,11 @@ export const servicesApi = {
   // Metrics
   getMetrics: async (serviceId: string, duration: string = '1h'): Promise<any> => {
     const response = await api.get(`/services/${serviceId}/metrics/`, { params: { duration } });
+    return response.data;
+  },
+  // Traffic Geo
+  getTrafficGeo: async (serviceId: string): Promise<any> => {
+    const response = await api.get(`/services/${serviceId}/traffic-geo/`);
     return response.data;
   },
   recheckHealth: async (serviceId: string, reset_backoff: boolean = true): Promise<any> => {
