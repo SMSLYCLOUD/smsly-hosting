@@ -404,6 +404,9 @@ fi
 
      if [ -f "$INSTALL_DIR/.env" ] && [ "$MODE_NODE" != "true" ]; then
          _env_fix_file="$INSTALL_DIR/.env"
+         # Read the current COMPOSE_FILE once — used by multiple blocks below
+         # to decide whether to apply HA-specific migrations.
+         _current_compose_final="$(env_get_value "$_env_fix_file" "COMPOSE_FILE" 2>/dev/null || true)"
 
          # REDIS_HOST: pre-HA used "redis", now "redis-primary"
          _current_redis_host="$(env_get_value "$_env_fix_file" "REDIS_HOST" 2>/dev/null || true)"
@@ -440,9 +443,12 @@ fi
              fi
          fi
 
-         # DIRECT_DATABASE_URL: auto-migrate from pre-HA @db to @postgres-primary
+         # DIRECT_DATABASE_URL: only migrate if the compose file already
+         # points to prod (HA).  If data migration failed and we kept the
+         # dev compose, leaving DIRECT_DATABASE_URL pointed at postgres-primary
+         # would crash Django management commands against an empty DB.
          _direct_url="$(env_get_value "$_env_fix_file" "DIRECT_DATABASE_URL" 2>/dev/null || true)"
-         if echo "$_direct_url" | grep -q '@db:'; then
+         if echo "$_direct_url" | grep -q '@db:' && echo "$_current_compose_final" | grep -q 'prod'; then
              _migrated_direct="$(echo "$_direct_url" | sed 's|@db:5432|@postgres-primary:5432|')"
              echo -e "${YELLOW}  → Migrating DIRECT_DATABASE_URL: @db → @postgres-primary${NC}"
              env_set_value "$_env_fix_file" "DIRECT_DATABASE_URL" "$_migrated_direct"
@@ -451,7 +457,6 @@ fi
          # Ensure REDIS_MIN_REPLICAS_TO_WRITE is present only when the
          # prod compose is active (has a replica).  Setting it on the
          # dev compose will cause NOREPLICAS errors on every write.
-         _current_compose_final="$(env_get_value "$_env_fix_file" "COMPOSE_FILE" 2>/dev/null || true)"
          if echo "$_current_compose_final" | grep -q 'prod'; then
              if ! grep -q '^REDIS_MIN_REPLICAS_TO_WRITE=' "$_env_fix_file" 2>/dev/null; then
                  echo -e "${YELLOW}  → Adding REDIS_MIN_REPLICAS_TO_WRITE=1 (Redis HA durability)${NC}"

@@ -157,7 +157,11 @@ docker exec "$NEW_DB_CONTAINER" psql -U "$DB_USER" -d postgres -c "
 docker exec "$NEW_DB_CONTAINER" psql -U "$DB_USER" -d postgres -c "
     DROP DATABASE IF EXISTS $DB_NAME;
     CREATE DATABASE $DB_NAME OWNER $DB_USER;
-" >/dev/null 2>&1
+" >/dev/null 2>&1 || {
+    echo -e "${RED}  ✗ Failed to drop/recreate database — aborting${NC}"
+    rm -f "$DUMP_FILE"
+    exit 1
+}
 
 # Pipe the dump into the new container
 cat "$DUMP_FILE" | docker exec -i "$NEW_DB_CONTAINER" \
