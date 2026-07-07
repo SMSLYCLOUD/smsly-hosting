@@ -3118,10 +3118,29 @@ class PipelineManager:
     def _sign_image(self):
         """Sign the deployed image with Cosign (keyless Sigstore or private key).
 
+        Reads cosign_enabled and cosign_require_verification from PlatformConfig
+        so the settings page UI controls the pipeline behavior.
         Runs after a successful push. Non-fatal if cosign is not installed or
-        signing fails — the image is still deployed but a warning is logged.
+        signing fails — unless cosign_require_verification is enabled, in which
+        case a failed verification raises SystemError.
         """
         if not self.image_name:
+            return
+
+        try:
+            from apps.deployments.models_core import PlatformConfig
+            config = PlatformConfig.load()
+            cosign_enabled = bool(getattr(config, 'cosign_enabled', True))
+            cosign_require_verify = bool(getattr(config, 'cosign_require_verification', False))
+        except Exception:  # pylint: disable=broad-exception-caught
+            cosign_enabled = True
+            cosign_require_verify = False
+
+        if not cosign_enabled:
+            append_log(
+                self.deployment,
+                "Cosign signing is disabled (cosign_enabled=false). Skipping.\n",
+            )
             return
 
         from apps.deployments.utils import find_binary
@@ -3170,14 +3189,24 @@ class PipelineManager:
             if vresult.returncode == 0:
                 append_log(self.deployment, "Cosign signature verification PASSED.\n")
             else:
-                append_log(
-                    self.deployment,
+                verify_msg = (
                     f"Cosign verification returned code {vresult.returncode} "
-                    f"(non-fatal for local-only images).\n",
+                    f"(non-fatal for local-only images).\n"
                 )
+                if cosign_require_verify:
+                    update_stage(self.deployment, 'Sign', 'failed')
+                    raise SystemError(
+                        f"Cosign signature verification FAILED and cosign_require_verification "
+                        f"is enabled. Deploying unsigned images is not permitted. "
+                        f"Image: {self.image_name}. "
+                        f"Fix: sign the image or disable cosign_require_verification in Platform Settings."
+                    )
+                append_log(self.deployment, verify_msg)
 
             update_stage(self.deployment, 'Sign', 'success')
 
+        except SystemError:
+            raise
         except subprocess.TimeoutExpired:
             append_log(self.deployment, "Cosign signing timed out (60s). Skipping.\n")
             update_stage(self.deployment, 'Sign', 'skipped')

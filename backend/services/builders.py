@@ -187,14 +187,23 @@ class BuildManager:
         """
         Run Trivy vulnerability scan on the Docker image.
         Falls back to skip if Trivy is not installed.
-        Respects settings.TRIVY_ENABLED and settings.TRIVY_FAIL_ON_SEVERITY.
+        Reads settings from PlatformConfig (database) so the UI toggle
+        actually controls the build pipeline.  Falls back to Django
+        settings / env vars when PlatformConfig is unavailable.
         Raises BuildError when vulnerabilities at or above the threshold are found.
         """
-        if not getattr(settings, 'TRIVY_ENABLED', True):
-            self._log("Trivy scanning is disabled (TRIVY_ENABLED=false). Skipping.")
-            return
+        try:
+            from apps.deployments.models_core import PlatformConfig
+            config = PlatformConfig.load()
+            trivy_enabled = bool(getattr(config, 'trivy_enabled', True))
+            fail_on = str(getattr(config, 'trivy_fail_on_severity', 'CRITICAL') or 'CRITICAL').upper()
+        except Exception:  # pylint: disable=broad-exception-caught
+            trivy_enabled = getattr(settings, 'TRIVY_ENABLED', True)
+            fail_on = getattr(settings, 'TRIVY_FAIL_ON_SEVERITY', 'CRITICAL').upper()
 
-        fail_on = getattr(settings, 'TRIVY_FAIL_ON_SEVERITY', 'CRITICAL').upper()
+        if not trivy_enabled:
+            self._log("Trivy scanning is disabled (trivy_enabled=false). Skipping.")
+            return
         severities = ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
         if fail_on not in severities:
             logger.warning("Invalid TRIVY_FAIL_ON_SEVERITY=%r — falling back to CRITICAL", fail_on)

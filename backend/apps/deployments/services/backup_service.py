@@ -2155,7 +2155,8 @@ class BackupService:
     def _backup_encryption_required() -> bool:
         """
         Resolve the BACKUP_REQUIRE_ENCRYPTION flag. Prefers an explicit
-        environment variable, then falls back to ``settings.BACKUP_REQUIRE_ENCRYPTION``
+        environment variable, then checks PlatformConfig (database/UI toggle),
+        then falls back to ``settings.BACKUP_REQUIRE_ENCRYPTION``
         (which itself defaults to ``True`` when ``DEBUG=False``).
         """
         explicit = os.environ.get("BACKUP_REQUIRE_ENCRYPTION", "").strip().lower()
@@ -2163,6 +2164,13 @@ class BackupService:
             return True
         if explicit in ("0", "false", "no", "off"):
             return False
+        try:
+            from apps.deployments.models_core import PlatformConfig
+            config = PlatformConfig.load()
+            if getattr(config, 'backup_require_encryption', None) is not None:
+                return bool(config.backup_require_encryption)
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
         return bool(getattr(settings, "BACKUP_REQUIRE_ENCRYPTION", False))
 
     @staticmethod

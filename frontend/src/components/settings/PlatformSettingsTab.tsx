@@ -364,7 +364,7 @@ export function PlatformSettingsTab() {
               <Shield className="h-5 w-5" />
               <span>Security Scanning</span>
             </CardTitle>
-            <CardDescription>Configure Trivy container image vulnerability scanning on build.</CardDescription>
+            <CardDescription>Configure container image vulnerability scanning, signing, and runtime protection.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex items-center justify-between rounded-lg border p-4">
@@ -395,6 +395,57 @@ export function PlatformSettingsTab() {
                 </p>
               </div>
             )}
+
+            <div className="border-t pt-4 mt-4">
+              <div className="flex items-center justify-between rounded-lg border p-4">
+                <div className="space-y-0.5">
+                  <Label className="text-base">Cosign Image Signing</Label>
+                  <p className="text-sm text-muted-foreground">Sign container images with Cosign after build for supply-chain integrity.</p>
+                </div>
+                <Switch
+                  checked={config.cosign_enabled ?? true}
+                  onCheckedChange={(v) => handleChange("cosign_enabled", v)}
+                />
+              </div>
+              {config.cosign_enabled !== false && (
+                <div className="flex items-center justify-between rounded-lg border p-4 mt-2">
+                  <div className="space-y-0.5">
+                    <Label className="text-base">Require Signature Verification</Label>
+                    <p className="text-sm text-muted-foreground">Block deployments if the image is unsigned or Cosign verification fails.</p>
+                  </div>
+                  <Switch
+                    checked={config.cosign_require_verification ?? false}
+                    onCheckedChange={(v) => handleChange("cosign_require_verification", v)}
+                  />
+                </div>
+              )}
+            </div>
+
+            <div className="border-t pt-4 mt-4">
+              <div className="flex items-center justify-between rounded-lg border p-4">
+                <div className="space-y-0.5">
+                  <Label className="text-base">CrowdSec WAF</Label>
+                  <p className="text-sm text-muted-foreground">Enable CrowdSec to automatically block malicious traffic.</p>
+                </div>
+                <Switch
+                  checked={config.enable_crowdsec_waf ?? false}
+                  onCheckedChange={(v) => handleChange("enable_crowdsec_waf", v)}
+                />
+              </div>
+            </div>
+
+            <div className="border-t pt-4 mt-4">
+              <div className="flex items-center justify-between rounded-lg border p-4">
+                <div className="space-y-0.5">
+                  <Label className="text-base">Require Backup Encryption</Label>
+                  <p className="text-sm text-muted-foreground">Force encryption for all server backups. Auto-enabled in production.</p>
+                </div>
+                <Switch
+                  checked={config.backup_require_encryption ?? false}
+                  onCheckedChange={(v) => handleChange("backup_require_encryption", v)}
+                />
+              </div>
+            </div>
           </CardContent>
         </Card>
 

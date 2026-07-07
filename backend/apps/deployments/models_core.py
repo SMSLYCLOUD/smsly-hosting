@@ -993,6 +993,22 @@ class PlatformConfig(models.Model):
         max_length=16, default='CRITICAL',
         help_text="Minimum severity that blocks the build: LOW, MEDIUM, HIGH, CRITICAL")
 
+    # ── Cosign Image Signing ──────────────────────────────────────────
+    cosign_enabled = models.BooleanField(
+        default=True,
+        help_text="Sign container images with Cosign after build. "
+                  "Non-fatal if Cosign is not installed.")
+    cosign_require_verification = models.BooleanField(
+        default=False,
+        help_text="Require Cosign signature verification before deploying images. "
+                  "Deployments fail if the image is unsigned or verification fails.")
+
+    # ── Backup Encryption ─────────────────────────────────────────────
+    backup_require_encryption = models.BooleanField(
+        default=False,
+        help_text="Require encryption for server backups. "
+                  "Auto-enabled in production (DEBUG=False) via settings.")
+
     # ── Device Trust (Beta) ────────────────────────────────────────────
     enforce_device_trust = models.BooleanField(
         default=False,

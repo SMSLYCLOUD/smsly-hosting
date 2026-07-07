@@ -4955,6 +4955,9 @@ class DomainConfigView(GenericAPIView):
             'enable_crowdsec_waf': config.enable_crowdsec_waf,
             'trivy_enabled': config.trivy_enabled,
             'trivy_fail_on_severity': config.trivy_fail_on_severity,
+            'cosign_enabled': config.cosign_enabled,
+            'cosign_require_verification': config.cosign_require_verification,
+            'backup_require_encryption': config.backup_require_encryption,
             'enforce_device_trust': config.enforce_device_trust,
             # SMTP
             'smtp_host': config.smtp_host,
@@ -5134,6 +5137,14 @@ class DomainConfigView(GenericAPIView):
                 val = str(data.get('trivy_fail_on_severity') or 'CRITICAL').strip().upper()
                 if val in ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL'):
                     config.trivy_fail_on_severity = val
+            # Cosign Image Signing
+            if 'cosign_enabled' in data:
+                config.cosign_enabled = _parse_bool(data.get('cosign_enabled'))
+            if 'cosign_require_verification' in data:
+                config.cosign_require_verification = _parse_bool(data.get('cosign_require_verification'))
+            # Backup Encryption
+            if 'backup_require_encryption' in data:
+                config.backup_require_encryption = _parse_bool(data.get('backup_require_encryption'))
             # Device Trust (Beta)
             if 'enforce_device_trust' in data:
                 config.enforce_device_trust = _parse_bool(data.get('enforce_device_trust'))
