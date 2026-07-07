@@ -100,6 +100,7 @@ services:
       - ./backend:/app:z
       - ./caddy-config:/caddy-config:z
       - backups_data:/app/backups
+      - traefik_logs:/var/log/traefik:ro
 
     depends_on:
       - redis
@@ -710,6 +711,7 @@ services:
       - crowdsec_config:/etc/crowdsec
       - ./infrastructure/crowdsec/acquis.yaml:/etc/crowdsec/acquis.yaml:ro,z
       - ./infrastructure/crowdsec/profiles.yaml:/etc/crowdsec/profiles.yaml:ro,z
+      - ./infrastructure/crowdsec/whitelists.yaml:/etc/crowdsec/postoverflows/s01_whitelist.yaml:ro,z
       - ./infrastructure/crowdsec/prometheus-config.yaml:/etc/crowdsec/console.yaml:ro,z
       - traefik_logs:/var/log/traefik:ro
       - caddy_logs:/var/log/caddy:ro
@@ -759,6 +761,17 @@ services:
     - --ping=true
     - --accesslog=true
     - --accesslog.filepath=/var/log/traefik/access.log
+    - --accesslog.format=json
+    - --accesslog.fields.defaultMode=keep
+    - --accesslog.fields.clientHost=keep
+    - --accesslog.fields.clientPort=drop
+    - --accesslog.fields.clientUsername=drop
+    - --accesslog.fields.requestHost=keep
+    - --accesslog.fields.requestMethod=keep
+    - --accesslog.fields.requestURI=keep
+    - --accesslog.fields.requestPort=drop
+    - --accesslog.fields.downstreamStatus=keep
+    - --accesslog.fields.userAgent=drop
     - --providers.docker.allowEmptyServices=true
     - --experimental.plugins.crowdsec-bouncer.modulename=github.com/maxmcd/traefik-crowdsec-bouncer
     - --experimental.plugins.crowdsec-bouncer.version=v1.3.3

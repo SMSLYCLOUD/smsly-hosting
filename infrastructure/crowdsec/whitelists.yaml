@@ -1,11 +1,12 @@
 # SMSLY custom whitelist — prevents ACME challenge blocking
-# This postoverflow sceanrio removes alerts for /.well-known/acme-challenge/
+# This postoverflow scenario removes alerts for /.well-known/acme-challenge/
 # requests before they reach the ban profiles. Without this, aggressive
 # probing scenario thresholds could ban Let's Encrypt validation IPs and
 # cause certificate renewal failures.
-name: smsly/acme-whitelist
+name: smsly/whitelists-acme
 description: "Whitelist ACME challenge requests"
+type: whitelist
 whitelist:
   reason: "ACME challenge request"
   expression:
-    - evt.Meta.http_path == '/.well-known/acme-challenge/'
+    - evt.Meta.http_path startsWith '/.well-known/acme-challenge/'
