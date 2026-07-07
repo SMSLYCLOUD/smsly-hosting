@@ -28,9 +28,25 @@ class BranchPreviewManager:
 
     def create_preview(self, service: Service, branch_name: str, commit_sha: str, user=None) -> PreviewEnvironment:
         """
-        Creates a new PreviewEnvironment and begins its provisioning workflow.
+        Creates or returns an existing PreviewEnvironment. If one already
+        exists for this service+branch+commit, it is returned as-is (idempotent).
+        If a preview exists for the same service+branch but with a different
+        commit, the existing one is rebuilt.
         """
         self._validate(branch_name, commit_sha)
+        existing = PreviewEnvironment.objects.filter(
+            service=service,
+            branch_name=branch_name,
+        ).order_by('-created_at').first()
+
+        if existing:
+            if existing.commit_sha == commit_sha and existing.status not in (
+                PreviewEnvironment.Status.DESTROYING,
+                PreviewEnvironment.Status.DESTROYED,
+            ):
+                return existing
+            return self.rebuild_preview(existing, commit_sha)
+
         preview = PreviewEnvironment.objects.create(
             service=service,
             branch_name=branch_name,

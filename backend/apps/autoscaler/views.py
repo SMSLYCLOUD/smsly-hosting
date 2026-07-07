@@ -234,7 +234,7 @@ def _apply_scaling(decision: dict):
             service.scale(target)
             logger.info("Autoscaler: Scaled Swarm service %s to %d", name, target)
         except Exception:
-            logger.warning("Autoscaler: Scaling for non-swarm container %s requested, but not fully implemented.", name)
+            logger.debug("Autoscaler: Scaling for non-swarm container %s requested, but not fully implemented.", name)
         logger.info(
             "Autoscaler: %s %s -> %s (reason: %s)",
             name, action, target, decision.get("reason", "no reason"),
