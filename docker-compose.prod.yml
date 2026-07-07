@@ -475,6 +475,7 @@ services:
     # specific feature requires it and document why.
     env_file: .env
     environment:
+      REDIS_HOST: redis-primary
       UVICORN_WS_PING_INTERVAL: 20
       UVICORN_WS_PING_TIMEOUT: 20
       MASTER_MESH_IP: ${MASTER_MESH_IP:-}
@@ -568,6 +569,7 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
+      REDIS_HOST: redis-primary
       MASTER_MESH_IP: ${MASTER_MESH_IP:-}
       CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-registry:5000}
       DOCKER_HOST: tcp://socket-proxy:2375
@@ -621,6 +623,7 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
+      REDIS_HOST: redis-primary
       MASTER_MESH_IP: ${MASTER_MESH_IP:-}
       BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
       # CELERY_ prefix is required for celery-redbeat to pick it up
@@ -701,6 +704,7 @@ services:
     restart: always
     env_file: .env
     environment:
+      REDIS_HOST: redis-primary
       MASTER_MESH_IP: ${MASTER_MESH_IP:-}
       CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-registry:5000}
       DOCKER_HOST: tcp://socket-proxy:2375
@@ -752,6 +756,7 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
+      REDIS_HOST: redis-primary
       MASTER_MESH_IP: ${MASTER_MESH_IP:-}
       CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-registry:5000}
       DOCKER_HOST: tcp://socket-proxy:2375
