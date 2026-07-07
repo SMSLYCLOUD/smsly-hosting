@@ -2945,19 +2945,37 @@ class PipelineManager:
         if not any(registry_url.startswith(m) for m in internal_markers):
             return  # external registry — nothing to bootstrap
 
-        # Extract container name from Docker DNS (registry:5000 → smsly-hosting-registry-1)
-        if registry_url.startswith('registry:'):
-            container_pattern = 'smsly-hosting-registry'
-        else:
-            return  # loopback — no container to start
+        # Match any container whose name includes the registry service name.
+        # Compose names it smsly-hosting-registry-1, plain docker may differ.
+        container_pattern = 'smsly-hosting-registry'
 
         try:
             result = subprocess.run(
-                ['docker', 'ps', '-a', '--filter', f'name={container_pattern}', '--format', '{{.Names}} {{.Status}}'],
+                ['docker', 'ps', '-a', '--filter', f'name={container_pattern}',
+                 '--format', '{{.Names}} {{.Status}}'],
                 capture_output=True, text=True, timeout=5,
             )
             if not result.stdout.strip():
-                append_log(self.deployment, f"Warning: registry container '{container_pattern}' not found.\n")
+                # Container not found — try docker-compose up on just the
+                # registry service so it gets created and started.
+                compose_file = os.getenv('COMPOSE_FILE', 'docker-compose.yml')
+                compose_dir = os.getenv('INSTALL_DIR', '/opt/smsly-hosting')
+                compose_path = os.path.join(compose_dir, compose_file)
+                if os.path.isfile(compose_path):
+                    try:
+                        subprocess.run(
+                            ['docker', 'compose', '-f', compose_path, 'up', '-d', '--no-recreate', 'registry'],
+                            capture_output=True, text=True, timeout=60,
+                        )
+                        append_log(self.deployment,
+                            f"Registry container not found — attempted 'docker compose up -d registry'.\n")
+                    except Exception as e:
+                        append_log(self.deployment,
+                            f"Warning: registry container not found and compose up failed: {e}\n")
+                else:
+                    append_log(self.deployment,
+                        f"Warning: registry container '{container_pattern}' not found and "
+                        f"no compose file at {compose_path}.\n")
                 return
 
             for line in result.stdout.strip().splitlines():

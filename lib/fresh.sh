@@ -746,7 +746,10 @@ REDIS_PASSWORD=$REDIS_PASSWORD
 RABBITMQ_PASSWORD=$RABBITMQ_PASSWORD
 RABBITMQ_DEFAULT_USER=smsly_user
 RABBITMQ_DEFAULT_PASS=$RABBITMQ_PASSWORD
+REDIS_HOST=redis-primary
 REDIS_URL=redis://:$REDIS_PASSWORD@redis-primary:6379/0
+REDIS_MIN_REPLICAS_TO_WRITE=1
+REDIS_MIN_REPLICAS_MAX_LAG=10
 # CELERY_ prefix is required for celery-redbeat to read this (see
 # backend/config/settings.py: CELERY_REDBEAT_REDIS_URL). Without the prefix
 # redbeat falls back to CELERY_BROKER_URL (RabbitMQ AMQP) and redis-py
@@ -765,6 +768,11 @@ SENTINEL_PASSWORD=${SENTINEL_PASSWORD:-}
 REPLICATION_PASSWORD=${REPLICATION_PASSWORD:-}
 DB_REPLICA_HOSTS=${DB_REPLICA_HOSTS:-}
 REGISTRY_HTTP_SECRET=${REGISTRY_HTTP_SECRET:-}
+
+# ── PostgreSQL durability ─────────────────────────────────────────────
+PG_SYNCHRONOUS_COMMIT=on
+# PG_SYNCHRONOUS_STANDBY_NAMES=  (unset = async replication)
+
 REDIS_SOCKET_TIMEOUT=5
 CELERY_BROKER_URL=amqp://smsly_user:$RABBITMQ_PASSWORD@rabbitmq:5672//
 
@@ -821,10 +829,10 @@ GRAFANA_PASSWORD=${GRAFANA_PASSWORD:-}
 GRAFANA_EXTERNAL_URL=${DOMAIN_ORIGINS}/grafana
 
 # Direct database connection for migrations (bypasses PgCat pooler)
-DIRECT_DATABASE_URL=postgresql://smsly_admin:$POSTGRES_PASSWORD@db:5432/smsly_hosting
+DIRECT_DATABASE_URL=postgresql://smsly_admin:$POSTGRES_PASSWORD@postgres-primary:5432/smsly_hosting
 
 # Private Docker registry (push/pull deployment images)
-CONTAINER_REGISTRY_URL=127.0.0.1:5000
+CONTAINER_REGISTRY_URL=registry:5000
 REGISTRY_USER=smsly-registry
 
 # The installer runs first-boot Django setup explicitly after the stack starts.

@@ -350,7 +350,68 @@ fi
      # Unset the helper var to avoid leaking into the rest of the script.
      unset _env_file _env_generators _entry _key _generator _missing_count
 
-      # Cache bust only if disk is low (already runs in the disk check above when needed).
+     # ── Auto-correct stale .env values from pre-HA upgrades ───────────
+     # After the PostgreSQL HA + Redis HA rename, old .env files may
+     # still reference single-node hostnames.  Fix them silently so the
+     # platform doesn't break after an update.
+     if [ -f "$INSTALL_DIR/.env" ] && [ "$MODE_NODE" != "true" ]; then
+         _env_fix_file="$INSTALL_DIR/.env"
+
+         # REDIS_HOST: pre-HA used "redis", now "redis-primary"
+         _current_redis_host="$(env_get_value "$_env_fix_file" "REDIS_HOST" 2>/dev/null || true)"
+         if [ "$_current_redis_host" = "redis" ] || [ -z "$_current_redis_host" ]; then
+             echo -e "${YELLOW}  → Updating REDIS_HOST: ${_current_redis_host:-<unset>} → redis-primary${NC}"
+             env_set_value "$_env_fix_file" "REDIS_HOST" "redis-primary"
+         fi
+
+         # REDIS_URL: replace stale @redis: with @redis-primary:
+         _redis_url="$(env_get_value "$_env_fix_file" "REDIS_URL" 2>/dev/null || true)"
+         if echo "$_redis_url" | grep -q '@redis:'; then
+             _fixed_redis_url="$(echo "$_redis_url" | sed 's|@redis:|@redis-primary:|g')"
+             echo -e "${YELLOW}  → Fixing REDIS_URL hostname: redis → redis-primary${NC}"
+             env_set_value "$_env_fix_file" "REDIS_URL" "$_fixed_redis_url"
+         fi
+
+         # CONTAINER_REGISTRY_URL: 127.0.0.1:5000 → registry:5000
+         _registry="$(env_get_value "$_env_fix_file" "CONTAINER_REGISTRY_URL" 2>/dev/null || true)"
+         if [ "$_registry" = "127.0.0.1:5000" ] || [ "$_registry" = "localhost:5000" ]; then
+             echo -e "${YELLOW}  → Fixing CONTAINER_REGISTRY_URL: $_registry → registry:5000${NC}"
+             env_set_value "$_env_fix_file" "CONTAINER_REGISTRY_URL" "registry:5000"
+         fi
+
+         # DATABASE_URL: if still pointing at single-node "db" host, warn
+         # but don't auto-migrate (requires operator confirmation)
+         _db_url="$(env_get_value "$_env_fix_file" "DATABASE_URL" 2>/dev/null || true)"
+         if echo "$_db_url" | grep -q '@db:'; then
+             echo -e "${YELLOW}  ⚠ DATABASE_URL still points to single-node @db:5432.${NC}"
+             echo -e "${YELLOW}     PostgreSQL HA with PgCat is available. To migrate:${NC}"
+             echo -e "${YELLOW}     1. Verify pgcat container is running${NC}"
+             echo -e "${YELLOW}     2. Update DATABASE_URL to: postgresql://smsly_admin:PASSWORD@pgcat:6432/smsly_hosting${NC}"
+             echo -e "${YELLOW}     3. Set DIRECT_DATABASE_URL for admin tasks (already configured if present)${NC}"
+         fi
+
+         # Ensure REDIS_MIN_REPLICAS_TO_WRITE is present (default: 1)
+         if ! grep -q '^REDIS_MIN_REPLICAS_TO_WRITE=' "$_env_fix_file" 2>/dev/null; then
+             echo -e "${YELLOW}  → Adding REDIS_MIN_REPLICAS_TO_WRITE=1 (Redis HA durability)${NC}"
+             echo 'REDIS_MIN_REPLICAS_TO_WRITE=1' >> "$_env_fix_file"
+         fi
+
+         # Ensure PG_SYNCHRONOUS_COMMIT is present (default: on)
+         if ! grep -q '^PG_SYNCHRONOUS_COMMIT=' "$_env_fix_file" 2>/dev/null; then
+             echo -e "${YELLOW}  → Adding PG_SYNCHRONOUS_COMMIT=on (PostgreSQL durability)${NC}"
+             echo 'PG_SYNCHRONOUS_COMMIT=on' >> "$_env_fix_file"
+         else
+             _pg_commit="$(env_get_value "$_env_fix_file" "PG_SYNCHRONOUS_COMMIT" 2>/dev/null || true)"
+             if [ "$_pg_commit" = "off" ]; then
+                 echo -e "${YELLOW}  ⚠ PG_SYNCHRONOUS_COMMIT=off — recent commits may be lost on crash.${NC}"
+                 echo -e "${YELLOW}     Consider setting PG_SYNCHRONOUS_COMMIT=on for durability.${NC}"
+             fi
+         fi
+
+         unset _env_fix_file _current_redis_host _redis_url _fixed_redis_url _registry _db_url _pg_commit
+     fi
+
+     # Cache bust only if disk is low (already runs in the disk check above when needed).
       # Moved into case blocks below to avoid redundant double bust.
 
       docker_login
