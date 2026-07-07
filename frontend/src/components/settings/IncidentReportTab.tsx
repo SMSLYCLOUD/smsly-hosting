@@ -18,12 +18,26 @@ interface TimelineEvent {
     acknowledged?: boolean;
     alert_id?: string;
     actor?: string;
+    action?: string;
+    branch?: string;
+    is_rollback?: boolean;
+    metric?: string;
+    threshold?: number;
+    current_value?: number;
+    backup_id?: string;
+    backup_type?: string;
+    transfer_id?: string;
+    snapshot_id?: string;
+    trigger?: string;
 }
 
 interface IncidentReport {
     service_id: string;
     service_name: string;
     total_events: number;
+    critical: number;
+    warning: number;
+    info: number;
     events: TimelineEvent[];
 }
 
@@ -33,11 +47,21 @@ const severityConfig: Record<string, { icon: typeof AlertTriangle; color: string
     info: { icon: Info, color: 'text-blue-500', bg: 'bg-blue-500/10' },
 };
 
-const typeIcons: Record<string, typeof Shield> = {
-    deployment: ServerCrash,
-    resource_alert: AlertTriangle,
-    health: Activity,
-    waf_summary: Shield,
+const typeMeta: Record<string, { icon: typeof Shield; label: string }> = {
+    deployment: { icon: ServerCrash, label: 'Deploy' },
+    resource_alert: { icon: AlertTriangle, label: 'Alert' },
+    health: { icon: Activity, label: 'Health' },
+    waf_summary: { icon: Shield, label: 'WAF' },
+    rollback: { icon: ServerCrash, label: 'Rollback' },
+    backup: { icon: Shield, label: 'Backup' },
+    backup_failure: { icon: XCircle, label: 'Backup Fail' },
+    ai_remediation: { icon: Activity, label: 'AI Fix' },
+    service_lifecycle: { icon: Info, label: 'Lifecycle' },
+    transfer: { icon: ServerCrash, label: 'Transfer' },
+    snapshot: { icon: Clock, label: 'Snapshot' },
+    infrastructure: { icon: ServerCrash, label: 'Infra' },
+    mesh: { icon: AlertTriangle, label: 'Mesh' },
+    cloud_upload_failure: { icon: XCircle, label: 'Cloud Fail' },
 };
 
 export function IncidentReportTab({ serviceId }: { serviceId: string }) {
@@ -85,19 +109,16 @@ export function IncidentReportTab({ serviceId }: { serviceId: string }) {
                 <CardContent className="py-16 text-center text-muted-foreground">
                     <Shield className="h-12 w-12 mx-auto mb-3 opacity-30" />
                     <p className="text-lg font-medium">No incidents or events</p>
-                    <p className="text-sm mt-1">This service has a clean record over the last 30 days.</p>
+                    <p className="text-sm mt-1">This service has a clean record over the last 90 days.</p>
                 </CardContent>
             </Card>
         );
     }
 
-    const criticalCount = report.events.filter(e => e.severity === 'critical').length;
-    const warningCount = report.events.filter(e => e.severity === 'warning').length;
-
     return (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
             {/* Summary header */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <Card>
                     <CardHeader className="pb-2">
                         <CardTitle className="text-sm font-medium text-muted-foreground">Total Events</CardTitle>
@@ -111,7 +132,7 @@ export function IncidentReportTab({ serviceId }: { serviceId: string }) {
                         <CardTitle className="text-sm font-medium text-muted-foreground">Critical</CardTitle>
                     </CardHeader>
                     <CardContent>
-                        <p className="text-3xl font-bold text-red-500">{criticalCount}</p>
+                        <p className="text-3xl font-bold text-red-500">{report.critical}</p>
                     </CardContent>
                 </Card>
                 <Card>
@@ -119,7 +140,15 @@ export function IncidentReportTab({ serviceId }: { serviceId: string }) {
                         <CardTitle className="text-sm font-medium text-muted-foreground">Warnings</CardTitle>
                     </CardHeader>
                     <CardContent>
-                        <p className="text-3xl font-bold text-amber-500">{warningCount}</p>
+                        <p className="text-3xl font-bold text-amber-500">{report.warning}</p>
+                    </CardContent>
+                </Card>
+                <Card>
+                    <CardHeader className="pb-2">
+                        <CardTitle className="text-sm font-medium text-muted-foreground">Info</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                        <p className="text-3xl font-bold text-blue-500">{report.info}</p>
                     </CardContent>
                 </Card>
             </div>
@@ -137,7 +166,8 @@ export function IncidentReportTab({ serviceId }: { serviceId: string }) {
                         {report.events.map((event, idx) => {
                             const sev = severityConfig[event.severity] || severityConfig.info;
                             const Icon = sev.icon;
-                            const TypeIcon = typeIcons[event.type] || Activity;
+                            const meta = typeMeta[event.type] || { icon: Activity, label: event.type };
+                            const TypeIcon = meta.icon;
                             const timeAgo = event.timestamp
                                 ? formatDistanceToNow(new Date(event.timestamp), { addSuffix: true })
                                 : '';
@@ -153,22 +183,48 @@ export function IncidentReportTab({ serviceId }: { serviceId: string }) {
                                         <div className="flex items-center gap-2 flex-wrap">
                                             <Badge variant="outline" className="text-[10px] uppercase tracking-wider">
                                                 <TypeIcon className="h-3 w-3 mr-1" />
-                                                {event.type.replace(/_/g, ' ')}
+                                                {meta.label}
                                             </Badge>
                                             <Badge className={`text-[10px] ${sev.bg} ${sev.color} border-0`}>
                                                 {event.severity}
                                             </Badge>
+                                            {event.action && (
+                                                <span className="text-[10px] text-muted-foreground font-mono">
+                                                    {event.action}
+                                                </span>
+                                            )}
                                             {timeAgo && (
-                                                <span className="text-xs text-muted-foreground">{timeAgo}</span>
+                                                <span className="text-xs text-muted-foreground ml-auto">{timeAgo}</span>
                                             )}
                                         </div>
                                         <p className="text-sm font-medium text-foreground">{event.title}</p>
                                         {event.detail && (
                                             <p className="text-xs text-muted-foreground">{event.detail}</p>
                                         )}
+                                        {/* Extra metadata */}
+                                        {event.metric && (
+                                            <span className="text-[10px] text-muted-foreground">
+                                                {event.metric}: {event.current_value ?? '?'} / threshold {event.threshold ?? '?'}
+                                            </span>
+                                        )}
+                                        {event.branch && (
+                                            <span className="text-[10px] text-muted-foreground font-mono">
+                                                branch: {event.branch}
+                                            </span>
+                                        )}
                                         {event.acknowledged !== undefined && (
                                             <span className="text-[10px] text-muted-foreground">
                                                 {event.acknowledged ? '✓ Acknowledged' : '⚠ Unacknowledged'}
+                                            </span>
+                                        )}
+                                        {event.is_rollback && (
+                                            <Badge variant="outline" className="text-[9px] w-fit border-amber-500/30 text-amber-500">
+                                                ROLLBACK
+                                            </Badge>
+                                        )}
+                                        {event.trigger && (
+                                            <span className="text-[10px] text-muted-foreground">
+                                                Trigger: {event.trigger}
                                             </span>
                                         )}
                                     </div>
