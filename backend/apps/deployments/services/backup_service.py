@@ -489,6 +489,7 @@ class BackupService:
             backup.file_path = filepath
             backup.metadata = metadata
             backup.size_bytes = os.path.getsize(filepath)
+            BackupService.stamp_encryption_header_into_metadata(backup.metadata, filepath)
 
             # Enforce maximum backup size
             try:
@@ -1165,6 +1166,7 @@ class BackupService:
             backup.status = 'COMPLETED'
             backup.size_bytes = os.path.getsize(local_filepath)
             backup.completed_at = timezone.now()
+            BackupService.stamp_encryption_header_into_metadata(backup.metadata, local_filepath)
             backup.save()
 
             self._prune_old_backups(ServiceBackup, service_id=service.id)
@@ -1694,6 +1696,8 @@ class BackupService:
             backup.size_bytes = os.path.getsize(filepath)
             backup.completed_at = timezone.now()
             backup.save()
+            BackupService.stamp_encryption_header_into_metadata(backup.metadata, filepath)
+            backup.save(update_fields=['metadata'])
             self._prune_old_backups(ServerBackup)
 
             # Upload to S3 if a cloud destination is configured.
@@ -1983,6 +1987,38 @@ class BackupService:
         if len(data) != size:
             raise ValueError("Encrypted backup is truncated")
         return data
+
+    @staticmethod
+    def get_encryption_header(filepath: str) -> dict | None:
+        """Read the encryption header (key_id, fingerprint) from a backup file.
+
+        Returns None if the file is not encrypted or header cannot be read.
+        Safe to call on unencrypted files — simply returns None.
+        """
+        if not filepath or not filepath.endswith('.enc'):
+            return None
+        try:
+            return BackupService.read_v2_header(filepath)
+        except (ValueError, OSError):
+            return None
+
+    @staticmethod
+    def stamp_encryption_header_into_metadata(metadata: dict, filepath: str) -> dict:
+        """Augment backup metadata with the V2/V3 encryption key_id + fingerprint.
+
+        Called after ``_maybe_encrypt`` so the backup JSON record carries
+        the key identity alongside the tarball — downstream services and
+        cross-master restores can look up the stored key without needing
+        access to the encrypted file itself.
+        """
+        header = BackupService.get_encryption_header(filepath)
+        if header:
+            metadata['encryption'] = {
+                'format': header.get('magic', ''),
+                'key_id': header.get('key_id', ''),
+                'fingerprint': header.get('fingerprint', ''),
+            }
+        return metadata
 
     @staticmethod
     def compute_backup_key_fingerprint(key_material: str) -> str:
