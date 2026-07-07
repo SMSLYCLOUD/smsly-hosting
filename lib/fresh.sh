@@ -731,7 +731,7 @@ MODE=$ENV_MODE_VALUE
 # dollar-paren or backtick sequences in heredoc comments.
 # Master mode: docker-compose.yml (base file with traefik + caddy inlined).
 # Agent-lite mode: overridden below to infrastructure/docker/docker-compose.agent-lite.yml.
-COMPOSE_FILE=docker-compose.yml
+COMPOSE_FILE=docker-compose.prod.yml
 DEBUG=False
 SECRET_KEY=$SECRET_KEY
 FIELD_ENCRYPTION_KEY=$FIELD_ENCRYPTION_KEY

@@ -354,6 +354,44 @@ fi
      # After the PostgreSQL HA + Redis HA rename, old .env files may
      # still reference single-node hostnames.  Fix them silently so the
      # platform doesn't break after an update.
+
+     # Switch from dev compose (docker-compose.yml) to prod (HA) if
+     # the operator hasn't explicitly picked a different one.
+     _current_compose="$(env_get_value "$INSTALL_DIR/.env" "COMPOSE_FILE" 2>/dev/null || true)"
+     if [ "$_current_compose" = "docker-compose.yml" ] && [ -f "$INSTALL_DIR/docker-compose.prod.yml" ]; then
+         # If the old db container still has data, migrate it FIRST before
+         # switching COMPOSE_FILE.  If migration fails, we keep the old
+         # compose so the platform continues working with the old db.
+         _has_old_db=false
+         if [ "$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -cx 'smsly-hosting-db-1' || echo 0)" -gt 0 ]; then
+             _has_old_db=true
+         fi
+
+         if $_has_old_db; then
+             _mig_script="$INSTALL_DIR/scripts/migrate-db-to-ha.sh"
+             if [ -f "$_mig_script" ] && [ -x "$_mig_script" ]; then
+                 echo -e "${BLUE}  → Running data migration from old @db to postgres-primary...${NC}"
+                 if bash "$_mig_script"; then
+                     echo -e "${GREEN}  ✓ Data migration successful. Switching COMPOSE_FILE to prod (HA).${NC}"
+                     env_set_value "$INSTALL_DIR/.env" "COMPOSE_FILE" "docker-compose.prod.yml"
+                 else
+                     echo -e "${RED}  ✗ Data migration failed. Keeping COMPOSE_FILE=docker-compose.yml.${NC}"
+                     echo -e "${YELLOW}     Fix the migration issue and re-run update, or run:${NC}"
+                     echo -e "${YELLOW}     sudo bash scripts/migrate-db-to-ha.sh${NC}"
+                 fi
+             else
+                 echo -e "${YELLOW}  ⚠ migrate-db-to-ha.sh not found or not executable — skipping migration${NC}"
+                 echo -e "${YELLOW}  → Switching COMPOSE_FILE anyway (no old db data to lose)${NC}"
+                 env_set_value "$INSTALL_DIR/.env" "COMPOSE_FILE" "docker-compose.prod.yml"
+             fi
+         else
+             # No old db container — safe to switch immediately
+             echo -e "${YELLOW}  → Switching COMPOSE_FILE: docker-compose.yml → docker-compose.prod.yml${NC}"
+             env_set_value "$INSTALL_DIR/.env" "COMPOSE_FILE" "docker-compose.prod.yml"
+         fi
+     fi
+     unset _current_compose
+     # platform doesn't break after an update.
      if [ -f "$INSTALL_DIR/.env" ] && [ "$MODE_NODE" != "true" ]; then
          _env_fix_file="$INSTALL_DIR/.env"
 
