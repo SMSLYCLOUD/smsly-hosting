@@ -374,6 +374,13 @@ fi
          fi
 
          if $_already_migrated; then
+             # Data is already on postgres-primary — switch to prod compose
+             # immediately but ensure the HA stack is up first.
+             echo -e "${BLUE}  → HA stack already has data — ensuring services are up...${NC}"
+             docker compose -f "$INSTALL_DIR/docker-compose.prod.yml" \
+                 up -d --wait --wait-timeout 120 \
+                 postgres-primary postgres-replica pgcat redis-primary redis-replica \
+                 2>/dev/null || echo -e "${YELLOW}  ⚠ Some HA services may not be healthy yet${NC}"
              echo -e "${YELLOW}  → Switching COMPOSE_FILE: docker-compose.yml → docker-compose.prod.yml${NC}"
              env_set_value "$INSTALL_DIR/.env" "COMPOSE_FILE" "docker-compose.prod.yml"
          else
@@ -411,7 +418,14 @@ fi
                      env_set_value "$INSTALL_DIR/.env" "COMPOSE_FILE" "docker-compose.prod.yml"
                  fi
              else
-                 # No old db container — safe to switch immediately
+                 # No old db container — but we still need to ensure the
+                 # HA stack is running so pgcat/postgres-primary resolve.
+                 # Otherwise manage.py migrate will fail with DNS errors.
+                 echo -e "${BLUE}  → Starting HA stack (fresh install)...${NC}"
+                 docker compose -f "$INSTALL_DIR/docker-compose.prod.yml" \
+                     up -d --wait --wait-timeout 120 \
+                     postgres-primary postgres-replica pgcat redis-primary redis-replica \
+                     2>/dev/null || echo -e "${YELLOW}  ⚠ Some HA services may not be healthy yet${NC}"
                  echo -e "${YELLOW}  → Switching COMPOSE_FILE: docker-compose.yml → docker-compose.prod.yml${NC}"
                  env_set_value "$INSTALL_DIR/.env" "COMPOSE_FILE" "docker-compose.prod.yml"
              fi
