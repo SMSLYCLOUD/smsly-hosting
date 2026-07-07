@@ -63,10 +63,23 @@ if ! docker ps -a --format '{{.Names}}' | grep -qx "$OLD_DB_CONTAINER"; then
     exit 0
 fi
 
-# Check new container exists
+# Check new container exists — if not, start the HA stack and wait for it
 if ! docker ps --format '{{.Names}}' | grep -qx "$NEW_DB_CONTAINER"; then
-    echo -e "${RED}✗ New container $NEW_DB_CONTAINER is not running${NC}"
-    exit 1
+    echo -e "${YELLOW}⚠ $NEW_DB_CONTAINER is not running — starting HA stack...${NC}"
+    docker compose -f "$COMPOSE_FILE" up -d postgres-primary postgres-replica 2>/dev/null
+    echo -e "  → Waiting for postgres-primary to become healthy..."
+    for _i in $(seq 1 30); do
+        if docker ps --format '{{.Names}}' | grep -qx "$NEW_DB_CONTAINER" && \
+           docker exec "$NEW_DB_CONTAINER" pg_isready -U "$DB_USER" >/dev/null 2>&1; then
+            echo -e "${GREEN}  ✓ postgres-primary is ready${NC}"
+            break
+        fi
+        sleep 2
+    done
+    if ! docker ps --format '{{.Names}}' | grep -qx "$NEW_DB_CONTAINER"; then
+        echo -e "${RED}✗ $NEW_DB_CONTAINER failed to start${NC}"
+        exit 1
+    fi
 fi
 
 # ── Check if postgres-primary already has data ────────────────────────────────
