@@ -851,8 +851,8 @@ const scaleStages = [
     { icon: Terminal, title: 'git push', subtitle: 'Your laptop', desc: 'Write code. Push to git. Grid handles everything else.', stat: '1 command', color: 'bg-slate-500' },
     { icon: Server, title: 'First VPS', subtitle: 'Single server', desc: 'Grid provisions containers, databases, SSL, and monitoring on your server.', stat: '< 45s deploy', color: 'bg-emerald-500' },
     { icon: Database, title: 'Managed Data', subtitle: '35+ addons', desc: 'PostgreSQL, Redis, MongoDB, Kafka. One-click provisioning with automated backups.', stat: '35+ services', color: 'bg-amber-500' },
-    { icon: Network, title: 'Multi-Region', subtitle: 'Distributed', desc: 'Deploy across regions with intelligent traffic routing. Data locality and latency-aware placement.', stat: '24+ regions', color: 'bg-blue-500' },
-    { icon: Globe, title: 'Global Edge', subtitle: '24+ locations', desc: 'Route traffic to the nearest edge. Lite edge agents. Custom SSL everywhere.', stat: '24+ PoPs', color: 'bg-violet-500' },
+    { icon: RefreshCw, title: 'HA Replication', subtitle: 'Streaming replication', desc: 'PostgreSQL streaming replicas via Patroni. Redis Sentinel auto-failover. Sub-second recovery.', stat: '< 30s failover', color: 'bg-blue-500' },
+    { icon: Network, title: 'Multi-Region', subtitle: 'Distributed', desc: 'Deploy across regions with WireGuard mesh networking. Data locality and latency-aware placement.', stat: '24+ regions', color: 'bg-violet-500' },
     { icon: Brain, title: 'AI Autopilot', subtitle: 'Predictive scaling', desc: 'AI predicts load spikes, auto-remediates crashes, and optimizes resource allocation.', stat: '99.99% uptime', color: 'bg-indigo-500' },
 ];
 
@@ -1198,7 +1198,7 @@ function TopologyVisualization() {
 const fleetFeatures = [
     { icon: Network, title: 'WireGuard VPN Mesh', desc: 'Encrypted mesh network across all managed servers. Auto-allocated IPs, encrypted-at-rest keys, per-peer latency tracking. Multiple named meshes.', color: 'text-blue-500', bg: 'bg-blue-500/10' },
     { icon: Server, title: 'Raft Leader Election', desc: 'Automatic leader election across your server fleet. Term tracking, heartbeat monitoring, quorum requirements, full vote history.', color: 'text-violet-500', bg: 'bg-violet-500/10' },
-    { icon: RefreshCw, title: 'Federated Fleet Updates', desc: '4-stage rollout: Shadow Pull → Master Update → Canary Verification → Fleet Rollout. Per-node progress with fleet-wide rollback.', color: 'text-emerald-500', bg: 'bg-emerald-500/10' },
+    { icon: RefreshCw, title: 'Self-Healing Orchestration', desc: 'Automatic failure classification: Docker daemon down, disk full, OOM, container crashed. Escalates to AI after 5 attempts with auto-remediation.', color: 'text-emerald-500', bg: 'bg-emerald-500/10' },
     { icon: Waypoints, title: 'Server Migration', desc: '9-state cross-server transfer engine. DNS cutover, rollback with deadline, progress tracking, estimated downtime.', color: 'text-amber-500', bg: 'bg-amber-500/10' },
 ];
 
@@ -1284,9 +1284,9 @@ const observabilityFeatures = [
     { icon: TrendingUp, title: 'Predictive Auto-Scaling', desc: 'AI-driven scaling that predicts load spikes before they happen. Scales up proactively, not reactively.', colSpan: 'md:col-span-2' },
     { icon: Activity, title: 'Fleet Health Monitor', desc: 'Cross-server health aggregation with per-node status, resource usage, and alert thresholds in one view.' },
     { icon: Cpu, title: 'Horizontal Scaling', desc: 'Scale any service horizontally across replicas with a single command or automatically via AI.' },
-    { icon: Eye, title: 'Real-Time Log Streaming', desc: 'Tail container logs in real time with Loki-powered search. Filter by service, severity, or timestamp.' },
+    { icon: RefreshCw, title: 'Disaster Recovery', desc: 'Tiered backup schedules (6h/24h/7d), cloud replication to S3/R2/MinIO, encryption key rotation, and defined RPO/RTO targets.', colSpan: 'md:col-span-2' },
     { icon: BarChart3, title: 'Metrics Dashboard', desc: 'CPU, memory, network, and disk metrics per service. Historical trends and anomaly detection.' },
-    { icon: Radio, title: 'Anomaly Detection', desc: 'AI monitors metrics in real time and flags unusual patterns before they become incidents. Proactive, not reactive.', colSpan: 'md:col-span-3' },
+    { icon: Radio, title: 'Anomaly Detection', desc: 'AI monitors metrics in real time and flags unusual patterns before they become incidents. Proactive, not reactive.' },
 ];
 
 function ObservabilityBento() {
@@ -1323,11 +1323,11 @@ function ObservabilityBento() {
 // ============================================
 const dataServices = [
     { icon: Container, title: 'Addon Marketplace', desc: '35+ managed data services. PostgreSQL, Redis, MongoDB, Kafka, Elasticsearch, and more.', color: 'text-amber-500', bg: 'bg-amber-500/10' },
-    { icon: Database, title: 'Database Cloning', desc: 'Zero-copy PostgreSQL template cloning provides instant staging data without doubling storage costs.', color: 'text-emerald-500', bg: 'bg-emerald-500/10' },
-    { icon: GitBranch, title: 'Deployment Previews', desc: 'Spin up isolated, ephemeral environments for every pull request. Review changes in production-like conditions.', color: 'text-blue-500', bg: 'bg-blue-500/10' },
+    { icon: Database, title: 'HA PostgreSQL', desc: 'Patroni-managed streaming replication with automatic failover. PgCat read/write splitting for zero-downtime upgrades.', color: 'text-blue-500', bg: 'bg-blue-500/10' },
+    { icon: GitBranch, title: 'Deployment Previews', desc: 'Spin up isolated, ephemeral environments for every pull request. Review changes in production-like conditions.', color: 'text-emerald-500', bg: 'bg-emerald-500/10' },
     { icon: Blocks, title: 'Multi-Git Providers', desc: 'Connect GitHub, GitLab, and Bitbucket. Auto-deploy on push. Unified webhook handling across all providers.', color: 'text-violet-500', bg: 'bg-violet-500/10' },
     { icon: Boxes, title: 'Nixpacks Build Support', desc: 'Auto-detect and build any language with Nixpacks. No Dockerfile needed for most applications.', color: 'text-cyan-500', bg: 'bg-cyan-500/10' },
-    { icon: Waypoints, title: 'Dev Tunnels', desc: 'Expose local dev servers via public URLs with request inspection. Test webhooks and integrations locally.', color: 'text-rose-500', bg: 'bg-rose-500/10' },
+    { icon: Waypoints, title: 'Dev Tunnels', desc: 'Expose local dev servers via public URLs with reserved subdomains. Test webhooks and integrations locally.', color: 'text-rose-500', bg: 'bg-rose-500/10' },
 ];
 
 const billingFeatures = [
@@ -1452,7 +1452,7 @@ const edgeFeatures = [
     { icon: Network, title: 'Lite Edge Agents', desc: 'Lightweight nodes connect to the master\'s DB and Redis. Minimal footprint, full orchestration.', color: 'text-blue-400', bg: 'bg-blue-500/10' },
     { icon: Lock, title: 'Custom SSL Manager', desc: 'Auto-provisioned Let\'s Encrypt certificates. Custom cert upload. Wildcard support.', color: 'text-emerald-400', bg: 'bg-emerald-500/10' },
     { icon: Shield, title: 'Safe Deploy & Approvals', desc: 'Manual approval gates for production. Preview environments per branch. Migration risk classification.', color: 'text-amber-400', bg: 'bg-amber-500/10' },
-    { icon: Fingerprint, title: 'Device Trust & Attestation', desc: 'Hardware fingerprint verification for server registration. TLS certificate pinning between nodes.', color: 'text-violet-400', bg: 'bg-violet-500/10' },
+    { icon: Waypoints, title: 'Secure Tunneling', desc: 'Expose local services via encrypted tunnels with reserved subdomains and public URLs. Real-time connection stats.', color: 'text-violet-400', bg: 'bg-violet-500/10' },
     { icon: Key, title: 'API Tokens & CLI', desc: 'Scoped API tokens with RBAC. Full CLI access to logs, deployments, secrets, and fleet management.', color: 'text-cyan-400', bg: 'bg-cyan-500/10' },
 ];
 
@@ -1882,7 +1882,7 @@ export default function StoryTellingSection() {
                     <ChapterHeader
                         number="05"
                         title={<>Dozens of servers.<br />One brain.</>}
-                        subtitle="Orchestrate your entire fleet as a single unit. 4-stage rolling updates, canary deployments, automatic rollback, and zero-downtime migration."
+                        subtitle="Orchestrate your entire fleet as a single unit. Self-healing orchestration, 4-stage rolling updates, automatic failover, and zero-downtime migration."
                         accent="bg-blue-500/20 text-blue-300"
                     />
                     <FleetShowcase />
@@ -1910,7 +1910,7 @@ export default function StoryTellingSection() {
                     <ChapterHeader
                         number="07"
                         title={<>See everything.<br />Miss nothing.</>}
-                        subtitle="Full observability across your entire infrastructure. Real-time logs, metrics dashboards, topology maps, and AI-driven anomaly detection."
+                        subtitle="Full observability across your entire infrastructure. Real-time logs, metrics dashboards, disaster recovery, and AI-driven anomaly detection."
                         accent="bg-teal-500/20 text-teal-300"
                     />
                     <ObservabilityBento />
@@ -1924,7 +1924,7 @@ export default function StoryTellingSection() {
                     <ChapterHeader
                         number="08"
                         title={<>Your data layer.<br />Handled.</>}
-                        subtitle="35+ managed data services, zero-copy database cloning, deployment previews, multi-git support, and flexible billing. All built in."
+                        subtitle="35+ managed data services with HA streaming replication, deployment previews, multi-git support, and secure tunneling. All built in."
                         accent="bg-sky-500/20 text-sky-300"
                     />
                     <DataAndBilling />

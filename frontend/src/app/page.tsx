@@ -39,6 +39,10 @@ import {
     Fingerprint,
     TrendingUp,
     Brain,
+    Database,
+    HardDrive,
+    Radio,
+    Waypoints,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useMemo } from 'react';
@@ -149,8 +153,8 @@ function CardIllustration({ index, className = '' }: { index: number; className?
 // ============================================
 const globalStats = [
     { label: 'Uptime SLA', value: '99.99%', icon: Activity, color: 'text-emerald-500' },
-    { label: 'Avg. Build Time', value: '< 45s', icon: Zap, color: 'text-amber-500' },
-    { label: 'Global Edge Locations', value: '24+', icon: Globe, color: 'text-blue-500' },
+    { label: 'Failover Time', value: '< 30s', icon: RefreshCw, color: 'text-blue-500' },
+    { label: 'Global Edge Locations', value: '24+', icon: Globe, color: 'text-cyan-500' },
     { label: 'Active Deployments', value: '50K+', icon: Rocket, color: 'text-violet-500' }
 ];
 
@@ -164,7 +168,7 @@ const battleCards = [
         description: "The Sovereign PaaS",
         price: "$0",
         priceDetail: "Open Source & Free",
-        features: ["Full Ecosystem Deployment", "AI Auto-Remediation Engine", "Multi-Git (GitHub, GitLab, Bitbucket)", "Nixpacks Any-Language Builds", "Predictive AI Auto-Scaling", "S3/R2/MinIO Backups", "Web Container Terminal", "100% Open Source"],
+        features: ["PostgreSQL HA Streaming Replication", "Redis Sentinel Auto-Failover", "AI Predictive Auto-Scaling", "Disaster Recovery & Backups", "Multi-Git (GitHub, GitLab, Bitbucket)", "Nixpacks Any-Language Builds", "Self-Healing Orchestration", "100% Open Source"],
         color: "bg-emerald-500",
         textColor: "text-emerald-500",
         borderColor: "border-emerald-500",
@@ -300,6 +304,60 @@ const smslycloudPillars = [
     }
 ];
 
+// ============================================
+// DATA: HIGH AVAILABILITY FEATURES
+// ============================================
+const haFeatures = [
+    {
+        icon: Database,
+        title: 'PostgreSQL HA Streaming Replication',
+        desc: 'Patroni-managed primary with streaming replicas. Automatic failover in seconds. PgCat read/write splitting for zero-downtime upgrades.',
+        stat: 'Sub-second failover',
+        color: 'from-blue-500 to-cyan-500',
+        bg: 'bg-blue-500/10',
+    },
+    {
+        icon: RefreshCw,
+        title: 'Redis Sentinel HA',
+        desc: 'Automatic cache and broker failover via Redis Sentinel. Configurable quorum, replica priorities, and down-after-milliseconds tuning.',
+        stat: 'Auto-failover',
+        color: 'from-red-500 to-rose-500',
+        bg: 'bg-red-500/10',
+    },
+    {
+        icon: Radio,
+        title: 'AI-Powered Autoscaler',
+        desc: 'Three engines: Classic CPU hysteresis, AI-enhanced with Prometheus + Loki anomaly detection, and K8s/Docker admin surface. Predictive, not reactive.',
+        stat: '3 engines',
+        color: 'from-violet-500 to-purple-500',
+        bg: 'bg-violet-500/10',
+    },
+    {
+        icon: HardDrive,
+        title: 'Disaster Recovery',
+        desc: 'Tiered backup schedules (6h/24h/7d), cloud replication to S3/R2/MinIO, encryption key rotation with multi-key support, and defined RPO/RTO targets.',
+        stat: 'RPO < 6h',
+        color: 'from-amber-500 to-orange-500',
+        bg: 'bg-amber-500/10',
+    },
+    {
+        icon: Waypoints,
+        title: 'Self-Healing Orchestration',
+        desc: 'Automatic failure classification: Docker daemon down, disk full, OOM, container crashed. Escalates to AI after 5 attempts with auto-remediation.',
+        stat: 'Auto-remediate',
+        color: 'from-emerald-500 to-teal-500',
+        bg: 'bg-emerald-500/10',
+    },
+    {
+        icon: Network,
+        title: 'WireGuard VPN Mesh',
+        desc: 'Encrypted node-to-node mesh networking across your fleet. Auto-allocated IPs, per-peer latency tracking, and multiple named meshes.',
+        stat: 'Encrypted mesh',
+        color: 'from-indigo-500 to-blue-500',
+        bg: 'bg-indigo-500/10',
+    },
+];
+
 export default function Home() {
     return (
         <main className="min-h-screen relative overflow-x-hidden">
@@ -377,7 +435,7 @@ export default function Home() {
                         transition={{ delay: 0.25, duration: 0.5 }}
                         className="mt-4 text-base md:text-lg text-slate-500 dark:text-slate-400 max-w-2xl mx-auto"
                     >
-                        Connect your VPS. Deploy connected apps, services, databases, workers, AI auto-remediation, tunnels, and multi-server clusters. No DevOps pain.
+                        Connect your VPS. Deploy connected apps, services, databases, workers, AI auto-remediation, tunnels, and multi-server clusters. PostgreSQL HA with streaming replication. Redis Sentinel failover. No DevOps pain.
                     </motion.p>
 
                     <motion.div
@@ -424,7 +482,7 @@ export default function Home() {
                         className="p-4 rounded-xl bg-white/90 dark:bg-slate-800/90 backdrop-blur-xl border border-slate-200 dark:border-slate-700 shadow-xl"
                     >
                         <Cpu className="w-8 h-8 text-violet-500" />
-                        <div className="mt-2 text-xs font-mono font-bold text-slate-500">Auto-Scaling: ON</div>
+                        <div className="mt-2 text-xs font-mono font-bold text-slate-500">HA: Active</div>
                     </motion.div>
                 </ParallaxLayer>
             </section>
@@ -507,8 +565,8 @@ export default function Home() {
                                             <Cpu className="w-4 h-4 text-violet-400" />
                                         </div>
                                         <div>
-                                            <div className="text-xs font-bold text-white">Auto-Scaler Intelligence</div>
-                                            <div className="text-[10px] text-slate-400">Reactive container scaling active</div>
+                                            <div className="text-xs font-bold text-white">HA Infrastructure</div>
+                                            <div className="text-[10px] text-slate-400">PostgreSQL replication + Sentinel failover</div>
                                         </div>
                                     </div>
                                     <span className="px-2 py-1 rounded bg-violet-500/10 text-violet-300 font-mono text-[10px] font-bold">READY</span>
@@ -540,6 +598,80 @@ export default function Home() {
 
             {/* STORYTELLING FEATURES — Narrative Journey */}
             <StoryTellingSection />
+
+            {/* HIGH AVAILABILITY INFRASTRUCTURE */}
+            <section className="relative py-20 md:py-32 overflow-hidden">
+                <div className="absolute inset-0 galaxy-bg" />
+                <div className="stars-layer" />
+                <div className="stars-twinkle" />
+                <ParallaxLayer speed={0.15} className="absolute inset-0 pointer-events-none">
+                    <div className="nebula-patch w-[600px] h-[400px] bg-blue-600 top-[10%] right-[5%] opacity-15" />
+                </ParallaxLayer>
+                <motion.div
+                    className="cosmic-body cosmic-pulsar w-[350px] h-[350px] md:w-[480px] md:h-[480px] bottom-[8%] left-[-3%] hidden md:block"
+                    animate={{ y: [0, -15, 0] }}
+                    transition={{ duration: 16, repeat: Infinity, ease: 'easeInOut' }}
+                />
+
+                <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                    <div className="text-center mb-16 md:mb-20">
+                        <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs md:text-sm font-bold rounded-full mb-6">
+                            <HardDrive className="w-3 h-3 md:w-3.5 md:h-3.5" />
+                            High Availability
+                        </div>
+                        <h2 className="text-3xl md:text-5xl font-extrabold text-white mb-6 tracking-tight">
+                            Zero Downtime.<br />
+                            <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-cyan-400 to-emerald-400">
+                                Every Layer.
+                            </span>
+                        </h2>
+                        <p className="text-base md:text-xl text-slate-400 max-w-3xl mx-auto leading-relaxed">
+                            PostgreSQL streaming replication with Patroni. Redis Sentinel auto-failover. AI-powered predictive autoscaling. Disaster recovery with defined RPO/RTO targets. Your infrastructure survives anything.
+                        </p>
+                    </div>
+
+                    <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 md:gap-8 mb-12">
+                        {haFeatures.map((feat, i) => (
+                            <motion.div
+                                key={i}
+                                initial={{ opacity: 0, y: 20 }}
+                                whileInView={{ opacity: 1, y: 0 }}
+                                viewport={{ once: true }}
+                                transition={{ delay: i * 0.1 }}
+                                className="group relative bg-slate-900/40 backdrop-blur-sm p-8 rounded-2xl border border-slate-700/30 hover:border-slate-600/80 transition-all overflow-hidden"
+                            >
+                                <div className={`absolute -top-16 -right-16 w-32 h-32 bg-gradient-to-bl ${feat.color} opacity-[0.06] group-hover:opacity-[0.12] rounded-full blur-2xl transition-opacity pointer-events-none`} />
+                                <div className="relative z-10">
+                                    <div className={`w-12 h-12 rounded-xl ${feat.bg} flex items-center justify-center mb-6 group-hover:scale-110 transition-transform`}>
+                                        <feat.icon className={`w-6 h-6 bg-gradient-to-br ${feat.color} text-transparent`} style={{ color: 'white' }} />
+                                    </div>
+                                    <h3 className="text-xl font-bold text-white mb-3">{feat.title}</h3>
+                                    <p className="text-sm text-slate-400 leading-relaxed mb-4">{feat.desc}</p>
+                                    <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-slate-800/80 rounded-full">
+                                        <Zap className="w-3 h-3 text-emerald-400" />
+                                        <span className="text-xs font-bold text-slate-300">{feat.stat}</span>
+                                    </div>
+                                </div>
+                            </motion.div>
+                        ))}
+                    </div>
+
+                    <motion.div
+                        initial={{ opacity: 0, y: 20 }}
+                        whileInView={{ opacity: 1, y: 0 }}
+                        viewport={{ once: true }}
+                        className="max-w-3xl mx-auto p-6 bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800/30 rounded-2xl"
+                    >
+                        <div className="flex items-center gap-3 mb-2">
+                            <Shield className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+                            <span className="font-bold text-blue-800 dark:text-blue-300">Battle-tested HA. Not a paid add-on.</span>
+                        </div>
+                        <p className="text-sm text-blue-700 dark:text-blue-400/80">
+                            PostgreSQL streaming replication, Redis Sentinel, AI autoscaling, and disaster recovery are all built-in. No extra infrastructure, no vendor lock-in, no per-seat fees.
+                        </p>
+                    </motion.div>
+                </div>
+            </section>
 
             {/* THE SMSLYCLOUD ECOSYSTEM — Galaxy background + Red Supergiant */}
             <section className="relative py-20 md:py-32 overflow-hidden">
@@ -828,10 +960,16 @@ export default function Home() {
                             </p>
                             <ul className="space-y-4 mb-8">
                                 <li className="flex items-center gap-3 text-slate-300">
+                                    <CheckCircle2 className="w-5 h-5 text-emerald-500" /> PostgreSQL HA streaming replication with Patroni
+                                </li>
+                                <li className="flex items-center gap-3 text-slate-300">
                                     <CheckCircle2 className="w-5 h-5 text-emerald-500" /> End-to-end VPN mesh across regions
                                 </li>
                                 <li className="flex items-center gap-3 text-slate-300">
                                     <CheckCircle2 className="w-5 h-5 text-emerald-500" /> Comprehensive Audit Logs for every action
+                                </li>
+                                <li className="flex items-center gap-3 text-slate-300">
+                                    <CheckCircle2 className="w-5 h-5 text-emerald-500" /> Disaster recovery with RPO/RTO targets
                                 </li>
                                 <li className="flex items-center gap-3 text-slate-300">
                                     <CheckCircle2 className="w-5 h-5 text-emerald-500" /> Zero-Trust Addon architecture
