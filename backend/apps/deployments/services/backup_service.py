@@ -1052,6 +1052,59 @@ class BackupService:
                 else:
                     raise RuntimeError(f"Failed to backup remote volume {vol.name}: {err or out}")
 
+            # 3b. Database dump — run the appropriate dump command inside
+            # the remote container via SSH (mirrors _dump_container_database).
+            image_lower = (service.docker_image or '').lower()
+            if 'postgres' in image_lower:
+                c_env = {}
+                out, _, _ = ssh.exec_command(
+                    f"docker inspect -f '{{{{range .Config.Env}}}}{{{{println .}}}}{{{{end}}}}' {safe_service_name}",
+                    raise_on_error=False,
+                )
+                for line in (out or '').splitlines():
+                    if '=' in line:
+                        k, v = line.split('=', 1)
+                        c_env[k] = v
+                pg_user = c_env.get('POSTGRES_USER', 'smsly_admin')
+                pg_db = c_env.get('POSTGRES_DB', 'postgres')
+                pg_password = c_env.get('POSTGRES_PASSWORD', '')
+                dump_cmd = (
+                    f"docker exec -e PGPASSWORD={shlex.quote(pg_password)} "
+                    f"{safe_service_name} pg_dump -U {shlex.quote(pg_user)} "
+                    f"-d {shlex.quote(pg_db)} --lock-wait-timeout=5000 "
+                    f"--clean --if-exists --no-owner --no-acl "
+                    f"> {remote_temp_dir}/db_dump.sql"
+                )
+                _, _, code = ssh.exec_command(dump_cmd)
+                if code != 0:
+                    logger.warning("Remote pg_dump failed — DB data will not be in backup")
+            elif 'mysql' in image_lower or 'mariadb' in image_lower:
+                c_env = {}
+                out, _, _ = ssh.exec_command(
+                    f"docker inspect -f '{{{{range .Config.Env}}}}{{{{println .}}}}{{{{end}}}}' {safe_service_name}",
+                    raise_on_error=False,
+                )
+                for line in (out or '').splitlines():
+                    if '=' in line:
+                        k, v = line.split('=', 1)
+                        c_env[k] = v
+                mysql_pass = c_env.get('MYSQL_ROOT_PASSWORD', c_env.get('MYSQL_PASSWORD', ''))
+                dump_cmd = (
+                    f"docker exec -e MYSQL_PWD={shlex.quote(mysql_pass)} "
+                    f"{safe_service_name} mysqldump --all-databases -u root "
+                    f"> {remote_temp_dir}/db_dump.sql"
+                )
+                _, _, code = ssh.exec_command(dump_cmd)
+                if code != 0:
+                    logger.warning("Remote mysqldump failed — DB data will not be in backup")
+            elif 'redis' in image_lower:
+                ssh.exec_command(f"docker exec {safe_service_name} redis-cli SAVE")
+                out, _, code = ssh.exec_command(
+                    f"docker cp {safe_service_name}:/data/dump.rdb {remote_temp_dir}/redis_dump.rdb"
+                )
+                if code != 0:
+                    logger.warning("Remote Redis SAVE/dump.rdb copy failed")
+
             # 4. Prepare Metadata.json locally and upload it
             env_vars_raw = [
                 {"key": ev.key, "value": ev.value, "is_secret": ev.is_secret}
@@ -1350,13 +1403,28 @@ class BackupService:
                 enqueue_smart_deploy_task,
             )
 
+            # Restore source-code metadata on the target service so
+            # future redeploys pull the right repo + branch.
+            restore_repo = metadata.get('git_url', '') or metadata.get('repository_url', '')
+            restore_branch = metadata.get('branch', '') or target_service.branch or 'main'
+            restore_buildpack = metadata.get('buildpack', '') or target_service.buildpack
+            if restore_repo:
+                target_service.repository_url = restore_repo
+            if restore_branch:
+                target_service.branch = restore_branch
+            if restore_buildpack and target_service.buildpack == 'NIXPACKS':
+                target_service.buildpack = restore_buildpack
+            if metadata.get('deploy_type') and target_service.deploy_type == 'GIT':
+                target_service.deploy_type = metadata['deploy_type']
+
             provider = _resolve_provider_for_service(target_service, prefer_local=False)
             if provider:
+                branch_ref = restore_branch or 'main'
                 deployment = Deployment.objects.create(
                     service=target_service,
                     status=Deployment.Status.QUEUED,
-                    commit_hash='latest',
-                    commit_message=f"Restored from backup {backup.id}",
+                    commit_hash=branch_ref,
+                    commit_message=f"Restored from backup {backup.id} (branch: {branch_ref})",
                 )
 
                 target_service.status = Service.Status.ACTIVE
