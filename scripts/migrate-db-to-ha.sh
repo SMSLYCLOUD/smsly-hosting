@@ -138,34 +138,45 @@ echo -e "${GREEN}  ✓ Backend services paused${NC}"
 echo ""
 echo -e "${BLUE}→ Step 3: Restoring to $NEW_DB_CONTAINER...${NC}"
 
-# Terminate existing connections (except our own)
-docker exec "$NEW_DB_CONTAINER" psql -U "$DB_USER" -d postgres -t -A -c "
-    SELECT pg_terminate_backend(pid)
-    FROM pg_stat_activity
-    WHERE datname = '$DB_NAME'
-      AND pid <> pg_backend_pid();
-" >/dev/null 2>&1 || true
+# Connect as superuser (postgres) via local Unix socket — no password needed.
+# smsly_admin can't drop its own default database if it's connected to it.
+echo "  → Killing active connections to $DB_NAME..."
+set +e
+docker exec -i "$NEW_DB_CONTAINER" psql -U postgres <<'EOSQL' 2>&1
+SELECT pg_terminate_backend(pid)
+FROM pg_stat_activity
+WHERE datname = 'smsly_hosting'
+  AND pid <> pg_backend_pid();
+EOSQL
+set -e
 
-# Drop and recreate database for clean restore
-docker exec "$NEW_DB_CONTAINER" psql -U "$DB_USER" -d postgres -c "
-    SELECT pg_terminate_backend(pid)
-    FROM pg_stat_activity
-    WHERE datname = '$DB_NAME'
-      AND pid <> pg_backend_pid();
-" >/dev/null 2>&1 || true
+echo "  → Dropping $DB_NAME if it exists..."
+set +e
+_drop_output=$(docker exec -i "$NEW_DB_CONTAINER" psql -U postgres -d template1 -c "DROP DATABASE IF EXISTS smsly_hosting;" 2>&1)
+_drop_rc=$?
+set -e
+echo "    $_drop_output" | tail -1
 
-docker exec "$NEW_DB_CONTAINER" psql -U "$DB_USER" -d postgres -c "
-    DROP DATABASE IF EXISTS $DB_NAME;
-    CREATE DATABASE $DB_NAME OWNER $DB_USER;
-" >/dev/null 2>&1 || {
-    echo -e "${RED}  ✗ Failed to drop/recreate database — aborting${NC}"
+echo "  → Creating $DB_NAME..."
+docker exec -i "$NEW_DB_CONTAINER" psql -U postgres -d template1 -c "CREATE DATABASE smsly_hosting OWNER $DB_USER;" 2>&1 || {
+    echo -e "${RED}  ✗ Failed to create database${NC}"
     rm -f "$DUMP_FILE"
     exit 1
 }
 
 # Pipe the dump into the new container
-cat "$DUMP_FILE" | docker exec -i "$NEW_DB_CONTAINER" \
-    psql -U "$DB_USER" -d "$DB_NAME" >/dev/null 2>&1
+echo "  → Restoring SQL dump (117 MB)..."
+set +e
+_restore_output=$(cat "$DUMP_FILE" | docker exec -i "$NEW_DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" 2>&1)
+_restore_rc=$?
+set -e
+if [ $_restore_rc -ne 0 ]; then
+    echo -e "${RED}  ✗ Failed to restore SQL dump (exit code $_restore_rc)${NC}"
+    echo -e "${YELLOW}  → Last 20 lines of error output:${NC}"
+    echo "$_restore_output" | tail -20
+    rm -f "$DUMP_FILE"
+    exit 1
+fi
 
 echo -e "${GREEN}  ✓ Database restored to postgres-primary${NC}"
 
