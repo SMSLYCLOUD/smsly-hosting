@@ -2956,26 +2956,10 @@ class PipelineManager:
                 capture_output=True, text=True, timeout=5,
             )
             if not result.stdout.strip():
-                # Container not found — try docker-compose up on just the
-                # registry service so it gets created and started.
-                compose_file = os.getenv('COMPOSE_FILE', 'docker-compose.yml')
-                compose_dir = os.getenv('INSTALL_DIR', '/opt/smsly-hosting')
-                compose_path = os.path.join(compose_dir, compose_file)
-                if os.path.isfile(compose_path):
-                    try:
-                        subprocess.run(
-                            ['docker', 'compose', '-f', compose_path, 'up', '-d', '--no-recreate', 'registry'],
-                            capture_output=True, text=True, timeout=60,
-                        )
-                        append_log(self.deployment,
-                            f"Registry container not found — attempted 'docker compose up -d registry'.\n")
-                    except Exception as e:
-                        append_log(self.deployment,
-                            f"Warning: registry container not found and compose up failed: {e}\n")
-                else:
-                    append_log(self.deployment,
-                        f"Warning: registry container '{container_pattern}' not found and "
-                        f"no compose file at {compose_path}.\n")
+                append_log(self.deployment,
+                    "Registry container not found. Run on the host:\n"
+                    "  docker compose up -d --no-deps registry\n"
+                    "Then retry the deployment.\n")
                 return
 
             for line in result.stdout.strip().splitlines():

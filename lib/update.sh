@@ -391,7 +391,7 @@ fi
          fi
      fi
      unset _current_compose
-     # platform doesn't break after an update.
+
      if [ -f "$INSTALL_DIR/.env" ] && [ "$MODE_NODE" != "true" ]; then
          _env_fix_file="$INSTALL_DIR/.env"
 
