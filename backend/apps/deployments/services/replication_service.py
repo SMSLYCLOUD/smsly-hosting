@@ -615,6 +615,21 @@ class ReplicationService:
                 for node in results["nodes"]
             )
             missing_primary = bool(results["nodes"]) and not results["primary"]
+
+            # Only transition to FAILED if the mesh was previously ACTIVE
+            # (a deployed cluster that broke).  Otherwise, unreachable
+            # nodes just mean the cluster hasn't been deployed yet — keep
+            # the current status (DISABLED or DEPLOYING).
+            was_active = mesh.replication_status == "ACTIVE"
+            was_failed = mesh.replication_status == "FAILED"
+
+            if has_unreachable or missing_primary:
+                if was_active or was_failed:
+                    mesh.replication_status = "FAILED"
+                # else: leave as DISABLED or DEPLOYING — cluster not yet deployed
+            else:
+                mesh.replication_status = "ACTIVE"
+
             mesh.replication_last_result = results
             mesh.replication_last_error = (
                 "One or more replication nodes are unreachable."
@@ -623,7 +638,6 @@ class ReplicationService:
                     if missing_primary else ""
                 )
             )
-            mesh.replication_status = "FAILED" if has_unreachable or missing_primary else "ACTIVE"
             mesh.replication_updated_at = timezone.now()
             mesh.save(update_fields=[
                 "replication_status",
