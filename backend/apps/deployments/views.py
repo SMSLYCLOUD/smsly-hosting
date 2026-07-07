@@ -7113,6 +7113,24 @@ class SecurityStatusView(GenericAPIView):
                 crowdsec["running"] = "Up" in (ps_result.stdout or "")
             except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
                 crowdsec["running"] = False
+            # Fetch active ban decisions for visibility
+            if crowdsec["running"]:
+                try:
+                    bans_result = subprocess.run(
+                        ["docker", "exec", crowdsec["container"],
+                         "cscli", "decisions", "list", "-o", "json"],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    if bans_result.returncode == 0:
+                        import json
+                        bans = json.loads(bans_result.stdout)
+                        crowdsec["active_bans"] = len(bans) if isinstance(bans, list) else 0
+                    else:
+                        crowdsec["active_bans"] = -1
+                except (FileNotFoundError, subprocess.TimeoutExpired, OSError, json.JSONDecodeError):
+                    crowdsec["active_bans"] = -1
+            else:
+                crowdsec["active_bans"] = 0
 
         # ── UFW ─────────────────────────────────────────────────────
         ufw = {"active": False}

@@ -67,6 +67,13 @@ scrape_configs:
           - '/etc/prometheus/docker-labels-targets/node-exporter-remote.json'
         refresh_interval: 60s
 
+  # CrowdSec (security WAF metrics)
+  - job_name: 'crowdsec'
+    static_configs:
+      - targets: ['crowdsec:6060']
+    metrics_path: /metrics
+    scrape_interval: 30s
+
   # Traefik (internal Prometheus metrics endpoint)
   - job_name: 'traefik'
     static_configs:

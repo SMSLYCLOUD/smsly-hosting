@@ -1,4 +1,5 @@
 filenames:
   - /var/log/traefik/access.log
+  - /var/log/caddy/access.log
 labels:
   type: traefik

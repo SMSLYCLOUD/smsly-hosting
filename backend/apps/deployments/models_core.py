@@ -404,6 +404,12 @@ class Service(TimeStampedModel):
         help_text="Per-service autoscaler alert thresholds and notification targets.",
     )
 
+    # Security
+    disable_crowdsec_waf = models.BooleanField(  # type: ignore[var-annotated]
+        default=False,
+        help_text="Opt this service out of CrowdSec WAF protection",
+    )
+
     # Multi-Region
     regions = models.ManyToManyField(  # type: ignore[var-annotated]
         Region,

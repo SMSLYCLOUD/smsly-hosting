@@ -1298,9 +1298,253 @@ class PipelineManager:
         'minio': 'MINIO',
     }
 
+    def _provision_from_grid_addons(self):
+        """Detect and process ``grid.addons`` manifest if present.
+
+        When the manifest exists, this method handles ALL addon and bundle
+        provisioning — standard addons via :class:`AddonProvisioner` and
+        custom bundles via :class:`BundleProvisioner`.
+
+        Returns:
+            ``True`` if grid.addons was found and processed, ``None``
+            otherwise (signalling the caller to fall through to heuristic
+            auto-detection).
+        """
+        from services.grid_addons_parser import (
+            find_grid_addons_file, load_grid_addons,
+        )
+
+        if not find_grid_addons_file(self.source_dir):
+            return None
+
+        try:
+            manifest = load_grid_addons(self.source_dir)
+        except Exception as exc:
+            append_log(
+                self.deployment,
+                f"⚠️ Failed to parse grid.addons: {exc}\n"
+                f"  Falling back to auto-detection.\n",
+            )
+            logger.warning("grid.addons parse failed: %s", exc)
+            return None
+
+        if manifest is None:
+            return None
+
+        append_log(
+            self.deployment,
+            f"\n📋 Found grid.addons (service_type={manifest.service_type or 'auto'})\n"
+            f"   Standard addons: {', '.join(sorted(manifest.standard_addon_types)) or '(none)'}\n"
+            f"   Bundles: {', '.join(b.name for b in manifest.bundles) or '(none)'}\n"
+        )
+
+        # ── Phase 1: Provision standard addons ──
+        from services.addon_provisioner import addon_provisioner
+        from apps.deployments.models_addons import Addon
+        from apps.deployments.models import EnvironmentVariable
+
+        addon_urls: dict[str, str] = {}
+
+        if manifest.addons:
+            existing_addons = {
+                a.addon_type: a
+                for a in Addon.objects.filter(
+                    service=self.service,
+                    status__in=['ACTIVE', 'PROVISIONING'],
+                )
+            }
+
+            for addon_decl in manifest.addons:
+                addon_type = addon_decl.addon_type
+                if addon_type in existing_addons:
+                    addon = existing_addons[addon_type]
+                    if addon.connection_url:
+                        addon_urls[addon_decl.name] = addon.connection_url
+                        addon_urls[addon_type.lower()] = addon.connection_url
+                    append_log(
+                        self.deployment,
+                        f"  ✅ {addon_type} already active\n",
+                    )
+                    continue
+
+                # Create and provision
+                addon = Addon.objects.create(
+                    service=self.service,
+                    name=f"{addon_decl.name}-{self.service.name}"[:255],
+                    addon_type=addon_type,
+                    status=Addon.Status.PROVISIONING,
+                )
+                try:
+                    _, url = addon_provisioner.provision_dispatch(addon)
+                    addon.connection_url = url
+                    addon.status = Addon.Status.ACTIVE
+                    addon.save()
+
+                    addon_urls[addon_decl.name] = url
+                    addon_urls[addon_type.lower()] = url
+
+                    env_key = addon_provisioner.ENV_KEY_MAP.get(
+                        addon_type, f"{addon_type}_URL",
+                    )
+                    EnvironmentVariable.objects.update_or_create(
+                        service=self.service, key=env_key,
+                        defaults={'value': url, 'is_secret': True},
+                    )
+
+                    append_log(
+                        self.deployment,
+                        f"  ✅ {addon_type} provisioned → {env_key}\n",
+                    )
+                except Exception as exc:
+                    addon.status = Addon.Status.FAILED
+                    addon.save()
+                    append_log(
+                        self.deployment,
+                        f"  ⚠️ {addon_type} provisioning failed: {exc}\n",
+                    )
+                    logger.warning(
+                        "grid.addons: provision %s failed: %s", addon_type, exc,
+                    )
+
+        # ── Phase 2: Provision custom bundles ──
+        if manifest.bundles:
+            from services.bundle_provisioner import bundle_provisioner
+            from apps.deployments.models_bundles import Bundle, BundleComponent
+            import hashlib
+
+            grid_addons_hash = hashlib.sha256(
+                open(os.path.join(self.source_dir, 'grid.addons'), 'rb').read(),
+            ).hexdigest()[:16]
+
+            for bundle_decl in manifest.bundles:
+                # Check if bundle already exists and is up-to-date
+                existing_bundle = Bundle.objects.filter(
+                    service=self.service, name=bundle_decl.name,
+                ).first()
+
+                if (
+                    existing_bundle
+                    and existing_bundle.status == Bundle.Status.ACTIVE
+                    and existing_bundle.grid_addons_hash == grid_addons_hash
+                ):
+                    append_log(
+                        self.deployment,
+                        f"  ✅ Bundle '{bundle_decl.name}' already active\n",
+                    )
+                    # Collect existing component URLs for env injection
+                    for comp in existing_bundle.components.filter(status='ACTIVE'):
+                        if comp.connection_url:
+                            addon_urls[comp.name] = comp.connection_url
+                    continue
+
+                # Create or update bundle record
+                if existing_bundle:
+                    bundle = existing_bundle
+                    bundle.status = Bundle.Status.PROVISIONING
+                    bundle.grid_addons_hash = grid_addons_hash
+                    bundle.save(update_fields=['status', 'grid_addons_hash'])
+                else:
+                    bundle = Bundle.objects.create(
+                        service=self.service,
+                        name=bundle_decl.name,
+                        status=Bundle.Status.PROVISIONING,
+                        grid_addons_hash=grid_addons_hash,
+                    )
+
+                append_log(
+                    self.deployment,
+                    f"\n🔧 Provisioning bundle '{bundle_decl.name}' "
+                    f"({len(bundle_decl.services)} components)...\n",
+                )
+
+                try:
+                    component_urls = bundle_provisioner.provision(
+                        bundle=bundle_decl,
+                        service_id=str(self.service.id),
+                        service_name=self.service.name,
+                        addon_urls=addon_urls,
+                        build_dir=self.source_dir,
+                    )
+
+                    bundle.status = Bundle.Status.ACTIVE
+                    bundle.network = bundle_provisioner._network_name(
+                        bundle_decl, str(self.service.id),
+                    )
+                    bundle.save(update_fields=['status', 'network'])
+
+                    # Create/update BundleComponent records
+                    for svc_decl in bundle_decl.services:
+                        url = component_urls.get(svc_decl.name, "")
+                        container_name = bundle_provisioner._container_name(
+                            bundle.name, str(self.service.id), svc_decl.name,
+                        )
+                        BundleComponent.objects.update_or_create(
+                            bundle=bundle,
+                            name=svc_decl.name,
+                            defaults={
+                                'source_type': (
+                                    BundleComponent.SourceType.REPO
+                                    if svc_decl.repo
+                                    else BundleComponent.SourceType.IMAGE
+                                ),
+                                'image': svc_decl.image or '',
+                                'repo': svc_decl.repo or '',
+                                'branch': svc_decl.branch or 'main',
+                                'build_type': svc_decl.build or '',
+                                'status': BundleComponent.Status.ACTIVE,
+                                'container_name': container_name,
+                                'connection_url': url,
+                                'ports': svc_decl.ports,
+                            },
+                        )
+
+                        # Inject component env vars
+                        if url:
+                            slug = svc_decl.name.upper().replace('-', '_')
+                            EnvironmentVariable.objects.update_or_create(
+                                service=self.service,
+                                key=f"{slug}_URL",
+                                defaults={'value': url, 'is_secret': True, 'source': 'ADDON'},
+                            )
+                            EnvironmentVariable.objects.update_or_create(
+                                service=self.service,
+                                key=f"{slug}_HOST",
+                                defaults={'value': url.split(':')[0] if ':' in url else url, 'is_secret': False, 'source': 'ADDON'},
+                            )
+                            addon_urls[svc_decl.name] = url
+
+                    append_log(
+                        self.deployment,
+                        f"  ✅ Bundle '{bundle_decl.name}' provisioned "
+                        f"({len(component_urls)} components)\n",
+                    )
+
+                except Exception as exc:
+                    bundle.status = Bundle.Status.FAILED
+                    bundle.deletion_error = str(exc)[:500]
+                    bundle.save(update_fields=['status', 'deletion_error'])
+                    append_log(
+                        self.deployment,
+                        f"  ⚠️ Bundle '{bundle_decl.name}' failed: {exc}\n",
+                    )
+                    logger.warning(
+                        "grid.addons: bundle '%s' failed: %s",
+                        bundle_decl.name, exc,
+                    )
+
+        return True  # signal that grid.addons was processed
+
     def _auto_provision_addons(self):
         """Step 1.7: Auto-detect and provision required addons."""
         try:
+            # ── Strategy -1: grid.addons manifest (highest priority) ──
+            # When a grid.addons file is present, it is the authoritative
+            # source of addon + bundle requirements.  We handle it here
+            # and skip all heuristic auto-detection.
+            grid_addons_result = self._provision_from_grid_addons()
+            if grid_addons_result is not None:
+                return  # grid.addons handled everything
+
             detected_types = set()
 
             # --- Strategy 0: infer from existing env vars (highest confidence) ---
@@ -1827,7 +2071,10 @@ class PipelineManager:
         try:
             config_obj = PlatformConfig.load()
             use_ssl = bool(config_obj.use_ssl)
-            enable_crowdsec_waf = bool(getattr(config_obj, 'enable_crowdsec_waf', False))
+            enable_crowdsec_waf = (
+                bool(getattr(config_obj, 'enable_crowdsec_waf', False))
+                and not bool(getattr(self.service, 'disable_crowdsec_waf', False))
+            )
         except Exception:  # pylint: disable=broad-exception-caught
             use_ssl = False
             enable_crowdsec_waf = False

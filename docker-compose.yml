@@ -703,14 +703,16 @@ services:
     container_name: smsly-crowdsec
     restart: unless-stopped
     environment:
-      COLLECTIONS: "crowdsecurity/traefik crowdsecurity/http-cve crowdsecurity/base-http-scenarios"
+      COLLECTIONS: "crowdsecurity/traefik crowdsecurity/http-cve crowdsecurity/base-http-scenarios crowdsecurity/prometheus"
       BOUNCER_KEY_traefik_bouncer: "${CROWDSEC_BOUNCER_KEY:-}"
     volumes:
       - crowdsec_data:/var/lib/crowdsec/data
       - crowdsec_config:/etc/crowdsec
       - ./infrastructure/crowdsec/acquis.yaml:/etc/crowdsec/acquis.yaml:ro,z
       - ./infrastructure/crowdsec/profiles.yaml:/etc/crowdsec/profiles.yaml:ro,z
+      - ./infrastructure/crowdsec/prometheus-config.yaml:/etc/crowdsec/console.yaml:ro,z
       - traefik_logs:/var/log/traefik:ro
+      - caddy_logs:/var/log/caddy:ro
     networks:
       - smsly-net
     healthcheck:
@@ -823,6 +825,7 @@ services:
     # Mounting the same host dir at /config fixes the path mismatch
     # — both sides now share storage transparently.
     - ./caddy-config:/config:z
+    - caddy_logs:/var/log/caddy
     - caddy_data:/data
     - static_volume:/app/staticfiles:ro
     - media_volume:/app/media:ro
@@ -876,5 +879,6 @@ volumes:
   static_volume:
   media_volume:
   traefik_logs:
+  caddy_logs:
   crowdsec_data:
   crowdsec_config:

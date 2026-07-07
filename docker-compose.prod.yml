@@ -879,7 +879,7 @@ services:
     container_name: smsly-crowdsec
     restart: unless-stopped
     environment:
-      COLLECTIONS: "crowdsecurity/traefik crowdsecurity/http-cve crowdsecurity/base-http-scenarios"
+      COLLECTIONS: "crowdsecurity/traefik crowdsecurity/http-cve crowdsecurity/base-http-scenarios crowdsecurity/prometheus"
       ENROLL_KEY: "${CROWDSEC_ENROLL_KEY:-}"
       ENROLL_INSTANCE_NAME: "${DOMAIN:-smsly-hosting}"
       BOUNCER_KEY_traefik_bouncer: "${CROWDSEC_BOUNCER_KEY:-}"
@@ -888,7 +888,9 @@ services:
       - crowdsec_config:/etc/crowdsec
       - ./infrastructure/crowdsec/acquis.yaml:/etc/crowdsec/acquis.yaml:ro,z
       - ./infrastructure/crowdsec/profiles.yaml:/etc/crowdsec/profiles.yaml:ro,z
+      - ./infrastructure/crowdsec/prometheus-config.yaml:/etc/crowdsec/console.yaml:ro,z
       - traefik_logs:/var/log/traefik:ro
+      - caddy_logs:/var/log/caddy:ro
     networks:
       - smsly-net
     healthcheck:
@@ -1091,6 +1093,7 @@ services:
       - ./caddy-config:/etc/caddy:z
       - caddy_config:/config
       - caddy_data:/data
+      - caddy_logs:/var/log/caddy
       - static_volume:/app/staticfiles:ro
       - media_volume:/app/media:ro
     depends_on:
@@ -1145,5 +1148,6 @@ volumes:
   verdaccio_data: null
   buildkit_data: null
   traefik_logs: null
+  caddy_logs: null
   crowdsec_data: null
   crowdsec_config: null
