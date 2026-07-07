@@ -5096,6 +5096,7 @@ class SystemConfigView(GenericAPIView):
             'VERSION': '3.0.0',
             'DOMAIN': getattr(settings, 'DOMAIN', 'localhost'),
             'safe_update_available': os.path.exists('/opt/smsly-hosting/scripts/safe-update.sh'),
+            'MAPBOX_TOKEN': PlatformConfig.get_config_value('mapbox_token'),
             **self._get_storage_metrics(),
         }
 

@@ -1323,6 +1323,10 @@ export const serversApi = {
   },
   runDiagnostics: (id: string) => api.post(`/servers/${id}/diagnostics/`),
   triggerHealing: (id: string, payload?: any) => api.post(`/servers/${id}/heal/`, payload || {}),
+  getIncidentReport: async (serverId: string): Promise<any> => {
+    const response = await api.get(`/servers/${serverId}/incident-report/`);
+    return response.data;
+  },
 };
 
 // ─── Multi-Deploy API ───────────────────────────────────────────────────────

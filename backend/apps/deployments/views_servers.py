@@ -2014,8 +2014,166 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+    @action(detail=True, methods=['get'], url_path='incident-report')
+    def incident_report(self, request, pk=None):
+        """Aggregate server-level incident report.
+
+        GET /api/v1/servers/{id}/incident-report/
+
+        Returns all incidents affecting this server: failed deployments,
+        health transitions, provisioning failures, transfer failures,
+        service lifecycle events, and mesh/network problems.
+        """
+        server = self.get_object()
+        from django.db.models import Q
+        from apps.deployments.models_audit import AuditLog
+        from apps.deployments.models_backup import ServiceBackup
+        from apps.deployments.models_core import Deployment, Service
+        from apps.deployments.models_transfer import ServerTransfer
+
+        events: list = []
+        server_name = server.name or server.host or str(server.id)
+
+        # ── 1. Failed deployments on this server ─────────────────────
+        failure_statuses = [
+            'FAILED', 'CANCELLED', 'BUILD_FAILED', 'BACKUP_FAILED',
+            'MIGRATION_FAILED', 'HEALTH_CHECK_FAILED',
+        ]
+        services = Service.objects.filter(server=server)
+        failed_deploys = (
+            Deployment.objects
+            .filter(service__in=services, status__in=failure_statuses)
+            .select_related('service')
+            .order_by('-created_at')[:30]
+        )
+        for d in failed_deploys:
+            events.append({
+                'type': 'deployment',
+                'severity': 'critical' if d.status == 'FAILED' else 'warning',
+                'timestamp': d.created_at.isoformat() if d.created_at else '',
+                'title': f"{d.service.name}: deployment {d.status.lower().replace('_', ' ')}",
+                'detail': (d.commit_message or '')[:500],
+                'service_id': str(d.service_id),
+                'service_name': d.service.name,
+                'deployment_id': str(d.id),
+                'status': d.status,
+            })
+
+        # ── 2. Failed backups on this server ─────────────────────────
+        failed_backups = (
+            ServiceBackup.objects
+            .filter(service__in=services, status='FAILED')
+            .select_related('service')
+            .order_by('-created_at')[:10]
+        )
+        for b in failed_backups:
+            events.append({
+                'type': 'backup_failure',
+                'severity': 'warning',
+                'timestamp': b.created_at.isoformat() if b.created_at else '',
+                'title': f"{b.service.name}: backup failed",
+                'detail': b.error_message or '',
+                'service_id': str(b.service_id),
+                'backup_id': str(b.id),
+            })
+
+        # ── 3. Health transitions on this server ─────────────────────
+        health_actions = [
+            'HEALTH_TRANSITION', 'SERVICE_HEALTHY', 'SERVICE_UNHEALTHY',
+        ]
+        health_audits = (
+            AuditLog.objects
+            .filter(
+                action__in=health_actions,
+                metadata__has_key='service_id',
+            )
+            .order_by('-timestamp')[:20]
+        )
+        for a in health_audits:
+            svc_id = (a.metadata or {}).get('service_id', '')
+            if svc_id not in {str(s.id) for s in services}:
+                continue
+            previous = (a.metadata or {}).get('previous', '')
+            current = (a.metadata or {}).get('current', '')
+            events.append({
+                'type': 'health',
+                'severity': (
+                    'critical' if a.action == 'SERVICE_UNHEALTHY' else 'warning'
+                ),
+                'timestamp': a.timestamp.isoformat() if a.timestamp else '',
+                'title': f'{previous} → {current}' if previous and current else a.action.replace('_', ' ').title(),
+                'detail': (a.metadata or {}).get('message', ''),
+                'actor': a.actor,
+                'action': a.action,
+            })
+
+        # ── 4. Transfers involving this server ───────────────────────
+        transfers = (
+            ServerTransfer.objects
+            .filter(
+                Q(source_server=server) | Q(target_server=server),
+            )
+            .exclude(status='COMPLETED')
+            .order_by('-created_at')[:10]
+        )
+        for t in transfers:
+            events.append({
+                'type': 'transfer',
+                'severity': 'critical' if t.status == 'FAILED' else 'warning',
+                'timestamp': t.created_at.isoformat() if t.created_at else '',
+                'title': f"Server transfer {t.status.lower()}",
+                'detail': t.error_message or f'Source → Target',
+                'transfer_id': str(t.id),
+                'status': t.status,
+            })
+
+        # ── 5. Provisioning failures ─────────────────────────────────
+        prov_logs = getattr(server, 'provision_logs', '') or ''
+        if prov_logs:
+            prov_lines = prov_logs.split('\n')
+            for line in reversed(prov_lines[-20:]):
+                lower = line.strip().lower()
+                if not lower:
+                    continue
+                if 'error' in lower or 'fail' in lower or 'exception' in lower:
+                    events.append({
+                        'type': 'provisioning',
+                        'severity': 'warning',
+                        'timestamp': '',
+                        'title': 'Provisioning error detected',
+                        'detail': line.strip()[:300],
+                    })
+
+        # ── 6. Server metadata ──────────────────────────────────────
+        service_list = [
+            {'id': str(s.id), 'name': s.name, 'status': s.status}
+            for s in services
+        ]
+        active_count = sum(1 for s in services if s.status == 'ACTIVE')
+
+        events.sort(key=lambda e: e['timestamp'] or '', reverse=True)
+
+        severity_counts = {'critical': 0, 'warning': 0, 'info': 0}
+        for e in events:
+            sev = e.get('severity', 'info')
+            if sev in severity_counts:
+                severity_counts[sev] += 1
+
+        return Response({
+            'server_id': str(server.id),
+            'server_name': server_name,
+            'server_status': server.status,
+            'total_services': len(service_list),
+            'active_services': active_count,
+            'total_events': len(events),
+            'critical': severity_counts['critical'],
+            'warning': severity_counts['warning'],
+            'info': severity_counts['info'],
+            'services': service_list,
+            'events': events,
+        })
+
     def _run_diagnostics(self, server):
-        """Run diagnostics on a remote server and return results."""
         try:
             from apps.deployments.services.self_healing_orchestrator import (
                 SelfHealingOrchestrator,

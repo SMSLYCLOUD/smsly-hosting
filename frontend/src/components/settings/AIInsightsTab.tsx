@@ -5,12 +5,13 @@ import { api } from "@/lib/api";
 import {
   Brain, Sparkles, AlertTriangle, CheckCircle2, Loader2, GitBranch, Clock, Wrench,
   XCircle, TrendingUp, Cpu, Gauge, BarChart3, Shield, Activity, DollarSign,
-  Server, Wifi, WifiOff, Bug, FileWarning, RefreshCw, Zap
+  Server, Wifi, WifiOff, Bug, FileWarning, RefreshCw, Zap, Siren
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SecurityStatusTab } from "@/components/insights/SecurityStatusTab";
+import { IncidentReportTab } from "@/components/settings/IncidentReportTab";
 
 interface JulesEntry {
   deployment_id: string;
@@ -94,7 +95,7 @@ export function AIInsightsTab({ serviceId }: { serviceId: string }) {
         </div>
         <div>
           <h2 className="text-lg font-bold">Insights & Auto-Fix</h2>
-          <p className="text-sm text-muted-foreground">AI diagnostics, scaling analysis, and system security status.</p>
+          <p className="text-sm text-muted-foreground">AI diagnostics, scaling analysis, incident history, and system security status.</p>
         </div>
       </div>
 
@@ -102,6 +103,7 @@ export function AIInsightsTab({ serviceId }: { serviceId: string }) {
         <TabsList>
           <TabsTrigger value="ai"><Brain className="w-4 h-4 mr-1" /> AI Insights</TabsTrigger>
           <TabsTrigger value="security"><Shield className="w-4 h-4 mr-1" /> Security</TabsTrigger>
+          <TabsTrigger value="incidents"><Siren className="w-4 h-4 mr-1" /> Incidents</TabsTrigger>
           <TabsTrigger value="platform"><Server className="w-4 h-4 mr-1" /> Platform</TabsTrigger>
         </TabsList>
 
@@ -254,6 +256,10 @@ export function AIInsightsTab({ serviceId }: { serviceId: string }) {
 
         <TabsContent value="security" className="mt-6">
           <SecurityStatusTab serviceId={serviceId} />
+        </TabsContent>
+
+        <TabsContent value="incidents" className="mt-6">
+          <IncidentReportTab serviceId={serviceId} />
         </TabsContent>
 
         <TabsContent value="platform" className="space-y-6 mt-6">
