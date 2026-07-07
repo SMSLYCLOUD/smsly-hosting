@@ -211,9 +211,13 @@ TRUSTED_PROXY_IPS = config(
 )
 
 # Container Registry
+# Default to Docker DNS name (registry:5000) which resolves inside smsly-net
+# for inter-container communication. External registries (Docker Hub, GHCR,
+# ECR, etc.) are fully supported — set CONTAINER_REGISTRY_URL to the
+# external registry URL and REGISTRY_USER/REGISTRY_PASSWORD accordingly.
 CONTAINER_REGISTRY_URL = config(
     'CONTAINER_REGISTRY_URL',
-    default='127.0.0.1:5000')
+    default='registry:5000')
 
 # NOTE: The old auto-correction that replaced 127.0.0.1/localhost with
 # MASTER_MESH_IP unconditionally has been removed.  It caused silent push
@@ -229,16 +233,16 @@ CONTAINER_REGISTRY_URL = config(
 def _validate_registry_url():
     """SSRF guard for the container registry URL.
 
-    Operators can accidentally (or an attacker can deliberately) point
-    CONTAINER_REGISTRY_URL at an external host, causing every tenant's
-    built image to be pushed off-platform. We refuse to boot with any URL
-    that is not on http(s) and not clearly internal.
+    Supports both internal registries (Docker DNS, loopback) and
+    external registries (Docker Hub, GHCR, ECR, etc.).
 
-    For convenience (and to match the pre-validator behaviour where
-    install.sh emits ``registry:5000`` and a value from ``CONTAINER_REGISTRY_URL``
-    without a scheme), the URL is auto-prefixed with ``http://`` if no
-    scheme is present. The scheme is then validated and the host is
-    checked against the platform allowlist.
+    Internal registries (http/https): validated against platform allowlist.
+    External registries (https only): allowed for push/pull with credentials.
+    http:// to external hosts: blocked (plaintext push to external is unsafe).
+
+    For convenience the URL is auto-prefixed with ``http://`` if no
+    scheme is present (internal default). External registries should
+    use ``https://`` explicitly.
     """
     import ipaddress
     from urllib.parse import urlparse
@@ -246,35 +250,59 @@ def _validate_registry_url():
     url = os.environ.get('CONTAINER_REGISTRY_URL', '').strip()
     if not url:
         return
+
     # Auto-default scheme so operators who follow the
-    # `.env.example` default (or the value of ``CONTAINER_REGISTRY_URL``)
-    # do not have to type ``http://`` /
-    # ``https://`` explicitly. The platform allowlist check
-    # below still applies.
+    # `.env.example` default do not have to type ``http://``.
     if '://' not in url:
-        url = 'http://' + url
+        # If it looks like an external hostname (contains dots but
+        # is not localhost/registry/private-ip), default to https.
+        _temp = urlparse('http://' + url)
+        _host = _temp.hostname or ''
+        _is_internal = (
+            _host.startswith(('localhost', '127.', 'registry', 'smsly'))
+            or _host in ('',)
+        )
+        scheme = 'http' if _is_internal else 'https'
+        url = scheme + '://' + url
         os.environ['CONTAINER_REGISTRY_URL'] = url
+
     parsed = urlparse(url)
     if parsed.scheme not in ('http', 'https'):
         raise ImproperlyConfigured(
             f'CONTAINER_REGISTRY_URL must use http or https; got scheme={parsed.scheme!r} '
             f'from url={url!r}'
         )
+
     hostname = parsed.hostname or ''
+
+    # ── Internal registries (always allowed) ──────────────────────
+    # These are platform-managed registries that run inside the cluster.
+    if hostname.startswith(('localhost', '127.', 'registry', 'smsly')):
+        return
+
+    # ── Private IPs ───────────────────────────────────────────────
     try:
         ip = ipaddress.ip_address(hostname)
-        if ip.is_private and hostname.startswith(('10.', '172.', '192.168.', '127.')):
-            return
         if ip.is_private:
-            raise ImproperlyConfigured(
-                f'CONTAINER_REGISTRY_URL private IP {ip} is not allowed'
-            )
+            # Private IPs are allowed (WireGuard mesh, local network)
+            return
     except ValueError:
         pass
-    if not hostname.startswith(('localhost', '127.0.0.1', 'registry', 'smsly')):
-        raise ImproperlyConfigured(
-            f'CONTAINER_REGISTRY_URL over {parsed.scheme} is only allowed for localhost/internal; got {url}'
-        )
+
+    # ── External registries over HTTPS ────────────────────────────
+    # HTTPS to external hosts is allowed — operators may push to
+    # Docker Hub, GHCR, ECR, or their own registry.
+    if parsed.scheme == 'https':
+        return
+
+    # ── External registries over HTTP ─────────────────────────────
+    # HTTP to external hosts is blocked — credentials would be sent
+    # in plaintext. Require HTTPS for external registries.
+    raise ImproperlyConfigured(
+        f'CONTAINER_REGISTRY_URL over http:// to external host {hostname!r} '
+        f'is not allowed (credentials would be sent in plaintext). '
+        f'Use https://{hostname} instead.'
+    )
 
 
 _validate_registry_url()
@@ -1118,8 +1146,8 @@ else:
 from config.redis_sentinel import (
     SENTINEL_ENABLED,
     SENTINEL_SERVICE_NAME,
-    sentinel_url,
-    sentinel_url_for_db,
+    sentinel_channel_layer_config,
+    standalone_url,
 )
 if SENTINEL_ENABLED:
     logger.info(
@@ -1130,7 +1158,8 @@ if SENTINEL_ENABLED:
 
 # Generic REDIS_URL — used by heartbeat_bus, tunnel storage, and other
 # consumers that need a single Redis connection (DB 0).
-REDIS_URL = config('REDIS_URL', default=sentinel_url_for_db(_REDIS_BASE_URL, 0, password=REDIS_PASSWORD))
+# Always plain redis:// — heartbeat_bus uses Sentinel.master_for() directly.
+REDIS_URL = config('REDIS_URL', default=standalone_url(_REDIS_BASE_URL, 0))
 
 # Prefer explicit REDIS_URL override when provided; otherwise build from host/port.
 # Prefer explicit CELERY_BROKER_URL override; otherwise build from user/pass.
@@ -1187,8 +1216,8 @@ CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = config(
 CELERY_TASK_ALWAYS_EAGER = IS_TESTING
 
 # Django cache: use Redis (needed for accurate /health cache checks + rate limits).
-# Use a dedicated DB index (2) to avoid colliding with Celery (0) / Channels (1).
-REDIS_CACHE_URL = config('REDIS_CACHE_URL', default=sentinel_url_for_db(_REDIS_BASE_URL, 2, password=REDIS_PASSWORD))
+# Use a dedicated DB index (2) to avoid colliding with Channels (1) / RedBeat (3).
+REDIS_CACHE_URL = config('REDIS_CACHE_URL', default=standalone_url(_REDIS_BASE_URL, 2))
 
 # RedBeat (celery-beat scheduler) needs its own Redis DB. Build it from the
 # same _REDIS_BASE_URL so credentials/host stay in sync with the rest of the
@@ -1196,7 +1225,11 @@ REDIS_CACHE_URL = config('REDIS_CACHE_URL', default=sentinel_url_for_db(_REDIS_B
 # CELERY_BROKER_URL (RabbitMQ AMQP), which makes redis-py raise:
 #   "Redis URL must specify one of the following schemes (redis://, ...)"
 # Operators can still override via the CELERY_REDBEAT_REDIS_URL env var.
-_REDBEAT_REDIS_URL = sentinel_url_for_db(_REDIS_BASE_URL, 3, password=REDIS_PASSWORD)
+#
+# NOTE: When Sentinel is enabled, the .env heredoc should set
+# CELERY_REDBEAT_REDIS_URL to a sentinel-aware URL (see fresh.sh).
+# The default fallback uses the standalone URL.
+_REDBEAT_REDIS_URL = standalone_url(_REDIS_BASE_URL, 3)
 CELERY_REDBEAT_REDIS_URL = config(
     'CELERY_REDBEAT_REDIS_URL',
     default=_REDBEAT_REDIS_URL,
@@ -1222,17 +1255,22 @@ else:
 
 # Channels (WebSockets) - use Redis so Celery tasks can broadcast logs/status to live UIs.
 # Uses a dedicated env var to avoid colliding with REDIS_URL (DB 0).
-CHANNEL_REDIS_URL = config('CHANNEL_REDIS_URL', default=sentinel_url_for_db(_REDIS_BASE_URL, 1, password=REDIS_PASSWORD))
+CHANNEL_REDIS_URL = config('CHANNEL_REDIS_URL', default=standalone_url(_REDIS_BASE_URL, 1))
+
+# channels_redis supports Sentinel via dict config (not URL).
+if SENTINEL_ENABLED:
+    _channel_hosts = sentinel_channel_layer_config(db=1, password=REDIS_PASSWORD)
+else:
+    _channel_hosts = [CHANNEL_REDIS_URL]
 
 CHANNEL_LAYERS = {
     'default': {
         'BACKEND': 'channels_redis.core.RedisChannelLayer',
         'CONFIG': {
-            'hosts': [CHANNEL_REDIS_URL],
+            'hosts': _channel_hosts,
             'capacity': 1500,
             'expiry': 10,
             'group_expiry': 86400,
-            'symmetric_encryption': False,
         },
     },
 }

@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import Notification, NotificationPreference, ResourceAlert
+from .models import AlertRule, Notification, NotificationChannel, NotificationPreference, ResourceAlert
 
 
 class ResourceAlertSerializer(serializers.ModelSerializer):
@@ -39,3 +39,27 @@ class NotificationPreferenceSerializer(serializers.ModelSerializer):
         model = NotificationPreference
         fields = ('id', 'user', 'event_type', 'channels')
         read_only_fields = ('id', 'user')
+
+
+class NotificationChannelSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = NotificationChannel
+        fields = (
+            'id', 'name', 'channel_type', 'target', 'enabled',
+            'created_at', 'updated_at',
+        )
+        read_only_fields = ('id', 'created_at', 'updated_at')
+
+
+class AlertRuleSerializer(serializers.ModelSerializer):
+    channels = serializers.PrimaryKeyRelatedField(
+        many=True, queryset=NotificationChannel.objects.all(), required=False)
+
+    class Meta:
+        model = AlertRule
+        fields = (
+            'id', 'name', 'enabled', 'metric', 'operator', 'threshold',
+            'severity', 'channels', 'cooldown_minutes', 'message_template',
+            'created_at', 'updated_at',
+        )
+        read_only_fields = ('id', 'created_at', 'updated_at')

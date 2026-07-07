@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { DashboardShell } from "@/components/layout/DashboardShell";
 import { PageHeader } from "@/components/ui/page-header";
 import { DbExplorer } from "@/components/addons/DbExplorer";
+import { AddonLogsViewer } from "@/components/addons/AddonLogsViewer";
 import { useToast } from "@/components/ui/use-toast";
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { DASHBOARD_ADDONS } from "@/lib/addonConstants";
@@ -227,9 +228,11 @@ export default function AddonDetailsPage() {
                     <TabsContent value="logs">
                         <Card>
                             <CardContent className="pt-6">
-                                <div className="h-64 bg-black text-green-500 p-4 font-mono text-xs rounded-md overflow-y-auto">
-                                    [System] Log stream not connected. Check back later.
-                                </div>
+                                <AddonLogsViewer
+                                    addonId={id as string}
+                                    addonType={addon.addon_type}
+                                    status={addon.status}
+                                />
                             </CardContent>
                         </Card>
                     </TabsContent>

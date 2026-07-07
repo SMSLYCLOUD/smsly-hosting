@@ -613,7 +613,7 @@ ensure_infrastructure_permissions() {
     if [ -f "/opt/smsly-hosting/.env" ] && ! touch "/opt/smsly-hosting/.env" 2>/dev/null; then
         echo -e "${YELLOW}  ⚠ .env not writable — fixing...${NC}"
         chown 1000:1000 "/opt/smsly-hosting/.env" 2>/dev/null || true
-        chmod 664 "/opt/smsly-hosting/.env" 2>/dev/null || true
+        chmod 640 "/opt/smsly-hosting/.env" 2>/dev/null || true
     fi
     if [ "$probe_failed" -ne 0 ]; then
         echo -e "${RED}  ✗ Some bind-mount directories are not writable — containers may fail${NC}"

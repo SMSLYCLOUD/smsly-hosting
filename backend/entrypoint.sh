@@ -155,6 +155,64 @@ ensure_prometheus_targets_writable() {
 }
 ensure_prometheus_targets_writable
 
+# ── Auto-setup registry certs and htpasswd if missing ─────────────
+# This makes the platform self-bootstrapping: the first deploy will
+# automatically generate TLS certs and htpasswd auth for the registry
+# container, without requiring a manual `install.sh` run.
+ensure_registry_bootstrap() {
+    # Only run if we're root and the registry volumes are mounted
+    if [ "$(id -u)" != "0" ]; then
+        return 0
+    fi
+    if [ ! -d /certs ] || [ ! -d /auth ]; then
+        return 0
+    fi
+
+    _regen_certs=false
+    if [ ! -f /certs/registry.crt ] || [ ! -f /certs/registry.key ]; then
+        _regen_certs=true
+    fi
+
+    if $_regen_certs; then
+        echo "[entrypoint] Generating self-signed registry TLS certificate..."
+        openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+            -keyout /certs/registry.key \
+            -out /certs/registry.crt \
+            -subj "/CN=registry" \
+            -addext "subjectAltName=DNS:registry,DNS:localhost,IP:127.0.0.1,IP:10.100.0.1" \
+            2>/dev/null || echo "[entrypoint] WARNING: TLS cert generation failed" >&2
+        chmod 644 /certs/registry.crt 2>/dev/null || true
+        chmod 600 /certs/registry.key 2>/dev/null || true
+    fi
+
+    if [ ! -f /auth/htpasswd ]; then
+        echo "[entrypoint] Generating registry htpasswd auth file..."
+        _reg_user="${REGISTRY_USER:-smsly-registry}"
+        _reg_pass="${REGISTRY_PASSWORD:-}"
+        if [ -z "$_reg_pass" ]; then
+            _reg_pass=$(python3 -c "import secrets; print(secrets.token_urlsafe(18))" 2>/dev/null \
+                || openssl rand -hex 12 2>/dev/null \
+                || echo "auto-generated-change-me")
+            echo "[entrypoint] Generated random REGISTRY_PASSWORD"
+        fi
+        # Try htpasswd first, fall back to Python bcrypt
+        if command -v htpasswd >/dev/null 2>&1; then
+            htpasswd -Bbn "$_reg_user" "$_reg_pass" > /auth/htpasswd 2>/dev/null || true
+        else
+            # Use env vars to avoid shell injection via password interpolation
+            REGISTRY_USER="$_reg_user" REGISTRY_PASSWORD="$_reg_pass" python3 -c '
+import os, bcrypt
+user = os.environ["REGISTRY_USER"]
+pw = os.environ["REGISTRY_PASSWORD"].encode()
+hashed = bcrypt.hashpw(pw, bcrypt.gensalt(10))
+print(user + ":" + hashed.decode())
+' > /auth/htpasswd 2>/dev/null || echo "[entrypoint] WARNING: htpasswd generation failed" >&2
+        fi
+        chmod 644 /auth/htpasswd 2>/dev/null || true
+    fi
+}
+ensure_registry_bootstrap
+
 # Write local docker-labels target files on every web container start
 if is_web_container "$@"; then
     python manage.py deploy_docker_labels_exporters --targets-only 2>&1 | \

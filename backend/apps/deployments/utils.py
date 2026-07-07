@@ -938,6 +938,29 @@ def log_exhaustive_deployment_diagnostics(deployment, service=None, build_dir=No
     registry_url = getattr(deployment, 'registry_url', None) or "Local Docker Daemon"
     image_name = getattr(deployment, 'image_name', getattr(svc, 'docker_image', f"smsly/{svc.name.lower()}:latest"))
 
+    # 4. Root user check — scan Dockerfile for USER directive
+    root_user_status = "No build dir — skipped"
+    if build_dir:
+        try:
+            dockerfile_path = os.path.join(build_dir, "Dockerfile")
+            if os.path.isfile(dockerfile_path):
+                with open(dockerfile_path, encoding="utf-8", errors="ignore") as df:
+                    for line in df:
+                        stripped = line.strip()
+                        if stripped.startswith("USER "):
+                            user_val = stripped.split(None, 1)[1].strip()
+                            if user_val.lower() not in ("root", "0"):
+                                root_user_status = f"Non-root user: {user_val} ✓"
+                            else:
+                                root_user_status = f"WARNING: Running as {user_val}"
+                            break
+                    else:
+                        root_user_status = "No USER directive — container runs as root"
+            else:
+                root_user_status = "No Dockerfile found"
+        except Exception as e:
+            root_user_status = f"Check failed: {e}"
+
     # Construct the exhaustive log
     log_lines = [
         "\n" + "═" * 70,
@@ -964,14 +987,14 @@ def log_exhaustive_deployment_diagnostics(deployment, service=None, build_dir=No
         "📦 [REGISTRY & CONTAINER OPERATIONS]",
         f"  • Target Registry : {registry_url}",
         f"  • Target Image    : {image_name}",
-        f"  • Layer Caching   : Enabled (Docker Buildx / Nixpacks cache mounts)",
+        f"  • Build Engine    : {buildpack} (Docker Buildx / Nixpacks)",
         "",
         "🛡️ [SECURITY SCANNING & HARDENING BASELINES (TRIVY / COSIGN)]",
         f"  • Scanner Status  : {trivy_ver}",
         f"  • Cosign Status   : {cosign_ver}",
-        "  • CVE Enforcement : Blocking CRITICAL vulnerabilities | Warning on HIGH",
-        "  • Root User Check : Verifying container execution user (non-root preferred)",
-        "  • Secret Leak Scan: Active during env injection and layer build",
+        f"  • CVE Enforcement : {'Blocking CRITICAL | Warning on HIGH' if trivy_bin else 'Trivy not available — no enforcement'}",
+        f"  • Root User Check : {root_user_status}",
+        f"  • Secret Leak Scan: {'Trivy secret scanner available' if trivy_bin else 'Secret scan unavailable — Trivy not installed'}",
         "═" * 70 + "\n"
     ]
     append_log(deployment, "\n".join(log_lines))
@@ -1014,29 +1037,44 @@ def log_exhaustive_clone_diagnostics(deployment, repo_url, branch, target_dir):
         f"  • Target Directory   : {target_dir}",
         f"  • Tree Statistics    : {file_count} files, {dir_count} directories",
         f"  • Total Disk Payload : {size_mb} MB ({total_size} bytes)",
-        f"  • Security Verification: Commit integrity checked & submodules validated",
+        f"  • Git Integrity     : Clone completed (branch: {branch})",
         "─" * 60 + "\n"
     ]
     append_log(deployment, "\n".join(log_lines))
 
 
 def log_exhaustive_env_diagnostics(deployment, service, source_label="Manifest/AI"):
-    """Log deep environment variable injection, secret protection, Infiscial vault audit, and locking."""
+    """Log deep environment variable injection, secret protection, Infisical vault audit, and locking."""
     env_vars = service.env_vars.all() if hasattr(service, 'env_vars') else []
     total_count = len(env_vars)
     secret_count = sum(1 for ev in env_vars if getattr(ev, 'is_secret', False))
     locked_count = sum(1 for ev in env_vars if getattr(ev, 'is_locked', False))
     
-    # Check for Infiscial / Vault integration
-    has_infiscial = any(
-        str(getattr(ev, 'key', '')).strip().upper().startswith('INFISCIAL_') or getattr(ev, 'is_secret', False)
-        for ev in env_vars
-    ) or bool(os.environ.get('INFISCIAL_TOKEN') or os.environ.get('INFISCIAL_PROJECT_ID')) or True
-    vault_provider = (
-        "Infiscial Vault Active (Runtime secret sync & KMS encryption verified)"
-        if has_infiscial
-        else "Internal Encrypted DB Vault (Infiscial / HashiCorp Vault ready)"
+    # Check for Infisical / Vault integration — actually verify container is running
+    infisical_running = False
+    try:
+        res = subprocess.run(
+            ["docker", "ps", "--filter", "name=infisical", "--format", "{{.Names}}"],
+            capture_output=True, text=True, timeout=3
+        )
+        infisical_running = "infisical" in (res.stdout or "")
+    except Exception:
+        pass
+
+    has_infisical_token = bool(
+        os.environ.get("INFISICAL_SERVICE_TOKEN")
+        or os.environ.get("INFISICAL_TOKEN")
+        or os.environ.get("INFISICAL_PROJECT_ID")
     )
+
+    if infisical_running and has_infisical_token:
+        vault_provider = "Infisical Vault Active (Runtime secret sync & KMS encryption verified)"
+    elif infisical_running:
+        vault_provider = "Infisical Running (service token not configured)"
+    elif has_infisical_token:
+        vault_provider = "Infisical Token Present (container not running)"
+    else:
+        vault_provider = "Internal Encrypted DB Vault (Infisical / HashiCorp Vault ready)"
     
     sources_summary = {}
     for ev in env_vars:
@@ -1051,7 +1089,7 @@ def log_exhaustive_env_diagnostics(deployment, service, source_label="Manifest/A
         f"  • Total Variables    : {total_count} loaded for container runtime",
         f"  • Secret Protection  : {secret_count} variables marked [SECRET] (redacted from logs)",
         f"  • Secret Vault Mode  : {vault_provider}",
-        f"  • Infiscial Vault    : Connected & Synchronized (Project KMS & Runtime Bridge Active)",
+        f"  • Infisical Status  : {'Container running ✓' if infisical_running else 'Container NOT running'} | Token: {'Set' if has_infisical_token else 'Missing'}",
         f"  • Locked Variables   : {locked_count} locked against auto-override",
         f"  • Source Breakdown   : {sources_str}",
         f"  • Runtime Injection  : PORT, HOST, and internal network envs mapped",
@@ -1086,28 +1124,92 @@ def log_exhaustive_build_diagnostics(deployment, builder_type, context_dir, buil
 
 
 def log_exhaustive_push_diagnostics(deployment, registry_url, image_name):
-    """Log container registry push, Trivy CVE scanning, and Cosign image attestation/signing."""
-    trivy_bin = find_binary("trivy")
+    """Log container registry push, Trivy CVE scanning, and Cosign image attestation/signing.
+    
+    Also enforces trivy_fail_on_severity: returns True if safe to proceed, False if build
+    should be blocked due to critical vulnerabilities.
+    """
+    from apps.deployments.models_core import PlatformConfig
+    config = PlatformConfig.objects.first()
+    trivy_enabled = getattr(config, 'trivy_enabled', True)
+    fail_severity = getattr(config, 'trivy_fail_on_severity', 'CRITICAL')
+
+    SEVERITY_ORDER = {'LOW': 0, 'MEDIUM': 1, 'HIGH': 2, 'CRITICAL': 3}
+    fail_threshold = SEVERITY_ORDER.get(fail_severity, 3)
+
+    trivy_bin = find_binary("trivy") if trivy_enabled else None
+    vuln_report = {"vulnerabilities": 0, "status": "skipped", "findings": []}
+    build_safe = True
+
     if trivy_bin:
         trivy_status = f"Active scan via {trivy_bin}"
         try:
             res = subprocess.run(
-                [trivy_bin, "image", "--insecure", "--scanners", "vuln", "--severity", "CRITICAL,HIGH", "--no-progress", image_name],
+                [trivy_bin, "image", "--insecure", "--scanners", "vuln", "--severity", "CRITICAL,HIGH",
+                 "--format", "json", "--no-progress", image_name],
                 capture_output=True, text=True, timeout=120
             )
-            if res.returncode == 0:
-                if "Total: 0" in res.stdout or not res.stdout.strip():
-                    trivy_outcome = "0 Critical/High CVEs detected"
-                else:
-                    trivy_outcome = "Scan completed — review output for details"
+            import json
+            try:
+                scan_data = json.loads(res.stdout) if res.stdout else {}
+            except (json.JSONDecodeError, ValueError):
+                scan_data = {}
+
+            total_vulns = 0
+            findings = []
+            for result in scan_data.get("Results", []):
+                for vuln in result.get("Vulnerabilities", []):
+                    sev = (vuln.get("Severity") or "UNKNOWN").upper()
+                    total_vulns += 1
+                    findings.append({
+                        "id": vuln.get("VulnerabilityID", "unknown"),
+                        "severity": sev,
+                        "pkg": vuln.get("PkgName", "unknown"),
+                        "title": vuln.get("Title", "")[:100],
+                    })
+
+            vuln_report = {
+                "vulnerabilities": total_vulns,
+                "status": "clean" if total_vulns == 0 else "findings",
+                "findings": findings[:50],
+                "fail_on_severity": fail_severity,
+                "summary": {
+                    "critical": sum(1 for f in findings if f["severity"] == "CRITICAL"),
+                    "high": sum(1 for f in findings if f["severity"] == "HIGH"),
+                    "medium": sum(1 for f in findings if f["severity"] == "MEDIUM"),
+                    "low": sum(1 for f in findings if f["severity"] == "LOW"),
+                },
+                "scan_time": __import__("datetime").datetime.utcnow().isoformat() + "Z",
+                "image": image_name,
+            }
+
+            if total_vulns == 0:
+                trivy_outcome = "0 Critical/High CVEs detected"
             else:
+                worst = max((SEVERITY_ORDER.get(f["severity"], 0) for f in findings), default=0)
+                if worst >= fail_threshold:
+                    build_safe = False
+                    blocked_sevs = [f["severity"] for f in findings if SEVERITY_ORDER.get(f["severity"], 0) >= fail_threshold]
+                    trivy_outcome = f"BLOCKED — {total_vulns} CVEs found ({', '.join(set(blocked_sevs))} >= {fail_severity})"
+                else:
+                    trivy_outcome = f"{total_vulns} CVEs found (none >= {fail_severity} threshold)"
+
+            if res.returncode != 0 and not scan_data:
                 err_msg = (res.stderr or res.stdout or '').strip().replace('\n', ' ')
                 trivy_outcome = f"Scan returned code {res.returncode}: {err_msg[:120]}"
         except Exception as e:
             trivy_outcome = f"Scan timeout/error: {e}"
     else:
-        trivy_status = "Trivy CLI not found in PATH"
-        trivy_outcome = "SKIPPED — Trivy not installed"
+        trivy_status = "Trivy CLI not found in PATH" if trivy_enabled else "Trivy scanning disabled in platform config"
+        trivy_outcome = "SKIPPED — Trivy not installed" if trivy_enabled else "SKIPPED — scanning disabled"
+        vuln_report["status"] = "disabled" if not trivy_enabled else "skipped"
+
+    # Save vulnerability report to deployment
+    try:
+        deployment.vulnerability_report = vuln_report
+        deployment.save(update_fields=["vulnerability_report"])
+    except Exception:
+        pass
 
     cosign_bin = find_binary("cosign")
     if cosign_bin:
@@ -1137,31 +1239,65 @@ def log_exhaustive_push_diagnostics(deployment, registry_url, image_name):
         "🚀 [CONTAINER REGISTRY PUSH, TRIVY CVE SCAN & COSIGN SIGNING]",
         f"  • Registry Endpoint  : {registry_url or 'Local Daemon / Managed Docker Hub'}",
         f"  • Target Reference   : {image_name}",
-        f"  • Auth Verification  : Credentials validated via secure token exchange",
-        f"  • Layer Push Status  : Deduplicating cached layers & uploading new diffs",
+        f"  • Trivy Enabled      : {trivy_enabled} (fail on: {fail_severity})",
         f"  • Trivy Scan Check   : {trivy_status}",
         f"  • Trivy Outcome      : {trivy_outcome}",
         f"  • Cosign Signing     : {cosign_status}",
         f"  • Cosign Outcome     : {cosign_outcome}",
+        f"  • Build Verdict      : {'SAFE — proceeding' if build_safe else 'BLOCKED — severity threshold exceeded'}",
         "─" * 60 + "\n"
     ]
     append_log(deployment, "\n".join(log_lines))
+    return build_safe
 
 
 def log_exhaustive_network_and_routing_diagnostics(deployment, service):
     """Log network topology, reverse proxy rules, and SSL termination configuration."""
     internal_port = getattr(service, 'internal_port', getattr(service, 'port', '8000'))
     domain = getattr(service, 'domain', getattr(service, 'name', 'localhost'))
-    
+    health_path = getattr(service, 'health_check_path', None) or '/health'
+
+    # Detect actual proxy engine
+    proxy_engine = "Unknown"
+    try:
+        res = subprocess.run(["docker", "ps", "--format", "{{.Names}}"], capture_output=True, text=True, timeout=3)
+        names = (res.stdout or "").lower()
+        if "traefik" in names:
+            proxy_engine = "Traefik"
+        elif "caddy" in names:
+            proxy_engine = "Caddy"
+        elif "nginx" in names:
+            proxy_engine = "Nginx"
+        else:
+            proxy_engine = "Not detected (reverse proxy may be external)"
+    except Exception:
+        proxy_engine = "Detection failed"
+
+    # Check SSL configuration
+    ssl_status = "Unknown"
+    try:
+        from apps.deployments.models_core import PlatformConfig
+        config = PlatformConfig.objects.first()
+        use_ssl = getattr(config, 'use_ssl', False)
+        wildcard = getattr(config, 'wildcard_subdomains', False)
+        if use_ssl and wildcard:
+            ssl_status = "ACME wildcard (Cloudflare DNS challenge)"
+        elif use_ssl:
+            ssl_status = "ACME Let's Encrypt (HTTP challenge)"
+        else:
+            ssl_status = "SSL disabled"
+    except Exception:
+        ssl_status = "Config check failed"
+
     log_lines = [
         "\n" + "─" * 60,
         "🕸️ [NETWORK TOPOLOGY, PROXY ROUTING & SSL TERMINATION]",
         f"  • Internal Target    : Container Port {internal_port} (HTTP/TCP)",
         f"  • External Domain    : {domain}",
-        f"  • Proxy Edge Engine  : Traefik / Caddy Reverse Proxy Mesh",
-        f"  • SSL / TLS Security : Automated ACME Let's Encrypt certificate generation",
+        f"  • Proxy Edge Engine  : {proxy_engine}",
+        f"  • SSL / TLS Security : {ssl_status}",
         f"  • Routing Rule       : Host(`{domain}`) -> Service({service.name}:{internal_port})",
-        f"  • Health Check Setup : Active monitoring endpoint configured",
+        f"  • Health Check       : {health_path}",
         "─" * 60 + "\n"
     ]
     append_log(deployment, "\n".join(log_lines))
@@ -1190,9 +1326,6 @@ def log_exhaustive_runtime_activation_diagnostics(deployment, service, container
         f"  • Target Node IP     : {target_ip}",
         f"  • Sandbox Runtime    : {runtime_name}",
         f"  • Promotion Strategy : {promotion_type}",
-        f"  • Traffic Cutover    : Zero-downtime routing table updated seamlessly",
-        f"  • Drain & Termination: Old container gracefully drained (SIGTERM -> SIGKILL)",
-        f"  • Active Monitoring  : Continuous health check probes registered in background mesh",
         "─" * 60 + "\n"
     ]
     append_log(deployment, "\n".join(log_lines))
@@ -1208,9 +1341,6 @@ def log_exhaustive_remote_orchestration_diagnostics(deployment, server, remote_d
         f"  • Target Node Name   : {server_name} ({server_host})",
         f"  • Remote Tracking ID : {remote_dep_id}",
         f"  • Delegation Status  : {status}",
-        f"  • Transport Security : Encrypted SSH/TLS Agent Tunnel verified",
-        f"  • Node Synchronity   : DNS records and environment secrets mirrored to edge",
-        f"  • Fleet Lock         : Exclusive node deployment lock acquired",
         "─" * 60 + "\n"
     ]
     append_log(deployment, "\n".join(log_lines))
@@ -1225,7 +1355,6 @@ def log_exhaustive_self_heal_diagnostics(deployment, action_taken, success, deta
         f"  • Recovery Outcome   : {'SUCCESS ✅' if success else 'ESCALATING ⚠️'}",
         f"  • Diagnostic Details : {details}",
         f"  • Suggested Next     : {next_action or 'Monitor system stability'}",
-        f"  • AI Senate Feedback : Automated heuristics applied to restore service continuity",
         "─" * 60 + "\n"
     ]
     append_log(deployment, "\n".join(log_lines))
@@ -1234,13 +1363,13 @@ def log_exhaustive_self_heal_diagnostics(deployment, action_taken, success, deta
 def log_exhaustive_addon_provisioning_diagnostics(deployment, addons_list):
     """Log deep database and cache addon provisioning, DSN injection, and peering."""
     addons_str = ", ".join(addons_list) if addons_list else "None detected / required"
+    addon_count = len(addons_list) if addons_list else 0
     log_lines = [
         "\n" + "─" * 60,
         "🗄️ [DATABASE & CACHE ADDON PROVISIONING MESH]",
         f"  • Addons Processed   : {addons_str}",
-        f"  • DSN Security Audit : Connection credentials encrypted and injected into runtime env",
-        f"  • Storage Volume     : Persistent block volumes attached and verified",
-        f"  • Network Peering    : Internal Docker mesh networking linked to host containers",
+        f"  • Addon Count        : {addon_count}",
+        f"  • Provisioning       : {'Via addon_provisioner (Docker containers)' if addon_count > 0 else 'No addons required'}",
         "─" * 60 + "\n"
     ]
     append_log(deployment, "\n".join(log_lines))

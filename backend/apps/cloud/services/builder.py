@@ -300,6 +300,9 @@ class NixpacksBuilder:
         logs a warning and returns the original local image name so the
         deploy phase can fall back to the local image.
 
+        Automatically runs ``docker login`` before pushing if credentials
+        are provided, so no manual pre-authentication is needed.
+
         Arguments:
             image_name: Local image name (e.g. ``smsly/myapp:abc1234``).
             registry_url: Target registry host:port (e.g. ``registry:5000``).
@@ -333,6 +336,20 @@ class NixpacksBuilder:
                     "username": _user,
                     "password": _pass,
                 }
+
+            # Auto-login: ensure Docker daemon has credentials for this
+            # registry so that both SDK push and CLI fallback work without
+            # requiring manual `docker login` on the host.
+            if has_creds and shutil.which('docker'):
+                try:
+                    _login = subprocess.run(
+                        ['docker', 'login', _tag_url, '-u', _user, '--password-stdin'],
+                        input=_pass, capture_output=True, text=True, timeout=15,
+                    )
+                    if _login.returncode != 0:
+                        logger.warning("docker login to %s failed: %s", _tag_url, _login.stderr.strip())
+                except Exception as login_err:
+                    logger.warning("docker login to %s failed: %s", _tag_url, login_err)
 
             # ── Push via SDK ────────────────────────────────────────────
             push_result = client.images.push(full_tag, auth_config=auth_config)

@@ -41,6 +41,8 @@ SECRET_DEFINITIONS = [
     ("PGCAT_ADMIN_PASSWORD", 48, "PgCat administration password"),
     ("REPLICATION_PASSWORD", 32, "PostgreSQL streaming replication password"),
     ("SENTINEL_PASSWORD", 32, "Redis Sentinel authentication password"),
+    ("REGISTRY_HTTP_SECRET", 32, "Docker registry internal secret"),
+    ("CROWDSEC_BOUNCER_KEY", 32, "CrowdSec bouncer key for Traefik"),
 ]
 
 
@@ -89,6 +91,12 @@ def print_secrets(secrets_dict: dict[str, str]) -> None:
     print("=" * 70)
 
 
+def print_shell(secrets_dict: dict[str, str]) -> None:
+    """Print secrets as KEY=VALUE lines for shell consumption."""
+    for name, _length, _desc in SECRET_DEFINITIONS:
+        print(f"{name}={secrets_dict[name]}")
+
+
 def append_to_env(env_path: str, secrets_dict: dict[str, str], dry_run: bool = False) -> None:
     if dry_run:
         print(f"[dry-run] Would append secrets to: {env_path}")
@@ -115,6 +123,11 @@ def main() -> None:
         help="Append secrets to .env file (default: print to stdout)",
     )
     parser.add_argument(
+        "--shell",
+        action="store_true",
+        help="Output as KEY=VALUE lines for shell consumption",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Show what would be written without modifying files",
@@ -125,6 +138,8 @@ def main() -> None:
 
     if args.env:
         append_to_env(args.env, secrets_dict, dry_run=args.dry_run)
+    elif args.shell:
+        print_shell(secrets_dict)
     else:
         print_secrets(secrets_dict)
 

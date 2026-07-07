@@ -138,6 +138,12 @@ app.conf.beat_schedule = {
         'schedule': 60.0,
         'options': {'expires': 60.0},
     },
+    # Persist cluster heartbeat snapshots to DB every 60 seconds
+    'persist-heartbeats-every-60s': {
+        'task': 'apps.deployments.services.heartbeat_bus.persist_heartbeats_task',
+        'schedule': 60.0,
+        'options': {'expires': 60.0},
+    },
     # Mark interrupted/stale server provisioning runs as failed
     'cleanup-stale-server-provisioning-every-5m': {
         'task': 'apps.deployments.services.provisioner.cleanup_stale_server_provisioning',

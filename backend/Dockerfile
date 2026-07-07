@@ -36,6 +36,12 @@ RUN apt-get update \
     && apt-get install -y docker-ce-cli docker-buildx-plugin \
     # Install Nixpacks (Current safest method)
     && curl -sL https://nixpacks.com/install.sh | bash \
+    # Security: Trivy vulnerability scanner
+    && curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | bash -s -- -b /usr/local/bin \
+    # Security: Cosign image signing (Sigstore keyless)
+    && COSIGN_ARCH=$(dpkg --print-architecture | sed 's/x86_64/amd64/;s/aarch64/arm64/') \
+    && curl -sSL -o /usr/local/bin/cosign "https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-${COSIGN_ARCH}" \
+    && chmod +x /usr/local/bin/cosign \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

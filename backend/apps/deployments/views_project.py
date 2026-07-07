@@ -282,6 +282,12 @@ class ProjectViewSet(viewsets.ModelViewSet):
             if existing:
                 for field, value in serializer.validated_data.items():
                     if field not in ('scope_type', 'scope_id', 'content_type', 'object_id'):
+                        # Guard: skip empty password to avoid overwriting stored credentials.
+                        # The frontend sends password=undefined when the user leaves the
+                        # field blank, but the API should also protect against explicit
+                        # empty-string payloads.
+                        if field == 'password' and not value:
+                            continue
                         setattr(existing, field, value)
                 existing.save()
                 logger.info("Updated scoped registry for project %s", project.id)

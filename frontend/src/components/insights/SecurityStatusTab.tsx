@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import {
   Shield, ShieldCheck, ShieldX, Cpu, Lock, Eye,
   AlertTriangle, CheckCircle2, XCircle, Loader2,
-  RefreshCw, Bug, FileWarning
+  RefreshCw, Bug, FileWarning, ShieldAlert
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,11 +18,21 @@ interface VulnSummary {
   low: number;
 }
 
+interface VulnFinding {
+  id: string;
+  severity: string;
+  pkg: string;
+  title: string;
+}
+
 interface VulnReport {
   summary?: VulnSummary;
+  findings?: VulnFinding[];
   scan_time?: string;
   image?: string;
   error?: string;
+  status?: string;
+  fail_on_severity?: string;
 }
 
 export function SecurityStatusTab({ serviceId }: { serviceId: string }) {
@@ -125,8 +135,35 @@ export function SecurityStatusTab({ serviceId }: { serviceId: string }) {
             <div className="text-xs text-muted-foreground space-y-1">
               {report.image && <p>Image: <code className="text-foreground">{report.image}</code></p>}
               {report.scan_time && <p>Scanned: {new Date(report.scan_time).toLocaleString()}</p>}
+              {report.fail_on_severity && <p>Fail on severity: <Badge variant="outline" className="text-[10px] ml-1">{report.fail_on_severity}</Badge></p>}
               {latestDeployId && <p>Deployment: <code className="text-foreground">{latestDeployId.slice(0, 8)}</code></p>}
             </div>
+
+            {/* Individual Findings */}
+            {report.findings && report.findings.length > 0 && (
+              <div className="mt-3">
+                <p className="text-xs font-semibold text-muted-foreground mb-2">Findings ({report.findings.length})</p>
+                <div className="max-h-60 overflow-y-auto space-y-1">
+                  {report.findings.map((f, i) => (
+                    <div key={i} className="flex items-center gap-2 p-2 rounded-lg bg-black/20 text-xs">
+                      <Badge
+                        variant={f.severity === "CRITICAL" ? "destructive" : f.severity === "HIGH" ? "destructive" : "outline"}
+                        className={`text-[9px] w-16 justify-center ${
+                          f.severity === "CRITICAL" ? "bg-red-500/20 text-red-400 border-red-500/30" :
+                          f.severity === "HIGH" ? "bg-orange-500/20 text-orange-400 border-orange-500/30" :
+                          f.severity === "MEDIUM" ? "bg-amber-500/20 text-amber-400 border-amber-500/30" :
+                          "bg-zinc-500/20 text-zinc-400 border-zinc-500/30"
+                        }`}
+                      >
+                        {f.severity}
+                      </Badge>
+                      <code className="text-muted-foreground">{f.pkg}</code>
+                      <span className="text-foreground truncate flex-1">{f.title || f.id}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         ) : (
           <Card>

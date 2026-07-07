@@ -1037,10 +1037,33 @@ class PlatformConfig(models.Model):
         default=False,
         help_text="Enable SMS on successful deployments")
 
+    # ── SMTP / Email ────────────────────────────────────────────────────
+    smtp_host = models.CharField(
+        max_length=255, blank=True, default='',
+        help_text="SMTP server host (e.g. smtp.gmail.com)")
+    smtp_port = models.PositiveIntegerField(
+        default=587,
+        help_text="SMTP server port (default 587 for STARTTLS)")
+    smtp_username = models.CharField(
+        max_length=255, blank=True, default='',
+        help_text="SMTP authentication username")
+    smtp_password = EncryptedCharField(
+        max_length=512, blank=True, default='',
+        help_text="SMTP authentication password")
+    smtp_use_tls = models.BooleanField(
+        default=True,
+        help_text="Enable STARTTLS encryption")
+    smtp_from_email = models.CharField(
+        max_length=255, blank=True, default='',
+        help_text="Default from address for outgoing emails")
+    smtp_from_name = models.CharField(
+        max_length=100, blank=True, default='SMSLY',
+        help_text="Default from name for outgoing emails")
+
     # ── Container Registry ───────────────────────────────────────────────
     container_registry_url = models.CharField(
-        max_length=255, blank=True, default='127.0.0.1:5000',
-        help_text="Container registry URL")
+        max_length=255, blank=True, default='registry:5000',
+        help_text="Container registry URL (e.g. registry:5000 for internal, or docker.io/ghcr.io for external)")
     registry_user = models.CharField(
         max_length=255, blank=True, default='smsly-registry',
         help_text="Container registry username")
@@ -1128,7 +1151,7 @@ class PlatformConfig(models.Model):
         'billing_currency': ('BILLING_CURRENCY', 'USD'),
         'billing_pro_amount': ('BILLING_PRO_AMOUNT', '29.00'),
         'billing_pro_period_days': ('BILLING_PRO_PERIOD_DAYS', '30'),
-        'container_registry_url': ('CONTAINER_REGISTRY_URL', '127.0.0.1:5000'),
+        'container_registry_url': ('CONTAINER_REGISTRY_URL', 'registry:5000'),
         'registry_user': ('REGISTRY_USER', 'smsly-registry'),
         'registry_password': ('REGISTRY_PASSWORD', ''),
         'smsly_sms_api_url': ('SMSLY_SMS_API_URL', 'http://smsly-sms:8000/api/v1'),

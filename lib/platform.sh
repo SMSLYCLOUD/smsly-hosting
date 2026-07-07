@@ -490,18 +490,18 @@ ensure_env_runtime_defaults() {
         fi
     fi
 
-    env_ensure_var "$env_file" "REDIS_PASSWORD" "$(gen_hex_secret 16)" "Redis authentication password"
-    env_ensure_var "$env_file" "RABBITMQ_PASSWORD" "$(gen_hex_secret 16)" "RabbitMQ authentication password"
-    env_ensure_var "$env_file" "GATEWAY_SECRET" "$(gen_hex_secret 32)" "Inter-service HMAC authentication secret"
-    env_ensure_var "$env_file" "GITHUB_WEBHOOK_SECRET" "$(gen_hex_secret 32)" "GitHub webhook signature verification"
-    env_ensure_var "$env_file" "AUTOSCALER_API_TOKEN" "$(gen_hex_secret 32)" "Autoscaler API bearer token (shared between autoscaler service and Django backend)"
-    env_ensure_var "$env_file" "FRP_AUTH_TOKEN" "$(gen_hex_secret 32)" "FRP tunnel relay authentication token"
-    env_ensure_var "$env_file" "CADDY_ASK_SECRET" "$(gen_hex_secret 32)" "Shared secret for the Caddy on_demand_tls 'ask' endpoint (X-Caddy-Secret header). Without this the backend logs a warning and generates an ephemeral random secret on every restart."
+    env_ensure_var "$env_file" "REDIS_PASSWORD" "$(gen_hex_secret 32)" "Redis authentication password"
+    env_ensure_var "$env_file" "RABBITMQ_PASSWORD" "$(gen_hex_secret 32)" "RabbitMQ authentication password"
+    env_ensure_var "$env_file" "GATEWAY_SECRET" "$(gen_hex_secret 64)" "Inter-service HMAC authentication secret"
+    env_ensure_var "$env_file" "GITHUB_WEBHOOK_SECRET" "$(gen_hex_secret 64)" "GitHub webhook signature verification"
+    env_ensure_var "$env_file" "AUTOSCALER_API_TOKEN" "$(gen_hex_secret 64)" "Autoscaler API bearer token (shared between autoscaler service and Django backend)"
+    env_ensure_var "$env_file" "FRP_AUTH_TOKEN" "$(gen_hex_secret 64)" "FRP tunnel relay authentication token"
+    env_ensure_var "$env_file" "CADDY_ASK_SECRET" "$(gen_hex_secret 64)" "Shared secret for the Caddy on_demand_tls 'ask' endpoint (X-Caddy-Secret header). Without this the backend logs a warning and generates an ephemeral random secret on every restart."
     env_ensure_var "$env_file" "BACKUP_ENCRYPTION_KEY" "$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())' 2>/dev/null || openssl rand -base64 32)" "Fernet key used to encrypt on-disk backups (required when BACKUP_REQUIRE_ENCRYPTION=True)"
     env_ensure_var "$env_file" "BACKUP_REQUIRE_ENCRYPTION" "true" "Refuse to write unencrypted backups"
     env_ensure_var "$env_file" "SMSLY_DISABLE_TIER_GATES" "true" "Disable owner-tier paywall gates in this edition"
     env_ensure_var "$env_file" "SMSLY_ENABLE_STARTUP_CADDY_SYNC" "false" "Keep AppConfig.ready side-effect free; installer/watchers sync edge config"
-    env_ensure_var "$env_file" "PGCAT_ADMIN_PASSWORD" "$(gen_hex_secret 24)" "PgCat administration password (mandatory for 1.2+)"
+    env_ensure_var "$env_file" "PGCAT_ADMIN_PASSWORD" "$(gen_hex_secret 48)" "PgCat administration password (mandatory for 1.2+)"
     env_ensure_var "$env_file" "GRAFANA_PASSWORD" "$(python3 -c "import secrets,string; print(''.join(secrets.choice(string.ascii_letters+string.digits+'-_') for _ in range(40)))" 2>/dev/null || openssl rand -base64 30 | tr -d '+/=')" "Grafana admin password (used by the standalone observability stack)"
     # SECURITY: default to true (was false pre-2026-06). Strict SSH host-key
     # checking is the safe default; only set to "false" in trusted/lab
@@ -724,23 +724,23 @@ validate_env_file() {
         if [ -z "$var_value" ]; then
             if [ "$var_name" = "RABBITMQ_PASSWORD" ]; then
                 local new_rabbitmq_pass
-                new_rabbitmq_pass=$(gen_hex_secret 16)
+                new_rabbitmq_pass=$(gen_hex_secret 32)
                 echo -e "${BLUE}  -> Generating missing RABBITMQ_PASSWORD for upgrade...${NC}"
                 echo "RABBITMQ_PASSWORD=$new_rabbitmq_pass" >> "$env_file"
                 # Update celery broker URL immediately to use this new password
                 env_set_value "$env_file" "CELERY_BROKER_URL" "amqp://smsly_user:${new_rabbitmq_pass}@rabbitmq:5672//"
             elif [ "$var_name" = "GATEWAY_SECRET" ]; then
                 echo -e "${BLUE}  -> Generating missing GATEWAY_SECRET...${NC}"
-                env_set_value "$env_file" "GATEWAY_SECRET" "$(gen_hex_secret 32)"
+                env_set_value "$env_file" "GATEWAY_SECRET" "$(gen_hex_secret 64)"
             elif [ "$var_name" = "FRP_AUTH_TOKEN" ]; then
                 echo -e "${BLUE}  -> Generating missing FRP_AUTH_TOKEN...${NC}"
-                env_set_value "$env_file" "FRP_AUTH_TOKEN" "$(gen_hex_secret 32)"
+                env_set_value "$env_file" "FRP_AUTH_TOKEN" "$(gen_hex_secret 64)"
             elif [ "$var_name" = "TUNNEL_DOMAIN" ]; then
                 echo -e "${BLUE}  -> Setting missing TUNNEL_DOMAIN...${NC}"
                 env_set_value "$env_file" "TUNNEL_DOMAIN" "tunnel.localhost"
             elif [ "$var_name" = "PGCAT_ADMIN_PASSWORD" ]; then
                 echo -e "${BLUE}  -> Generating missing PGCAT_ADMIN_PASSWORD...${NC}"
-                env_set_value "$env_file" "PGCAT_ADMIN_PASSWORD" "$(gen_hex_secret 32)"
+                env_set_value "$env_file" "PGCAT_ADMIN_PASSWORD" "$(gen_hex_secret 48)"
             else
                 missing_vars+=("$var_name")
             fi

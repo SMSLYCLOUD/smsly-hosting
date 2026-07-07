@@ -109,15 +109,21 @@ def main():
     app_pool_size = int(os.environ.get("PGCAT_APP_POOL_SIZE", "20"))
     worker_pool_size = int(os.environ.get("PGCAT_WORKER_POOL_SIZE", "5"))
 
-    pg_max_conn = int(os.environ.get("POSTGRES_MAX_CONNECTIONS", "100"))
+    node_users = _fetch_node_agent_users()
+    num_node_agents = len(node_users)
+
+    pg_max_conn = int(os.environ.get("POSTGRES_MAX_CONNECTIONS", "200"))
     reserved_conn = 5
-    total_requested = app_pool_size + worker_pool_size + reserved_conn
+    # Each node_agent user gets pool_size=5 (app) + pool_size=3 (session) = 8 connections
+    node_agent_conns = num_node_agents * 8
+    total_requested = app_pool_size + worker_pool_size + reserved_conn + node_agent_conns
 
     if total_requested > pg_max_conn:
-        print(f"ERROR: Connection budget exceeded! Requested: {total_requested}, Postgres max: {pg_max_conn}", file=sys.stderr)
+        print(f"ERROR: Connection budget exceeded! Requested: {total_requested} "
+              f"(app={app_pool_size} + worker={worker_pool_size} + reserved={reserved_conn} "
+              f"+ node_agents={node_agent_conns} [{num_node_agents} agents × 8]), "
+              f"Postgres max: {pg_max_conn}", file=sys.stderr)
         sys.exit(1)
-
-    node_users = _fetch_node_agent_users()
 
     # Build the server list: primary + replicas
     primary_server = f'["{db_host}", {db_port}, "primary"]'

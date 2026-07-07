@@ -8,8 +8,9 @@ import {
   RefreshCw, Send, CheckCircle2, XCircle, Loader2, TrendingUp,
   Gauge, CircuitBoard, Bot, MessageSquare, AlertTriangle, Flame,
   Target, Lightbulb, DollarSign, Clock, ArrowUpRight, Settings, Save, Lock,
-  Code2
+  Code2, Server
 } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 import CodeMapView from '@/components/intelligence/CodeMapView';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { aiApi, type AIProvidersResponse } from '@/lib/api';
@@ -74,9 +75,13 @@ export default function IntelligencePage() {
   const [costAnalysis, setCostAnalysis] = useState<string | null>(null);
   const [costLoading, setCostLoading] = useState(false);
 
+  // Platform Health State
+  const [allServices, setAllServices] = useState<any[]>([]);
+  const [autoscalerStatus, setAutoscalerStatus] = useState<any>(null);
+
   const fetchData = useCallback(async () => {
     try {
-      const [prov, deps, anoms, rep] = await Promise.all([
+      const [prov, deps, anoms, rep, svcs, autoStatus] = await Promise.all([
         aiApi.getProviders(false).catch(() => ({
           providers: [],
           mode: 'mock',
@@ -91,11 +96,15 @@ export default function IntelligencePage() {
           _skipRemoteProxy: true,
         } as any).then(r => r.data?.results || r.data || []).catch(() => []),
         aiApi.getAnomalies().then(r => r.anomalies).catch(() => []),
-        aiApi.getReport().catch(() => null)
+        aiApi.getReport().catch(() => null),
+        api.get('/services/', { params: { page_size: 50 } }).then(r => r.data?.results || r.data || []).catch(() => []),
+        api.get('/autoscaler/status/').then(r => r.data).catch(() => null),
       ]);
       setProviders(prov);
       setAnomalies(anoms);
       setReport(rep);
+      setAllServices(svcs);
+      setAutoscalerStatus(autoStatus);
 
       const insights = (deps as DeploymentInsight[]).filter(
         d => d.ai_diagnosis || d.status === 'FAILED'
@@ -429,9 +438,11 @@ export default function IntelligencePage() {
 
           <Tabs defaultValue="dashboard" className="w-full">
             <div className="w-full overflow-x-auto scrollbar-hide pb-2 -mx-4 px-4 sm:mx-0 sm:px-0">
-              <TabsList className="inline-flex sm:grid w-max sm:w-full sm:grid-cols-5 bg-muted/20 gap-2 sm:gap-0 p-1">
+              <TabsList className="inline-flex sm:grid w-max sm:w-full sm:grid-cols-7 bg-muted/20 gap-2 sm:gap-0 p-1">
                 <TabsTrigger value="dashboard" className="rounded-full sm:rounded-sm px-4">Dashboard</TabsTrigger>
                 <TabsTrigger value="anomalies" className="rounded-full sm:rounded-sm px-4">Anomalies</TabsTrigger>
+                <TabsTrigger value="services" className="rounded-full sm:rounded-sm px-4">Services</TabsTrigger>
+                <TabsTrigger value="autoscaler" className="rounded-full sm:rounded-sm px-4">Autoscaler</TabsTrigger>
                 <TabsTrigger value="cost" className="rounded-full sm:rounded-sm px-4">Cost Intel</TabsTrigger>
                 <TabsTrigger value="codemap" className="rounded-full sm:rounded-sm px-4"><Code2 className="w-3.5 h-3.5 mr-1 inline" />Code Map</TabsTrigger>
                 <TabsTrigger value="chat" className="rounded-full sm:rounded-sm px-4">AI Chat</TabsTrigger>
@@ -600,7 +611,113 @@ export default function IntelligencePage() {
                        )}
                     </CardContent>
                  </Card>
-               </div>
+                </div>
+            </TabsContent>
+
+            {/* ── Services Tab ─────────────────────────────────────── */}
+            <TabsContent value="services" className="mt-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Server className="text-blue-500" /> Platform Services Health
+                  </CardTitle>
+                  <CardDescription>Overview of all deployed services and their status</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-2">
+                    {allServices.length === 0 ? (
+                      <div className="text-center py-8 text-muted-foreground">No services found.</div>
+                    ) : (
+                      allServices.map((svc: any) => {
+                        const depStatus = svc.latest_deployment?.status || "UNKNOWN";
+                        const isHealthy = depStatus === "SUCCESS" || depStatus === "RUNNING";
+                        const isFailed = depStatus === "FAILED";
+                        return (
+                          <div key={svc.id} className="flex items-center justify-between p-3 rounded-lg border border-border bg-muted/10">
+                            <div className="flex items-center gap-3">
+                              <div className={`w-2 h-2 rounded-full ${isHealthy ? "bg-emerald-500" : isFailed ? "bg-red-500" : "bg-amber-500"}`} />
+                              <div>
+                                <div className="font-bold text-sm">{svc.name}</div>
+                                <div className="text-xs text-muted-foreground">{svc.repository_url ? "Git" : svc.docker_image ? "Docker" : "Unknown source"}</div>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <Badge variant={isHealthy ? "default" : isFailed ? "destructive" : "outline"} className="text-[10px]">
+                                {depStatus}
+                              </Badge>
+                              {svc.latest_deployment?.created_at && (
+                                <span className="text-[10px] text-muted-foreground">{new Date(svc.latest_deployment.created_at).toLocaleDateString()}</span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            {/* ── Autoscaler Tab ─────────────────────────────────── */}
+            <TabsContent value="autoscaler" className="mt-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Gauge className="text-amber-500" /> Autoscaler Status
+                  </CardTitle>
+                  <CardDescription>Platform-wide autoscaling engine status and recent decisions</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {autoscalerStatus ? (
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        <div className="p-3 rounded-lg bg-muted/30 text-center">
+                          <div className="text-lg font-bold">{autoscalerStatus.status || "Unknown"}</div>
+                          <div className="text-[10px] text-muted-foreground uppercase">Status</div>
+                        </div>
+                        <div className="p-3 rounded-lg bg-muted/30 text-center">
+                          <div className="text-lg font-bold">{autoscalerStatus.uptime_seconds ? `${Math.floor(autoscalerStatus.uptime_seconds / 3600)}h` : "—"}</div>
+                          <div className="text-[10px] text-muted-foreground uppercase">Uptime</div>
+                        </div>
+                        <div className="p-3 rounded-lg bg-muted/30 text-center">
+                          <div className="text-lg font-bold">{autoscalerStatus.check_interval || "—"}</div>
+                          <div className="text-[10px] text-muted-foreground uppercase">Check Interval</div>
+                        </div>
+                        <div className="p-3 rounded-lg bg-muted/30 text-center">
+                          <div className="text-lg font-bold">{autoscalerStatus.services?.length ?? 0}</div>
+                          <div className="text-[10px] text-muted-foreground uppercase">Tracked Services</div>
+                        </div>
+                      </div>
+
+                      {/* Recent Decisions */}
+                      {autoscalerStatus.recent_decisions && autoscalerStatus.recent_decisions.length > 0 && (
+                        <div>
+                          <h4 className="text-sm font-bold mb-2">Recent Decisions</h4>
+                          <div className="space-y-2 max-h-60 overflow-y-auto">
+                            {autoscalerStatus.recent_decisions.map((dec: any, i: number) => (
+                              <div key={i} className="flex items-center justify-between p-2 rounded bg-muted/20 text-xs">
+                                <div className="flex items-center gap-2">
+                                  <Badge variant={dec.action === "scale_up" ? "destructive" : dec.action === "scale_down" ? "secondary" : "outline"} className="text-[9px]">
+                                    {dec.action?.toUpperCase() || "N/A"}
+                                  </Badge>
+                                  <span className="font-medium">{dec.service_name || dec.service}</span>
+                                </div>
+                                <span className="text-muted-foreground">{dec.reason?.slice(0, 60) || "—"}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-center py-12">
+                      <Gauge className="w-10 h-10 text-muted-foreground mx-auto mb-2 opacity-40" />
+                      <p className="text-sm text-muted-foreground">Autoscaler status unavailable.</p>
+                      <p className="text-xs text-muted-foreground mt-1">The autoscaler runs on the admin endpoint.</p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
             </TabsContent>
 
             {/* ── Chat Tab ───────────────────────────────────────────── */}

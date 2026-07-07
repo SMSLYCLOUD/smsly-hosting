@@ -1385,7 +1385,7 @@ export default function SettingsPage() {
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2"><Cloud className="h-5 w-5 text-blue-500" /> Container Registry</CardTitle>
-                  <CardDescription>Docker image registry for deployments.</CardDescription>
+                  <CardDescription>Docker image registry for deployments. Supports internal and external registries.</CardDescription>
                 </CardHeader>
                 <CardContent>
                   <Table>
@@ -1394,17 +1394,26 @@ export default function SettingsPage() {
                       <TableRow>
                         <TableCell className="font-mono">REGISTRY_URL</TableCell>
                         <TableCell>{systemConfig.CONTAINER_REGISTRY_URL || "Not set"}</TableCell>
-                        <TableCell><Badge variant="outline">Config</Badge></TableCell>
+                        <TableCell><Badge variant={systemConfig.CONTAINER_REGISTRY_URL ? "default" : "destructive"}>{systemConfig.CONTAINER_REGISTRY_URL ? "Configured" : "Missing"}</Badge></TableCell>
                       </TableRow>
                       <TableRow>
                         <TableCell className="font-mono">REGISTRY_USER</TableCell>
                         <TableCell>{systemConfig.REGISTRY_USER}</TableCell>
-                        <TableCell><Badge variant="outline">Config</Badge></TableCell>
+                        <TableCell><Badge variant={systemConfig.REGISTRY_USER ? "default" : "secondary"}>{systemConfig.REGISTRY_USER || "Not set"}</Badge></TableCell>
                       </TableRow>
                       <TableRow>
                         <TableCell className="font-mono">REGISTRY_PASSWORD</TableCell>
                         <TableCell>{systemConfig.REGISTRY_PASSWORD_SET ? "Set" : "Not set"}</TableCell>
                         <TableCell><Badge variant={systemConfig.REGISTRY_PASSWORD_SET ? "default" : "secondary"}>{systemConfig.REGISTRY_PASSWORD_SET ? "Secure" : "Missing"}</Badge></TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">REGISTRY_TYPE</TableCell>
+                        <TableCell>{(() => {
+                          const url = systemConfig.CONTAINER_REGISTRY_URL || "";
+                          if (url.startsWith("registry:") || url.startsWith("127.") || url.startsWith("localhost")) return "Internal (Docker DNS)";
+                          return "External";
+                        })()}</TableCell>
+                        <TableCell><Badge variant="outline">Auto-detected</Badge></TableCell>
                       </TableRow>
                     </TableBody>
                   </Table>

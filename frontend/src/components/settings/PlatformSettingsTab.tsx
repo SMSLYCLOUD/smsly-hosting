@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/components/ui/use-toast";
-import { Loader2, Save, Server, Shield, Globe, Database, Activity, CreditCard, AlertTriangle } from "lucide-react";
+import { Loader2, Save, Server, Shield, Globe, Database, Activity, CreditCard, AlertTriangle, CheckCircle2, XCircle } from "lucide-react";
 import api, { infisicalApi } from "@/lib/api";
 
 export function PlatformSettingsTab() {
@@ -165,17 +165,41 @@ export function PlatformSettingsTab() {
             <CardTitle className="flex items-center space-x-2">
               <Database className="h-5 w-5" />
               <span>Container Registry</span>
+              {config.container_registry_url ? (
+                (() => {
+                  const url = config.container_registry_url || '';
+                  const isExternal = !url.startsWith('registry:') && !url.startsWith('127.') && !url.startsWith('localhost');
+                  const hasCreds = config.REGISTRY_PASSWORD_SET;
+                  return (
+                    <span className="ml-2 flex items-center gap-1 text-xs font-normal">
+                      {hasCreds ? (
+                        <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
+                      ) : (
+                        <XCircle className="h-3.5 w-3.5 text-yellow-500" />
+                      )}
+                      <span className={isExternal ? "text-blue-500" : "text-muted-foreground"}>
+                        {isExternal ? "External" : "Internal"}
+                      </span>
+                    </span>
+                  );
+                })()
+              ) : null}
             </CardTitle>
-            <CardDescription>Configure the private Docker registry used by the platform.</CardDescription>
+            <CardDescription>
+              Docker image registry for deployments. Supports internal (registry:5000) and external (Docker Hub, GHCR, ECR, etc.) registries.
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
               <Label>Registry URL</Label>
               <Input
-                placeholder="127.0.0.1:5000"
+                placeholder="registry:5000 (internal) or docker.io/ghcr.io (external)"
                 value={config.container_registry_url || ""}
                 onChange={(e) => handleChange("container_registry_url", e.target.value)}
               />
+              <p className="text-xs text-muted-foreground">
+                Internal: registry:5000, 127.0.0.1:5000 · External: docker.io, ghcr.io, &lt;your-registry&gt;:5000
+              </p>
             </div>
             <div className="space-y-2">
               <Label>Registry User</Label>

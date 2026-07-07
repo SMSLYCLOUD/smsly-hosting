@@ -1228,6 +1228,9 @@ class AddonLogConsumer(AsyncWebsocketConsumer):
         await self.accept(subprotocol=get_websocket_subprotocol(self.scope))
 
         try:
+            # Support both query-string token and HttpOnly cookie auth
+            # (the QueryStringAuthMiddleware already populated scope['user']
+            # from the cookie if no query-string token was present).
             query_string = self.scope.get('query_string', b'').decode()
             token_key = None
             for param in query_string.split('&'):
@@ -1235,14 +1238,13 @@ class AddonLogConsumer(AsyncWebsocketConsumer):
                     token_key = param.split('=', 1)[1]
                     break
 
-            if not token_key:
-                await self.send(text_data=json.dumps({'error': 'Missing token'}))
-                await self.close(code=4001)
-                return
+            if token_key:
+                self.user = await self._authenticate_token(token_key)
+            else:
+                self.user = self.scope.get('user')
 
-            self.user = await self._authenticate_token(token_key)
-            if not self.user:
-                await self.send(text_data=json.dumps({'error': 'Invalid token'}))
+            if not self.user or self.user.is_anonymous:
+                await self.send(text_data=json.dumps({'error': 'Authentication required'}))
                 await self.close(code=4002)
                 return
 

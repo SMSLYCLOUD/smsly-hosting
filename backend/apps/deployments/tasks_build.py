@@ -78,16 +78,28 @@ def _build_function(deployment, service) -> str:
                 append_log(deployment, f"{output[-8000:]}\n")
             raise
 
-        registry = getattr(settings, 'CONTAINER_REGISTRY_URL', None)
+        # ── Resolve registry via ScopedRegistry (Project → Team → Org → PlatformConfig)
+        from apps.deployments.models_registry_scope import ScopedRegistry
+
+        scope_obj = getattr(service, 'project', None) or getattr(service, 'owner', None)
+        registry_info = ScopedRegistry.resolve_registry_credentials(scope_obj) if scope_obj else {}
+        registry_url = (registry_info.get("url") or "").split("://")[-1] or None
+        reg_username = registry_info.get("username") or ""
+        reg_password = registry_info.get("password") or ""
+
         is_local = is_deployment_local(deployment)
-        if not is_local and not registry:
+        if not is_local and not registry_url:
             raise RuntimeError(
-                "CONTAINER_REGISTRY_URL is not configured. "
-                "A registry is required to push/pull images for remote node deployments."
+                "No registry URL configured. "
+                "A registry is required to push/pull images for remote node deployments. "
+                "Set a registry at the Project, Team, or Organization level, "
+                "or configure CONTAINER_REGISTRY_URL."
             )
-        if registry:
-            remote_tag, _push_error = NixpacksBuilder.push_image(tag, registry)
-            pushed_to_registry = bool(remote_tag and remote_tag.startswith(registry))
+        if registry_url:
+            remote_tag, _push_error = NixpacksBuilder.push_image(
+                tag, registry_url, username=reg_username, password=reg_password,
+            )
+            pushed_to_registry = bool(remote_tag and remote_tag.startswith(registry_url))
             if not pushed_to_registry and not is_local:
                 raise RuntimeError(
                     f"Image push failed: Local fallback is not allowed for remote deployments. "
@@ -174,17 +186,29 @@ def _build_uploaded_source(deployment, service) -> str:
                 env_vars=env_map,
             )
 
-        registry = getattr(settings, "CONTAINER_REGISTRY_URL", None)
+        # ── Resolve registry via ScopedRegistry (Project → Team → Org → PlatformConfig)
+        from apps.deployments.models_registry_scope import ScopedRegistry
+
+        scope_obj = getattr(service, 'project', None) or getattr(service, 'owner', None)
+        registry_info = ScopedRegistry.resolve_registry_credentials(scope_obj) if scope_obj else {}
+        registry_url = (registry_info.get("url") or "").split("://")[-1] or None
+        reg_username = registry_info.get("username") or ""
+        reg_password = registry_info.get("password") or ""
+
         is_local = is_deployment_local(deployment)
-        if not is_local and not registry:
+        if not is_local and not registry_url:
             raise RuntimeError(
-                "CONTAINER_REGISTRY_URL is not configured. "
-                "A registry is required to push/pull images for remote node deployments."
+                "No registry URL configured. "
+                "A registry is required to push/pull images for remote node deployments. "
+                "Set a registry at the Project, Team, or Organization level, "
+                "or configure CONTAINER_REGISTRY_URL."
             )
-        if registry:
-            append_log(deployment, f"Pushing uploaded image to {registry}...\n")
-            remote_tag, _push_error = NixpacksBuilder.push_image(image_name, registry)
-            pushed_to_registry = bool(remote_tag and remote_tag.startswith(registry))
+        if registry_url:
+            append_log(deployment, f"Pushing uploaded image to {registry_url}...\n")
+            remote_tag, _push_error = NixpacksBuilder.push_image(
+                image_name, registry_url, username=reg_username, password=reg_password,
+            )
+            pushed_to_registry = bool(remote_tag and remote_tag.startswith(registry_url))
             if not pushed_to_registry and not is_local:
                 raise RuntimeError(
                     f"Image push failed: Local fallback is not allowed for remote deployments. "

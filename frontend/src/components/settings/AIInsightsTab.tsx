@@ -2,7 +2,11 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { api } from "@/lib/api";
-import { Brain, Sparkles, AlertTriangle, CheckCircle2, Loader2, GitBranch, Clock, Wrench, XCircle, TrendingUp, Cpu, Gauge, BarChart3, Shield } from "lucide-react";
+import {
+  Brain, Sparkles, AlertTriangle, CheckCircle2, Loader2, GitBranch, Clock, Wrench,
+  XCircle, TrendingUp, Cpu, Gauge, BarChart3, Shield, Activity, DollarSign,
+  Server, Wifi, WifiOff, Bug, FileWarning, RefreshCw, Zap
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -34,20 +38,29 @@ export function AIInsightsTab({ serviceId }: { serviceId: string }) {
   const [julesData, setJulesData] = useState<{ entries: JulesEntry[] } | null>(null);
   const [scaleAnalysis, setScaleAnalysis] = useState<ScalingAnalysis | null>(null);
   const [anomalies, setAnomalies] = useState<any[]>([]);
+  const [platformReport, setPlatformReport] = useState<any>(null);
+  const [allServices, setAllServices] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [julesRes, scaleRes, anomalyRes] = await Promise.allSettled([
+      const [julesRes, scaleRes, anomalyRes, reportRes, servicesRes] = await Promise.allSettled([
         api.get(`/ai/jules-history/${serviceId}/`),
         api.post(`/scaling/${serviceId}/analyze/`),
-        api.get(`/ai/anomalies/`, { params: { service_id: serviceId } })
+        api.get(`/ai/anomalies/`, { params: { service_id: serviceId } }),
+        api.get(`/ai/report/`),
+        api.get(`/services/`, { params: { page_size: 50 } }),
       ]);
       if (julesRes.status === "fulfilled") setJulesData(julesRes.value.data);
       if (scaleRes.status === "fulfilled") setScaleAnalysis(scaleRes.value.data);
       if (anomalyRes.status === "fulfilled") setAnomalies(Array.isArray(anomalyRes.value.data) ? anomalyRes.value.data : (anomalyRes.value.data?.results || []));
+      if (reportRes.status === "fulfilled") setPlatformReport(reportRes.value.data);
+      if (servicesRes.status === "fulfilled") {
+        const svcData = servicesRes.value.data;
+        setAllServices(svcData?.results || svcData || []);
+      }
     } catch (err: any) {
       setError(err?.message || "Failed to load insights");
     } finally {
@@ -89,6 +102,7 @@ export function AIInsightsTab({ serviceId }: { serviceId: string }) {
         <TabsList>
           <TabsTrigger value="ai"><Brain className="w-4 h-4 mr-1" /> AI Insights</TabsTrigger>
           <TabsTrigger value="security"><Shield className="w-4 h-4 mr-1" /> Security</TabsTrigger>
+          <TabsTrigger value="platform"><Server className="w-4 h-4 mr-1" /> Platform</TabsTrigger>
         </TabsList>
 
         <TabsContent value="ai" className="space-y-6 mt-6">
@@ -240,6 +254,137 @@ export function AIInsightsTab({ serviceId }: { serviceId: string }) {
 
         <TabsContent value="security" className="mt-6">
           <SecurityStatusTab serviceId={serviceId} />
+        </TabsContent>
+
+        <TabsContent value="platform" className="space-y-6 mt-6">
+          {/* Platform Health Overview */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="p-3 rounded-lg border border-border bg-card">
+              <div className="flex items-center gap-2 mb-1">
+                <Activity className="w-3.5 h-3.5 text-emerald-500" />
+                <span className="text-[10px] text-muted-foreground uppercase">Total Services</span>
+              </div>
+              <div className="text-xl font-bold">{allServices.length}</div>
+            </div>
+            <div className="p-3 rounded-lg border border-border bg-card">
+              <div className="flex items-center gap-2 mb-1">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                <span className="text-[10px] text-muted-foreground uppercase">Healthy</span>
+              </div>
+              <div className="text-xl font-bold text-emerald-500">
+                {allServices.filter((s: any) => s.latest_deployment?.status === "SUCCESS" || s.latest_deployment?.status === "RUNNING").length}
+              </div>
+            </div>
+            <div className="p-3 rounded-lg border border-border bg-card">
+              <div className="flex items-center gap-2 mb-1">
+                <XCircle className="w-3.5 h-3.5 text-red-500" />
+                <span className="text-[10px] text-muted-foreground uppercase">Failed</span>
+              </div>
+              <div className="text-xl font-bold text-red-500">
+                {allServices.filter((s: any) => s.latest_deployment?.status === "FAILED").length}
+              </div>
+            </div>
+            <div className="p-3 rounded-lg border border-border bg-card">
+              <div className="flex items-center gap-2 mb-1">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+                <span className="text-[10px] text-muted-foreground uppercase">Anomalies (24h)</span>
+              </div>
+              <div className="text-xl font-bold text-amber-500">{anomalies.length}</div>
+            </div>
+          </div>
+
+          {/* Daily Intelligence Report */}
+          {platformReport && (
+            <div className="p-4 rounded-xl border border-border bg-gradient-to-r from-violet-500/5 to-blue-500/5">
+              <div className="flex items-center gap-2 mb-3">
+                <BarChart3 className="w-4 h-4 text-violet-500" />
+                <h3 className="text-sm font-bold">Daily Intelligence Report</h3>
+                {platformReport.generated_at && (
+                  <span className="text-[10px] text-muted-foreground ml-auto">
+                    {new Date(platformReport.generated_at).toLocaleString()}
+                  </span>
+                )}
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div className="p-2 rounded-lg bg-black/20 text-center">
+                  <div className="text-lg font-bold">{platformReport.total_deployments ?? 0}</div>
+                  <div className="text-[10px] text-muted-foreground">Total Deploys</div>
+                </div>
+                <div className="p-2 rounded-lg bg-black/20 text-center">
+                  <div className="text-lg font-bold text-red-500">{platformReport.failed_deployments ?? 0}</div>
+                  <div className="text-[10px] text-muted-foreground">Failed</div>
+                </div>
+                <div className="p-2 rounded-lg bg-black/20 text-center">
+                  <div className="text-lg font-bold text-amber-500">{platformReport.anomalies_detected ?? 0}</div>
+                  <div className="text-[10px] text-muted-foreground">Anomalies</div>
+                </div>
+                <div className="p-2 rounded-lg bg-black/20 text-center">
+                  <div className="text-lg font-bold text-emerald-500">{platformReport.success_rate ?? "N/A"}</div>
+                  <div className="text-[10px] text-muted-foreground">Success Rate</div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Scaling Recommendations for This Service */}
+          {scaleAnalysis?.recommendation && scaleAnalysis.recommendation.action !== "none" && (
+            <div className="p-4 rounded-xl border border-border bg-gradient-to-r from-amber-500/5 to-orange-500/5">
+              <div className="flex items-center gap-2 mb-2">
+                <Zap className="w-4 h-4 text-amber-500" />
+                <h3 className="text-sm font-bold">Scaling Recommendation</h3>
+              </div>
+              <div className="flex items-center gap-2 mb-2">
+                <Badge variant={scaleAnalysis.recommendation.action === "scale_up" ? "destructive" : "secondary"} className="text-[10px]">
+                  {scaleAnalysis.recommendation.action.toUpperCase()}
+                </Badge>
+                <Badge variant="outline" className="text-[10px]">{scaleAnalysis.recommendation.urgency}</Badge>
+                {scaleAnalysis.recommendation.scale_up_by > 0 && (
+                  <span className="text-xs text-muted-foreground">+{scaleAnalysis.recommendation.scale_up_by} replicas</span>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">{scaleAnalysis.recommendation.reason}</p>
+            </div>
+          )}
+
+          {/* All Services Health */}
+          <div>
+            <h3 className="text-sm font-bold mb-3 flex items-center gap-2">
+              <Server className="w-4 h-4 text-blue-500" /> All Services
+            </h3>
+            <div className="space-y-2">
+              {allServices.length === 0 ? (
+                <div className="text-center py-6 text-sm text-muted-foreground">No services found.</div>
+              ) : (
+                allServices.map((svc: any) => {
+                  const depStatus = svc.latest_deployment?.status || "UNKNOWN";
+                  const isHealthy = depStatus === "SUCCESS" || depStatus === "RUNNING";
+                  return (
+                    <div key={svc.id} className="flex items-center justify-between p-3 rounded-lg border border-border bg-card">
+                      <div className="flex items-center gap-3">
+                        {isHealthy ? (
+                          <Wifi className="w-4 h-4 text-emerald-500" />
+                        ) : depStatus === "FAILED" ? (
+                          <WifiOff className="w-4 h-4 text-red-500" />
+                        ) : (
+                          <Activity className="w-4 h-4 text-amber-500" />
+                        )}
+                        <div>
+                          <span className="text-sm font-medium">{svc.name}</span>
+                          <span className="text-xs text-muted-foreground ml-2">{depStatus}</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        {svc.latest_deployment?.created_at && (
+                          <Clock className="w-3 h-3" />
+                        )}
+                        <span>{svc.latest_deployment?.created_at ? new Date(svc.latest_deployment.created_at).toLocaleDateString() : "—"}</span>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
         </TabsContent>
       </Tabs>
     </div>

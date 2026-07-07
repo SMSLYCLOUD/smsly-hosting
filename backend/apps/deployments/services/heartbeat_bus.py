@@ -31,6 +31,10 @@ _PUBSUB_CHANNEL = 'cluster_heartbeats'
 _KEY_PREFIX = 'cluster_heartbeat:'
 _SNAPSHOT_TTL_SECONDS = 60
 
+# Module-level cache for the Redis client to avoid creating a new
+# connection on every publish/get call.
+_redis_client = None
+
 
 def _redis_url() -> str | None:
     """Resolve the Redis URL for the heartbeat bus.
@@ -49,10 +53,17 @@ def _redis_url() -> str | None:
 
 
 def _get_redis():
-    """Return a connected redis client, or ``None`` if redis is
+    """Return a cached connected redis client, or ``None`` if redis is
     unavailable.  Uses Sentinel when configured, otherwise falls back
-    to the standalone URL.
+    to the standalone URL.  The client is cached at module level to
+    avoid creating a new connection on every call.
+
+    Reconnection is triggered by ``RedisError`` in callers — not by
+    a per-call ``ping()`` — to avoid unnecessary round-trips.
     """
+    global _redis_client
+    if _redis_client is not None:
+        return _redis_client
     url = _redis_url()
     if not url:
         return None
@@ -66,11 +77,19 @@ def _get_redis():
                 password=getattr(settings, 'REDIS_PASSWORD', None),
             )
             if conn is not None:
-                return conn
-        return redis.from_url(url, decode_responses=True)
+                _redis_client = conn
+                return _redis_client
+        _redis_client = redis.from_url(url, decode_responses=True)
+        return _redis_client
     except Exception as exc:
         logger.warning("heartbeat_bus: redis unavailable: %s", exc)
         return None
+
+
+def _invalidate_redis():
+    """Discard the cached Redis client so the next call creates a fresh one."""
+    global _redis_client
+    _redis_client = None
 
 
 def publish_heartbeat(peer_id, wg_address, status, term=None):
@@ -103,6 +122,7 @@ def publish_heartbeat(peer_id, wg_address, status, term=None):
         )
     except redis.RedisError as exc:
         logger.warning("heartbeat_bus: publish failed: %s", exc)
+        _invalidate_redis()
         return None
     return payload
 
@@ -113,22 +133,28 @@ def get_latest_heartbeats():
     Returns an empty list if redis is unavailable or no snapshots
     exist. Snapshots older than ``_SNAPSHOT_TTL_SECONDS`` are
     auto-expired by Redis and will not appear here.
+
+    Uses ``SCAN`` instead of ``KEYS`` to avoid blocking the Redis
+    event loop under large keyspaces.
     """
     import redis
     r = _get_redis()
     if r is None:
         return []
     try:
-        keys = list(r.keys(f"{_KEY_PREFIX}*"))
+        keys = list(r.scan_iter(match=f"{_KEY_PREFIX}*", count=200))
     except redis.RedisError as exc:
-        logger.warning("heartbeat_bus: keys() failed: %s", exc)
+        logger.warning("heartbeat_bus: scan_iter() failed: %s", exc)
+        return []
+    if not keys:
+        return []
+    try:
+        values = r.mget(keys)
+    except redis.RedisError as exc:
+        logger.warning("heartbeat_bus: mget() failed: %s", exc)
         return []
     out = []
-    for key in keys:
-        try:
-            body = r.get(key)
-        except redis.RedisError:
-            continue
+    for body in values:
         if not body:
             continue
         try:
@@ -194,6 +220,10 @@ def _persist_one_heartbeat(snapshot):
         return False
 
 
+from celery import shared_task
+
+
+@shared_task
 def persist_heartbeats_task():
     """Celery task: drain the bus and write one audit row per
     peer. Runs every 60 seconds via the beat schedule. The hot

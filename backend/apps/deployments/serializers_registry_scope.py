@@ -50,6 +50,13 @@ class ScopedRegistrySerializer(serializers.ModelSerializer):
         validated_data["object_id"] = scope_id
         return super().create(validated_data)
 
+    def update(self, instance, validated_data):
+        # Strip write-only scope fields that are not model attributes.
+        # These are only used during create() to resolve the GenericForeignKey.
+        validated_data.pop("scope_type", None)
+        validated_data.pop("scope_id", None)
+        return super().update(instance, validated_data)
+
 
 class ScopedRegistryReadSerializer(serializers.ModelSerializer):
     """Lightweight read serializer — no password, no write-only fields."""

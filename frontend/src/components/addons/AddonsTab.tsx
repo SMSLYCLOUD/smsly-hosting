@@ -6,6 +6,7 @@ import { Database, RotateCcw, Plus, Trash2, RefreshCw, Download, Shield, Loader2
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { addonsApi, Addon } from '@/lib/api';
 import { ADDON_TYPES } from '@/lib/addonConstants';
+import { AddonLogsViewer } from '@/components/addons/AddonLogsViewer';
 
 
 interface Backup {
@@ -502,6 +503,17 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                                                     ))}
                                                 </div>
                                             )}
+                                        </div>
+
+                                        {/* Logs */}
+                                        <div>
+                                            <h5 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">Logs</h5>
+                                            <AddonLogsViewer
+                                                addonId={addon.id}
+                                                addonType={addon.addon_type}
+                                                status={addon.status}
+                                                compact
+                                            />
                                         </div>
                                     </div>
                                 )}

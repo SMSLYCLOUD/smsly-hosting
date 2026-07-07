@@ -178,7 +178,7 @@ class ScopedRegistry(models.Model):
             or getattr(  # noqa: B009
                 __import__("django.conf", fromlist=["settings"]).settings,
                 "CONTAINER_REGISTRY_URL",
-                "127.0.0.1:5000",
+                "registry:5000",
             ),
             "username": PlatformConfig.get_config_value("registry_user")
             or "smsly-registry",

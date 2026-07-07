@@ -626,11 +626,11 @@ else
     SECRETS_GENERATED=false
     while IFS='=' read -r _smsly_secrets_key _smsly_secrets_val; do
         case "$_smsly_secrets_key" in
-            SECRET_KEY|FIELD_ENCRYPTION_KEY|POSTGRES_PASSWORD|REDIS_PASSWORD|RABBITMQ_PASSWORD|GATEWAY_SECRET|GITHUB_WEBHOOK_SECRET|AUTOSCALER_API_TOKEN|FRP_AUTH_TOKEN|PGCAT_ADMIN_PASSWORD|REPLICATION_PASSWORD|SENTINEL_PASSWORD)
+            SECRET_KEY|FIELD_ENCRYPTION_KEY|POSTGRES_PASSWORD|REDIS_PASSWORD|RABBITMQ_PASSWORD|GATEWAY_SECRET|GITHUB_WEBHOOK_SECRET|AUTOSCALER_API_TOKEN|FRP_AUTH_TOKEN|PGCAT_ADMIN_PASSWORD|REPLICATION_PASSWORD|SENTINEL_PASSWORD|REGISTRY_HTTP_SECRET|CROWDSEC_BOUNCER_KEY)
                 printf -v "$_smsly_secrets_key" '%s' "$_smsly_secrets_val"
                 ;;
         esac
-    done < <(python3 "$INSTALL_DIR/scripts/generate_env_secrets.py" 2>/dev/null | grep -E '^[A-Z_]+=' || true)
+    done < <(python3 "$INSTALL_DIR/scripts/generate_env_secrets.py" --shell 2>/dev/null | grep -E '^[A-Z_]+=' || true)
     unset _smsly_secrets_key _smsly_secrets_val
     if [ -n "${SECRET_KEY:-}" ] && [ -n "${FIELD_ENCRYPTION_KEY:-}" ]; then
         SECRETS_GENERATED=true
@@ -657,6 +657,7 @@ else
     [ -n "${GRAFANA_PASSWORD:-}" ] || GRAFANA_PASSWORD="$(python3 -c "import secrets,string; print(''.join(secrets.choice(string.ascii_letters+string.digits+'-_') for _ in range(40)))" 2>/dev/null || openssl rand -base64 30 | tr -d '+/=' )"
     [ -n "${BACKUP_ENCRYPTION_KEY:-}" ] || BACKUP_ENCRYPTION_KEY="$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null || openssl rand -base64 32)"
     [ -n "${CROWDSEC_BOUNCER_KEY:-}" ] || CROWDSEC_BOUNCER_KEY="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
+    [ -n "${REGISTRY_HTTP_SECRET:-}" ] || REGISTRY_HTTP_SECRET="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
     [ -n "${BACKUP_REQUIRE_ENCRYPTION:-}" ] || BACKUP_REQUIRE_ENCRYPTION="true"
     # SECURITY: SSH strict host-key checking. Defaults to false (accept-first)
     # for convenience during initial provisioning. Operators managing trusted
@@ -763,6 +764,7 @@ SENTINEL_PASSWORD=${SENTINEL_PASSWORD:-}
 # ── PostgreSQL streaming replication ──────────────────────────────────
 REPLICATION_PASSWORD=${REPLICATION_PASSWORD:-}
 DB_REPLICA_HOSTS=${DB_REPLICA_HOSTS:-}
+REGISTRY_HTTP_SECRET=${REGISTRY_HTTP_SECRET:-}
 REDIS_SOCKET_TIMEOUT=5
 CELERY_BROKER_URL=amqp://smsly_user:$RABBITMQ_PASSWORD@rabbitmq:5672//
 
@@ -876,7 +878,7 @@ EOF
         # This allows the domain-config signal to persist DOMAIN/USE_SSL back to
         # .env when the user updates settings via the web UI — no SSH needed.
         chown root:1000 "$INSTALL_DIR/.env"
-        chmod 664 "$INSTALL_DIR/.env"
+        chmod 640 "$INSTALL_DIR/.env"
         # Docker Compose v2+ resolves .env from the compose file's parent directory,
         # not the CWD. Create a symlink so all compose files can find it.
         _compose_env_link="$INSTALL_DIR/infrastructure/docker/.env"

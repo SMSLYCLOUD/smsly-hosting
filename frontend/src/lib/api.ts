@@ -888,13 +888,7 @@ export const systemApi = {
     const response = await api.get('/system/domain-config/');
     return response.data;
   },
-  updateDomainConfig: async (data: {
-    domain?: string;
-    use_ssl?: boolean;
-    wildcard_subdomains?: boolean;
-    cloudflare_api_token?: string;
-    server_ip?: string;
-  }): Promise<any> => {
+  updateDomainConfig: async (data: Record<string, any>): Promise<any> => {
     const response = await api.put('/system/domain-config/', data);
     return response.data;
   },
@@ -1848,6 +1842,10 @@ export const addonsApi = {
       const res = await api.post(`/addons/${addonId}/toggle_bucket_public/`, { is_public: isPublic });
       return res.data;
     },
+    getLogs: async (addonId: string, tail: number = 200): Promise<{ id: string; addon_type: string; container_name: string; status: string; logs: string; message?: string }> => {
+      const res = await api.get(`/addons/${addonId}/logs/?tail=${tail}`);
+      return res.data;
+    },
 };
 
 export const addonMaintenanceApi = {
@@ -2384,5 +2382,82 @@ export const infisicalApi = {
   sync: async (data?: { direction?: 'push' | 'pull'; workspace?: string }) => {
     const response = await api.post('/platform-config/sync-infisical/', data || {});
     return response.data;
+  },
+};
+
+// ── Alert Rules & Notification Channels ──────────────────────────────
+
+export interface NotificationChannel {
+  id: string;
+  name: string;
+  channel_type: 'email' | 'slack' | 'sms' | 'webhook';
+  target: string;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AlertRule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  metric: string;
+  operator: string;
+  threshold: number;
+  severity: 'info' | 'warning' | 'critical';
+  channels: string[];
+  cooldown_minutes: number;
+  message_template: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export const alertsApi = {
+  // Notification Channels
+  listChannels: async (): Promise<NotificationChannel[]> => {
+    const res = await api.get('/notifications/channels/');
+    return Array.isArray(res.data) ? res.data : (res.data?.results || []);
+  },
+  createChannel: async (data: Partial<NotificationChannel>): Promise<NotificationChannel> => {
+    const res = await api.post('/notifications/channels/', data);
+    return res.data;
+  },
+  updateChannel: async (id: string, data: Partial<NotificationChannel>): Promise<NotificationChannel> => {
+    const res = await api.patch(`/notifications/channels/${id}/`, data);
+    return res.data;
+  },
+  deleteChannel: async (id: string): Promise<void> => {
+    await api.delete(`/notifications/channels/${id}/`);
+  },
+  testChannel: async (id: string): Promise<{ status: string; message?: string; error?: string }> => {
+    const res = await api.post(`/notifications/channels/${id}/test/`);
+    return res.data;
+  },
+
+  // Alert Rules
+  listRules: async (): Promise<AlertRule[]> => {
+    const res = await api.get('/notifications/rules/');
+    return Array.isArray(res.data) ? res.data : (res.data?.results || []);
+  },
+  createRule: async (data: Partial<AlertRule>): Promise<AlertRule> => {
+    const res = await api.post('/notifications/rules/', data);
+    return res.data;
+  },
+  updateRule: async (id: string, data: Partial<AlertRule>): Promise<AlertRule> => {
+    const res = await api.patch(`/notifications/rules/${id}/`, data);
+    return res.data;
+  },
+  deleteRule: async (id: string): Promise<void> => {
+    await api.delete(`/notifications/rules/${id}/`);
+  },
+  toggleRule: async (id: string): Promise<{ enabled: boolean }> => {
+    const res = await api.post(`/notifications/rules/${id}/toggle/`);
+    return res.data;
+  },
+
+  // SMTP
+  testSmtp: async (toEmail: string): Promise<{ status: string; message?: string; error?: string }> => {
+    const res = await api.post('/notifications/test-smtp/', { to_email: toEmail });
+    return res.data;
   },
 };

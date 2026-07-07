@@ -4956,6 +4956,14 @@ class DomainConfigView(GenericAPIView):
             'trivy_enabled': config.trivy_enabled,
             'trivy_fail_on_severity': config.trivy_fail_on_severity,
             'enforce_device_trust': config.enforce_device_trust,
+            # SMTP
+            'smtp_host': config.smtp_host,
+            'smtp_port': config.smtp_port,
+            'smtp_username': config.smtp_username,
+            'smtp_password_set': bool(config.smtp_password),
+            'smtp_use_tls': config.smtp_use_tls,
+            'smtp_from_email': config.smtp_from_email,
+            'smtp_from_name': config.smtp_from_name,
             'updated_at': config.updated_at,
         })
 
@@ -5129,6 +5137,19 @@ class DomainConfigView(GenericAPIView):
             # Device Trust (Beta)
             if 'enforce_device_trust' in data:
                 config.enforce_device_trust = _parse_bool(data.get('enforce_device_trust'))
+            # SMTP / Email
+            for _field in ('smtp_host', 'smtp_username', 'smtp_from_email', 'smtp_from_name'):
+                if _field in data:
+                    setattr(config, _field, str(data.get(_field) or '').strip()[:255])
+            if 'smtp_port' in data:
+                try:
+                    config.smtp_port = max(1, min(65535, int(data['smtp_port'])))
+                except (TypeError, ValueError):
+                    pass
+            if 'smtp_password' in data:
+                config.smtp_password = str(data.get('smtp_password') or '').strip()
+            if 'smtp_use_tls' in data:
+                config.smtp_use_tls = _parse_bool(data.get('smtp_use_tls'))
 
             # Validate: wildcard requires Cloudflare token
             if config.wildcard_subdomains and config.use_ssl and not config.cloudflare_api_token:

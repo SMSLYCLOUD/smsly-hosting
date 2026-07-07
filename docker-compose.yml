@@ -427,28 +427,27 @@ services:
     restart: unless-stopped
     ports:
       # Localhost by default; set REGISTRY_BIND_IP=0.0.0.0 or 10.100.0.1 in .env for multi-node mesh
+      # For multi-node: set REGISTRY_BIND_IP=0.0.0.0 and CONTAINER_REGISTRY_URL=<master_mesh_ip>:5000
       - "${REGISTRY_BIND_IP:-127.0.0.1}:5000:5000"
     environment:
       REGISTRY_AUTH_HTPASSWD_REALM: registry-realm
       REGISTRY_AUTH_HTPASSWD_PATH: /auth/htpasswd
       REGISTRY_HTTP_TLS_CERTIFICATE: /certs/registry.crt
       REGISTRY_HTTP_TLS_KEY: /certs/registry.key
+      # Storage settings
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+      REGISTRY_HTTP_SECRET: ${REGISTRY_HTTP_SECRET:-}
     volumes:
       - registry_data:/var/lib/registry
       - ./certs:/certs:ro,z
       - ./auth:/auth:ro,z
     healthcheck:
-      # The registry:2.8.3 image is scratch-based with no shell and no
-      # 'health' subcommand. The actual registry process health is
-      # monitored by docker restart on crash. To get a proper health
-      # probe here, we'd need to add a shell + curl/nc to the image,
-      # which is a larger change. For now, disable the healthcheck
-      # (docker will still restart the container if it crashes).
-      test: ["CMD-SHELL", "exit 0"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
+      # registry:2.8.3 is scratch-based (no shell, no curl/wget).
+      # The Docker restart policy handles crash recovery.
+      # For active health monitoring, run the registry-health.sh script
+      # from the host or use an external monitoring container.
+      test: ["NONE"]
+      disable: true
     # Traefik labels for the public registry.<DOMAIN> route.
     # Inside the VPN, nodes can use either:
     #   - https://registry.<DOMAIN>/v2/... (via Traefik, same LE cert)

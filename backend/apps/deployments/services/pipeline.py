@@ -1230,7 +1230,6 @@ class PipelineManager:
             if injected_count:
                 append_log(self.deployment, f"\n🔧 Auto-injected {injected_count} env vars.\n")
 
-            append_log(self.deployment, "🔐 Infiscial Vault KMS Sync: Verified runtime secret synchronization and encryption bridge.\n")
             self._inject_proxy_runtime_defaults(scan_result)
             log_exhaustive_env_diagnostics(self.deployment, self.service, "Auto-Scan / Manifest")
 
@@ -2894,11 +2893,137 @@ class PipelineManager:
                     ) from e
                 raise BuildError("Command failed") from e
 
+    def _ensure_docker_network(self):
+        """Ensure the Docker network for deployed services exists.
+
+        Creates ``smsly-net`` (or the configured ``DOCKER_NETWORK``) if it
+        does not already exist.  This is a no-op when the network is
+        already present.  External networks (pre-created by the operator)
+        are not touched.
+        """
+        network_name = os.getenv('DOCKER_NETWORK', 'smsly-net')
+        try:
+            result = subprocess.run(
+                ['docker', 'network', 'inspect', network_name],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                return  # network exists
+            # Create the network
+            subprocess.run(
+                ['docker', 'network', 'create', network_name],
+                capture_output=True, text=True, timeout=10,
+            )
+            append_log(self.deployment, f"Docker network '{network_name}' created.\n")
+        except Exception as e:
+            # Non-fatal: if the network can't be created, the push may
+            # still work if the registry is on a reachable network.
+            append_log(self.deployment, f"Warning: could not ensure Docker network '{network_name}': {e}\n")
+
+    def _ensure_registry_running(self):
+        """Ensure the internal registry container is running (if using internal registry).
+
+        Only applies when CONTAINER_REGISTRY_URL points to the platform's
+        own registry (registry:5000, 127.0.0.1:5000, localhost:5000).
+        For external registries this is a no-op.
+        """
+        from apps.deployments.models_registry_scope import ScopedRegistry
+
+        registry_url = None
+        try:
+            scope_obj = self.service.project or self.service.owner
+            registry_info = ScopedRegistry.resolve_registry_credentials(scope_obj)
+            registry_url = (registry_info.get("url") or "").split("://")[-1]
+        except Exception:
+            pass
+
+        if not registry_url:
+            return
+
+        # Only check for internal registries
+        internal_markers = ('registry:', '127.0.0.1:', 'localhost:')
+        if not any(registry_url.startswith(m) for m in internal_markers):
+            return  # external registry — nothing to bootstrap
+
+        # Extract container name from Docker DNS (registry:5000 → smsly-hosting-registry-1)
+        if registry_url.startswith('registry:'):
+            container_pattern = 'smsly-hosting-registry'
+        else:
+            return  # loopback — no container to start
+
+        try:
+            result = subprocess.run(
+                ['docker', 'ps', '-a', '--filter', f'name={container_pattern}', '--format', '{{.Names}} {{.Status}}'],
+                capture_output=True, text=True, timeout=5,
+            )
+            if not result.stdout.strip():
+                append_log(self.deployment, f"Warning: registry container '{container_pattern}' not found.\n")
+                return
+
+            for line in result.stdout.strip().splitlines():
+                parts = line.split(' ', 1)
+                name = parts[0]
+                status = parts[1] if len(parts) > 1 else ''
+                if 'Up' not in status:
+                    subprocess.run(
+                        ['docker', 'start', name],
+                        capture_output=True, text=True, timeout=15,
+                    )
+                    append_log(self.deployment, f"Registry container '{name}' was stopped; started it.\n")
+        except Exception as e:
+            append_log(self.deployment, f"Warning: could not check/start registry container: {e}\n")
+
+    def _ensure_registry_login(self):
+        """Ensure Docker is logged in to the registry before pushing.
+
+        Runs ``docker login`` with configured credentials so that
+        ``docker push`` / ``docker pull`` commands succeed without
+        requiring manual pre-authentication on the host.
+        """
+        from apps.deployments.models_registry_scope import ScopedRegistry
+
+        registry_url = None
+        reg_username = None
+        reg_password = None
+
+        try:
+            scope_obj = self.service.project or self.service.owner
+            registry_info = ScopedRegistry.resolve_registry_credentials(scope_obj)
+            registry_url = (registry_info.get("url") or "").split("://")[-1]
+            reg_username = registry_info.get("username") or ""
+            reg_password = registry_info.get("password") or ""
+        except Exception:
+            pass
+
+        if not registry_url or not reg_username or not reg_password:
+            return  # no credentials to login with
+
+        try:
+            login_proc = subprocess.run(
+                ['docker', 'login', registry_url, '-u', reg_username, '--password-stdin'],
+                input=reg_password, capture_output=True, text=True, timeout=15,
+            )
+            if login_proc.returncode == 0:
+                append_log(self.deployment, f"Registry login successful ({registry_url}).\n")
+            else:
+                append_log(self.deployment, f"Warning: registry login failed for {registry_url}: {login_proc.stderr.strip()}\n")
+        except Exception as e:
+            append_log(self.deployment, f"Warning: could not login to registry {registry_url}: {e}\n")
+
     def _push_image(self):
         """Step 3: Push to Registry."""
         # Skip push for DOCKER type: image is already in the registry
         if self.service.deploy_type == 'DOCKER' and self.service.docker_image:
             return
+
+        # ── Auto-ensure Docker network exists ─────────────────────
+        self._ensure_docker_network()
+
+        # ── Auto-ensure internal registry is running ──────────────
+        self._ensure_registry_running()
+
+        # ── Auto-login to registry if credentials available ────────
+        self._ensure_registry_login()
 
         # ── Resolve registry URL and credentials ─────────────────
         # Priority: 1) deployment.registry_override
@@ -2961,7 +3086,13 @@ class PipelineManager:
             if pushed_to_registry:
                 update_stage(self.deployment, 'Push', 'success')
                 append_log(self.deployment, f"✓ Pushed: {remote_tag}\n")
-                log_exhaustive_push_diagnostics(self.deployment, registry_url, remote_tag)
+                build_safe = log_exhaustive_push_diagnostics(self.deployment, registry_url, remote_tag)
+                if not build_safe:
+                    update_stage(self.deployment, 'Push', 'blocked')
+                    raise SystemError(
+                        "Deployment BLOCKED: Trivy scan found vulnerabilities exceeding "
+                        f"the configured severity threshold. Check the vulnerability report."
+                    )
             else:
                 if push_error:
                     append_log(self.deployment, f"Registry error details: {push_error}\n")
