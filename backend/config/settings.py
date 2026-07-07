@@ -850,6 +850,10 @@ ASGI_APPLICATION = 'config.asgi.application'
 
 DATABASE_CONNECT_TIMEOUT = config('DATABASE_CONNECT_TIMEOUT', default=5, cast=int)
 REDIS_SOCKET_TIMEOUT = config('REDIS_SOCKET_TIMEOUT', default=5, cast=int)
+# channels_redis pubsub connections are intentionally idle while waiting
+# for messages — a short read timeout would kill every WebSocket after 5s
+# of silence.  Use a separate, longer timeout for the channels layer.
+CHANNELS_REDIS_SOCKET_TIMEOUT = config('CHANNELS_REDIS_SOCKET_TIMEOUT', default=60, cast=int)
 
 _db_url = _resolve_db_url()
 if os.environ.get("SMSLY_MIGRATION_MODE") == "true" or os.environ.get("SMSLY_DISABLE_STARTUP_TASKS") == "true":
@@ -1263,8 +1267,8 @@ if SENTINEL_ENABLED:
 else:
     _channel_hosts = [{
         'address': CHANNEL_REDIS_URL,
-        'socket_connect_timeout': REDIS_SOCKET_TIMEOUT,
-        'socket_timeout': REDIS_SOCKET_TIMEOUT,
+        'socket_connect_timeout': CHANNELS_REDIS_SOCKET_TIMEOUT,
+        'socket_timeout': CHANNELS_REDIS_SOCKET_TIMEOUT,
     }]
 
 CHANNEL_LAYERS = {
