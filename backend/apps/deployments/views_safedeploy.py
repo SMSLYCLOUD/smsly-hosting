@@ -97,7 +97,6 @@ def send_approval_notification(approval, service_pk):
 
     if not delivered:
         try:
-            from django.conf import settings as django_settings
             from django.core.mail import send_mail
             send_mail(
                 subject=subject,

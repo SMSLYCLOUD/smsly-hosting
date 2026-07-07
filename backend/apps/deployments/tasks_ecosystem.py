@@ -741,6 +741,7 @@ def _resolve_from_manifest_or_fallback(
     """
     # Try to find cloned source for this repo
     source_dir = _find_cloned_source_for_repo(repo, service_name)
+    resolved_env = None
 
     if source_dir:
         try:
@@ -811,12 +812,13 @@ def _resolve_from_manifest_or_fallback(
                 elif any(p in v_str.lower() for p in _MOCK_PATTERNS):
                     _needs_senate[k] = v
             # Also include unresolved and heuristic vars from manifest resolver
-            for k in getattr(resolver, 'unresolved_vars', []):
-                if k not in _needs_senate:
-                    _needs_senate[k] = ""
-            for k in getattr(resolver, 'heuristic_vars', []):
-                if k not in _needs_senate:
-                    _needs_senate[k] = resolved_env.get(k, "")
+            if source_dir:
+                for k in getattr(resolver, 'unresolved_vars', []):
+                    if k not in _needs_senate:
+                        _needs_senate[k] = ""
+                for k in getattr(resolver, 'heuristic_vars', []):
+                    if k not in _needs_senate:
+                        _needs_senate[k] = resolved_env.get(k, "")
 
             if _needs_senate:
                 senate_suggestions = EnvironmentIntelligenceService.resolve_environment(

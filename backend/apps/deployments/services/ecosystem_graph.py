@@ -47,5 +47,7 @@ def build_ecosystem_graph(manifest_content: str) -> EcosystemGraph:
     if isinstance(manifest_content, str):
         parsed = parse_ecosystem_manifest(manifest_content)
         return EcosystemGraph(parsed)
-    # Support for legacy graph object if passing service objects
-    return manifest_content
+    # Support passing a pre-parsed dict directly (legacy callers)
+    if isinstance(manifest_content, dict):
+        return EcosystemGraph(manifest_content)
+    raise TypeError(f"Expected str or dict manifest, got {type(manifest_content).__name__}")
