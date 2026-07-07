@@ -97,10 +97,16 @@ from .utils import validate_and_sanitize_path
 
 
 def _resolve_encryption_key(request):
-    """Extract encryption key from request data or uploaded JSON file."""
+    """Extract encryption key from request data (encryption_key, key_id, or uploaded JSON)."""
     key = request.data.get('encryption_key', '').strip()
     if key:
         return key
+    key_id = request.data.get('key_id', '').strip()
+    if key_id:
+        from apps.deployments.services.backup_service import BackupService
+        key_material = BackupService.lookup_key_by_id(key_id)
+        if key_material:
+            return key_material
     key_file = request.FILES.get('key_file')
     if key_file:
         import json
@@ -5509,6 +5515,52 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
                 },
             ).save()
         return Response(result, status=status.HTTP_201_CREATED if result.get('created') else status.HTTP_200_OK)
+
+    @action(detail=False, methods=['get'], url_path='list-keys')
+    def list_keys(self, request):
+        """Return stored backup encryption keys (fingerprints only, no key material)."""
+        from apps.deployments.models_backup import BackupEncryptionKey
+        keys = BackupEncryptionKey.objects.all().order_by('-created_at')
+        return Response([
+            {
+                'id': str(k.id),
+                'key_id': k.key_id,
+                'fingerprint': k.fingerprint,
+                'label': k.label,
+                'source': k.source,
+                'is_active': k.is_active,
+                'created_at': k.created_at.isoformat() if k.created_at else None,
+            }
+            for k in keys
+        ])
+
+    @action(detail=False, methods=['post'], url_path='delete-key')
+    def delete_key(self, request):
+        """Delete a stored backup encryption key by id. Admin only.
+        Cannot delete the active (AUTO) key."""
+        from apps.deployments.models_backup import BackupEncryptionKey
+        if not request.user.is_superuser:
+            return Response(
+                {'error': 'Admin only.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        key_id_param = str(request.data.get('id') or '').strip()
+        if not key_id_param:
+            return Response(
+                {'error': '"id" is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            key = BackupEncryptionKey.objects.get(id=key_id_param)
+        except BackupEncryptionKey.DoesNotExist:
+            return Response({'error': 'Key not found.'}, status=status.HTTP_404_NOT_FOUND)
+        if key.is_active and key.source == 'AUTO':
+            return Response(
+                {'error': 'Cannot delete the active local encryption key.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        key.delete()
+        return Response({'deleted': True, 'id': key_id_param})
 
     @action(detail=True, methods=['get'], url_path='header')
     def header(self, request, pk=None):

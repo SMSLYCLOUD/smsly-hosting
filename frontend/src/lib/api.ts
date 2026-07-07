@@ -1763,6 +1763,16 @@ export const backupsApi = {
     const res = await api.get(`${prefix}/`);
     return Array.isArray(res.data) ? res.data : (res.data?.results || []);
   },
+  listKeys: async (scope: 'service' | 'server'): Promise<any[]> => {
+    const prefix = scope === 'server' ? '/server/backups' : '/backups';
+    const res = await api.get(`${prefix}/list-keys/`);
+    return Array.isArray(res.data) ? res.data : [];
+  },
+  deleteKey: async (scope: 'service' | 'server', keyId: string): Promise<any> => {
+    const prefix = scope === 'server' ? '/server/backups' : '/backups';
+    const res = await api.post(`${prefix}/delete-key/`, { id: keyId });
+    return res.data;
+  },
 };
 
 export const addonsApi = {

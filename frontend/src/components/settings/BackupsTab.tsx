@@ -83,6 +83,7 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
     const [keyPromptSubmitting, setKeyPromptSubmitting] = useState(false);
     const [keyPromptSaveForFuture, setKeyPromptSaveForFuture] = useState(false);
     const [keyPromptKeyId, setKeyPromptKeyId] = useState('');
+    const [storedKeys, setStoredKeys] = useState<any[]>([]);
 
     // Pre-restore snapshot override dialog
     const [snapOverrideOpen, setSnapOverrideOpen] = useState(false);
@@ -313,7 +314,16 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
         }
     };
 
-    const handleRestore = async (id: string, encryptionKey?: string) => {
+    const loadStoredKeys = async () => {
+        try {
+            const keys = await backupsApi.listKeys('service');
+            setStoredKeys(keys);
+        } catch {
+            setStoredKeys([]);
+        }
+    };
+
+    const handleRestore = async (id: string, encryptionKey?: string, keyId?: string) => {
         if (!await confirm({ title: 'Restore backup?', message: 'Are you sure? This will overwrite the current service state.', variant: 'destructive', confirmText: 'Restore' })) return;
 
         setRestoringId(id);
@@ -323,7 +333,13 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
         setDeploymentLogs('');
 
         try {
-            await api.post(`/backups/${id}/restore/`, { confirm: true, ...(encryptionKey ? { encryption_key: encryptionKey } : {}) });
+            const body: any = { confirm: true };
+            if (keyId) {
+                body.key_id = keyId;
+            } else if (encryptionKey) {
+                body.encryption_key = encryptionKey;
+            }
+            await api.post(`/backups/${id}/restore/`, body);
             toast({ title: "Restore Started", description: "Service will restart once restored. Monitoring deployment progress..." });
 
             // Start monitoring deployment status
@@ -346,6 +362,7 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                 setKeyPromptOpen(true);
                 setRestoringId(null);
                 setRestoreStatus('');
+                loadStoredKeys();
                 return;
             }
             // If pre-restore snapshot failed, show override dialog
@@ -367,30 +384,35 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
     };
 
     const submitEncryptionKey = async () => {
-        if (!keyPromptBackupId || !keyPromptValue.trim()) {
-            setKeyPromptError('Please enter the encryption key.');
+        const usingStoredKey = keyPromptKeyId && keyPromptValue === '__imported__';
+        if (!keyPromptBackupId || (!keyPromptValue.trim() && !usingStoredKey)) {
+            setKeyPromptError('Please select a stored key or enter the encryption key.');
             return;
         }
         setKeyPromptSubmitting(true);
         setKeyPromptError('');
         try {
-            if (keyPromptSaveForFuture && keyPromptKeyId) {
+            if (keyPromptSaveForFuture && keyPromptKeyId && !usingStoredKey) {
                 try {
                     await backupsApi.importKey('service', {
                         key_id: keyPromptKeyId,
                         key_material: keyPromptValue.trim(),
                         label: 'Imported from cross-master restore',
                     });
-                    toast({ title: 'Key saved', description: 'Encryption key imported. Future restores from this master won\'t need the key.' });
+                    toast({ title: 'Key saved', description: 'Encryption key imported.' });
                 } catch (importErr: any) {
                     if (importErr?.response?.status === 403) {
-                        toast({ title: 'Admin only', description: 'Key import requires superuser. The key will be used for this restore only.', variant: 'default' });
+                        toast({ title: 'Admin only', description: 'Key import requires superuser.', variant: 'default' });
                     } else {
                         toast({ title: 'Import failed', description: 'Key will be used for this restore only.', variant: 'default' });
                     }
                 }
             }
-            await handleRestore(keyPromptBackupId, keyPromptValue.trim());
+            if (usingStoredKey) {
+                await handleRestore(keyPromptBackupId, undefined, keyPromptKeyId);
+            } else {
+                await handleRestore(keyPromptBackupId, keyPromptValue.trim());
+            }
             setKeyPromptOpen(false);
         } catch {
             // handleRestore already shows the toast on error
@@ -1607,14 +1629,42 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                         {keyPromptError}
                     </p>
                     <p className="text-xs text-muted-foreground mb-4">
-                        This backup was encrypted on a different master. Enter the source master&apos;s
-                        backup encryption key to decrypt and restore it.
+                        This backup was encrypted on a different master. Select a stored key below
+                        or enter the source master&apos;s encryption key manually.
                     </p>
+                    {storedKeys.length > 0 && (
+                        <div className="mb-4">
+                            <label className="text-xs text-muted-foreground block mb-1">Stored keys:</label>
+                            <select
+                                className="w-full h-9 px-3 border border-border rounded-md bg-background text-sm"
+                                value=""
+                                onChange={(e) => {
+                                    const val = e.target.value;
+                                    if (val === '__manual__') {
+                                        setKeyPromptValue('');
+                                        return;
+                                    }
+                                    const selected = storedKeys.find(k => k.key_id === val);
+                                    if (selected) {
+                                        setKeyPromptValue('__imported__');
+                                        setKeyPromptKeyId(selected.key_id);
+                                    }
+                                }}
+                            >
+                                <option value="">-- Enter key manually --</option>
+                                {storedKeys.filter(k => !k.is_active).map(k => (
+                                    <option key={k.key_id} value={k.key_id}>
+                                        {k.label || k.key_id} ({k.source === 'IMPORTED' ? 'imported' : 'auto'})
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                    )}
                     <Input
                         type="password"
-                        placeholder="Backup encryption key"
+                        placeholder="Or enter encryption key manually"
                         value={keyPromptValue}
-                        onChange={(e) => setKeyPromptValue(e.target.value)}
+                        onChange={(e) => { setKeyPromptValue(e.target.value); setKeyPromptKeyId(''); }}
                         onKeyDown={(e) => { if (e.key === 'Enter') submitEncryptionKey(); }}
                         autoFocus
                         className="mb-4"
