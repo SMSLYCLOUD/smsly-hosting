@@ -1261,7 +1261,11 @@ CHANNEL_REDIS_URL = config('CHANNEL_REDIS_URL', default=standalone_url(_REDIS_BA
 if SENTINEL_ENABLED:
     _channel_hosts = sentinel_channel_layer_config(db=1, password=REDIS_PASSWORD)
 else:
-    _channel_hosts = [CHANNEL_REDIS_URL]
+    _channel_hosts = [{
+        'address': CHANNEL_REDIS_URL,
+        'socket_connect_timeout': REDIS_SOCKET_TIMEOUT,
+        'socket_timeout': REDIS_SOCKET_TIMEOUT,
+    }]
 
 CHANNEL_LAYERS = {
     'default': {
@@ -1271,6 +1275,7 @@ CHANNEL_LAYERS = {
             'capacity': 1500,
             'expiry': 10,
             'group_expiry': 86400,
+            'symmetric_encryption_keys': [],
         },
     },
 }
