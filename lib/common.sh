@@ -469,6 +469,19 @@ get_db_service() {
     fi
 }
 
+get_redis_service() {
+    # Return the correct redis service name for the current compose file.
+    # Returns:
+    #   "redis-primary" for HA/prod compose
+    #   "redis"           for legacy dev compose
+    local ct="${COMPOSE_FILE:-docker-compose.prod.yml}"
+    if [ -f "$ct" ] && grep -q "^  *redis-replica:" "$ct" 2>/dev/null; then
+        echo "redis-primary"
+    else
+        echo "redis"
+    fi
+}
+
 compose_stack_services() {
     local services=""
     services="$(docker compose -f "$COMPOSE_FILE" config --services)" || return $?

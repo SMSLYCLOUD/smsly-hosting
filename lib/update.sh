@@ -571,13 +571,13 @@ fi
             echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 verify_agent_lite_connectivity
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans redis rabbitmq socket-proxy
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_redis_service) rabbitmq socket-proxy
                 sync_agent_lite_rabbitmq_password
             elif [ "$MODE_NODE" = "true" ]; then
                 stop_node_excluded_services
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_db_service) $(get_pgcat_if_exists) redis rabbitmq socket-proxy registry route-fallback traefik
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) rabbitmq socket-proxy registry route-fallback traefik
             else
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_db_service) $(get_pgcat_if_exists) redis socket-proxy
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) socket-proxy
             fi
             # Stop backend, celery & pgcat so their DB connections don't block
             # migrations (ALTER TABLE requires exclusive locks).
@@ -673,7 +673,7 @@ fi
             echo -e "${BLUE}  → Starting pgcat & backend...${NC}"
             if [ -n "$(get_pgcat_if_exists)" ]; then docker compose -f "$COMPOSE_FILE" up -d --no-deps pgcat 2>/dev/null || true; fi
             if [ "$MODE_AGENT_LITE" = "true" ]; then
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans redis rabbitmq socket-proxy
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_redis_service) rabbitmq socket-proxy
                 sync_agent_lite_rabbitmq_password
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate backend
             else
@@ -750,12 +750,12 @@ fi
             # This does a graceful zero-downtime replacement instead of an explicit hard stop
             echo -e "${BLUE}    ↳ Starting all services...${NC}"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans redis rabbitmq socket-proxy
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_redis_service) rabbitmq socket-proxy
                 sync_agent_lite_rabbitmq_password
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --remove-orphans $CORE_SERVICES
             elif [ "$MODE_NODE" = "true" ]; then
                 stop_node_excluded_services
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_db_service) $(get_pgcat_if_exists) redis rabbitmq socket-proxy registry route-fallback traefik
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) rabbitmq socket-proxy registry route-fallback traefik
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps --remove-orphans $CORE_SERVICES
             else
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps --remove-orphans $CORE_SERVICES
@@ -782,13 +782,13 @@ fi
             echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 verify_agent_lite_connectivity
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans redis rabbitmq socket-proxy
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_redis_service) rabbitmq socket-proxy
                 sync_agent_lite_rabbitmq_password
             elif [ "$MODE_NODE" = "true" ]; then
                 stop_node_excluded_services
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_db_service) $(get_pgcat_if_exists) redis rabbitmq socket-proxy registry route-fallback traefik
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) rabbitmq socket-proxy registry route-fallback traefik
             else
-                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_db_service) $(get_pgcat_if_exists) redis socket-proxy
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_db_service) $(get_pgcat_if_exists) $(get_redis_service) socket-proxy
             fi
             run_backend_migrations --root || {
                 echo -e "${YELLOW}  ⚠ Migration failed — retrying in 15s...${NC}"
