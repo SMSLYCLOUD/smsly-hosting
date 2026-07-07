@@ -9,6 +9,7 @@ import { Loader2, Download, RotateCcw, Trash2, Plus, Clock, Save, AlertCircle, C
 import { useToast } from '@/components/ui/use-toast';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import api from '@/lib/api';
+import { backupsApi } from '@/lib/api';
 import { getWsUrl } from '@/lib/websocket';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 
@@ -80,6 +81,8 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
     const [keyPromptBackupId, setKeyPromptBackupId] = useState<string | null>(null);
     const [keyPromptError, setKeyPromptError] = useState<string>('');
     const [keyPromptSubmitting, setKeyPromptSubmitting] = useState(false);
+    const [keyPromptSaveForFuture, setKeyPromptSaveForFuture] = useState(false);
+    const [keyPromptKeyId, setKeyPromptKeyId] = useState('');
 
     // Pre-restore snapshot override dialog
     const [snapOverrideOpen, setSnapOverrideOpen] = useState(false);
@@ -337,7 +340,9 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
             if (data?.error_code === 'ENCRYPTION_KEY_REQUIRED') {
                 setKeyPromptBackupId(id);
                 setKeyPromptValue('');
+                setKeyPromptKeyId(data?.key_id || '');
                 setKeyPromptError(data?.error || 'Encryption key required');
+                setKeyPromptSaveForFuture(false);
                 setKeyPromptOpen(true);
                 setRestoringId(null);
                 setRestoreStatus('');
@@ -369,7 +374,22 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
         setKeyPromptSubmitting(true);
         setKeyPromptError('');
         try {
-            // Retry the restore with the encryption key
+            if (keyPromptSaveForFuture && keyPromptKeyId) {
+                try {
+                    await backupsApi.importKey('service', {
+                        key_id: keyPromptKeyId,
+                        key_material: keyPromptValue.trim(),
+                        label: 'Imported from cross-master restore',
+                    });
+                    toast({ title: 'Key saved', description: 'Encryption key imported. Future restores from this master won\'t need the key.' });
+                } catch (importErr: any) {
+                    if (importErr?.response?.status === 403) {
+                        toast({ title: 'Admin only', description: 'Key import requires superuser. The key will be used for this restore only.', variant: 'default' });
+                    } else {
+                        toast({ title: 'Import failed', description: 'Key will be used for this restore only.', variant: 'default' });
+                    }
+                }
+            }
             await handleRestore(keyPromptBackupId, keyPromptValue.trim());
             setKeyPromptOpen(false);
         } catch {
@@ -1599,6 +1619,21 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                         autoFocus
                         className="mb-4"
                     />
+                    {keyPromptKeyId && (
+                        <div className="flex items-center gap-2 mb-4">
+                            <input
+                                type="checkbox"
+                                id="save-key-checkbox"
+                                checked={keyPromptSaveForFuture}
+                                onChange={(e) => setKeyPromptSaveForFuture(e.target.checked)}
+                                className="rounded border-gray-300"
+                            />
+                            <label htmlFor="save-key-checkbox" className="text-xs text-muted-foreground cursor-pointer">
+                                Save this key for future restores from this master (imports via <code className="text-[10px] bg-muted rounded px-1">POST /backups/import-key/</code> — admin required).
+                                Will not overwrite your local <code className="text-[10px] bg-muted rounded px-1">BACKUP_ENCRYPTION_KEY</code>.
+                            </label>
+                        </div>
+                    )}
                     <div className="flex justify-end gap-2">
                         <Button
                             variant="outline"
