@@ -6395,6 +6395,7 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
         restore_server_backup_task.delay(
             backup_id=str(backup.id),
             encryption_key=key_provided or None,
+            requesting_user_id=request.user.id,
         )
         return Response({
             'status': 'restore_started',

@@ -825,7 +825,13 @@ class BackupService:
                                 self.docker_client, temp_ctr.id,
                                 db_dump, '/tmp/db_dump.sql',
                             )
-                            res = temp_ctr.exec_run(['psql', '-U', db_user, '-d', db_name, '-f', '/tmp/db_dump.sql'], environment={'PGPASSWORD': db_password})
+                            res = temp_ctr.exec_run(
+                                ['psql', '-U', db_user, '-d', db_name,
+                                 '-v', 'ON_ERROR_STOP=1',
+                                 '--single-transaction',
+                                 '-f', '/tmp/db_dump.sql'],
+                                environment={'PGPASSWORD': db_password},
+                            )
                             if res.exit_code != 0:
                                 raise RuntimeError(f"psql execution failed: {res.output}")
                             logger.info("Postgres SQL dump restored successfully.")
@@ -1294,7 +1300,7 @@ class BackupService:
                                 raise RuntimeError(f"Remote Postgres failed to start in time: {err or out}")
 
                             ssh.exec_command(f"docker cp {shlex.quote(remote_db_dump)} {temp_ctr_id}:/tmp/db_dump.sql", timeout=300)
-                            psql_cmd = f"docker exec -e PGPASSWORD={shlex.quote(db_password)} {temp_ctr_id} psql -U {shlex.quote(db_user)} -d {shlex.quote(db_name)} -f /tmp/db_dump.sql"
+                            psql_cmd = f"docker exec -e PGPASSWORD={shlex.quote(db_password)} {temp_ctr_id} psql -v ON_ERROR_STOP=1 --single-transaction -U {shlex.quote(db_user)} -d {shlex.quote(db_name)} -f /tmp/db_dump.sql"
                             out, err, code = ssh.exec_command(psql_cmd, timeout=86400)
                             if code != 0:
                                 raise RuntimeError(f"psql execution failed: {err or out}")
@@ -1748,7 +1754,10 @@ class BackupService:
                 dump_path, '/tmp/db_dump.sql',
             )
             psql_res = pg_container.exec_run(
-                ['psql', '-U', 'postgres', '-f', '/tmp/db_dump.sql'],
+                ['psql', '-U', 'postgres',
+                 '-v', 'ON_ERROR_STOP=1',
+                 '--single-transaction',
+                 '-f', '/tmp/db_dump.sql'],
                 demux=False,
             )
             if psql_res.exit_code != 0:
@@ -2724,7 +2733,10 @@ def _dump_container_database(container_name, image_tag, temp_dir):
             pg_db = c_env.get('POSTGRES_DB', 'postgres')
             pg_password = c_env.get('POSTGRES_PASSWORD', os.environ.get('POSTGRES_PASSWORD', ''))
             result = ctr.exec_run(
-                ['pg_dump', '-U', pg_user, '-d', pg_db, '--lock-wait-timeout=5000', '-c'],
+                ['pg_dump', '-U', pg_user, '-d', pg_db,
+                 '--lock-wait-timeout=5000',
+                 '--clean', '--if-exists',
+                 '--no-owner', '--no-acl'],
                 environment={'PGPASSWORD': pg_password},
             )
             if result.exit_code == 0:
@@ -2737,7 +2749,10 @@ def _dump_container_database(container_name, image_tag, temp_dir):
                     container_name, result.exit_code,
                 )
                 result = ctr.exec_run(
-                    ['pg_dumpall', '-U', pg_user, '-c', '--lock-wait-timeout=5000'],
+                    ['pg_dumpall', '-U', pg_user,
+                     '--clean', '--if-exists',
+                     '--no-role-passwords',
+                     '--lock-wait-timeout=5000'],
                     environment={'PGPASSWORD': pg_password},
                 )
                 if result.exit_code == 0:
