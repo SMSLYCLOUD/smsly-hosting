@@ -255,6 +255,12 @@ app.conf.beat_schedule = {
         'schedule': 21600.0,
         'options': {'expires': 21600.0},
     },
+    # Verify backup integrity daily (random sample of COMPLETED backups)
+    'verify-backup-integrity-daily': {
+        'task': 'apps.deployments.tasks_backup.verify_backup_integrity_task',
+        'schedule': crontab(hour=3, minute=30),
+        'options': {'expires': 3600.0},
+    },
     # Dispatch due cron jobs every minute
     'check-cron-jobs-every-1m': {
         'task': 'apps.deployments.tasks_cron.check_cron_jobs',
