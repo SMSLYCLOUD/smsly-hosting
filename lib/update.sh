@@ -448,10 +448,23 @@ fi
              env_set_value "$_env_fix_file" "DIRECT_DATABASE_URL" "$_migrated_direct"
          fi
 
-         # Ensure REDIS_MIN_REPLICAS_TO_WRITE is present (default: 1)
-         if ! grep -q '^REDIS_MIN_REPLICAS_TO_WRITE=' "$_env_fix_file" 2>/dev/null; then
-             echo -e "${YELLOW}  → Adding REDIS_MIN_REPLICAS_TO_WRITE=1 (Redis HA durability)${NC}"
-             echo 'REDIS_MIN_REPLICAS_TO_WRITE=1' >> "$_env_fix_file"
+         # Ensure REDIS_MIN_REPLICAS_TO_WRITE is present only when the
+         # prod compose is active (has a replica).  Setting it on the
+         # dev compose will cause NOREPLICAS errors on every write.
+         _current_compose_final="$(env_get_value "$_env_fix_file" "COMPOSE_FILE" 2>/dev/null || true)"
+         if echo "$_current_compose_final" | grep -q 'prod'; then
+             if ! grep -q '^REDIS_MIN_REPLICAS_TO_WRITE=' "$_env_fix_file" 2>/dev/null; then
+                 echo -e "${YELLOW}  → Adding REDIS_MIN_REPLICAS_TO_WRITE=1 (Redis HA durability)${NC}"
+                 echo 'REDIS_MIN_REPLICAS_TO_WRITE=1' >> "$_env_fix_file"
+             fi
+         else
+             # Dev/single-node compose — ensure replica requirement is off
+             # so writes don't get rejected.
+             _min_rep="$(grep '^REDIS_MIN_REPLICAS_TO_WRITE=' "$_env_fix_file" 2>/dev/null | cut -d= -f2 || true)"
+             if [ "$_min_rep" != "0" ]; then
+                 echo -e "${YELLOW}  → Setting REDIS_MIN_REPLICAS_TO_WRITE=0 (single-node, no replica)${NC}"
+                 env_set_value "$_env_fix_file" "REDIS_MIN_REPLICAS_TO_WRITE" "0"
+             fi
          fi
 
          # Ensure PG_SYNCHRONOUS_COMMIT is present (default: on)
@@ -466,7 +479,7 @@ fi
              fi
          fi
 
-         unset _env_fix_file _current_redis_host _redis_url _fixed_redis_url _registry _db_url _pg_commit
+         unset _env_fix_file _current_redis_host _redis_url _fixed_redis_url _registry _db_url _pg_commit _current_compose_final _min_rep
      fi
 
      # Cache bust only if disk is low (already runs in the disk check above when needed).
