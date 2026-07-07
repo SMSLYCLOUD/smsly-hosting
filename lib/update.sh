@@ -379,15 +379,25 @@ fi
              env_set_value "$_env_fix_file" "CONTAINER_REGISTRY_URL" "registry:5000"
          fi
 
-         # DATABASE_URL: if still pointing at single-node "db" host, warn
-         # but don't auto-migrate (requires operator confirmation)
+         # DATABASE_URL: auto-migrate from pre-HA single-node @db to pgcat
          _db_url="$(env_get_value "$_env_fix_file" "DATABASE_URL" 2>/dev/null || true)"
          if echo "$_db_url" | grep -q '@db:'; then
-             echo -e "${YELLOW}  ⚠ DATABASE_URL still points to single-node @db:5432.${NC}"
-             echo -e "${YELLOW}     PostgreSQL HA with PgCat is available. To migrate:${NC}"
-             echo -e "${YELLOW}     1. Verify pgcat container is running${NC}"
-             echo -e "${YELLOW}     2. Update DATABASE_URL to: postgresql://smsly_admin:PASSWORD@pgcat:6432/smsly_hosting${NC}"
-             echo -e "${YELLOW}     3. Set DIRECT_DATABASE_URL for admin tasks (already configured if present)${NC}"
+             if [ -n "$(get_pgcat_if_exists)" ]; then
+                 _migrated_url="$(echo "$_db_url" | sed 's|@db:5432|@pgcat:5432|;s|@db/|@pgcat/|')"
+                 echo -e "${YELLOW}  → Migrating DATABASE_URL: @db → @pgcat (PostgreSQL HA)${NC}"
+                 env_set_value "$_env_fix_file" "DATABASE_URL" "$_migrated_url"
+             else
+                 echo -e "${YELLOW}  ⚠ DATABASE_URL points to single-node @db, but pgcat service not found.${NC}"
+                 echo -e "${YELLOW}     Migrate DATABASE_URL to @postgres-primary or enable HA with pgcat.${NC}"
+             fi
+         fi
+
+         # DIRECT_DATABASE_URL: auto-migrate from pre-HA @db to @postgres-primary
+         _direct_url="$(env_get_value "$_env_fix_file" "DIRECT_DATABASE_URL" 2>/dev/null || true)"
+         if echo "$_direct_url" | grep -q '@db:'; then
+             _migrated_direct="$(echo "$_direct_url" | sed 's|@db:5432|@postgres-primary:5432|')"
+             echo -e "${YELLOW}  → Migrating DIRECT_DATABASE_URL: @db → @postgres-primary${NC}"
+             env_set_value "$_env_fix_file" "DIRECT_DATABASE_URL" "$_migrated_direct"
          fi
 
          # Ensure REDIS_MIN_REPLICAS_TO_WRITE is present (default: 1)
