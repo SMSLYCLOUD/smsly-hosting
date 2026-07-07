@@ -50,13 +50,19 @@ class ReplicationService:
 
     @classmethod
     def generate_patroni_compose(cls, mesh, db_password, admin_password,
-                                  replication_password="repl_pass"):
+                                  replication_password="repl_pass",
+                                  is_fresh: bool = True):
         """
         Generate a docker-compose.yml for Patroni that uses WireGuard IPs.
 
         Each server runs:
         - 1 Patroni node (PostgreSQL + Patroni agent)
         - 1 etcd node (distributed consensus)
+
+        Args:
+            is_fresh: True for initial deploy (etcd starts fresh).  False
+                for scale-out — the new node joins an existing etcd cluster
+                with ``--initial-cluster-state existing``.
 
         Returns dict mapping peer_wg_address → compose YAML string.
         """
@@ -73,6 +79,8 @@ class ReplicationService:
         # Including URL schemes makes Patroni treat the comma-delimited value
         # as an invalid URL and crash during DCS initialization.
         etcd_endpoints = ",".join(f"{p.wg_address}:2379" for p in peers)
+
+        cluster_state = "new" if is_fresh else "existing"
 
         configs = {}
         for idx, peer in enumerate(peers, 1):
@@ -96,7 +104,7 @@ class ReplicationService:
                       --listen-client-urls http://{wg_ip}:2379
                       --advertise-client-urls http://{wg_ip}:2379
                       --initial-cluster {etcd_cluster}
-                      --initial-cluster-state new
+                      --initial-cluster-state {cluster_state}
                       --initial-cluster-token smsly-etcd-cluster
                     network_mode: host
                     volumes:
@@ -285,11 +293,42 @@ class ReplicationService:
     @classmethod
     def connect_replica(cls, mesh, target_wg_address, db_password, admin_password, replication_password="repl_pass"):
         """
-        Finalize connection by deploying the updated configurations across the mesh.
-        Since Patroni/etcd relies on a consistent config, we redeploy to all nodes.
+        Scale out — add a single new replica to an existing Patroni cluster.
+
+        Only the target node is touched.  Existing nodes keep their etcd
+        state because ``--initial-cluster-state existing`` is used.
         """
-        # Redeploy Patroni/etcd and HAProxy with the new mesh topology
-        return cls.deploy_replication(mesh, db_password, admin_password, replication_password)
+        target_peer = mesh.peers.filter(wg_address=target_wg_address, is_active=True).first()
+        if not target_peer:
+            raise ValueError(f"Target peer {target_wg_address} not found or inactive")
+
+        # Generate configs for the whole cluster (so the etcd_cluster string
+        # includes the new node) but only deploy to the target.
+        configs = cls.generate_patroni_compose(
+            mesh, db_password, admin_password, replication_password,
+            is_fresh=False,  # scale-out — use existing etcd cluster
+        )
+        compose_content = configs.get(target_wg_address)
+        if not compose_content:
+            raise ValueError(f"No config generated for {target_wg_address}")
+
+        # Update HAProxy on the local server so it routes to the new node
+        haproxy_compose, haproxy_cfg = cls.generate_haproxy_compose(mesh)
+
+        if target_peer.is_local:
+            cls._deploy_patroni_local(compose_content)
+        elif target_peer.server:
+            cls._deploy_patroni_remote(target_peer.server, compose_content)
+        else:
+            raise ValueError(f"Target peer {target_wg_address} has no server assigned")
+
+        # Redeploy HAProxy only (on local) with updated topology
+        try:
+            cls._deploy_haproxy_local(haproxy_compose, haproxy_cfg)
+        except Exception as e:
+            logger.warning("HAProxy redeploy failed during scale-out: %s", e)
+
+        return {"status": "Replica started", "wg_address": target_wg_address}
 
     # ── Deployment ───────────────────────────────────────────────────────
 
@@ -342,8 +381,14 @@ class ReplicationService:
 
         cls.validate_mesh_for_replication(mesh)
 
+        # If the cluster is already ACTIVE, we're doing a scale-out — etcd
+        # member state must be preserved by using ``--initial-cluster-state existing``
+        # for the net-new node.  Fresh deploys use ``new``.
+        is_fresh = mesh.replication_status not in ("ACTIVE", "FAILED")
+
         configs = cls.generate_patroni_compose(
             mesh, db_password, admin_password, replication_password,
+            is_fresh=is_fresh,
         )
         haproxy_compose, haproxy_cfg = cls.generate_haproxy_compose(mesh)
 

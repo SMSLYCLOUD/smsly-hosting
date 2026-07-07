@@ -19,6 +19,36 @@ from .services.replication_service import ReplicationService
 logger = logging.getLogger(__name__)
 
 
+def _get_local_replica_health():
+    """Return health status of postgres-replica containers (local HA stack)."""
+    from .models_database_replica import DatabaseReplica
+    from .services import database_replica_service as svc
+
+    replicas = DatabaseReplica.objects.filter(is_active=True, kind="local")
+    results = []
+    for r in replicas:
+        try:
+            ok, err, lag = svc.test_connection(r)
+            results.append({
+                "name": r.name,
+                "host": r.host,
+                "port": r.port,
+                "status": "OK" if ok else f"ERROR: {err}",
+                "lag_seconds": lag,
+                "last_checked_at": r.last_checked_at.isoformat() if r.last_checked_at else None,
+            })
+        except Exception as exc:
+            results.append({
+                "name": r.name,
+                "host": r.host,
+                "port": r.port,
+                "status": f"ERROR: {exc}",
+                "lag_seconds": None,
+                "last_checked_at": None,
+            })
+    return results
+
+
 # ─── Serializers ─────────────────────────────────────────────────────────────
 
 class ReplicationDeploySerializer(serializers.Serializer):
@@ -265,9 +295,10 @@ class ReplicationViewSet(viewsets.ViewSet):
 
         try:
             health = ReplicationService.check_replication_health(mesh)
+            health["local_replicas"] = _get_local_replica_health()
         except Exception as exc:
             logger.exception("Replication health failed for mesh %s: %s", mesh.id, exc)
-            return Response({"error": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+            health = {"error": str(exc), "local_replicas": _get_local_replica_health()}
         return Response(health)
 
     @action(detail=False, methods=["post"])
