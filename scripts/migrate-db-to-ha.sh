@@ -138,27 +138,38 @@ echo -e "${GREEN}  ✓ Backend services paused${NC}"
 echo ""
 echo -e "${BLUE}→ Step 3: Restoring to $NEW_DB_CONTAINER...${NC}"
 
-# Connect as superuser (postgres) via local Unix socket — no password needed.
-# smsly_admin can't drop its own default database if it's connected to it.
+# Connect via a superuser to drop/recreate the database.  The postgres
+# image may not have a 'postgres' role if POSTGRES_USER was customized,
+# so fall back to $DB_USER (which is typically smsly_admin, a superuser).
+# Connect to template1 so we're not blocking the target database.
+for _try_user in "postgres" "$DB_USER"; do
+    if docker exec "$NEW_DB_CONTAINER" psql -U "$_try_user" -d template1 -c "SELECT 1;" >/dev/null 2>&1; then
+        _admin_user="$_try_user"
+        break
+    fi
+done
+_admin_user="${_admin_user:-$DB_USER}"
+echo "  → Using admin role: $_admin_user"
+
 echo "  → Killing active connections to $DB_NAME..."
 set +e
-docker exec -i "$NEW_DB_CONTAINER" psql -U postgres <<'EOSQL' 2>&1
+docker exec -i "$NEW_DB_CONTAINER" psql -U "$_admin_user" -d template1 <<EOSQL 2>&1
 SELECT pg_terminate_backend(pid)
 FROM pg_stat_activity
-WHERE datname = 'smsly_hosting'
+WHERE datname = '$DB_NAME'
   AND pid <> pg_backend_pid();
 EOSQL
 set -e
 
 echo "  → Dropping $DB_NAME if it exists..."
 set +e
-_drop_output=$(docker exec -i "$NEW_DB_CONTAINER" psql -U postgres -d template1 -c "DROP DATABASE IF EXISTS smsly_hosting;" 2>&1)
+_drop_output=$(docker exec -i "$NEW_DB_CONTAINER" psql -U "$_admin_user" -d template1 -c "DROP DATABASE IF EXISTS $DB_NAME;" 2>&1)
 _drop_rc=$?
 set -e
 echo "    $_drop_output" | tail -1
 
 echo "  → Creating $DB_NAME..."
-docker exec -i "$NEW_DB_CONTAINER" psql -U postgres -d template1 -c "CREATE DATABASE smsly_hosting OWNER $DB_USER;" 2>&1 || {
+docker exec -i "$NEW_DB_CONTAINER" psql -U "$_admin_user" -d template1 -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;" 2>&1 || {
     echo -e "${RED}  ✗ Failed to create database${NC}"
     rm -f "$DUMP_FILE"
     exit 1
