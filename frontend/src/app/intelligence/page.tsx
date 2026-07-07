@@ -81,24 +81,54 @@ export default function IntelligencePage() {
 
   const fetchData = useCallback(async () => {
     try {
+      const withTimeout = <T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> =>
+        Promise.race([
+          promise,
+          new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
+        ]);
+
       const [prov, deps, anoms, rep, svcs, autoStatus] = await Promise.all([
-        aiApi.getProviders(false).catch(() => ({
-          providers: [],
-          mode: 'mock',
-          mode_label: 'Mock AI (provider status unavailable)',
-          active_count: 0,
-          total_available: 0,
-          degraded: true,
-          degraded_reason: 'providers_request_failed',
-        }) as any),
-        api.get('/deployments/', {
-          params: { page_size: 20 },
-          _skipRemoteProxy: true,
-        } as any).then(r => r.data?.results || r.data || []).catch(() => []),
-        aiApi.getAnomalies().then(r => r.anomalies).catch(() => []),
-        aiApi.getReport().catch(() => null),
-        api.get('/services/', { params: { page_size: 50 } }).then(r => r.data?.results || r.data || []).catch(() => []),
-        api.get('/autoscaler/status/').then(r => r.data).catch(() => null),
+        withTimeout(
+          aiApi.getProviders(false).catch(() => ({
+            providers: [],
+            mode: 'mock',
+            mode_label: 'Mock AI (provider status unavailable)',
+            active_count: 0,
+            total_available: 0,
+            degraded: true,
+            degraded_reason: 'providers_request_failed',
+          }) as any),
+          12000,
+          { providers: [], mode: 'mock', mode_label: 'Mock AI (timeout)', active_count: 0, total_available: 0, degraded: true, degraded_reason: 'providers_timeout' } as any,
+        ),
+        withTimeout(
+          api.get('/deployments/', {
+            params: { page_size: 20 },
+            _skipRemoteProxy: true,
+          } as any).then(r => r.data?.results || r.data || []).catch(() => []),
+          12000,
+          [],
+        ),
+        withTimeout(
+          aiApi.getAnomalies().then(r => r.anomalies).catch(() => []),
+          12000,
+          [],
+        ),
+        withTimeout(
+          aiApi.getReport().catch(() => null),
+          12000,
+          null,
+        ),
+        withTimeout(
+          api.get('/services/', { params: { page_size: 50 } }).then(r => r.data?.results || r.data || []).catch(() => []),
+          12000,
+          [],
+        ),
+        withTimeout(
+          api.get('/autoscaler/status/').then(r => r.data).catch(() => null),
+          12000,
+          null,
+        ),
       ]);
       setProviders(prov);
       setAnomalies(anoms);
