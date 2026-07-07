@@ -5676,34 +5676,60 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
                 BackupService,
                 UnknownBackupKeyIdError,
             )
-            if not BackupService.can_decrypt_backup(backup.file_path, passed_key=key_provided):
+            # Check metadata stamp first (works for cloud-stored backups
+            # where the local file doesn't exist yet), then fall back
+            # to reading the V2 header from the file on disk.
+            enc_meta = (backup.metadata or {}).get('encryption', {})
+            meta_key_id = enc_meta.get('key_id', '')
+            meta_fingerprint = enc_meta.get('fingerprint', '')
+            # If metadata carries the key identity and we have a stored
+            # key matching that fingerprint (either the active local key
+            # or an imported key), the pre-flight passes without needing
+            # the file on disk.
+            meta_matched = False
+            if meta_fingerprint:
+                from .services.backup_service import BackupService as BSC
+                if key_provided:
+                    try:
+                        if BSC.compute_backup_key_fingerprint(key_provided) == meta_fingerprint:
+                            meta_matched = True
+                    except Exception:
+                        pass
+                if not meta_matched and BSC.lookup_key_by_id(meta_fingerprint):
+                    meta_matched = True
+                if not meta_matched and BSC.lookup_key_by_id(meta_key_id):
+                    meta_matched = True
+            if not meta_matched and not BackupService.can_decrypt_backup(
+                backup.file_path, passed_key=key_provided,
+            ):
+                header_key_id = meta_key_id or 'unknown'
+                # Try reading the header from the file for a better key_id
                 try:
                     header = BackupService.read_v2_header(backup.file_path)
-                    header_key_id = header.get('key_id', 'unknown')
-                    return Response(
-                        {
-                            'error': (
-                                'Encryption key required. This backup '
-                                'was encrypted on a different '
-                                'master. Import the key or '
-                                'provide it in the request.'
-                            ),
-                            'error_code': 'ENCRYPTION_KEY_REQUIRED',
-                            'key_id': header_key_id,
-                            'remediation': (
-                                'POST /api/v1/backups/import-key/ with '
-                                'key_id and key_material from '
-                                'the source master, or send '
-                                '"encryption_key" in the '
-                                'restore request body, or '
-                                'upload a key_file JSON.'
-                            ),
-                        },
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
+                    header_key_id = header.get('key_id', header_key_id)
                 except (OSError, ValueError):
                     pass
-
+                return Response(
+                    {
+                        'error': (
+                            'Encryption key required. This backup '
+                            'was encrypted on a different '
+                            'master. Import the key or '
+                            'provide it in the request.'
+                        ),
+                        'error_code': 'ENCRYPTION_KEY_REQUIRED',
+                        'key_id': header_key_id,
+                        'remediation': (
+                            'POST /api/v1/backups/import-key/ with '
+                            'key_id and key_material from '
+                            'the source master, or send '
+                            '"encryption_key" in the '
+                            'restore request body, or '
+                            'upload a key_file JSON.'
+                        ),
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
         # ── Pre-flight safety snapshot check ─────────────
         # Attempt a synchronous PRE_TRANSFER snapshot. If it fails, warn
         # the user and ask them to confirm with "force": true. Without a
