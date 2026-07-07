@@ -347,7 +347,9 @@ class NixpacksBuilder:
                         input=_pass, capture_output=True, text=True, timeout=15,
                     )
                     if _login.returncode != 0:
-                        logger.warning("docker login to %s failed: %s", _tag_url, _login.stderr.strip())
+                        # SECURITY: don't log raw stderr — docker CLI can
+                        # echo malformed input including password chars.
+                        logger.warning("docker login to %s failed (exit code %s)", _tag_url, _login.returncode)
                 except Exception as login_err:
                     logger.warning("docker login to %s failed: %s", _tag_url, login_err)
 

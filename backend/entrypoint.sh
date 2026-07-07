@@ -155,10 +155,9 @@ ensure_prometheus_targets_writable() {
 }
 ensure_prometheus_targets_writable
 
-# ── Auto-setup registry certs and htpasswd if missing ─────────────
-# This makes the platform self-bootstrapping: the first deploy will
-# automatically generate TLS certs and htpasswd auth for the registry
-# container, without requiring a manual `install.sh` run.
+# ── Auto-setup registry htpasswd if missing ───────────────────────
+# TLS certificates for the registry are managed by Traefik — do NOT
+# regenerate certs here (see .commandcode/taste/taste.md: infrastructure).
 ensure_registry_bootstrap() {
     # Only run if we're root and the registry volumes are mounted
     if [ "$(id -u)" != "0" ]; then
@@ -168,21 +167,10 @@ ensure_registry_bootstrap() {
         return 0
     fi
 
-    _regen_certs=false
+    # TLS certs are Traefik-managed — warn if missing but don't generate
     if [ ! -f /certs/registry.crt ] || [ ! -f /certs/registry.key ]; then
-        _regen_certs=true
-    fi
-
-    if $_regen_certs; then
-        echo "[entrypoint] Generating self-signed registry TLS certificate..."
-        openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
-            -keyout /certs/registry.key \
-            -out /certs/registry.crt \
-            -subj "/CN=registry" \
-            -addext "subjectAltName=DNS:registry,DNS:localhost,IP:127.0.0.1,IP:10.100.0.1" \
-            2>/dev/null || echo "[entrypoint] WARNING: TLS cert generation failed" >&2
-        chmod 644 /certs/registry.crt 2>/dev/null || true
-        chmod 600 /certs/registry.key 2>/dev/null || true
+        echo "[entrypoint] WARNING: Registry TLS certs missing from /certs/." >&2
+        echo "[entrypoint] Certs are managed by Traefik — run install.sh or check Traefik cert generation." >&2
     fi
 
     if [ ! -f /auth/htpasswd ]; then

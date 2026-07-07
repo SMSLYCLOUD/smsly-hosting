@@ -3006,7 +3006,9 @@ class PipelineManager:
             if login_proc.returncode == 0:
                 append_log(self.deployment, f"Registry login successful ({registry_url}).\n")
             else:
-                append_log(self.deployment, f"Warning: registry login failed for {registry_url}: {login_proc.stderr.strip()}\n")
+                # SECURITY: don't log raw stderr — docker CLI can echo
+                # malformed input including password characters.
+                append_log(self.deployment, f"Warning: registry login failed for {registry_url} (exit code {login_proc.returncode})\n")
         except Exception as e:
             append_log(self.deployment, f"Warning: could not login to registry {registry_url}: {e}\n")
 

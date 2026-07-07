@@ -1422,7 +1422,13 @@ if SENTRY_DSN:
 # =============================================================================
 # Email Configuration (SMTP)
 # =============================================================================
-EMAIL_BACKEND = config('EMAIL_BACKEND', default='django.core.mail.backends.smtp.EmailBackend')
+# config/email_backend.py loads SMTP settings from PlatformConfig at
+# send time, so the admin UI works without a restart.  Fallback env
+# vars below are used when PlatformConfig.smtp_host is empty.
+EMAIL_BACKEND = config(
+    'EMAIL_BACKEND',
+    default='config.email_backend.PlatformConfigEmailBackend',
+)
 EMAIL_HOST = config('EMAIL_HOST', default='localhost')
 EMAIL_PORT = config('EMAIL_PORT', default=587, cast=int)
 EMAIL_USE_TLS = config('EMAIL_USE_TLS', default=True, cast=bool)
@@ -1431,7 +1437,6 @@ EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='')
 EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')
 EMAIL_TIMEOUT = config('EMAIL_TIMEOUT', default=10, cast=int)
 
-# Read DEFAULT_FROM_EMAIL from env (already in .env.example line 75-76)
 _DEFAULT_FROM = config(
     "DEFAULT_FROM_EMAIL",
     default=f"noreply@{DOMAIN}" if DOMAIN and DOMAIN != 'localhost' else "noreply@localhost"

@@ -7,7 +7,7 @@ import uuid
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
-from django.db import models
+from django.db import models, ProgrammingError, OperationalError
 from django.utils.translation import gettext_lazy as _
 from encrypted_model_fields.fields import EncryptedCharField, EncryptedTextField
 
@@ -1211,7 +1211,7 @@ class PlatformConfig(models.Model):
 
         try:
             obj, created = cls.objects.get_or_create(pk=1)
-        except Exception:
+        except (ProgrammingError, OperationalError):
             # Column may not exist yet if a migration is pending.
             # Return a default instance from ENV so the app can start.
             env_domain = os.environ.get('DOMAIN', '').strip()
