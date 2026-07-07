@@ -1209,7 +1209,21 @@ class PlatformConfig(models.Model):
                 server_ip=os.environ.get('PUBLIC_IP', '').strip(),
             )
 
-        obj, created = cls.objects.get_or_create(pk=1)
+        try:
+            obj, created = cls.objects.get_or_create(pk=1)
+        except Exception:
+            # Column may not exist yet if a migration is pending.
+            # Return a default instance from ENV so the app can start.
+            env_domain = os.environ.get('DOMAIN', '').strip()
+            env_ssl = os.environ.get('USE_SSL', '').strip().lower()
+            return cls(
+                pk=1,
+                domain=env_domain,
+                use_ssl=env_ssl in ('true', '1', 'yes'),
+                cloudflare_api_token=os.environ.get('CLOUDFLARE_API_TOKEN', '').strip(),
+                wildcard_subdomains=os.environ.get('WILDCARD_SUBDOMAINS', 'true').lower() in ('true', '1', 'yes'),
+                server_ip=os.environ.get('PUBLIC_IP', '').strip(),
+            )
 
         env_domain = os.environ.get('DOMAIN', '').strip()
         env_ssl = os.environ.get('USE_SSL', '').strip().lower()

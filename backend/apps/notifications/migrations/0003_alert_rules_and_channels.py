@@ -8,7 +8,7 @@ import uuid
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('notifications', '0001_initial'),
+        ('notifications', '0002_resourcealert'),
     ]
 
     operations = [
