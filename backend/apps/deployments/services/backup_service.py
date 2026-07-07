@@ -1540,7 +1540,10 @@ class BackupService:
                     pg_user = c_env.get('POSTGRES_USER', user)
                     pg_db = c_env.get('POSTGRES_DB', name)
 
-                    cmd = ["pg_dump", "-U", pg_user, "-d", pg_db, "--lock-wait-timeout=5000"]
+                    cmd = ["pg_dump", "-U", pg_user, "-d", pg_db,
+                           "--lock-wait-timeout=5000",
+                           "--clean", "--if-exists",
+                           "--no-owner", "--no-acl"]
                     res = pg_container.exec_run(cmd, environment={'PGPASSWORD': password})
                     if res.exit_code == 0:
                         with open(db_file, 'wb') as f:
@@ -1553,7 +1556,10 @@ class BackupService:
                     try:
                         self.docker_client.containers.get(host)
                         container = self.docker_client.containers.get(host)
-                        res = container.exec_run(["pg_dump", "-U", user, name])
+                        res = container.exec_run(
+                            ["pg_dump", "-U", user, "-d", name,
+                             "--clean", "--if-exists",
+                             "--no-owner", "--no-acl"])
                         if res.exit_code == 0:
                             with open(db_file, 'wb') as f:
                                 f.write(res.output)
@@ -1561,13 +1567,15 @@ class BackupService:
                             raise Exception(f"pg_dump failed: {res.output}")
                     except Exception:
                         import subprocess
-                        cmd = ["pg_dump", "-h", host, "-p", str(port), "-U", user, name]
+                        cmd = ["pg_dump", "-h", host, "-p", str(port), "-U", user, name,
+                               "--clean", "--if-exists", "--no-owner", "--no-acl"]
                         with open(db_file, 'w') as f:
                             subprocess.run(cmd, env=env, stdout=f, check=True)
                 else:
                     # Fallback: run pg_dump locally via pgcat's upstream
                     import subprocess
-                    cmd = ["pg_dump", "-h", host, "-p", str(port), "-U", user, name]
+                    cmd = ["pg_dump", "-h", host, "-p", str(port), "-U", user, name,
+                           "--clean", "--if-exists", "--no-owner", "--no-acl"]
                     with open(db_file, 'w') as f:
                         subprocess.run(cmd, env=env, stdout=f, check=True)
 
