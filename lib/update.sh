@@ -370,6 +370,16 @@ fi
          if $_has_old_db; then
              _mig_script="$INSTALL_DIR/scripts/migrate-db-to-ha.sh"
              if [ -f "$_mig_script" ] && [ -x "$_mig_script" ]; then
+                 # Bring up the HA stack FIRST so postgres-primary/pgcat exist
+                 # before the migration script tries to dump into them.
+                 # We use -f docker-compose.prod.yml explicitly (not $COMPOSE_FILE
+                 # which still points to docker-compose.yml at this point).
+                 echo -e "${BLUE}  → Starting HA stack (postgres-primary, pgcat, redis-primary)...${NC}"
+                 docker compose -f "$INSTALL_DIR/docker-compose.prod.yml" \
+                     up -d --wait --wait-timeout 120 \
+                     postgres-primary postgres-replica pgcat redis-primary redis-replica \
+                     2>/dev/null || echo -e "${YELLOW}  ⚠ Some HA services may not be healthy yet${NC}"
+
                  echo -e "${BLUE}  → Running data migration from old @db to postgres-primary...${NC}"
                  if bash "$_mig_script"; then
                      echo -e "${GREEN}  ✓ Data migration successful. Switching COMPOSE_FILE to prod (HA).${NC}"
