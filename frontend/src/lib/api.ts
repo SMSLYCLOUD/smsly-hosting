@@ -545,7 +545,9 @@ export const servicesApi = {
     return response.data;
   },
   getIncidentReport: async (serviceId: string): Promise<any> => {
-    const response = await api.get(`/services/${serviceId}/incident-report/`);
+    const response = await api.get(`/services/${serviceId}/incident-report/`, {
+      _skipRemoteProxy: true,
+    } as any);
     return response.data;
   },
   rollback: async (deploymentId: string): Promise<DeploymentRollbackResponse> => {
@@ -648,7 +650,9 @@ export const servicesApi = {
   },
   // Traffic Geo
   getTrafficGeo: async (serviceId: string): Promise<any> => {
-    const response = await api.get(`/services/${serviceId}/traffic-geo/`);
+    const response = await api.get(`/services/${serviceId}/traffic-geo/`, {
+      _skipRemoteProxy: true,
+    } as any);
     return response.data;
   },
   recheckHealth: async (serviceId: string, reset_backoff: boolean = true): Promise<any> => {
@@ -1324,7 +1328,9 @@ export const serversApi = {
   runDiagnostics: (id: string) => api.post(`/servers/${id}/diagnostics/`),
   triggerHealing: (id: string, payload?: any) => api.post(`/servers/${id}/heal/`, payload || {}),
   getIncidentReport: async (serverId: string): Promise<any> => {
-    const response = await api.get(`/servers/${serverId}/incident-report/`);
+    const response = await api.get(`/servers/${serverId}/incident-report/`, {
+      _skipRemoteProxy: true,
+    } as any);
     return response.data;
   },
 };

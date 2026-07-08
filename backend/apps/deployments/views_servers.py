@@ -732,7 +732,6 @@ def _is_command_allowed(command: str) -> bool:
         return False
     if '`' in command or '$(' in command:
         return False
-        return False
     stripped = command.strip()
     if not stripped:
         return False
@@ -2081,18 +2080,18 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
         health_actions = [
             'HEALTH_TRANSITION', 'SERVICE_HEALTHY', 'SERVICE_UNHEALTHY',
         ]
+        service_ids = [str(s.id) for s in services]
+        from django.db.models import Q as QQ
+        health_filter = QQ()
+        for sid in service_ids:
+            health_filter |= QQ(metadata__contains={'service_id': sid})
         health_audits = (
             AuditLog.objects
-            .filter(
-                action__in=health_actions,
-                metadata__has_key='service_id',
-            )
+            .filter(health_filter)
+            .filter(action__in=health_actions)
             .order_by('-timestamp')[:20]
         )
         for a in health_audits:
-            svc_id = (a.metadata or {}).get('service_id', '')
-            if svc_id not in {str(s.id) for s in services}:
-                continue
             previous = (a.metadata or {}).get('previous', '')
             current = (a.metadata or {}).get('current', '')
             events.append({
