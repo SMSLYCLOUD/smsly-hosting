@@ -103,12 +103,10 @@
     "list": [
       {
         "name": "service",
-        "type": "query",
-        "datasource": { "type": "prometheus", "uid": "prometheus" },
-        "query": "label_values(docker_container_labels, service_name)",
-        "refresh": 1,
-        "includeAll": true,
-        "multi": true
+        "type": "constant",
+        "query": "",
+        "hide": 2,
+        "current": { "text": "", "value": "" }
       }
     ]
   },

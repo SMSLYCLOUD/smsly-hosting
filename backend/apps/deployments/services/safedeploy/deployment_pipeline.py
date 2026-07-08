@@ -486,7 +486,7 @@ class ProductionDeploymentPipeline:
             from apps.deployments.services.safedeploy.health_checks import (
                 perform_health_check,
             )
-            ok, _ = perform_health_check(full_url)
+            ok, _ = perform_health_check(full_url, service=svc)
         except Exception as e:
             logger.error(f"Health check raised for deployment {deployment.id}: {e}")
             ok = False

@@ -619,7 +619,7 @@ def run_preview_health_check_job(preview_id: str):
             preview.error_message = "No preview URL configured"
             preview.save()
             return
-        ok, result = perform_health_check(preview.preview_url)
+        ok, result = perform_health_check(preview.preview_url, service=preview.service)
         if ok:
             preview.status = PreviewEnvironment.Status.READY
         else:

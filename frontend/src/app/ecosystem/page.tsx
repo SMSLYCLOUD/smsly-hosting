@@ -72,6 +72,10 @@ const STACK_COLORS: Record<string, string> = {
 
 type Step = 'idle' | 'selection' | 'scanning' | 'review' | 'deploying' | 'done';
 
+interface SharedAddonConfig {
+    [addonType: string]: { shared: boolean; shared_by?: string[] };
+}
+
 // SECURITY: Use sessionStorage, not localStorage. The deployment plan
 // contains environment variable values that may include secrets.
 // sessionStorage is cleared when the tab closes, limiting exposure.
@@ -87,7 +91,7 @@ function loadState<T>(key: string, fallback: T): T {
 }
 
 function clearState() {
-    ['step', 'plan', 'planId', 'scanTaskId', 'deployTaskId', 'selectedRepos', 'aiProvider', 'useSharedAddons'].forEach(
+    ['step', 'plan', 'planId', 'scanTaskId', 'deployTaskId', 'selectedRepos', 'aiProvider', 'useSharedAddons', 'cancelOthersOnFailure', 'sharedAddonConfig'].forEach(
         key => sessionStorage.removeItem(`ecosystem:${key}`)
     );
 }
@@ -129,6 +133,8 @@ export default function EcosystemPage() {
     const [selectedRepos, setSelectedRepos] = useState<string[]>(() => loadState('selectedRepos', []));
     const [viewMode, setViewMode] = useState<'canvas' | 'list'>('canvas');
     const [useSharedAddons, setUseSharedAddons] = useState<boolean>(() => loadState('useSharedAddons', true));
+    const [cancelOthersOnFailure, setCancelOthersOnFailure] = useState<boolean>(() => loadState('cancelOthersOnFailure', false));
+    const [sharedAddonConfig, setSharedAddonConfig] = useState<SharedAddonConfig>(() => loadState('sharedAddonConfig', {}));
 
     const [aiProviders, setAiProviders] = useState<any[]>([]);
     const [selectedProvider, setSelectedProvider] = useState<string>(() => loadState('aiProvider', 'auto'));
@@ -164,6 +170,8 @@ export default function EcosystemPage() {
     useEffect(() => { saveState('plan', plan); }, [plan]);
     useEffect(() => { saveState('planId', planId); }, [planId]);
     useEffect(() => { saveState('useSharedAddons', useSharedAddons); }, [useSharedAddons]);
+    useEffect(() => { saveState('cancelOthersOnFailure', cancelOthersOnFailure); }, [cancelOthersOnFailure]);
+    useEffect(() => { saveState('sharedAddonConfig', sharedAddonConfig); }, [sharedAddonConfig]);
     useEffect(() => { saveState('scanTaskId', scanTaskId); }, [scanTaskId]);
     useEffect(() => { saveState('deployTaskId', deployTaskId); }, [deployTaskId]);
     useEffect(() => { saveState('selectedRepos', selectedRepos); }, [selectedRepos]);
@@ -428,7 +436,13 @@ export default function EcosystemPage() {
         setError(null);
 
         try {
-            const data = await apiPost('/api/v1/cloud/ecosystem/deploy/', { plan, plan_id: planId, use_shared_addons: useSharedAddons });
+            const data = await apiPost('/api/v1/cloud/ecosystem/deploy/', {
+                plan,
+                plan_id: planId,
+                use_shared_addons: useSharedAddons,
+                cancel_others_on_failure: cancelOthersOnFailure,
+                shared_addon_config: sharedAddonConfig,
+            });
             setDeployTaskId(data.task_id);
             if (data.plan_id) setPlanId(data.plan_id);
 
@@ -606,7 +620,7 @@ export default function EcosystemPage() {
                                     </>
                                 )}
                                 <button
-                                    onClick={() => { clearState(); setStep('idle'); setPlan(null); setPlanId(''); setError(null); setUseSharedAddons(true); }}
+                                    onClick={() => { clearState(); setStep('idle'); setPlan(null); setPlanId(''); setError(null); setUseSharedAddons(true); setCancelOthersOnFailure(false); setSharedAddonConfig({}); }}
                                     className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1"
                                 >
                                     <RefreshCw size={14} /> Start Over
@@ -997,26 +1011,74 @@ export default function EcosystemPage() {
                                             {syncing ? 'Syncing...' : 'Sync Fleet Health'}
                                         </button>
                                     </div>
-                                    {/* Shared Addons Toggle (Canvas View) */}
-                                    <div className="bg-card border border-border p-4 rounded-xl flex items-center justify-between">
-                                        <div>
-                                            <h3 className="font-bold text-sm flex items-center gap-2">
-                                                <Database size={14} className="text-purple-500" /> Shared Addons
-                                            </h3>
-                                            <p className="text-xs text-muted-foreground mt-0.5">
-                                                {useSharedAddons ? 'Provisioned once, shared across all services' : 'Each service provisions its own addons'}
-                                            </p>
+                                    {/* Shared Addons + Fail-Fast (Canvas View) */}
+                                    <div className="bg-card border border-border p-4 rounded-xl space-y-3">
+                                        <div className="flex items-center justify-between">
+                                            <div>
+                                                <h3 className="font-bold text-sm flex items-center gap-2">
+                                                    <Database size={14} className="text-purple-500" /> Addon Sharing
+                                                </h3>
+                                                <p className="text-xs text-muted-foreground mt-0.5">
+                                                    {useSharedAddons ? 'Global: provisioned once, shared across services' : 'Global: each service provisions its own'}
+                                                </p>
+                                            </div>
+                                            <button
+                                                onClick={() => {
+                                                    const next = !useSharedAddons;
+                                                    setUseSharedAddons(next);
+                                                    setSharedAddonConfig({});
+                                                }}
+                                                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                                                    useSharedAddons ? 'bg-emerald-500' : 'bg-muted'
+                                                }`}
+                                            >
+                                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                                                    useSharedAddons ? 'translate-x-6' : 'translate-x-1'
+                                                }`} />
+                                            </button>
                                         </div>
-                                        <button
-                                            onClick={() => setUseSharedAddons(!useSharedAddons)}
-                                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                                                useSharedAddons ? 'bg-emerald-500' : 'bg-muted'
-                                            }`}
-                                        >
-                                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                                                useSharedAddons ? 'translate-x-6' : 'translate-x-1'
-                                            }`} />
-                                        </button>
+                                        {plan.addons && plan.addons.length > 0 && (
+                                            <div className="flex flex-wrap gap-1.5">
+                                                {plan.addons.map((addon) => {
+                                                    const cfg = sharedAddonConfig[addon.type];
+                                                    const isShared = cfg !== undefined ? cfg.shared : useSharedAddons;
+                                                    return (
+                                                        <button
+                                                            key={addon.type}
+                                                            onClick={() => setSharedAddonConfig(prev => ({ ...prev, [addon.type]: { shared: !isShared } }))}
+                                                            className={`text-[11px] px-2 py-1 rounded-md border transition-colors ${
+                                                                isShared
+                                                                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                                                                    : 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400'
+                                                            }`}
+                                                            title={`Click to toggle ${addon.type} sharing`}
+                                                        >
+                                                            {addon.type}: {isShared ? 'shared' : 'individual'}
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                        )}
+                                        <div className="flex items-center justify-between pt-1 border-t border-border/50">
+                                            <div>
+                                                <h3 className="font-bold text-sm flex items-center gap-2">
+                                                    <AlertTriangle size={13} className="text-amber-500" /> Fail-Fast
+                                                </h3>
+                                                <p className="text-[10px] text-muted-foreground">
+                                                    {cancelOthersOnFailure ? 'Cancel all on any failure' : 'Continue unrelated on failure'}
+                                                </p>
+                                            </div>
+                                            <button
+                                                onClick={() => setCancelOthersOnFailure(!cancelOthersOnFailure)}
+                                                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                                                    cancelOthersOnFailure ? 'bg-amber-500' : 'bg-muted'
+                                                }`}
+                                            >
+                                                <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                                                    cancelOthersOnFailure ? 'translate-x-5' : 'translate-x-0.5'
+                                                }`} />
+                                            </button>
+                                        </div>
                                     </div>
                                     <TopologyCanvas 
                                         plan={plan} 
@@ -1035,10 +1097,15 @@ export default function EcosystemPage() {
                                     <div className="bg-card border border-border p-5 rounded-xl">
                                         <div className="flex items-center justify-between mb-3">
                                             <h3 className="font-bold text-sm uppercase tracking-wider text-muted-foreground flex items-center gap-2">
-                                                <Database size={14} /> Shared Addons
+                                                <Database size={14} /> Addon Sharing
                                             </h3>
                                             <button
-                                                onClick={() => setUseSharedAddons(!useSharedAddons)}
+                                                onClick={() => {
+                                                    const next = !useSharedAddons;
+                                                    setUseSharedAddons(next);
+                                                    // When toggling global, clear per-addon overrides
+                                                    setSharedAddonConfig({});
+                                                }}
                                                 className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
                                                     useSharedAddons ? 'bg-emerald-500' : 'bg-muted'
                                                 }`}
@@ -1050,27 +1117,78 @@ export default function EcosystemPage() {
                                         </div>
                                         <p className="text-xs text-muted-foreground mb-3">
                                             {useSharedAddons
-                                                ? 'Addons (Postgres, Redis, etc.) are provisioned once and shared across all services.'
-                                                : 'Each service provisions its own addons independently — no shared infrastructure.'}
+                                                ? 'Global: addons are provisioned once and shared. Override per addon below.'
+                                                : 'Global: each service provisions its own addons. Override per addon below.'}
                                         </p>
-                                        {plan.addons && plan.addons.length > 0 && useSharedAddons && (
-                                            <div className="flex flex-wrap gap-2">
-                                                {plan.addons.map((addon) => (
-                                                    <span key={addon.type} className="px-3 py-1.5 rounded-lg bg-purple-500/10 border border-purple-500/20 text-purple-400 text-sm font-medium">
-                                                        {addon.type} → {addon.shared_by.join(', ')}
-                                                    </span>
-                                                ))}
+
+                                        {/* Per-addon overrides */}
+                                        {plan.addons && plan.addons.length > 0 && (
+                                            <div className="space-y-2 mt-3">
+                                                {plan.addons.map((addon) => {
+                                                    const cfg = sharedAddonConfig[addon.type];
+                                                    const isShared = cfg !== undefined ? cfg.shared : useSharedAddons;
+                                                    return (
+                                                        <div key={addon.type} className="flex items-center justify-between p-2.5 rounded-lg border border-border/60 bg-background/50">
+                                                            <div className="flex items-center gap-2.5">
+                                                                <Database size={12} className="text-purple-400" />
+                                                                <span className="text-sm font-medium">{addon.type}</span>
+                                                                {isShared ? (
+                                                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">shared</span>
+                                                                ) : (
+                                                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-yellow-500/10 text-yellow-400 border border-yellow-500/20">individual</span>
+                                                                )}
+                                                                {addon.shared_by?.length > 0 && isShared && (
+                                                                    <span className="text-[10px] text-muted-foreground">
+                                                                        by {addon.shared_by.join(', ')}
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                            <button
+                                                                onClick={() => {
+                                                                    setSharedAddonConfig(prev => ({
+                                                                        ...prev,
+                                                                        [addon.type]: { shared: !isShared },
+                                                                    }));
+                                                                }}
+                                                                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                                                                    isShared ? 'bg-emerald-500' : 'bg-muted'
+                                                                }`}
+                                                            >
+                                                                <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                                                                    isShared ? 'translate-x-5' : 'translate-x-0.5'
+                                                                }`} />
+                                                            </button>
+                                                        </div>
+                                                    );
+                                                })}
                                             </div>
                                         )}
-                                        {plan.addons && plan.addons.length > 0 && !useSharedAddons && (
-                                            <div className="flex flex-wrap gap-2">
-                                                {plan.addons.map((addon) => (
-                                                    <span key={addon.type} className="px-3 py-1.5 rounded-lg bg-yellow-500/10 border border-yellow-500/20 text-yellow-500 text-sm font-medium">
-                                                        {addon.type} → individual per service
-                                                    </span>
-                                                ))}
+                                    </div>
+
+                                    {/* Cancel Others on Failure */}
+                                    <div className="bg-card border border-border p-5 rounded-xl">
+                                        <div className="flex items-center justify-between">
+                                            <div>
+                                                <h3 className="font-bold text-sm flex items-center gap-2">
+                                                    <AlertTriangle size={14} className="text-amber-500" /> Fail-Fast Mode
+                                                </h3>
+                                                <p className="text-xs text-muted-foreground mt-0.5">
+                                                    {cancelOthersOnFailure
+                                                        ? 'If any service fails, all remaining queued deployments are cancelled.'
+                                                        : 'Failed services are retried; unrelated services continue deploying.'}
+                                                </p>
                                             </div>
-                                        )}
+                                            <button
+                                                onClick={() => setCancelOthersOnFailure(!cancelOthersOnFailure)}
+                                                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                                                    cancelOthersOnFailure ? 'bg-amber-500' : 'bg-muted'
+                                                }`}
+                                            >
+                                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                                                    cancelOthersOnFailure ? 'translate-x-6' : 'translate-x-1'
+                                                }`} />
+                                            </button>
+                                        </div>
                                     </div>
 
                                     {/* Services List */}
@@ -1390,7 +1508,7 @@ export default function EcosystemPage() {
                                     <Plus size={16} /> Add More Repos
                                 </button>
                                 <button
-                                    onClick={() => { clearState(); setStep('idle'); setDeployResults([]); setError(null); setUseSharedAddons(true); }}
+                                    onClick={() => { clearState(); setStep('idle'); setDeployResults([]); setError(null); setUseSharedAddons(true); setCancelOthersOnFailure(false); setSharedAddonConfig({}); }}
                                     className="px-6 py-2.5 rounded-xl border border-border hover:border-foreground/20 text-muted-foreground font-semibold transition-colors"
                                 >
                                     Deploy Another

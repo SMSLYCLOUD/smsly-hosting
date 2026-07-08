@@ -687,6 +687,39 @@ except Exception:
 
     echo -e "${GREEN}  ✓ All secrets generated successfully${NC}"
 
+    # ─── Cosign keypair (image signing) ────────────────────────────────────
+    # Generate a password-protected cosign keypair so the platform's own
+    # builds can produce verifiable signatures.  Without this, every local
+    # build falls through to keyless Sigstore signing which only works with
+    # GitHub Actions OIDC — private-key signing is a hard requirement on
+    # self-hosted / air-gapped nodes.
+    echo -e "${BLUE}  → Bootstrapping Cosign signing keypair...${NC}"
+    mkdir -p "$INSTALL_DIR/cosign-keys"
+    COSIGN_PASSWORD="${COSIGN_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || openssl rand -hex 32 2>/dev/null || echo 'cosign-placeholder')}"
+    COSIGN_PRIVATE_KEY_PATH="$INSTALL_DIR/cosign-keys/cosign.key"
+    COSIGN_PUBLIC_KEY_PATH="$INSTALL_DIR/cosign-keys/cosign.pub"
+    if [ ! -f "$COSIGN_PRIVATE_KEY_PATH" ] || [ ! -f "$COSIGN_PUBLIC_KEY_PATH" ]; then
+        if command -v cosign >/dev/null 2>&1; then
+            COSIGN_PASSWORD="$COSIGN_PASSWORD" cosign generate-key-pair 2>/dev/null || true
+            # cosign writes to cosign.key / cosign.pub in cwd
+            if [ -f cosign.key ]; then
+                mv cosign.key "$COSIGN_PRIVATE_KEY_PATH"
+                mv cosign.pub "$COSIGN_PUBLIC_KEY_PATH"
+                chmod 600 "$COSIGN_PRIVATE_KEY_PATH"
+                chmod 644 "$COSIGN_PUBLIC_KEY_PATH"
+                env_set_value "$INSTALL_DIR/.env" "COSIGN_PASSWORD" "$COSIGN_PASSWORD"
+                env_set_value "$INSTALL_DIR/.env" "COSIGN_PRIVATE_KEY_PATH" "$COSIGN_PRIVATE_KEY_PATH"
+                echo -e "${GREEN}    ✓ Cosign keypair created at $INSTALL_DIR/cosign-keys/${NC}"
+            else
+                echo -e "${YELLOW}    ⚠ cosign generate-key-pair ran but no keyfile produced — keyless only${NC}"
+            fi
+        else
+            echo -e "${YELLOW}    ⚠ cosign not installed — image signing will be keyless (requires GitHub OIDC)${NC}"
+            echo -e "${YELLOW}    Install with: 'sudo bash install.sh --update' or download cosign manually${NC}"
+        fi
+    else
+        echo -e "${GREEN}    ✓ Cosign keypair already exists — skipping generation${NC}"
+    fi
 
 
     # Agent-lite nodes must use the master's DB password, not a locally generated one.

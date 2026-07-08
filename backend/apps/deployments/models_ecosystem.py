@@ -32,6 +32,15 @@ class EcosystemPlan(models.Model):
         default=True,
         help_text='When True, addons (Postgres, Redis, etc.) are provisioned once and shared across all services. When False, each service provisions its own addons independently.',
     )
+    cancel_others_on_failure = models.BooleanField(
+        default=False,
+        help_text='When True, if any service deployment fails, all remaining queued deployments in the ecosystem are cancelled.',
+    )
+    shared_addon_config = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text='Per-addon sharing configuration. Keys are addon types (e.g. "POSTGRES", "REDIS"), values are objects with "shared" (bool) and optionally "shared_by" (list of service names). When an addon is not listed, the use_shared_addons default applies.',
+    )
 
     # Task IDs for resume
     scan_task_id = models.CharField(max_length=255, blank=True, null=True)  # type: ignore[var-annotated]

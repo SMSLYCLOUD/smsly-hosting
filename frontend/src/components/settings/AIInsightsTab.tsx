@@ -40,28 +40,25 @@ export function AIInsightsTab({ serviceId }: { serviceId: string }) {
   const [scaleAnalysis, setScaleAnalysis] = useState<ScalingAnalysis | null>(null);
   const [anomalies, setAnomalies] = useState<any[]>([]);
   const [platformReport, setPlatformReport] = useState<any>(null);
-  const [allServices, setAllServices] = useState<any[]>([]);
+  const [serviceInfo, setServiceInfo] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [julesRes, scaleRes, anomalyRes, reportRes, servicesRes] = await Promise.allSettled([
+      const [julesRes, scaleRes, anomalyRes, reportRes, serviceRes] = await Promise.allSettled([
         api.get(`/ai/jules-history/${serviceId}/`),
         api.post(`/scaling/${serviceId}/analyze/`),
         api.get(`/ai/anomalies/`, { params: { service_id: serviceId } }),
-        api.get(`/ai/report/`),
-        api.get(`/services/`, { params: { page_size: 50 } }),
+        api.get(`/ai/report/`, { params: { service_id: serviceId } }),
+        api.get(`/services/${serviceId}/`),
       ]);
       if (julesRes.status === "fulfilled") setJulesData(julesRes.value.data);
       if (scaleRes.status === "fulfilled") setScaleAnalysis(scaleRes.value.data);
       if (anomalyRes.status === "fulfilled") setAnomalies(Array.isArray(anomalyRes.value.data) ? anomalyRes.value.data : (anomalyRes.value.data?.results || []));
       if (reportRes.status === "fulfilled") setPlatformReport(reportRes.value.data);
-      if (servicesRes.status === "fulfilled") {
-        const svcData = servicesRes.value.data;
-        setAllServices(svcData?.results || svcData || []);
-      }
+      if (serviceRes.status === "fulfilled") setServiceInfo(serviceRes.value.data);
     } catch (err: any) {
       setError(err?.message || "Failed to load insights");
     } finally {
@@ -263,48 +260,62 @@ export function AIInsightsTab({ serviceId }: { serviceId: string }) {
         </TabsContent>
 
         <TabsContent value="platform" className="space-y-6 mt-6">
-          {/* Platform Health Overview */}
+          {/* Service Health Overview */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <div className="p-3 rounded-lg border border-border bg-card">
               <div className="flex items-center gap-2 mb-1">
                 <Activity className="w-3.5 h-3.5 text-emerald-500" />
-                <span className="text-[10px] text-muted-foreground uppercase">Total Services</span>
+                <span className="text-[10px] text-muted-foreground uppercase">Status</span>
               </div>
-              <div className="text-xl font-bold">{allServices.length}</div>
+              <div className="text-xl font-bold">{serviceInfo?.status || "—"}</div>
             </div>
             <div className="p-3 rounded-lg border border-border bg-card">
               <div className="flex items-center gap-2 mb-1">
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
-                <span className="text-[10px] text-muted-foreground uppercase">Healthy</span>
+                <RefreshCw className="w-3.5 h-3.5 text-blue-500" />
+                <span className="text-[10px] text-muted-foreground uppercase">Deploys</span>
               </div>
-              <div className="text-xl font-bold text-emerald-500">
-                {allServices.filter((s: any) => s.latest_deployment?.status === "SUCCESS" || s.latest_deployment?.status === "RUNNING").length}
-              </div>
+              <div className="text-xl font-bold">{serviceInfo?.deployment_count ?? "—"}</div>
             </div>
             <div className="p-3 rounded-lg border border-border bg-card">
               <div className="flex items-center gap-2 mb-1">
-                <XCircle className="w-3.5 h-3.5 text-red-500" />
-                <span className="text-[10px] text-muted-foreground uppercase">Failed</span>
+                <Bug className="w-3.5 h-3.5 text-red-500" />
+                <span className="text-[10px] text-muted-foreground uppercase">Failures</span>
               </div>
-              <div className="text-xl font-bold text-red-500">
-                {allServices.filter((s: any) => s.latest_deployment?.status === "FAILED").length}
-              </div>
+              <div className="text-xl font-bold text-red-500">{serviceInfo?.failed_deployments ?? "—"}</div>
             </div>
             <div className="p-3 rounded-lg border border-border bg-card">
               <div className="flex items-center gap-2 mb-1">
                 <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
-                <span className="text-[10px] text-muted-foreground uppercase">Anomalies (24h)</span>
+                <span className="text-[10px] text-muted-foreground uppercase">Anomalies</span>
               </div>
               <div className="text-xl font-bold text-amber-500">{anomalies.length}</div>
             </div>
           </div>
 
-          {/* Daily Intelligence Report */}
-          {platformReport && (
+          {/* Latest Deployment */}
+          {serviceInfo?.latest_deployment && (
+            <div className="p-4 rounded-xl border border-border bg-card">
+              <div className="flex items-center gap-2 mb-3">
+                <Server className="w-4 h-4 text-blue-500" />
+                <h3 className="text-sm font-bold">Latest Deployment</h3>
+                <Badge variant={serviceInfo.latest_deployment.status === "SUCCESS" || serviceInfo.latest_deployment.status === "RUNNING" ? "outline" : "destructive"} className="text-[10px] ml-auto">
+                  {serviceInfo.latest_deployment.status}
+                </Badge>
+              </div>
+              <div className="text-xs text-muted-foreground space-y-1">
+                {serviceInfo.latest_deployment.commit_message && <p>Commit: {serviceInfo.latest_deployment.commit_message.slice(0, 200)}</p>}
+                {serviceInfo.latest_deployment.branch && <p>Branch: {serviceInfo.latest_deployment.branch}</p>}
+                {serviceInfo.latest_deployment.created_at && <p>Deployed: {new Date(serviceInfo.latest_deployment.created_at).toLocaleString()}</p>}
+              </div>
+            </div>
+          )}
+
+          {/* Service Report */}
+          {platformReport && platformReport.available && (
             <div className="p-4 rounded-xl border border-border bg-gradient-to-r from-violet-500/5 to-blue-500/5">
               <div className="flex items-center gap-2 mb-3">
                 <BarChart3 className="w-4 h-4 text-violet-500" />
-                <h3 className="text-sm font-bold">Daily Intelligence Report</h3>
+                <h3 className="text-sm font-bold">Intelligence Report</h3>
                 {platformReport.generated_at && (
                   <span className="text-[10px] text-muted-foreground ml-auto">
                     {new Date(platformReport.generated_at).toLocaleString()}
@@ -351,46 +362,6 @@ export function AIInsightsTab({ serviceId }: { serviceId: string }) {
               <p className="text-xs text-muted-foreground">{scaleAnalysis.recommendation.reason}</p>
             </div>
           )}
-
-          {/* All Services Health */}
-          <div>
-            <h3 className="text-sm font-bold mb-3 flex items-center gap-2">
-              <Server className="w-4 h-4 text-blue-500" /> All Services
-            </h3>
-            <div className="space-y-2">
-              {allServices.length === 0 ? (
-                <div className="text-center py-6 text-sm text-muted-foreground">No services found.</div>
-              ) : (
-                allServices.map((svc: any) => {
-                  const depStatus = svc.latest_deployment?.status || "UNKNOWN";
-                  const isHealthy = depStatus === "SUCCESS" || depStatus === "RUNNING";
-                  return (
-                    <div key={svc.id} className="flex items-center justify-between p-3 rounded-lg border border-border bg-card">
-                      <div className="flex items-center gap-3">
-                        {isHealthy ? (
-                          <Wifi className="w-4 h-4 text-emerald-500" />
-                        ) : depStatus === "FAILED" ? (
-                          <WifiOff className="w-4 h-4 text-red-500" />
-                        ) : (
-                          <Activity className="w-4 h-4 text-amber-500" />
-                        )}
-                        <div>
-                          <span className="text-sm font-medium">{svc.name}</span>
-                          <span className="text-xs text-muted-foreground ml-2">{depStatus}</span>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                        {svc.latest_deployment?.created_at && (
-                          <Clock className="w-3 h-3" />
-                        )}
-                        <span>{svc.latest_deployment?.created_at ? new Date(svc.latest_deployment.created_at).toLocaleDateString() : "—"}</span>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
         </TabsContent>
       </Tabs>
     </div>

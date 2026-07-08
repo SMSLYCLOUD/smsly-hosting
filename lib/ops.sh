@@ -223,7 +223,8 @@ recover_runtime_stack() {
         openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
             -keyout "${_tmp_dir}/registry.key" \
             -out    "${_tmp_dir}/registry.crt" \
-            -subj "/CN=registry" 2>/dev/null
+            -subj "/CN=registry" \
+            -addext "subjectAltName=DNS:registry,DNS:localhost,IP:127.0.0.1,IP:10.100.0.1" 2>/dev/null
         local _rc=$?
         if [ "$_rc" -ne 0 ]; then
             rm -rf "$_tmp_dir"
@@ -268,6 +269,43 @@ print('${REGISTRY_USER:-smsly-registry}:' + bcrypt.hashpw(pw.encode(), bcrypt.ge
         fi
         env_set_value "$INSTALL_DIR/.env" "REGISTRY_USER" "${REGISTRY_USER:-smsly-registry}"
         env_set_value "$INSTALL_DIR/.env" "REGISTRY_PASSWORD" "$REGISTRY_PASS"
+    fi
+
+    # ─── Self-heal: missing secrets + cosign keypair ───────────────────────
+    if [ -f "$INSTALL_DIR/.env" ]; then
+        _ensure_secret() {
+            local _name="$1" _bytes="$2"
+            if ! grep -q "^${_name}=" "$INSTALL_DIR/.env" 2>/dev/null || [ -z "$(grep "^${_name}=" "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2)" ]; then
+                local _val="$(python3 -c "import secrets; print(secrets.token_hex($_bytes))" 2>/dev/null || openssl rand -hex "$_bytes" 2>/dev/null || true)"
+                if [ -n "$_val" ]; then
+                    printf -v "$_name" '%s' "$_val"
+                    env_set_value "$INSTALL_DIR/.env" "$_name" "$_val" 2>/dev/null || true
+                    echo -e "${BLUE}    → Self-healed $_name${NC}"
+                fi
+            fi
+        }
+        _ensure_secret REGISTRY_HTTP_SECRET 32
+        _ensure_secret REPLICATION_PASSWORD 32
+        _ensure_secret SENTINEL_PASSWORD 32
+        _ensure_secret CROWDSEC_BOUNCER_KEY 32
+        _ensure_secret COSIGN_PASSWORD 32
+    fi
+    if command -v cosign >/dev/null 2>&1; then
+        mkdir -p "$INSTALL_DIR/cosign-keys"
+        if [ ! -f "$INSTALL_DIR/cosign-keys/cosign.key" ] || [ ! -f "$INSTALL_DIR/cosign-keys/cosign.pub" ]; then
+            echo -e "${BLUE}    → Cosign keypair missing — generating...${NC}"
+            COSIGN_PASSWORD="${COSIGN_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || openssl rand -hex 32 2>/dev/null || true)}"
+            COSIGN_PASSWORD="$COSIGN_PASSWORD" cosign generate-key-pair 2>/dev/null || true
+            if [ -f cosign.key ]; then
+                mv cosign.key "$INSTALL_DIR/cosign-keys/cosign.key"
+                mv cosign.pub "$INSTALL_DIR/cosign-keys/cosign.pub"
+                chmod 600 "$INSTALL_DIR/cosign-keys/cosign.key"
+                chmod 644 "$INSTALL_DIR/cosign-keys/cosign.pub"
+                env_set_value "$INSTALL_DIR/.env" "COSIGN_PASSWORD" "$COSIGN_PASSWORD" 2>/dev/null || true
+                env_set_value "$INSTALL_DIR/.env" "COSIGN_PRIVATE_KEY_PATH" "$INSTALL_DIR/cosign-keys/cosign.key" 2>/dev/null || true
+                echo -e "${GREEN}      ✓ Cosign keypair created${NC}"
+            fi
+        fi
     fi
 
     if [ "$MODE_AGENT_LITE" = "true" ]; then

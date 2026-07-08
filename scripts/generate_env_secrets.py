@@ -43,6 +43,7 @@ SECRET_DEFINITIONS = [
     ("SENTINEL_PASSWORD", 32, "Redis Sentinel authentication password"),
     ("REGISTRY_HTTP_SECRET", 32, "Docker registry internal secret"),
     ("CROWDSEC_BOUNCER_KEY", 32, "CrowdSec bouncer key for Traefik"),
+    ("COSIGN_PASSWORD", 32, "Password protecting the Cosign private key"),
 ]
 
 

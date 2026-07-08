@@ -5536,11 +5536,11 @@ else
     SECRETS_GENERATED=false
     while IFS='=' read -r _smsly_secrets_key _smsly_secrets_val; do
         case "$_smsly_secrets_key" in
-            SECRET_KEY|FIELD_ENCRYPTION_KEY|POSTGRES_PASSWORD|REDIS_PASSWORD|RABBITMQ_PASSWORD|GATEWAY_SECRET|GITHUB_WEBHOOK_SECRET|AUTOSCALER_API_TOKEN|FRP_AUTH_TOKEN|PGCAT_ADMIN_PASSWORD)
+            SECRET_KEY|FIELD_ENCRYPTION_KEY|POSTGRES_PASSWORD|REDIS_PASSWORD|RABBITMQ_PASSWORD|GATEWAY_SECRET|GITHUB_WEBHOOK_SECRET|AUTOSCALER_API_TOKEN|FRP_AUTH_TOKEN|PGCAT_ADMIN_PASSWORD|REGISTRY_HTTP_SECRET|REPLICATION_PASSWORD|SENTINEL_PASSWORD|CROWDSEC_BOUNCER_KEY)
                 printf -v "$_smsly_secrets_key" '%s' "$_smsly_secrets_val"
                 ;;
         esac
-    done < <(python3 "$INSTALL_DIR/scripts/generate_env_secrets.py" 2>/dev/null | grep -E '^[A-Z_]+=' || true)
+    done < <(python3 "$INSTALL_DIR/scripts/generate_env_secrets.py" --shell 2>/dev/null | grep -E '^[A-Z_]+=' || true)
     unset _smsly_secrets_key _smsly_secrets_val
     if [ -n "${SECRET_KEY:-}" ] && [ -n "${FIELD_ENCRYPTION_KEY:-}" ]; then
         SECRETS_GENERATED=true

@@ -2109,10 +2109,13 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
             })
 
         # ── 4. Transfers involving this server ───────────────────────
+        target_ip_match = Q(target_server_ip=server.host)
+        if server.private_ip:
+            target_ip_match |= Q(target_server_ip=server.private_ip)
         transfers = (
             ServerTransfer.objects
             .filter(
-                Q(source_server=server) | Q(target_server=server),
+                Q(source_server_id=str(server.id)) | target_ip_match,
             )
             .exclude(status='COMPLETED')
             .order_by('-created_at')[:10]

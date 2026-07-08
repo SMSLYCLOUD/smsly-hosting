@@ -769,6 +769,8 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         plan = request.data.get('plan')
         project_id = request.data.get('project_id')
         use_shared_addons = request.data.get('use_shared_addons', True)
+        cancel_others_on_failure = request.data.get('cancel_others_on_failure', False)
+        shared_addon_config = request.data.get('shared_addon_config', {})
         if not isinstance(plan, dict):
             return Response(
                 {'error': 'plan (object) is required'},
@@ -800,29 +802,36 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             plan_record = None
 
         if not project:
+            from apps.deployments.tasks_ecosystem import _ecosystem_project_name
             services_plan = plan.get("services", []) if isinstance(plan, dict) else []
-            proj_name = str(
+            raw_name = str(
                 (plan.get("project_name") if isinstance(plan, dict) else None)
                 or (plan.get("name") if isinstance(plan, dict) else None)
                 or (services_plan[0].get("repo", "").split("/")[-1] if services_plan and isinstance(services_plan, list) and services_plan[0].get("repo") else "")
                 or "Ecosystem Cluster"
             ).strip()
-            if not proj_name:
-                proj_name = "Ecosystem Cluster"
+            if not raw_name:
+                raw_name = "Ecosystem Cluster"
+            proj_name = _ecosystem_project_name(raw_name)[:100]
             project = Project.objects.create(
                 owner=request.user,
-                name=proj_name[:100],
+                name=proj_name,
                 description="Auto-created by zero-config ecosystem deployment.",
+                is_ephemeral=True,
             )
 
         if plan_record:
             if not plan_record.project:
                 plan_record.project = project
             plan['use_shared_addons'] = use_shared_addons
+            plan['cancel_others_on_failure'] = cancel_others_on_failure
+            plan['shared_addon_config'] = shared_addon_config
             plan_record.plan = plan
             plan_record.status = EcosystemPlan.Status.DEPLOYING
             plan_record.use_shared_addons = use_shared_addons
-            plan_record.save(update_fields=['plan', 'status', 'use_shared_addons', 'updated_at'])
+            plan_record.cancel_others_on_failure = cancel_others_on_failure
+            plan_record.shared_addon_config = shared_addon_config
+            plan_record.save(update_fields=['plan', 'status', 'use_shared_addons', 'cancel_others_on_failure', 'shared_addon_config', 'updated_at'])
         else:
             plan_record = EcosystemPlan.objects.create(
                 user=request.user,
@@ -830,6 +839,8 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
                 plan=plan,
                 status=EcosystemPlan.Status.DEPLOYING,
                 use_shared_addons=use_shared_addons,
+                cancel_others_on_failure=cancel_others_on_failure,
+                shared_addon_config=shared_addon_config,
             )
 
         task = ecosystem_deploy_task.delay(

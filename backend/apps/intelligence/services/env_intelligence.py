@@ -295,7 +295,7 @@ class EnvironmentIntelligenceService:
 
         # Ensure any unfilled, placeholder, or mock environment variables on the
         # service are added to env_context for AI Senate resolution.
-        for ev in service.environment_variables.all():
+        for ev in service.env_vars.all():
             val_str = str(ev.value or "").strip()
             if _needs_real_value(val_str):
                 if ev.key not in env_context:

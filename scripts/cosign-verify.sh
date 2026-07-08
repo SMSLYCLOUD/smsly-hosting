@@ -85,12 +85,26 @@ cosign_verify_image() {
 
     _cosign_ensure_binary || return 1
 
+    local cosign_keys="/opt/smsly-hosting/cosign-keys"
+    local private_key="${COSIGN_PRIVATE_KEY_PATH:-${cosign_keys}/cosign.key}"
+    local public_key="${cosign_keys}/cosign.pub"
+
+    # ── Private-key verification (preferred for self-hosted nodes) ─────
+    if [ -f "$public_key" ]; then
+        echo "[cosign] Verifying $image (public key)..."
+        if "$COSIGN_BINARY" verify --key "$public_key" "$image" 2>/dev/null; then
+            echo "[cosign] ✓ Signature verified (public key) for $image"
+            return 0
+        fi
+    fi
+
+    # ── Keyless Sigstore verification (CI-built images) ───────────────
     local repo_identity
     repo_identity="$(_cosign_get_repo)"
     local issuer="https://token.actions.githubusercontent.com"
     local identity="https://github.com/${repo_identity}/.github/workflows/deploy.yml@refs/heads/main"
 
-    echo "[cosign] Verifying $image..."
+    echo "[cosign] Verifying $image (keyless)..."
     if "$COSIGN_BINARY" verify \
         --certificate-oidc-issuer "$issuer" \
         --certificate-identity "$identity" \
@@ -99,11 +113,10 @@ cosign_verify_image() {
         return 0
     fi
 
-    # Try the cosign-sign workflow identity as fallback
-    identity="https://github.com/${repo_identity}/.github/workflows/cosign-sign.yml@refs/heads/main"
+    local identity2="https://github.com/${repo_identity}/.github/workflows/cosign-sign.yml@refs/heads/main"
     if "$COSIGN_BINARY" verify \
         --certificate-oidc-issuer "$issuer" \
-        --certificate-identity "$identity" \
+        --certificate-identity "$identity2" \
         "$image" 2>/dev/null; then
         echo "[cosign] ✓ Signature verified for $image"
         return 0

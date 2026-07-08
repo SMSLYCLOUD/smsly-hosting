@@ -1015,6 +1015,31 @@ def _runtime_watch_defaults(user) -> dict[str, str]:
     return defaults
 
 
+def _ecosystem_project_name(raw_name: str) -> str:
+    """Generate a beautified, unique project name for ecosystem deployments.
+
+    Produces names like: ``my-app — Jul 8, 2026 · 14:32``
+    The timestamp ensures uniqueness across repeated deploys of the same ecosystem.
+    """
+    from django.utils import timezone as _tz
+    import calendar
+
+    base = _slugify_name(raw_name).replace("-", " ").strip()
+    if not base:
+        base = "Ecosystem"
+
+    # Title-case the base name for readability
+    base = " ".join(word.capitalize() for word in base.split())
+
+    now = _tz.now()
+    month_abbr = calendar.month_abbr[now.month]   # e.g. "Jul"
+    day = now.day
+    year = now.year
+    hour = now.hour
+    minute = now.minute
+    return f"{base} — {month_abbr} {day}, {year} · {hour:02d}:{minute:02d}"
+
+
 def _order_key(item: Any) -> int:
     """Sort helper for deploy order."""
     if not isinstance(item, dict):
@@ -1337,6 +1362,48 @@ def _cancel_dependent_deployments(
     return cancelled
 
 
+def _cancel_all_remaining_deployments(
+    waves: list[list[str]],
+    from_wave_index: int,
+    failed_deployment_ids: list[str],
+    deployment_by_repo_key: dict[str, str],
+    reason: str,
+) -> int:
+    """Cancel ALL queued deployments from *from_wave_index* onwards.
+
+    Unlike ``_cancel_dependent_deployments`` which only cancels nodes
+    that transitively depend on the failed node, this function cancels
+    every remaining queued deployment in the ecosystem.  Used when
+    ``cancel_others_on_failure`` is enabled.
+    """
+    failed_set = set(failed_deployment_ids)
+
+    to_cancel_ids: list[str] = []
+    for wave in waves[from_wave_index:]:
+        for dep_id in wave:
+            if dep_id in failed_set:
+                continue
+            to_cancel_ids.append(dep_id)
+
+    if not to_cancel_ids:
+        return 0
+
+    cancelled = 0
+    for deployment in Deployment.objects.filter(id__in=to_cancel_ids):
+        if deployment.status != Deployment.Status.QUEUED:
+            continue
+        deployment.status = Deployment.Status.CANCELLED
+        deployment.finished_at = timezone.now()
+        deployment.build_logs = (
+            f"{deployment.build_logs or ''}"
+            f"\n[Ecosystem] Cancelled (fail-fast mode): {reason}\n"
+        )
+        deployment.save(update_fields=["status", "finished_at", "build_logs"])
+        cancelled += 1
+
+    return cancelled
+
+
 def _apply_service_profile(service, svc_plan: dict[str, Any], provider, port: int, server=None):
     """Apply ecosystem plan profile to a service with production defaults.
 
@@ -1552,8 +1619,14 @@ def ecosystem_release_wave_task(
     max_rechecks: int = _MAX_WAVE_RECHECKS,
     dependencies: dict[str, set[str]] | None = None,
     deployment_by_repo_key: dict[str, str] | None = None,
+    cancel_others_on_failure: bool = False,
 ) -> dict:
-    """Release next wave, continuing successful branches and cancelling failed branches."""
+    """Release next wave, continuing successful branches and cancelling failed branches.
+
+    When *cancel_others_on_failure* is ``True``, ANY failure in a wave causes
+    ALL remaining queued deployments across all future waves to be cancelled
+    (not just the ones that transitively depend on the failed node).
+    """
 
     # Rebuild build counter from actual deployment statuses to prevent drift
     _rebuild_ecosystem_build_counter()
@@ -1566,7 +1639,7 @@ def ecosystem_release_wave_task(
         if not _has_enough_memory():
             self.app.send_task(
                 "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
-                args=[provider_id, waves, 0, recheck_count, max_rechecks, dependencies, deployment_by_repo_key],
+                args=[provider_id, waves, 0, recheck_count, max_rechecks, dependencies, deployment_by_repo_key, cancel_others_on_failure],
                 countdown=_wave_recheck_countdown(),
             )
             return {"status": "deferred", "wave": 0, "reason": "low_memory"}
@@ -1574,7 +1647,7 @@ def ecosystem_release_wave_task(
         if len(waves) > 1:
             self.app.send_task(
                 "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
-                args=[provider_id, waves, 1, 0, max_rechecks, dependencies, deployment_by_repo_key],
+                args=[provider_id, waves, 1, 0, max_rechecks, dependencies, deployment_by_repo_key, cancel_others_on_failure],
                 countdown=_wave_recheck_countdown(),
             )
         return {"status": "released", "wave": 1, "queued": queued}
@@ -1640,7 +1713,15 @@ def ecosystem_release_wave_task(
         if recheck_count >= max_rechecks:
             # Time out waiting for remaining ones
             failed_ids.extend([str(dep["id"]) for dep in deployments if dep["status"] in in_progress_states])
-            if dependencies and deployment_by_repo_key:
+            if cancel_others_on_failure and deployment_by_repo_key:
+                cancelled = _cancel_all_remaining_deployments(
+                    waves,
+                    from_wave_index=wave_index,
+                    failed_deployment_ids=failed_ids,
+                    deployment_by_repo_key=deployment_by_repo_key,
+                    reason="previous wave timed out and cancel-others-on-failure is enabled",
+                )
+            elif dependencies and deployment_by_repo_key:
                 cancelled = _cancel_dependent_deployments(
                     waves,
                     from_wave_index=wave_index,
@@ -1659,7 +1740,7 @@ def ecosystem_release_wave_task(
 
         self.app.send_task(
             "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
-            args=[provider_id, waves, wave_index, recheck_count + 1, max_rechecks, dependencies, deployment_by_repo_key],
+            args=[provider_id, waves, wave_index, recheck_count + 1, max_rechecks, dependencies, deployment_by_repo_key, cancel_others_on_failure],
             countdown=_wave_recheck_countdown(),
         )
         return {
@@ -1670,21 +1751,31 @@ def ecosystem_release_wave_task(
 
     # At this point, everything is either terminal (ACTIVE or FAILED/CANCELLED)
     cancelled = 0
-    if failed_ids and dependencies and deployment_by_repo_key:
-        cancelled = _cancel_dependent_deployments(
-            waves,
-            from_wave_index=wave_index,
-            failed_deployment_ids=failed_ids,
-            dependencies=dependencies,
-            deployment_by_repo_key=deployment_by_repo_key,
-            reason="upstream dependency deployment failed",
-        )
+    if failed_ids:
+        if cancel_others_on_failure and deployment_by_repo_key:
+            # Fail-fast mode: cancel ALL remaining queued deployments
+            cancelled = _cancel_all_remaining_deployments(
+                waves,
+                from_wave_index=wave_index,
+                failed_deployment_ids=failed_ids,
+                deployment_by_repo_key=deployment_by_repo_key,
+                reason="a service deployment failed and cancel-others-on-failure is enabled",
+            )
+        elif dependencies and deployment_by_repo_key:
+            cancelled = _cancel_dependent_deployments(
+                waves,
+                from_wave_index=wave_index,
+                failed_deployment_ids=failed_ids,
+                dependencies=dependencies,
+                deployment_by_repo_key=deployment_by_repo_key,
+                reason="upstream dependency deployment failed",
+            )
 
     # Memory-aware gating: defer wave if system is under memory pressure
     if not _has_enough_memory():
         self.app.send_task(
             "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
-            args=[provider_id, waves, wave_index, 0, max_rechecks, dependencies, deployment_by_repo_key],
+            args=[provider_id, waves, wave_index, 0, max_rechecks, dependencies, deployment_by_repo_key, cancel_others_on_failure],
             countdown=_wave_recheck_countdown(),
         )
         return {"status": "deferred", "wave": wave_index, "reason": "low_memory"}
@@ -1694,7 +1785,7 @@ def ecosystem_release_wave_task(
     if wave_index + 1 < len(waves):
         self.app.send_task(
             "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
-            args=[provider_id, waves, wave_index + 1, 0, max_rechecks, dependencies, deployment_by_repo_key],
+            args=[provider_id, waves, wave_index + 1, 0, max_rechecks, dependencies, deployment_by_repo_key, cancel_others_on_failure],
             countdown=_wave_recheck_countdown(),
         )
     return {
@@ -1744,6 +1835,8 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
 
     services_plan = plan.get("services", [])
     use_shared_addons = plan.get("use_shared_addons", True)
+    cancel_on_failure = plan.get("cancel_others_on_failure", False)
+    shared_addon_config: dict[str, dict] = plan.get("shared_addon_config", {})
     if not isinstance(services_plan, list) or not services_plan:
         return {"error": "No services in deploy plan"}
 
@@ -1785,20 +1878,22 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
 
     if not project:
         from apps.deployments.models_core import Project
-        proj_name = str(
+        raw_name = str(
             plan.get("project_name")
             or plan.get("name")
             or (services_plan[0].get("repo", "").split("/")[-1] if services_plan and services_plan[0].get("repo") else "")
             or "Ecosystem Cluster"
         ).strip()
-        if not proj_name:
-            proj_name = "Ecosystem Cluster"
+        if not raw_name:
+            raw_name = "Ecosystem Cluster"
+        proj_name = _ecosystem_project_name(raw_name)[:100]
         project = Project.objects.create(
             owner=user,
-            name=proj_name[:100],
+            name=proj_name,
             description="Auto-created by zero-config ecosystem deployment.",
+            is_ephemeral=True,
         )
-        logger.info("Auto-created project '%s' (%s) for ecosystem deployment", project.name, project.id)
+        logger.info("Auto-created ecosystem project '%s' (%s)", project.name, project.id)
 
     if plan_id:
         from apps.deployments.models_ecosystem import EcosystemPlan
@@ -1809,6 +1904,41 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                 _plan_rec.save(update_fields=["project", "updated_at"])
         except Exception:
             pass
+
+    # Ensure the ecosystem project always has its own ScopedRegistry.
+    # Ecosystem deployments must never fall back to the platform default
+    # registry.  This covers both the auto-created project path (above)
+    # and the case where the project was created by the view.
+    if project:
+        try:
+            from django.contrib.contenttypes.models import ContentType
+            from apps.deployments.models_registry_scope import ScopedRegistry
+
+            _ct = ContentType.objects.get_for_model(Project)
+            _has_registry = ScopedRegistry.objects.filter(
+                content_type=_ct, object_id=project.id,
+            ).exists()
+            if not _has_registry:
+                import secrets as _sec
+                import string as _str
+                raw_name = str(
+                    plan.get("project_name")
+                    or plan.get("name")
+                    or (services_plan[0].get("repo", "").split("/")[-1] if services_plan and services_plan[0].get("repo") else "")
+                    or "ecosystem"
+                ).strip()
+                _reg_user = f"eco-{_slugify_name(raw_name)[:24]}"
+                _reg_pass = "".join(_sec.choices(_str.ascii_letters + _str.digits, k=24))
+                ScopedRegistry.objects.create(
+                    content_type=_ct,
+                    object_id=project.id,
+                    username=_reg_user,
+                    password=_reg_pass,
+                    is_active=True,
+                )
+                logger.info("Auto-created scoped registry for ecosystem project %s", project.id)
+        except Exception as exc:
+            logger.warning("Failed to ensure scoped registry for ecosystem project: %s", exc)
 
     # 1. Parse and validate manifest if provided, bulk verify env before continuing
     manifest_content = plan.get("manifest")
@@ -1945,11 +2075,29 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
     if not use_shared_addons:
         logger.info("Shared addons disabled — each service will provision its own addons independently")
 
-    if addon_anchor_service and required_addons and use_shared_addons:
+    def _addon_is_shared(addon_type: str) -> bool:
+        """Return True if this addon type should be provisioned once and shared.
+
+        Per-addon ``shared_addon_config`` overrides the global ``use_shared_addons``
+        flag.  If an addon type is not listed in ``shared_addon_config``, the global
+        flag applies.
+        """
+        cfg = shared_addon_config.get(addon_type)
+        if isinstance(cfg, dict):
+            return bool(cfg.get("shared", use_shared_addons))
+        return use_shared_addons
+
+    if addon_anchor_service and required_addons:
         supported_addons = set(addon_provisioner.ADDON_IMAGES.keys())
         for addon_type in required_addons:
             if addon_type not in supported_addons:
                 logger.warning("Ecosystem addon %s is not supported; skipping", addon_type)
+                continue
+
+            # Per-addon sharing resolution: check shared_addon_config first,
+            # then fall back to the global use_shared_addons flag.
+            if not _addon_is_shared(addon_type):
+                logger.info("Addon %s is configured as individual (not shared); skipping shared provisioning", addon_type)
                 continue
 
             existing_addon = Addon.objects.filter(service=addon_anchor_service, addon_type=addon_type).first()
@@ -2091,13 +2239,17 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             env_vars = _normalize_env_vars(svc_plan.get("env_vars", {}))
             service_addon_types = _service_plan_addon_types(svc_plan, plan.get("addons", []))
 
-            # When shared addons are disabled, provision each service's addons independently.
+            # When shared addons are disabled, or this specific addon is not shared,
+            # provision each service's addons independently.
             service_addon_urls: dict[str, str] = {}
-            if not use_shared_addons and service_addon_types:
+            if service_addon_types:
                 supported_addons = set(addon_provisioner.ADDON_IMAGES.keys())
                 for addon_type in service_addon_types:
                     if addon_type not in supported_addons:
                         logger.warning("Ecosystem addon %s is not supported; skipping", addon_type)
+                        continue
+                    # Only provision individually if this addon is NOT shared
+                    if _addon_is_shared(addon_type):
                         continue
                     try:
                         svc_addon = Addon.objects.create(
@@ -2121,7 +2273,9 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             # and SECRETS-MANIFEST.yaml files to produce a fully resolved,
             # grounded env configuration. Falls back to placeholder resolution
             # + AI Senate only when source files are unavailable.
-            active_addon_urls = service_addon_urls if not use_shared_addons else provisioned_addon_urls
+            # Merge shared + individual addon URLs: prefer per-service URLs
+            # (individual provisioning) and fall back to shared provisioned URLs.
+            active_addon_urls: dict[str, str] = {**provisioned_addon_urls, **service_addon_urls}
             resolved_env = _resolve_from_manifest_or_fallback(
                 repo=repo,
                 service_name=service.name,
@@ -2270,7 +2424,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             # Defer first wave — start via release task with memory gating
             self.app.send_task(
                 "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
-                args=[str(provider.id), waves, 0, 0, _MAX_WAVE_RECHECKS, safe_dependencies, deployment_by_repo_key],
+                args=[str(provider.id), waves, 0, 0, _MAX_WAVE_RECHECKS, safe_dependencies, deployment_by_repo_key, cancel_on_failure],
                 countdown=_wave_recheck_countdown(),
             )
         else:
@@ -2278,7 +2432,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
         if len(waves) > 1:
             self.app.send_task(
                 "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
-                args=[str(provider.id), waves, 1, 0, _MAX_WAVE_RECHECKS, safe_dependencies, deployment_by_repo_key],
+                args=[str(provider.id), waves, 1, 0, _MAX_WAVE_RECHECKS, safe_dependencies, deployment_by_repo_key, cancel_on_failure],
                 countdown=_wave_recheck_countdown(),
             )
 

@@ -361,7 +361,7 @@ def jules_fix_deployment_failure(
 
             # Auto-redeploy from the PR branch if enabled (global toggle with per-service override)
             settings_obj = AIProviderSettings.get_solo()
-            per_service_override = deployment.service.environment_variables.filter(
+            per_service_override = deployment.service.env_vars.filter(
                 key='JULES_AUTO_FIX_DEPLOY'
             ).first()
             auto_deploy_enabled = settings_obj.jules_auto_deploy_pr

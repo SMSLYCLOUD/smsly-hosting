@@ -8,7 +8,7 @@ from datetime import date
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import DatabaseError
-from django.db.models import Sum
+from django.db.models import Q, Sum
 from django.http import JsonResponse, StreamingHttpResponse
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
@@ -615,17 +615,21 @@ def ai_cost_estimate(request):
 def ai_intelligence_report(request):
     """
     GET /api/v1/ai/report/
-    Returns the latest daily intelligence report.
+    Returns the latest daily intelligence report, optionally scoped to a service.
+    Query params: ?service_id=<uuid>
     """
+    service_id = request.query_params.get("service_id", "").strip()
     try:
+        filters = Q(actor="AI_REPORTER", action="DAILY_REPORT")
+        if service_id:
+            filters &= Q(target__icontains=service_id)
         report = (
             AuditLog.objects
-            .filter(actor="AI_REPORTER", action="DAILY_REPORT")
+            .filter(filters)
             .order_by("-created_at")
             .first()
         )
     except (DatabaseError, Exception):
-        # Keep the dashboard stable even when audit storage is unavailable.
         return Response({
             "available": False,
             "message": "Intelligence report storage unavailable.",
@@ -669,13 +673,14 @@ def ai_anomaly_history(request):
     """
     GET /api/v1/ai/anomalies/
     Returns history of detected anomalies and remediation actions.
+    Query params: ?service_id=<uuid>
     """
+    service_id = request.query_params.get("service_id", "").strip()
     try:
-        anomalies = (
-            AuditLog.objects
-            .filter(actor__in=["AI_REMEDIATOR", "AI_REVIEWER"])
-            .order_by("-created_at")[:50]
-        )
+        qs = AuditLog.objects.filter(actor__in=["AI_REMEDIATOR", "AI_REVIEWER"])
+        if service_id:
+            qs = qs.filter(target__icontains=service_id)
+        anomalies = qs.order_by("-created_at")[:50]
     except (DatabaseError, Exception):
         return Response({"anomalies": [], "available": False})
 

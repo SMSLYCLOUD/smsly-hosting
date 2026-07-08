@@ -184,12 +184,14 @@ def grafana_embed_url(request, dashboard_uid: str):
     params = dict(request.GET)
     params.setdefault('theme', 'dark')
     params.setdefault('kiosk', 'tv')
-    # Resolve var-service UUID to service name for Grafana template variable
+    # Resolve var-service UUID to service name for Grafana template variable.
+    # Tenant-scoped: if the caller doesn't own the service, resolved becomes ""
+    # which hides all metrics in the dashboard instead of leaking another
+    # tenant's data.
     var_service = params.get('var-service', '')
     if var_service:
-        resolved = _resolve_service_var(var_service)
-        if resolved != var_service:
-            params['var-service'] = resolved
+        resolved = _resolve_service_var(var_service, user=request.user)
+        params['var-service'] = resolved
 
     try:
         resp = requests.get(
@@ -240,16 +242,29 @@ def grafana_embed_url(request, dashboard_uid: str):
     })
 
 
-def _resolve_service_var(var_service: str) -> str:
-    """Resolve a var-service parameter (UUID or name) to a compose service name."""
+def _resolve_service_var(var_service: str, user=None) -> str:
+    """Resolve a var-service parameter (UUID or name) to a compose service name.
+
+    When *user* is provided, the service lookup is scoped to services the
+    user owns or has team access to.  A non-owned service returns an empty
+    string so Grafana cannot leak another tenant's metrics.
+    """
+    from django.db.models import Q
     from apps.deployments.models import Service
     try:
         uuid.UUID(var_service)
-        svc = Service.objects.filter(id=var_service).first()
+        qs = Service.objects.filter(id=var_service)
     except (ValueError, Exception):
-        svc = Service.objects.filter(name=var_service).first()
+        qs = Service.objects.filter(name=var_service)
+    if user:
+        qs = qs.filter(
+            Q(owner=user) | Q(project__team__members__user=user)
+        )
+    svc = qs.first()
     if svc:
         return svc.compose_main_service or svc.name
+    if user:
+        return ""
     return var_service
 
 

@@ -94,6 +94,54 @@ print('${REGISTRY_USER:-smsly-registry}:' + bcrypt.hashpw(pw.encode(), bcrypt.ge
         chmod 600 "$INSTALL_DIR/auth/htpasswd" 2>/dev/null || true
     fi
 
+    # ─── Self-heal: missing secrets (update paths can miss secret generation) ─
+    echo -e "${BLUE}  → Checking for missing secrets and generating if needed...${NC}"
+    _ensure_secret() {
+        local _name="$1" _bytes="$2"
+        if [ -z "${!_name:-}" ]; then
+            local _val="$(python3 -c "import secrets; print(secrets.token_hex($_bytes))" 2>/dev/null || openssl rand -hex "$_bytes" 2>/dev/null || true)"
+            if [ -n "$_val" ]; then
+                printf -v "$_name" '%s' "$_val"
+                env_set_value "$INSTALL_DIR/.env" "$_name" "$_val" 2>/dev/null || true
+                echo -e "${BLUE}    → Generated $_name${NC}"
+            fi
+        fi
+    }
+    _ensure_secret REGISTRY_HTTP_SECRET 32
+    _ensure_secret REPLICATION_PASSWORD 32
+    _ensure_secret SENTINEL_PASSWORD 32
+    _ensure_secret CROWDSEC_BOUNCER_KEY 32
+    _ensure_secret COSIGN_PASSWORD 32
+
+    # ─── Self-heal: Cosign keypair ──────────────────────────────────────────
+    if command -v cosign >/dev/null 2>&1; then
+        mkdir -p "$INSTALL_DIR/cosign-keys"
+        COSIGN_PRIVATE_KEY_PATH="$INSTALL_DIR/cosign-keys/cosign.key"
+        COSIGN_PUBLIC_KEY_PATH="$INSTALL_DIR/cosign-keys/cosign.pub"
+        if [ ! -f "$COSIGN_PRIVATE_KEY_PATH" ] || [ ! -f "$COSIGN_PUBLIC_KEY_PATH" ]; then
+            echo -e "${BLUE}  → Cosign keypair missing — generating...${NC}"
+            COSIGN_PASSWORD="${COSIGN_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || openssl rand -hex 32 2>/dev/null || true)}"
+            COSIGN_PASSWORD="$COSIGN_PASSWORD" cosign generate-key-pair 2>/dev/null || true
+            if [ -f cosign.key ]; then
+                mv cosign.key "$COSIGN_PRIVATE_KEY_PATH"
+                mv cosign.pub "$COSIGN_PUBLIC_KEY_PATH"
+                chmod 600 "$COSIGN_PRIVATE_KEY_PATH"
+                chmod 644 "$COSIGN_PUBLIC_KEY_PATH"
+                env_set_value "$INSTALL_DIR/.env" "COSIGN_PASSWORD" "$COSIGN_PASSWORD" 2>/dev/null || true
+                env_set_value "$INSTALL_DIR/.env" "COSIGN_PRIVATE_KEY_PATH" "$COSIGN_PRIVATE_KEY_PATH" 2>/dev/null || true
+                echo -e "${GREEN}    ✓ Cosign keypair created${NC}"
+            else
+                echo -e "${YELLOW}    ⚠ cosign generate-key-pair ran but no output — skipping${NC}"
+            fi
+        else
+            # Key exists but password might be missing
+            if [ -z "${COSIGN_PASSWORD:-}" ]; then
+                COSIGN_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || openssl rand -hex 32 2>/dev/null || true)"
+                env_set_value "$INSTALL_DIR/.env" "COSIGN_PASSWORD" "$COSIGN_PASSWORD" 2>/dev/null || true
+            fi
+        fi
+    fi
+
     # ─── Git Safety ──────────────────────────────────────────────────────────
     # Prevents "dubious ownership" errors on production VPS
     git config --global --add safe.directory "$INSTALL_DIR" 2>/dev/null || true

@@ -528,6 +528,7 @@ services:
     - /opt/smsly-cache:/opt/smsly-cache:z
     - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds:z
     - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets:z
+    - /opt/smsly-hosting/cosign-keys:/opt/smsly-hosting/cosign-keys:z
     - backups_data:/app/backups
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O- http://localhost:8000/health/live || exit 1"]
