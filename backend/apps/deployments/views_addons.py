@@ -457,6 +457,70 @@ class AddonViewSet(viewsets.ModelViewSet):
             }, status=status.HTTP_200_OK)
 
 
+# ---------------------------------------------------------------------------
+# Unified addons + bundles endpoint
+# ---------------------------------------------------------------------------
+
+from rest_framework.decorators import api_view, permission_classes  # noqa: E402
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def service_addons_unified(request, service_id):
+    """Return all addons AND bundle components for a service in one list.
+
+    This powers the Addons tab in the frontend.  Each item has a
+    ``_type`` field set to ``"addon"`` or ``"bundle_component"`` so the
+    frontend can distinguish them while rendering a single list.
+    """
+    try:
+        service = Service.objects.filter(
+            get_team_q_filter(request.user),
+        ).get(pk=service_id)
+    except Service.DoesNotExist:
+        return Response({'error': 'Service not found'}, status=404)
+
+    result = []
+
+    # Standard addons
+    for addon in Addon.objects.filter(service=service).exclude(
+        status=Addon.Status.DELETED,
+    ):
+        result.append({
+            '_type': 'addon',
+            'id': str(addon.id),
+            'name': addon.name,
+            'addon_type': addon.addon_type,
+            'status': addon.status,
+            'connection_url': addon.connection_url or '',
+            'public_domain': addon.public_domain or '',
+            'created_at': addon.created_at.isoformat() if hasattr(addon, 'created_at') and addon.created_at else None,
+        })
+
+    # Bundle components
+    from apps.deployments.models_bundles import Bundle, BundleComponent
+    for bundle in Bundle.objects.filter(service=service).prefetch_related('components').exclude(
+        status=Bundle.Status.DELETED,
+    ):
+        for comp in bundle.components.all():
+            result.append({
+                '_type': 'bundle_component',
+                'id': str(comp.id),
+                'name': f"{comp.name} ({bundle.name})",
+                'bundle_name': bundle.name,
+                'addon_type': f"BUNDLE_{bundle.name.upper()}",
+                'status': comp.status,
+                'source_type': comp.source_type,
+                'connection_url': comp.connection_url or '',
+                'image': comp.image,
+                'repo': comp.repo,
+                'bundle_id': str(bundle.id),
+                'created_at': comp.created_at.isoformat() if hasattr(comp, 'created_at') and comp.created_at else None,
+            })
+
+    return Response(result)
+
+
 from rest_framework.decorators import api_view, permission_classes  # noqa: E402
 from rest_framework.permissions import IsAuthenticated  # noqa: E402
 
