@@ -2081,16 +2081,18 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
             'HEALTH_TRANSITION', 'SERVICE_HEALTHY', 'SERVICE_UNHEALTHY',
         ]
         service_ids = [str(s.id) for s in services]
-        from django.db.models import Q as QQ
-        health_filter = QQ()
-        for sid in service_ids:
-            health_filter |= QQ(metadata__contains={'service_id': sid})
-        health_audits = (
-            AuditLog.objects
-            .filter(health_filter)
-            .filter(action__in=health_actions)
-            .order_by('-timestamp')[:20]
-        )
+        health_audits = []
+        if service_ids:
+            from django.db.models import Q as QQ
+            health_filter = QQ()
+            for sid in service_ids:
+                health_filter |= QQ(metadata__contains={'service_id': sid})
+            health_audits = list(
+                AuditLog.objects
+                .filter(health_filter)
+                .filter(action__in=health_actions)
+                .order_by('-timestamp')[:20]
+            )
         for a in health_audits:
             previous = (a.metadata or {}).get('previous', '')
             current = (a.metadata or {}).get('current', '')

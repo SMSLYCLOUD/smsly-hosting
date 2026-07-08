@@ -366,7 +366,6 @@ class BundleViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        from django.http import FileResponse
         from .views_addons import _ClosingFileResponse
         import re
         backup_file = open(backup.file_path, 'rb')
