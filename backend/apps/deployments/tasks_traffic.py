@@ -23,6 +23,25 @@ SKIP_PATHS = frozenset({'/ping', '/health', '/health/live', '/health/ready', '/m
 IP_API_URL = 'http://ip-api.com/json/{ip}?fields=status,countryCode,country,city,lat,lon'
 IP_API_DELAY = 1.4  # 45 req/min -> ~1.33s; use 1.4s for safety margin
 
+# Cached toggle state to avoid hitting DB every 15s/30s
+_traffic_geo_cache: tuple = (0.0, True)
+_TRAFFIC_GEO_CACHE_TTL = 60  # seconds
+
+
+def _is_traffic_geo_enabled() -> bool:
+    """Return cached traffic_geo_enabled value, refreshing every 60s."""
+    global _traffic_geo_cache
+    now = time.time()
+    if now - _traffic_geo_cache[0] < _TRAFFIC_GEO_CACHE_TTL:
+        return _traffic_geo_cache[1]
+    try:
+        from .models_core import PlatformConfig
+        enabled = PlatformConfig.load().traffic_geo_enabled
+    except Exception:
+        enabled = True  # fail-open: keep collecting if DB is down
+    _traffic_geo_cache = (now, enabled)
+    return enabled
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -80,8 +99,7 @@ def _upsert_traffic_row(ip: str, domain: str) -> None:
 def collect_traefik_logs(self):
     """Tail Traefik access.log (JSON format), map RequestHost -> Service,
     and upsert ServiceTrafficLog rows. Runs every ~15 seconds."""
-    from .models_core import PlatformConfig
-    if not PlatformConfig.load().traffic_geo_enabled:
+    if not _is_traffic_geo_enabled():
         return
     if not ACCESS_LOG.exists():
         return
@@ -149,8 +167,7 @@ def collect_traefik_logs(self):
 def resolve_traffic_geolocations(self):
     """Batch-resolve unresolved IPs via ip-api.com. Rate-limited to 45 req/min.
     Runs every ~30 seconds, processes up to 20 IPs per batch."""
-    from .models_core import PlatformConfig
-    if not PlatformConfig.load().traffic_geo_enabled:
+    if not _is_traffic_geo_enabled():
         return
     from .models_traffic import ServiceTrafficLog
 

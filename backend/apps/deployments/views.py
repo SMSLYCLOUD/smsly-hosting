@@ -5308,15 +5308,21 @@ class SystemConfigView(GenericAPIView):
             'alertmanager': 'http://localhost:9093/-/healthy',
         }
 
-        http_results = {}
-        for svc, url in HTTP_PROBES.items():
+        def _http_probe(url: str) -> bool:
             try:
                 import urllib.request
                 req = urllib.request.Request(url, method='GET')
                 resp = urllib.request.urlopen(req, timeout=2)
-                http_results[svc] = resp.status < 400
+                return resp.status < 400
             except Exception:
-                http_results[svc] = False
+                return False
+
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        http_results = {}
+        with ThreadPoolExecutor(max_workers=len(HTTP_PROBES)) as pool:
+            futures = {pool.submit(_http_probe, url): svc for svc, url in HTTP_PROBES.items()}
+            for future in as_completed(futures):
+                http_results[futures[future]] = future.result()
 
         # ── Build final service map ───────────────────────────────
         for svc_name in KNOWN_SERVICES:
