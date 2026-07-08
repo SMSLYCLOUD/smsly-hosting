@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Loader2, AlertTriangle, XCircle, Info, Shield, Activity, Clock, ServerCrash, RefreshCw } from 'lucide-react';
@@ -69,7 +69,7 @@ export function IncidentReportTab({ serviceId }: { serviceId: string }) {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
-    const fetchReport = async () => {
+    const fetchReport = useCallback(async () => {
         setLoading(true);
         setError(null);
         try {
@@ -80,9 +80,9 @@ export function IncidentReportTab({ serviceId }: { serviceId: string }) {
         } finally {
             setLoading(false);
         }
-    };
+    }, [serviceId]);
 
-    useEffect(() => { fetchReport(); }, [serviceId]);
+    useEffect(() => { fetchReport(); }, [fetchReport]);
 
     if (loading) {
         return (

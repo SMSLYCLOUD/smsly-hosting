@@ -864,7 +864,7 @@ export default function IntelligencePage() {
                 <Card className="bg-muted/20 border-violet-500/10">
                   <CardContent className="py-10 text-center text-muted-foreground">
                     <Server className="h-10 w-10 mx-auto mb-3 opacity-30" />
-                    <p>Click "Load Reports" to fetch incident data for each server.</p>
+                    <p>Click &quot;Load Reports&quot; to fetch incident data for each server.</p>
                   </CardContent>
                 </Card>
               )}
@@ -891,7 +891,7 @@ export default function IntelligencePage() {
                       </CardHeader>
                       <CardContent>
                         {report === undefined ? (
-                          <p className="text-sm text-muted-foreground">Click "Load Reports" to fetch.</p>
+                          <p className="text-sm text-muted-foreground">Click &quot;Load Reports&quot; to fetch.</p>
                         ) : report === null ? (
                           <p className="text-sm text-red-400">Failed to load report.</p>
                         ) : (
