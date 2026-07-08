@@ -137,6 +137,7 @@ archive/**/*.dylib
 K8native/
 
 # Scratch / temp files
+scripts/render_pgcat_config.py
 _check.py
 _explore.py
 _syntax_check.txt
