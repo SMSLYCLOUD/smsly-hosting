@@ -58,3 +58,29 @@ scrape_configs:
       - match:
           selector: '{container=""}'
           action: drop
+
+  # Traefik access log collection (JSON format)
+  - job_name: traefik-access
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: traefik-access
+          __path__: /var/log/traefik/access.log
+    pipeline_stages:
+      - json:
+          expressions:
+            client_host: ClientHost
+            request_host: RequestHost
+            method: RequestMethod
+            status: DownstreamStatus
+      - labels:
+          method:
+          status:
+      - metrics:
+          http_requests_total:
+            type: Counter
+            description: "Total HTTP requests from Traefik access log"
+            source: status
+            config:
+              action: inc

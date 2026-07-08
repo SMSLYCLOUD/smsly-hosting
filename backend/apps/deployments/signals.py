@@ -782,3 +782,48 @@ def deprovision_addon_on_delete(sender, instance, **kwargs):
     except Exception:
         pass
 
+
+# ---------------------------------------------------------------------------
+# Bundle cleanup on delete
+# ---------------------------------------------------------------------------
+
+from .models_bundles import Bundle  # noqa: E402
+
+
+@receiver(pre_delete, sender=Bundle)
+def deprovision_bundle_on_delete(sender, instance, **kwargs):
+    """Ensure bundle infrastructure is torn down before the row is removed.
+
+    Passes bundle name, service ID, and network name to the task so it can
+    deprovision even after the Bundle row is deleted.
+    """
+    log = logging.getLogger(__name__)
+    try:
+        from .tasks_bundles import deprovision_bundle_task
+        bundle_name = instance.name
+        service_id = str(instance.service_id)
+        network_name = instance.network or ''
+        try:
+            deprovision_bundle_task.delay(
+                str(instance.id),
+                bundle_name=bundle_name,
+                service_id=service_id,
+                network_name=network_name,
+            )
+        except Exception:
+            deprovision_bundle_task(
+                str(instance.id),
+                bundle_name=bundle_name,
+                service_id=service_id,
+                network_name=network_name,
+            )
+        log.info(
+            "Dispatched deprovision_bundle_task for bundle %s on pre_delete",
+            instance.id,
+        )
+    except Exception as exc:
+        log.warning(
+            "Failed to dispatch deprovision_bundle_task for bundle %s: %s",
+            instance.id, exc,
+        )
+

@@ -63,7 +63,6 @@ def _is_serving_process() -> bool:
     if not argv:
         return True  # Assume serving if we can't determine (e.g. embedded)
 
-    argv[0]
     # Include common web servers and management commands that serve traffic
     serving_commands = {"gunicorn", "uvicorn", "daphne", "runserver", "runserver_plus"}
     return any(cmd in " ".join(argv) for cmd in serving_commands)
@@ -114,10 +113,8 @@ class DeploymentsConfig(AppConfig):
         # Import models to ensure they are registered
 
         # Import signals
-        # Note: We assume there's a signals.py or we define them here.
-        # Based on the failing test, we need a signal that creates SMSLY_API_KEY
         with contextlib.suppress(ImportError):
-            pass
+            from . import signals  # noqa: F401
 
         # Defer DB-dependent startup work (Prometheus gauge + runtime settings
         # patch) to the first DB connection of each worker. Running these in

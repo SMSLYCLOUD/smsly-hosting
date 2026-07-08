@@ -85,7 +85,7 @@ export default function IntelligencePage() {
 
   const fetchData = useCallback(async () => {
     try {
-      const withTimeout = <T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> =>
+      const withTimeout = <T,>(promise: Promise<T>, ms: number, fallback: T): Promise<T> =>
         Promise.race([
           promise,
           new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),

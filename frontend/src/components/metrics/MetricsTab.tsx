@@ -13,6 +13,8 @@ const Tooltip = dynamic(() => import('recharts').then(m => m.Tooltip), { ssr: fa
 const Area = dynamic(() => import('recharts').then(m => m.Area), { ssr: false, loading: () => <Skeleton className="h-4 w-full" /> });
 const AreaChart = dynamic(() => import('recharts').then(m => m.AreaChart), { ssr: false, loading: () => <Skeleton className="h-4 w-full" /> });
 import { ChartContainer } from '@/components/ui/chart-container';
+import { WorldTrafficMap } from './WorldTrafficMap';
+import { TrafficSummary } from './TrafficSummary';
 
 interface MetricPoint {
     timestamp: string;
@@ -76,6 +78,7 @@ export function MetricsTab({ serviceId }: { serviceId: string }) {
     const [loading, setLoading] = useState(true);
     const [duration, setDuration] = useState('1h');
     const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+    const [trafficData, setTrafficData] = useState<any>(null);
 
     const fetchMetrics = useCallback(async () => {
         try {
@@ -95,6 +98,21 @@ export function MetricsTab({ serviceId }: { serviceId: string }) {
         const interval = setInterval(fetchMetrics, 30000);
         return () => clearInterval(interval);
     }, [fetchMetrics]);
+
+    const fetchTraffic = useCallback(async () => {
+        try {
+            const res = await servicesApi.getTrafficGeo(serviceId);
+            setTrafficData(res);
+        } catch {
+            // Silently ignore — traffic data is optional
+        }
+    }, [serviceId]);
+
+    useEffect(() => {
+        fetchTraffic();
+        const interval = setInterval(fetchTraffic, 60000);
+        return () => clearInterval(interval);
+    }, [fetchTraffic]);
 
     const formatTime = (ts: string) => {
         const date = new Date(ts);
@@ -321,6 +339,19 @@ export function MetricsTab({ serviceId }: { serviceId: string }) {
                     </ChartContainer>
                 </Card>
             </div>
+
+            {/* Traffic Summary + Map */}
+            {trafficData && trafficData.total_requests > 0 && (
+                <>
+                    <TrafficSummary
+                        totalRequests={trafficData.total_requests}
+                        uniqueCountries={trafficData.unique_countries}
+                        uniqueIps={trafficData.unique_ips}
+                        topCountries={trafficData.countries}
+                    />
+                    <WorldTrafficMap serviceId={serviceId} />
+                </>
+            )}
         </div>
     );
 }

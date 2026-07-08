@@ -1116,6 +1116,12 @@ class PlatformConfig(models.Model):
         default=False,
         help_text="Strict SSH host-key verification for provisioner")
 
+    # ── Frontend Map Visualization ────────────────────────────────────────
+    mapbox_token = EncryptedCharField(
+        max_length=512, blank=True, default='',
+        help_text="Mapbox GL token for the traffic world map on the Metrics page. "
+                  "Falls back to NEXT_PUBLIC_MAPBOX_TOKEN env var if empty.")
+
     updated_at = models.DateTimeField(auto_now=True)  # type: ignore[var-annotated]
 
     class Meta:
@@ -1186,6 +1192,7 @@ class PlatformConfig(models.Model):
         'sentry_environment': ('SENTRY_ENVIRONMENT', 'production'),
         'sentry_traces_sample_rate': ('SENTRY_TRACES_SAMPLE_RATE', '0.0'),
         'sentry_profiles_sample_rate': ('SENTRY_PROFILES_SAMPLE_RATE', '0.0'),
+        'mapbox_token': ('NEXT_PUBLIC_MAPBOX_TOKEN', ''),
     }
 
     @classmethod

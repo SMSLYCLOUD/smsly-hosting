@@ -522,6 +522,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro,z
       - ./infrastructure/monitoring/promtail-config.yml:/etc/promtail/config.yml:ro,z
       - promtail_positions:/tmp
+      - traefik_logs:/var/log/traefik:ro
     command: -config.file=/etc/promtail/config.yml
     networks:
       - smsly-net

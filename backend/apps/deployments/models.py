@@ -56,5 +56,7 @@ from .models_tunnels import Tunnel, TunnelRequest, ReservedSubdomain  # noqa: F4
 from .models_updates import PlatformUpdate  # noqa: F401
 from .models_registry import RegistryCredential  # noqa: F401
 from .models_registry_scope import ScopedRegistry  # noqa: F401
+from .models_traffic import ServiceTrafficLog  # noqa: F401
+from .models_bundles import Bundle, BundleComponent, BundleBackup  # noqa: F401
 
 # pylint: enable=unused-import, wrong-import-position

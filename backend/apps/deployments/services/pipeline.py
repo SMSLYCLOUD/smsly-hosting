@@ -1344,13 +1344,14 @@ class PipelineManager:
         from apps.deployments.models import EnvironmentVariable
 
         addon_urls: dict[str, str] = {}
+        failed_addons: list[str] = []
 
         if manifest.addons:
             existing_addons = {
                 a.addon_type: a
                 for a in Addon.objects.filter(
                     service=self.service,
-                    status__in=['ACTIVE', 'PROVISIONING'],
+                    status__in=['ACTIVE', 'PROVISIONING', 'FAILED'],
                 )
             }
 
@@ -1358,24 +1359,44 @@ class PipelineManager:
                 addon_type = addon_decl.addon_type
                 if addon_type in existing_addons:
                     addon = existing_addons[addon_type]
-                    if addon.connection_url:
+                    if addon.status == Addon.Status.ACTIVE and addon.connection_url:
                         addon_urls[addon_decl.name] = addon.connection_url
                         addon_urls[addon_type.lower()] = addon.connection_url
+                        append_log(
+                            self.deployment,
+                            f"  ✅ {addon_type} already active\n",
+                        )
+                        continue
+                    elif addon.status == Addon.Status.PROVISIONING:
+                        append_log(
+                            self.deployment,
+                            f"  ⏳ {addon_type} still provisioning, skipping\n",
+                        )
+                        continue
+                    # FAILED — retry by re-provisioning the existing record
                     append_log(
                         self.deployment,
-                        f"  ✅ {addon_type} already active\n",
+                        f"  🔄 {addon_type} was failed, retrying...\n",
                     )
-                    continue
 
-                # Create and provision
-                addon = Addon.objects.create(
-                    service=self.service,
-                    name=f"{addon_decl.name}-{self.service.name}"[:255],
-                    addon_type=addon_type,
-                    status=Addon.Status.PROVISIONING,
-                )
+                # Create or reuse failed addon record
+                if addon_type in existing_addons:
+                    addon = existing_addons[addon_type]
+                    addon.status = Addon.Status.PROVISIONING
+                    addon.save(update_fields=['status'])
+                else:
+                    addon = Addon.objects.create(
+                        service=self.service,
+                        name=f"{addon_decl.name}-{self.service.name}"[:255],
+                        addon_type=addon_type,
+                        status=Addon.Status.PROVISIONING,
+                    )
                 try:
                     _, url = addon_provisioner.provision_dispatch(addon)
+                    if not url:
+                        raise ValueError(
+                            f"{addon_type} provisioned but returned empty URL"
+                        )
                     addon.connection_url = url
                     addon.status = Addon.Status.ACTIVE
                     addon.save()
@@ -1388,7 +1409,11 @@ class PipelineManager:
                     )
                     EnvironmentVariable.objects.update_or_create(
                         service=self.service, key=env_key,
-                        defaults={'value': url, 'is_secret': True},
+                        defaults={
+                            'value': url,
+                            'is_secret': True,
+                            'source': 'ADDON',
+                        },
                     )
 
                     append_log(
@@ -1397,7 +1422,8 @@ class PipelineManager:
                     )
                 except Exception as exc:
                     addon.status = Addon.Status.FAILED
-                    addon.save()
+                    addon.save(update_fields=['status'])
+                    failed_addons.append(addon_type)
                     append_log(
                         self.deployment,
                         f"  ⚠️ {addon_type} provisioning failed: {exc}\n",
@@ -1412,9 +1438,8 @@ class PipelineManager:
             from apps.deployments.models_bundles import Bundle, BundleComponent
             import hashlib
 
-            grid_addons_hash = hashlib.sha256(
-                open(os.path.join(self.source_dir, 'grid.addons'), 'rb').read(),
-            ).hexdigest()[:16]
+            with open(os.path.join(self.source_dir, 'grid.addons'), 'rb') as fh:
+                grid_addons_hash = hashlib.sha256(fh.read()).hexdigest()[:16]
 
             for bundle_decl in manifest.bundles:
                 # Check if bundle already exists and is up-to-date
@@ -1466,52 +1491,80 @@ class PipelineManager:
                         build_dir=self.source_dir,
                     )
 
-                    bundle.status = Bundle.Status.ACTIVE
-                    bundle.network = bundle_provisioner._network_name(
-                        bundle_decl, str(self.service.id),
-                    )
-                    bundle.save(update_fields=['status', 'network'])
-
-                    # Create/update BundleComponent records
-                    for svc_decl in bundle_decl.services:
-                        url = component_urls.get(svc_decl.name, "")
-                        container_name = bundle_provisioner._container_name(
-                            bundle.name, str(self.service.id), svc_decl.name,
+                    # Post-provision DB writes — rollback Docker on failure
+                    try:
+                        bundle.status = Bundle.Status.ACTIVE
+                        bundle.network = bundle_provisioner._network_name(
+                            bundle_decl, str(self.service.id),
                         )
-                        BundleComponent.objects.update_or_create(
-                            bundle=bundle,
-                            name=svc_decl.name,
-                            defaults={
-                                'source_type': (
-                                    BundleComponent.SourceType.REPO
-                                    if svc_decl.repo
-                                    else BundleComponent.SourceType.IMAGE
-                                ),
-                                'image': svc_decl.image or '',
-                                'repo': svc_decl.repo or '',
-                                'branch': svc_decl.branch or 'main',
-                                'build_type': svc_decl.build or '',
-                                'status': BundleComponent.Status.ACTIVE,
-                                'container_name': container_name,
-                                'connection_url': url,
-                                'ports': svc_decl.ports,
-                            },
-                        )
+                        bundle.save(update_fields=['status', 'network'])
 
-                        # Inject component env vars
-                        if url:
-                            slug = svc_decl.name.upper().replace('-', '_')
-                            EnvironmentVariable.objects.update_or_create(
-                                service=self.service,
-                                key=f"{slug}_URL",
-                                defaults={'value': url, 'is_secret': True, 'source': 'ADDON'},
+                        # Create/update BundleComponent records
+                        for svc_decl in bundle_decl.services:
+                            url = component_urls.get(svc_decl.name, "")
+                            container_name = bundle_provisioner._container_name(
+                                bundle.name, str(self.service.id), svc_decl.name,
                             )
-                            EnvironmentVariable.objects.update_or_create(
-                                service=self.service,
-                                key=f"{slug}_HOST",
-                                defaults={'value': url.split(':')[0] if ':' in url else url, 'is_secret': False, 'source': 'ADDON'},
+                            BundleComponent.objects.update_or_create(
+                                bundle=bundle,
+                                name=svc_decl.name,
+                                defaults={
+                                    'source_type': (
+                                        BundleComponent.SourceType.REPO
+                                        if svc_decl.repo
+                                        else BundleComponent.SourceType.IMAGE
+                                    ),
+                                    'image': svc_decl.image or '',
+                                    'repo': svc_decl.repo or '',
+                                    'branch': svc_decl.branch or 'main',
+                                    'build_type': svc_decl.build or '',
+                                    'status': BundleComponent.Status.ACTIVE,
+                                    'container_name': container_name,
+                                    'connection_url': url,
+                                    'ports': svc_decl.ports,
+                                },
                             )
-                            addon_urls[svc_decl.name] = url
+
+                            # Inject component env vars
+                            if url:
+                                slug = svc_decl.name.upper().replace('-', '_')
+                                from urllib.parse import urlparse as _urlparse
+                                parsed_url = _urlparse(url)
+                                EnvironmentVariable.objects.update_or_create(
+                                    service=self.service,
+                                    key=f"{slug}_URL",
+                                    defaults={'value': url, 'is_secret': True, 'source': 'ADDON'},
+                                )
+                                EnvironmentVariable.objects.update_or_create(
+                                    service=self.service,
+                                    key=f"{slug}_HOST",
+                                    defaults={
+                                        'value': parsed_url.hostname or url,
+                                        'is_secret': False,
+                                        'source': 'ADDON',
+                                    },
+                                )
+                                addon_urls[svc_decl.name] = url
+
+                    except Exception as db_exc:
+                        # DB writes failed — tear down Docker containers
+                        logger.warning(
+                            "grid.addons: DB writes failed for bundle '%s', "
+                            "rolling back Docker: %s",
+                            bundle_decl.name, db_exc,
+                        )
+                        try:
+                            bundle_provisioner.deprovision(
+                                bundle_decl.name,
+                                str(self.service.id),
+                                network_name=bundle.network or None,
+                            )
+                        except Exception:
+                            logger.error(
+                                "grid.addons: rollback deprovision failed for '%s'",
+                                bundle_decl.name,
+                            )
+                        raise db_exc
 
                     append_log(
                         self.deployment,
@@ -1523,6 +1576,7 @@ class PipelineManager:
                     bundle.status = Bundle.Status.FAILED
                     bundle.deletion_error = str(exc)[:500]
                     bundle.save(update_fields=['status', 'deletion_error'])
+                    failed_addons.append(f"bundle:{bundle_decl.name}")
                     append_log(
                         self.deployment,
                         f"  ⚠️ Bundle '{bundle_decl.name}' failed: {exc}\n",
@@ -1531,6 +1585,12 @@ class PipelineManager:
                         "grid.addons: bundle '%s' failed: %s",
                         bundle_decl.name, exc,
                     )
+
+        if failed_addons:
+            raise PipelineError(
+                f"grid.addons provisioning failed for: {', '.join(failed_addons)}. "
+                f"Aborting deployment to prevent starting without required infrastructure."
+            )
 
         return True  # signal that grid.addons was processed
 

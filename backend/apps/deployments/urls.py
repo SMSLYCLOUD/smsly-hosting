@@ -25,7 +25,8 @@ from .views import (
 from .views_registry_scope import ScopedRegistryViewSet
 from .views_network_scope import ScopedNetworkViewSet
 from .views_registry_auth import registry_token
-from .views_addons import AddonViewSet
+from .views_addons import AddonViewSet, service_addons_unified
+from .views_bundles import BundleViewSet
 from .views_analysis import RepoAnalysisView
 from .views_autoscale import ScalingViewSet
 from .views_bitbucket import bitbucket_branches, bitbucket_commits, bitbucket_repos
@@ -66,6 +67,7 @@ from .views_subdomains import subdomains_list_create, subdomains_release
 from .views_templates import TemplateViewSet
 from .views_tokens import create_token, list_tokens, revoke_token
 from .views_topology import TopologyViewSet
+from .views_traffic import TrafficGeoViewSet
 from .views_transfer import ServerTransferViewSet
 from .views_tunnels import TunnelViewSet
 from .views_updates import PlatformUpdateViewSet
@@ -80,6 +82,7 @@ router = DefaultRouter()
 router.register(r'services', ServiceViewSet, basename='service')
 router.register(r'deployments', DeploymentViewSet, basename='deployment')
 router.register(r'addons', AddonViewSet, basename='addon')
+router.register(r'bundles', BundleViewSet, basename='bundle')
 router.register(r'blueprints', BlueprintViewSet, basename='blueprint')
 router.register(r'topology', TopologyViewSet, basename='topology')
 router.register(r'tunnels', TunnelViewSet, basename='tunnel')
@@ -121,6 +124,7 @@ services_router.register(r'backups', ServiceBackupViewSet, basename='service-bac
 services_router.register(r'snapshots', ServiceSnapshotViewSet, basename='service-snapshot')
 services_router.register(r'previews', PreviewEnvironmentViewSet, basename='service-previews')
 services_router.register(r'approvals', DeploymentApprovalViewSet, basename='service-approvals')
+services_router.register(r'traffic-geo', TrafficGeoViewSet, basename='service-traffic-geo')
 
 # ── CRITICAL: Explicit Addon Actions (must be before router.urls to avoid 404 shadowing)
 urlpatterns = [
@@ -128,6 +132,10 @@ urlpatterns = [
     path('deployments/upload/', DeploymentViewSet.as_view({'post': 'upload_source'}), name='deployment-upload'),
     path('addons/<uuid:pk>/toggle_bucket_public/', AddonViewSet.as_view({'post': 'toggle_bucket_public'}), name='addon-toggle-bucket-public-direct'),
     path('addons/<uuid:pk>/deprovision/', AddonViewSet.as_view({'post': 'deprovision'}), name='addon-deprovision-direct'),
+    path('bundles/<uuid:pk>/deprovision/', BundleViewSet.as_view({'post': 'deprovision'}), name='bundle-deprovision-direct'),
+    path('bundles/<uuid:pk>/reprovision/', BundleViewSet.as_view({'post': 'reprovision'}), name='bundle-reprovision-direct'),
+    # Unified addons + bundles endpoint for the Addons tab
+    path('services/<uuid:service_id>/addons-all/', service_addons_unified, name='service-addons-unified'),
     path('services/check-domain/', ServiceViewSet.as_view({'get': 'check_domain'}), name='service-check-domain-direct'),
     path('services/check-domain', ServiceViewSet.as_view({'get': 'check_domain'}), name='service-check-domain-direct-noslash'),
     path('topology/ecosystem/', TopologyViewSet.as_view({'get': 'ecosystem'}), name='topology-ecosystem'),

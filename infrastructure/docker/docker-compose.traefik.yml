@@ -74,6 +74,17 @@ services:
       - "--log.level=INFO"
       - "--accesslog=true"
       - "--accesslog.filepath=/var/log/traefik/access.log"
+      - "--accesslog.format=json"
+      - "--accesslog.fields.defaultMode=keep"
+      - "--accesslog.fields.clientHost=keep"
+      - "--accesslog.fields.clientPort=drop"
+      - "--accesslog.fields.clientUsername=drop"
+      - "--accesslog.fields.requestHost=keep"
+      - "--accesslog.fields.requestMethod=keep"
+      - "--accesslog.fields.requestURI=keep"
+      - "--accesslog.fields.requestPort=drop"
+      - "--accesslog.fields.downstreamStatus=keep"
+      - "--accesslog.fields.userAgent=drop"
       
       # Metrics for Prometheus
       - "--metrics.prometheus=true"

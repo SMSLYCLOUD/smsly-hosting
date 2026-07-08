@@ -730,6 +730,7 @@ services:
     - /opt/smsly-cache:/opt/smsly-cache:z
     - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds:z
     - backups_data:/app/backups
+    - traefik_logs:/var/log/traefik:ro
     healthcheck:
       test:
       - CMD-SHELL
@@ -937,6 +938,17 @@ services:
     - --ping=true
     - --accesslog=true
     - --accesslog.filepath=/var/log/traefik/access.log
+    - --accesslog.format=json
+    - --accesslog.fields.defaultMode=keep
+    - --accesslog.fields.clientHost=keep
+    - --accesslog.fields.clientPort=drop
+    - --accesslog.fields.clientUsername=drop
+    - --accesslog.fields.requestHost=keep
+    - --accesslog.fields.requestMethod=keep
+    - --accesslog.fields.requestURI=keep
+    - --accesslog.fields.requestPort=drop
+    - --accesslog.fields.downstreamStatus=keep
+    - --accesslog.fields.userAgent=drop
     - --experimental.plugins.crowdsec-bouncer.modulename=github.com/maxmcd/traefik-crowdsec-bouncer
     - --experimental.plugins.crowdsec-bouncer.version=v1.3.3
     ports:

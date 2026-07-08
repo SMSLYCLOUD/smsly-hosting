@@ -1,0 +1,4 @@
+# CrowdSec Prometheus exporter
+# Exposes metrics on the configured listen_addr/port
+listen_addr: 0.0.0.0
+listen_port: 6060

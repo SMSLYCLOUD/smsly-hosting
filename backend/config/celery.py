@@ -69,6 +69,7 @@ def register_extra_tasks(sender, **kwargs):  # pylint: disable=unused-argument
     import apps.deployments.tasks_code_intelligence    # noqa: F401
     import apps.deployments.tasks_health               # noqa: F401
     import apps.deployments.tasks_alerts               # noqa: F401
+    import apps.deployments.tasks_traffic             # noqa: F401
 
 # =============================================================================
 # Beat Schedule — Periodic tasks for metrics, health, autoscaling, cleanup
@@ -298,6 +299,18 @@ app.conf.beat_schedule = {
         'task': 'apps.permissions.tasks.deactivate_expired_memberships',
         'schedule': 86400.0,
         'options': {'expires': 86400.0},
+    },
+    # Collect Traefik access log entries every 15 seconds
+    'collect-traffic-logs-every-15s': {
+        'task': 'apps.deployments.tasks_traffic.collect_traefik_logs',
+        'schedule': 15.0,
+        'options': {'expires': 15.0, 'queue': 'fast'},
+    },
+    # Resolve IP geolocations every 30 seconds
+    'resolve-traffic-geolocations-every-30s': {
+        'task': 'apps.deployments.tasks_traffic.resolve_traffic_geolocations',
+        'schedule': 30.0,
+        'options': {'expires': 30.0, 'queue': 'fast'},
     },
 }
 
