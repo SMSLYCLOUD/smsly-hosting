@@ -326,6 +326,16 @@ export function PlatformSettingsTab() {
           <CardContent className="space-y-4">
             <div className="flex items-center justify-between rounded-lg border p-4">
               <div className="space-y-0.5">
+                <Label className="text-base">Traffic Geo Collection</Label>
+                <p className="text-sm text-muted-foreground">Collect Traefik access logs and resolve IP geolocations for the traffic world map.</p>
+              </div>
+              <Switch
+                checked={config.traffic_geo_enabled ?? true}
+                onCheckedChange={(v) => handleChange("traffic_geo_enabled", v)}
+              />
+            </div>
+            <div className="flex items-center justify-between rounded-lg border p-4">
+              <div className="space-y-0.5">
                 <Label className="text-base">Disable Tier Gates</Label>
                 <p className="text-sm text-muted-foreground">Allow all users to access premium features.</p>
               </div>

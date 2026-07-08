@@ -1237,6 +1237,138 @@ export default function SettingsPage() {
         <TabsContent value="infra">
           {systemConfig ? (
             <div className="space-y-6">
+              {/* Live Host Metrics */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <Card className="p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">CPU</p>
+                      <p className={`text-2xl font-bold mt-1 ${(systemConfig.cpu_percent || 0) >= 85 ? 'text-red-500' : (systemConfig.cpu_percent || 0) >= 60 ? 'text-yellow-500' : 'text-emerald-500'}`}>
+                        {(systemConfig.cpu_percent || 0).toFixed(1)}%
+                      </p>
+                      <p className="text-[10px] text-muted-foreground">Load: {(systemConfig.load_avg || [0,0,0]).join(' / ')}</p>
+                    </div>
+                    <Server className="w-8 h-8 text-blue-500/30" />
+                  </div>
+                </Card>
+                <Card className="p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Memory</p>
+                      <p className={`text-2xl font-bold mt-1 ${(systemConfig.ram_percent || 0) >= 85 ? 'text-red-500' : (systemConfig.ram_percent || 0) >= 60 ? 'text-yellow-500' : 'text-emerald-500'}`}>
+                        {(systemConfig.ram_percent || 0).toFixed(1)}%
+                      </p>
+                      <p className="text-[10px] text-muted-foreground">{systemConfig.ram_used_mb || 0} / {systemConfig.ram_total_mb || 0} MB</p>
+                    </div>
+                    <Server className="w-8 h-8 text-purple-500/30" />
+                  </div>
+                </Card>
+                <Card className="p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Disk</p>
+                      <p className={`text-2xl font-bold mt-1 ${(systemConfig.disk_percent || systemConfig.STORAGE_USED_PERCENT || 0) >= 85 ? 'text-red-500' : (systemConfig.disk_percent || systemConfig.STORAGE_USED_PERCENT || 0) >= 60 ? 'text-yellow-500' : 'text-emerald-500'}`}>
+                        {(systemConfig.disk_percent || systemConfig.STORAGE_USED_PERCENT || 0).toFixed(1)}%
+                      </p>
+                      <p className="text-[10px] text-muted-foreground">{(systemConfig.disk_used_gb || systemConfig.STORAGE_USED_GB || 0)} / {(systemConfig.disk_total_gb || systemConfig.STORAGE_TOTAL_GB || 0)} GB</p>
+                    </div>
+                    <Server className="w-8 h-8 text-amber-500/30" />
+                  </div>
+                </Card>
+                <Card className="p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Uptime</p>
+                      <p className="text-2xl font-bold mt-1 text-cyan-500">
+                        {systemConfig.uptime_seconds ? `${Math.floor(systemConfig.uptime_seconds / 86400)}d` : '--'}
+                      </p>
+                      <p className="text-[10px] text-muted-foreground">
+                        {systemConfig.uptime_seconds ? `${Math.floor((systemConfig.uptime_seconds % 86400) / 3600)}h ${Math.floor((systemConfig.uptime_seconds % 3600) / 60)}m` : ''}
+                      </p>
+                    </div>
+                    <Server className="w-8 h-8 text-cyan-500/30" />
+                  </div>
+                </Card>
+              </div>
+
+              {/* Full PaaS Service Health */}
+              {systemConfig.services && (() => {
+                const svc = systemConfig.services as Record<string, { running: boolean; status: string }>;
+                const groups = [
+                  { label: 'Core', keys: ['backend', 'frontend', 'celery', 'celery-beat', 'celery-fast', 'celery-deploy'] },
+                  { label: 'Database', keys: ['db', 'db-replica', 'postgres-primary', 'postgres-replica', 'pgcat', 'pgbouncer', 'pgbouncer-readonly'] },
+                  { label: 'Redis HA', keys: ['redis', 'redis-primary', 'redis-replica', 'redis-sentinel-1', 'redis-sentinel-2', 'redis-sentinel-3'] },
+                  { label: 'Queue', keys: ['rabbitmq'] },
+                  { label: 'Proxy', keys: ['traefik', 'caddy', 'route-fallback', 'socket-proxy', 'frps'] },
+                  { label: 'Observability', keys: ['grafana', 'loki', 'promtail', 'prometheus', 'alertmanager', 'cadvisor', 'node-exporter'] },
+                  { label: 'Security', keys: ['crowdsec', 'smsly-falco', 'infisical'] },
+                  { label: 'Registry & Build', keys: ['registry', 'docker-mirror', 'verdaccio', 'buildkitd'] },
+                  { label: 'Other', keys: ['apt-cacher', 'docker-labels'] },
+                ];
+                return (
+                  <div className="space-y-4">
+                    {groups.map((group) => {
+                      const items = group.keys.filter((k) => svc[k]);
+                      if (items.length === 0) return null;
+                      return (
+                        <Card key={group.label}>
+                          <CardHeader className="pb-2">
+                            <CardTitle className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">{group.label}</CardTitle>
+                          </CardHeader>
+                          <CardContent>
+                            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
+                              {items.map((name) => {
+                                const s = svc[name];
+                                return (
+                                  <div key={name} className="flex items-center gap-2 p-2 rounded-lg border text-sm">
+                                    <span className={`w-2 h-2 rounded-full shrink-0 ${s.running ? 'bg-emerald-500' : 'bg-red-500 animate-pulse'}`} />
+                                    <span className="font-medium truncate">{name}</span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </CardContent>
+                        </Card>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+
+              {/* Host Security */}
+              {systemConfig.host_security && (() => {
+                const sec = systemConfig.host_security as Record<string, { installed: boolean; active: boolean }>;
+                const items = [
+                  { label: 'UFW', key: 'ufw' },
+                  { label: 'fail2ban', key: 'fail2ban' },
+                  { label: 'auditd', key: 'auditd' },
+                ].filter((i) => sec[i.key]?.installed);
+                if (items.length === 0) return null;
+                return (
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Host Security</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                        {items.map(({ label, key }) => {
+                          const s = sec[key];
+                          return (
+                            <div key={key} className="flex items-center gap-2 p-2 rounded-lg border text-sm">
+                              <span className={`w-2 h-2 rounded-full shrink-0 ${s.active ? 'bg-emerald-500' : 'bg-yellow-500'}`} />
+                              <span className="font-medium">{label}</span>
+                              <Badge variant={s.active ? 'default' : 'secondary'} className="ml-auto text-[10px]">
+                                {s.active ? 'Active' : 'Inactive'}
+                              </Badge>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })()}
+
               {/* Domain & SSL Configuration */}
               <Card>
                 <CardHeader>

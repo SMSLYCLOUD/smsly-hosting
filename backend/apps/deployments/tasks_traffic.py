@@ -80,6 +80,9 @@ def _upsert_traffic_row(ip: str, domain: str) -> None:
 def collect_traefik_logs(self):
     """Tail Traefik access.log (JSON format), map RequestHost -> Service,
     and upsert ServiceTrafficLog rows. Runs every ~15 seconds."""
+    from .models_core import PlatformConfig
+    if not PlatformConfig.load().traffic_geo_enabled:
+        return
     if not ACCESS_LOG.exists():
         return
 
@@ -146,6 +149,9 @@ def collect_traefik_logs(self):
 def resolve_traffic_geolocations(self):
     """Batch-resolve unresolved IPs via ip-api.com. Rate-limited to 45 req/min.
     Runs every ~30 seconds, processes up to 20 IPs per batch."""
+    from .models_core import PlatformConfig
+    if not PlatformConfig.load().traffic_geo_enabled:
+        return
     from .models_traffic import ServiceTrafficLog
 
     unresolved = list(

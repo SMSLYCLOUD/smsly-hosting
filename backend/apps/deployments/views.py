@@ -1730,11 +1730,8 @@ class ServiceViewSet(viewsets.ModelViewSet):
         # ── 8. Server transfers ───────────────────────────────────────
         transfers = (
             ServerTransfer.objects
-            .filter(
-                source_server_backup__service=service,
-            )
+            .filter(service=service)
             .exclude(status='COMPLETED')
-            .select_related('source_server_backup')
             .order_by('-created_at')[:5]
         )
         for t in transfers:
@@ -5152,6 +5149,9 @@ class SystemConfigView(GenericAPIView):
             'GITLAB_WEBHOOK_SECRET_SET': bool(getattr(settings, 'GITLAB_WEBHOOK_SECRET', '')),
             'BITBUCKET_WEBHOOK_SECRET_SET': bool(getattr(settings, 'BITBUCKET_WEBHOOK_SECRET', '')),
 
+            # Infra Health
+            **self._get_infra_health(),
+
             # Maintenance actions available to admins (labels only, no flags)
             'maintenance_actions': [
                 {'action': key, 'label': spec['label']}
@@ -5177,6 +5177,217 @@ class SystemConfigView(GenericAPIView):
                 'STORAGE_FREE_GB': 0,
                 'STORAGE_USED_PERCENT': 0,
             }
+
+    def _get_infra_health(self):
+        """Check live infrastructure health: host metrics + all PaaS services."""
+        import subprocess
+        import time
+
+        infra = {
+            'cpu_percent': 0.0,
+            'ram_total_mb': 0,
+            'ram_used_mb': 0,
+            'ram_percent': 0.0,
+            'load_avg': [0.0, 0.0, 0.0],
+            'disk_total_gb': 0.0,
+            'disk_used_gb': 0.0,
+            'disk_percent': 0.0,
+            'uptime_seconds': 0,
+            'services': {},
+        }
+
+        # ── Host metrics ──────────────────────────────────────────
+        try:
+            import psutil
+            infra['cpu_percent'] = psutil.cpu_percent(interval=0.1)
+            mem = psutil.virtual_memory()
+            infra['ram_total_mb'] = round(mem.total / (1024 * 1024))
+            infra['ram_used_mb'] = round(mem.used / (1024 * 1024))
+            infra['ram_percent'] = mem.percent
+            load = psutil.getloadavg()
+            infra['load_avg'] = [round(x, 2) for x in load]
+            disk = psutil.disk_usage('/')
+            infra['disk_total_gb'] = round(disk.total / (2**30), 2)
+            infra['disk_used_gb'] = round(disk.used / (2**30), 2)
+            infra['disk_percent'] = round(disk.percent, 1)
+            infra['uptime_seconds'] = int(time.time() - psutil.boot_time())
+        except ImportError:
+            try:
+                with open('/proc/loadavg') as f:
+                    parts = f.read().split()
+                    infra['load_avg'] = [float(parts[i]) for i in range(3)]
+            except Exception:
+                pass
+
+        # ── Docker containers ─────────────────────────────────────
+        KNOWN_SERVICES = [
+            # Core
+            'backend', 'frontend', 'celery', 'celery-beat', 'celery-fast', 'celery-deploy',
+            # Database
+            'db', 'db-replica', 'postgres-primary', 'postgres-replica', 'pgcat',
+            'pgbouncer', 'pgbouncer-readonly',
+            # Cache / Redis HA
+            'redis', 'redis-primary', 'redis-replica',
+            'redis-sentinel-1', 'redis-sentinel-2', 'redis-sentinel-3',
+            # Queue
+            'rabbitmq',
+            # Proxy / Routing
+            'traefik', 'caddy', 'route-fallback', 'socket-proxy', 'frps',
+            # Observability
+            'grafana', 'loki', 'promtail', 'prometheus', 'alertmanager',
+            'cadvisor', 'node-exporter',
+            # Security
+            'crowdsec', 'smsly-falco', 'infisical',
+            # Registry / Build
+            'registry', 'docker-mirror', 'verdaccio', 'buildkitd',
+            # Misc
+            'apt-cacher', 'docker-labels',
+        ]
+
+        running_map = {}  # name -> status string
+        try:
+            result = subprocess.run(
+                ['docker', 'ps', '-a', '--format', '{{.Names}}\t{{.Status}}\t{{.State}}'],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                for line in result.stdout.strip().split('\n'):
+                    if not line.strip():
+                        continue
+                    parts = line.split('\t')
+                    if len(parts) >= 3:
+                        name, status, state = parts[0].strip(), parts[1].strip(), parts[2].strip()
+                        running_map[name] = {'status': status, 'running': state == 'running'}
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            pass
+
+        # ── Service health probes ─────────────────────────────────
+        # Database
+        db_ok = False
+        try:
+            from django.db import connection
+            with connection.cursor() as cursor:
+                cursor.execute('SELECT 1')
+                db_ok = True
+        except Exception:
+            pass
+
+        # Redis
+        redis_ok = False
+        try:
+            import redis as redis_lib
+            r = redis_lib.Redis(
+                host=getattr(settings, 'REDIS_HOST', 'redis'),
+                port=int(getattr(settings, 'REDIS_PORT', 6379)),
+                password=getattr(settings, 'REDIS_PASSWORD', '') or None,
+                socket_timeout=2,
+            )
+            r.ping()
+            redis_ok = True
+        except Exception:
+            pass
+
+        # Celery workers
+        celery_ok = False
+        try:
+            from celery import app as celery_app
+            inspect = celery_app.control.inspect(timeout=2)
+            active = inspect.active()
+            if active is not None:
+                celery_ok = True
+        except Exception:
+            pass
+
+        # HTTP health probes for services with /health or /ping endpoints
+        HTTP_PROBES = {
+            'grafana': 'http://localhost:3001/api/health',
+            'prometheus': 'http://localhost:9090/-/healthy',
+            'loki': 'http://localhost:3100/ready',
+            'rabbitmq': 'http://localhost:15672/api/health/checks/alarms',
+            'pgcat': 'http://localhost:6432/pool',
+            'alertmanager': 'http://localhost:9093/-/healthy',
+        }
+
+        http_results = {}
+        for svc, url in HTTP_PROBES.items():
+            try:
+                import urllib.request
+                req = urllib.request.Request(url, method='GET')
+                resp = urllib.request.urlopen(req, timeout=2)
+                http_results[svc] = resp.status < 400
+            except Exception:
+                http_results[svc] = False
+
+        # ── Build final service map ───────────────────────────────
+        for svc_name in KNOWN_SERVICES:
+            container = running_map.get(svc_name)
+            if container:
+                running = container['running']
+            elif svc_name in ('db',):
+                running = db_ok
+            elif svc_name in ('redis', 'redis-primary'):
+                running = redis_ok
+            elif svc_name in ('celery', 'celery-beat', 'celery-fast', 'celery-deploy'):
+                running = celery_ok
+            elif svc_name in http_results:
+                running = http_results[svc_name]
+            else:
+                running = False
+
+            # Override for HA replicas / sentinels — use docker state
+            if svc_name in ('postgres-replica', 'redis-replica',
+                            'redis-sentinel-1', 'redis-sentinel-2', 'redis-sentinel-3'):
+                if container:
+                    running = container['running']
+
+            infra['services'][svc_name] = {
+                'running': running,
+                'status': container['status'] if container else ('healthy' if running else 'missing'),
+            }
+
+        # ── Host-level security ───────────────────────────────────
+        host_security = {}
+
+        # UFW
+        try:
+            result = subprocess.run(
+                ['ufw', 'status'], capture_output=True, text=True, timeout=3,
+            )
+            host_security['ufw'] = {
+                'installed': result.returncode == 0 or 'not found' not in (result.stderr or '').lower(),
+                'active': 'active' in (result.stdout or '').lower(),
+            }
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            host_security['ufw'] = {'installed': False, 'active': False}
+
+        # fail2ban
+        try:
+            result = subprocess.run(
+                ['fail2ban-client', 'ping'], capture_output=True, text=True, timeout=3,
+            )
+            host_security['fail2ban'] = {
+                'installed': True,
+                'active': 'pong' in (result.stdout or '').lower(),
+            }
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            host_security['fail2ban'] = {'installed': False, 'active': False}
+
+        # auditd
+        try:
+            result = subprocess.run(
+                ['systemctl', 'is-active', 'auditd'],
+                capture_output=True, text=True, timeout=3,
+            )
+            host_security['auditd'] = {
+                'installed': result.returncode == 0 or 'could not be found' not in (result.stderr or '').lower(),
+                'active': (result.stdout or '').strip() == 'active',
+            }
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            host_security['auditd'] = {'installed': False, 'active': False}
+
+        infra['host_security'] = host_security
+
+        return infra
 
     def post(self, request):
         """Queue a maintenance task via the API."""
@@ -5317,6 +5528,8 @@ class DomainConfigView(GenericAPIView):
             'cosign_require_verification': config.cosign_require_verification,
             'backup_require_encryption': config.backup_require_encryption,
             'enforce_device_trust': config.enforce_device_trust,
+            # Traffic Geo
+            'traffic_geo_enabled': config.traffic_geo_enabled,
             # SMTP
             'smtp_host': config.smtp_host,
             'smtp_port': config.smtp_port,
@@ -5484,6 +5697,9 @@ class DomainConfigView(GenericAPIView):
                     pass
             if 'sentry_environment' in data:
                 config.sentry_environment = str(data.get('sentry_environment') or 'production').strip()[:50]
+            # Traffic Geo
+            if 'traffic_geo_enabled' in data:
+                config.traffic_geo_enabled = _parse_bool(data.get('traffic_geo_enabled'))
             # Feature Flags
             for _field in ('smsly_disable_tier_gates', 'enable_legacy_tunnel_api', 'smsly_strict_ssh_host_key_check'):
                 if _field in data:

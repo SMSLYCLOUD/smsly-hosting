@@ -341,17 +341,13 @@ export function MetricsTab({ serviceId }: { serviceId: string }) {
             </div>
 
             {/* Traffic Summary + Map */}
-            {trafficData && trafficData.total_requests > 0 && (
-                <>
-                    <TrafficSummary
-                        totalRequests={trafficData.total_requests}
-                        uniqueCountries={trafficData.unique_countries}
-                        uniqueIps={trafficData.unique_ips}
-                        topCountries={trafficData.countries}
-                    />
-                    <WorldTrafficMap serviceId={serviceId} />
-                </>
-            )}
+            <TrafficSummary
+                totalRequests={trafficData?.total_requests ?? 0}
+                uniqueCountries={trafficData?.unique_countries ?? 0}
+                uniqueIps={trafficData?.unique_ips ?? 0}
+                topCountries={trafficData?.countries ?? []}
+            />
+            <WorldTrafficMap serviceId={serviceId} />
         </div>
     );
 }

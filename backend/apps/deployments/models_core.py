@@ -1116,6 +1116,11 @@ class PlatformConfig(models.Model):
         default=False,
         help_text="Strict SSH host-key verification for provisioner")
 
+    # ── Traffic Geo ────────────────────────────────────────────────────────
+    traffic_geo_enabled = models.BooleanField(
+        default=True,
+        help_text="Collect Traefik access logs and resolve IP geolocations for the traffic map.")
+
     # ── Frontend Map Visualization ────────────────────────────────────────
     mapbox_token = EncryptedCharField(
         max_length=512, blank=True, default='',
