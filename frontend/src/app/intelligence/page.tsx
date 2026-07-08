@@ -8,13 +8,14 @@ import {
   RefreshCw, Send, CheckCircle2, XCircle, Loader2, TrendingUp,
   Gauge, CircuitBoard, Bot, MessageSquare, AlertTriangle, Flame,
   Target, Lightbulb, DollarSign, Clock, ArrowUpRight, Settings, Save, Lock,
-  Code2, Server
+  Code2, Server, Siren
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import CodeMapView from '@/components/intelligence/CodeMapView';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { aiApi, type AIProvidersResponse } from '@/lib/api';
 import api from '@/lib/api';
+import { serversApi } from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -78,6 +79,9 @@ export default function IntelligencePage() {
   // Platform Health State
   const [allServices, setAllServices] = useState<any[]>([]);
   const [autoscalerStatus, setAutoscalerStatus] = useState<any>(null);
+  const [servers, setServers] = useState<any[]>([]);
+  const [serverReports, setServerReports] = useState<Record<string, any>>({});
+  const [serverReportsLoading, setServerReportsLoading] = useState(false);
 
   const fetchData = useCallback(async () => {
     try {
@@ -87,7 +91,7 @@ export default function IntelligencePage() {
           new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
         ]);
 
-      const [prov, deps, anoms, rep, svcs, autoStatus] = await Promise.all([
+      const [prov, deps, anoms, rep, svcs, autoStatus, svrs] = await Promise.all([
         withTimeout(
           aiApi.getProviders(false).catch(() => ({
             providers: [],
@@ -129,12 +133,18 @@ export default function IntelligencePage() {
           12000,
           null,
         ),
+        withTimeout(
+          api.get('/servers/').then(r => r.data?.results || r.data || []).catch(() => []),
+          12000,
+          [],
+        ),
       ]);
       setProviders(prov);
       setAnomalies(anoms);
       setReport(rep);
       setAllServices(svcs);
       setAutoscalerStatus(autoStatus);
+      setServers(svrs);
 
       const insights = (deps as DeploymentInsight[]).filter(
         d => d.ai_diagnosis || d.status === 'FAILED'
@@ -158,6 +168,31 @@ export default function IntelligencePage() {
     setRefreshing(true);
     fetchData();
   };
+
+  // Load server incident reports on demand when servers tab is opened
+  const loadServerReports = useCallback(async () => {
+    if (serverReportsLoading) return;
+    setServerReportsLoading(true);
+    try {
+      const results = await Promise.all(
+        servers.map(async (srv: any) => {
+          try {
+            const rep = await serversApi.getIncidentReport(srv.id);
+            return { id: srv.id, report: rep };
+          } catch {
+            return { id: srv.id, report: null };
+          }
+        })
+      );
+      const map: Record<string, any> = {};
+      for (const r of results) {
+        map[r.id] = r.report;
+      }
+      setServerReports(map);
+    } finally {
+      setServerReportsLoading(false);
+    }
+  }, [servers, serverReportsLoading]);
 
   const handleChat = async () => {
     if (!chatInput.trim()) return;
@@ -468,7 +503,7 @@ export default function IntelligencePage() {
 
           <Tabs defaultValue="dashboard" className="w-full">
             <div className="w-full overflow-x-auto scrollbar-hide pb-2 -mx-4 px-4 sm:mx-0 sm:px-0">
-              <TabsList className="inline-flex sm:grid w-max sm:w-full sm:grid-cols-7 bg-muted/20 gap-2 sm:gap-0 p-1">
+              <TabsList className="inline-flex sm:grid w-max sm:w-full sm:grid-cols-8 bg-muted/20 gap-2 sm:gap-0 p-1">
                 <TabsTrigger value="dashboard" className="rounded-full sm:rounded-sm px-4">Dashboard</TabsTrigger>
                 <TabsTrigger value="anomalies" className="rounded-full sm:rounded-sm px-4">Anomalies</TabsTrigger>
                 <TabsTrigger value="services" className="rounded-full sm:rounded-sm px-4">Services</TabsTrigger>
@@ -476,6 +511,7 @@ export default function IntelligencePage() {
                 <TabsTrigger value="cost" className="rounded-full sm:rounded-sm px-4">Cost Intel</TabsTrigger>
                 <TabsTrigger value="codemap" className="rounded-full sm:rounded-sm px-4"><Code2 className="w-3.5 h-3.5 mr-1 inline" />Code Map</TabsTrigger>
                 <TabsTrigger value="chat" className="rounded-full sm:rounded-sm px-4">AI Chat</TabsTrigger>
+                <TabsTrigger value="servers" className="rounded-full sm:rounded-sm px-4"><Siren className="w-3.5 h-3.5 mr-1 inline" />Servers</TabsTrigger>
               </TabsList>
             </div>
 
@@ -800,6 +836,103 @@ export default function IntelligencePage() {
             {/* ── Code Map Tab ─────────────────────────────────────────── */}
             <TabsContent value="codemap" className="mt-6">
               <CodeMapView />
+            </TabsContent>
+
+            {/* ── Servers Tab ─────────────────────────────────── */}
+            <TabsContent value="servers" className="space-y-6 mt-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-lg font-bold flex items-center gap-2">
+                    <Siren className="text-red-500" /> Server Incident Reports
+                  </h3>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Consolidated incident timeline for each managed server.
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={loadServerReports}
+                  disabled={serverReportsLoading}
+                >
+                  <RefreshCw className={`w-4 h-4 mr-1 ${serverReportsLoading ? 'animate-spin' : ''}`} />
+                  Load Reports
+                </Button>
+              </div>
+
+              {Object.keys(serverReports).length === 0 && (
+                <Card className="bg-muted/20 border-violet-500/10">
+                  <CardContent className="py-10 text-center text-muted-foreground">
+                    <Server className="h-10 w-10 mx-auto mb-3 opacity-30" />
+                    <p>Click "Load Reports" to fetch incident data for each server.</p>
+                  </CardContent>
+                </Card>
+              )}
+
+              <div className="grid grid-cols-1 gap-4">
+                {servers.map((srv: any) => {
+                  const report = serverReports[srv.id];
+                  return (
+                    <Card key={srv.id} className="bg-muted/10 border-border">
+                      <CardHeader className="pb-2">
+                        <div className="flex items-center justify-between">
+                          <CardTitle className="text-base flex items-center gap-2">
+                            <Server className="h-4 w-4 text-blue-500" />
+                            {srv.name || srv.host || srv.id}
+                          </CardTitle>
+                          <Badge variant={srv.status === 'ONLINE' ? 'default' : 'outline'}
+                            className={srv.status === 'ONLINE' ? 'bg-emerald-500/10 text-emerald-500' : 'text-muted-foreground'}>
+                            {srv.status || 'UNKNOWN'}
+                          </Badge>
+                        </div>
+                        <CardDescription>
+                          {srv.host} · {srv.services_count || 0} services
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        {report === undefined ? (
+                          <p className="text-sm text-muted-foreground">Click "Load Reports" to fetch.</p>
+                        ) : report === null ? (
+                          <p className="text-sm text-red-400">Failed to load report.</p>
+                        ) : (
+                          <div className="grid grid-cols-4 gap-3 text-center">
+                            <div>
+                              <p className="text-2xl font-bold">{report.total_events || 0}</p>
+                              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Events</p>
+                            </div>
+                            <div>
+                              <p className="text-2xl font-bold text-red-500">{report.critical || 0}</p>
+                              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Critical</p>
+                            </div>
+                            <div>
+                              <p className="text-2xl font-bold text-amber-500">{report.warning || 0}</p>
+                              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Warning</p>
+                            </div>
+                            <div>
+                              <p className="text-2xl font-bold text-blue-500">{report.info || 0}</p>
+                              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Info</p>
+                            </div>
+                          </div>
+                        )}
+                        {report && report.events && report.events.length > 0 && (
+                          <div className="mt-3 space-y-1 max-h-32 overflow-y-auto">
+                            {report.events.slice(0, 5).map((evt: any, i: number) => (
+                              <div key={i} className="flex items-center gap-2 text-xs">
+                                <span className={`w-1.5 h-1.5 rounded-full ${
+                                  evt.severity === 'critical' ? 'bg-red-500' :
+                                  evt.severity === 'warning' ? 'bg-amber-500' : 'bg-blue-500'
+                                }`} />
+                                <span className="text-muted-foreground truncate flex-1">{evt.title}</span>
+                                <Badge variant="outline" className="text-[9px]">{evt.type}</Badge>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
             </TabsContent>
 
           </Tabs>
