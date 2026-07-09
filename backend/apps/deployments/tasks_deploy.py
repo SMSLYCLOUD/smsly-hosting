@@ -490,7 +490,6 @@ def fleet_build_lock(deployment):
         yield
         return
 
-    getattr(config, "max_concurrent_builds", 1) or 1
     # For now, we enforce a strict single-build lock for maximum safety on small VPS nodes.
     # A true semaphore can be implemented later if needed.
     lock_key = "smsly_fleet_build_lock"
@@ -1110,8 +1109,8 @@ def _deploy_container(deployment, provider, image_name):
             _regenerate_caddyfile()
         append_log(
             deployment,
-            "[DEPLOY] ✅ Container live with Traefik routing enabled.\n"
-            "Domain should be accessible immediately.\n"
+            "[DEPLOY] ✅ Container started with Traefik routing label applied.\n"
+            "Domain accessibility depends on DNS propagation and Traefik config reload.\n"
         )
 
         _sync_service_dns_to_node(deployment, service)
@@ -1198,7 +1197,7 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
             continue
 
     if not crash_detected:
-        append_log(deployment, "✅ Container healthy after 30s monitoring.\n")
+        append_log(deployment, "✅ Container stable — no crashes detected during 30s monitoring.\n")
 
         # ── Infrastructure health summary ──
         infra_lines = []

@@ -925,7 +925,7 @@ def log_exhaustive_deployment_diagnostics(deployment, service=None, build_dir=No
     sandbox_runtime = "runc (default)"
     sandbox_isolation = "Process-level (standard Docker)"
     try:
-        from apps.deployments.services.container_runtime import detect_best_runtime, is_sandboxed_runtime
+        from apps.deployments.services.container_runtime import detect_best_runtime
         detected = detect_best_runtime()
         if detected == "runsc":
             sandbox_runtime = "gVisor (runsc)"
@@ -1326,7 +1326,7 @@ def log_exhaustive_network_and_routing_diagnostics(deployment, service):
 
 
 
-def log_exhaustive_runtime_activation_diagnostics(deployment, service, container_id, target_ip="127.0.0.1", promotion_type="Local Direct / Blue-Green"):
+def log_exhaustive_runtime_activation_diagnostics(deployment, service, container_id, target_ip=None, promotion_type="Local Direct / Blue-Green"):
     """Log deep container runtime activation, gVisor/Kata sandboxing, blue-green promotion, and health monitoring."""
     runtime_name = "runc (Standard Docker OCI Runtime)"
     try:
@@ -1345,7 +1345,7 @@ def log_exhaustive_runtime_activation_diagnostics(deployment, service, container
         "\n" + "─" * 60,
         "🟢 [RUNTIME ACTIVATION, SANDBOX ISOLATION & HEALTH MESH]",
         f"  • Live Container ID  : {container_id}",
-        f"  • Target Node IP     : {target_ip}",
+        f"  • Target Node IP     : {target_ip or 'Not specified'}",
         f"  • Sandbox Runtime    : {runtime_name}",
         f"  • Promotion Strategy : {promotion_type}",
         "─" * 60 + "\n"

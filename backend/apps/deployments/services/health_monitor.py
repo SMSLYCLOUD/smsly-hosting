@@ -293,9 +293,6 @@ def _build_targets(service, active_deployment):
     container_id = (active_deployment.container_id or "").strip()
     if container_id:
         direct_headers = {"Host": public_domain} if public_domain else {}
-        (
-            _server_verify_tls(service.server) if service.server else True
-        )
 
         service_name = (service.name or "").strip()
         if service_name:

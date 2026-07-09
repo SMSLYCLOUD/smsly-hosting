@@ -693,7 +693,7 @@ def _build_runtime_env(service: Service, image_name: str | None = None) -> dict:
         # non-ecosystem deploy path bypassed _resolve_env_placeholders).
         if isinstance(val, str) and re.search(r"\{\{.*?\}\}", val):
             logger.warning(
-                "[PLACEHOLDER] Skipping unresoloved placeholder %s=%s for service %s "
+                "[PLACEHOLDER] Skipping unresolved placeholder %s=%s for service %s "
                 "at runtime injection — addon may not be provisioned yet.",
                 env.key, val, service.name,
             )
@@ -2733,8 +2733,8 @@ def _deploy_container(deployment, provider, image_name):
             _regenerate_caddyfile()
         append_log(
             deployment,
-            "[DEPLOY] ✅ Container live with Traefik routing enabled.\n"
-            "Domain should be accessible immediately.\n"
+            "[DEPLOY] ✅ Container started with Traefik routing label applied.\n"
+            "Domain accessibility depends on DNS propagation and Traefik config reload.\n"
         )
 
         # Post-deploy runtime monitor (watches for crashes)
@@ -2902,7 +2902,7 @@ def _post_deploy_monitor(self, deployment_id: str, provider_id: str, container_i
             continue
 
     if not crash_detected:
-        append_log(deployment, "✅ Container healthy after 30s monitoring.\n")
+        append_log(deployment, "✅ Container stable — no crashes detected during 30s monitoring.\n")
         broadcast_status(deployment)
         return
 

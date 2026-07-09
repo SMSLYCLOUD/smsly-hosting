@@ -59,8 +59,8 @@ ERROR_PATTERNS: list[dict[str, Any]] = [
             'The domain needs to be added to ALLOWED_HOSTS.'
         ),
             'auto_fix': {
-                'env': {'ALLOWED_HOSTS': '.onrender.com,.railway.app,localhost,127.0.0.1'},
-                'action': 'Set ALLOWED_HOSTS to common PaaS domains (restrict further in production)',
+                'env': {'ALLOWED_HOSTS': 'localhost,127.0.0.1'},
+                'action': 'Set ALLOWED_HOSTS to localhost only — add your domain in production',
             },
     },
     {

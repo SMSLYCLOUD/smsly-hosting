@@ -859,8 +859,6 @@ class ServiceViewSet(viewsets.ModelViewSet):
         if server:
             ServerGuard.assert_user_workload_allowed(server)
 
-        serializer.validated_data.get('deploy_type', 'GIT')
-
         service = serializer.save(owner=self.request.user, server=server)
 
         # Setup provider webhook only for direct user actions.
@@ -2118,9 +2116,6 @@ class ServiceViewSet(viewsets.ModelViewSet):
         registry_url = str(request.data.get('registry_url', '')).strip()
         registry_username = str(request.data.get('registry_username', '')).strip()
         registry_password = str(request.data.get('registry_password', '')).strip()
-
-        from .models_core import PlatformConfig
-        PlatformConfig.objects.first()
 
         # F3: validate & cap server_ids
         if not isinstance(server_ids, list):
