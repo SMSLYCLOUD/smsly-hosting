@@ -18,6 +18,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
 
+from apps.deployments.models_core import PlatformConfig
 from apps.billing.models import (
     BillingAccount,
     BillingPayment,

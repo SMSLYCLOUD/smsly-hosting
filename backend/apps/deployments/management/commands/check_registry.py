@@ -72,7 +72,7 @@ class Command(BaseCommand):
         dns_details = ""
         try:
             ips = socket.getaddrinfo(hostname, port, socket.AF_INET, socket.SOCK_STREAM)
-            resolved_ips = sorted(set(addr[4][0] for addr in ips))
+            resolved_ips = sorted({addr[4][0] for addr in ips})
             dns_ok = len(resolved_ips) > 0
             dns_details = f"Resolved to {', '.join(resolved_ips)}"
         except socket.gaierror as exc:

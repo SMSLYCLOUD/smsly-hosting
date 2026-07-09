@@ -4948,7 +4948,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             try:
                 from kombu.exceptions import OperationalError as BrokerOperationalError
             except Exception:  # pragma: no cover
-                BrokerOperationalError = tuple()
+                BrokerOperationalError = ()
 
             if BrokerOperationalError and isinstance(exc, BrokerOperationalError):
                 logger.warning(

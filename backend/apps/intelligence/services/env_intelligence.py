@@ -288,10 +288,7 @@ class EnvironmentIntelligenceService:
                 return True
             # Detect mock/heuristic values
             v_lower = v.lower()
-            for pattern in _MOCK_PATTERNS:
-                if pattern in v_lower:
-                    return True
-            return False
+            return any(pattern in v_lower for pattern in _MOCK_PATTERNS)
 
         # Ensure any unfilled, placeholder, or mock environment variables on the
         # service are added to env_context for AI Senate resolution.

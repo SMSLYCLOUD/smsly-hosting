@@ -34,7 +34,7 @@ class HasPermission(permissions.BasePermission):
         # For list/create actions we don't have a specific object yet.
         # has_permission() requires an object, so for list we check
         # against the view's queryset model.
-        obj = getattr(view, 'swagger_fake_view', None) is not None
+        getattr(view, 'swagger_fake_view', None) is not None
         if view.action in ('list', 'create', 'metadata'):
             # Use queryset model as a proxy — the object check happens
             # in has_object_permission() below.

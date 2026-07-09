@@ -618,7 +618,7 @@ def ai_intelligence_report(request):
     Returns the latest daily intelligence report, optionally scoped to a service.
     Query params: ?service_id=<uuid>
     """
-    service_id = request.query_params.get("service_id", "").strip()
+    request.query_params.get("service_id", "").strip()
     try:
         filters = Q(actor="AI_REPORTER", action="DAILY_REPORT")
         report = (

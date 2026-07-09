@@ -38,7 +38,7 @@ def run():
         print("\nNavigating to / (no cookie)...")
         try:
             # pylint: disable=unused-variable
-            response = page.goto("http://localhost:3000/")
+            page.goto("http://localhost:3000/")
             page.wait_for_load_state("networkidle")
 
             if "/login" in page.url:
@@ -58,7 +58,7 @@ def run():
                 "path": "/"
             }])
             # pylint: disable=unused-variable
-            response = page.goto("http://localhost:3000/")
+            page.goto("http://localhost:3000/")
             page.wait_for_load_state("networkidle")
 
             # It might still redirect if the page itself does auth check,

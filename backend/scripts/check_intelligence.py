@@ -12,7 +12,7 @@ for t in intl:
 
 if not intl:
     # Check all unique categories
-    cats = set(t.get('category', 'NONE') for t in data)
+    cats = {t.get('category', 'NONE') for t in data}
     print(f"\nAll categories: {sorted(cats)}")
     # Check last 25 templates
     print("\nLast 25 templates:")

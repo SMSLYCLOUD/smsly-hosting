@@ -105,7 +105,7 @@ class VerifyBackupIntegrityTaskTest(TestCase):
         """A valid gzipped tar with zero members should fail (empty archive)."""
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".tar.gz")
         # Write a valid but empty tar (no members)
-        with tarfile.open(tmp.name, "w:gz") as tar:
+        with tarfile.open(tmp.name, "w:gz"):
             pass
         tmp.close()
 

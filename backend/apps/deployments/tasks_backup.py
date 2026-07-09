@@ -117,7 +117,6 @@ def verify_backup_integrity_task(self, backup_ids: list | None = None, sample_si
 
     for backup in candidates:
         filepath = backup.file_path
-        errors = []
         try:
             if not filepath or not os.path.exists(filepath):
                 raise FileNotFoundError(f"Backup file not found: {filepath}")

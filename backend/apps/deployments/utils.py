@@ -1125,7 +1125,7 @@ def log_exhaustive_build_diagnostics(deployment, builder_type, context_dir, buil
 
 def log_exhaustive_push_diagnostics(deployment, registry_url, image_name):
     """Log container registry push, Trivy CVE scanning, and Cosign image attestation/signing.
-    
+
     Also enforces trivy_fail_on_severity: returns True if safe to proceed, False if build
     should be blocked due to critical vulnerabilities.
     """

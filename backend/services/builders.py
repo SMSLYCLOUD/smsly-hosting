@@ -13,6 +13,7 @@ from urllib.parse import urlparse, urlunparse
 
 from django.conf import settings
 from django.utils import timezone
+from apps.deployments.services.pipeline import BuildError
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)

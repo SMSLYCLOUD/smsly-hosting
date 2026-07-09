@@ -18,15 +18,15 @@ class RemoteSyncHeaderTrustTests(TestCase):
         self.user.delete()
 
     def _make(self, **overrides):
-        defaults = dict(
-            owner=self.user,
-            name="trust-test",
-            host="203.0.113.10",
-            api_url="https://203.0.113.10",
-            api_token="tok",
-            gateway_secret="secret",
-            is_lite_agent=False,
-        )
+        defaults = {
+            "owner": self.user,
+            "name": "trust-test",
+            "host": "203.0.113.10",
+            "api_url": "https://203.0.113.10",
+            "api_token": "tok",
+            "gateway_secret": "secret",
+            "is_lite_agent": False,
+        }
         defaults.update(overrides)
         return ManagedServer.objects.create(**defaults)
 

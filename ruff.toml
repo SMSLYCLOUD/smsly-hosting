@@ -7,6 +7,8 @@ extend-exclude = [
   "venv",
   "**/__pycache__",
   "**/migrations",
+  "backend/caddy_analysis.py",
+  "backend/caddy_analysis_fixed.py",
 ]
 line-length = 120
 
@@ -22,14 +24,24 @@ line-length = 120
 # - RUF: ruff-specific
 select = ["E", "W", "F", "I", "B", "UP", "C4", "SIM", "RUF"]
 ignore = [
-  "E501",   # line length — handled by formatter, noisy in legacy
-  "B008",   # function call in default argument (Django idiomatic)
-  "B904",   # raise from in except (false positives in test code)
-  "E402",   # module-level import not at top (we use sys.path hacks)
-  "E731",   # lambda assignment (acceptable in tests/scripts)
-  "SIM108", # ternary instead of if/else (style preference)
-  "UP015",  # redundant open() mode="r" (we keep explicit)
-  "UP032",  # use f-string instead of format (legacy)
+  "E501",    # line length — handled by formatter, noisy in legacy
+  "B008",    # function call in default argument (Django idiomatic)
+  "B904",    # raise from in except (false positives in test code)
+  "E402",    # module-level import not at top (we use sys.path hacks)
+  "E731",    # lambda assignment (acceptable in tests/scripts)
+  "SIM108",  # ternary instead of if/else (style preference)
+  "UP015",   # redundant open() mode="r" (we keep explicit)
+  "UP032",   # use f-string instead of format (legacy)
+  "RUF012",  # mutable-class-default — Django/DRF idiomatic (Meta.ordering, permission_classes, etc.)
+  "RUF001",  # ambiguous-unicode-character-string — intentional emoji in user-facing strings
+  "RUF002",  # ambiguous-unicode-character-docstring — intentional emoji
+  "RUF003",  # ambiguous-unicode-character-comment — intentional emoji
+  "SIM102",  # collapsible-if — style preference, nested ifs can be clearer
+  "SIM105",  # suppressible-exception — contextlib.suppress not always preferred
+  "SIM115",  # open-file-with-context-handler — not always possible
+  "SIM103",  # needless-bool — style preference, explicit is sometimes clearer
+  "B007",    # unused-loop-control-variable — sometimes needed for unpacking
+  "RUF059",  # unused-unpacked-variable — sometimes needed for unpacking
 ]
 
 [lint.per-file-ignores]

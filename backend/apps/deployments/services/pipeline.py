@@ -1845,7 +1845,7 @@ class PipelineManager:
                     f"\n✅ All {len(detected_types)} detected addons "
                     f"already provisioned.\n"
                 )
-                log_exhaustive_addon_provisioning_diagnostics(self.deployment, sorted(list(detected_types)))
+                log_exhaustive_addon_provisioning_diagnostics(self.deployment, sorted(detected_types))
                 return
 
             append_log(
@@ -1923,7 +1923,7 @@ class PipelineManager:
                         "Auto-provision %s failed: %s", addon_type, e
                     )
 
-            log_exhaustive_addon_provisioning_diagnostics(self.deployment, sorted(list(detected_types)))
+            log_exhaustive_addon_provisioning_diagnostics(self.deployment, sorted(detected_types))
         except Exception as e:  # pylint: disable=broad-exception-caught
             logger.warning("Auto-addon provisioning failed: %s", e)
 
@@ -2226,7 +2226,7 @@ class PipelineManager:
                         # Detect sandboxed container runtime
                         from apps.deployments.services.container_runtime import detect_best_runtime
                         compose_runtime = detect_best_runtime()
-                        for svc_name in user_compose["services"].keys():
+                        for svc_name in user_compose["services"]:
                             if svc_name not in override_payload["services"]:
                                 override_payload["services"][svc_name] = {}
                             override_payload["services"][svc_name]["security_opt"] = [
@@ -2813,16 +2813,16 @@ class PipelineManager:
 
             try:
                 client = get_docker_client()
-                build_kwargs: dict = dict(
-                    fileobj=tar_buffer,
-                    custom_context=True,
-                    tag=tag,
-                    dockerfile=dockerfile_rel,
-                    buildargs=merged_buildargs or None,
-                    cache_from=cache_from or None,
-                    rm=True,
-                    forcerm=True,
-                )
+                build_kwargs: dict = {
+                    "fileobj": tar_buffer,
+                    "custom_context": True,
+                    "tag": tag,
+                    "dockerfile": dockerfile_rel,
+                    "buildargs": merged_buildargs or None,
+                    "cache_from": cache_from or None,
+                    "rm": True,
+                    "forcerm": True,
+                }
                 _image, build_log = client.images.build(**build_kwargs)
             except Exception as exc:
                 err_str = str(exc) or type(exc).__name__

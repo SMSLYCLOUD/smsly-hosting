@@ -132,7 +132,6 @@ def _collect_parallel(managed):
                 except Exception:
                     pass  # container may have disappeared during fetch
         except FutureTimeout:
-            elapsed = "?"
             remaining = sum(1 for f in futures_map if not f.done())
             traceback.print_exc(file=sys.stdout)
             print(f"[drain] Stats cycle timed out after {STATS_TIMEOUT}s — "

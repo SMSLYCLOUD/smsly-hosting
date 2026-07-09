@@ -484,7 +484,7 @@ def _detect_env_vars(files: list[str], stack: str, port: int,
                             if isinstance(svc_def, dict):
                                 env = svc_def.get('environment')
                                 if isinstance(env, dict):
-                                    for k in env.keys():
+                                    for k in env:
                                         if k and _re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', str(k)):
                                             var_keys.append(str(k))
                                 elif isinstance(env, list):
@@ -1998,7 +1998,7 @@ def _build_deploy_sequence(services: list[dict]) -> list[str]:
         unresolved = [n for n in name_map if n not in processed]
         ordered.extend(unresolved)
 
-        return ["addons"] + ordered
+        return ["addons", *ordered]
 
     except Exception as e:
         logger.warning("Deploy sequence build failed: %s", e)
@@ -2464,7 +2464,7 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
         svc_prefixes = svc.get("_env_prefixes", [])
         if not svc_prefixes:
             # Fallback: infer prefix from var names that share a leading segment
-            keys = [k.upper() for k in env_map.keys()]
+            keys = [k.upper() for k in env_map]
             _counts: dict[str, int] = {}
             for k in keys:
                 parts = k.split("_")
@@ -2518,7 +2518,7 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
             ("{{MINIO_URL}}",          "MINIO",         ["MINIO_ENDPOINT", "MINIO_HOST", "S3_ENDPOINT_URL", "S3_HOST"]),
             ("{{MEMCACHED_URL}}",      "MEMCACHED",     ["MEMCACHED_URL", "MEMCACHED_HOST", "MEMCACHE_SERVERS"]),
         ]
-        _svc_addon_upper = set(str(a).upper() for a in (svc.get("addons") or []))
+        _svc_addon_upper = {str(a).upper() for a in (svc.get("addons") or [])}
         _ecosystem_addon_upper = set()
         for o in deployable:
             _ecosystem_addon_upper.update(str(a).upper() for a in (o.get("addons") or []))
@@ -2799,7 +2799,7 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
                     continue
                 env_map.setdefault(
                     "NEXT_PUBLIC_API_URL",
-                    "{{SERVICE:%s}}" % target_name,
+                    "{{{{SERVICE:{}}}}}".format(target_name),
                 )
                 try:
                     deps = set(_coerce_depends_on(svc.get("depends_on", []) or []))
@@ -2815,7 +2815,7 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
                     continue
                 env_map.setdefault(
                     "CORS_ALLOWED_ORIGINS",
-                    "{{SERVICE:%s}}" % target_name,
+                    "{{{{SERVICE:{}}}}}".format(target_name),
                 )
                 # Backend doesn't depend on frontend for deploy order,
                 # but the var reference makes the runtime link.
@@ -2973,7 +2973,7 @@ def _ensure_100_percent_env_coverage(services: list[dict]):
     for svc in services:
         env_map = svc.get("env_vars", {})
         svc_port = str(svc.get("port") or 3000)
-        svc_name = str(svc.get("name") or "service")
+        str(svc.get("name") or "service")
 
         for key in list(env_map.keys()):
             val = env_map.get(key)
@@ -3344,7 +3344,7 @@ def _scan_and_analyze_impl(token: str, ai_provider: str | None = None, selected_
             if isinstance(service, dict):
                 try:
                     # Check if already deployed
-                    service_name = str(service.get("name", f"service-{i}")).lower()
+                    str(service.get("name", f"service-{i}")).lower()
                     service_repo = str(service.get("repo", "")).lower()
 
                     if service_repo:

@@ -1265,7 +1265,7 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
     operators to re-enter the Cloudflare token after restarts or background
     sync jobs that didn't pass it through.
     """
-    global _last_caddy_reload_ts
+    global _last_caddy_reload_ts, _last_caddy_content_hash
 
     if caddy_disabled_mode():
         logger.debug("Caddy-disabled mode: skipping apply_caddyfile()")

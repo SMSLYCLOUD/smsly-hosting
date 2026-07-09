@@ -431,7 +431,7 @@ class RepoAnalysisView(GenericAPIView):
 
         # Merge: template vars first, then extras (deduplicated)
         all_var_keys = template_vars[:]
-        seen = set(v.upper() for v in template_vars)
+        seen = {v.upper() for v in template_vars}
         for v in extra_vars:
             if v.upper() not in seen:
                 all_var_keys.append(v)

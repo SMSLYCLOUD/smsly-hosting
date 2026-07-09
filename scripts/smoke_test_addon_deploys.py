@@ -42,7 +42,7 @@ def main():
             if atype in provisioner.ADDON_IMAGES:
                 # Built in
                 image = provisioner.ADDON_IMAGES[atype]
-                port = provisioner.ADDON_PORTS[atype]
+                provisioner.ADDON_PORTS[atype]
                 container_name = f"smsly-addon-{atype.lower()}-{addon.id}"
 
                 # Mock generation

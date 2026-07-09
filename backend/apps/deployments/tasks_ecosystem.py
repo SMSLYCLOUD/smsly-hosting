@@ -2236,7 +2236,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             for alias in aliases:
                 created_services[alias] = service
 
-            env_vars = _normalize_env_vars(svc_plan.get("env_vars", {}))
+            _normalize_env_vars(svc_plan.get("env_vars", {}))
             service_addon_types = _service_plan_addon_types(svc_plan, plan.get("addons", []))
 
             # When shared addons are disabled, or this specific addon is not shared,

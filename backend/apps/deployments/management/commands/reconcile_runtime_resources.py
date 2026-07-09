@@ -39,8 +39,8 @@ class Command(BaseCommand):
             self.stdout.write(self.style.ERROR(f"Failed to connect to Docker: {e}"))
             return
 
-        active_service_ids = set(str(sid) for sid in Service.objects.exclude(status='DELETED').values_list('id', flat=True))
-        active_addon_ids = set(str(aid) for aid in Addon.objects.exclude(status='DELETED').values_list('id', flat=True))
+        active_service_ids = {str(sid) for sid in Service.objects.exclude(status='DELETED').values_list('id', flat=True)}
+        active_addon_ids = {str(aid) for aid in Addon.objects.exclude(status='DELETED').values_list('id', flat=True)}
 
         orchestrator = DeletionOrchestrator()
 

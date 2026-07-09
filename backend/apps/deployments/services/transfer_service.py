@@ -221,7 +221,7 @@ class ServerTransferService:
 
         server = self._target_server_record()
         wg_ip = str(getattr(server, 'wg_address', '') or '').strip() if server else ''
-        is_lite = getattr(server, 'is_lite_agent', False) if server else False
+        getattr(server, 'is_lite_agent', False) if server else False
         host = str(getattr(server, 'host', '') or '').strip() if server else ''
 
         def add(url: str):

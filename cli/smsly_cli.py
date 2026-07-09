@@ -399,7 +399,7 @@ def main():
     # env
     p_env = subparsers.add_parser("env")
     env_subs = p_env.add_subparsers(dest="env_cmd")
-    p_env_list = env_subs.add_parser("list")
+    env_subs.add_parser("list")
     p_env_set = env_subs.add_parser("set")
     p_env_set.add_argument("vars", nargs="+", help="KEY=VAL pairs")
     p_env.set_defaults(func=cmd_env)

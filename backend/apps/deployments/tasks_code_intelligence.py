@@ -19,17 +19,17 @@ def deep_scan_and_verify_task(self, user_id, repos_data, deploy_plan, ai_provide
 
         try:
             from apps.deployments.models import Service
-            owned_repo_ids = set(
+            owned_repo_ids = {
                 str(sid) for sid in Service.objects.filter(
                     owner=user
                 ).values_list('id', flat=True)
-            )
-            owned_repo_urls = set(
+            }
+            owned_repo_urls = {
                 url for url in Service.objects.filter(
                     owner=user
                 ).values_list('repository_url', flat=True)
                 if url
-            )
+            }
         except Exception as e:
             logger.error("Could not load ownership for %s: %s", user_id, e)
             return {"error": f"ownership check failed: {e}"}

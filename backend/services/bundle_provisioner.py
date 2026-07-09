@@ -396,8 +396,7 @@ class BundleProvisioner:
                 if paths:
                     with open(backup_path, "wb") as fh:
                         tar_result = subprocess.run(
-                            ["docker", "exec", container_name, "tar", "czf", "-"]
-                            + paths,
+                            ["docker", "exec", container_name, "tar", "czf", "-", *paths],
                             stdout=fh, timeout=300,
                         )
                     if tar_result.returncode != 0:
@@ -569,10 +568,7 @@ class BundleProvisioner:
                 return {"components": []}
 
             stats_result = subprocess.run(
-                ["docker", "stats", "--no-stream", "--format",
-                 '{"name":"{{.Name}}","cpu":"{{.CPUPerc}}","mem":"{{.MemUsage}}",'
-                 '"net":"{{.NetIO}}","disk":"{{.BlockIO}}"}']
-                + container_ids,
+                ["docker", "stats", "--no-stream", "--format", '{"name":"{{.Name}}","cpu":"{{.CPUPerc}}","mem":"{{.MemUsage}}",' '"net":"{{.NetIO}}","disk":"{{.BlockIO}}"}', *container_ids],
                 capture_output=True, text=True, timeout=15,
             )
             components = []

@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import shutil
 import struct
 import sys
@@ -15,6 +16,7 @@ import tempfile
 import time
 import traceback
 import uuid
+from typing import Any
 
 import docker
 from cryptography.exceptions import InvalidSignature
@@ -2360,7 +2362,7 @@ class BackupService:
         return BackupService._decrypt_legacy_fernet_backup(path, key)
 
     @staticmethod
-    def can_decrypt_backup(path: str, passed_key: str = None) -> bool:
+    def can_decrypt_backup(path: str, passed_key: str | None = None) -> bool:
         """Return True if this master has an encryption key capable of decrypting path."""
         try:
             if not path or not os.path.exists(path) or not path.endswith('.enc'):
@@ -3310,7 +3312,7 @@ def delete_cloud_backup_object(s3_bucket: str, s3_key: str,
 
 def _upload_backup_to_cloud(backup, filepath, service_name):
     """Upload a backup to cloud storage and track metadata on the backup record.
-    
+
     Accepts either a ServiceBackup or ServerBackup instance. Updates cloud_*
     fields on success. Returns a dict::
 
@@ -3488,7 +3490,7 @@ def _alert_cloud_upload_failed(backup, cloud_result: dict):
 
 def _resolve_cloud_config(backup):
     """Resolve cloud bucket + key + credentials for a backup record.
-    
+
     Priority: 1) stored cloud fields on backup, 2) BackupSchedule lookup.
     Returns (bucket, key, endpoint, region, access_key, secret_key) or
     (None, None, None, None, None, None) if nothing found.
@@ -3524,7 +3526,7 @@ def _resolve_cloud_config(backup):
 
 def _download_backup_from_cloud(backup, local_path) -> bool:
     """Download a backup from cloud storage to local path.
-    
+
     Uses stored cloud_* fields on the backup record first, then falls
     back to BackupSchedule lookup. Returns True on success.
     """

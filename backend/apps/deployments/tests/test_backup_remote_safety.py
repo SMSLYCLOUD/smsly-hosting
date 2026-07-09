@@ -144,7 +144,7 @@ class RemoteBackupShellQuoteTest(TestCase):
         mock_encrypt.side_effect = lambda p: p
 
         # Create a volume with a name that could be problematic
-        vol = Volume.objects.create(
+        Volume.objects.create(
             service=self.service,
             name="vol; id",
             mount_path="/data",

@@ -136,9 +136,9 @@ def _inject_addon_credentials(addon: Addon) -> None:
 def _sync_preview_addons(preview: PreviewEnvironment, transient_service: Service) -> None:
 
     try:
-        db_clone = preview.database_clone
+        pass
     except DatabaseClone.DoesNotExist:
-        db_clone = None
+        pass
 
     for addon in preview.service.addons.exclude(status=Addon.Status.DELETED):
         preview_addon_name = f"{addon.name}-preview-{preview.id.hex[:6]}"

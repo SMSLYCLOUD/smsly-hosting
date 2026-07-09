@@ -164,7 +164,7 @@ def build_cross_service_map(services_with_source: dict[str, str]) -> dict[str, A
     for svc_name, expects_list in all_expects.items():
         for entry in expects_list:
             local_var = entry["local_var"]
-            source_service = entry["source_service"]
+            entry["source_service"]
             remote_var = entry["remote_var"]
 
             # Look up who serves this pair

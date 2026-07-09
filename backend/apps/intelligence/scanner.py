@@ -431,7 +431,7 @@ class RepoScanner:
                                         if isinstance(svc_def, dict):
                                             env = svc_def.get('environment')
                                             if isinstance(env, dict):
-                                                for k in env.keys():
+                                                for k in env:
                                                     add_var(str(k), f"Found in {f} ({svc_name} environment block)")
                                             elif isinstance(env, list):
                                                 for item in env:
@@ -449,7 +449,7 @@ class RepoScanner:
 
     def _detect_env_vars(self) -> list[str]:
         """Legacy wrapper for flat list return."""
-        return sorted(list(self._detect_env_vars_with_context().keys()))
+        return sorted(self._detect_env_vars_with_context().keys())
 
     # -----------------------------------------------------------------------
     # Directory Structure

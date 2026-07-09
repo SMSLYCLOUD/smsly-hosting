@@ -128,7 +128,7 @@ def main():
     # Build the server list: primary + replicas
     primary_server = f'["{db_host}", {db_port}, "primary"]'
     replica_entries = [f'["{rh}", {rp}, "replica"]' for rh, rp in replica_servers]
-    all_servers = [primary_server] + replica_entries
+    all_servers = [primary_server, *replica_entries]
     servers_str = ",\n        ".join(all_servers)
 
     lines = [

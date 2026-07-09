@@ -27,7 +27,7 @@ class Command(BaseCommand):
 
         # Find known active slugs/IDs
         active_service_slugs = set(Service.objects.exclude(status='DELETED').values_list('name', flat=True))
-        active_addon_ids = set(str(a.id) for a in Addon.objects.exclude(status='DELETED'))
+        active_addon_ids = {str(a.id) for a in Addon.objects.exclude(status='DELETED')}
 
         for c in all_containers:
             c_name = c.name.lower()

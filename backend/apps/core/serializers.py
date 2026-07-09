@@ -30,7 +30,7 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
     roles = serializers.SerializerMethodField()
 
     class Meta(UserDetailsSerializer.Meta):
-        fields = UserDetailsSerializer.Meta.fields + ('permissions', 'roles')
+        fields = (*UserDetailsSerializer.Meta.fields, 'permissions', 'roles')
 
     def get_permissions(self, user) -> list[str]:
         return get_user_permissions(user)

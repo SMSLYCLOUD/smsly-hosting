@@ -16,6 +16,8 @@ services:
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+    environment:
+      - DOCKER_API_VERSION=1.40
     command:
       # API & Dashboard
       - "--api.dashboard=true"

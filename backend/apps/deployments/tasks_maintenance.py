@@ -73,18 +73,18 @@ def _is_stale_maintenance_container(
 
 def _clear_orphaned_runtime_resources() -> dict:
     client = docker.from_env()
-    active_service_ids = set(
+    active_service_ids = {
         str(value)
         for value in Service.objects.exclude(status__in=["DELETED", "DELETION_PENDING"]).values_list("id", flat=True)
-    )
-    active_service_names = set(
+    }
+    active_service_names = {
         str(value)
         for value in Service.objects.exclude(status__in=["DELETED", "DELETION_PENDING"]).values_list("name", flat=True)
-    )
-    active_addon_ids = set(
+    }
+    active_addon_ids = {
         str(value)
         for value in Addon.objects.exclude(status="DELETED").values_list("id", flat=True)
-    )
+    }
 
     removed = []
     skipped = []

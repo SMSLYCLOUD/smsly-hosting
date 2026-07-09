@@ -11,7 +11,7 @@ def addon_health_check_all():
     """Run health checks on all active addons."""
     for addon in Addon.objects.filter(status='ACTIVE'):
         service = AddonMaintenanceService(addon)
-        health = service.health_check()
+        service.health_check()
         # Dispatch alerts for unhealthy addons based on metrics
         try:
             stats = service.proxy.get_stats()
