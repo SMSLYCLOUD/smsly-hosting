@@ -9,11 +9,11 @@ Replaces in-memory dictionaries with Redis for production persistence.
 Falls back to in-memory storage if Redis is unavailable.
 """
 
-import json  # noqa: E402
-import logging  # noqa: E402
+import json
+import logging
 
 # pylint: disable=unused-import
-from django.core.cache import cache  # noqa: E402
+from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
 

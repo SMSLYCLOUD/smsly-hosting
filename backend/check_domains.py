@@ -13,7 +13,7 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 # Setup Django
 django.setup()
 
-from apps.domains.models import Domain, DomainStatus  # noqa: E402
+from apps.domains.models import Domain, DomainStatus
 
 print('=== Current Domain Records ===')
 domains = Domain.objects.all().order_by('id')

@@ -59,8 +59,8 @@ for domain in test_domains:
 print("2. Django DNS Verification Function")
 print("-" * 40)
 
-from apps.deployments.models import PlatformConfig  # noqa: E402
-from apps.domains.verification import _expected_targets, verify_custom_domain_dns  # noqa: E402
+from apps.deployments.models import PlatformConfig
+from apps.domains.verification import _expected_targets, verify_custom_domain_dns
 
 try:
     config = PlatformConfig.load()
@@ -97,7 +97,7 @@ print()
 print("3. Domain Model and Task Analysis")
 print("-" * 40)
 
-from apps.domains.models import Domain  # noqa: E402
+from apps.domains.models import Domain
 
 try:
     domains = Domain.objects.all()

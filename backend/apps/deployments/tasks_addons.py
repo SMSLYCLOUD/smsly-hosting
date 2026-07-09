@@ -2,13 +2,13 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-from celery import shared_task  # noqa: E402
-from services.addon_provisioner import addon_provisioner  # noqa: E402
+from celery import shared_task
+from services.addon_provisioner import addon_provisioner
 
-from apps.deployments.models import (  # noqa: E402
+from apps.deployments.models import (
     EnvironmentVariable,
 )
-from apps.deployments.models_addons import Addon, Backup  # noqa: E402
+from apps.deployments.models_addons import Addon, Backup
 
 
 @shared_task(bind=True, max_retries=3)
@@ -117,9 +117,10 @@ def backup_addon_task(self, addon_id: str):
 
         # Attempt to upload to cloud storage if a schedule exists
         try:
+            import os
+
             from apps.deployments.models_backup import BackupSchedule
             from apps.deployments.services.backup_service import upload_backup_to_s3
-            import os
 
             sched = BackupSchedule.objects.filter(
                 service_id=addon.service_id, enabled=True, storage_backend='s3'

@@ -84,8 +84,9 @@ def user_can_read(user, service_or_project) -> bool:
 
 def user_is_owner_or_team_member(user, service_or_project) -> bool:
     """Legacy check — any team membership (binary)."""
-    from .models import TeamMember
     from django.utils import timezone
+
+    from .models import TeamMember
     team = _resolve_team(service_or_project)
     if not team:
         return False
@@ -103,8 +104,9 @@ def get_team_q_filter(user, prefix: str = "", request=None, team_id=None) -> Q:
     belonging to a project whose team includes *user* (any role).
     Superusers see all resources (no filtering).
     """
-    from .models import TeamMember
     from django.utils import timezone
+
+    from .models import TeamMember
 
     if team_id is None and request is not None:
         team_id = (

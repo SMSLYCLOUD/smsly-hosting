@@ -18,7 +18,8 @@ logger = logging.getLogger(__name__)
 k8s_config = None
 k8s_client = None
 try:
-    from kubernetes import config as _k8s_config, client as _k8s_client
+    from kubernetes import client as _k8s_client
+    from kubernetes import config as _k8s_config
     k8s_config = _k8s_config
     k8s_client = _k8s_client
 except ImportError:

@@ -38,7 +38,6 @@ from apps.deployments.utils import (
     estimate_resources_from_deps,
     extract_dockerfile_arg_names,
     get_default_env_value,
-    get_github_oauth_token_for_user,
     is_deployment_local,
     log_exhaustive_addon_provisioning_diagnostics,
     log_exhaustive_build_diagnostics,
@@ -1311,7 +1310,8 @@ class PipelineManager:
             auto-detection).
         """
         from services.grid_addons_parser import (
-            find_grid_addons_file, load_grid_addons,
+            find_grid_addons_file,
+            load_grid_addons,
         )
 
         if not find_grid_addons_file(self.source_dir):
@@ -1340,8 +1340,9 @@ class PipelineManager:
 
         # ── Phase 1: Provision standard addons ──
         from services.addon_provisioner import addon_provisioner
-        from apps.deployments.models_addons import Addon
+
         from apps.deployments.models import EnvironmentVariable
+        from apps.deployments.models_addons import Addon
 
         addon_urls: dict[str, str] = {}
         failed_addons: list[str] = []
@@ -1434,9 +1435,11 @@ class PipelineManager:
 
         # ── Phase 2: Provision custom bundles ──
         if manifest.bundles:
-            from services.bundle_provisioner import bundle_provisioner
-            from apps.deployments.models_bundles import Bundle, BundleComponent
             import hashlib
+
+            from services.bundle_provisioner import bundle_provisioner
+
+            from apps.deployments.models_bundles import Bundle, BundleComponent
 
             with open(os.path.join(self.source_dir, 'grid.addons'), 'rb') as fh:
                 grid_addons_hash = hashlib.sha256(fh.read()).hexdigest()[:16]
@@ -2051,12 +2054,10 @@ class PipelineManager:
 
             # Dockerfile detection
             dockerfile_path = self._find_dockerfile(context_dir)
-            
+
             if self.service.buildpack == 'DOCKER':
                 use_docker = True
-            elif self.service.buildpack == 'NIXPACKS':
-                use_docker = False
-            elif self.service.buildpack == 'STATIC':
+            elif self.service.buildpack == 'NIXPACKS' or self.service.buildpack == 'STATIC':
                 use_docker = False
             else:
                 # AUTO or other
@@ -2148,7 +2149,7 @@ class PipelineManager:
             middlewares = f"{router}-redirect"
             if enable_crowdsec_waf:
                 middlewares += ",crowdsec-bouncer"
-                
+
             labels.update(
                 {
                     f"traefik.http.routers.{router}-http.rule": host_rule,
@@ -2182,7 +2183,7 @@ class PipelineManager:
                 labels[f"traefik.http.routers.{router}.middlewares"] = f"{current_middlewares},{middleware_name}"
             else:
                 labels[f"traefik.http.routers.{router}.middlewares"] = middleware_name
-                
+
             labels.update(
                 {
                     f"traefik.http.middlewares.{middleware_name}.headers.customrequestheaders.X-Forwarded-Proto": "https",
@@ -2234,7 +2235,7 @@ class PipelineManager:
                             ]
                             if compose_runtime and compose_runtime != "runc":
                                 override_payload["services"][svc_name]["runtime"] = compose_runtime
-            except Exception as e:
+            except Exception:
                 # Fallback to just securing the main service if parsing fails
                 details = {"security_opt": [
                     "no-new-privileges:true",
@@ -3402,7 +3403,7 @@ class PipelineManager:
                     update_stage(self.deployment, 'Push', 'blocked')
                     raise SystemError(
                         "Deployment BLOCKED: Trivy scan found vulnerabilities exceeding "
-                        f"the configured severity threshold. Check the vulnerability report."
+                        "the configured severity threshold. Check the vulnerability report."
                     )
             else:
                 if push_error:

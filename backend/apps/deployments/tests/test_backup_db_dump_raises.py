@@ -7,7 +7,7 @@ Tests for DB dump / addon backup failure propagation.
 returning ``None``.  This prevents service backup from silently
 producing incomplete archives.
 """
-from unittest.mock import MagicMock, PropertyMock, patch
+from unittest.mock import MagicMock, patch
 
 from django.test import TestCase
 
@@ -71,8 +71,8 @@ class BackupAddonFailureTest(TestCase):
 
     def _run_addon_test(self, addon_type, env_vars):
         """Helper to run a single addon failure scenario."""
-        from apps.deployments.services.backup_service import backup_addon
         from apps.deployments.models_addons import Addon
+        from apps.deployments.services.backup_service import backup_addon
 
         with patch("docker.from_env") as mock_docker_from_env, \
              patch.object(Addon.objects, 'get') as mock_addon_get:

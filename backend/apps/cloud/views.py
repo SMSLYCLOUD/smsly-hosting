@@ -771,8 +771,8 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         All services created are scoped to the plan's project for
         isolation, permissions, and resource tracking.
         """
-        from apps.deployments.models_ecosystem import EcosystemPlan
         from apps.deployments.models_core import Project
+        from apps.deployments.models_ecosystem import EcosystemPlan
         from apps.deployments.tasks_ecosystem import ecosystem_deploy_task
 
         plan_id = request.data.get('plan_id')

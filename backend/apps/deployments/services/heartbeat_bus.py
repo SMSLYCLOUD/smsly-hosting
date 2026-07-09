@@ -69,9 +69,10 @@ def _get_redis():
         return None
     try:
         import redis
+
         # Try Sentinel first — when SENTINEL_HOSTS is set, route through
         # Sentinel for automatic master failover.
-        from config.redis_sentinel import get_master_connection, SENTINEL_ENABLED
+        from config.redis_sentinel import SENTINEL_ENABLED, get_master_connection
         if SENTINEL_ENABLED:
             conn = get_master_connection(
                 password=getattr(settings, 'REDIS_PASSWORD', None),

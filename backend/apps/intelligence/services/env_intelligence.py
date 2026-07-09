@@ -256,7 +256,7 @@ class EnvironmentIntelligenceService:
         (reading actual .env.example files) instead of the AI Senate.
         This eliminates hallucinated env vars.
         """
-        from apps.deployments.models import EnvironmentVariable  # type: ignore[attr-defined]  # noqa: F401
+        from apps.deployments.models import EnvironmentVariable  # type: ignore[attr-defined]
 
         # Prefer manifest-backed resolution when source files are available
         if source_dir:

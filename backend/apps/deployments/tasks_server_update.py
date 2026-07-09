@@ -3,20 +3,20 @@ import logging
 logger = logging.getLogger(__name__)
 REMOTE_UPDATE_LOG_LIMIT = 300_000
 
-import logging  # noqa: E402
-import os  # noqa: E402
-import re  # noqa: E402
-import shlex  # noqa: E402
+import logging
+import os
+import re
+import shlex
 
-from celery import shared_task  # noqa: E402
-from django.core.cache import cache  # noqa: E402
-from django.utils import timezone  # noqa: E402
+from celery import shared_task
+from django.core.cache import cache
+from django.utils import timezone
 
-from apps.deployments.models import (  # noqa: E402
+from apps.deployments.models import (
     PlatformConfig,
 )
 
-from .tasks_utils import _env_bool  # noqa: E402
+from .tasks_utils import _env_bool
 
 
 @shared_task(name="apps.deployments.tasks.update_remote_server_task")

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 import asyncio
-import aiohttp
-import time
 import os
+import time
+
+import aiohttp
 
 API_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 

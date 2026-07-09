@@ -9,7 +9,7 @@ Each template defines the exact Docker image, ports, environment variables,
 and health checks needed for deployment.
 """
 
-from dataclasses import dataclass, field  # noqa: E402
+from dataclasses import dataclass, field
 
 
 @dataclass

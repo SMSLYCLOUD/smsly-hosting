@@ -1,11 +1,11 @@
 import os
 import shutil
-import tempfile
 import sys
+import tempfile
 import unittest
-import docker
-import requests
 from unittest.mock import MagicMock, patch
+
+import docker
 
 # Ensure backend path is in sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../backend')))
@@ -14,13 +14,14 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../.
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 import django
 from django.conf import settings
+
 if not settings.configured:
     django.setup()
 
-from apps.deployments.services.git_manager import GitManager
-from apps.deployments.utils import extract_dockerfile_arg_names, get_default_env_value
 from apps.cloud.adapters.local import LocalAdapter
-from apps.cloud.services.builder import NixpacksBuilder
+from apps.deployments.services.git_manager import GitManager
+from apps.deployments.utils import extract_dockerfile_arg_names
+
 
 class TestDeploymentPipeline(unittest.TestCase):
     def setUp(self):

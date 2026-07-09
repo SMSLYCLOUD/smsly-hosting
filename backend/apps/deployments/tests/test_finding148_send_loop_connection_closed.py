@@ -45,7 +45,7 @@ class Finding148SendLoopConnectionClosedTests(TestCase):
                 consumer.is_disconnected = True
                 try:
                     await asyncio.wait_for(task, timeout=2.0)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     task.cancel()
             return close_mock
 
@@ -79,7 +79,7 @@ class Finding148SendLoopConnectionClosedTests(TestCase):
                 task = asyncio.create_task(consumer._send_loop())
                 try:
                     await asyncio.wait_for(task, timeout=6.0)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     task.cancel()
             return close_mock
 

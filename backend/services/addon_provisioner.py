@@ -10,19 +10,19 @@ using Docker directly, without external PaaS dependencies.
 
 Uses the same Docker network as deployed services for internal connectivity.
 """
-import base64  # noqa: E402
-import contextlib  # noqa: E402
-import logging  # noqa: E402
-import os  # noqa: E402
-import secrets  # noqa: E402
-import shlex  # noqa: E402
-import subprocess  # noqa: E402
-import time  # noqa: E402
-import uuid  # noqa: E402
-from typing import cast  # noqa: E402
-from urllib.parse import urlparse  # noqa: E402
+import base64
+import contextlib
+import logging
+import os
+import secrets
+import shlex
+import subprocess
+import time
+import uuid
+from typing import cast
+from urllib.parse import urlparse
 
-from decouple import config  # noqa: E402
+from decouple import config
 
 logger = logging.getLogger(__name__)
 

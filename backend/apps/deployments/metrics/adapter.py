@@ -2,7 +2,7 @@
 import logging
 import re
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import requests
@@ -264,7 +264,7 @@ class MetricsAdapter:
         mem_percent = (mem_usage / mem_limit * 100.0) if mem_limit > 0 else 0.0
         rx_kb = float(stats.get('network_rx_bytes') or 0.0) / 1024
         tx_kb = float(stats.get('network_tx_bytes') or 0.0) / 1024
-        now = datetime.now(tz=timezone.utc).isoformat()
+        now = datetime.now(tz=UTC).isoformat()
 
         return {
             'cpu': [{'timestamp': now, 'value': round(cpu_percent, 2)}],
@@ -329,7 +329,7 @@ class MetricsAdapter:
                 {
                     'timestamp': datetime.fromtimestamp(
                         int(float(v[0])),
-                        tz=timezone.utc,
+                        tz=UTC,
                     ).isoformat(),
                     'value': round(float(v[1]), 2),
                 }

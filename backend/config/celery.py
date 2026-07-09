@@ -51,26 +51,26 @@ def register_extra_tasks(sender, **kwargs):  # pylint: disable=unused-argument
     # Importing the module is enough — the @shared_task decorator
     # registers the task with the worker on import.
     # pylint: disable=import-outside-toplevel
-    import apps.deployments.tasks_templates           # noqa: F401
-    import apps.deployments.tasks_ecosystem           # noqa: F401
-    import apps.deployments.tasks_safedeploy          # noqa: F401
-    import apps.deployments.tasks_replication          # noqa: F401
-    import apps.deployments.tasks_election             # noqa: F401
-    import apps.deployments.tasks_metrics              # noqa: F401
-    import apps.deployments.tasks_cron                 # noqa: F401
-    import apps.deployments.tasks_ai_router            # noqa: F401
-    import apps.deployments.services.autoscaler        # noqa: F401
-    import apps.deployments.services.health_monitor    # noqa: F401
-    import apps.deployments.services.provisioner       # noqa: F401
-    import apps.deployments.services.auto_rollback     # noqa: F401
-    import apps.deployments.tasks_platform_update      # noqa: F401
-    import apps.deployments.tasks_backup               # noqa: F401
-    import apps.deployments.tasks_maintenance          # noqa: F401
-    import apps.deployments.tasks_code_intelligence    # noqa: F401
-    import apps.deployments.tasks_health               # noqa: F401
-    import apps.deployments.tasks_alerts               # noqa: F401
-    import apps.deployments.tasks_traffic             # noqa: F401
-    import apps.intelligence.jules_fix.jules_fix      # noqa: F401
+    import apps.deployments.services.auto_rollback
+    import apps.deployments.services.autoscaler
+    import apps.deployments.services.health_monitor
+    import apps.deployments.services.provisioner
+    import apps.deployments.tasks_ai_router
+    import apps.deployments.tasks_alerts
+    import apps.deployments.tasks_backup
+    import apps.deployments.tasks_code_intelligence
+    import apps.deployments.tasks_cron
+    import apps.deployments.tasks_ecosystem
+    import apps.deployments.tasks_election
+    import apps.deployments.tasks_health
+    import apps.deployments.tasks_maintenance
+    import apps.deployments.tasks_metrics
+    import apps.deployments.tasks_platform_update
+    import apps.deployments.tasks_replication
+    import apps.deployments.tasks_safedeploy
+    import apps.deployments.tasks_templates
+    import apps.deployments.tasks_traffic
+    import apps.intelligence.jules_fix.jules_fix  # noqa: F401
 
 # =============================================================================
 # Beat Schedule — Periodic tasks for metrics, health, autoscaling, cleanup
@@ -321,7 +321,7 @@ def debug_task(self):
     print(f'Request: {self.request!r}')
 
 # Prevent Celery database connection leaks (especially for PgCat)
-from django.db import close_old_connections  # noqa: E402
+from django.db import close_old_connections
 
 
 @signals.task_prerun.connect

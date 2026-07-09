@@ -2,20 +2,20 @@ import logging
 import threading
 
 logger = logging.getLogger(__name__)
-import os  # noqa: E402
+import os
 
-from celery import shared_task  # noqa: E402
+from celery import shared_task
 
 # Serializes backup/restore tasks that carry a per-request encryption key.
 # Without this lock, two concurrent Celery workers can clobber each other's
 # BACKUP_ENCRYPTION_KEY in os.environ (process-wide).  Tasks that use the
 # default key from the environment do NOT acquire the lock.
 _backup_key_lock = threading.Lock()
-from django.utils import timezone  # noqa: E402
+from django.utils import timezone
 
-from apps.deployments.models_backup import BackupSchedule  # noqa: E402
-from apps.deployments.services.backup_service import BackupService  # noqa: E402
-from apps.deployments.utils import log_event  # noqa: E402
+from apps.deployments.models_backup import BackupSchedule
+from apps.deployments.services.backup_service import BackupService
+from apps.deployments.utils import log_event
 
 
 @shared_task(bind=True, soft_time_limit=3600, time_limit=3900, max_retries=3, default_retry_delay=300)
@@ -85,11 +85,10 @@ def verify_backup_integrity_task(self, backup_ids: list | None = None, sample_si
     Emits an ``AuditLog`` entry per verification run with pass/fail counts.
     """
     import hashlib as _hashlib
-    import random as _random
     import tarfile as _tarfile
 
-    from apps.deployments.models_backup import ServerBackup, ServiceBackup
     from apps.deployments.models_audit import AuditLog
+    from apps.deployments.models_backup import ServerBackup, ServiceBackup
 
     candidates = []
     if backup_ids:
@@ -381,7 +380,7 @@ def cleanup_old_backups_task():
         except Exception as exc:
             logger.warning("Backup cleanup failed for schedule %s: %s", sched.id, exc)
 
-    from .models_backup import SnapshotSchedule, ServiceSnapshot
+    from .models_backup import ServiceSnapshot, SnapshotSchedule
     snapshot_schedules = SnapshotSchedule.objects.filter(enabled=True)
     for sched in snapshot_schedules:
         try:
@@ -466,6 +465,7 @@ def run_scheduled_backups_task():
 def run_scheduled_snapshots_task():
     """Execute all due SnapshotSchedule entries."""
     import croniter  # type: ignore[import-untyped]
+
     from .models_backup import SnapshotSchedule
 
     now = timezone.now()
@@ -499,6 +499,7 @@ def run_scheduled_snapshots_task():
 @shared_task(bind=True, soft_time_limit=300, max_retries=2, default_retry_delay=60)
 def create_snapshot_task(self, service_id: str, trigger: str = 'MANUAL', label: str = '', created_by_id: str | None = None):
     from django.contrib.auth import get_user_model
+
     from apps.deployments.services.snapshot_service import SnapshotService
 
     User = get_user_model()

@@ -1,9 +1,9 @@
-import unittest
 import os
 import shutil
-import tempfile
 import subprocess
-from unittest.mock import patch, MagicMock
+import tempfile
+import unittest
+
 
 class TestInstallScript(unittest.TestCase):
     def setUp(self):

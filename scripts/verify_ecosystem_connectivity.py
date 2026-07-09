@@ -7,8 +7,9 @@ Checks health, API, and worker heartbeats for all managed nodes.
 import os
 import sys
 import time
-import requests
 from datetime import datetime
+
+import requests
 
 # Setup Django environment
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'backend'))
@@ -21,9 +22,9 @@ except Exception as e:
     print(f"Error setting up Django: {e}")
     sys.exit(1)
 
-from apps.deployments.models import ManagedServer, Deployment
+from apps.deployments.models import Deployment, ManagedServer
 from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
-from django.utils import timezone
+
 
 def color(text, code):
     return f"\033[{code}m{text}\033[0m"

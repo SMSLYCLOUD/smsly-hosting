@@ -1,5 +1,7 @@
 import os
+
 import requests
+
 
 def download_fallback(path, icon_slug=None):
     # Try simpleicons

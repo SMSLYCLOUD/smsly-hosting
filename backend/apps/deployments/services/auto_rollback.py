@@ -30,7 +30,6 @@ Reserved for future use: ``AI_HEALTH_CHECK_FAIL``, ``AI_OOM_KILLED``,
 """
 import logging
 from datetime import timedelta
-from typing import Optional
 
 from celery import shared_task
 from django.conf import settings
@@ -84,7 +83,7 @@ class AutoRollbackResult:
 
     __slots__ = ('fired', 'reason', 'rollback_id')
 
-    def __init__(self, fired: bool, reason: str, rollback_id: Optional[str] = None):
+    def __init__(self, fired: bool, reason: str, rollback_id: str | None = None):
         self.fired = fired
         self.reason = reason
         self.rollback_id = rollback_id

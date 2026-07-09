@@ -28,7 +28,6 @@ from apps.deployments.models_backup import BackupEncryptionKey
 from apps.deployments.services.backup_service import (
     _CHUNKED_BACKUP_FINGERPRINT_BYTES,
     _CHUNKED_BACKUP_KEY_ID_BYTES,
-    _CHUNKED_BACKUP_V2_MAGIC,
     _CHUNKED_BACKUP_V3_MAGIC,
     BackupKeyCollisionError,
     BackupService,

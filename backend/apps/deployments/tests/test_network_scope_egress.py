@@ -23,7 +23,6 @@ After the fix:
     intent is "allow anywhere" — there is nothing to restrict).
 """
 
-import subprocess
 from unittest.mock import MagicMock, patch
 
 from django.test import SimpleTestCase

@@ -8,29 +8,26 @@ from .views import (
     BackupScheduleViewSet,
     DeploymentViewSet,
     DomainConfigView,
+    PlatformConfigViewSet,
     PlatformResourcesView,
+    RegistryCredentialViewSet,
     RemoteTriggerView,
     RouteRecheckView,
+    SecurityStatusView,
     ServerBackupViewSet,
     ServiceBackupViewSet,
     ServiceSnapshotViewSet,
-    SnapshotScheduleViewSet,
     ServiceViewSet,
     SessionTokenView,
+    SnapshotScheduleViewSet,
     SystemConfigView,
-    SecurityStatusView,
-    RegistryCredentialViewSet,
-    PlatformConfigViewSet,
 )
-from .views_registry_scope import ScopedRegistryViewSet
-from .views_network_scope import ScopedNetworkViewSet
-from .views_registry_auth import registry_token
 from .views_addons import AddonViewSet, service_addons_unified
-from .views_bundles import BundleViewSet
 from .views_analysis import RepoAnalysisView
 from .views_autoscale import ScalingViewSet
 from .views_bitbucket import bitbucket_branches, bitbucket_commits, bitbucket_repos
 from .views_blueprints import BlueprintViewSet
+from .views_bundles import BundleViewSet
 from .views_chat import AIChatView
 from .views_cloud_storage import CloudStorageViewSet
 from .views_cron import CronJobViewSet
@@ -54,10 +51,13 @@ from .views_integrations import (
 )
 from .views_mesh import MeshNetworkViewSet
 from .views_metrics import MetricsViewSet
+from .views_network_scope import ScopedNetworkViewSet
 from .views_node_exchange import node_token_exchange, node_token_exchange_via_gateway
 from .views_oauth import oauth_credentials, oauth_providers_status
 from .views_project import ProjectViewSet
 from .views_recovery import recovery_phrase_generate, recovery_phrase_verify
+from .views_registry_auth import registry_token
+from .views_registry_scope import ScopedRegistryViewSet
 from .views_replication import ReplicationViewSet
 from .views_safedeploy import DeploymentApprovalViewSet, PreviewEnvironmentViewSet
 from .views_servers import ManagedServerViewSet

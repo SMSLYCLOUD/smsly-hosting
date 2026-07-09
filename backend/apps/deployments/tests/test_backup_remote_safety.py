@@ -9,14 +9,12 @@ Changes:
 3. Image save/load failures and volume backup failures now **raise**
    instead of logging a warning and continuing.
 """
-import os
 from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
 from apps.deployments.models import Project, Service
-from apps.deployments.models_backup import ServerBackup
 from apps.deployments.models_core import ManagedServer
 from apps.deployments.models_storage import Volume
 from apps.deployments.services.backup_service import BackupService

@@ -2,8 +2,7 @@
 import ipaddress
 import logging
 import socket
-from datetime import datetime
-from datetime import timezone as dt_timezone
+from datetime import UTC, datetime
 
 from apps.deployments.models import PlatformConfig
 from apps.domains.models import Domain, DomainStatus
@@ -87,7 +86,7 @@ class SSLMonitorService:
                 cert = s.getpeercert()
 
             not_after = datetime.strptime(cert['notAfter'], '%b %d %H:%M:%S %Y %Z')
-            expires_at = not_after.replace(tzinfo=dt_timezone.utc)
+            expires_at = not_after.replace(tzinfo=UTC)
 
             days_left = (expires_at - timezone.now()).days
 
@@ -122,7 +121,7 @@ class SSLMonitorService:
                 cert = s.getpeercert()
 
             not_after = datetime.strptime(cert['notAfter'], '%b %d %H:%M:%S %Y %Z')
-            expires_at = not_after.replace(tzinfo=dt_timezone.utc)
+            expires_at = not_after.replace(tzinfo=UTC)
 
             domain_obj.expires_at = expires_at
             domain_obj.status = DomainStatus.ACTIVE

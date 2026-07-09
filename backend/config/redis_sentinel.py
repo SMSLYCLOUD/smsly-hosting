@@ -13,7 +13,7 @@ Falls back to standalone Redis when SENTINEL_HOSTS is not set.
 import logging
 import os
 import threading
-from urllib.parse import urlparse, urlunparse, quote
+from urllib.parse import urlparse, urlunparse
 
 logger = logging.getLogger(__name__)
 

@@ -3,7 +3,6 @@ import logging
 import os
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Optional
 
 from apps.intelligence.providers import ask_with_fallback
 
@@ -149,7 +148,7 @@ def analyze_codebase_chunked(repos_data: list[dict], deploy_plan: dict, github_t
         chunk_size = 30
         file_chunks = [all_files_content[i:i + chunk_size] for i in range(0, len(all_files_content), chunk_size)]
 
-        chunk_summaries: list[Optional[str]] = [None] * len(file_chunks)
+        chunk_summaries: list[str | None] = [None] * len(file_chunks)
 
         def _analyze_chunk(idx: int, chunk: list, provider: str | None = None):
             """Analyze a single code chunk."""

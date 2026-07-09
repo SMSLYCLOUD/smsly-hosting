@@ -132,7 +132,6 @@ class ScopedNetwork(models.Model):
         if direct:
             return direct
 
-        from apps.organizations.models import Organization
         from apps.teams.models import Team
 
         from .models_core import Project

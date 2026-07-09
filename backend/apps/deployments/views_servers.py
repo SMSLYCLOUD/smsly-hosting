@@ -207,7 +207,7 @@ def _detect_reachable_api_url(server) -> tuple[str | None, Any | None]:
                 )
                 if fingerprint:
                     _check_pin_after_handshake(response, fingerprint)
-                
+
                 # Consume and close so connection returns to pool
                 _ = response.content
                 response.close()
@@ -2039,6 +2039,7 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
         """
         server = self.get_object()
         from django.db.models import Q
+
         from apps.deployments.models_audit import AuditLog
         from apps.deployments.models_backup import ServiceBackup
         from apps.deployments.models_core import Deployment, Service
@@ -2140,7 +2141,7 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
                 'severity': 'critical' if t.status == 'FAILED' else 'warning',
                 'timestamp': t.created_at.isoformat() if t.created_at else '',
                 'title': f"Server transfer {t.status.lower()}",
-                'detail': t.error_message or f'Source → Target',
+                'detail': t.error_message or 'Source → Target',
                 'transfer_id': str(t.id),
                 'status': t.status,
             })

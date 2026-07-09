@@ -50,7 +50,6 @@ class Command(BaseCommand):
             sys.exit(1)
 
     def _run_diagnostics(self, verbose: bool, insecure: bool = False) -> dict:
-        from urllib.parse import urlparse
 
         registry = os.environ.get("CONTAINER_REGISTRY_URL", "").strip()
         if not registry:
@@ -102,8 +101,8 @@ class Command(BaseCommand):
         for proto in (["https", "http"] if not use_tls else ["http", "https"]):
             url = f"{proto}://{hostname}:{port}/v2/"
             try:
-                import urllib.request
                 import ssl
+                import urllib.request
 
                 ctx = ssl.create_default_context()
                 if insecure:

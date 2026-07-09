@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
+from apps.permissions.utils import get_user_permissions
 from dj_rest_auth.serializers import UserDetailsSerializer
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
-
-from apps.permissions.utils import get_user_permissions
 
 User = get_user_model()
 

@@ -10,7 +10,9 @@ from rest_framework import authentication, permissions
 from rest_framework.generics import GenericAPIView
 from rest_framework.response import Response
 
-from .models import PlatformConfig  # type: ignore[attr-defined]    # re-exported via models.py; mypy can't see through the empty hub module.
+from .models import (
+    PlatformConfig,  # type: ignore[attr-defined]    # re-exported via models.py; mypy can't see through the empty hub module.
+)
 
 
 class RouteStatusView(GenericAPIView):

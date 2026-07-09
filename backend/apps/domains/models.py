@@ -1,5 +1,5 @@
 """Models module."""
-from apps.deployments.models import Service  # type: ignore[attr-defined]  # noqa: F401
+from apps.deployments.models import Service  # type: ignore[attr-defined]
 from django.db import models
 
 

@@ -12,8 +12,8 @@ from django.core.management.base import BaseCommand
 from ...services.infisical import (
     get_infisical_client,
     get_or_create_workspace,
-    push_platform_config_to_infisical,
     pull_platform_config_from_infisical,
+    push_platform_config_to_infisical,
 )
 
 

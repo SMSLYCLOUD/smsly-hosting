@@ -4,7 +4,7 @@ import logging
 import re
 import urllib.parse
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import requests
 from decouple import config
@@ -64,7 +64,7 @@ def _loki_time_to_ns(value: str) -> str:
             'h': timedelta(hours=amount),
             'd': timedelta(days=amount),
         }[unit]
-        ts_dt = datetime.now(timezone.utc) - delta
+        ts_dt = datetime.now(UTC) - delta
         return str(int(ts_dt.timestamp() * 1_000_000_000))
     try:
         ts = float(value)
@@ -164,8 +164,8 @@ def _parse_prometheus_time(raw: str | None) -> str | None:
         ts = float(raw)
     except (TypeError, ValueError):
         return None
-    now = datetime.now(timezone.utc).timestamp()
-    lower = (datetime.now(timezone.utc) - MAX_PROMETHEUS_TIME_RANGE).timestamp()
+    now = datetime.now(UTC).timestamp()
+    lower = (datetime.now(UTC) - MAX_PROMETHEUS_TIME_RANGE).timestamp()
     if ts < lower or ts > now:
         return None
     return raw
@@ -206,7 +206,7 @@ def grafana_embed_url(request, dashboard_uid: str):
             )
         resp.raise_for_status()
         dashboard = resp.json().get('dashboard', {})
-    except requests.RequestException as exc:
+    except requests.RequestException:
         logger.exception("Grafana dashboard lookup failed for %s", dashboard_uid)
         return Response(
             {'error': 'Grafana is unreachable.'},
@@ -249,8 +249,8 @@ def _resolve_service_var(var_service: str, user=None) -> str:
     user owns or has team access to.  A non-owned service returns an empty
     string so Grafana cannot leak another tenant's metrics.
     """
-    from django.db.models import Q
     from apps.deployments.models import Service
+    from django.db.models import Q
     try:
         uuid.UUID(var_service)
         qs = Service.objects.filter(id=var_service)
@@ -293,7 +293,7 @@ def loki_query(request):
         )
     try:
         query = _scope_query_to_tenant(query, service_names)
-    except ValueError as exc:
+    except ValueError:
         logger.exception("Tenant query scoping failed")
         return Response({'error': 'An observability query failed.'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -347,7 +347,7 @@ def loki_query(request):
         )
         resp.raise_for_status()
         data = resp.json()
-    except requests.RequestException as exc:
+    except requests.RequestException:
         logger.exception("Loki query failed")
         return Response(
             {'error': 'Loki is unreachable.'},
@@ -398,7 +398,7 @@ def loki_label_values(request, label: str):
         )
         resp.raise_for_status()
         data = resp.json()
-    except requests.RequestException as exc:
+    except requests.RequestException:
         logger.exception("Loki label-values lookup failed")
         return Response(
             {'error': 'Loki is unreachable.'},
@@ -433,7 +433,7 @@ def prometheus_query(request):
         )
     try:
         query = _scope_query_to_tenant(query, service_names)
-    except ValueError as exc:
+    except ValueError:
         logger.exception("Tenant query scoping failed for Prometheus")
         return Response({'error': 'An observability query failed.'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -459,7 +459,7 @@ def prometheus_query(request):
         )
         resp.raise_for_status()
         data = resp.json()
-    except requests.RequestException as exc:
+    except requests.RequestException:
         logger.exception("Prometheus query failed")
         return Response(
             {'error': 'Prometheus is unreachable.'},

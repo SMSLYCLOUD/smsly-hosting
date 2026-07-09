@@ -111,7 +111,7 @@ class IsOrgAdmin(permissions.BasePermission):
     def has_object_permission(self, request, view, obj):
         if not request.user or not request.user.is_authenticated:
             return False
-        from apps.organizations.permissions import is_admin, get_org_from_resource
+        from apps.organizations.permissions import get_org_from_resource, is_admin
         org = get_org_from_resource(obj)
         if not org:
             return False
@@ -127,7 +127,7 @@ class IsOrgOwner(permissions.BasePermission):
     def has_object_permission(self, request, view, obj):
         if not request.user or not request.user.is_authenticated:
             return False
-        from apps.organizations.permissions import is_owner, get_org_from_resource
+        from apps.organizations.permissions import get_org_from_resource, is_owner
         org = get_org_from_resource(obj)
         if not org:
             return False

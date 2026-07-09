@@ -1,5 +1,7 @@
 import logging
+
 from django.core.management.base import BaseCommand
+
 from apps.mcp.server import mcp_server
 
 logger = logging.getLogger(__name__)

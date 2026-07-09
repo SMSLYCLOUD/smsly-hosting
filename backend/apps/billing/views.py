@@ -278,7 +278,7 @@ class CheckoutView(GenericAPIView):
                 return Response({"url": link})
 
             raise ValueError("Unknown provider.")
-        except Exception as e: # pylint: disable=broad-exception-caught
+        except Exception: # pylint: disable=broad-exception-caught
             logger.exception("Checkout session creation failed")
             return Response({"error": "A billing error occurred. Please try again or contact support."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -299,7 +299,7 @@ class PortalSessionView(GenericAPIView):
         try:
             url = StripeService.create_portal_session(user=request.user, return_url=return_url)
             return Response({"url": url})
-        except Exception as e: # pylint: disable=broad-exception-caught
+        except Exception: # pylint: disable=broad-exception-caught
             logger.exception("Portal session creation failed")
             return Response({"error": "A billing error occurred. Please try again or contact support."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -317,7 +317,7 @@ class InvoicesView(GenericAPIView):
         try:
             invoices = StripeService.list_invoices(user=request.user, limit=10)
             return Response({"invoices": invoices})
-        except Exception as e: # pylint: disable=broad-exception-caught
+        except Exception: # pylint: disable=broad-exception-caught
             logger.exception("Invoice listing failed")
             return Response({"error": "A billing error occurred. Please try again or contact support."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -362,7 +362,7 @@ class StripeWebhookView(GenericAPIView):
                 # pylint: disable=protected-access
                 StripeService._configure_stripe()
                 event = stripe.Webhook.construct_event(payload, sig_header, secret)
-            except Exception as e: # pylint: disable=broad-exception-caught
+            except Exception: # pylint: disable=broad-exception-caught
                 logger.exception("Stripe webhook verification failed")
                 return Response({"error": "A billing error occurred. Please try again or contact support."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -459,13 +459,13 @@ class FlutterwaveWebhookView(GenericAPIView):
                     {"error": "Invalid signature"},
                     status=status.HTTP_401_UNAUTHORIZED
                 )
-        except Exception as e: # pylint: disable=broad-exception-caught
+        except Exception: # pylint: disable=broad-exception-caught
             logger.exception("Flutterwave webhook signature verification failed")
             return Response({"error": "A billing error occurred. Please try again or contact support."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             event = FlutterwaveService.parse_webhook(raw)
-        except Exception as e: # pylint: disable=broad-exception-caught
+        except Exception: # pylint: disable=broad-exception-caught
             logger.exception("Flutterwave webhook parsing failed")
             return Response({"error": "A billing error occurred. Please try again or contact support."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -534,7 +534,7 @@ class CryptomusWebhookView(GenericAPIView):
                     {"error": "Invalid signature"},
                     status=status.HTTP_401_UNAUTHORIZED
                 )
-        except Exception as e: # pylint: disable=broad-exception-caught
+        except Exception: # pylint: disable=broad-exception-caught
             logger.exception("Cryptomus webhook verification failed")
             return Response({"error": "A billing error occurred. Please try again or contact support."}, status=status.HTTP_400_BAD_REQUEST)
 

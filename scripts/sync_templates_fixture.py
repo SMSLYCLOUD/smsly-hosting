@@ -1,10 +1,11 @@
+import json
 import os
 import sys
-import json
 from dataclasses import asdict
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'backend'))
 from services.app_templates import APP_TEMPLATES
+
 
 def main():
     fixture_path = os.path.join(os.path.dirname(__file__), '..', 'backend', 'apps', 'deployments', 'fixtures', 'templates.json')

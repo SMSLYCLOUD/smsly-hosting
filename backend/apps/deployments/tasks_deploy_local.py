@@ -42,27 +42,27 @@ _SERVICE_REDIS_DB = {
     'smsly-marketer':   4,
 }
 
-import logging  # noqa: E402
-import os  # noqa: E402
-import re  # noqa: E402
-import secrets  # noqa: E402
-import time  # noqa: E402
-from typing import Any  # noqa: E402
-from urllib.parse import urlparse  # noqa: E402
+import logging
+import os
+import re
+import secrets
+import time
+from typing import Any
+from urllib.parse import urlparse
 
-import docker  # noqa: E402
-import requests  # noqa: E402
+import docker
+import requests
 
-from apps.deployments.models import (  # noqa: E402
+from apps.deployments.models import (
     Service,
 )
-from apps.deployments.models_addons import Addon  # noqa: E402
-from apps.deployments.services.tls_verify import should_verify  # noqa: E402
-from apps.deployments.utils import (  # noqa: E402
+from apps.deployments.models_addons import Addon
+from apps.deployments.services.tls_verify import should_verify
+from apps.deployments.utils import (
     append_log,
 )
 
-from .tasks_utils import _env_bool, _env_int  # noqa: E402
+from .tasks_utils import _env_bool, _env_int
 
 
 def _docker_safe_segment(value: str, fallback: str = "app") -> str:

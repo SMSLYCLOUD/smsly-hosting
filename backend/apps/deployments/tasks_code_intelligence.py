@@ -2,10 +2,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-from celery import shared_task  # noqa: E402
-from django.contrib.auth import get_user_model  # noqa: E402
-
-from services.code_intelligence import analyze_codebase_chunked  # noqa: E402
+from celery import shared_task
+from django.contrib.auth import get_user_model
+from services.code_intelligence import analyze_codebase_chunked
 
 User = get_user_model()
 

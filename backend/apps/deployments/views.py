@@ -64,13 +64,17 @@ from .ai_router import (
     serialize_ai_router_config,
 )
 from .domain_utils import normalize_domain
-from .models import Deployment, EnvironmentVariable, PlatformConfig, Service  # type: ignore[attr-defined]    # models.py hub no longer re-exports; classes live in models_core.py.
+from .models import (  # type: ignore[attr-defined]    # models.py hub no longer re-exports; classes live in models_core.py.
+    Deployment,
+    EnvironmentVariable,
+    PlatformConfig,
+    Service,
+)
 from .models_audit import AuditLog
 from .models_backup import BackupSchedule, ServerBackup, ServiceBackup, ServiceSnapshot, SnapshotSchedule
 from .rate_limiting import BurstRateThrottle, DeploymentRateThrottle
 from .serializers import (
     BackupScheduleSerializer,
-    SnapshotScheduleSerializer,
     DeploymentApproveSerializer,
     DeploymentSerializer,
     DeploymentTimelineSerializer,
@@ -80,9 +84,10 @@ from .serializers import (
     ServerBackupSerializer,
     ServiceBackupSerializer,
     ServiceSerializer,
-    ServiceSnapshotSerializer,
-    ServiceSnapshotRestoreSerializer,
     ServiceSnapshotDiffSerializer,
+    ServiceSnapshotRestoreSerializer,
+    ServiceSnapshotSerializer,
+    SnapshotScheduleSerializer,
 )
 from .services.server_guard import ServerGuard
 from .tasks import (
@@ -1563,10 +1568,10 @@ class ServiceViewSet(viewsets.ModelViewSet):
         and CrowdSec WAF bans.
         """
         service = self.get_object()
-        from apps.notifications.models import ResourceAlert
         from apps.deployments.models_audit import AuditLog
         from apps.deployments.models_backup import ServiceBackup, ServiceSnapshot
         from apps.deployments.models_transfer import ServerTransfer
+        from apps.notifications.models import ResourceAlert
 
         events: list = []
 
@@ -4088,7 +4093,6 @@ class DeploymentViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         """Return deployments for services accessible to the requesting user."""
-        from django.db.models import Q
         base_qs = self.queryset.select_related('service')
         if self.action == 'list':
             base_qs = base_qs.defer(
@@ -4430,6 +4434,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         is stored on the Deployment for audit trail.
         """
         from django.utils import timezone
+
         from .models_project import Project
         from .models_registry_scope import ScopedRegistry
 
@@ -4672,27 +4677,27 @@ class DeploymentViewSet(viewsets.ModelViewSet):
 
         summary = deployment.review_summary or {}
         unresolved_vars = summary.get('unresolved_external_vars', [])
-        
+
         if not unresolved_vars:
             return Response({'message': 'No unresolved external variables found.'})
 
-        from apps.deployments.services.manifest_env_resolver import ManifestEnvResolver
         from apps.deployments.models import EnvironmentVariable
+        from apps.deployments.services.manifest_env_resolver import ManifestEnvResolver
 
         injected = 0
         for var_name in unresolved_vars:
             key_upper = var_name.strip().upper()
             if not key_upper:
                 continue
-            
+
             # Check if user already set it
             if EnvironmentVariable.objects.filter(service=deployment.service, key=key_upper).exists():
                 continue
 
             placeholder = ManifestEnvResolver.generate_placeholder_for_external(var_name)
-            
+
             is_secret = any(hint in key_upper for hint in ["SECRET", "TOKEN", "PASSWORD", "PRIVATE_KEY", "API_KEY"])
-            
+
             EnvironmentVariable.objects.create(
                 service=deployment.service,
                 key=key_upper,
@@ -5044,10 +5049,10 @@ class DeploymentViewSet(viewsets.ModelViewSet):
                             status=status.HTTP_404_NOT_FOUND)
 
 
-from .views_audit import (  # noqa: E402
+from .views_audit import (
     AuditLogViewSet,  # noqa: F401  (re-export for backwards compat — see views_audit.py)
 )
-from .views_auth import (  # noqa: E402
+from .views_auth import (
     SessionTokenView,  # noqa: F401  (re-export for backwards compat — see views_auth.py)
 )
 
@@ -6011,7 +6016,7 @@ class RouteRecheckView(GenericAPIView):
         )
 
 
-from .views_route_status import (  # noqa: E402
+from .views_route_status import (
     RouteStatusView,  # noqa: F401  (re-export for backwards compat — see views_route_status.py)
 )
 
@@ -6039,7 +6044,6 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
         return super().create(request, *args, **kwargs)
 
     def get_queryset(self):
-        from django.db.models import Q
         qs = self.queryset
 
         # `header` and `download_key` are intentionally public actions (see
@@ -6241,8 +6245,9 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
             ),
         }
 
-        from django.http import HttpResponse
         import json as _json
+
+        from django.http import HttpResponse
         response = HttpResponse(
             _json.dumps(key_payload, indent=2),
             content_type='application/json',
@@ -6292,7 +6297,6 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
         if backup.file_path and backup.file_path.endswith('.enc'):
             from .services.backup_service import (
                 BackupService,
-                UnknownBackupKeyIdError,
             )
             # Check metadata stamp first (works for cloud-stored backups
             # where the local file doesn't exist yet), then fall back
@@ -6478,7 +6482,7 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
             access_key = request.data.get('s3_access_key', '').strip()
             secret_key = request.data.get('s3_secret_key', '').strip()
 
-        from .services.backup_service import download_from_s3, normalize_s3_key, BackupService
+        from .services.backup_service import BackupService, download_from_s3, normalize_s3_key
         s3_key = normalize_s3_key(s3_key, s3_bucket)
 
         if not s3_bucket or not s3_key or not access_key or not secret_key:
@@ -6664,8 +6668,8 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
         this backup synchronously and returns the result immediately.
         """
         import hashlib as _hashlib
-        import tarfile as _tarfile
         import os as _os
+        import tarfile as _tarfile
 
         backup = self.get_object()
         filepath = backup.file_path
@@ -6775,7 +6779,6 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
         metadata in error_message), plus their associated deployment
         status.  Useful for showing a "Restoration Activity" timeline.
         """
-        from django.db.models import Q
         qs = ServiceBackup.objects.filter(
             get_team_q_filter(request.user, prefix='service__', request=request)
         ).filter(
@@ -6815,7 +6818,6 @@ class ServiceSnapshotViewSet(viewsets.ModelViewSet):
         return service.project_id and service.project.team_id and service.project.team.members.filter(user=user).exists()
 
     def get_queryset(self):
-        from django.db.models import Q
         qs = self.queryset
         if not self.request.user.is_authenticated:
             return qs.none()
@@ -6950,9 +6952,11 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
         ServiceBackupViewSet.download_key for details. Public for the
         same reason — key_id/fingerprint are not secret material.
         """
-        from .services.backup_service import BackupService
-        from django.http import HttpResponse
         import json as _json
+
+        from django.http import HttpResponse
+
+        from .services.backup_service import BackupService
         backup = self.get_object()
         if not backup.file_path or not os.path.exists(backup.file_path):
             return Response({'error': 'Backup file not found'}, status=status.HTTP_404_NOT_FOUND)
@@ -7060,7 +7064,6 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
         if backup.file_path and backup.file_path.endswith('.enc'):
             from .services.backup_service import (
                 BackupService,
-                UnknownBackupKeyIdError,
             )
             if not BackupService.can_decrypt_backup(backup.file_path, passed_key=key_provided):
                 try:
@@ -7289,8 +7292,9 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['post'], url_path='restore-from-cloud')
     def restore_from_cloud(self, request):
         """Restore a server backup directly from cloud storage."""
-        from .services.backup_service import download_from_s3, normalize_s3_key, BackupService
         import uuid as _uuid
+
+        from .services.backup_service import BackupService, download_from_s3, normalize_s3_key
 
         cloud_storage_id = request.data.get('cloud_storage_id')
         s3_key = request.data.get('s3_key', '').strip()
@@ -7604,6 +7608,7 @@ class RemoteTriggerView(GenericAPIView):
 from apps.deployments.models_registry import RegistryCredential
 from apps.deployments.serializers import RegistryCredentialSerializer
 
+
 class RegistryCredentialViewSet(viewsets.ModelViewSet):
     serializer_class = RegistryCredentialSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -7626,7 +7631,7 @@ class RegistryCredentialViewSet(viewsets.ModelViewSet):
                 registry=credential.registry_url,
             )
             return Response({'status': 'success', 'message': result.get('Status', 'Login succeeded')})
-        except Exception as e:
+        except Exception:
             logger.exception("Registry connection test failed")
             return Response({'status': 'error', 'message': 'Connection test failed. Please verify your credentials.'}, status=400)
 
@@ -7652,9 +7657,9 @@ class SecurityStatusView(GenericAPIView):
     def get(self, request):
         from apps.deployments.models_core import PlatformConfig
         from apps.deployments.services.container_runtime import (
-            detect_best_runtime,
             _kata_available,
             _runsc_available,
+            detect_best_runtime,
             is_sandboxed_runtime,
         )
 
@@ -7874,8 +7879,8 @@ class PlatformConfigViewSet(viewsets.GenericViewSet):
         from apps.deployments.services.infisical import (
             get_infisical_client,
             get_or_create_workspace,
-            push_platform_config_to_infisical,
             pull_platform_config_from_infisical,
+            push_platform_config_to_infisical,
         )
         client = get_infisical_client()
         if not client:

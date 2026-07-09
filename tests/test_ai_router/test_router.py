@@ -1,7 +1,8 @@
-import requests
 import os
 import sys
+
 import pytest
+import requests
 
 ROUTER_URL = os.environ.get("AI_ROUTER_URL", "https://ai-router-b7bd2fad-eb7003.pcloud.linadeluxe.com")
 API_KEY = os.environ.get("AI_ROUTER_API_KEY")
@@ -16,7 +17,7 @@ headers = {
 }
 
 def check_endpoint():
-    print(f"\n--- Testing AI Router Integration ---")
+    print("\n--- Testing AI Router Integration ---")
     print(f"URL: {ROUTER_URL}")
     print(f"Key: {API_KEY[:4]}...{API_KEY[-4:]}")
 

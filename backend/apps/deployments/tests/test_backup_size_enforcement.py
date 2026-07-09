@@ -8,7 +8,6 @@ This prevents accidental disk exhaustion from oversized backups.
 import os
 from unittest.mock import MagicMock, patch
 
-import docker
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 

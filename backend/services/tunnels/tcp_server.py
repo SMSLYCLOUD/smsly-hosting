@@ -8,13 +8,13 @@ Expose local TCP services (databases, Redis, etc.) to the internet.
 Team tier feature.
 """
 
-import asyncio  # noqa: E402
-import logging  # noqa: E402
-import uuid  # noqa: E402
-from dataclasses import dataclass, field  # noqa: E402
-from datetime import datetime  # noqa: E402
+import asyncio
+import logging
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime
 
-from django.conf import settings  # noqa: E402
+from django.conf import settings
 
 logger = logging.getLogger('smsly.tunnels.tcp')
 

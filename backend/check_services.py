@@ -13,7 +13,7 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 # Setup Django
 django.setup()
 
-from apps.deployments.models import Service  # noqa: E402
+from apps.deployments.models import Service
 
 print('=== Current Service Records ===')
 services = Service.objects.all().order_by('id')

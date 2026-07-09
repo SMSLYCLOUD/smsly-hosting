@@ -8,7 +8,9 @@ from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import permissions, serializers, status, viewsets
 from rest_framework.response import Response
 
-from .metrics import metrics_adapter  # type: ignore[attr-defined]    # metrics/__init__.py is a hub; metrics_adapter lives in metrics/adapter.py.
+from .metrics import (
+    metrics_adapter,  # type: ignore[attr-defined]    # metrics/__init__.py is a hub; metrics_adapter lives in metrics/adapter.py.
+)
 from .models import Service  # type: ignore[attr-defined]
 from .models_metrics import ServiceMetric
 

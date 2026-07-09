@@ -15,7 +15,6 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from apps.permissions.codes import MEMBER_INVITE, MEMBER_REMOVE, MEMBER_ROLE_CHANGE
-from apps.permissions.drf import HasAnyPermission
 from apps.permissions.utils import has_permission
 
 from .models import Service  # type: ignore[attr-defined]
@@ -258,6 +257,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
         Returns the effective registry config (walks hierarchy if none set).
         """
         from django.contrib.contenttypes.models import ContentType
+
         from .models_registry_scope import ScopedRegistry
         from .serializers_registry_scope import (
             ScopedRegistryReadSerializer,

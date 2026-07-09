@@ -126,7 +126,7 @@ class Command(BaseCommand):
             "DB_USER=$(grep -m1 '^MASTER_DB_USER=' .env | cut -d= -f2-) && "
             "DB_PASS=$(grep -m1 '^MASTER_DB_PASSWORD=' .env | cut -d= -f2-) && "
             "DB_NAME=$(grep -m1 '^POSTGRES_DB=' .env 2>/dev/null || echo 'smsly_hosting') && "
-            f"NEW_URL=\"postgresql://${{DB_USER}}:${{DB_PASS}}@{master_mesh_ip}:5432/${{DB_NAME}}\" && "  # noqa: F821 (DB_USER/DB_PASS/DB_NAME are shell vars set earlier)
+            f"NEW_URL=\"postgresql://${{DB_USER}}:${{DB_PASS}}@{master_mesh_ip}:5432/${{DB_NAME}}\" && "
             "grep -q '^DATABASE_URL=' .env && "
             "sed -i \"s|^DATABASE_URL=.*|DATABASE_URL=${NEW_URL}|\" .env || "
             "echo \"DATABASE_URL=${NEW_URL}\" >> .env"

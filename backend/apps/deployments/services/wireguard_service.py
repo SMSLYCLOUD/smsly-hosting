@@ -547,7 +547,7 @@ class WireGuardService:
         peer.delete()
 
         # Update configs on all remaining peers
-        from apps.deployments.models_mesh import WireGuardPeer  # noqa: F401
+        from apps.deployments.models_mesh import WireGuardPeer
         remaining_peers = WireGuardPeer.objects.filter(mesh=mesh, is_active=True)
         for p in remaining_peers:
             try:
@@ -713,7 +713,7 @@ class WireGuardService:
                 logger.error(message)
                 return {"success": [], "failed": [{"peer": "mesh", "error": message}]}
 
-        from apps.deployments.models_mesh import WireGuardPeer  # noqa: F401
+        from apps.deployments.models_mesh import WireGuardPeer
         peers = WireGuardPeer.objects.filter(mesh=mesh, is_active=True)
         results = {"success": [], "failed": []}
 
@@ -744,7 +744,7 @@ class WireGuardService:
 
         Pings each peer from the local server and updates latency_ms.
         """
-        from apps.deployments.models_mesh import WireGuardPeer  # noqa: F401
+        from apps.deployments.models_mesh import WireGuardPeer
         local_peer = WireGuardPeer.objects.filter(mesh=mesh, is_local=True).first()
         if not local_peer:
             return {"error": "No local peer configured in mesh"}

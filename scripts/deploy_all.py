@@ -1,4 +1,5 @@
 import os
+
 import paramiko
 
 VPS_PASSWORD = os.environ['VPS_PASSWORD']  # SECURITY: Never hardcode passwords

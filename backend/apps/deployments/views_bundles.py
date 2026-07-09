@@ -26,13 +26,13 @@ from rest_framework import permissions, serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
+from apps.deployments.models import Service
+from apps.deployments.models_bundles import Bundle, BundleBackup, BundleComponent
 from apps.teams.permissions import (
     assert_can_delete,
     assert_can_write,
     get_team_q_filter,
 )
-from apps.deployments.models import Service
-from apps.deployments.models_bundles import Bundle, BundleComponent, BundleBackup
 
 logger = logging.getLogger(__name__)
 
@@ -366,8 +366,9 @@ class BundleViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        from .views_addons import _ClosingFileResponse
         import re
+
+        from .views_addons import _ClosingFileResponse
         backup_file = open(backup.file_path, 'rb')
         response = _ClosingFileResponse(backup_file, as_attachment=True)
         safe_name = re.sub(r'[^a-zA-Z0-9._-]', '_', os.path.basename(backup.file_path))

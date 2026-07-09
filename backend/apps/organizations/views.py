@@ -138,6 +138,7 @@ class OrganizationViewSet(viewsets.ModelViewSet):
             }
         """
         from django.contrib.contenttypes.models import ContentType
+
         from apps.deployments.models_registry_scope import ScopedRegistry
         from apps.deployments.serializers_registry_scope import (
             ScopedRegistryReadSerializer,

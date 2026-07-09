@@ -69,7 +69,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 # ── Configuration ─────────────────────────────────────────────────────────
@@ -237,7 +237,7 @@ def build_runtime_info() -> dict[str, Any]:
     """Build the runtime snapshot posted with every heartbeat."""
     return {
         "node_id": SERVER_ID,
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "ts": datetime.now(UTC).isoformat(),
         "platform": platform.platform(),
         "python": sys.version.split()[0],
         "docker_version": _read_docker_version(),

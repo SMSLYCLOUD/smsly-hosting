@@ -1,5 +1,6 @@
 import os
 import sys
+
 import django
 from django.conf import settings
 
@@ -51,14 +52,16 @@ if not settings.configured:
     )
     django.setup()
 
-import uuid
 import random
+import uuid
 from decimal import Decimal
-from django.core.management import call_command
-from django.contrib.auth.models import User
-from apps.deployments.models import Service, Region
+
 from apps.billing.models import UsageRecord
 from apps.cloud.models import CloudProvider
+from apps.deployments.models import Region, Service
+from django.contrib.auth.models import User
+from django.core.management import call_command
+
 
 def run_stress_test():
     print("🚀 Starting SMSly Platform Stress Test...")

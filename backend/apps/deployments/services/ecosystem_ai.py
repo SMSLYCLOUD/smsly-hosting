@@ -1,9 +1,6 @@
-import json
 import logging
 import os
 from typing import Any
-
-from apps.intelligence.providers import _cached_ask
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +30,8 @@ class EcosystemDeploymentSenate:
         Returns:
             dict with "resolutions" key containing {service_key: {env_var: value}}
         """
-        from .manifest_env_resolver import ManifestEnvResolver
         from .cross_service_secret_map import build_cross_service_map, generate_secrets_for_map, get_secret_for_service
+        from .manifest_env_resolver import ManifestEnvResolver
 
         if not hasattr(graph, "services") or not graph.services:
             return None

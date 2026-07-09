@@ -1066,7 +1066,7 @@ def analyze_ecosystem(repos_data: list[dict], github_token: str | None = None, a
                 full_prompt, system_prompt=ECOSYSTEM_PROMPT, provider_id=ai_provider,
             )
             response_text = response_text or ""
-        except Exception as ai_exc:
+        except Exception:
             logger.exception("AI analysis unavailable; falling back to heuristic plan")
             response_text = ""
             provider = None
@@ -1257,7 +1257,7 @@ def analyze_ecosystem_chunked(repos_data: list[dict], github_token: str | None =
                 for path, content in rd.get('configs_summary', {}).items():
                     if other in content.lower():
                         cross_links.append(f"DEPENDENCY HINT: {rd['repo']} mentions {other} in {path}")
-                        
+
         try:
             cross_links_deduped = _safe_set(cross_links)
             brief_header = "ECOSYSTEM DISCOVERY HINTS:\n" + "\n".join(cross_links_deduped) if cross_links_deduped else ""
@@ -2212,8 +2212,9 @@ def _ai_env_crosscheck(services: list[dict], ai_provider: str | None) -> None:
     cross-service secret mismatches or missing vars that the initial
     AI pass missed.  Runs after the main plan + heuristic corrections.
     """
-    from apps.intelligence.providers import _cached_ask
     import json
+
+    from apps.intelligence.providers import _cached_ask
 
     if not ai_provider:
         return
@@ -2530,9 +2531,7 @@ def _apply_generic_ecosystem_intelligence(services: list[dict]):
                 if env_key not in env_map:
                     continue
                 cur = str(env_map.get(env_key, "")).strip()
-                if has_addon:
-                    env_map[env_key] = placeholder
-                elif ecosystem_has and (not cur or cur in ("", "{{GENERATE}}", "{{FILL_ME}}") or cur.startswith("REPLACE_WITH_")):
+                if has_addon or (ecosystem_has and (not cur or cur in ("", "{{GENERATE}}", "{{FILL_ME}}") or cur.startswith("REPLACE_WITH_"))):
                     env_map[env_key] = placeholder
 
         # 4.5 Intelligence Service Specialization
@@ -3537,10 +3536,10 @@ def _clone_repo(repo_full: str, target_dir: str, token: str | None = None) -> bo
         provider = "github.com"
         if repo_full.startswith(("github.com/", "gitlab.com/", "bitbucket.org/")):
             provider, repo_full = repo_full.split("/", 1)
-            
+
         # Construct clone URL
         clone_url = f"https://{provider}/{repo_full}.git"
-        
+
         # Inject token for GitHub specifically (GitLab/Bitbucket would need their own token formats if provided)
         if token and provider == "github.com":
             clone_url = f"https://x-access-token:{token}@{provider}/{repo_full}.git"

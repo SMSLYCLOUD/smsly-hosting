@@ -1,30 +1,30 @@
 import logging
 
 logger = logging.getLogger(__name__)
-import os  # noqa: E402
-import re  # noqa: E402
-import secrets  # noqa: E402
-import string  # noqa: E402
-from collections import defaultdict  # noqa: E402
-from collections.abc import Iterable  # noqa: E402
-from typing import Any  # noqa: E402
-from urllib.parse import urlparse, urlunparse  # noqa: E402
+import os
+import re
+import secrets
+import string
+from collections import defaultdict
+from collections.abc import Iterable
+from decimal import Decimal
+from typing import Any
+from urllib.parse import urlparse, urlunparse
 
-from celery import shared_task  # noqa: E402
-from celery.exceptions import SoftTimeLimitExceeded  # noqa: E402
-from decimal import Decimal  # noqa: E402
-from django.conf import settings  # noqa: E402
-from django.core.cache import cache  # noqa: E402
-from django.utils import timezone  # noqa: E402
-from services.addon_provisioner import addon_provisioner  # noqa: E402
+from celery import shared_task
+from celery.exceptions import SoftTimeLimitExceeded
+from django.conf import settings
+from django.core.cache import cache
+from django.utils import timezone
+from services.addon_provisioner import addon_provisioner
 
-from apps.cloud.models import CloudProvider  # noqa: E402
-from apps.deployments.models import (  # noqa: E402
+from apps.cloud.models import CloudProvider
+from apps.deployments.models import (
     Deployment,
     EnvironmentVariable,
     Service,
 )
-from apps.deployments.models_addons import Addon  # noqa: E402
+from apps.deployments.models_addons import Addon
 
 # Module-level constants (ecosystem scanning thresholds)
 _MIN_FREE_MEMORY_MB = 256
@@ -807,9 +807,7 @@ def _resolve_from_manifest_or_fallback(
             _needs_senate = {}
             for k, v in resolved_env.items():
                 v_str = str(v or "").strip()
-                if v_str in _PLACEHOLDER_VALS or v_str.startswith("REPLACE_WITH_"):
-                    _needs_senate[k] = v
-                elif any(p in v_str.lower() for p in _MOCK_PATTERNS):
+                if v_str in _PLACEHOLDER_VALS or v_str.startswith("REPLACE_WITH_") or any(p in v_str.lower() for p in _MOCK_PATTERNS):
                     _needs_senate[k] = v
             # Also include unresolved and heuristic vars from manifest resolver
             if source_dir:
@@ -1021,8 +1019,9 @@ def _ecosystem_project_name(raw_name: str) -> str:
     Produces names like: ``my-app — Jul 8, 2026 · 14:32``
     The timestamp ensures uniqueness across repeated deploys of the same ecosystem.
     """
-    from django.utils import timezone as _tz
     import calendar
+
+    from django.utils import timezone as _tz
 
     base = _slugify_name(raw_name).replace("-", " ").strip()
     if not base:
@@ -1912,6 +1911,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
     if project:
         try:
             from django.contrib.contenttypes.models import ContentType
+
             from apps.deployments.models_registry_scope import ScopedRegistry
 
             _ct = ContentType.objects.get_for_model(Project)

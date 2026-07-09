@@ -76,7 +76,7 @@ def _get_bridge_interface_name(network_name: str) -> str | None:
     except docker.errors.NotFound:
         logger.warning("Docker network %s not found when resolving bridge", network_name)
         return None
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.exception("Failed to resolve bridge interface for %s", network_name)
         return None
 

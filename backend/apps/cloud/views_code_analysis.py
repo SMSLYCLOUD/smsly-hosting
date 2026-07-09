@@ -73,9 +73,9 @@ LANGUAGE_COLORS = {
 
 MAX_FILES = 500  # Safety cap
 MAX_FILE_SIZE = 100_000  # 100KB per file
-import contextlib  # noqa: E402
+import contextlib
 
-from apps.cloud.services.code_analyzer import MAX_TOTAL_BYTES  # noqa: E402
+from apps.cloud.services.code_analyzer import MAX_TOTAL_BYTES
 
 _AI_CODE_DISCLAIMER = (
     "NOTE: The following prompt contains structural metadata extracted from "

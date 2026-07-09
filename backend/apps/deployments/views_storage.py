@@ -14,7 +14,7 @@ from rest_framework.response import Response
 
 from apps.deployments.utils_file_browser import exec_file_list
 
-from .models import Service  # type: ignore[attr-defined]  # noqa: F401
+from .models import Service  # type: ignore[attr-defined]
 from .models_storage import Volume
 from .utils import resolve_running_container, validate_and_sanitize_path
 

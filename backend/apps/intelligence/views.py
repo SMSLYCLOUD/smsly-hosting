@@ -372,7 +372,7 @@ def ai_test_prompt(request):
             "mode": mode,
             "active_count": len(configured),
         })
-    except Exception as e:
+    except Exception:
         logger.exception("AI completion failed")
         return Response(
             {"error": "An AI service error occurred."},
@@ -458,7 +458,7 @@ def ai_chat_completions(request):
             ],
             "usage": recorded,
         })
-    except Exception as e:
+    except Exception:
         logger.exception("AI Chat completion failed")
         return Response({"error": "An AI service error occurred."}, status=500)
 
@@ -537,7 +537,7 @@ def ai_chat_stream(request):
                 logger.exception("Failed to record streaming usage")
 
             yield "data: [DONE]\n\n"
-        except Exception as exc:
+        except Exception:
             logger.exception("AI streaming error")
             yield f"data: {json.dumps({'error': 'An AI service error occurred.'})}\n\n"
             yield "data: [DONE]\n\n"

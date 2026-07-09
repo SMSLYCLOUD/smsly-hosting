@@ -1,6 +1,5 @@
 import os
 import sys
-import requests
 
 # Add backend to path so we can import services
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'backend'))

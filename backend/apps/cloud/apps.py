@@ -9,7 +9,7 @@ class CloudConfig(AppConfig):
     def ready(self):
         # Globally patch docker.from_env across all threads and workers
         try:
-            import apps.cloud.docker_client
+            pass
         except Exception:
             pass
 

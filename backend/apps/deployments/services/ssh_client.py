@@ -5,7 +5,6 @@ import os
 import re
 import shlex
 import time
-import warnings
 
 import paramiko
 

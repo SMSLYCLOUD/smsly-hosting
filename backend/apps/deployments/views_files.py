@@ -1,13 +1,15 @@
-import os
-import uuid
-import secrets
 import logging
+import os
+import secrets
+import uuid
 from pathlib import Path
+
 from django.conf import settings
 from rest_framework import status
 from rest_framework.decorators import action
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
-from rest_framework.parsers import MultiPartParser, FormParser
+
 from apps.deployments.models import Deployment
 from apps.deployments.tasks import smart_deploy_task
 from apps.teams.permissions import assert_can_write

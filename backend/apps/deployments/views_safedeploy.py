@@ -9,7 +9,6 @@ from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle
 
 from apps.core.auth import CsrfExemptSessionAuthentication
-
 from apps.deployments.models_audit import AuditLog
 from apps.deployments.models_core import Deployment, Service
 from apps.deployments.models_safedeploy import DeploymentApproval, PreviewEnvironment

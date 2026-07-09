@@ -10,15 +10,15 @@ from django.core.asgi import get_asgi_application
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 django.setup()
 
-import apps.deployments.routing  # noqa: E402
-from apps.deployments.middleware import (  # noqa: E402
+import apps.deployments.routing
+from apps.deployments.middleware import (
+    DynamicAllowedHostsASGIMiddleware,
     QueryStringAuthMiddleware,
     RedisResilientMiddleware,
-    DynamicAllowedHostsASGIMiddleware,
 )
-from channels.auth import AuthMiddlewareStack  # noqa: E402
-from channels.routing import ProtocolTypeRouter, URLRouter  # noqa: E402
-from channels.security.websocket import AllowedHostsOriginValidator  # noqa: E402
+from channels.auth import AuthMiddlewareStack
+from channels.routing import ProtocolTypeRouter, URLRouter
+from channels.security.websocket import AllowedHostsOriginValidator
 
 application = ProtocolTypeRouter({
     "http": get_asgi_application(),

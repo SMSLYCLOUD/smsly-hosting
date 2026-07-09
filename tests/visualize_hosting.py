@@ -5,8 +5,8 @@ Generates screenshots of key pages in the hosting platform with mock data.
 """
 
 # pylint: disable=unused-import
-import time
 from playwright.sync_api import sync_playwright
+
 
 def run(playwright_instance):
     """Run the visualization script."""

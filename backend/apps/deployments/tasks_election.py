@@ -1,11 +1,11 @@
 import logging
 
 logger = logging.getLogger(__name__)
-import contextlib  # noqa: E402
-import logging  # noqa: E402
-import random  # noqa: E402
+import contextlib
+import logging
+import random
 
-from celery import shared_task  # noqa: E402
+from celery import shared_task
 
 
 def _get_local_role() -> str:

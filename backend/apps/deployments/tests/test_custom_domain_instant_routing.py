@@ -14,7 +14,6 @@ from services.caddy_manager import (
     apply_caddyfile,
     generate_caddyfile,
     validate_service_routes_do_not_hit_control_plane,
-    _last_caddy_reload_ts,
 )
 
 from apps.billing.models import PricingPlan, UserSubscription

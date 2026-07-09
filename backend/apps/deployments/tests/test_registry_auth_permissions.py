@@ -20,9 +20,9 @@ from django.contrib.auth import get_user_model
 from django.http import HttpRequest
 from django.test import TestCase, override_settings
 
+import apps.deployments.views_registry_auth as auth_mod
 from apps.deployments.models_core import Project
 from apps.deployments.models_project import ProjectMember
-import apps.deployments.views_registry_auth as auth_mod
 from apps.deployments.views_registry_auth import (
     _check_registry_permission,
     _reset_registry_secret_cache,

@@ -14,13 +14,12 @@ Usage:
     smsly deploy <id>               # Trigger git deployment
 """
 import argparse
+import glob
 import json
 import os
 import sys
-import time
-import zipfile
 import tempfile
-import glob
+import zipfile
 
 # Try to import requests
 try:
@@ -73,28 +72,28 @@ def load_config():
                 if "=" in line and not line.startswith("#"):
                     k, v = line.split("=", 1)
                     env_vars[k.strip()] = v.strip()
-        
+
         with open(TOKEN_FILE, "r") as f:
             token = f.read().strip()
-            
+
         domain = env_vars.get("DOMAIN", "localhost")
         use_ssl = env_vars.get("USE_SSL", "false").lower() == "true"
         scheme = "https" if use_ssl and domain != "localhost" else "http"
-        
+
         # If it's a raw IP, use it. If it's a domain, use it.
         # Default to 8090 for local IP mode.
         port = ""
         if domain == "localhost" or domain.replace(".", "").isdigit():
             port = ":8090"
-            
+
         url = f"{scheme}://{domain}{port}"
-        
+
         # Best effort: auto-save to user config for future runs
         try:
             save_config(url, token)
         except Exception:
             pass
-            
+
         return {"url": url, "token": token}
 
     print("✗ Not logged in. Run: smsly login <url> <token>")
@@ -126,7 +125,7 @@ def api_request(method, path, data=None, files=None, stream=False):
     # Don't set Content-Type if uploading files (requests handles boundary)
     if not files:
         headers["Content-Type"] = "application/json"
-        
+
     try:
         resp = requests.request(
             method, url, headers=headers, json=data, files=files, stream=stream, timeout=60
@@ -185,7 +184,7 @@ def cmd_init(args):
         # List services to pick
         resp = api_request("GET", "/api/v1/services/")
         services = resp.json().get("results", []) if resp.status_code == 200 else []
-        
+
         if not services:
             print("No services found.")
             return
@@ -193,7 +192,7 @@ def cmd_init(args):
         print("\nAvailable Services:")
         for idx, s in enumerate(services):
             print(f"{idx+1}. {s['name']} ({s['id']})")
-        
+
         try:
             sel = int(input("\nSelect service number: ")) - 1
             if 0 <= sel < len(services):
@@ -208,10 +207,10 @@ def cmd_init(args):
         if not name:
             print("Name required.")
             return
-            
+
         print("Creating service...")
         data = {
-            "name": name, 
+            "name": name,
             "deploy_type": "UPLOAD",
             "cpu_cores": 0.5,
             "memory_mb": 512
@@ -239,48 +238,48 @@ def cmd_up(args):
         return
 
     service_id = project['service_id']
-    
+
     print(f"Packaging current directory for service {service_id}...")
-    
+
     # Create temp zip
     with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
         tmp_name = tmp.name
-        
+
     try:
         with zipfile.ZipFile(tmp_name, 'w', zipfile.ZIP_DEFLATED) as zf:
             for root, dirs, files in os.walk('.'):
                 # Filter directories
                 dirs[:] = [d for d in dirs if d not in IGNORE_PATTERNS]
-                
+
                 for file in files:
                     # Filter files
                     if any(glob.fnmatch.fnmatch(file, p) for p in IGNORE_PATTERNS):
                         continue
-                        
+
                     file_path = os.path.join(root, file)
                     arcname = os.path.relpath(file_path, '.')
                     zf.write(file_path, arcname)
-        
+
         file_size = os.path.getsize(tmp_name)
         print(f"Uploading {file_size / 1024 / 1024:.2f} MB package...")
-        
+
         with open(tmp_name, 'rb') as f:
             resp = api_request(
-                "POST", 
-                "/api/v1/deployments/upload/", 
+                "POST",
+                "/api/v1/deployments/upload/",
                 data={"service_id": service_id},
                 files={"file": ("source.zip", f)}
             )
-            
+
         if resp.status_code == 201:
             data = resp.json()
             deploy_id = data.get('deployment_id')
-            print(f"✓ Upload successful!")
+            print("✓ Upload successful!")
             print(f"✓ Deployment triggered: {deploy_id}")
             print(f"  Run 'smsly logs {deploy_id} --follow' to watch.")
         else:
             print(f"✗ Upload failed: {resp.status_code} - {resp.text}")
-            
+
     finally:
         if os.path.exists(tmp_name):
             os.remove(tmp_name)
@@ -310,7 +309,7 @@ def cmd_env(args):
         if not args.vars:
             print("Usage: smsly env set KEY=VAL KEY2=VAL2")
             return
-            
+
         for item in args.vars:
             if "=" not in item:
                 print(f"Skipping invalid format '{item}'")
@@ -318,7 +317,7 @@ def cmd_env(args):
             k, v = item.split("=", 1)
             # Create/Update each var
             # Ideal API would accept batch, but we'll loop for now
-            payload = {"key": k, "value": v, "is_secret": False} 
+            payload = {"key": k, "value": v, "is_secret": False}
             resp = api_request("POST", f"/api/v1/services/{service_id}/env_vars/", data=payload)
             if resp.status_code == 201:
                 print(f"✓ Set {k}")
@@ -329,7 +328,7 @@ def cmd_env(args):
 def cmd_logs(args):
     """View or follow logs."""
     deploy_id = args.deployment_id
-    
+
     # 1. Initial Fetch
     resp = api_request("GET", f"/api/v1/deployments/{deploy_id}/build-logs/")
     if resp.status_code != 200:
@@ -338,18 +337,18 @@ def cmd_logs(args):
         if resp.status_code != 200:
             print(f"✗ Error: {resp.status_code} — {resp.text}")
             return
-    
+
     data = resp.json()
     logs = data.get("build_logs", "") or ""
     status = data.get("status", "UNKNOWN")
-    
+
     # Clear screen if following? No, just print.
     print(logs, end="")
-    
+
     if args.follow:
         import time
         last_len = len(logs)
-        
+
         while status in ["QUEUED", "BUILDING", "DEPLOYING"]:
             time.sleep(2)
             resp = api_request("GET", f"/api/v1/deployments/{deploy_id}/build-logs/")
@@ -357,13 +356,13 @@ def cmd_logs(args):
                 data = resp.json()
                 status = data.get("status", status)
                 current_logs = data.get("build_logs", "") or ""
-                
+
                 if len(current_logs) > last_len:
                     print(current_logs[last_len:], end="", flush=True)
                     last_len = len(current_logs)
             else:
                 break
-        
+
         print(f"\n[Process completed with status: {status}]")
 
 

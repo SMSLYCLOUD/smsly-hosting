@@ -776,7 +776,7 @@ def is_deployment_local(deployment) -> bool:
     if bool(getattr(server, "is_primary", False)):
         return True
 
-    from apps.deployments.models import PlatformConfig  # type: ignore[attr-defined]  # noqa: F401
+    from apps.deployments.models import PlatformConfig  # type: ignore[attr-defined]
     config = PlatformConfig.objects.first()
     server_ip = str(getattr(config, "server_ip", "") or "")
     return str(getattr(server, "host", "") or "") == server_ip
@@ -863,7 +863,7 @@ def log_exhaustive_deployment_diagnostics(deployment, service=None, build_dir=No
     # 1. Linux & Host Operations
     os_info = f"{platform.system()} {platform.release()} ({platform.machine()})"
     cpu_cores = os.cpu_count() or "Unknown"
-    
+
     mem_info = "Unknown"
     try:
         import psutil
@@ -928,7 +928,7 @@ def log_exhaustive_deployment_diagnostics(deployment, service=None, build_dir=No
     branch = getattr(svc, 'branch', 'main')
     internal_port = getattr(svc, 'internal_port', getattr(svc, 'port', '8000'))
     domain = getattr(svc, 'domain', getattr(svc, 'name', 'localhost'))
-    
+
     env_vars = svc.env_vars.all() if hasattr(svc, 'env_vars') else []
     total_vars = len(env_vars)
     secret_vars = sum(1 for ev in env_vars if getattr(ev, 'is_secret', False))
@@ -1049,7 +1049,7 @@ def log_exhaustive_env_diagnostics(deployment, service, source_label="Manifest/A
     total_count = len(env_vars)
     secret_count = sum(1 for ev in env_vars if getattr(ev, 'is_secret', False))
     locked_count = sum(1 for ev in env_vars if getattr(ev, 'is_locked', False))
-    
+
     # Check for Infisical / Vault integration — actually verify container is running
     infisical_running = False
     try:
@@ -1075,7 +1075,7 @@ def log_exhaustive_env_diagnostics(deployment, service, source_label="Manifest/A
         vault_provider = "Infisical Token Present (container not running)"
     else:
         vault_provider = "Internal Encrypted DB Vault (Infisical / HashiCorp Vault ready)"
-    
+
     sources_summary = {}
     for ev in env_vars:
         src = getattr(ev, 'source', 'USER') or 'USER'
@@ -1092,7 +1092,7 @@ def log_exhaustive_env_diagnostics(deployment, service, source_label="Manifest/A
         f"  • Infisical Status  : {'Container running ✓' if infisical_running else 'Container NOT running'} | Token: {'Set' if has_infisical_token else 'Missing'}",
         f"  • Locked Variables   : {locked_count} locked against auto-override",
         f"  • Source Breakdown   : {sources_str}",
-        f"  • Runtime Injection  : PORT, HOST, and internal network envs mapped",
+        "  • Runtime Injection  : PORT, HOST, and internal network envs mapped",
         "─" * 60 + "\n"
     ]
     append_log(deployment, "\n".join(log_lines))
@@ -1101,23 +1101,23 @@ def log_exhaustive_env_diagnostics(deployment, service, source_label="Manifest/A
 def log_exhaustive_build_diagnostics(deployment, builder_type, context_dir, build_arg_names=None):
     """Log deep build engine preparation, cache volumes, and context layout."""
     build_arg_str = ", ".join(build_arg_names) if build_arg_names else "Standard defaults"
-    
+
     context_files = []
     try:
         if context_dir and os.path.exists(context_dir):
             context_files = os.listdir(context_dir)[:10]
     except Exception:
         pass
-    
+
     log_lines = [
         "\n" + "─" * 60,
-        f"⚙️ [BUILD ENGINE & CONTAINER WORKSPACE PREPARATION]",
+        "⚙️ [BUILD ENGINE & CONTAINER WORKSPACE PREPARATION]",
         f"  • Build Engine       : {builder_type.upper()}",
         f"  • Build Context Root : {context_dir}",
         f"  • Context Preview    : {', '.join(context_files) if context_files else 'Empty/Unknown'}",
         f"  • Build Arguments    : {build_arg_str}",
-        f"  • Cache Mounts       : /root/.cache, /var/cache configured for accelerated builds",
-        f"  • Target Platform    : linux/amd64 (cloud-native standard architecture)",
+        "  • Cache Mounts       : /root/.cache, /var/cache configured for accelerated builds",
+        "  • Target Platform    : linux/amd64 (cloud-native standard architecture)",
         "─" * 60 + "\n"
     ]
     append_log(deployment, "\n".join(log_lines))

@@ -1,22 +1,22 @@
 import logging
 
 logger = logging.getLogger(__name__)
-import contextlib  # noqa: E402
-import logging  # noqa: E402
-import subprocess  # noqa: E402
-import time  # noqa: E402
+import contextlib
+import logging
+import subprocess
+import time
 
-import docker  # noqa: E402
-from celery import shared_task  # noqa: E402
-from django.core.cache import cache  # noqa: E402
-from django.utils import timezone  # noqa: E402
+import docker
+from celery import shared_task
+from django.core.cache import cache
+from django.utils import timezone
 
-from apps.deployments.models import (  # noqa: E402
+from apps.deployments.models import (
     Service,
 )
-from apps.deployments.models_addons import Addon  # noqa: E402
+from apps.deployments.models_addons import Addon
 
-from .tasks_platform_update import _clear_directory_contents, platform_update_task  # noqa: E402
+from .tasks_platform_update import _clear_directory_contents, platform_update_task
 
 
 def _extract_addon_id_from_name(name: str) -> str:

@@ -7,19 +7,17 @@ Provides:
   - infisical_client(): Return a configured Infisical API client
 """
 
-import json
 import logging
 import os
 from typing import Any
 
 import requests
-from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
 INFISICAL_URL = os.environ.get(
     "INFISICAL_URL",
-    f"http://infisical:8080",
+    "http://infisical:8080",
 )
 INFISICAL_API_URL = f"{INFISICAL_URL}/api/v1"
 
@@ -29,7 +27,7 @@ if _site_url:
     _site_public_url = _site_url
     INFISICAL_API_URL = f"{_site_url}/api/v1"
 elif not INFISICAL_URL.startswith("http"):
-    INFISICAL_API_URL = f"http://infisical:8080/api/v1"
+    INFISICAL_API_URL = "http://infisical:8080/api/v1"
 
 
 class InfisicalClient:

@@ -11,7 +11,7 @@ superusers.
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from django.core.management.base import BaseCommand
 
@@ -59,7 +59,7 @@ class Command(BaseCommand):
             "age_hours": None,
             "size_bytes": None,
             "log_tail": None,
-            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "checked_at": datetime.now(UTC).isoformat(),
         }
 
         if not os.path.isdir(backup_dir):
@@ -140,6 +140,7 @@ class Command(BaseCommand):
     def _send_alerts(self, status: dict) -> None:
         try:
             from django.contrib.auth import get_user_model
+
             from apps.notifications.tasks import dispatch_notification
 
             for user in get_user_model().objects.filter(is_superuser=True, is_active=True):

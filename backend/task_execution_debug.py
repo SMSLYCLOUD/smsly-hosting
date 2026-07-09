@@ -19,9 +19,9 @@ print("=== Domain Task Execution Debug ===\n")
 print("1. Domain Task Execution Analysis")
 print("-" * 40)
 
-from apps.deployments.models import PlatformConfig  # noqa: E402
-from apps.domains.models import Domain  # noqa: E402
-from apps.domains.verification import verify_custom_domain_dns  # noqa: E402
+from apps.deployments.models import PlatformConfig
+from apps.domains.models import Domain
+from apps.domains.verification import verify_custom_domain_dns
 
 try:
     config = PlatformConfig.load()

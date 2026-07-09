@@ -106,17 +106,18 @@ def trigger_cron_job(self, job_id):
         if job.cloud_destination_id:
             dest = job.cloud_destination
             try:
-                from apps.deployments.services.backup_service import upload_backup_to_s3
-                import tempfile
                 import os
+                import tempfile
+
+                from apps.deployments.services.backup_service import upload_backup_to_s3
 
                 timestamp = now.strftime('%Y%m%d_%H%M%S')
                 s3_key = f"cron-logs/service-{service.id}/job-{job.name.replace(' ', '_')}/{timestamp}.log"
-                
+
                 with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
                     f.write(output or b'')
                     path = f.name
-                
+
                 try:
                     success = upload_backup_to_s3(
                         path, dest.bucket, s3_key,

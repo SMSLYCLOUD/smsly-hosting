@@ -1,17 +1,17 @@
 import logging
 
 logger = logging.getLogger(__name__)
-import logging  # noqa: E402
-import random  # noqa: E402
+import logging
+import random
 
-from celery import shared_task  # noqa: E402
-from django.utils import timezone  # noqa: E402
+from celery import shared_task
+from django.utils import timezone
 
-from apps.deployments.models import (  # noqa: E402
+from apps.deployments.models import (
     Deployment,
     Service,
 )
-from apps.deployments.models_metrics import ServiceMetric  # noqa: E402
+from apps.deployments.models_metrics import ServiceMetric
 
 
 def _get_docker_client():

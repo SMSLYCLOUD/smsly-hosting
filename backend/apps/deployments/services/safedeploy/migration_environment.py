@@ -1,11 +1,9 @@
 import logging
-import logging
 import os
 import re
 import shutil
 import subprocess
 import venv
-from pathlib import Path
 from typing import NamedTuple
 
 logger = logging.getLogger(__name__)

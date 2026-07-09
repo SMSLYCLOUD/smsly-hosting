@@ -751,7 +751,7 @@ class BackupService:
             db_dump = os.path.join(temp_dir, 'db_dump.sql')
             redis_dump = os.path.join(temp_dir, 'redis_dump.rdb')
             image_lower = (restored_image or '').lower()
-            
+
             vol_binds = {}
             for vol_meta in metadata.get('volumes', []):
                 vol_obj = Volume.objects.filter(
@@ -789,7 +789,7 @@ class BackupService:
                 logger.info("Restoring database from SQL dump...")
                 try:
                     import time
-                    
+
                     if 'postgres' in image_lower:
                         db_user = 'postgres'
                         db_name = 'postgres'
@@ -801,7 +801,7 @@ class BackupService:
                                 db_name = ev['value']
                             elif ev['key'] == 'POSTGRES_PASSWORD':
                                 db_password = ev['value']
-                        
+
                         temp_ctr = self.docker_client.containers.run(
                             restored_image,
                             volumes=vol_binds,
@@ -838,15 +838,13 @@ class BackupService:
                             logger.info("Postgres SQL dump restored successfully.")
                         finally:
                             temp_ctr.remove(force=True)
-                            
+
                     elif 'mysql' in image_lower or 'mariadb' in image_lower:
                         db_password = ''
                         for ev in metadata.get('env_vars', []):
-                            if ev['key'] == 'MYSQL_ROOT_PASSWORD':
+                            if ev['key'] == 'MYSQL_ROOT_PASSWORD' or (ev['key'] == 'MYSQL_PASSWORD' and not db_password):
                                 db_password = ev['value']
-                            elif ev['key'] == 'MYSQL_PASSWORD' and not db_password:
-                                db_password = ev['value']
-                                
+
                         temp_ctr = self.docker_client.containers.run(
                             restored_image,
                             volumes=vol_binds,
@@ -1290,7 +1288,7 @@ class BackupService:
             db_dump = os.path.join(temp_dir, 'db_dump.sql')
             redis_dump = os.path.join(temp_dir, 'redis_dump.rdb')
             image_lower = (restored_image or '').lower()
-            
+
             vol_binds = []
             for vol_meta in metadata.get('volumes', []):
                 vol_obj = Volume.objects.filter(
@@ -1304,7 +1302,7 @@ class BackupService:
                 logger.info("Uploading Redis RDB dump to remote server...")
                 remote_redis_dump = f"/tmp/redis_dump_{uuid.uuid4().hex[:8]}.rdb"
                 ssh.upload_file(redis_dump, remote_redis_dump)
-                
+
                 try:
                     logger.info("Restoring Redis RDB dump remotely...")
                     start_cmd = f"docker run -d --rm {vol_bind_str} alpine:latest sleep 60"
@@ -1312,7 +1310,7 @@ class BackupService:
                     if code != 0:
                         raise RuntimeError(f"Failed to start temp container remotely: {err or out}")
                     temp_ctr_id = out.strip()
-                    
+
                     try:
                         ssh.exec_command(f"docker cp {shlex.quote(remote_redis_dump)} {temp_ctr_id}:/tmp/dump.rdb", timeout=300)
                         ssh.exec_command(f"docker exec {temp_ctr_id} sh -c 'cp /tmp/dump.rdb /data/dump.rdb || true'")
@@ -1326,7 +1324,7 @@ class BackupService:
                 logger.info("Uploading database SQL dump to remote server...")
                 remote_db_dump = f"/tmp/db_dump_{uuid.uuid4().hex[:8]}.sql"
                 ssh.upload_file(db_dump, remote_db_dump)
-                
+
                 try:
                     logger.info("Restoring database from SQL dump remotely...")
                     if 'postgres' in image_lower:
@@ -1340,14 +1338,14 @@ class BackupService:
                                 db_name = ev['value']
                             elif ev['key'] == 'POSTGRES_PASSWORD':
                                 db_password = ev['value']
-                        
+
                         env_str = f"-e POSTGRES_USER={shlex.quote(db_user)} -e POSTGRES_DB={shlex.quote(db_name)} -e POSTGRES_PASSWORD={shlex.quote(db_password)}"
                         start_cmd = f"docker run -d --rm {env_str} {vol_bind_str} {shlex.quote(restored_image)}"
                         out, err, code = ssh.exec_command(start_cmd)
                         if code != 0:
                             raise RuntimeError(f"Failed to start temp DB container remotely: {err or out}")
                         temp_ctr_id = out.strip()
-                        
+
                         try:
                             wait_cmd = f"docker exec -e PGUSER={shlex.quote(db_user)} {temp_ctr_id} sh -c 'for i in $(seq 1 30); do pg_isready -U \"$PGUSER\" && exit 0; sleep 1; done; exit 1'"
                             out, err, code = ssh.exec_command(wait_cmd)
@@ -1362,15 +1360,13 @@ class BackupService:
                             logger.info("Remote Postgres SQL dump restored successfully.")
                         finally:
                             ssh.exec_command(f"docker kill {temp_ctr_id}")
-                            
+
                     elif 'mysql' in image_lower or 'mariadb' in image_lower:
                         db_password = ''
                         for ev in metadata.get('env_vars', []):
-                            if ev['key'] == 'MYSQL_ROOT_PASSWORD':
+                            if ev['key'] == 'MYSQL_ROOT_PASSWORD' or (ev['key'] == 'MYSQL_PASSWORD' and not db_password):
                                 db_password = ev['value']
-                            elif ev['key'] == 'MYSQL_PASSWORD' and not db_password:
-                                db_password = ev['value']
-                                
+
                         allow_empty = 'yes' if not db_password else 'no'
                         env_str = f"-e MYSQL_ROOT_PASSWORD={shlex.quote(db_password)} -e MYSQL_ALLOW_EMPTY_PASSWORD={shlex.quote(allow_empty)}"
                         start_cmd = f"docker run -d --rm {env_str} {vol_bind_str} {shlex.quote(restored_image)}"
@@ -1378,7 +1374,7 @@ class BackupService:
                         if code != 0:
                             raise RuntimeError(f"Failed to start temp DB container remotely: {err or out}")
                         temp_ctr_id = out.strip()
-                        
+
                         try:
                             wait_cmd = f"docker exec -e MYSQL_PWD={shlex.quote(db_password)} {temp_ctr_id} sh -c 'for i in $(seq 1 45); do mysqladmin ping -h 127.0.0.1 -uroot && exit 0; sleep 1; done; exit 1'"
                             out, err, code = ssh.exec_command(wait_cmd)
@@ -2111,6 +2107,7 @@ class BackupService:
             return None
         try:
             from django.db.models import Q
+
             from apps.deployments.models_backup import BackupEncryptionKey
             row = (
                 BackupEncryptionKey.objects
@@ -2268,13 +2265,13 @@ class BackupService:
                     encrypted.write(struct.pack(">I", len(ciphertext)))
                     encrypted.write(ciphertext)
                     chunk_index += 1
-                
+
                 # Append encrypted EOF marker
                 eof_nonce = nonce_prefix + struct.pack(">I", chunk_index)
                 eof_ciphertext = aesgcm.encrypt(eof_nonce, b"EOF", None)
                 encrypted.write(struct.pack(">I", len(eof_ciphertext)))
                 encrypted.write(eof_ciphertext)
-                
+
                 encrypted.write(struct.pack(">I", 0))
 
             with contextlib.suppress(OSError):
@@ -3183,6 +3180,7 @@ def _s3_upload_with_retry(client, local_path, s3_bucket, s3_key,
                           max_retries=3, progress_callback=None) -> bool:
     """Upload a file to S3 with exponential backoff retry."""
     import time
+
     from botocore.s3.transfer import TransferConfig
     config = TransferConfig(
         multipart_threshold=8 * 1024 * 1024,
@@ -3345,7 +3343,7 @@ def _upload_backup_to_cloud(backup, filepath, service_name):
                 service_name, result["reason"],
             )
             return result
-        
+
         if dest:
             s3_bucket = dest.bucket
             s3_endpoint = dest.endpoint_url
@@ -3539,7 +3537,7 @@ def _download_backup_from_cloud(backup, local_path) -> bool:
         def __call__(self, bytes_amount):
             BackupService._broadcast_progress(
                 backup_id_str, 'downloading', percent=min(10, bytes_amount / (1024 * 1024)),
-                message=f'Downloading from cloud...',
+                message='Downloading from cloud...',
                 bytes_transferred=bytes_amount, total_bytes=0,
             )
     return download_from_s3(

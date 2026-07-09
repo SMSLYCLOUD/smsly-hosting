@@ -1,11 +1,11 @@
 import logging
 
 logger = logging.getLogger(__name__)
-import logging  # noqa: E402
-import os  # noqa: E402
-import shutil  # noqa: E402
+import logging
+import os
+import shutil
 
-from celery import shared_task  # noqa: E402
+from celery import shared_task
 
 
 @shared_task(bind=True, max_retries=0, acks_late=False, reject_on_worker_lost=False)
@@ -40,7 +40,6 @@ def platform_rollback_task(self, update_id: str):
     concurrent rollback requests for the same update.
     """
     from django.core.cache import cache
-
     from services.platform_updater import _rollback
 
     from .models_updates import PlatformUpdate

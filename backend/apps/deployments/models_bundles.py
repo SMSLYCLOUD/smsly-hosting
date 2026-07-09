@@ -158,7 +158,7 @@ class BundleComponent(TimeStampedModel):
     @property
     def parsed_credentials(self) -> dict:
         """Parse connection_url into env-var-style credentials."""
-        from urllib.parse import urlparse, unquote
+        from urllib.parse import unquote, urlparse
         if not self.connection_url:
             return {}
         parsed = urlparse(self.connection_url)

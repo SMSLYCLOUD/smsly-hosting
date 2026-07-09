@@ -1,17 +1,16 @@
 import os
-import time
 import random
 import string
-import json
-from docx import Document
-from docx.shared import Inches, Pt, RGBColor
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill, Alignment
-from fpdf import FPDF
+import time
+
 import matplotlib.pyplot as plt
-import pandas as pd
 import numpy as np
+from docx import Document
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.shared import Inches, RGBColor
+from fpdf import FPDF
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font, PatternFill
 
 OUTPUT_DIR = "test-results/skills_test"
 os.makedirs(OUTPUT_DIR, exist_ok=True)

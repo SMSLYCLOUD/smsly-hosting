@@ -10,7 +10,9 @@ from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
 from ..api_token_auth import APIToken
-from ..models import Service  # type: ignore[attr-defined]    # models.py hub no longer re-exports; class lives in models_core.py.
+from ..models import (
+    Service,  # type: ignore[attr-defined]    # models.py hub no longer re-exports; class lives in models_core.py.
+)
 
 User = get_user_model()
 

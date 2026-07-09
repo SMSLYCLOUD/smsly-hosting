@@ -1354,7 +1354,6 @@ if os.path.exists(services_dir):
         database, and starts the platform — all via incoming REST endpoints.
         """
         import base64
-        import tempfile
 
         backup = self.transfer.source_backup or self.transfer.source_server_backup
         if not backup or not backup.file_path:
@@ -1437,7 +1436,7 @@ else:
         if env_content:
             # Write .env to target via upload-file
             b64_env = base64.b64encode(env_content.encode()).decode('ascii')
-            self._node_api_request('incoming/upload-file', 
+            self._node_api_request('incoming/upload-file',
 body={
                 'path': '/tmp/.env.restore',
                 'content_base64': b64_env,

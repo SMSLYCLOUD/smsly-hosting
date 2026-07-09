@@ -8,11 +8,11 @@ Permanently fixes the custom domain SSL system by addressing:
 4. Testing and verification
 """
 
-import os
-import sys
-import subprocess
-import time
 import logging
+import os
+import subprocess
+import sys
+import time
 from pathlib import Path
 
 # Setup logging

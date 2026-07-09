@@ -3,11 +3,11 @@
 """Clusters module."""
 # pylint: disable=no-member
 """Cluster manager service."""
-import logging  # noqa: E402
-import re  # noqa: E402
-import time  # noqa: E402
+import logging
+import re
+import time
 
-from tenacity import retry, stop_after_attempt, wait_exponential  # noqa: E402
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
 

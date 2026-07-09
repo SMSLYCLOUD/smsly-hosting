@@ -19,8 +19,8 @@ print("=== Custom Domain System Status Report ===\n")
 print("1. Database Records Check")
 print("-" * 40)
 
-from apps.deployments.models import Service  # noqa: E402
-from apps.domains.models import Domain, DomainStatus  # noqa: E402
+from apps.deployments.models import Service
+from apps.domains.models import Domain, DomainStatus
 
 # Check Domain records
 domains = Domain.objects.all()
@@ -67,7 +67,7 @@ else:
 print("2. Platform Configuration")
 print("-" * 40)
 
-from apps.deployments.models import PlatformConfig  # noqa: E402
+from apps.deployments.models import PlatformConfig
 
 try:
     config = PlatformConfig.load()
@@ -85,7 +85,7 @@ print()
 print("3. DNS Verification Test")
 print("-" * 40)
 
-from apps.domains.verification import verify_custom_domain_dns  # noqa: E402
+from apps.domains.verification import verify_custom_domain_dns
 
 # Test with existing domains
 if domains.exists():

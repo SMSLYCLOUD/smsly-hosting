@@ -67,9 +67,10 @@ class ScopedRegistryViewSet(viewsets.ModelViewSet):
         # SECURITY: Scope results to entities the user owns or belongs to
         if not user.is_superuser:
             from django.db.models import Q
-            from .models import Organization, Team, Project
             from organizations.models import OrganizationMembership
             from teams.models import TeamMember
+
+            from .models import Organization, Project, Team
 
             # Resolve content-type-specific Q filters for each scope type
             scope_filters = Q()

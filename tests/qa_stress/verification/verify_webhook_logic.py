@@ -1,14 +1,15 @@
 # pylint: disable=protected-access
 import os
+from unittest.mock import patch
+
 import django
-from unittest.mock import MagicMock, patch
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 django.setup()
 
-from apps.deployments.webhooks.github import GitHubWebhookHandler
-from apps.deployments.models import Service
 from apps.cloud.models import CloudProvider
+from apps.deployments.models import Service
+from apps.deployments.webhooks.github import GitHubWebhookHandler
 
 # Setup Mock Data
 provider = CloudProvider.objects.create(name="TestProvider", provider_type="LOCAL")

@@ -13,9 +13,8 @@ Responsibilities:
 import json
 import logging
 import socket
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
-from django.conf import settings
 from django.utils import timezone
 
 from ..models_database_replica import DatabaseReplica
@@ -36,7 +35,7 @@ PGCAT_RELOAD_SIGNAL = "SIGHUP"
 DB_REPLICA_HOSTS_ENV = "DB_REPLICA_HOSTS"
 
 
-def active_replica_endpoints() -> List[str]:
+def active_replica_endpoints() -> list[str]:
     """
     Return the list of ``host:port`` strings for all active replicas.
 
@@ -60,7 +59,7 @@ def replica_endpoints_for_pgcat() -> str:
     return ",".join(active_replica_endpoints())
 
 
-def test_connection(replica: DatabaseReplica) -> Tuple[bool, str, Optional[float]]:
+def test_connection(replica: DatabaseReplica) -> tuple[bool, str, float | None]:
     """
     Test the connection to a replica.
 
@@ -82,7 +81,7 @@ def test_connection(replica: DatabaseReplica) -> Tuple[bool, str, Optional[float
             return True, "", None
     except OSError as exc:
         return False, f"{type(exc).__name__}: {exc}", None
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return False, f"{type(exc).__name__}: {exc}", None
 
 
@@ -103,7 +102,7 @@ def update_replica_health(replica: DatabaseReplica) -> DatabaseReplica:
     return replica
 
 
-def sync_pgcat_config(*, trigger_reload: bool = True) -> Dict[str, Any]:
+def sync_pgcat_config(*, trigger_reload: bool = True) -> dict[str, Any]:
     """
     Push the current set of active replicas to the pgcat container.
 
@@ -126,7 +125,7 @@ def sync_pgcat_config(*, trigger_reload: bool = True) -> Dict[str, Any]:
                 len(endpoints_str.split(",")) if endpoints_str else 0,
                 endpoints_str or "(none)")
 
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "replica_count": 0,
         "endpoints": endpoints_str,
         "pgcat_container": None,
@@ -140,7 +139,7 @@ def sync_pgcat_config(*, trigger_reload: bool = True) -> Dict[str, Any]:
         # socket isn't available (e.g. unit tests on a developer
         # laptop).
         import docker  # type: ignore
-        from docker.errors import NotFound, APIError  # type: ignore
+        from docker.errors import APIError, NotFound  # type: ignore
     except ImportError as exc:
         result["error"] = f"docker SDK not available: {exc}"
         logger.error(result["error"])
@@ -207,7 +206,7 @@ def sync_pgcat_config(*, trigger_reload: bool = True) -> Dict[str, Any]:
     return result
 
 
-def _find_pgcat_container() -> Optional[str]:
+def _find_pgcat_container() -> str | None:
     """Locate the pgcat container name. Returns None if not found."""
     import docker  # type: ignore
     from docker.errors import NotFound  # type: ignore
@@ -226,7 +225,7 @@ def _find_pgcat_container() -> Optional[str]:
         for c in client.containers.list():
             if "pgcat" in (c.name or "").lower():
                 return c.name
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("Could not enumerate docker containers: %s", exc)
     return None
 

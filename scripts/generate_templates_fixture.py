@@ -12,10 +12,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Dict, List
-import sys
+from typing import Any
 
 # When executed as a script, Python puts `scripts/` on sys.path, not the repo root.
 # Ensure `backend/` is importable (we rely on backend.services.app_templates).
@@ -58,11 +58,11 @@ def _icon_for(template_id: str, category: str) -> str:
     return by_category.get(category, "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/docker/docker-original.svg")
 
 
-def build_base_templates() -> List[Dict[str, Any]]:
+def build_base_templates() -> list[dict[str, Any]]:
     # Import from the backend registry (works when run from repo root).
     from backend.services.app_templates import APP_TEMPLATES
 
-    base: List[Dict[str, Any]] = []
+    base: list[dict[str, Any]] = []
     for t in sorted(APP_TEMPLATES.values(), key=lambda x: x.id):
         # Convert dataclass -> dict, then reshape into the fixture schema.
         td = asdict(t)
@@ -71,7 +71,7 @@ def build_base_templates() -> List[Dict[str, Any]]:
             for k, v in sorted((td.get("env_vars") or {}).items())
         ]
 
-        entry: Dict[str, Any] = {
+        entry: dict[str, Any] = {
             "id": td["id"],
             "name": td["name"],
             "description": td["description"],
@@ -90,12 +90,12 @@ def build_base_templates() -> List[Dict[str, Any]]:
     return base
 
 
-def build_templates(count: int) -> List[Dict[str, Any]]:
+def build_templates(count: int) -> list[dict[str, Any]]:
     base = build_base_templates()
     if not base:
         raise RuntimeError("No base templates found (APP_TEMPLATES is empty).")
 
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for i in range(count):
         b = base[i % len(base)]
         variant = i // len(base)

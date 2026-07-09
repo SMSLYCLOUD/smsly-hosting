@@ -13,9 +13,9 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 # Setup Django
 django.setup()
 
-from apps.deployments.models import PlatformConfig, Service  # noqa: E402
-from apps.domains.models import Domain, DomainStatus  # noqa: E402
-from apps.domains.verification import verify_custom_domain_dns  # noqa: E402
+from apps.deployments.models import PlatformConfig, Service
+from apps.domains.models import Domain, DomainStatus
+from apps.domains.verification import verify_custom_domain_dns
 
 print('=== Investigation of Custom Domain SSL Issue ===')
 

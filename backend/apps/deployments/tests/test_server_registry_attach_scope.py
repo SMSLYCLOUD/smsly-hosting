@@ -26,7 +26,7 @@ from apps.deployments.models import ScopedRegistry
 from apps.deployments.models_core import Project
 from apps.deployments.models_servers import ManagedServer
 from apps.organizations.models import Organization, OrganizationMembership
-from apps.teams.models import Team, TeamMember
+from apps.teams.models import Team
 
 User = get_user_model()
 

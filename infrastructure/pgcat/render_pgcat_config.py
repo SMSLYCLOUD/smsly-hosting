@@ -133,7 +133,7 @@ def main():
 
     lines = [
         '[general]',
-        f'host = "0.0.0.0"',
+        'host = "0.0.0.0"',
         f'port = {db_port}',
         f'admin_username = "{admin_user}"',
         f'admin_password = "{admin_pass}"',
@@ -171,7 +171,7 @@ def main():
     for node_user, node_pass in node_users:
         lines.append(f'[pools.smsly_hosting.users.{node_user}]')
         lines.append(f'username = "{node_user}"')
-        lines.append(f'pool_size = 5')
+        lines.append('pool_size = 5')
         lines.append(f'password = "{node_pass}"')
 
     lines += [
@@ -191,7 +191,7 @@ def main():
     for node_user, node_pass in node_users:
         lines.append(f'[pools.smsly_hosting_session.users.{node_user}]')
         lines.append(f'username = "{node_user}"')
-        lines.append(f'pool_size = 3')
+        lines.append('pool_size = 3')
         lines.append(f'password = "{node_pass}"')
 
     toml_content = "\n".join(lines) + "\n"

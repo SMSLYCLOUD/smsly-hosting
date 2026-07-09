@@ -7,15 +7,15 @@ Expose local development servers to public URLs via WebSocket tunnels.
 Similar to ngrok, but integrated with SMSLY Hosting.
 """
 
-import asyncio  # noqa: E402
-import json  # noqa: E402
-import logging  # noqa: E402
-import uuid  # noqa: E402
-from dataclasses import dataclass, field  # noqa: E402
-from datetime import datetime  # noqa: E402
+import asyncio
+import json
+import logging
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime
 
-from aiohttp import WSMsgType, web  # noqa: E402
-from django.conf import settings  # noqa: E402
+from aiohttp import WSMsgType, web
+from django.conf import settings
 
 logger = logging.getLogger('smsly.tunnels')
 
@@ -222,7 +222,7 @@ class TunnelServer:  # pylint: disable=too-many-instance-attributes
         # Wait for response from client (with timeout)
         try:
             response_data = await asyncio.wait_for(fut, timeout=30.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pending.pop(request_id, None)
             log_entry.response_status = 504
             return web.Response(status=504, text="Tunnel timeout")

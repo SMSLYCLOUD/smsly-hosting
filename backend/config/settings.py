@@ -25,7 +25,7 @@ def _env_bool(name: str, default: str = 'False') -> bool:
     return raw in ('1', 'true', 'yes', 'on')
 
 
-from django.core.exceptions import ImproperlyConfigured  # noqa: E402
+from django.core.exceptions import ImproperlyConfigured
 
 _SECRET_KEY_RAW = str(config('SECRET_KEY', default='')).strip()
 _FIELD_ENCRYPTION_KEY_RAW = str(config('FIELD_ENCRYPTION_KEY', default='')).strip()
@@ -1166,6 +1166,7 @@ from config.redis_sentinel import (
     sentinel_channel_layer_config,
     standalone_url,
 )
+
 if SENTINEL_ENABLED:
     logger.info(
         "Redis Sentinel enabled — service=%s hosts=%s",

@@ -29,6 +29,7 @@ def authenticate_ws_token(token_key: str):
     Validate WS token against DRF Tokens and APITokens, returning the active User if valid.
     """
     import hashlib
+
     from django.core.cache import cache
     from rest_framework.authtoken.models import Token
 
@@ -309,7 +310,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 try:
                     # Brief wait for cancellation to propagate
                     await asyncio.wait_for(task, timeout=0.2)
-                except (asyncio.CancelledError, asyncio.TimeoutError):
+                except (TimeoutError, asyncio.CancelledError):
                     if settings.DEBUG:
                         logger.debug("%s task CANCELLED", name)
                 except Exception as e:
@@ -552,7 +553,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                         await self.send(text_data=json.dumps(msg))
                         await asyncio.sleep(0.01)
 
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     # No data? Send a protocol-level 'pong' to keep the tunnel "hot"
                     if not self.is_disconnected:
                         try:

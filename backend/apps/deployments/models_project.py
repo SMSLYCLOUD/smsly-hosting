@@ -4,7 +4,7 @@ import uuid
 from django.conf import settings
 from django.db import models
 
-from .models_core import Project  # noqa: F401
+from .models_core import Project
 
 
 class ProjectMember(models.Model):

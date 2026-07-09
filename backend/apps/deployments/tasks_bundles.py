@@ -22,10 +22,11 @@ def provision_bundle_task(
     Creates BundleComponent records, spins up the Docker Compose stack,
     and injects connection URLs as env vars on the parent service.
     """
-    from apps.deployments.models_bundles import Bundle, BundleComponent
-    from apps.deployments.models import EnvironmentVariable
     from services.bundle_provisioner import bundle_provisioner
     from services.grid_addons_parser import load_grid_addons
+
+    from apps.deployments.models import EnvironmentVariable
+    from apps.deployments.models_bundles import Bundle, BundleComponent
 
     start_ts = _time.monotonic()
 
@@ -152,9 +153,10 @@ def reprovision_bundle_task(
     build_dir: str | None = None,
 ):
     """Tear down and re-provision a bundle."""
-    from apps.deployments.models_bundles import Bundle
     from services.bundle_provisioner import bundle_provisioner
     from services.grid_addons_parser import load_grid_addons
+
+    from apps.deployments.models_bundles import Bundle
 
     try:
         bundle = Bundle.objects.get(id=bundle_id)
@@ -195,8 +197,9 @@ def reprovision_bundle_task(
         bundle.save(update_fields=['status', 'network'])
 
         # Update BundleComponent records with new values
-        from apps.deployments.models_bundles import BundleComponent
         from urllib.parse import urlparse as _urlparse
+
+        from apps.deployments.models_bundles import BundleComponent
         for svc_decl in bundle_decl.services:
             url = component_urls.get(svc_decl.name, "")
             container_name = bundle_provisioner._container_name(
@@ -322,8 +325,9 @@ def backup_bundle_component_task(
     component_id: str,
 ):
     """Create a backup for a bundle component."""
-    from apps.deployments.models_bundles import BundleComponent, BundleBackup
     from services.bundle_provisioner import bundle_provisioner
+
+    from apps.deployments.models_bundles import BundleBackup, BundleComponent
 
     try:
         component = BundleComponent.objects.get(id=component_id)
@@ -348,6 +352,7 @@ def backup_bundle_component_task(
         )
 
         import os
+
         from django.utils import timezone
         backup.file_path = path
         backup.size_bytes = os.path.getsize(path) if os.path.isfile(path) else 0
@@ -378,8 +383,9 @@ def backup_bundle_component_task(
 @shared_task(bind=True, max_retries=3)
 def restore_bundle_component_task(self, backup_id: str):
     """Restore a backup to a bundle component."""
-    from apps.deployments.models_bundles import BundleBackup
     from services.bundle_provisioner import bundle_provisioner
+
+    from apps.deployments.models_bundles import BundleBackup
 
     try:
         backup = BundleBackup.objects.select_related(
@@ -411,8 +417,9 @@ def restore_bundle_component_task(self, backup_id: str):
 @shared_task
 def delete_bundle_task(bundle_id: str):
     """Full deletion of a bundle: deprovision + remove DB records."""
-    from apps.deployments.models_bundles import Bundle
     from services.bundle_provisioner import bundle_provisioner
+
+    from apps.deployments.models_bundles import Bundle
 
     try:
         bundle = Bundle.objects.get(id=bundle_id)

@@ -7,7 +7,7 @@ import shlex
 from django.utils import timezone
 
 from .container_runtime import get_runtime_for_container
-from .network_scope import ensure_scoped_network, apply_egress_restrictions
+from .network_scope import apply_egress_restrictions, ensure_scoped_network
 from .ssh_client import SSHClient
 
 logger = logging.getLogger(__name__)

@@ -1,7 +1,9 @@
 
 import os
 import time
+
 from playwright.sync_api import sync_playwright
+
 
 def verify_comparison_page():
     with sync_playwright() as p:

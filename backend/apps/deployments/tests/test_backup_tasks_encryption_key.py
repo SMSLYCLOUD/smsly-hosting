@@ -11,9 +11,8 @@ This lets operators set a per-backup key (e.g. from a schedule's
 backups.
 """
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import docker
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 

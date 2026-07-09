@@ -1,11 +1,11 @@
 import logging
 
 logger = logging.getLogger(__name__)
-from celery import shared_task  # noqa: E402
-from django.db import models as db_models  # noqa: E402
+from celery import shared_task
+from django.db import models as db_models
 
-from apps.deployments.models import Service  # noqa: E402
-from apps.deployments.models_replica import ServiceReplica  # noqa: E402
+from apps.deployments.models import Service
+from apps.deployments.models_replica import ServiceReplica
 
 # AUTOSCALE_BATCH_SIZE: maximum services to process per cursor page.
 # The periodic task walks all eligible services in batches to avoid

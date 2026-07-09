@@ -3,10 +3,14 @@ import re
 
 from rest_framework import serializers
 
-from .models import Deployment, EnvironmentVariable, Region, Service  # type: ignore[attr-defined]  # models re-exports from submodules
+from .models import (  # type: ignore[attr-defined]  # models re-exports from submodules
+    Deployment,
+    EnvironmentVariable,
+    Region,
+    Service,
+)
 from .models_audit import AuditLog
 from .models_backup import BackupSchedule, ServerBackup, ServiceBackup, ServiceSnapshot
-from .serializers_transfer import ServerTransferCreateSerializer, ServerTransferSerializer  # noqa: F401
 from .models_safedeploy import (
     DatabaseClone,
     DeploymentApproval,
@@ -14,6 +18,7 @@ from .models_safedeploy import (
     MigrationValidation,
     PreviewEnvironment,
 )
+from .serializers_transfer import ServerTransferCreateSerializer, ServerTransferSerializer  # noqa: F401
 
 # SECURITY: docker_image strings flow into ``docker pull`` on the
 # controller and remote nodes. We restrict the scheme/host to the
@@ -23,7 +28,7 @@ from .models_safedeploy import (
 #
 # The canonical allowlist lives in registry_validation.py to prevent
 # policy drift between the API-boundary serializer and internal callers.
-from .services.registry_validation import ALLOWED_IMAGE_REGISTRY_HOSTS as _ALLOWED_IMAGE_REGISTRIES  # noqa: E501
+from .services.registry_validation import ALLOWED_IMAGE_REGISTRY_HOSTS as _ALLOWED_IMAGE_REGISTRIES
 
 
 def _validate_docker_image(image: str) -> str:
@@ -72,6 +77,7 @@ def _validate_docker_image(image: str) -> str:
 
 
 from apps.deployments.models_registry import RegistryCredential
+
 
 class RegistryCredentialSerializer(serializers.ModelSerializer):
     class Meta:
@@ -161,10 +167,10 @@ class ServiceSerializer(serializers.ModelSerializer):
                 user = self.instance.owner
             elif 'request' in self.context and self.context['request'].user.is_authenticated:
                 user = self.context['request'].user
-            
+
             class MockService:
                 owner_id = user.id if user else None
-                
+
             return validate_image_registry(value, service=MockService())
         except ValueError as e:
             raise serializers.ValidationError(str(e))

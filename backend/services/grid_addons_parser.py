@@ -147,7 +147,7 @@ def _load_data(raw_text: str, source_path: str) -> dict:
     stripped = raw_text.strip()
     # YAML first — handles flow syntax {key: value} and [items] correctly
     try:
-        import yaml  # noqa: E402 – imported at call-time to keep load light
+        import yaml
     except ImportError:
         raise ImportError(
             "PyYAML is required to parse grid.addons.  "

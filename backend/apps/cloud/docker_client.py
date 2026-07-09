@@ -4,8 +4,9 @@ L-3 fix: Always respects DOCKER_HOST env var to ensure all Docker SDK
 calls go through the socket-proxy service rather than hitting the raw
 Docker socket directly.
 """
-import os
 import logging
+import os
+
 import docker
 
 logger = logging.getLogger(__name__)

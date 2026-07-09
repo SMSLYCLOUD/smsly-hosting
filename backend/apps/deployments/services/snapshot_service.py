@@ -11,8 +11,6 @@ import logging
 import subprocess
 from typing import Any
 
-from django.conf import settings
-
 logger = logging.getLogger(__name__)
 
 
@@ -167,7 +165,6 @@ class SnapshotService:
 
         Returns the created ``ServiceSnapshot`` instance.
         """
-        import time as _time
 
         from apps.deployments.models_backup import ServiceSnapshot
         from apps.deployments.models_core import Service
@@ -222,6 +219,7 @@ class SnapshotService:
         if sched and sched.storage_backend == 's3' and sched.s3_bucket:
             import json
             import tempfile
+
             from apps.deployments.services.backup_service import upload_backup_to_s3
             try:
                 timestamp = snapshot.created_at.strftime('%Y%m%d_%H%M%S')
@@ -326,6 +324,7 @@ class SnapshotService:
         Returns True on success, False on failure.
         """
         from urllib.parse import urlparse
+
         from apps.deployments.models_addons import Addon
 
         db_url = None
@@ -358,7 +357,6 @@ class SnapshotService:
             # Use pg_dump from clone into current DB (safer than DROP/CREATE)
             try:
                 # Clone from the snapshot DB back to the original
-                from psycopg2 import sql as pg_sql
                 maintenance_url = mgr._get_maintenance_url()
 
                 # Terminate connections on current DB

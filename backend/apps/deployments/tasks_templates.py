@@ -1,35 +1,35 @@
 import logging
 
 logger = logging.getLogger(__name__)
-import json  # noqa: E402
-import logging  # noqa: E402
-import os  # noqa: E402
-import secrets  # noqa: E402
-import subprocess  # noqa: E402
-from urllib.parse import urlparse  # noqa: E402
+import json
+import logging
+import os
+import secrets
+import subprocess
+from urllib.parse import urlparse
 
-from celery import shared_task  # noqa: E402
-from django.conf import settings  # noqa: E402
-from services.addon_provisioner import addon_provisioner  # noqa: E402
+from celery import shared_task
+from django.conf import settings
+from services.addon_provisioner import addon_provisioner
 
-from apps.cloud.models import CloudProvider  # noqa: E402
-from apps.deployments.ai_router import (  # noqa: E402
+from apps.cloud.models import CloudProvider
+from apps.deployments.ai_router import (
     DEFAULT_AI_ROUTER_API_BASE,
     DEFAULT_AI_ROUTER_UI_BASE,
     DEFAULT_BRAID_ALIAS,
 )
-from apps.deployments.models import (  # noqa: E402
+from apps.deployments.models import (
     Deployment,
     EnvironmentVariable,
     Service,
 )
-from apps.deployments.models_addons import Addon  # noqa: E402
-from apps.deployments.utils import (  # noqa: E402
+from apps.deployments.models_addons import Addon
+from apps.deployments.utils import (
     append_log,
 )
 
-from .tasks_ai_router import _ensure_shared_ollama_cpp, _pull_ollama_models_into_shared  # noqa: E402
-from .tasks_deploy import enqueue_smart_deploy_task  # noqa: E402
+from .tasks_ai_router import _ensure_shared_ollama_cpp, _pull_ollama_models_into_shared
+from .tasks_deploy import enqueue_smart_deploy_task
 
 
 @shared_task(bind=True, max_retries=0)

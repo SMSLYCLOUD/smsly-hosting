@@ -1,6 +1,7 @@
 import os
 import sys
 
+
 def main():
     docs_dir = os.path.join(os.path.dirname(__file__), '..', 'docs')
     matrix_path = os.path.join(docs_dir, 'ADDON_TEMPLATE_CERTIFICATION_MATRIX.md')

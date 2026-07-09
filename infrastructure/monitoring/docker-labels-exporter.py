@@ -11,12 +11,13 @@ import os
 import socket
 import socketserver
 import sys
-import time
 import threading
+import time
 import traceback
 
 try:
-    from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FutureTimeout
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import TimeoutError as FutureTimeout
     _HAS_POOL = True
 except ImportError:  # minimal Python builds
     _HAS_POOL = False

@@ -1,5 +1,5 @@
-import subprocess
 import json
+import subprocess
 
 # Get all running docker containers
 result = subprocess.run(["docker", "ps", "--format", "{{.Names}}"], capture_option=True, text=True)

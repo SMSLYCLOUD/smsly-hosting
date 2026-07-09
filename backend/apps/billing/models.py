@@ -5,6 +5,7 @@ from django.conf import settings
 from django.db import models
 
 from apps.deployments.models import Service
+
 from .models_analytics import DailyRevenue, InfrastructureCost  # noqa: F401
 
 

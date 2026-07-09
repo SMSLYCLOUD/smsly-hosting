@@ -3,9 +3,10 @@ import logging
 import re
 
 import sqlparse
-from apps.deployments.models_addons import Addon
 from django.core.cache import cache
 from sqlparse.sql import Statement
+
+from apps.deployments.models_addons import Addon
 
 logger = logging.getLogger(__name__)
 

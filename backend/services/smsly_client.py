@@ -7,11 +7,11 @@ SMSLY Platform Integration Client.
 Provides native integration with SMSLY's SMS, Voice, and Verification services
 for the hosting platform's internal use (alerts, notifications, 2FA).
 """
-import logging  # noqa: E402
-from typing import Any  # noqa: E402
+import logging
+from typing import Any
 
-import httpx  # noqa: E402
-from decouple import config  # noqa: E402
+import httpx
+from decouple import config
 
 logger = logging.getLogger(__name__)
 

@@ -49,6 +49,7 @@ class CloudStorageSerializer(serializers.ModelSerializer):
 
     def validate_endpoint(self, value):
         from django.core.exceptions import ValidationError as DjangoValidationError
+
         from .models_backup import validate_endpoint_url
         try:
             validate_endpoint_url(value)

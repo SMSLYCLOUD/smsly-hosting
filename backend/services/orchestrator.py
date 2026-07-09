@@ -4,6 +4,7 @@
 import logging
 import signal
 import threading
+
 from apps.deployments.models import Deployment
 from apps.deployments.tasks_ai import analyze_failure_task
 from apps.deployments.tasks_alerts import alert_user_task

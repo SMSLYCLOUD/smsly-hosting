@@ -7,10 +7,13 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'backend'))
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 
 import django
+
 django.setup()
 
-from apps.deployments.tasks_metrics import collect_metrics_task
 import time
+
+from apps.deployments.tasks_metrics import collect_metrics_task
+
 
 def main():
     print("Starting Celery DB Pool Stress Test...")

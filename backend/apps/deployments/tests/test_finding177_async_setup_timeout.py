@@ -53,7 +53,7 @@ class Finding177AsyncSetupTimeoutTests(TestCase):
                  patch.object(consumer, 'close', AsyncMock()), \
                  patch.object(consumer, '_close_exec_socket', AsyncMock()), \
                  patch('apps.deployments.consumers.asyncio.wait_for') as wait_for_mock:
-                wait_for_mock.side_effect = asyncio.TimeoutError()
+                wait_for_mock.side_effect = TimeoutError()
                 await consumer._async_setup()
                 self.assertGreaterEqual(wait_for_mock.call_count, 1)
 
@@ -77,7 +77,7 @@ class Finding177AsyncSetupTimeoutTests(TestCase):
                     if call_count['n'] >= 2:
                         with contextlib.suppress(Exception):
                             coro.close()
-                        raise asyncio.TimeoutError()
+                        raise TimeoutError()
                     return await real_wait_for(coro, timeout)
 
                 with patch('apps.deployments.consumers.asyncio.wait_for', side_effect=_wait_for):

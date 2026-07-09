@@ -7,7 +7,7 @@ import uuid
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
-from django.db import models, ProgrammingError, OperationalError
+from django.db import OperationalError, ProgrammingError, models
 from django.utils.translation import gettext_lazy as _
 from encrypted_model_fields.fields import EncryptedCharField, EncryptedTextField
 
@@ -678,7 +678,9 @@ class Service(TimeStampedModel):
             configured = ""
 
         try:
-            from .models_addons import PlatformConfig  # type: ignore[attr-defined]  # models_addons re-exports from submodules
+            from .models_addons import (
+                PlatformConfig,  # type: ignore[attr-defined]  # models_addons re-exports from submodules
+            )
             platform_cfg = PlatformConfig.objects.only("domain").first()
             if platform_cfg and platform_cfg.domain:
                 configured = platform_cfg.domain.strip().lower().rstrip(".")

@@ -1,9 +1,9 @@
 import logging
 
 logger = logging.getLogger(__name__)
-import logging  # noqa: E402
+import logging
 
-from apps.deployments.models import (  # noqa: E402  # type: ignore[attr-defined]
+from apps.deployments.models import (  # type: ignore[attr-defined]
     PlatformConfig,
 )
 

@@ -126,12 +126,12 @@ class DynamicAllowedHostsMiddleware:
 
         return self.get_response(request)
 
-import hashlib  # noqa: E402
-from urllib.parse import parse_qs  # noqa: E402
+import hashlib
+from urllib.parse import parse_qs
 
-from channels.db import database_sync_to_async  # noqa: E402
-from django.contrib.auth.models import AnonymousUser  # noqa: E402
-from django.db import close_old_connections  # noqa: E402
+from channels.db import database_sync_to_async
+from django.contrib.auth.models import AnonymousUser
+from django.db import close_old_connections
 
 
 @database_sync_to_async

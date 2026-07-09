@@ -1,47 +1,52 @@
 import logging
 
 logger = logging.getLogger(__name__)
-import logging  # noqa: E402
-import os  # noqa: E402
-import shlex  # noqa: E402
-import subprocess  # noqa: E402
-import tempfile  # noqa: E402
-import threading  # noqa: E402
-import time  # noqa: E402
-from contextlib import contextmanager, suppress  # noqa: E402
-from urllib.parse import urlparse  # noqa: E402
+import logging
+import os
+import shlex
+import subprocess
+import tempfile
+import threading
+import time
+from contextlib import contextmanager, suppress
+from urllib.parse import urlparse
 
-import docker  # noqa: E402
-from celery import shared_task  # noqa: E402
-from django.conf import settings  # noqa: E402
-from django.core.cache import cache  # noqa: E402
-from django.utils import timezone  # noqa: E402
-from services.addon_provisioner import addon_provisioner  # noqa: E402
+import docker
+from celery import shared_task
+from django.conf import settings
+from django.core.cache import cache
+from django.utils import timezone
+from services.addon_provisioner import addon_provisioner
 
-from apps.cloud.models import CloudProvider  # noqa: E402
-from apps.cloud.services.compute import ComputeService  # noqa: E402
-from apps.deployments.ai_router import (  # noqa: E402
+from apps.cloud.models import CloudProvider
+from apps.cloud.services.compute import ComputeService
+from apps.deployments.ai_router import (
     generate_ai_router_proxy_config,
     get_ollama_model_name,
     is_ai_router_service,
     is_ollama_service,
 )
-from apps.deployments.models import (  # noqa: E402
+from apps.deployments.models import (
     Deployment,
     EnvironmentVariable,
     PlatformConfig,
     Service,
 )
-from apps.deployments.models_addons import Addon  # noqa: E402
-from apps.deployments.models_storage import Volume  # noqa: E402
-from apps.deployments.services.pipeline import PipelineError, PipelineManager  # noqa: E402
-from apps.deployments.services.remote_orchestrator import RemoteOrchestrator  # noqa: E402
-from apps.deployments.utils import append_log, broadcast_status, log_exhaustive_runtime_activation_diagnostics, update_stage  # noqa: E402
+from apps.deployments.models_addons import Addon
+from apps.deployments.models_storage import Volume
+from apps.deployments.services.pipeline import PipelineError, PipelineManager
+from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+from apps.deployments.utils import (
+    append_log,
+    broadcast_status,
+    log_exhaustive_runtime_activation_diagnostics,
+    update_stage,
+)
 
-from .tasks_ai_router import _cleanup_shared_ollama_if_unused  # noqa: E402
-from .tasks_build import _build_function, _build_uploaded_source  # noqa: E402
-from .tasks_caddy import _regenerate_caddyfile  # noqa: E402
-from .tasks_deploy_local import (  # noqa: E402
+from .tasks_ai_router import _cleanup_shared_ollama_if_unused
+from .tasks_build import _build_function, _build_uploaded_source
+from .tasks_caddy import _regenerate_caddyfile
+from .tasks_deploy_local import (
     _build_platform_healthcheck,
     _build_runtime_env,
     _local_container_timeout_seconds,
@@ -49,8 +54,8 @@ from .tasks_deploy_local import (  # noqa: E402
     _wait_for_local_container_healthy,
     _wait_for_local_route_ready,
 )
-from .tasks_deploy_remote import _handle_remote_deployment, _resume_remote_deployment  # noqa: E402
-from .tasks_utils import (  # noqa: E402
+from .tasks_deploy_remote import _handle_remote_deployment, _resume_remote_deployment
+from .tasks_utils import (
     _current_agent_node_queue,
     _env_bool,
     _env_int,
@@ -1432,7 +1437,7 @@ def _handle_failure(task, deployment, error_msg, reason):
                     from apps.intelligence.models import AIProviderSettings
                 except Exception:
                     AIProviderSettings = None
-                
+
                 service = deployment.service
                 # Only trigger if Jules has an API key configured
                 if not AIProviderSettings:

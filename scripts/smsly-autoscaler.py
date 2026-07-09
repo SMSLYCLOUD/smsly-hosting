@@ -23,19 +23,18 @@ Architecture:
   - Hard floor: each service always gets at least 256MB
 """
 
-import subprocess
+import collections
 import json
-import time
+import logging
 import os
 import signal
+import subprocess
 import sys
-import logging
-import collections
 import threading
-from dataclasses import dataclass, asdict
-from typing import Dict, List, Optional
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from datetime import datetime, timezone
+import time
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -130,7 +129,7 @@ class ScalingDecision:
 # Docker Stats Collection
 # =============================================================================
 
-def get_docker_stats() -> Dict[str, ContainerStats]:
+def get_docker_stats() -> dict[str, ContainerStats]:
     """Read live Docker stats for all running containers."""
     try:
         result = subprocess.run(
@@ -216,7 +215,7 @@ def _parse_size_mb(size_str: str) -> float:
 # Scaling Logic
 # =============================================================================
 
-def calculate_demand_scores(stats: Dict[str, ContainerStats]) -> Dict[str, float]:
+def calculate_demand_scores(stats: dict[str, ContainerStats]) -> dict[str, float]:
     """
     Calculate a demand score [0-1] for each managed container.
     Higher = more resources needed.
@@ -258,9 +257,9 @@ def calculate_demand_scores(stats: Dict[str, ContainerStats]) -> Dict[str, float
 
 
 def make_scaling_decisions(
-    stats: Dict[str, ContainerStats],
-    demand_scores: Dict[str, float]
-) -> List[ScalingDecision]:
+    stats: dict[str, ContainerStats],
+    demand_scores: dict[str, float]
+) -> list[ScalingDecision]:
     """
     Decide how to redistribute resources based on demand.
 
@@ -271,7 +270,7 @@ def make_scaling_decisions(
     - Scale memory limits with worker count
     """
     decisions = []
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso = datetime.now(UTC).isoformat()
 
     # Calculate total demand
     total_demand = sum(demand_scores.values())
@@ -358,7 +357,7 @@ def make_scaling_decisions(
 # Scaling Actions
 # =============================================================================
 
-def apply_decisions(decisions: List[ScalingDecision]):
+def apply_decisions(decisions: list[ScalingDecision]):
     """Apply scaling decisions to running containers."""
     for d in decisions:
         if d.action == 'none':
@@ -692,7 +691,7 @@ def _run_once_implementation():
         logger.debug("All containers balanced — no changes needed")
 
     # Update history and state
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso = datetime.now(UTC).isoformat()
     state_snapshot = {
         'timestamp': now_iso,
         'stats': stats,

@@ -5,11 +5,12 @@ The ``remove_member`` action must refuse to remove the last
 ADMIN of a team. Lock in the existing behavior with a test so a
 future refactor can't silently regress it.
 """
-from apps.teams.models import Team, TeamMember
 from django.contrib.auth.models import User
 from django.test import TestCase, override_settings
 from rest_framework import status as http_status
 from rest_framework.test import APIClient
+
+from apps.teams.models import Team, TeamMember
 
 TEST_CACHES = {
     "default": {

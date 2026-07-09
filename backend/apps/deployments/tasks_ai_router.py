@@ -9,16 +9,16 @@ SHARED_OLLAMA_MAX_CPU_CORES = 4.0
 SHARED_OLLAMA_NAME_PREFIX = "ollama-cpp-shared"
 SHARED_OLLAMA_PORT = 11434
 
-import logging  # noqa: E402
-import shlex  # noqa: E402
-import subprocess  # noqa: E402
+import logging
+import shlex
+import subprocess
 
-from apps.deployments.models import (  # noqa: E402
+from apps.deployments.models import (
     Deployment,
     EnvironmentVariable,
     Service,
 )
-from apps.deployments.utils import (  # noqa: E402
+from apps.deployments.utils import (
     append_log,
 )
 
@@ -207,7 +207,7 @@ def _ensure_shared_ollama_cpp(service, provider) -> str | None:
         )
 
         # Trigger deployment
-        from .tasks_deploy import enqueue_smart_deploy_task  # noqa: E402
+        from .tasks_deploy import enqueue_smart_deploy_task
         deployment = Deployment.objects.create(
             service=shared,
             status='QUEUED',
@@ -311,7 +311,7 @@ def _cleanup_shared_ollama_if_unused(project):
             # Mark for deletion
             shared.status = 'DELETION_PENDING'
             shared.save(update_fields=['status'])
-            from .tasks_deploy import delete_service_task  # noqa: E402
+            from .tasks_deploy import delete_service_task
             delete_service_task.delay(str(shared.id), force=True)
     except Exception as exc:
         logger.warning("Shared Ollama cleanup check failed: %s", exc)

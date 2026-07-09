@@ -5,7 +5,6 @@ Tests for datetime-based backup pruning (race-free).
 set of IDs.  This prevents a race where a new backup that completes
 between the query and the delete is accidentally removed.
 """
-import os
 from datetime import timedelta
 from unittest.mock import patch
 

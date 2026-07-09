@@ -1,7 +1,7 @@
 import time
+
 import psutil
-import os
-import sys
+
 
 def log_memory():
     mem = psutil.virtual_memory()

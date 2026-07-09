@@ -8,7 +8,10 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from .models import Deployment, Service  # type: ignore[attr-defined]    # re-exported via models.py hub; mypy can't see through the empty module.
+from .models import (  # type: ignore[attr-defined]    # re-exported via models.py hub; mypy can't see through the empty module.
+    Deployment,
+    Service,
+)
 
 logger = logging.getLogger(__name__)
 

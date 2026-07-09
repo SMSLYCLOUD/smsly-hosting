@@ -1,18 +1,18 @@
 import logging
 
 logger = logging.getLogger(__name__)
-import asyncio  # noqa: E402
-import logging  # noqa: E402
-from typing import Any  # noqa: E402
+import asyncio
+import logging
+from typing import Any
 
-import docker  # noqa: E402
-import requests  # noqa: E402
-from celery import shared_task  # noqa: E402
-from decouple import config  # noqa: E402
-from django.core.cache import cache  # noqa: E402
-from django.core.mail import send_mail  # noqa: E402
+import docker
+import requests
+from celery import shared_task
+from decouple import config
+from django.core.cache import cache
+from django.core.mail import send_mail
 
-from apps.deployments.models import (  # type: ignore[attr-defined]  # noqa: E402
+from apps.deployments.models import (  # type: ignore[attr-defined]
     Deployment,
 )
 

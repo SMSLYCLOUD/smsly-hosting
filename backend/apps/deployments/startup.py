@@ -130,7 +130,7 @@ def schedule_startup_caddy_sync():
         logger.debug("Caddy-disabled mode: skipping startup caddy sync")
         return
 
-    global _started  # noqa: PLW0603
+    global _started
     if _started:
         return
     _started = True

@@ -4,11 +4,9 @@ Quick Fix for Custom Domain SSL System
 Addresses the core issues preventing custom domain SSL from working
 """
 
-import os
-import sys
-import subprocess
 import logging
-from pathlib import Path
+import subprocess
+import sys
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

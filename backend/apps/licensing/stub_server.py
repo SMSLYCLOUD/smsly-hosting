@@ -45,8 +45,8 @@ def validate_stub(license_key, instance_id):
         "max_services": max_services,
         "max_team_members": max_team_members,
         "features": ["ai", "autoscaler", "custom_domains", "ssl", "marketplace", "functions", "tunnels", "topology", "transfers"],
-        "issued_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "expires_at": (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=30)).isoformat()
+        "issued_at": datetime.datetime.now(datetime.UTC).isoformat(),
+        "expires_at": (datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=30)).isoformat()
     }
 
     payload_json = json.dumps(payload_dict)

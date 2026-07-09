@@ -31,7 +31,7 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
-from apps.deployments.models_servers import ManagedServer  # noqa: F401
+from apps.deployments.models_servers import ManagedServer
 from apps.deployments.utils import (
     build_local_source_bundle as utils_build_bundle,
 )
@@ -326,29 +326,28 @@ def _restrict_ssh_key_to_master_ip(ssh, server: ManagedServer) -> None:
     can ONLY be used from the master's IP address — even if the private
     key is stolen, it cannot be used from a different network location.
     """
-    import io
-    from cryptography.hazmat.primitives.asymmetric import ed25519
     from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
 
     master_ip = os.environ.get("PUBLIC_IP") or "127.0.0.1"
     mesh_ip = _get_master_mesh_ip()
     allowed_ips = f"{master_ip},{mesh_ip}" if mesh_ip else master_ip
-    
+
     # Always use Ed25519 to avoid ssh-rsa deprecation rejections on modern OpenSSH (>= 8.8)
     # Generate natively via cryptography to avoid dependency on ssh-keygen
     private_key = ed25519.Ed25519PrivateKey.generate()
-    
+
     priv_key_pem = private_key.private_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.OpenSSH,
         encryption_algorithm=serialization.NoEncryption()
     ).decode("utf-8")
-    
+
     pub_key_bytes = private_key.public_key().public_bytes(
         encoding=serialization.Encoding.OpenSSH,
         format=serialization.PublicFormat.OpenSSH
     ).decode("utf-8")
-    
+
     # pub_key_bytes is "ssh-ed25519 AAAAC3Nz..."
     pub_key_line = pub_key_bytes.strip()
 
@@ -402,8 +401,9 @@ def _harden_node_ssh(ssh, server: ManagedServer) -> None:
 
     # Verify the key actually works by attempting a test connection
     try:
-        import paramiko
         import io
+
+        import paramiko
         test_ssh = paramiko.SSHClient()
         test_ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         pkey = paramiko.Ed25519Key.from_private_key(io.StringIO(server.ssh_key))
@@ -1267,12 +1267,12 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
             if cf_token and root_domain:
                 node_slug = str(server.id).split('-')[0]
                 node_domain = f"node-{node_slug}.{root_domain}"
-                
+
                 _append_log(server, f"🌐 Automated TLS: Generating DNS record for node ({node_domain})...")
                 try:
                     ensure_dns_records([node_domain], server.host, cf_token)
                     _append_log(server, "✅ Automated TLS: DNS sync OK.")
-                    
+
                     install_env["CLOUDFLARE_API_TOKEN"] = cf_token
                     install_env["DOMAIN"] = node_domain
                     install_env["USE_SSL"] = "true"

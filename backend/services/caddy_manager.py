@@ -1224,7 +1224,7 @@ def _load_cached_token() -> str:
     if now >= expires_at:
         logger.warning(
             "Cloudflare token cache is stale (expired at %s, %s days old); ignoring.",
-            datetime.datetime.fromtimestamp(expires_at, datetime.timezone.utc).isoformat(),
+            datetime.datetime.fromtimestamp(expires_at, datetime.UTC).isoformat(),
             int((now - expires_at) / 86400),
         )
         with contextlib.suppress(OSError):

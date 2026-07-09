@@ -781,7 +781,7 @@ def deprovision_addon_on_delete(sender, instance, **kwargs):
 # Bundle cleanup on delete
 # ---------------------------------------------------------------------------
 
-from .models_bundles import Bundle  # noqa: E402
+from .models_bundles import Bundle
 
 
 @receiver(pre_delete, sender=Bundle)

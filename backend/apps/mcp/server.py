@@ -1,5 +1,7 @@
 import logging
+
 from mcp.server.fastmcp import FastMCP
+
 from apps.mcp import tools
 
 logger = logging.getLogger(__name__)

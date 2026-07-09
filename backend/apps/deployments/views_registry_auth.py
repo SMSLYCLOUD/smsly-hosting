@@ -19,13 +19,11 @@ import threading
 import time
 import uuid
 
+import jwt as pyjwt
 from django.conf import settings
-from django.contrib.auth.models import AnonymousUser
 from django.http import HttpRequest, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET
-
-import jwt as pyjwt
 from rest_framework.authtoken.models import Token
 
 logger = logging.getLogger(__name__)
@@ -159,9 +157,11 @@ def _check_registry_permission(user, scope: str, actions: list[str]) -> bool:
         return False
 
     from django.db.models import Q as _Q
+
+    from apps.teams.models import TeamMember as _TeamMember
+
     from .models import Project as _Project
     from .models_project import ProjectMember as _ProjectMember
-    from apps.teams.models import TeamMember as _TeamMember
 
     # Build set of project prefixes that this user can access
     # Repo names follow the pattern: smsly/<service_name>

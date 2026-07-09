@@ -1,5 +1,6 @@
 # pylint: disable=invalid-name
 """Hermetic tests for the observability proxy SSRF / tenant-leak guards."""
+from datetime import UTC
 from unittest.mock import patch
 
 from apps.core.views_observability import (
@@ -103,16 +104,16 @@ class QueryValidationUnitTests(TestCase):
         self.assertIn(r'svc\.a\+b', out)
 
     def test_parse_prometheus_time_rejects_out_of_range(self):
-        from datetime import datetime, timedelta, timezone
-        too_old = (datetime.now(timezone.utc) - timedelta(days=365)).timestamp()
+        from datetime import datetime, timedelta
+        too_old = (datetime.now(UTC) - timedelta(days=365)).timestamp()
         self.assertIsNone(_parse_prometheus_time(str(too_old)))
         self.assertIsNone(_parse_prometheus_time('not-a-number'))
         self.assertIsNone(_parse_prometheus_time(''))
         self.assertIsNone(_parse_prometheus_time(None))
 
     def test_parse_prometheus_time_accepts_recent_timestamp(self):
-        from datetime import datetime, timedelta, timezone
-        recent = (datetime.now(timezone.utc) - timedelta(hours=1)).timestamp()
+        from datetime import datetime, timedelta
+        recent = (datetime.now(UTC) - timedelta(hours=1)).timestamp()
         self.assertEqual(
             _parse_prometheus_time(str(recent)),
             str(recent),
@@ -198,7 +199,7 @@ class ObservabilitySafetyTests(TestCase):
         CACHES={'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}},
     )
     def test_prometheus_query_rejects_time_outside_30_days(self):
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         from apps.deployments.models import Service
         # Give the user a service so the tenant-scope guard does not short-circuit
@@ -206,7 +207,7 @@ class ObservabilitySafetyTests(TestCase):
         Service.objects.create(
             name='obs-svc', owner=self.user, repository_url='', branch='main',
         )
-        too_old = (datetime.now(timezone.utc) - timedelta(days=365)).timestamp()
+        too_old = (datetime.now(UTC) - timedelta(days=365)).timestamp()
         with patch('apps.core.views_observability.requests.get') as gget:
             gget.return_value.status_code = 200
             gget.return_value.json.return_value = {'data': {'result': []}}

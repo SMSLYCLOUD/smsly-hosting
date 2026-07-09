@@ -4,6 +4,7 @@ Verify branding updates.
 
 from playwright.sync_api import sync_playwright
 
+
 def run():
     """Run verification."""
     with sync_playwright() as p:

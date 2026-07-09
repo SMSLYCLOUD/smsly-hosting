@@ -2,18 +2,18 @@
 """Builders module."""
 # pylint: disable=no-member
 """Build manager service."""
-import contextlib  # noqa: E402
-import logging  # noqa: E402
-import os  # noqa: E402
-import shutil  # noqa: E402
-import subprocess  # noqa: E402
-import time  # noqa: E402
-from pathlib import Path  # noqa: E402
-from urllib.parse import urlparse, urlunparse  # noqa: E402
+import contextlib
+import logging
+import os
+import shutil
+import subprocess
+import time
+from pathlib import Path
+from urllib.parse import urlparse, urlunparse
 
-from django.conf import settings  # noqa: E402
-from django.utils import timezone  # noqa: E402
-from tenacity import retry, stop_after_attempt, wait_exponential  # noqa: E402
+from django.conf import settings
+from django.utils import timezone
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
 

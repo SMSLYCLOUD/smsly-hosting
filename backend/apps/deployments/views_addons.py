@@ -461,7 +461,7 @@ class AddonViewSet(viewsets.ModelViewSet):
 # Unified addons + bundles endpoint
 # ---------------------------------------------------------------------------
 
-from rest_framework.decorators import api_view, permission_classes  # noqa: E402
+from rest_framework.decorators import api_view, permission_classes
 
 
 @api_view(['GET'])
@@ -498,7 +498,7 @@ def service_addons_unified(request, service_id):
         })
 
     # Bundle components
-    from apps.deployments.models_bundles import Bundle, BundleComponent
+    from apps.deployments.models_bundles import Bundle
     for bundle in Bundle.objects.filter(service=service).prefetch_related('components').exclude(
         status=Bundle.Status.DELETED,
     ):
@@ -521,8 +521,8 @@ def service_addons_unified(request, service_id):
     return Response(result)
 
 
-from rest_framework.decorators import api_view, permission_classes  # noqa: E402
-from rest_framework.permissions import IsAuthenticated  # noqa: E402
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
 
 
 @api_view(['POST'])

@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 import os
-import requests
-import json
-import uuid
 import sys
-import time
+import uuid
+
+import requests
 
 # --- MOCK DATA ---
 GITHUB_SECRET = 'your-github-webhook-secret-here'  # Will be overridden by environment or args for real test
@@ -51,12 +50,12 @@ def check_system_config():
         # Alternatively, rely on debug/local access if authentication is bypassed or mocked.
         # For simulation, we'll check unauthenticated access failure (401/403) as partially correct behavior,
         # or assume we have a valid token.
-        
+
         # In a real simulation, we'd log in first.
         # Let's assume we can hit the health check at least.
         health_resp = requests.get(f"{API_URL.replace('/api/v1', '')}/health", timeout=10)
         print(f"Health Check Status: {health_resp.status_code}")
-        
+
         # Check Config Endpoint
         # Requires Auth - Creating mock user or using existing token would be ideal but complex here without credentials.
         # We will skip direct authenticated call unless provided.
@@ -76,11 +75,11 @@ def simulate_webhook():
         'X-GitHub-Delivery': str(uuid.uuid4()),
         # 'X-Hub-Signature-256': 'sha256=...' # Would need actual secret for valid signature
     }
-    
+
     # In a real environment, we need the valid signature.
     # Without the secret, the backend SHOULD reject this (403/400).
     # This verifies security.
-    
+
     try:
         response = requests.post(
             f"{API_URL}/webhooks/github/",
@@ -89,7 +88,7 @@ def simulate_webhook():
             timeout=10
         )
         print(f"Webhook Response Status: {response.status_code}")
-        
+
         if response.status_code == 403:
             print("SUCCESS: Webhook correctly rejected unsigned payload (Security Verified).")
             return True
@@ -108,7 +107,7 @@ if __name__ == "__main__":
     print(f"Starting Full Deployment Simulation against {API_URL}")
     CONFIG_OK = check_system_config()
     WEBHOOK_OK = simulate_webhook()
-    
+
     if CONFIG_OK and WEBHOOK_OK:
         print("\nAll Simulation Checks Passed.")
         sys.exit(0)

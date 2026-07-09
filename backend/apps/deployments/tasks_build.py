@@ -1,29 +1,27 @@
 import logging
 
 logger = logging.getLogger(__name__)
-import logging  # noqa: E402
-import os  # noqa: E402
-import shutil  # noqa: E402
-import subprocess  # noqa: E402
-import tempfile  # noqa: E402
-import zipfile  # noqa: E402
-from urllib.parse import unquote, urlparse  # noqa: E402
+import logging
+import os
+import shutil
+import subprocess
+import tempfile
+import zipfile
+from urllib.parse import unquote, urlparse
 
-from django.conf import settings  # noqa: E402
-
-from apps.cloud.services.builder import NixpacksBuilder  # noqa: E402
-from apps.cloud.services.function_provisioner import FunctionProvisioner  # noqa: E402
-from apps.deployments.models import (  # noqa: E402
+from apps.cloud.services.builder import NixpacksBuilder
+from apps.cloud.services.function_provisioner import FunctionProvisioner
+from apps.deployments.models import (
     Deployment,
 )
-from apps.deployments.utils import (  # noqa: E402
+from apps.deployments.utils import (
     append_log,
     broadcast_status,
     is_deployment_local,
     log_exhaustive_deployment_diagnostics,
 )
 
-from .tasks_deploy_local import _docker_safe_segment  # noqa: E402
+from .tasks_deploy_local import _docker_safe_segment
 
 
 def _build_function(deployment, service) -> str:
@@ -147,12 +145,10 @@ def _build_uploaded_source(deployment, service) -> str:
         env_map = {env.key: env.value for env in service.env_vars.all()}
         dockerfile_path = os.path.join(source_dir, "Dockerfile")
         has_dockerfile = os.path.isfile(dockerfile_path)
-        
+
         if service.buildpack == 'DOCKER':
             use_docker = True
-        elif service.buildpack == 'NIXPACKS':
-            use_docker = False
-        elif service.buildpack == 'STATIC':
+        elif service.buildpack == 'NIXPACKS' or service.buildpack == 'STATIC':
             use_docker = False
         else:
             use_docker = has_dockerfile
@@ -179,7 +175,7 @@ def _build_uploaded_source(deployment, service) -> str:
                 append_log(deployment, "Building uploaded source with Nixpacks...\n")
             else:
                 append_log(deployment, "Building uploaded source with Nixpacks fallback...\n")
-            
+
             NixpacksBuilder.build_image(
                 source_dir=source_dir,
                 image_name=image_name,

@@ -151,7 +151,7 @@ class ScopedRegistry(models.Model):
 
         return PlatformConfig.get_config_value(
             "container_registry_url"
-        ) or getattr(  # noqa: B009
+        ) or getattr(
             __import__("django.conf", fromlist=["settings"]).settings,
             "CONTAINER_REGISTRY_URL",
             None,
@@ -175,7 +175,7 @@ class ScopedRegistry(models.Model):
 
         return {
             "url": PlatformConfig.get_config_value("container_registry_url")
-            or getattr(  # noqa: B009
+            or getattr(
                 __import__("django.conf", fromlist=["settings"]).settings,
                 "CONTAINER_REGISTRY_URL",
                 "registry:5000",

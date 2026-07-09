@@ -418,7 +418,7 @@ class RepoScanner:
                     for match in docker_arg_pattern.finditer(content):
                         val = match.group(2).strip()
                         add_var(match.group(1), f"Found in {f} (ARG: {val})")
-                        
+
                     # Scan for environment blocks in docker-compose YAML files
                     if f.startswith('docker-compose') or f in ('compose.yml', 'compose.yaml'):
                         import yaml

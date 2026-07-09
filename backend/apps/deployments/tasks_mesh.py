@@ -1,11 +1,11 @@
 import logging
 
 logger = logging.getLogger(__name__)
-import logging  # noqa: E402
+import logging
 
-from celery import shared_task  # noqa: E402
-from django.core.cache import cache  # noqa: E402
-from django.utils import timezone  # noqa: E402
+from celery import shared_task
+from django.core.cache import cache
+from django.utils import timezone
 
 
 def _bounded_error(exc, limit=2000):

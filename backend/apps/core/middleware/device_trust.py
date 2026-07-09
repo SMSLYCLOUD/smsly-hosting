@@ -9,10 +9,8 @@ When PlatformConfig.enforce_device_trust is enabled, this middleware:
 
 The middleware is a no-op when enforce_device_trust is disabled (default).
 """
-import json
 import logging
 
-from django.conf import settings
 from django.http import JsonResponse
 
 logger = logging.getLogger(__name__)

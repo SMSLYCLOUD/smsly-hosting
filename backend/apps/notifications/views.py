@@ -1,6 +1,7 @@
 from django.core.mail import send_mail
 from rest_framework import permissions, status, viewsets
-from rest_framework.decorators import action, api_view, permission_classes as perms
+from rest_framework.decorators import action, api_view
+from rest_framework.decorators import permission_classes as perms
 from rest_framework.response import Response
 
 from .models import AlertRule, Notification, NotificationChannel, NotificationPreference, ResourceAlert
@@ -90,8 +91,8 @@ class NotificationChannelViewSet(viewsets.ModelViewSet):
                     fail_silently=False,
                 )
             elif channel.channel_type == 'slack':
-                import urllib.request
                 import json
+                import urllib.request
                 payload = json.dumps({
                     'text': ':white_check_mark: *SMSLY Test Alert*\nThis is a test notification from your SMSLY hosting platform.'
                 }).encode()
@@ -103,8 +104,8 @@ class NotificationChannelViewSet(viewsets.ModelViewSet):
                 )
                 urllib.request.urlopen(req, timeout=10)
             elif channel.channel_type == 'webhook':
-                import urllib.request
                 import json
+                import urllib.request
                 payload = json.dumps({
                     'event': 'test',
                     'message': 'SMSLY test alert notification',

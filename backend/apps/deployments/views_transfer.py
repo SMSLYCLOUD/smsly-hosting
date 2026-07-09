@@ -20,7 +20,10 @@ from rest_framework.throttling import UserRateThrottle
 from .models import PlatformConfig, Service  # type: ignore[attr-defined]
 from .models_servers import ManagedServer
 from .models_transfer import ServerTransfer
-from .serializers import ServerTransferCreateSerializer, ServerTransferSerializer  # type: ignore[attr-defined]    # defined in serializers_transfer.py; not re-exported by serializers.py hub.
+from .serializers import (  # type: ignore[attr-defined]    # defined in serializers_transfer.py; not re-exported by serializers.py hub.
+    ServerTransferCreateSerializer,
+    ServerTransferSerializer,
+)
 from .services.server_guard import ServerGuard
 from .tasks_transfer import execute_server_transfer_task, rollback_transfer_task
 
@@ -241,7 +244,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
 
         try:
             owner = _resolve_incoming_owner(request, source_ip)
-        except RuntimeError as exc:
+        except RuntimeError:
             logger.exception("Incoming owner resolution failed")
             return Response({'error': 'Authentication failed.'}, status=status.HTTP_401_UNAUTHORIZED)
 
@@ -635,7 +638,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
             client = get_docker_client()
             client.images.pull(image)
             return Response({'status': 'pulled', 'image': image})
-        except Exception as e:
+        except Exception:
             logger.exception("Image pull failed")
             return Response({'error': 'An internal error occurred. Please check server logs.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -671,7 +674,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
                 detach=True,
             )
             return Response({'container_id': container.id, 'status': 'running'})
-        except Exception as e:
+        except Exception:
             logger.exception("Transfer operation failed")
             return Response({'error': 'An internal error occurred. Please check server logs.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -728,7 +731,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
             })
         except subprocess.TimeoutExpired:
             return Response({'error': 'Script timed out'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        except Exception as e:
+        except Exception:
             logger.exception("Incoming exec failed")
             return Response({'error': 'An internal error occurred. Please check server logs.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -751,7 +754,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
             except Exception:
                 pass
             return Response({'status': 'stopped'})
-        except Exception as e:
+        except Exception:
             logger.exception("Container stop failed")
             return Response({'error': 'An internal error occurred. Please check server logs.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -786,7 +789,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
             client = get_docker_client()
             client.ping()
             return Response({'docker_available': True})
-        except Exception as e:
+        except Exception:
             logger.exception("Docker health check failed")
             return Response({'docker_available': False, 'error': 'An internal error occurred. Please check server logs.'})
 
@@ -803,7 +806,6 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Invalid HMAC signature'}, status=status.HTTP_401_UNAUTHORIZED)
 
         import base64
-        import tempfile
 
         content_base64 = request.data.get('content_base64') if isinstance(request.data, dict) else None
         dest_path = (request.data.get('path') if isinstance(request.data, dict) else None) or \
@@ -866,7 +868,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
             with open(dest_path, mode) as f:
                 f.write(raw)
             return Response({'status': 'written', 'path': dest_path, 'size': len(raw), 'mode': mode})
-        except Exception as e:
+        except Exception:
             logger.exception("Incoming write-file failed")
             return Response({'error': 'An internal error occurred. Please check server logs.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -911,7 +913,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
                 'path': dest_path,
                 'size_bytes': len(raw_body),
             })
-        except Exception as e:
+        except Exception:
             logger.exception("Incoming tar-upload failed")
             return Response({'error': 'An internal error occurred. Please check server logs.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -936,6 +938,6 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
                 'latest_size_bytes': os.path.getsize(latest_path) if latest_path and os.path.exists(latest_path) else 0,
                 'backup_dir': backup_dir,
             })
-        except Exception as e:
+        except Exception:
             logger.exception("Incoming list-backups failed")
             return Response({'backups_available': 0, 'error': 'An internal error occurred. Please check server logs.'})

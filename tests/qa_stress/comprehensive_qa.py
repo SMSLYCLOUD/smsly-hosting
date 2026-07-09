@@ -1,18 +1,14 @@
 import os
 import sys
-import shutil
 import time
 import uuid
-import json
-import random
-import string
-import requests
+from datetime import datetime
+from decimal import Decimal
+
 import django
+import requests
 from django.conf import settings
 from django.core.management import call_command
-from django.db import transaction
-from decimal import Decimal
-from datetime import datetime, timedelta
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -67,21 +63,29 @@ if not settings.configured:
     django.setup()
 
 # Import Models AFTER setup
-from django.contrib.auth.models import User
-from apps.deployments.models import Service, Deployment, EnvironmentVariable, Region
+from apps.billing.models import UsageRecord
 from apps.cloud.models import CloudProvider
-from apps.billing.models import UsageRecord, BillingAccount
+from apps.deployments.models import Deployment, EnvironmentVariable, Service
+from django.contrib.auth.models import User
 
 # Import Skills Simulator
 try:
     from tests.qa_stress.simulate_skills import (
-        test_docx_skill, test_xlsx_skill, test_pdf_skill, test_chart_skill, test_frontend_design_skill
+        test_chart_skill,
+        test_docx_skill,
+        test_frontend_design_skill,
+        test_pdf_skill,
+        test_xlsx_skill,
     )
 except ImportError:
     # Handle case where script is run from root
     sys.path.append(os.path.join(os.getcwd(), 'tests/qa_stress'))
     from simulate_skills import (
-        test_docx_skill, test_xlsx_skill, test_pdf_skill, test_chart_skill, test_frontend_design_skill
+        test_chart_skill,
+        test_docx_skill,
+        test_frontend_design_skill,
+        test_pdf_skill,
+        test_xlsx_skill,
     )
 
 # --- REPORTING ---

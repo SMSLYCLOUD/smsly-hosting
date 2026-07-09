@@ -21,6 +21,7 @@ import socket
 import ssl
 from urllib.parse import urlparse
 
+
 # SECURITY: helper used to read the platform-wide
 # ALLOW_INSECURE_INTER_NODE_TLS env flag. We re-read it on
 # every call (rather than capturing it at import time) so a
@@ -62,14 +63,14 @@ def _check_pin_after_handshake(response, expected_fingerprint_hex: str) -> None:
     Raises ``ssl.SSLError`` on mismatch.
     """
     import hashlib
-    
+
     connection = getattr(response.raw, "_connection", None)
     if connection is None:
         raise ValueError("TLS pin check failed: no underlying connection available")
-        
+
     pool = getattr(connection, "pool", None)
     sock = getattr(pool, "sock", None) if pool else None
-    
+
     if sock is None:
         # Modern urllib3: cert is in pool.conn.cert_file / we need
         # to reach into a different attribute. Fall back to
@@ -80,7 +81,7 @@ def _check_pin_after_handshake(response, expected_fingerprint_hex: str) -> None:
             raise ValueError(f"TLS pin check failed: unable to retrieve peer certificate: {exc}") from exc
     else:
         peer = sock.getpeercert(binary_form=True)
-        
+
     if peer is None:
         raise ValueError("TLS pin check failed: peer certificate is None")
     digest = hashlib.sha256(peer).hexdigest()

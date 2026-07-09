@@ -69,7 +69,7 @@ try:
 except (ImportError, RuntimeError):
     _AIProviderSettings = None  # type: ignore[assignment]
 AIProviderSettings = _AIProviderSettings
-from services.addon_provisioner import addon_provisioner  # noqa: E402
+from services.addon_provisioner import addon_provisioner
 
 logger = logging.getLogger(__name__)
 
@@ -2030,12 +2030,10 @@ def _build_uploaded_source(deployment, service) -> str:
         env_map = {env.key: env.value for env in service.env_vars.all()}
         dockerfile_path = os.path.join(source_dir, "Dockerfile")
         has_dockerfile = os.path.isfile(dockerfile_path)
-        
+
         if service.buildpack == 'DOCKER':
             use_docker = True
-        elif service.buildpack == 'NIXPACKS':
-            use_docker = False
-        elif service.buildpack == 'STATIC':
+        elif service.buildpack == 'NIXPACKS' or service.buildpack == 'STATIC':
             use_docker = False
         else:
             use_docker = has_dockerfile
@@ -2062,7 +2060,7 @@ def _build_uploaded_source(deployment, service) -> str:
                 append_log(deployment, "Building uploaded source with Nixpacks...\n")
             else:
                 append_log(deployment, "Building uploaded source with Nixpacks fallback...\n")
-            
+
             NixpacksBuilder.build_image(
                 source_dir=source_dir,
                 image_name=image_name,
@@ -4207,7 +4205,7 @@ def restore_addon_task(self, backup_id: str):
 # view imports (which reference .tasks) continue to work without
 # maintaining duplicate definitions.
 
-from apps.deployments.tasks_backup import (  # noqa: E402, F401
+from apps.deployments.tasks_backup import (  # noqa: F401
     cleanup_old_backups_task,
     create_server_backup_task,
     create_service_backup_task,

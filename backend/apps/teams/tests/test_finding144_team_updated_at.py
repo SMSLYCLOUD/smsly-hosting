@@ -5,9 +5,10 @@ The Team model previously only tracked ``created_at``. Every save
 should now refresh ``updated_at`` automatically so audit and UI
 flows can sort by recency.
 """
-from apps.teams.models import Team
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+
+from apps.teams.models import Team
 
 User = get_user_model()
 

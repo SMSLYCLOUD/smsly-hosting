@@ -25,8 +25,7 @@ The keys remain encrypted with FIELD_ENCRYPTION_KEY — the operator needs
 the same FIELD_ENCRYPTION_KEY on the target master to decrypt them.
 """
 import json
-import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from django.core.management.base import BaseCommand
 
@@ -70,7 +69,7 @@ class Command(BaseCommand):
             })
 
         output = {
-            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "exported_at": datetime.now(UTC).isoformat(),
             "version": 1,
             "keys": keys_data,
             "instructions": (

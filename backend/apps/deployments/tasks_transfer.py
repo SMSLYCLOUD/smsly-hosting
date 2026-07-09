@@ -1,11 +1,11 @@
 import logging
 
 logger = logging.getLogger(__name__)
-from celery import shared_task  # noqa: E402
-from django.core.cache import cache  # noqa: E402
+from celery import shared_task
+from django.core.cache import cache
 
-from apps.deployments.services.transfer_service import ServerTransferService  # noqa: E402
-from apps.deployments.models_transfer import ServerTransfer as TransferModel  # noqa: E402
+from apps.deployments.models_transfer import ServerTransfer as TransferModel
+from apps.deployments.services.transfer_service import ServerTransferService
 
 
 @shared_task(bind=True, soft_time_limit=3600, time_limit=4200)

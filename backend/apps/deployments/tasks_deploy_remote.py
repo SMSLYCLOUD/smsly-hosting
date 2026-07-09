@@ -1,19 +1,19 @@
 import logging
 
 logger = logging.getLogger(__name__)
-import logging  # noqa: E402
-import random  # noqa: E402
-import time  # noqa: E402
+import logging
+import random
+import time
 
-import requests  # noqa: E402
-from celery import shared_task  # noqa: E402
-from django.utils import timezone  # noqa: E402
+import requests
+from celery import shared_task
+from django.utils import timezone
 
-from apps.deployments.models import (  # noqa: E402
+from apps.deployments.models import (
     Deployment,
 )
-from apps.deployments.services.remote_orchestrator import RemoteOrchestrator  # noqa: E402
-from apps.deployments.utils import (  # noqa: E402
+from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+from apps.deployments.utils import (
     append_log,
     broadcast_status,
     log_exhaustive_remote_orchestration_diagnostics,
@@ -21,13 +21,14 @@ from apps.deployments.utils import (  # noqa: E402
     update_stage,
 )
 
-from .tasks_caddy import _regenerate_caddyfile  # noqa: E402
+from .tasks_caddy import _regenerate_caddyfile
 
 
 def _handle_remote_deployment_legacy(deployment, server):
     """Delegate deployment to a remote server and poll for status."""
     from apps.deployments.services.server_guard import ServerGuard
-    from .tasks_deploy import _handle_failure  # noqa: E402
+
+    from .tasks_deploy import _handle_failure
 
     service = deployment.service
     guard = ServerGuard.check_user_workload_allowed(server)
@@ -143,7 +144,7 @@ def _stop_local_service_container(service_name: str):
 
 
 def _remote_deploy_failed(deployment, orchestrator, fallback_msg, stage):
-    from .tasks_deploy import _handle_failure  # noqa: E402
+    from .tasks_deploy import _handle_failure
     _handle_failure(None, deployment, _remote_failure_message(orchestrator, fallback_msg), stage)
 
 
@@ -155,8 +156,9 @@ def _handle_remote_deployment(deployment, server, skip_review=False, image_name=
     it is forwarded to the remote so that node can skip its own build phase
     and go straight to pull + run (build-agent optimization).
     """
-    from .tasks_deploy import _handle_failure  # noqa: E402
     from apps.deployments.services.server_guard import ServerGuard
+
+    from .tasks_deploy import _handle_failure
 
     service = deployment.service
 
@@ -237,8 +239,9 @@ def _handle_remote_deployment(deployment, server, skip_review=False, image_name=
 
 def _resume_remote_deployment(deployment, server):
     """Approve/resume an existing remote deployment and keep polling it."""
-    from .tasks_deploy import _handle_failure  # noqa: E402
     from apps.deployments.services.server_guard import ServerGuard
+
+    from .tasks_deploy import _handle_failure
 
     service = deployment.service
     guard = ServerGuard.check_user_workload_allowed(server)
@@ -324,7 +327,7 @@ def _poll_remote_deployment(
     remote_service_id=None,
 ):
     """Poll a delegated deployment until it reaches REVIEW or a terminal state."""
-    from .tasks_deploy import _handle_failure  # noqa: E402
+    from .tasks_deploy import _handle_failure
     max_retries = 90  # 15 minutes (10s intervals)
     max_empty_polls = 12  # 2 minutes of unreachable/invalid poll responses.
     empty_polls = 0
@@ -649,7 +652,7 @@ def self_heal_remote_deployment(self, deployment_id: str, server_id: str):
                 try:
                     provider = deployment.service.provider
                     if provider:
-                        from .tasks_deploy import enqueue_smart_deploy_task  # noqa: E402
+                        from .tasks_deploy import enqueue_smart_deploy_task
                         enqueue_smart_deploy_task(
                             deployment_id=str(deployment.id),
                             provider_id=str(provider.id),

@@ -93,8 +93,9 @@ def validate_image_registry(image: str, service=None) -> str:
 
     # Always allow the platform's configured registry URL
     try:
-        from django.conf import settings
         from urllib.parse import urlparse as _urlparse
+
+        from django.conf import settings
 
         _cfg_url = getattr(settings, "CONTAINER_REGISTRY_URL", "") or ""
         if _cfg_url:
@@ -104,7 +105,7 @@ def validate_image_registry(image: str, service=None) -> str:
                 _cfg_host = _cfg_url.split("/")[0].rstrip("/")
             if _cfg_host and _cfg_host not in allowed_hosts:
                 allowed_hosts.append(_cfg_host)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     # Per-scope allowlist: append hosts from Project → Team → Organization chain
@@ -116,7 +117,7 @@ def validate_image_registry(image: str, service=None) -> str:
             for h in scoped_hosts:
                 if h not in allowed_hosts:
                     allowed_hosts.append(h)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
     # User's custom RegistryCredential hosts (existing behaviour)

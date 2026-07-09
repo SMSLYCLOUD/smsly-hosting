@@ -13,7 +13,7 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 # Setup Django
 django.setup()
 
-from django_celery_results.models import TaskResult  # noqa: E402
+from django_celery_results.models import TaskResult
 
 print('=== Celery System Check ===')
 
