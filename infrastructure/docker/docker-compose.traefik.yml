@@ -11,7 +11,7 @@
 
 services:
   socket-proxy:
-    image: tecnativa/docker-socket-proxy:0.2 # TODO: pin to digest via dependabot/renovate
+    image: tecnativa/docker-socket-proxy:0.11
     container_name: smsly-traefik-socket-proxy
     restart: unless-stopped
     tmpfs:

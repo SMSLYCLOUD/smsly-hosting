@@ -36,6 +36,7 @@ services:
       - /lib/modules:/host/lib/modules:ro,z
       - /usr/src:/host/usr/src:ro,z
       - /etc:/host/etc:ro,z
+      - /sys/kernel/debug:/sys/kernel/debug:ro,z
     environment:
       # Auto-detect: try eBPF first (modern kernel), fallback to module
       - FALCO_BPF_PROBE=${FALCO_BPF_PROBE:-}
