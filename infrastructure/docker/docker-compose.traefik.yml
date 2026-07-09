@@ -83,7 +83,7 @@ services:
       - "--accesslog.fields.names.request.uri=keep"
       - "--accesslog.fields.names.request.port=drop"
       - "--accesslog.fields.names.downstream.status=keep"
-      - "--accesslog.fields.userAgent=drop"
+      - "--accesslog.fields.names.user-agent=drop"
       
       # Metrics for Prometheus
       - "--metrics.prometheus=true"
