@@ -950,8 +950,8 @@ services:
     - --accesslog.fields.names.request.port=drop
     - --accesslog.fields.names.downstream.status=keep
     - --accesslog.fields.names.user-agent=drop
-    - --experimental.plugins.crowdsec-bouncer.modulename=github.com/maxmcd/traefik-crowdsec-bouncer
-    - --experimental.plugins.crowdsec-bouncer.version=v1.3.3
+    - --experimental.plugins.crowdsec-bouncer.modulename=github.com/maxlerebourg/crowdsec-bouncer-traefik-plugin
+    - --experimental.plugins.crowdsec-bouncer.version=v1.6.0
     ports:
     - "${TRAEFIK_HTTP_BIND:-127.0.0.1:8081}:80"
     - "${TRAEFIK_HTTPS_BIND:-127.0.0.1:8443}:443"
@@ -975,10 +975,10 @@ services:
     labels:
     - managed_by=smsly-hosting
     - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.enabled=true"
-    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.CrowdsecMode=live"
-    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.CrowdsecLapiScheme=http"
-    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.CrowdsecLapiHost=crowdsec:8080"
-    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.CrowdsecLapiKey=$${CROWDSEC_BOUNCER_KEY:-}"
+    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.crowdsecMode=live"
+    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.crowdsecLapiScheme=http"
+    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.crowdsecLapiHost=crowdsec:8080"
+    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.crowdsecLapiKey=$${CROWDSEC_BOUNCER_KEY:-}"
     networks:
     - smsly-net
     - socket-proxy

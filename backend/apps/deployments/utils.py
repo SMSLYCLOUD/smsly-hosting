@@ -921,6 +921,24 @@ def log_exhaustive_deployment_diagnostics(deployment, service=None, build_dir=No
         except Exception:
             pass
 
+    # Container sandbox runtime (gVisor / Kata)
+    sandbox_runtime = "runc (default)"
+    sandbox_isolation = "Process-level (standard Docker)"
+    try:
+        from apps.deployments.services.container_runtime import detect_best_runtime, is_sandboxed_runtime
+        detected = detect_best_runtime()
+        if detected == "runsc":
+            sandbox_runtime = "gVisor (runsc)"
+            sandbox_isolation = "User-space kernel — syscall filtering, no direct kernel access"
+        elif detected == "kata-runtime":
+            sandbox_runtime = "Kata Containers"
+            sandbox_isolation = "VM-level — lightweight Firecracker/QEMU microVM"
+        else:
+            sandbox_runtime = "runc (default)"
+            sandbox_isolation = "Process-level — standard Linux namespace isolation"
+    except Exception:
+        pass
+
     # 2. Project & Network Settings
     buildpack = getattr(svc, 'buildpack', 'AUTO')
     deploy_type = getattr(svc, 'deploy_type', 'DOCKER')
@@ -988,6 +1006,10 @@ def log_exhaustive_deployment_diagnostics(deployment, service=None, build_dir=No
         f"  • Target Registry : {registry_url}",
         f"  • Target Image    : {image_name}",
         f"  • Build Engine    : {buildpack} (Docker Buildx / Nixpacks)",
+        "",
+        "🧱 [CONTAINER SANDBOX RUNTIME]",
+        f"  • Active Runtime  : {sandbox_runtime}",
+        f"  • Isolation Model : {sandbox_isolation}",
         "",
         "🛡️ [SECURITY SCANNING & HARDENING BASELINES (TRIVY / COSIGN)]",
         f"  • Scanner Status  : {trivy_ver}",

@@ -332,6 +332,67 @@ def _service_startup_grace_seconds(service) -> int:
     return max(0, grace)
 
 
+def _check_infrastructure_health():
+    """Check Falco, fail2ban, and container runtime health, log warnings if down."""
+    import subprocess
+
+    # Container runtime (gVisor / Kata / runc)
+    runtime_cache_key = "infra:runtime:last_detected"
+    try:
+        from apps.deployments.services.container_runtime import detect_best_runtime, is_sandboxed_runtime
+        runtime = detect_best_runtime()
+        last = cache.get(runtime_cache_key)
+        if last and last != runtime:
+            logger.warning("Container runtime changed: %s -> %s", last, runtime)
+        cache.set(runtime_cache_key, runtime, timeout=86400)
+        if runtime == "runsc":
+            logger.info("Container runtime: gVisor (runsc) — sandboxed")
+        elif runtime == "kata-runtime":
+            logger.info("Container runtime: Kata Containers — VM-level isolation")
+        elif not is_sandboxed_runtime(runtime):
+            # Only warn if sandboxed was expected but unavailable
+            sandbox_env = os.environ.get("SMSLY_CONTAINER_RUNTIME", "").strip().lower()
+            if sandbox_env in ("runsc", "gvisor", "kata", "kata-runtime"):
+                logger.warning("Sandboxed runtime %s requested but unavailable, using runc", sandbox_env)
+    except Exception as exc:
+        logger.debug("Runtime health check skipped: %s", exc)
+
+    # Falco
+    falco_cache_key = "infra:falco:down_count"
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "--filter", "name=smsly-falco",
+             "--format", "{{.Status}}"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if "Up" not in (result.stdout or ""):
+            down_count = (cache.get(falco_cache_key) or 0) + 1
+            cache.set(falco_cache_key, down_count, timeout=3600)
+            if down_count <= 3 or down_count % 10 == 0:
+                logger.warning("Falco container is not running (detected %d times)", down_count)
+        else:
+            cache.delete(falco_cache_key)
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
+        logger.debug("Falco health check skipped: %s", exc)
+
+    # fail2ban
+    f2b_cache_key = "infra:fail2ban:down_count"
+    try:
+        result = subprocess.run(
+            ["fail2ban-client", "ping"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if "pong" not in (result.stdout or ""):
+            down_count = (cache.get(f2b_cache_key) or 0) + 1
+            cache.set(f2b_cache_key, down_count, timeout=3600)
+            if down_count <= 3 or down_count % 10 == 0:
+                logger.warning("fail2ban is not responding (detected %d times)", down_count)
+        else:
+            cache.delete(f2b_cache_key)
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
+        logger.debug("fail2ban health check skipped: %s", exc)
+
+
 @shared_task
 def monitor_health_task():
     """
@@ -356,6 +417,9 @@ def monitor_health_task():
             logger.error("Health check failed for %s: %s", service.name, exc)
 
     logger.info("Health monitor checked=%d skipped=%d", checked, skipped)
+
+    # ── Infrastructure health (Falco + fail2ban) ──
+    _check_infrastructure_health()
 
 
 

@@ -7667,9 +7667,16 @@ class SecurityStatusView(GenericAPIView):
         runtime = detect_best_runtime()
 
         # ── Container runtime ──────────────────────────────────────
+        isolation_model = "process-level (runc)"
+        if runtime == "runsc":
+            isolation_model = "user-space kernel (gVisor)"
+        elif runtime == "kata-runtime":
+            isolation_model = "VM-level (Kata)"
+
         container_runtime = {
             "active": runtime,
             "sandboxed": is_sandboxed_runtime(runtime),
+            "isolation_model": isolation_model,
             "kata_available": _kata_available(),
             "gvisor_available": _runsc_available(),
         }
@@ -7709,7 +7716,7 @@ class SecurityStatusView(GenericAPIView):
             seccomp["enabled"] = False
 
         # ── Falco ───────────────────────────────────────────────────
-        falco = {"running": False, "container": "smsly-falco"}
+        falco = {"running": False, "container": "smsly-falco", "driver": "unknown", "events_detected": 0}
         try:
             ps_result = subprocess.run(
                 ["docker", "ps", "--filter", f"name={falco['container']}",
@@ -7719,6 +7726,27 @@ class SecurityStatusView(GenericAPIView):
             falco["running"] = "Up" in (ps_result.stdout or "")
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
             falco["running"] = False
+        if falco["running"]:
+            try:
+                driver_result = subprocess.run(
+                    ["docker", "exec", falco["container"],
+                     "falco", "--list-options"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if "modern_ebpf" in (driver_result.stdout or ""):
+                    falco["driver"] = "modern_ebpf"
+                elif "ebpf" in (driver_result.stdout or "").lower():
+                    falco["driver"] = "ebpf"
+            except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+                pass
+            try:
+                subprocess.run(
+                    ["docker", "exec", falco["container"],
+                     "falcosidekick", "--version"],
+                    capture_output=True, text=True, timeout=5,
+                )
+            except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+                pass
 
         # ── CrowdSec ────────────────────────────────────────────────
         crowdsec = {
@@ -7767,7 +7795,7 @@ class SecurityStatusView(GenericAPIView):
             ufw["active"] = False
 
         # ── fail2ban ────────────────────────────────────────────────
-        fail2ban = {"active": False}
+        fail2ban = {"active": False, "jails": []}
         try:
             f2b_result = subprocess.run(
                 ["fail2ban-client", "ping"],
@@ -7776,6 +7804,18 @@ class SecurityStatusView(GenericAPIView):
             fail2ban["active"] = "pong" in (f2b_result.stdout or "")
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
             fail2ban["active"] = False
+        if fail2ban["active"]:
+            try:
+                jails_result = subprocess.run(
+                    ["fail2ban-client", "status"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                for line in (jails_result.stdout or "").splitlines():
+                    if line.strip().startswith("Jail list:"):
+                        jails_str = line.split(":", 1)[1].strip()
+                        fail2ban["jails"] = [j.strip() for j in jails_str.split(",") if j.strip()]
+            except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+                pass
 
         # ── auditd ──────────────────────────────────────────────────
         auditd = {"active": False}

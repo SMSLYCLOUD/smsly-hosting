@@ -1199,6 +1199,65 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
 
     if not crash_detected:
         append_log(deployment, "✅ Container healthy after 30s monitoring.\n")
+
+        # ── Infrastructure health summary ──
+        infra_lines = []
+
+        # Container runtime (gVisor / Kata)
+        try:
+            from apps.deployments.services.container_runtime import detect_best_runtime, is_sandboxed_runtime
+            runtime = detect_best_runtime()
+            sandboxed = is_sandboxed_runtime(runtime)
+            if runtime == "runsc":
+                infra_lines.append("🧱 gVisor (runsc): active — user-space kernel sandbox")
+            elif runtime == "kata-runtime":
+                infra_lines.append("🧱 Kata Containers: active — VM-level isolation")
+            elif sandboxed:
+                infra_lines.append(f"🧱 Runtime: {runtime} (sandboxed)")
+            else:
+                infra_lines.append(f"🧱 Runtime: {runtime} (default runc)")
+        except Exception:
+            infra_lines.append("⚠️  Runtime: detection failed")
+
+        # Falco
+        try:
+            falco_ps = subprocess.run(
+                ["docker", "ps", "--filter", "name=smsly-falco",
+                 "--format", "{{.Status}}"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if "Up" in (falco_ps.stdout or ""):
+                infra_lines.append("🛡️  Falco: running")
+            else:
+                infra_lines.append("⚠️  Falco: not running")
+        except Exception:
+            infra_lines.append("⚠️  Falco: check failed")
+
+        # fail2ban
+        try:
+            f2b_ping = subprocess.run(
+                ["fail2ban-client", "ping"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if "pong" in (f2b_ping.stdout or ""):
+                jails_result = subprocess.run(
+                    ["fail2ban-client", "status"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                jail_count = 0
+                for line in (jails_result.stdout or "").splitlines():
+                    if line.strip().startswith("Jail list:"):
+                        jails_str = line.split(":", 1)[1].strip()
+                        jail_count = len([j for j in jails_str.split(",") if j.strip()])
+                infra_lines.append(f"🔒 fail2ban: active ({jail_count} jails)")
+            else:
+                infra_lines.append("⚠️  fail2ban: not running")
+        except Exception:
+            infra_lines.append("⚠️  fail2ban: check failed")
+
+        if infra_lines:
+            append_log(deployment, "\n📋 Infrastructure: " + " | ".join(infra_lines) + "\n")
+
         broadcast_status(deployment)
         return
 
