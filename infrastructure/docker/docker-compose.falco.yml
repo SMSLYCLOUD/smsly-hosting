@@ -1,4 +1,4 @@
-# SMSLY Hosting — Falco Runtime Security (eBPF / BPF auto-detect)
+# SMSLY Hosting — Falco Runtime Security (modern_ebpf driver)
 #
 # Falco monitors syscalls at the kernel level to detect runtime threats:
 #   - Unauthorized process execution inside containers
@@ -7,41 +7,35 @@
 #   - Reverse shell / unexpected network connections
 #   - Privilege escalation inside containers
 #
-# The installer (lib/harden.sh) auto-detects the best driver:
-#   - eBPF: modern kernel >= 5.8 with BTF (no probe build needed)
-#   - BPF probe: kernel >= 4.14 with debugfs (auto-build on first run)
-#   - Kernel module: fallback (requires dkms)
+# Uses the modern_ebpf driver (CO-RE, no kernel headers needed):
+#   - Requires kernel >= 5.8 with BTF (/sys/kernel/btf/vmlinux)
+#   - No driver installation needed — probe is bundled in the Falco binary
+#   - Requires tracefs mount for BPF program loading
 
 services:
   falco:
-    image: falcosecurity/falco:0.38.0
+    image: falcosecurity/falco:0.39.2
     container_name: smsly-falco
     restart: unless-stopped
-    # Drop all capabilities, add only what Falco needs for BPF/eBPF
+    # Modern eBPF least-privileged mode (per falco.org/docs/setup/container/)
     cap_drop:
       - ALL
     cap_add:
       - SYS_PTRACE
       - SYS_ADMIN
-      - NET_ADMIN
       - SYS_RESOURCE
-    # Security options: no privilege escalation
     security_opt:
       - apparmor:unconfined
     volumes:
+      # Required for modern_ebpf: tracefs (BPF program loading)
+      - /sys/kernel/tracing:/sys/kernel/tracing:ro,z
+      # Required for container enrichment
       - /var/run/docker.sock:/host/var/run/docker.sock:ro,z
-      - /dev:/host/dev:ro,z
       - /proc:/host/proc:ro,z
-      - /boot:/host/boot:ro,z
-      - /lib/modules:/host/lib/modules:ro,z
-      - /usr/src:/host/usr/src:ro,z
       - /etc:/host/etc:ro,z
-      - /sys/kernel/debug:/sys/kernel/debug:ro,z
     environment:
-      # Auto-detect: try eBPF first (modern kernel), fallback to module
-      - FALCO_BPF_PROBE=${FALCO_BPF_PROBE:-}
       - HOST_ROOT=/host
-    command: ["/usr/bin/falco", "-o", "json_output=true"]
+    command: ["/usr/bin/falco", "-o", "json_output=true", "-o", "engine.kind=modern_ebpf"]
     labels:
       - managed_by=smsly-hosting
     networks:
