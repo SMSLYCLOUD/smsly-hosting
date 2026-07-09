@@ -27,7 +27,7 @@ services:
       - SYS_RESOURCE
     # Security options: no privilege escalation
     security_opt:
-      - no-new-privileges:true
+      - apparmor:unconfined
     volumes:
       - /var/run/docker.sock:/host/var/run/docker.sock:ro,z
       - /dev:/host/dev:ro,z

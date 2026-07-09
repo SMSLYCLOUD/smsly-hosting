@@ -22,6 +22,7 @@ services:
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
     environment:
+      DOCKER_API_VERSION: "1.40"
       CONTAINERS: 1
       IMAGES: 1
       NETWORKS: 1
