@@ -18,6 +18,7 @@ services:
     tmpfs:
       - /run
       - /tmp
+      - /usr/local/etc/haproxy
     security_opt:
       - no-new-privileges:true
     volumes:
