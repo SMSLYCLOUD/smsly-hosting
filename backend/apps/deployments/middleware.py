@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import logging
 
+from channels.db import database_sync_to_async
 from django.conf import settings
 
 logger = logging.getLogger(__name__)

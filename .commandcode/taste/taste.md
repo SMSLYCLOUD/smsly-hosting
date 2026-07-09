@@ -22,3 +22,9 @@ See [workflow/taste.md](workflow/taste.md)
 # testing
 - When fixing a Django endpoint that silently crashes (e.g., `result.save()` fails), check required model FK fields — the ORM won't validate defaults and `.save()` will raise `IntegrityError` swallowed by broad `except Exception`. Confidence: 0.65
 - Service detail tabs (Insights, Monitoring, Security) must scope data to the current service only — do not fetch or display platform-wide metrics from within a service context. Confidence: 0.75
+
+# verification
+- After code changes, perform deep E2E verification: trace every path across all changed files with exact timing (T+n notation), identify race conditions, and walk through multiple scenario outcomes before/after the change. Confidence: 0.75
+
+# frontend-navigation
+- Before creating a new page, check the navbar component (and any other navigation components) for existing links to that page — the route may already exist under a different path than what glob/file-search suggests. Confidence: 0.65

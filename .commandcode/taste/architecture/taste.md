@@ -1,4 +1,5 @@
 # architecture
+- Blue-green candidate containers that never became healthy should not be restarted — set restart policy to `no` for green candidates before promotion; only containers that were once healthy (i.e., promoted to live) should use `unless-stopped`. Confidence: 0.70
 - The SMSLYCLOUD/ directory belongs to the parent company and is separate from the smsly-hosting (CloudNeuron) PaaS open-source project — do not treat it as part of the same product. Confidence: 0.65
 - New installer functionality goes into separate files under lib/ and is sourced/linked from install.sh, not added directly to install.sh. Confidence: 0.75
 - Kubernetes-related code (Helm charts, PodSecurity helpers, k8s templates) is no longer used — skip all k8s fixes and do not spend time on k8s-related work. Confidence: 0.70
