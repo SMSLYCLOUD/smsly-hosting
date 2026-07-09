@@ -70,6 +70,7 @@ def register_extra_tasks(sender, **kwargs):  # pylint: disable=unused-argument
     import apps.deployments.tasks_health               # noqa: F401
     import apps.deployments.tasks_alerts               # noqa: F401
     import apps.deployments.tasks_traffic             # noqa: F401
+    import apps.intelligence.jules_fix.jules_fix      # noqa: F401
 
 # =============================================================================
 # Beat Schedule — Periodic tasks for metrics, health, autoscaling, cleanup

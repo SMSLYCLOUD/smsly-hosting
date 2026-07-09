@@ -11,10 +11,6 @@ AUTO_APPROVE_COMMIT_MARKERS = (
     "service restart",
 )
 
-import logging  # noqa: E402
-import os  # noqa: E402
-
-
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = str(os.environ.get(name, str(default))).strip().lower()
     return raw in {"1", "true", "yes", "on"}
