@@ -701,7 +701,7 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
-    image: crowdsecurity/crowdsec:1.6.4 # TODO: pin to digest via dependabot/renovate
+    image: crowdsecurity/crowdsec:v1.7.8
     container_name: smsly-crowdsec
     restart: unless-stopped
     environment:

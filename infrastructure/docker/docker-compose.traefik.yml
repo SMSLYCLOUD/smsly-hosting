@@ -1,10 +1,8 @@
-# Traefik Reverse Proxy with Auto-SSL
+# Traefik Reverse Proxy (behind Caddy)
 # SMSly Hosting Infrastructure Layer
 #
-# Provides:
-# - Automatic SSL via Let's Encrypt
-# - Dynamic service discovery for deployed apps
-# - Dashboard for monitoring routes
+# Caddy handles SSL termination and forwards HTTP to Traefik:80.
+# Traefik does NOT have a websecure entrypoint in this setup.
 #
 # Usage:
 #   docker compose -f docker-compose.traefik.yml up -d
@@ -28,11 +26,6 @@ services:
       
       # Entrypoints (Caddy handles SSL, forwards to traefik:80)
       - "--entrypoints.web.address=:80"
-      
-      # SSL with Let's Encrypt
-      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:?ACME_EMAIL must be set}"
-      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
-      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
       
       # Logging
       - "--log.level=INFO"
@@ -60,30 +53,19 @@ services:
     
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
-      - "letsencrypt:/letsencrypt"
       - "traefik_logs:/var/log/traefik"
     
     networks:
       - smsly-proxy
     
     labels:
-      # Dashboard
+      # Dashboard (Caddy routes traefik.${DOMAIN} here)
       - "traefik.enable=true"
       - "traefik.http.routers.traefik.rule=Host(`traefik.${DOMAIN:?DOMAIN must be set}`)"
-      - "traefik.http.routers.traefik.entrypoints=websecure"
-      - "traefik.http.routers.traefik.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.traefik.entrypoints=web"
       - "traefik.http.routers.traefik.service=api@internal"
-      
-      # Basic auth for dashboard (generate with: htpasswd -nb admin password)
       - "traefik.http.routers.traefik.middlewares=auth"
       - "traefik.http.middlewares.auth.basicauth.users=${TRAEFIK_DASHBOARD_AUTH:-admin:$$apr1$$xyz$$hash}"
-      
-      # Global redirect HTTP -> HTTPS
-      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
-      - "traefik.http.middlewares.redirect-to-https.redirectscheme.permanent=true"
-      - "traefik.http.routers.http-catchall.rule=hostregexp(`{host:.+}`)"
-      - "traefik.http.routers.http-catchall.entrypoints=web"
-      - "traefik.http.routers.http-catchall.middlewares=redirect-to-https"
       
       # Security headers middleware
       - "traefik.http.middlewares.secure-headers.headers.stsSeconds=31536000"
@@ -92,8 +74,6 @@ services:
       - "traefik.http.middlewares.secure-headers.headers.forceSTSHeader=true"
 
 volumes:
-  letsencrypt:
-    driver: local
   traefik_logs:
     driver: local
 
