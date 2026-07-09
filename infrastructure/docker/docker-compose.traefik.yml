@@ -61,9 +61,8 @@ services:
       - "--providers.docker.network=smsly-proxy"
       - "--providers.docker.endpoint=tcp://socket-proxy:2375"
       
-      # Entrypoints
+      # Entrypoints (Caddy handles SSL, forwards to traefik:80)
       - "--entrypoints.web.address=:80"
-      - "--entrypoints.websecure.address=:443"
       
       # SSL with Let's Encrypt
       - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:?ACME_EMAIL must be set}"
@@ -92,8 +91,6 @@ services:
       - "--entrypoints.metrics.address=:8082"
     
     ports:
-      - "80:80"
-      - "443:443"
       - "8082:8082"  # Prometheus metrics
     
     volumes:
