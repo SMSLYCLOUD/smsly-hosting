@@ -14,11 +14,9 @@ services:
     image: tecnativa/docker-socket-proxy:0.2 # TODO: pin to digest via dependabot/renovate
     container_name: smsly-traefik-socket-proxy
     restart: unless-stopped
-    read_only: true
     tmpfs:
       - /run
       - /tmp
-      - /usr/local/etc/haproxy
     security_opt:
       - no-new-privileges:true
     volumes:
