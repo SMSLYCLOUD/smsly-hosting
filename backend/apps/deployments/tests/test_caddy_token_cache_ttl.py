@@ -84,6 +84,8 @@ class CaddyTokenCacheTtlTests(SimpleTestCase):
              patch.object(caddy_manager, "CADDY_TOKEN_FILE", self.token_file), \
              patch.object(caddy_manager, "CADDY_TOKEN_CLEAR_FILE", self.clear_file), \
              patch.object(caddy_manager, "caddy_disabled_mode", return_value=False), \
+             patch.object(caddy_manager, "_last_caddy_reload_ts", 0.0), \
+             patch.object(caddy_manager, "_last_caddy_content_hash", ""), \
              patch.object(
                  caddy_manager,
                  "validate_service_routes_do_not_hit_control_plane",

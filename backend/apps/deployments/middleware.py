@@ -55,6 +55,48 @@ class RedisResilientMiddleware:
                 await send({"type": "websocket.close", "code": 4503})
             return None
 
+
+class DynamicAllowedHostsASGIMiddleware:
+    """
+    ASGI middleware that dynamically adds valid hosts to ALLOWED_HOSTS
+    during the WebSocket handshake.  This mirrors DynamicAllowedHostsMiddleware
+    for HTTP but works at the ASGI level so WebSocket connections are not
+    rejected by AllowedHostsOriginValidator after a domain config change.
+
+    Note: ``is_valid_host()`` performs synchronous DB queries.  We wrap it
+    in ``database_sync_to_async`` so the event loop is not blocked during
+    the async handshake path.
+    """
+    def __init__(self, app):
+        self.app = app
+
+    @database_sync_to_async
+    def _is_valid_host(self, host: str) -> bool:
+        from apps.deployments.patching import is_valid_host
+        return is_valid_host(host)
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") in ("http", "websocket"):
+            host = ""
+            for raw_name, raw_value in scope.get("headers", []):
+                if raw_name == b"host":
+                    try:
+                        host = raw_value.decode("latin-1").split(":")[0]
+                    except UnicodeDecodeError:
+                        pass
+                    break
+            if host and host not in settings.ALLOWED_HOSTS:
+                try:
+                    if await self._is_valid_host(host):
+                        settings.ALLOWED_HOSTS.append(host)
+                        logger.info(
+                            "DynamicAllowedHostsASGIMiddleware: whitelisted %s", host
+                        )
+                except Exception as exc:
+                    logger.warning("Dynamic WS host patching failed: %s", exc)
+        return await self.app(scope, receive, send)
+
+
 class DynamicAllowedHostsMiddleware:
     """
     Dynamically patches ALLOWED_HOSTS if an incoming request's host matches

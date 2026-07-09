@@ -1364,6 +1364,38 @@ def _handle_failure(task, deployment, error_msg, reason):
             except Exception as e:
                 logger.warning(f"Docker client error during failure cleanup: {e}")
 
+            # Sweep stale green candidates from prior failed deploys.
+            # When a service has multiple failed attempts, each creates a
+            # green container that can accumulate as restart-looping orphans.
+            try:
+                service_name = deployment.service.name
+                import docker
+                _client = docker.from_env()
+                stale = _client.containers.list(
+                    all=True,
+                    filters={"status": ["exited", "dead", "restarting"]},
+                )
+                swept = 0
+                for c in stale:
+                    parts = c.name.rsplit("-green-", 1)
+                    if len(parts) == 2 and parts[0] == service_name:
+                        try:
+                            c.remove(force=True)
+                            swept += 1
+                        except Exception:
+                            pass
+                if swept:
+                    logger.info(
+                        "Swept %d stale green container(s) for %s on deploy failure",
+                        swept, service_name,
+                    )
+                    deployment.build_logs += (
+                        f"\n🧹 Swept {swept} stale green container(s) from prior failed attempts.\n"
+                    )
+                    deployment.save(update_fields=['build_logs'])
+            except Exception as sweep_err:
+                logger.warning("Failed to sweep stale green containers: %s", sweep_err)
+
             try:
                 from apps.deployments.tasks_alerts import alert_user_task
                 alert_user_task.delay(deployment_id=str(deployment.id), error_message=f"{reason}: {error_msg}")

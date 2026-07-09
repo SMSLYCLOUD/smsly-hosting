@@ -39,7 +39,7 @@ def _is_stale_maintenance_container(
     name = str(getattr(container, "name", "") or "")
     labels = getattr(container, "labels", None) or {}
     status_value = str(getattr(container, "status", "") or "").lower()
-    if status_value not in {"exited", "created", "dead"}:
+    if status_value not in {"exited", "created", "dead", "restarting"}:
         return False, "container is not stopped"
 
     service_id = str(labels.get("smsly.service_id") or "").strip()
@@ -91,7 +91,7 @@ def _clear_orphaned_runtime_resources() -> dict:
     errors = []
     containers = client.containers.list(
         all=True,
-        filters={"status": ["exited", "created", "dead"]},
+        filters={"status": ["exited", "created", "dead", "restarting"]},
     )
     for container in containers:
         should_remove, reason = _is_stale_maintenance_container(

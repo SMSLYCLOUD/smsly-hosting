@@ -460,6 +460,7 @@ class LocalAdapter(BaseCloudAdapter):
             'smsly.blue_green.hc_path': hc_primary_path,
             'smsly.blue_green.hc_interval': str(hc_interval),
             'smsly.blue_green.hc_timeout': str(hc_timeout),
+            'smsly.blue_green.restart_policy': restart_policy,
         }
         # Traefik routing metadata
         if stage_before_cutover:
@@ -536,6 +537,9 @@ class LocalAdapter(BaseCloudAdapter):
             rp = {"Name": "unless-stopped"}
         else:
             rp = {"Name": restart_policy, "MaximumRetryCount": "5"}
+
+        if stage_before_cutover:
+            rp = {"Name": "on-failure", "MaximumRetryCount": "5"}
 
         networking_config = self.docker_client.api.create_networking_config({
             network_name: self.docker_client.api.create_endpoint_config(
@@ -797,12 +801,17 @@ class LocalAdapter(BaseCloudAdapter):
         if cpu_shares and cpu_shares > 0:
             run_kwargs['cpu_shares'] = cpu_shares
 
-        rp_config = green_host_config.get('RestartPolicy', {}) or {}
-        rp = None
-        if rp_config.get('Name'):
-            rp = {"Name": rp_config['Name']}
-            if rp_config.get('MaximumRetryCount') is not None:
-                rp['MaximumRetryCount'] = rp_config['MaximumRetryCount']
+        # Resolve restart policy for the promoted container.
+        # Green candidates use bounded on-failure during warm-up; the
+        # promoted container uses the service's configured policy,
+        # preserved via a label on the green container.
+        promoted_restart_policy = green_labels.get('smsly.blue_green.restart_policy', 'unless-stopped')
+        if promoted_restart_policy == 'no':
+            rp = None
+        elif promoted_restart_policy == 'unless-stopped':
+            rp = {"Name": "unless-stopped"}
+        else:
+            rp = {"Name": promoted_restart_policy, "MaximumRetryCount": "5"}
 
         old_container = None
         backup_name = ""

@@ -7,6 +7,7 @@ Design goals:
 - Keep failure/restart state shared across workers (cache-backed).
 - Prevent restart storms with backoff + max restart cap.
 - Avoid duplicate restarts while another deployment is already in progress.
+- Detect crashed containers via Docker state for instant fail-fast.
 """
 import logging
 import os
@@ -52,6 +53,9 @@ LOW_RESOURCE_EXTRA_GRACE_SECONDS = _env_int(
     120,
     minimum=0,
 )
+# When a container is dead (exited/crashed), use a fast
+# retry threshold instead of the full HTTP retry count.
+CRASH_FAST_RETRIES = _env_int("HEALTH_CRASH_FAST_RETRIES", 3, minimum=1)
 LOW_RESOURCE_CPU_THRESHOLD = _env_float(
     "HEALTH_LOW_RESOURCE_CPU_THRESHOLD",
     0.75,
@@ -87,11 +91,16 @@ def _last_check_key(service_id: str) -> str:
     return f"health:last-check:{service_id}"
 
 
+def _container_state_key(service_id: str) -> str:
+    return f"health:state:{service_id}"
+
+
 def _clear_state(service_id: str, clear_restart: bool = False):
     cache.delete(_failure_key(service_id))
     if clear_restart:
         cache.delete(_restart_key(service_id))
     cache.delete(_last_check_key(service_id))
+    cache.delete(_container_state_key(service_id))
 
 
 def _normalize_path(path: str) -> str:
@@ -349,6 +358,32 @@ def monitor_health_task():
     logger.info("Health monitor checked=%d skipped=%d", checked, skipped)
 
 
+
+def _probe_container_state(container_id: str) -> tuple[str, int | None]:
+    """Fetch container status and exit code from Docker.
+
+    Returns (status: str, exit_code: int | None).
+    Status is one of: created, restarting, running, removing, paused,
+    exited, dead.  Returns ("unknown", None) if Docker is unreachable
+    or the container no longer exists.
+    """
+    import docker
+
+    if not container_id:
+        return ("unknown", None)
+    try:
+        client = docker.from_env()
+        container = client.containers.get(container_id)
+        state = container.attrs.get("State", {})
+        status = (state.get("Status") or "unknown").lower()
+        exit_code = state.get("ExitCode")
+        return (status, exit_code)
+    except docker.errors.NotFound:
+        return ("not-found", None)
+    except Exception:
+        return ("unknown", None)
+
+
 def _check_service_health(service, Deployment):
     """Check a single service's health and update service status."""
     active = (
@@ -371,6 +406,17 @@ def _check_service_health(service, Deployment):
         age = (timezone.now() - active.created_at).total_seconds()
         if age < startup_grace_seconds:
             return
+
+    # Check Docker container state: if the container is dead, fast-fail.
+    container_id = (active.container_id or "").strip()
+    state, exit_code = _probe_container_state(container_id)
+    is_crashed = state in {"exited", "dead", "not-found", "restarting"}
+
+    cache_key = _container_state_key(service_key)
+    if is_crashed:
+        cache.set(cache_key, {"state": state, "exit_code": exit_code}, timeout=STATE_TTL_SECONDS)
+    else:
+        cache.delete(cache_key)
 
     targets = _build_targets(service, active)
     if not targets:
@@ -430,7 +476,14 @@ def _handle_failure(service, service_key: str, reason: str):
     current_failures = int(cache.get(failure_key, 0) or 0) + 1
     cache.set(failure_key, current_failures, timeout=STATE_TTL_SECONDS)
 
-    retries = max(2, int(service.health_check_retries or 8))
+    # Use fast retries if the container is dead (exited/crashed/not-found),
+    # otherwise use the service's configured HTTP retry threshold.
+    state_info = cache.get(_container_state_key(service_key))
+    if state_info and isinstance(state_info, dict):
+        retries = max(2, CRASH_FAST_RETRIES)
+    else:
+        retries = max(2, int(service.health_check_retries or 8))
+
     logger.warning(
         "%s health check failed (%d/%d): %s",
         service.name,
@@ -543,12 +596,25 @@ def _trigger_restart(service, service_key: str) -> bool:
             logger.info("Skipping auto-restart for %s: deployment already in progress.", service.name)
             return False
 
+        # Don't pile on if a deployment recently failed — the issue
+        # is likely systemic and auto-restart won't help.
+        from datetime import timedelta
+        if Deployment.objects.filter(
+            service=service,
+            status=Deployment.Status.FAILED,
+            finished_at__gte=timezone.now() - timedelta(seconds=RESTART_COOLDOWN_BASE),
+        ).exists():
+            logger.info(
+                "Skipping auto-restart for %s: recent deployment failure within cooldown.",
+                service.name,
+            )
+            return False
+
         # Guard: don't auto-restart if recent deployments keep failing.
         # This prevents restart storms when the issue is persistent
         # (bad code, missing env var, broken Dockerfile, etc.).
         # The window/threshold matches ``AutoRollbackEngine`` so the
         # fast-path here is a thin shim around the engine's check.
-        from datetime import timedelta
         from apps.deployments.services.auto_rollback import (
             AUTO_ROLLBACK_THRESHOLD,
             AUTO_ROLLBACK_WINDOW_MINUTES,

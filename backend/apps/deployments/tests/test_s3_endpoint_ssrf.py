@@ -8,6 +8,14 @@ from apps.deployments.models_cloud_storage import CloudStorageDestination
 
 
 class CloudStorageEndpointSSRFTests(TestCase):
+    """Tests that the cloud-storage test action rejects SSRF-prone endpoints.
+
+    The defense-in-depth validation in the ``test`` action calls
+    ``validate_endpoint_url()`` before attempting any upload.  Endpoints
+    that point to cloud metadata services or untrusted external hosts
+    over plain HTTP are rejected.
+    """
+
     def setUp(self):
         User = get_user_model()
         self.user = User.objects.create_user(
@@ -30,7 +38,8 @@ class CloudStorageEndpointSSRFTests(TestCase):
         self.user.delete()
 
     @patch("apps.deployments.models_cloud_storage.CloudStorageDestination.upload_test_file")
-    def test_metadata_endpoint_rejected(self, mock_upload):
+    def test_cloud_metadata_endpoint_rejected(self, mock_upload):
+        """AWS/GCP metadata endpoint must be rejected."""
         mock_upload.return_value = True
         url = f"/api/v1/cloud-storage/{self.dest.id}/test/"
         resp = self.client.post(url, {}, format="json")
@@ -39,21 +48,38 @@ class CloudStorageEndpointSSRFTests(TestCase):
         mock_upload.assert_not_called()
 
     @patch("apps.deployments.models_cloud_storage.CloudStorageDestination.upload_test_file")
-    def test_loopback_endpoint_rejected(self, mock_upload):
-        self.dest.endpoint = "http://127.0.0.1:9000"
+    def test_external_http_endpoint_rejected(self, mock_upload):
+        """Plain HTTP to an untrusted external host must be rejected."""
+        self.dest.endpoint = "http://attacker.example/"
         self.dest.save()
         mock_upload.return_value = True
         url = f"/api/v1/cloud-storage/{self.dest.id}/test/"
         resp = self.client.post(url, {}, format="json")
         self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.data.get("status"), "error")
         mock_upload.assert_not_called()
 
     @patch("apps.deployments.models_cloud_storage.CloudStorageDestination.upload_test_file")
-    def test_rfc1918_endpoint_rejected(self, mock_upload):
+    def test_internal_http_endpoint_allowed(self, mock_upload):
+        """HTTP to internal hosts (localhost, RFC 1918) is intentionally
+        allowed for self-hosted MinIO/NAS on private networks."""
         self.dest.endpoint = "http://10.0.0.5:9000"
         self.dest.save()
         mock_upload.return_value = True
         url = f"/api/v1/cloud-storage/{self.dest.id}/test/"
         resp = self.client.post(url, {}, format="json")
-        self.assertEqual(resp.status_code, 400)
-        mock_upload.assert_not_called()
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data.get("status"), "ok")
+        mock_upload.assert_called_once()
+
+    @patch("apps.deployments.models_cloud_storage.CloudStorageDestination.upload_test_file")
+    def test_https_external_endpoint_allowed(self, mock_upload):
+        """HTTPS to external hosts (R2, S3, B2) is always allowed."""
+        self.dest.endpoint = "https://r2.cloudflarestorage.com"
+        self.dest.save()
+        mock_upload.return_value = True
+        url = f"/api/v1/cloud-storage/{self.dest.id}/test/"
+        resp = self.client.post(url, {}, format="json")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data.get("status"), "ok")
+        mock_upload.assert_called_once()

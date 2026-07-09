@@ -7,6 +7,7 @@ to a shared volume for the host-side watcher to pick up.
 
 import contextlib
 import datetime
+import hashlib
 import ipaddress
 import json
 import logging
@@ -35,6 +36,15 @@ CADDY_TOKEN_CACHE = os.path.join(CADDY_CONFIG_DIR, ".cloudflare_token_cache")
 # re-supply a token. This prevents the cache from effectively becoming
 # permanent when combined with preserve_existing_token=True.
 CADDY_TOKEN_CACHE_TTL_SECONDS = 30 * 24 * 60 * 60
+# Minimum seconds between Caddy reloads.  A single user action (e.g. add_domain)
+# can trigger apply_caddyfile() multiple times via both the post_save signal
+# and the explicit view call.  Without a cooldown every caller generates a
+# full Caddyfile rewrite + docker exec reload, wasting resources and
+# potentially disrupting in-flight connections.
+CADDY_RELOAD_COOLDOWN_SECONDS = 10
+_last_caddy_reload_ts: float = 0.0
+_last_caddy_content_hash: str = ""
+
 SERVICE_PROXY_UPSTREAM = os.environ.get("SMSLY_SERVICE_PROXY_UPSTREAM", "traefik:80")
 CONTROL_PLANE_UPSTREAMS = {
     "backend:8000",
@@ -1255,9 +1265,32 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
     operators to re-enter the Cloudflare token after restarts or background
     sync jobs that didn't pass it through.
     """
+    global _last_caddy_reload_ts
+
     if caddy_disabled_mode():
         logger.debug("Caddy-disabled mode: skipping apply_caddyfile()")
         return {"ok": True, "message": "Skipped because Caddy is not part of this node"}
+
+    # Debounce: within the cooldown window, skip if the content is identical
+    # to the last reload.  This prevents the double-reload pattern where both
+    # the post_save signal and the explicit view call trigger a full Caddyfile
+    # rewrite in the same request — the on-disk file is already up-to-date.
+    # However, genuinely different content (e.g. a second domain added within
+    # the same window) must still be written and reloaded.
+    now = time.time()
+    elapsed = now - _last_caddy_reload_ts
+    if elapsed < CADDY_RELOAD_COOLDOWN_SECONDS:
+        content_hash = hashlib.md5(content.encode()).hexdigest()
+        if content_hash == _last_caddy_content_hash:
+            logger.info(
+                "Skipping Caddy reload — identical content, %.1fs since last reload (cooldown=%ds)",
+                elapsed, CADDY_RELOAD_COOLDOWN_SECONDS,
+            )
+            return {"ok": True, "message": f"Skipped (cooldown, identical content, {elapsed:.1f}s since last reload)"}
+        logger.info(
+            "Caddy content changed within cooldown window — proceeding with reload (%.1fs since last)",
+            elapsed,
+        )
 
     result = {"ok": False, "message": ""}
 
@@ -1365,6 +1398,13 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
             logger.info("Wrote .reload flag to %s", CADDY_RELOAD_FLAG)
         except Exception as flag_exc:
             logger.warning("Failed to write .reload flag: %s", flag_exc)
+
+        # Stamp the debounce timer — a reload is now committed (Caddyfile on
+        # disk, .reload flag written).  Even if the docker exec fails, the host
+        # watcher will pick it up, so we treat this as a completed reload for
+        # cooldown purposes.
+        _last_caddy_reload_ts = time.time()
+        _last_caddy_content_hash = hashlib.md5(content.encode()).hexdigest()
 
         # Fire-and-forget: try docker exec for an immediate reload.
         # If it fails (e.g. socket-proxy 403), the host-side watcher will

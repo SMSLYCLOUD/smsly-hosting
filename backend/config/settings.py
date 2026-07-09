@@ -777,9 +777,17 @@ ACCOUNT_LOGOUT_REDIRECT_URL = '/login'
 # breaks OAuth callbacks — allauth's state validation 401s because the
 # session cookie (containing the OAuth state) is never sent.
 SESSION_COOKIE_SAMESITE = 'Lax'
-SESSION_COOKIE_SECURE = not DEBUG and not IS_TESTING and config('USE_SSL', default='False', cast=bool)
+# SESSION_COOKIE_SECURE is set in the security hardening block (line 190)
+# to respect USE_SSL and account for IP/localhost bypasses.  The previous
+# unconditional override here lacked the IP/localhost check, which would
+# set the cookie to Secure on a plain-HTTP IP address — causing the
+# browser to silently drop the session cookie.
 SESSION_COOKIE_HTTPONLY = True
-CSRF_COOKIE_SECURE = not DEBUG and not IS_TESTING
+# CSRF_COOKIE_SECURE is set in the security hardening block (line 191) to
+# respect USE_SSL. The unconditional override here was a bug — it set the
+# cookie to Secure even when Django was behind Caddy on plain HTTP, causing
+# the browser to silently omit the csrftoken cookie (Django 5.0+ refuses to
+# emit a Secure cookie on a non-HTTPS connection).
 
 # Ensure allauth uses HTTPS callback URLs in production (prevents CSRF Referer mismatch)
 ACCOUNT_DEFAULT_HTTP_PROTOCOL = 'https' if not DEBUG and not IS_TESTING else 'http'
@@ -1079,6 +1087,10 @@ REST_FRAMEWORK = {
         # indefinitely to enumerate destination IDs that the
         # platform supports. Cap at 30/minute per user.
         'cloud_templates': '30/minute',
+        # SECURITY: the cloud-storage test action triggers a real S3
+        # upload.  Cap at 10/minute per user to prevent abuse while
+        # allowing interactive troubleshooting.
+        'cloud_test': '10/minute',
         # SECURITY (Issue 137): cron-jobs POST is uncapped, a user
         # can spam cron jobs. Cap at 10/hour per user.
         'cron_jobs_create': '10/hour',

@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, PlusCircle, Settings, Box, Brain,
   Server, Rocket, Globe, ChevronDown, Wifi, WifiOff,
-  ExternalLink, Radio, Scaling, ArrowLeftRight, ShieldCheck, Plug
+  ExternalLink, Radio, Scaling, ArrowLeftRight, ShieldCheck, Plug, Activity
 } from "lucide-react";
 import { api, serversApi, type ManagedServer } from "@/lib/api";
 import TeamSwitcher from "@/components/team-switcher";
@@ -39,7 +39,7 @@ export function Sidebar() {
 
   // Auto-expand infra section if user is on an infra page
   React.useEffect(() => {
-    const infraPaths = ["/servers", "/autoscaler", "/tunnels", "/ecosystem", "/intelligence", "/mcp"];
+    const infraPaths = ["/servers", "/autoscaler", "/tunnels", "/ecosystem", "/intelligence", "/mcp", "/status"];
     if (infraPaths.some(p => pathname?.startsWith(p))) {
       setInfraOpen(true);
     }
@@ -93,6 +93,7 @@ export function Sidebar() {
   ];
 
   if (user?.is_staff) {
+    infraRoutes.push({ label: "System Status", icon: Activity, href: "/status" });
     utilRoutes.push({ label: "User Admin", icon: ShieldCheck, href: "/admin-dashboard/users" });
     utilRoutes.push({ label: "Price Settings", icon: ShieldCheck, href: "/admin-dashboard/pricing" });
   }

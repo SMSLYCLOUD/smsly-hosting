@@ -14,6 +14,7 @@ from services.caddy_manager import (
     apply_caddyfile,
     generate_caddyfile,
     validate_service_routes_do_not_hit_control_plane,
+    _last_caddy_reload_ts,
 )
 
 from apps.billing.models import PricingPlan, UserSubscription
@@ -26,6 +27,10 @@ class CaddyCustomDomainRoutingTests(TestCase):
     """Ensure custom domains route immediately through Caddy host rewrite."""
 
     def setUp(self):
+        import services.caddy_manager as caddy_mod
+        caddy_mod._last_caddy_reload_ts = 0.0  # reset debounce between tests
+        caddy_mod._last_caddy_content_hash = ""  # reset content-hash debounce
+
         self.user = User.objects.create_user(
             username='caddy-owner',
             email='caddy-owner@example.com',

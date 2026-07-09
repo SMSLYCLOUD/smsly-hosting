@@ -1,5 +1,5 @@
 """Cloud storage destinations API — create, list, update, delete, test connection."""
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import models
 from rest_framework import permissions, serializers, status, viewsets
 from rest_framework.decorators import action
@@ -7,6 +7,15 @@ from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle
 
 from apps.deployments.models_cloud_storage import CloudStorageDestination
+
+
+class CloudStorageTestRateThrottle(UserRateThrottle):
+    """Per-user throttle on the ``test`` endpoint.
+
+    Each test triggers an actual S3 upload.  Cap at 10/minute per user
+    to prevent abuse while allowing interactive troubleshooting.
+    """
+    scope = 'cloud_test'
 
 
 class CloudStorageTemplatesRateThrottle(UserRateThrottle):
@@ -37,6 +46,15 @@ class CloudStorageSerializer(serializers.ModelSerializer):
     def get_secret_key_masked(self, obj):
         key = obj.secret_key or ''
         return key[:4] + '****' + key[-4:] if len(key) > 8 else '****'
+
+    def validate_endpoint(self, value):
+        from django.core.exceptions import ValidationError as DjangoValidationError
+        from .models_backup import validate_endpoint_url
+        try:
+            validate_endpoint_url(value)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.messages)
+        return value
 
 
 class CloudStorageViewSet(viewsets.ModelViewSet):
@@ -90,9 +108,23 @@ class CloudStorageViewSet(viewsets.ModelViewSet):
     # queryset already excludes other users' rows, raising 404 for cross-tenant
     # delete attempts.
 
-    @action(detail=True, methods=['post'])
+    @action(detail=True, methods=['post'],
+            throttle_classes=[CloudStorageTestRateThrottle])
     def test(self, request, pk=None):
         destination = self.get_object()
+        # Defense-in-depth: validate endpoint before attempting upload.
+        # The serializer's validate_endpoint covers create/update, but the
+        # test action bypasses the serializer.  A malicious endpoint that
+        # slipped into the DB via ORM or a migration bug would otherwise
+        # be tried blindly.
+        try:
+            from .models_backup import validate_endpoint_url
+            validate_endpoint_url(destination.endpoint)
+        except (ValueError, ValidationError):
+            return Response(
+                {'status': 'error', 'message': 'Endpoint URL is not allowed — check for SSRF risks'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         success = destination.upload_test_file()
         if success:
             return Response({'status': 'ok', 'message': 'Test file uploaded successfully'})

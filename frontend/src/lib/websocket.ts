@@ -28,6 +28,7 @@ interface UseWebSocketOptions {
   onError?: (event: Event) => void;
   reconnect?: boolean;
   reconnectInterval?: number;
+  maxReconnectAttempts?: number;
 }
 
 export function useWebSocket(options: UseWebSocketOptions) {
@@ -39,13 +40,13 @@ export function useWebSocket(options: UseWebSocketOptions) {
     onError,
     reconnect = true,
     reconnectInterval = 5000,
+    maxReconnectAttempts = 10,
   } = options;
 
   const wsRef = useRef<WebSocket | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'open' | 'closed' | 'error'>('closed');
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttempts = useRef(0);
-  const maxReconnectAttempts = 10;
 
   const connect = () => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -84,10 +85,13 @@ export function useWebSocket(options: UseWebSocketOptions) {
         onClose?.(event);
         
         if (reconnect && reconnectAttempts.current < maxReconnectAttempts) {
+          // Exponential backoff: base * 2^attempt, capped at 30s
+          // e.g. base=2000 → 2s, 4s, 8s, 16s, 30s, 30s, ...
+          const delay = Math.min(reconnectInterval * Math.pow(2, reconnectAttempts.current), 30000);
           reconnectTimeoutRef.current = setTimeout(() => {
             reconnectAttempts.current++;
             connect();
-          }, reconnectInterval);
+          }, delay);
         }
       };
 
@@ -161,7 +165,8 @@ export function useServiceStatusUpdates(userId: string) {
   const { connectionStatus } = useWebSocket({
     url: getWsUrl('/ws/service-status/'),
     reconnect: true,
-    reconnectInterval: 3000,
+    reconnectInterval: 2000,
+    maxReconnectAttempts: 15,
     onMessage: (message) => {
       if (message.type === 'service_status_update') {
         setServices(prev => {
@@ -203,7 +208,8 @@ export function useDeploymentStatusUpdates(serviceId: string) {
   const { connectionStatus } = useWebSocket({
     url: getWsUrl('/ws/service-status/'),
     reconnect: true,
-    reconnectInterval: 3000,
+    reconnectInterval: 2000,
+    maxReconnectAttempts: 15,
     onMessage: (message) => {
       if (message.type === 'deployment_status_update' && message.service_id === serviceId) {
         setDeployments(prev => {

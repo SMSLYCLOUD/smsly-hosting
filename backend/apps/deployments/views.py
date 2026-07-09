@@ -5089,12 +5089,15 @@ class SystemConfigView(GenericAPIView):
         if task_id:
             return self._maintenance_task_response(task_id)
 
+        infra_health = self._get_infra_health()
+
         safe_data = {
             'VERSION': '3.0.0',
             'DOMAIN': getattr(settings, 'DOMAIN', 'localhost'),
             'safe_update_available': os.path.exists('/opt/smsly-hosting/scripts/safe-update.sh'),
             'MAPBOX_TOKEN': PlatformConfig.get_config_value('mapbox_token'),
             **self._get_storage_metrics(),
+            **infra_health,
         }
 
         if not request.user.is_superuser:
@@ -5148,9 +5151,6 @@ class SystemConfigView(GenericAPIView):
             'GITHUB_WEBHOOK_SECRET_SET': bool(getattr(settings, 'GITHUB_WEBHOOK_SECRET', '')),
             'GITLAB_WEBHOOK_SECRET_SET': bool(getattr(settings, 'GITLAB_WEBHOOK_SECRET', '')),
             'BITBUCKET_WEBHOOK_SECRET_SET': bool(getattr(settings, 'BITBUCKET_WEBHOOK_SECRET', '')),
-
-            # Infra Health
-            **self._get_infra_health(),
 
             # Maintenance actions available to admins (labels only, no flags)
             'maintenance_actions': [
@@ -5244,6 +5244,15 @@ class SystemConfigView(GenericAPIView):
             'apt-cacher', 'docker-labels',
         ]
 
+        import re
+
+        def _match_container_name(container_name, svc_name):
+            """Check if container_name corresponds to svc_name.
+            Docker Compose names containers as project-service-N
+            (e.g. smsly-hosting-backend-1, smsly-postgres-primary, smsly-crowdsec).
+            Match when svc_name appears as a hyphen-delimited suffix component."""
+            return bool(re.search(rf'(?:-|^){re.escape(svc_name)}(?:-\d+)?$', container_name))
+
         running_map = {}  # name -> status string
         try:
             result = subprocess.run(
@@ -5260,6 +5269,13 @@ class SystemConfigView(GenericAPIView):
                         running_map[name] = {'status': status, 'running': state == 'running'}
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
             pass
+
+        def _find_container(svc_name):
+            """Look up a service in running_map by matching container naming conventions."""
+            for container_name, info in running_map.items():
+                if _match_container_name(container_name, svc_name):
+                    return info
+            return None
 
         # ── Service health probes ─────────────────────────────────
         # Database
@@ -5326,7 +5342,7 @@ class SystemConfigView(GenericAPIView):
 
         # ── Build final service map ───────────────────────────────
         for svc_name in KNOWN_SERVICES:
-            container = running_map.get(svc_name)
+            container = _find_container(svc_name)
             if container:
                 running = container['running']
             elif svc_name in ('db',):

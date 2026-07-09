@@ -249,14 +249,25 @@ def _refresh_managed_server_health(server):
         else:
             api_path = "/api/v1/services/"
             headers = _build_remote_headers(server, method="GET", path=api_path)
-            try:
-                resp = requests.get(f"{base}{api_path}", headers=headers, timeout=10)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    services = data.get("results", data) if isinstance(data, dict) else data
-                    server.services_count = len(services) if isinstance(services, list) else 0
-            except requests.RequestException:
-                pass
+
+            # Skip the request entirely when no auth credentials exist.
+            # Sending an unauthenticated request to a production endpoint
+            # is both useless (it 401s) and noisy (appears in access logs
+            # as an auth failure every 5 minutes).
+            if not headers.get("Authorization") and not headers.get("X-Gateway-Signature-V2"):
+                logger.debug(
+                    "Skipping service count sync for %s — no api_token or gateway_secret",
+                    server.name,
+                )
+            else:
+                try:
+                    resp = requests.get(f"{base}{api_path}", headers=headers, timeout=10)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        services = data.get("results", data) if isinstance(data, dict) else data
+                        server.services_count = len(services) if isinstance(services, list) else 0
+                except requests.RequestException:
+                    pass
     else:
         server.status = ManagedServer.Status.OFFLINE
 
@@ -273,19 +284,22 @@ def _refresh_managed_server_health(server):
 
                 api_path = "/api/v1/services/"
                 headers = _build_remote_headers(server, method="GET", path=api_path)
-                try:
-                    resp = requests.get(
-                        f"{server.api_url.rstrip('/')}{api_path}",
-                        headers=headers,
-                        timeout=10,
-                    )
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        services = data.get("results", data) if isinstance(data, dict) else data
-                        server.services_count = len(services) if isinstance(services, list) else 0
-                        server.save(update_fields=["services_count"])
-                except requests.RequestException:
-                    pass
+                if not headers.get("Authorization") and not headers.get("X-Gateway-Signature-V2"):
+                    logger.debug("Skipping post-exchange service count sync for %s — no auth", server.name)
+                else:
+                    try:
+                        resp = requests.get(
+                            f"{server.api_url.rstrip('/')}{api_path}",
+                            headers=headers,
+                            timeout=10,
+                        )
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            services = data.get("results", data) if isinstance(data, dict) else data
+                            server.services_count = len(services) if isinstance(services, list) else 0
+                            server.save(update_fields=["services_count"])
+                    except requests.RequestException:
+                        pass
 
         try:
             if not server.is_primary and (server.ssh_key or server.ssh_password):

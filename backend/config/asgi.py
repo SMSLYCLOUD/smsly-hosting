@@ -14,6 +14,7 @@ import apps.deployments.routing  # noqa: E402
 from apps.deployments.middleware import (  # noqa: E402
     QueryStringAuthMiddleware,
     RedisResilientMiddleware,
+    DynamicAllowedHostsASGIMiddleware,
 )
 from channels.auth import AuthMiddlewareStack  # noqa: E402
 from channels.routing import ProtocolTypeRouter, URLRouter  # noqa: E402
@@ -21,12 +22,14 @@ from channels.security.websocket import AllowedHostsOriginValidator  # noqa: E40
 
 application = ProtocolTypeRouter({
     "http": get_asgi_application(),
-    "websocket": RedisResilientMiddleware(
-        AllowedHostsOriginValidator(
-            AuthMiddlewareStack(
-                QueryStringAuthMiddleware(
-                    URLRouter(
-                        apps.deployments.routing.websocket_urlpatterns
+    "websocket": DynamicAllowedHostsASGIMiddleware(
+        RedisResilientMiddleware(
+            AllowedHostsOriginValidator(
+                AuthMiddlewareStack(
+                    QueryStringAuthMiddleware(
+                        URLRouter(
+                            apps.deployments.routing.websocket_urlpatterns
+                        )
                     )
                 )
             )
