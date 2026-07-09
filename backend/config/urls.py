@@ -9,7 +9,7 @@ from drf_spectacular.views import (
     SpectacularSwaggerView,
 )
 
-from config.health import health_check, liveness_check, readiness_check
+from config.health import health_check, health_check_verbose, liveness_check, readiness_check
 
 urlpatterns = [
     # ─── CRITICAL: Direct Addon Actions (Greedy Regex bypass for router shadowing) ───
@@ -21,6 +21,7 @@ urlpatterns = [
     path('health', health_check, name='health-check'),
     path('health/live', liveness_check, name='health-liveness'),
     path('health/ready', readiness_check, name='health-readiness'),
+    path('health/verbose', health_check_verbose, name='health-verbose'),
     path('healthz', health_check, name='healthz-check'),
     path('', include('django_prometheus.urls')),
 
@@ -96,6 +97,9 @@ if 'apps.billing' in settings.INSTALLED_APPS:
 
 if 'apps.licensing' in settings.INSTALLED_APPS:
     urlpatterns.append(path('api/v1/licensing/', include('apps.licensing.urls')))
+
+if 'apps.addons' in settings.INSTALLED_APPS:
+    urlpatterns.append(path('api/v1/addons/', include('apps.addons.urls')))
 
 if 'apps.intelligence' in settings.INSTALLED_APPS:
     urlpatterns.append(path('api/v1/ai/', include('apps.intelligence.urls')))

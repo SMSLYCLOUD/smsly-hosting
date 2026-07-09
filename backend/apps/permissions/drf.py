@@ -11,7 +11,7 @@ import logging
 from rest_framework import permissions
 
 from .codes import ADMIN_ACCESS, BILLING_MANAGE, BILLING_VIEW
-from .utils import has_permission, get_accessible_q
+from .utils import has_permission
 
 logger = logging.getLogger(__name__)
 

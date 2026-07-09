@@ -417,12 +417,6 @@ def sync_infrastructure_on_config_change(sender, instance, **kwargs):
         logger.error("Failed to sync infrastructure from signal: %s", e)
 
 
-@receiver(post_save, sender=PlatformConfig)
-def update_allowed_hosts_on_config_change(sender, instance, **kwargs):
-    # This is now handled by sync_infrastructure_on_config_change
-    pass
-
-
 @receiver(post_save, sender=Deployment)
 def sync_preview_status_on_deployment_change(sender, instance, created, **kwargs):
     """Update PreviewEnvironment status when the transient service's deployment changes."""

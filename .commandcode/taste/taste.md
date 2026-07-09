@@ -14,6 +14,12 @@ See [architecture/taste.md](architecture/taste.md)
 - Make security scan severity threshold configurable via settings with options to enable/disable and choose threshold level (low, medium, high, critical). Confidence: 0.70
 - Security tab in service Insights should show the service's own vulnerability scan data (Trivy results from the deployment model), not system-level hardening status. Confidence: 0.65
 
+# content
+- Do not fabricate usage stats (deployment counts, user numbers, trust indicators) for new/early-stage products — the product is "new and fresh" and fake numbers undermine credibility. Confidence: 0.65
+- When highlighting security features on the Grid product landing page, include the advanced/production-hardening features: gVisor sandboxing, Falco runtime security, fail2ban intrusion prevention, Trivy vulnerability scanning, scoped container registry, and cosigning/signature verification. Confidence: 0.65
+- When rewriting a page and losing original content, recover feature lists from git history (e.g., `git show <commit>:path/to/page.tsx`) — the old commits contain detailed feature descriptions that should be preserved or adapted. Confidence: 0.65
+- Landing page and marketing copy must only describe features that actually exist in the codebase — verify backend capabilities before writing demo code samples, feature descriptions, or architecture visuals. Confidence: 0.70
+
 # typescript
 - In .tsx files, generic arrow functions need a trailing comma on the type parameter (e.g., `<T,>` not `<T>`) to prevent TSX from parsing it as a JSX tag. Confidence: 0.70
 

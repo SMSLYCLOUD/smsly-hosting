@@ -166,7 +166,7 @@ def delete_service_env_var(service_id: str, key: str, user_id: Optional[str] = N
         user = _resolve_user(user_id, user_email)
         svc = Service.objects.get(id=service_id)
         if user:
-            assert_can_write(user, svc, action='delete environment variable')
+            assert_can_delete(user, svc, action='delete environment variable')
             
         deleted_count, _ = svc.env_vars.filter(key=key).delete()
         if deleted_count > 0:
@@ -185,6 +185,8 @@ def trigger_service_rebuild(service_id: str, user_id: Optional[str] = None, user
         svc = Service.objects.get(id=service_id)
         if user:
             assert_can_write(user, svc, action='trigger deployment rebuild')
+            if not user_is_team_admin(user, svc):
+                return {"error": "Only team admins can trigger rebuilds."}
             
         new_deploy = Deployment.objects.create(
             service=svc,

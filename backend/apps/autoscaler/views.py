@@ -30,6 +30,7 @@ from apps.autoscaler.engine.container_metrics import (
     collect_container_stats,
     init_k8s,
     k8s_available,
+    k8s_client,
 )
 from apps.autoscaler.models import AutoscalerConfig
 
@@ -331,9 +332,5 @@ def autoscaler_trigger(request):
 @api_view(["POST"])
 @permission_classes([IsAdminUser])
 def autoscaler_scale(request):
-    """Manual endpoint to force a scaling round."""
-    try:
-        return Response(_run_autoscaler_check())
-    except Exception as exc:
-        logger.error("Autoscaler scale endpoint error: %s", exc)
-        return Response({"error": str(exc)}, status=503)
+    """Manual endpoint to force a scaling round. Delegates to autoscaler_trigger."""
+    return autoscaler_trigger(request)

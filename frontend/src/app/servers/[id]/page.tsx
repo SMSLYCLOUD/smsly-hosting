@@ -271,6 +271,9 @@ export default function ServerDetailPage() {
     };
 
     const handleServiceAction = async (serviceId: string, action: 'deploy' | 'stop' | 'restart') => {
+        if (action === 'restart') {
+            if (!await confirm({ title: 'Restart service?', message: 'Fast-restart the container (~5 seconds). No rebuild required.', confirmText: 'Restart' })) return;
+        }
         setActionLoading(prev => ({ ...prev, [serviceId]: action }));
         try {
             if (action === 'deploy') await serversApi.remoteDeployService(serverId, serviceId);

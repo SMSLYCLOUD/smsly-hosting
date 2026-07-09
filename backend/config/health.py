@@ -71,6 +71,26 @@ def health_check(request):
     return JsonResponse(payload, status=status_code)
 
 
+def health_check_verbose(request):
+    """
+    Verbose health check — includes RabbitMQ, Celery, disk, SSL, and DNS.
+    Uses HealthCheckService for comprehensive infrastructure checks.
+    """
+    try:
+        from apps.core.services.health_check_service import HealthCheckService
+        result = HealthCheckService.run_all_checks()
+        result['version'] = _VERSION
+        result['uptime_seconds'] = int(time.monotonic() - _PROCESS_START)
+        status_code = 200 if result['ok'] else 503
+        return JsonResponse(result, status=status_code)
+    except Exception as exc:
+        return JsonResponse({
+            'status': 'error',
+            'error': str(exc),
+            'version': _VERSION,
+        }, status=503)
+
+
 def liveness_check(request):
     """
     Liveness probe — is the process alive and responsive?

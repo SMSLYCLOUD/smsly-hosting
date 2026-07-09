@@ -18,11 +18,14 @@ import {
   Cloud,
   RefreshCw,
   RotateCcw,
-  ShieldAlert
+  ShieldAlert,
+  Loader2
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Service, servicesApi, addonsApi } from '@/lib/api';
+import { toast } from '@/components/ui/use-toast';
+import { usePermissions, PERMISSION } from '@/hooks/usePermissions';
 
 import { motion } from 'framer-motion';
 import Link from 'next/link';
@@ -34,6 +37,7 @@ interface ServicesGridProps {
 export function ServicesGrid({ services }: ServicesGridProps) {
   const router = useRouter();
   const confirm = useConfirm();
+  const { has } = usePermissions();
   const [actionLoading, setActionLoading] = React.useState<string | null>(null);
 
   const handleDeploy = async (serviceId: string) => {
@@ -62,13 +66,19 @@ export function ServicesGrid({ services }: ServicesGridProps) {
     }
   };
 
-  const handleRestart = async (serviceId: string) => {
-    if (!await confirm({ title: 'Restart service?', message: 'Fast-restart the container (~5 seconds). No rebuild required.', confirmText: 'Restart' })) return;
+  const handleRestart = async (serviceId: string, serviceName: string, deploymentStatus?: string) => {
+    const inProgress = deploymentStatus && !['ACTIVE', 'FAILED', 'CANCELLED'].includes(deploymentStatus);
+    const message = inProgress
+      ? `A deployment is currently ${deploymentStatus.toLowerCase()}. Restart will cancel it and trigger a full rebuild (~1-5 min).`
+      : 'Fast-restart the container (~5 seconds). No rebuild required.';
+    if (!await confirm({ title: 'Restart service?', message, confirmText: 'Restart' })) return;
     setActionLoading(serviceId);
     try {
       await servicesApi.restart(serviceId);
+      toast({ title: 'Restart triggered', description: `${serviceName} is restarting.` });
     } catch (err) {
       console.error('Restart failed:', err);
+      toast({ title: 'Restart failed', description: `Could not restart ${serviceName}.`, variant: 'destructive' });
     } finally {
       setActionLoading(null);
     }
@@ -251,16 +261,16 @@ export function ServicesGrid({ services }: ServicesGridProps) {
               >
                 <Play size={12} fill="currentColor" />
               </Button>
-              {service.latest_deployment?.status === 'ACTIVE' && (
+              {service.latest_deployment?.status === 'ACTIVE' && has(PERMISSION.SERVICE_RESTART) && (
                 <Button
                   variant="ghost"
                   size="icon"
                   className="h-7 w-7 text-muted-foreground hover:text-yellow-500"
                   title="Restart"
                   disabled={actionLoading === service.id}
-                  onClick={() => handleRestart(service.id)}
+                  onClick={() => handleRestart(service.id, service.name, service.latest_deployment?.status)}
                 >
-                  <RotateCcw size={12} />
+                  {actionLoading === service.id ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />}
                 </Button>
               )}
               {service.latest_deployment?.status === 'ACTIVE' && (

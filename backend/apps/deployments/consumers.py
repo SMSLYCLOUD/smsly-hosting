@@ -11,7 +11,6 @@ from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from django.conf import settings
 
-from apps.deployments.middleware import get_user_from_token
 from apps.deployments.utils import log_event
 
 logger = logging.getLogger(__name__)
@@ -1368,8 +1367,9 @@ class AddonLogConsumer(AsyncWebsocketConsumer):
                 text=True,
                 bufsize=1,
             )
+            loop = asyncio.get_event_loop()
             while not self._proc.stdout.closed:
-                line = self._proc.stdout.readline()
+                line = await loop.run_in_executor(None, self._proc.stdout.readline)
                 if not line:
                     break
                 if self._disconnected:

@@ -8,7 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Loader2, Download, RotateCcw, Trash2, Plus, Clock, Save, AlertCircle, CheckCircle, FileKey, Key, GitCompare, Cloud, ShieldCheck, Upload, History } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import api from '@/lib/api';
+import api, { servicesApi } from '@/lib/api';
 import { backupsApi } from '@/lib/api';
 import { getWsUrl } from '@/lib/websocket';
 import { useConfirm } from '@/components/ui/confirm-dialog';
@@ -1370,23 +1370,23 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                              >
                                  Cancel Monitoring
                              </Button>
-                             {deploymentStatus === 'FAILED' && (
-                                 <Button 
-                                     variant="destructive" 
-                                     onClick={() => {
-                                         // Try to restart the service
-                                         api.post(`/services/${serviceId}/restart/`)
-                                             .then(() => {
-                                                 toast({ title: "Service restart initiated", description: "Attempting to restore service functionality." });
-                                                 setDeploymentStatus('');
-                                                 setDeploymentProgress(0);
-                                             })
-                                             .catch(err => {
-                                                 toast({ title: "Restart failed", description: "Could not restart service.", variant: "destructive" });
-                                             });
-                                     }}
-                                 >
-                                     Restart Service
+                              {deploymentStatus === 'FAILED' && (
+                                  <Button 
+                                      variant="destructive" 
+                                      onClick={() => {
+                                          // Try to restart the service
+                                          servicesApi.restart(serviceId)
+                                              .then(() => {
+                                                  toast({ title: "Service restart initiated", description: "Attempting to restore service functionality." });
+                                                  setDeploymentStatus('');
+                                                  setDeploymentProgress(0);
+                                              })
+                                              .catch(err => {
+                                                  toast({ title: "Restart failed", description: "Could not restart service.", variant: "destructive" });
+                                              });
+                                      }}
+                                  >
+                                      Restart Service
                                  </Button>
                              )}
                          </div>

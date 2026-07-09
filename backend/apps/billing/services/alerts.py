@@ -21,8 +21,21 @@ class AdminAlertService:
 
         avg_revenue = sum(d.total_revenue for d in past_week) / past_week.count()
         if avg_revenue > 0 and today.total_revenue < avg_revenue * 0.8:
-            logger.warning(f"Revenue drop detected: ${today.total_revenue} vs ${avg_revenue} avg")
-            # Trigger notification here
+            logger.warning("Revenue drop detected: $%s vs $%s avg", today.total_revenue, avg_revenue)
+            try:
+                from apps.notifications.tasks import dispatch_notification
+                from django.contrib.auth import get_user_model
+                User = get_user_model()
+                admins = User.objects.filter(is_superuser=True)
+                for admin in admins:
+                    dispatch_notification.delay(
+                        event_type='billing_alert',
+                        user_id=str(admin.id),
+                        title='Revenue Drop Alert',
+                        message=f'Revenue dropped to ${today.total_revenue:.2f} (avg: ${avg_revenue:.2f}).',
+                    )
+            except Exception as exc:
+                logger.warning("Failed to dispatch revenue drop alert: %s", exc)
 
     def check_churn_spike(self):
         # Placeholder for churn monitoring

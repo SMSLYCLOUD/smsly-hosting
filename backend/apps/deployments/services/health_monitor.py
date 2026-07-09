@@ -407,6 +407,10 @@ def _check_service_health(service, Deployment):
         if age < startup_grace_seconds:
             return
 
+    # Skip health check if a manual restart just happened (grace period)
+    if cache.get(f"health:restart_grace:{service.id}"):
+        return
+
     # Check Docker container state: if the container is dead, fast-fail.
     container_id = (active.container_id or "").strip()
     state, exit_code = _probe_container_state(container_id)

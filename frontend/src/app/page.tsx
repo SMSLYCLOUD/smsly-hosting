@@ -9,7 +9,8 @@ import {
     Container, Fingerprint, ScanLine, Bug, ShieldAlert,
 } from "lucide-react";
 import { motion } from "framer-motion";
-import { NetworkBackground } from "@/components/effects/NetworkBackground";
+import { NatureBackground } from "@/components/effects/NatureBackground";
+import { EcosystemDeployVisual } from "@/components/effects/EcosystemDeployVisual";
 
 // ============================================
 // DASHBOARD MOCKUP — Real product visualization
@@ -124,45 +125,208 @@ function SecurityPipelineVisual() {
 }
 
 // ============================================
-// WIREGUARD MESH TOPOLOGY VISUAL
+// WIREGUARD MESH TOPOLOGY VISUAL — Animated canvas
 // ============================================
 function MeshTopologyVisual() {
-    const nodes = [
-        { label: 'Master', x: '50%', y: '15%', color: 'bg-emerald-500' },
-        { label: 'Berlin', x: '25%', y: '55%', color: 'bg-blue-500' },
-        { label: 'Singapore', x: '75%', y: '50%', color: 'bg-violet-500' },
-        { label: 'NYC', x: '35%', y: '85%', color: 'bg-amber-500' },
-        { label: 'SF', x: '65%', y: '80%', color: 'bg-cyan-500' },
-    ];
+    const canvasRef = useRef<HTMLCanvasElement>(null);
+
+    useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        let animId = 0;
+        let w = 0;
+        let h = 0;
+
+        const nodes = [
+            { label: 'Master', region: 'Frankfurt', color: '#10b981', tier: 'control' as const },
+            { label: 'EU-West', region: 'Berlin', color: '#3b82f6', tier: 'worker' as const },
+            { label: 'EU-East', region: 'Warsaw', color: '#6366f1', tier: 'worker' as const },
+            { label: 'US-East', region: 'NYC', color: '#f59e0b', tier: 'worker' as const },
+            { label: 'US-West', region: 'SF', color: '#06b6d4', tier: 'worker' as const },
+            { label: 'Asia', region: 'Singapore', color: '#a855f7', tier: 'worker' as const },
+            { label: 'Oceania', region: 'Sydney', color: '#ec4899', tier: 'worker' as const },
+            { label: 'S-Am', region: 'São Paulo', color: '#f97316', tier: 'worker' as const },
+        ];
+
+        const positions: { x: number; y: number }[] = [];
+        const packets: { from: number; to: number; t: number; speed: number; color: string }[] = [];
+
+        function layout() {
+            positions.length = 0;
+            const cx = w / 2;
+            const cy = h / 2;
+            const rx = w * 0.36;
+            const ry = h * 0.36;
+            positions.push({ x: cx, y: cy - ry * 0.85 });
+            for (let i = 1; i < nodes.length; i++) {
+                const angle = ((i - 1) / (nodes.length - 1)) * Math.PI * 2 - Math.PI / 2;
+                positions.push({
+                    x: cx + Math.cos(angle) * rx,
+                    y: cy + Math.sin(angle) * ry * 0.9 + ry * 0.15,
+                });
+            }
+        }
+
+        function spawnPacket() {
+            const from = Math.floor(Math.random() * nodes.length);
+            let to = from;
+            while (to === from) to = Math.floor(Math.random() * nodes.length);
+            packets.push({
+                from, to, t: 0,
+                speed: 0.006 + Math.random() * 0.01,
+                color: nodes[from].color,
+            });
+            if (packets.length > 40) packets.shift();
+        }
+
+        function resize() {
+            const rect = canvas!.getBoundingClientRect();
+            const dpr = window.devicePixelRatio || 1;
+            w = rect.width * dpr;
+            h = rect.height * dpr;
+            canvas!.width = w;
+            canvas!.height = h;
+            ctx!.scale(dpr, dpr);
+            w = rect.width;
+            h = rect.height;
+            layout();
+        }
+
+        function draw() {
+            if (!ctx) return;
+            const c = ctx;
+            c.clearRect(0, 0, w, h);
+            const time = Date.now() * 0.001;
+
+            // Mesh connections — bold, enterprise
+            for (let i = 0; i < nodes.length; i++) {
+                for (let j = i + 1; j < nodes.length; j++) {
+                    const a = positions[i];
+                    const b = positions[j];
+                    const dx = b.x - a.x;
+                    const dy = b.y - a.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    const maxDist = Math.min(w, h) * 0.7;
+                    if (dist > maxDist) continue;
+
+                    const alpha = 0.1 + (1 - dist / maxDist) * 0.2;
+                    c.strokeStyle = `rgba(16,185,129,${alpha})`;
+                    c.lineWidth = 1.2;
+                    c.setLineDash([6, 4]);
+                    c.lineDashOffset = -time * 25;
+                    c.beginPath();
+                    c.moveTo(a.x, a.y);
+                    c.lineTo(b.x, b.y);
+                    c.stroke();
+                    c.setLineDash([]);
+                }
+            }
+
+            // Draw packets — bigger, bolder
+            for (let i = packets.length - 1; i >= 0; i--) {
+                const p = packets[i];
+                p.t += p.speed;
+                if (p.t >= 1) { packets.splice(i, 1); continue; }
+                const a = positions[p.from];
+                const b = positions[p.to];
+                const x = a.x + (b.x - a.x) * p.t;
+                const y = a.y + (b.y - a.y) * p.t;
+                c.globalAlpha = 1 - p.t * 0.5;
+                c.beginPath();
+                c.arc(x, y, 3, 0, Math.PI * 2);
+                c.fillStyle = p.color;
+                c.fill();
+                c.beginPath();
+                c.arc(x, y, 8, 0, Math.PI * 2);
+                c.fillStyle = p.color.replace(')', ',0.15)').replace('rgb', 'rgba');
+                c.fill();
+                c.globalAlpha = 1;
+            }
+
+            // Draw nodes — bigger, tiered sizing
+            for (let i = 0; i < nodes.length; i++) {
+                const n = nodes[i];
+                const p = positions[i];
+                const pulse = 0.7 + Math.sin(time * 2 + i) * 0.3;
+                const r = n.tier === 'control' ? 16 : 10;
+
+                // Outer glow
+                c.globalAlpha = 0.12 * pulse;
+                c.beginPath();
+                c.arc(p.x, p.y, r * 3, 0, Math.PI * 2);
+                c.fillStyle = n.color;
+                c.fill();
+
+                // Ring
+                c.globalAlpha = 0.35;
+                c.beginPath();
+                c.arc(p.x, p.y, r * 1.6, 0, Math.PI * 2);
+                c.strokeStyle = n.color;
+                c.lineWidth = 1.5;
+                c.stroke();
+
+                // Body
+                c.globalAlpha = 0.9;
+                c.beginPath();
+                c.arc(p.x, p.y, r, 0, Math.PI * 2);
+                c.fillStyle = n.color;
+                c.fill();
+
+                // Center dot
+                c.globalAlpha = 1;
+                c.beginPath();
+                c.arc(p.x, p.y, r * 0.3, 0, Math.PI * 2);
+                c.fillStyle = '#fff';
+                c.fill();
+
+                // Labels
+                c.globalAlpha = 0.85;
+                c.font = 'bold 11px monospace';
+                c.fillStyle = '#e2e8f0';
+                c.textAlign = 'center';
+                c.fillText(n.label, p.x, p.y + r + 14);
+                c.globalAlpha = 0.5;
+                c.font = '9px monospace';
+                c.fillStyle = '#94a3b8';
+                c.fillText(n.region, p.x, p.y + r + 26);
+            }
+
+            c.globalAlpha = 1;
+            if (Math.random() < 0.18) spawnPacket();
+            animId = requestAnimationFrame(draw);
+        }
+
+        resize();
+        draw();
+        window.addEventListener('resize', resize);
+        return () => {
+            window.removeEventListener('resize', resize);
+            cancelAnimationFrame(animId);
+        };
+    }, []);
+
     return (
-        <div className="bg-[#0f172a] rounded-2xl p-5 border border-slate-800 w-full">
-            <div className="text-xs font-mono text-slate-500 mb-4 flex items-center gap-2">
-                <Wifi className="w-3.5 h-3.5 text-emerald-400" /> WireGuard VPN Mesh — All Nodes Encrypted
+        <div className="w-full rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 bg-[#0a0f1a]">
+            <div className="px-5 py-3 border-b border-slate-800 flex items-center gap-3">
+                <div className="flex gap-1.5">
+                    <div className="w-3 h-3 rounded-full bg-red-500/80" />
+                    <div className="w-3 h-3 rounded-full bg-yellow-500/80" />
+                    <div className="w-3 h-3 rounded-full bg-green-500/80" />
+                </div>
+                <span className="text-xs font-mono text-slate-500">
+                    WireGuard VPN Mesh — 8 Nodes · 28 Encrypted Links · Multi-Region
+                </span>
             </div>
-            <div className="relative h-[180px]">
-                <svg viewBox="0 0 300 180" className="w-full h-full absolute inset-0">
-                    {/* Mesh lines */}
-                    <line x1="150" y1="27" x2="75" y2="99" stroke="rgba(16,185,129,0.2)" strokeWidth="0.5" />
-                    <line x1="150" y1="27" x2="225" y2="90" stroke="rgba(16,185,129,0.2)" strokeWidth="0.5" />
-                    <line x1="150" y1="27" x2="105" y2="153" stroke="rgba(16,185,129,0.2)" strokeWidth="0.5" />
-                    <line x1="150" y1="27" x2="195" y2="144" stroke="rgba(16,185,129,0.2)" strokeWidth="0.5" />
-                    <line x1="75" y1="99" x2="225" y2="90" stroke="rgba(99,102,241,0.15)" strokeWidth="0.5" />
-                    <line x1="75" y1="99" x2="105" y2="153" stroke="rgba(99,102,241,0.15)" strokeWidth="0.5" />
-                    <line x1="225" y1="90" x2="195" y2="144" stroke="rgba(99,102,241,0.15)" strokeWidth="0.5" />
-                    <line x1="105" y1="153" x2="195" y2="144" stroke="rgba(245,158,11,0.15)" strokeWidth="0.5" />
-                </svg>
-                {nodes.map((n, i) => (
-                    <div key={i} className="absolute flex flex-col items-center gap-0.5" style={{ left: n.x, top: n.y, transform: 'translate(-50%, -50%)' }}>
-                        <div className={`w-6 h-6 rounded-full ${n.color} flex items-center justify-center shadow-lg shadow-current/20`}>
-                            <div className="w-2 h-2 rounded-full bg-white/60" />
-                        </div>
-                        <span className="text-[9px] font-bold text-slate-300">{n.label}</span>
-                    </div>
-                ))}
-            </div>
-            <div className="flex items-center gap-2 mt-2 text-[10px] text-slate-500 font-mono">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                All inter-node traffic encrypted. Auto-allocated IPs. Zero config.
+            <canvas ref={canvasRef} className="w-full h-[340px] md:h-[400px]" />
+            <div className="px-5 py-3 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3 text-[11px] font-mono text-slate-500">
+                <span className="flex items-center gap-2">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    All traffic encrypted · WireGuard tunnel
+                </span>
+                <span>Avg latency: 12ms · 0 packet loss · 99.999% uptime</span>
             </div>
         </div>
     );
@@ -477,11 +641,11 @@ export default function Home() {
         <main className="min-h-screen relative overflow-x-hidden">
 
             {/* ============================================
-                HERO — Network mesh background, one clear message
+                HERO — Atmospheric cloud sky, one clear message
                ============================================ */}
-            <section className="relative pt-32 pb-24 overflow-hidden bg-white dark:bg-slate-950">
-                <div className="absolute inset-0 opacity-30 dark:opacity-40 pointer-events-none">
-                    <NetworkBackground />
+            <section className="relative min-h-[70vh] md:min-h-[78vh] pt-32 pb-28 md:pb-32 overflow-hidden bg-white dark:bg-slate-950">
+                <div className="absolute inset-0 pointer-events-none" aria-hidden>
+                    <NatureBackground />
                 </div>
 
                 <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center z-10">
@@ -706,6 +870,40 @@ export default function Home() {
             </section>
 
             {/* ============================================
+                ECOSYSTEM DEPLOY — Full Visual
+               ============================================ */}
+            <section className="py-24 bg-[#0a0f1a] relative overflow-hidden">
+                <div className="absolute inset-0 opacity-[0.03]" style={{
+                    backgroundImage: 'linear-gradient(to right, #fff 1px, transparent 1px), linear-gradient(to bottom, #fff 1px, transparent 1px)',
+                    backgroundSize: '60px 60px',
+                }} />
+                <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                    <motion.div
+                        initial={{ opacity: 0, y: 30 }}
+                        whileInView={{ opacity: 1, y: 0 }}
+                        viewport={{ once: true }}
+                        transition={{ duration: 0.6 }}
+                    >
+                        <div className="text-center mb-12">
+                            <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-bold rounded-full mb-6">
+                                <Rocket className="w-3 h-3" />
+                                Ecosystem Deploy
+                            </div>
+                            <h2 className="text-3xl md:text-4xl lg:text-5xl font-bold text-white mb-6">
+                                One Command. Full Stack.
+                            </h2>
+                            <p className="text-lg text-slate-400 max-w-3xl mx-auto font-medium leading-relaxed">
+                                AI scans your repos, generates a deploy plan with dependency-aware waves,
+                                then orchestrates the full stack — addons first, services in topological order.
+                                All addons auto-provisioned. Zero manual config.
+                            </p>
+                        </div>
+                        <EcosystemDeployVisual />
+                    </motion.div>
+                </div>
+            </section>
+
+            {/* ============================================
                 HIGH AVAILABILITY INFRASTRUCTURE
                ============================================ */}
             <section className="py-24 bg-white dark:bg-slate-950">
@@ -768,7 +966,7 @@ export default function Home() {
                         initial={{ opacity: 0, y: 20 }}
                         whileInView={{ opacity: 1, y: 0 }}
                         viewport={{ once: true }}
-                        className="mt-10 max-w-xl mx-auto"
+                        className="mt-10 w-full"
                     >
                         <MeshTopologyVisual />
                     </motion.div>
@@ -963,7 +1161,8 @@ export default function Home() {
                         </p>
                     </div>
 
-                    <div className="grid md:grid-cols-5 gap-4 mb-12">
+                    {/* SMSLYCLOUD Pillars */}
+                    <div className="grid md:grid-cols-5 gap-4 mb-16">
                         {ecosystemPillars.map((pillar, i) => (
                             <motion.div
                                 key={i}
@@ -984,66 +1183,6 @@ export default function Home() {
                             </motion.div>
                         ))}
                     </div>
-
-                    {/* Ecosystem deployment manifest */}
-                    <motion.div
-                        initial={{ opacity: 0, y: 20 }}
-                        whileInView={{ opacity: 1, y: 0 }}
-                        viewport={{ once: true }}
-                        className="mt-12 max-w-2xl mx-auto bg-[#0f172a] rounded-2xl p-6 border border-slate-800"
-                    >
-                        <div className="text-xs font-mono text-slate-500 mb-4 flex items-center gap-2">
-                            <FileCode className="w-3.5 h-3.5 text-emerald-400" /> Grid.ecosystem.yml — Multi-Service Deploy
-                        </div>
-                        <pre className="font-mono text-xs leading-relaxed">
-                            <code className="text-slate-300">
-{`services:
-  api-gateway:
-    image: node:20
-    addons: [postgres, redis, meilisearch]
-    hosts: [primary, europe-1]
-
-  auth-service:
-    image: python:3.12
-    addons: [postgres, redis]
-    depends_on: [api-gateway]
-
-  analytics-worker:
-    addons: [clickhouse, kafka, minio]
-    hosts: [analytics-node]`}
-                            </code>
-                        </pre>
-                        <div className="flex items-center gap-2 mt-3 text-[10px] text-slate-500 font-mono">
-                            <span className="text-emerald-400 font-bold">▶ grid deploy --ecosystem</span>
-                            <span>One command. Full stack. All addons auto-provisioned.</span>
-                        </div>
-                    </motion.div>
-
-                    {/* Ecosystem deploy flow */}
-                    <motion.div
-                        initial={{ opacity: 0, y: 20 }}
-                        whileInView={{ opacity: 1, y: 0 }}
-                        viewport={{ once: true }}
-                        className="mt-8 max-w-3xl mx-auto"
-                    >
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            {[
-                                { step: '1', title: 'Scan', desc: 'AI scans your GitHub repos, detects frameworks, maps dependencies, and identifies addons needed.', icon: ScanLine },
-                                { step: '2', title: 'Plan', desc: 'Generates a deploy plan with env vars, shared addons, and dependency-aware waves. Review before deploying.', icon: FileCode },
-                                { step: '3', title: 'Deploy', desc: 'Deploys in waves: shared addons first, then services in topological order. Auto-retries, auto-rollback.', icon: Rocket },
-                            ].map((item, i) => (
-                                <div key={i} className="flex items-start gap-3 p-4 bg-slate-900/60 rounded-xl border border-slate-800/60">
-                                    <div className="w-8 h-8 rounded-lg bg-emerald-500/20 flex items-center justify-center flex-shrink-0">
-                                        <span className="text-sm font-bold text-emerald-400">{item.step}</span>
-                                    </div>
-                                    <div>
-                                        <h4 className="text-sm font-bold text-white mb-1">{item.title}</h4>
-                                        <p className="text-xs text-slate-400 leading-relaxed">{item.desc}</p>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    </motion.div>
 
                     <div className="text-center mt-10">
                         <Link

@@ -30,6 +30,7 @@ export const extractDataList = (response: any): any[] => {
 export const api = axios.create({
   baseURL: getApiUrl(),
   withCredentials: true,
+  timeout: 30000,
 });
 
 function isServerProxyUrl(url?: string): boolean {

@@ -165,11 +165,12 @@ class Reconciler:
         from apps.deployments.models_replica import ServiceReplica
         from apps.deployments.services.spawning_service import SpawningService
         destroyed = 0
+        target = max(rec.scale_down_by, 1)
         try:
             spawner = SpawningService()
             replicas = ServiceReplica.objects.filter(
                 service=self.service, status='RUNNING',
-            ).order_by('created_at')
+            ).order_by('created_at')[:target]
             for replica in replicas:
                 try:
                     spawner.destroy(replica)

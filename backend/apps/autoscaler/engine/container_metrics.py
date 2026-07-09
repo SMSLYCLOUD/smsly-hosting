@@ -13,6 +13,17 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Lazy-loaded K8s clients — only imported when the kubernetes package
+# is available.  ``init_k8s()`` populates ``_k8s_clients`` on first use.
+k8s_config = None
+k8s_client = None
+try:
+    from kubernetes import config as _k8s_config, client as _k8s_client
+    k8s_config = _k8s_config
+    k8s_client = _k8s_client
+except ImportError:
+    pass
+
 
 # K8s availability flag — populated lazily by ``init_k8s``
 K8S_AVAILABLE = False
@@ -24,10 +35,14 @@ def init_k8s() -> bool:
     global K8S_AVAILABLE
     if _k8s_clients.get('available') is not None:
         return _k8s_clients['available']
+    if k8s_config is None or k8s_client is None:
+        _k8s_clients['available'] = False
+        K8S_AVAILABLE = False
+        return False
     try:
         try:
             k8s_config.load_incluster_config()
-        except BaseException:
+        except Exception:
             k8s_config.load_kube_config()
         _k8s_clients['client'] = k8s_client
         _k8s_clients['available'] = True

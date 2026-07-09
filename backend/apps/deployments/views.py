@@ -1116,9 +1116,14 @@ class ServiceViewSet(viewsets.ModelViewSet):
            1. Cancel active deployments
            2. Queue a fresh build + deploy
         """
+        from django.db import transaction
+
         service = self.get_object()
         assert_can_write(self.request.user, service)
         force_rebuild = _parse_bool(request.data.get('force_rebuild', False))
+
+        # Lock the service row to prevent concurrent restarts
+        service = Service.objects.select_for_update().get(id=service.id)
 
         # Clear health monitor restart state (ends exponential backoff)
         from apps.deployments.services.health_monitor import reset_restart_state
@@ -1158,6 +1163,19 @@ class ServiceViewSet(viewsets.ModelViewSet):
                             timeout=15,
                         )
                         if resp and resp.status_code in (200, 202):
+                            # Set restart grace period in cache
+                            from django.core.cache import cache
+                            cache.set(f"health:restart_grace:{service.id}", True, timeout=60)
+                            AuditLog(
+                                actor=request.user.get_username(),
+                                action='SERVICE_FAST_RESTART',
+                                target=f'Service: {service.name}',
+                                metadata={
+                                    'service_id': str(service.id),
+                                    'method': 'remote_docker_restart',
+                                    'remote_server': active_server.host,
+                                },
+                            ).save()
                             return Response({
                                 'message': f'Service {service.name} restarted (fast) remotely',
                                 'method': 'remote_docker_restart',
@@ -1176,6 +1194,10 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     # Update health status
                     service.health_status = 'starting'
                     service.save(update_fields=['health_status', 'updated_at'])
+
+                    # Set restart grace period so health monitor doesn't false-fail
+                    from django.core.cache import cache
+                    cache.set(f"health:restart_grace:{service.id}", True, timeout=60)
 
                     AuditLog(
                         actor=request.user.get_username(),
@@ -1201,30 +1223,36 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     )
                     # Fall through to full rebuild
 
-        # ── Full rebuild path ──
-        service.deployments.filter(
-            status__in=[
-                Deployment.Status.ACTIVE,
-                Deployment.Status.BUILDING,
-                Deployment.Status.DEPLOYING,
-            ]
-        ).update(
-            status=Deployment.Status.CANCELLED,
-            finished_at=timezone.now(),
-        )
+        # ── Full rebuild path (wrapped in atomic for rollback) ──
+        try:
+            with transaction.atomic():
+                service.deployments.filter(
+                    status__in=[
+                        Deployment.Status.ACTIVE,
+                        Deployment.Status.BUILDING,
+                        Deployment.Status.DEPLOYING,
+                    ]
+                ).update(
+                    status=Deployment.Status.CANCELLED,
+                    finished_at=timezone.now(),
+                )
 
-        provider = _resolve_provider_for_service(service)
-        if not provider:
-            return Response({'error': 'No active cloud provider configured'},
-                            status=status.HTTP_400_BAD_REQUEST)
+                provider = _resolve_provider_for_service(service)
+                if not provider:
+                    return Response({'error': 'No active cloud provider configured'},
+                                    status=status.HTTP_400_BAD_REQUEST)
 
-        deployment = Deployment.objects.create(
-            service=service,
-            status=Deployment.Status.QUEUED,
-            commit_hash='latest',
-            commit_message='Service restart (full rebuild)',
-            branch=service.branch or '',
-        )
+                deployment = Deployment.objects.create(
+                    service=service,
+                    status=Deployment.Status.QUEUED,
+                    commit_hash='latest',
+                    commit_message='Service restart (full rebuild)',
+                    branch=service.branch or '',
+                )
+        except Exception as exc:
+            logger.error("Failed to prepare full rebuild for %s: %s", service.name, exc)
+            return Response({'error': f'Failed to queue rebuild: {exc}'},
+                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         smart_deploy_task.delay(deployment_id=str(deployment.id), provider_id=str(provider.id),
                                skip_review=True)

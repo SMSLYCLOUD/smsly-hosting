@@ -48,6 +48,7 @@ class Recommendation:
     action: str = 'none'        # scale_up | scale_down | none
     reason: str = 'Metrics within normal range.'
     scale_up_by: int = 0
+    scale_down_by: int = 0
     urgency: str = 'low'        # low | medium | high | critical
     cooldown_active: bool = False
     at_capacity: bool = False
@@ -58,6 +59,7 @@ class Recommendation:
             'action': self.action,
             'reason': self.reason,
             'scale_up_by': self.scale_up_by,
+            'scale_down_by': self.scale_down_by,
             'urgency': self.urgency,
             'cooldown_active': self.cooldown_active,
             'at_capacity': self.at_capacity,
@@ -206,9 +208,10 @@ class DecisionEngine:
         ):
             r.action = 'scale_down'
             r.urgency = 'low'
+            r.scale_down_by = 1
             r.reason = (
                 f'CPU at {cpu:.0f}% with {self.running_replicas} extra '
-                f'replicas — removing 1.'
+                f'replicas — removing {r.scale_down_by}.'
             )
             return r
 
