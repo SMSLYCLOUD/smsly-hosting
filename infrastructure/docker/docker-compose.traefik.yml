@@ -7,47 +7,13 @@
 # - Dashboard for monitoring routes
 #
 # Usage:
-#   docker-compose -f docker-compose.traefik.yml up -d
+#   docker compose -f docker-compose.traefik.yml up -d
 
 services:
-  socket-proxy:
-    image: tecnativa/docker-socket-proxy:latest
-    container_name: smsly-traefik-socket-proxy
-    restart: unless-stopped
-    tmpfs:
-      - /run
-      - /tmp
-    security_opt:
-      - no-new-privileges:true
-    volumes:
-      - "/var/run/docker.sock:/var/run/docker.sock:ro"
-    environment:
-      DOCKER_API_VERSION: "1.40"
-      CONTAINERS: 1
-      IMAGES: 1
-      NETWORKS: 1
-      VOLUMES: 1
-      INFO: 1
-      VERSION: 1
-      EVENTS: 1
-      POST: 0
-      PUT: 0
-      DELETE: 0
-      EXEC: 0
-      SERVICES: 0
-      SWARM: 0
-      NODES: 0
-      SECRETS: 0
-    networks:
-      - smsly-proxy
-
   traefik:
     image: traefik:v3.0
     container_name: smsly-traefik
     restart: unless-stopped
-    depends_on:
-      socket-proxy:
-        condition: service_started
     security_opt:
       - no-new-privileges:true
     command:
@@ -55,11 +21,10 @@ services:
       - "--api.dashboard=true"
       - "--api.insecure=false"
       
-      # Docker provider
+      # Docker provider (direct socket mount)
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
       - "--providers.docker.network=smsly-proxy"
-      - "--providers.docker.endpoint=tcp://socket-proxy:2375"
       
       # Entrypoints (Caddy handles SSL, forwards to traefik:80)
       - "--entrypoints.web.address=:80"
@@ -94,6 +59,7 @@ services:
       - "8082:8082"  # Prometheus metrics
     
     volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
       - "letsencrypt:/letsencrypt"
       - "traefik_logs:/var/log/traefik"
     
