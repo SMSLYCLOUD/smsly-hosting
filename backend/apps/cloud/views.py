@@ -212,11 +212,21 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         """Suggest fixes for a specific error."""
         from apps.intelligence.remediator import RemediationEngine
         error_msg = request.data.get('error')
-        # context = request.data.get('context', {})
+
+        if not error_msg:
+            return Response(
+                {'error': 'error field is required'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         remediator = RemediationEngine()
-        # Only pass issue_type (error_msg)
         plan = remediator.suggest_fix(error_msg)
+
+        if not plan:
+            return Response(
+                {'error': f'No known fix for issue type: {error_msg}'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
 
         return Response(plan)
 

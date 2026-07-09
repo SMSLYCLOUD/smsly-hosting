@@ -100,9 +100,10 @@ def proactive_health_scan_task():
     unhealthy_services = Service.objects.filter(health_status='unhealthy')
 
     for service in unhealthy_services:
-        # Check how long it has been unhealthy (mock logic as health_since not in Service model)
-        # Assuming we check metrics or last update
-        remediator.apply_fix('HEALTH_CHECK_FAIL', str(service.id))
+        try:
+            remediator.apply_fix('HEALTH_CHECK_FAIL', str(service.id))
+        except Exception as exc:
+            logger.error("Health scan failed for service %s: %s", service.id, exc)
 
 
 @shared_task
@@ -115,7 +116,7 @@ def ai_deployment_review_task(deployment_id: str):
     """
     try:
         deployment = Deployment.objects.get(id=deployment_id)
-        if deployment.status == 'FAILED':
+        if deployment.status in ('FAILED', 'BUILD_FAILED'):
             analyzer = LogAnalyzer()
             diagnosis = analyzer.generate_diagnosis(deployment.build_logs or "")
             deployment.ai_diagnosis = diagnosis

@@ -135,7 +135,7 @@ def _parse_jules_response(raw: str) -> dict[str, Any]:
         payload = json.loads(raw)
     except json.JSONDecodeError:
         # Attempt to extract a JSON block from the raw text.
-        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        match = re.search(r"\{.*?\}", raw, re.DOTALL)
         if match:
             payload = json.loads(match.group())
         else:
@@ -259,7 +259,10 @@ def _apply_fix_to_repo(
         logger.error("Failed to apply fix to repo: %s", exc)
         # Attempt to clean up the branch if it was created
         try:
-            _run_git(["checkout", "main"])
+            # Detect the default branch instead of hardcoding 'main'
+            result = _run_git(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"])
+            default_branch = result.stdout.strip().replace("origin/", "") if result.returncode == 0 else "main"
+            _run_git(["checkout", default_branch])
             _run_git(["branch", "-D", branch_name])
         except Exception:
             pass
@@ -276,6 +279,7 @@ def _create_pr(
     branch_name: str,
     title: str,
     body: str,
+    base: str = "main",
 ) -> str | None:
     """Create a Pull Request on GitHub."""
     try:
@@ -284,7 +288,7 @@ def _create_pr(
             title=title,
             body=body,
             head=branch_name,
-            base="main",
+            base=base,
         )
         return pr.get("html_url")
     except Exception as exc:
@@ -376,7 +380,8 @@ def jules_fix_deployment_failure(
                     # Create a new deployment record for the PR branch
                     new_deployment = Deployment.objects.create(
                         service=deployment.service,
-                        branch=branch_name,  # Deploy the fix branch
+                        branch=branch_name,
+                        commit_hash="",
                         commit_message=f"[auto-fix] Deploying Jules fix from branch {branch_name}",
                         status=Deployment.Status.QUEUED,
                     )

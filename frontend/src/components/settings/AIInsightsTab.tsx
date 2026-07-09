@@ -56,7 +56,10 @@ export function AIInsightsTab({ serviceId }: { serviceId: string }) {
       ]);
       if (julesRes.status === "fulfilled") setJulesData(julesRes.value.data);
       if (scaleRes.status === "fulfilled") setScaleAnalysis(scaleRes.value.data);
-      if (anomalyRes.status === "fulfilled") setAnomalies(Array.isArray(anomalyRes.value.data) ? anomalyRes.value.data : (anomalyRes.value.data?.results || []));
+      if (anomalyRes.status === "fulfilled") {
+        const data = anomalyRes.value.data;
+        setAnomalies(Array.isArray(data) ? data : (data?.anomalies || data?.results || []));
+      }
       if (reportRes.status === "fulfilled") setPlatformReport(reportRes.value.data);
       if (serviceRes.status === "fulfilled") setServiceInfo(serviceRes.value.data);
     } catch (err: any) {
@@ -240,10 +243,11 @@ export function AIInsightsTab({ serviceId }: { serviceId: string }) {
             {anomalies.map((anomaly) => (
               <div key={anomaly.id} className="p-3 rounded-lg border border-border bg-card">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-semibold">{anomaly.metric_name}</span>
-                  <span className="text-xs text-muted-foreground">{new Date(anomaly.timestamp).toLocaleString()}</span>
+                  <span className="text-sm font-semibold">{anomaly.issue_type}</span>
+                  <span className="text-xs text-muted-foreground">{new Date(anomaly.detected_at).toLocaleString()}</span>
                 </div>
-                <p className="text-xs text-muted-foreground">{anomaly.description || `Severity: ${anomaly.severity}`}</p>
+                <p className="text-xs text-muted-foreground">{anomaly.severity || 'Unknown severity'}</p>
+                {anomaly.auto_fixed && <Badge variant="outline" className="text-[10px] mt-1">Auto-Fixed</Badge>}
               </div>
             ))}
           </div>

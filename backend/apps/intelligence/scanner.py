@@ -447,8 +447,6 @@ class RepoScanner:
 
         return env_vars
 
-        return env_vars
-
     def _detect_env_vars(self) -> list[str]:
         """Legacy wrapper for flat list return."""
         return sorted(list(self._detect_env_vars_with_context().keys()))

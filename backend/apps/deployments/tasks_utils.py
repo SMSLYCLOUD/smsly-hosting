@@ -1,4 +1,5 @@
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 AUTO_APPROVE_COMMIT_MARKERS = (

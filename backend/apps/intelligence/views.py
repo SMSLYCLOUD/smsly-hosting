@@ -621,8 +621,6 @@ def ai_intelligence_report(request):
     service_id = request.query_params.get("service_id", "").strip()
     try:
         filters = Q(actor="AI_REPORTER", action="DAILY_REPORT")
-        if service_id:
-            filters &= Q(target__icontains=service_id)
         report = (
             AuditLog.objects
             .filter(filters)
@@ -696,7 +694,7 @@ def ai_anomaly_history(request):
             "issue_type": str(a.action or "UNKNOWN"),
             "severity": str(safe_meta.get("severity", "WARNING")),
             "detected_at": a.created_at,
-            "auto_fixed": a.action in ["SCALE_UP", "ROLLBACK", "CLEANUP"],
+            "auto_fixed": a.action in ["SCALE_UP", "ROLLBACK", "CLEANUP", "RESTART", "REBUILD", "DIAGNOSE"],
             "fix_result": str(safe_meta),
         })
 
@@ -712,7 +710,7 @@ def jules_fix_history(request, service_id: str):
     try:
         from django.db.models import Q
 
-        from apps.deployments.models_core import Deployment, Service
+        from apps.deployments.models import Deployment, Service
 
         # SECURITY: scope to services the caller can access (owner or
         # team member). Without this, any authenticated user could

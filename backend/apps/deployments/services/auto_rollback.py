@@ -537,9 +537,5 @@ def monitor_stuck_rollback_heartbeats():
 
         # Clear the heartbeat so we don't keep alerting.
         clear_rollback_heartbeat(rollback_id)
-        registry_key = 'rollback-heartbeat-registry'
-        registry = cache.get(registry_key) or set()
-        registry.discard(rollback_id)
-        cache.set(registry_key, registry, timeout=86400)
 
     return {"checked": True, "stuck_count": len(stuck)}

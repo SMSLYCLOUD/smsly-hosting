@@ -199,7 +199,6 @@ class RemediationEngine:
                         return False
 
                 if action == 'REBUILD':
-                    # Trigger build without cache logic is tricky here, default deploy for now.
                     return self._trigger_redeploy(service, fix['message'])
 
                 if action == 'NOTIFY_AND_DIAGNOSE':
@@ -222,8 +221,6 @@ class RemediationEngine:
                     return False
 
                 if action == 'RESTART_OR_ROLLBACK':
-                    # Simple restart via API call equivalent (not fully implemented here, assume redeploy works as restart)
-                    # Ideally we check uptime. If short uptime, rollback. If long uptime, restart.
                     return self._trigger_redeploy(service, "Restarting due to health check failure")
 
                 if action == 'NOTIFY_ADMIN':
@@ -251,7 +248,8 @@ class RemediationEngine:
         return service.deployments.filter(
             commit_message__startswith=prefix,
             created_at__gte=cutoff,
-        ).exclude(status=Deployment.Status.ACTIVE).exists()
+            status__in=self.IN_PROGRESS_STATUSES,
+        ).exists()
 
     def _trigger_redeploy(self, service: Service, message: str):
         """Trigger a new deployment based on the latest active one."""
@@ -310,14 +308,21 @@ class RemediationEngine:
         )
 
         latest_deploy = service.deployments.order_by('-created_at').first()
-        result = AutoRollbackEngine.trigger(
-            service=service,
-            trigger=Trigger.AI_CRASH_LOOP,
-            reason_detail=(
-                f"CRASH_LOOP detected. Latest deployment: {latest_deploy.commit_hash[:7] if latest_deploy and latest_deploy.commit_hash else 'unknown'}"
-            ),
-            failed_deployment=latest_deploy,
-        )
+        try:
+            result = AutoRollbackEngine.trigger(
+                service=service,
+                trigger=Trigger.AI_CRASH_LOOP,
+                reason_detail=(
+                    f"CRASH_LOOP detected. Latest deployment: {latest_deploy.commit_hash[:7] if latest_deploy and latest_deploy.commit_hash else 'unknown'}"
+                ),
+                failed_deployment=latest_deploy,
+            )
+        except Exception as exc:
+            logger.error("AutoRollbackEngine.trigger failed for %s: %s", service.name, exc)
+            return False
+        if result is None:
+            logger.warning("AutoRollbackEngine.trigger returned None for %s", service.name)
+            return False
         if result.fired:
             logger.info("Rollback triggered for %s (rollback_id=%s)", service.name, result.rollback_id)
             return True

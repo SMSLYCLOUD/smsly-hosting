@@ -26,7 +26,8 @@ class LogAnalyzer:
         ],
         'CRASH_LOOP': [
             r"Back-off restarting failed container",
-            r"Error: EADDRINUSE"
+            r"CrashLoopBackOff",
+            r"restart count exceeded",
         ],
         'SSL_CERT_EXPIRED': [
             r"SSL_ERROR_EXPIRED_CERT_ALERT",

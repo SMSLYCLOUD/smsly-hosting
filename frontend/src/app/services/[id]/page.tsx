@@ -61,7 +61,7 @@ export default function ServiceDetailPage() {
     const [watchConfigLoading, setWatchConfigLoading] = useState(false);
     const [watchConfigSaving, setWatchConfigSaving] = useState(false);
     const [serviceEnvMap, setServiceEnvMap] = useState<ServiceEnvMap>({});
-    const [julesAutoFixDeploy, setJulesAutoFixDeploy] = useState(true);
+    const [julesAutoFixDeploy, setJulesAutoFixDeploy] = useState(false);
     const [runtimeWatchEnabled, setRuntimeWatchEnabled] = useState(true);
     const [notifyInApp, setNotifyInApp] = useState(true);
     const [notifySms, setNotifySms] = useState(true);
