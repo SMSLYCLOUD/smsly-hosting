@@ -61,9 +61,14 @@ class ReplicationDeploySerializer(serializers.Serializer):
     )
 
     def validate_replication_password(self, value):
-        if not value or value.strip().lower() == "repl_pass":
+        if not value or value.strip().lower() in ("repl_pass", "repl_change_me"):
             raise serializers.ValidationError(
-                "replication_password must be provided and cannot use the default 'repl_pass'."
+                "replication_password must be a strong unique password. "
+                "Default passwords like 'repl_pass' or 'repl_change_me' are not allowed."
+            )
+        if len(value.strip()) < 16:
+            raise serializers.ValidationError(
+                "replication_password must be at least 16 characters."
             )
         return value
 
@@ -115,9 +120,14 @@ class ConnectReplicaSerializer(serializers.Serializer):
         return value
 
     def validate_replication_password(self, value):
-        if not value or value.strip().lower() == "repl_pass":
+        if not value or value.strip().lower() in ("repl_pass", "repl_change_me"):
             raise serializers.ValidationError(
-                "replication_password must be provided and cannot use the default 'repl_pass'."
+                "replication_password must be a strong unique password. "
+                "Default passwords like 'repl_pass' or 'repl_change_me' are not allowed."
+            )
+        if len(value.strip()) < 16:
+            raise serializers.ValidationError(
+                "replication_password must be at least 16 characters."
             )
         return value
 
@@ -183,6 +193,7 @@ class ReplicationViewSet(viewsets.ViewSet):
             )
 
         # Launch async deployment
+        from .services.task_encryption import encrypt_arg
         from .tasks_replication import deploy_replication_task
         mesh.replication_status = "DEPLOYING"
         mesh.replication_last_error = ""
@@ -196,9 +207,9 @@ class ReplicationViewSet(viewsets.ViewSet):
         try:
             deploy_replication_task.delay(
                 mesh_id,
-                ser.validated_data["db_password"],
-                ser.validated_data["admin_password"],
-                ser.validated_data["replication_password"],
+                encrypt_arg(ser.validated_data["db_password"]),
+                encrypt_arg(ser.validated_data["admin_password"]),
+                encrypt_arg(ser.validated_data["replication_password"]),
             )
         except Exception as exc:
             logger.exception("Failed to queue replication deployment for mesh %s: %s", mesh.id, exc)
@@ -314,12 +325,15 @@ class ReplicationViewSet(viewsets.ViewSet):
             )
 
         try:
-            MeshNetwork.objects.get(id=mesh_id)
+            mesh = MeshNetwork.objects.get(id=mesh_id)
         except MeshNetwork.DoesNotExist:
             return Response(
                 {"error": "Mesh not found"},
                 status=status.HTTP_404_NOT_FOUND,
             )
+
+        if mesh.owner and mesh.owner != request.user and not request.user.is_staff:
+            return Response({'error': 'You do not own this mesh'}, status=status.HTTP_403_FORBIDDEN)
 
         ser = FailoverSerializer(data={"target_wg_address": target})
         ser.is_valid(raise_exception=True)

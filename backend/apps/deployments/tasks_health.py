@@ -1,17 +1,12 @@
 import logging
 
 logger = logging.getLogger(__name__)
-import hashlib
-import hmac
 import logging
 import os
-import secrets
 import shutil
 import subprocess
 import tempfile
-import time
 
-import requests
 from celery import shared_task
 from django.conf import settings
 from django.utils import timezone
@@ -313,43 +308,33 @@ def sync_master_db_to_agents_task():
         logger.info("sync_master_db_to_agents: dump created (%.1f MB), pushing to %d agents",
                     file_size / (1024 * 1024), agents.count())
 
-        # Push to each lite agent via REST API
-        # Send raw binary in body (not multipart) so body_hash computed
-        # from file content matches request.body on the receiving end.
-        with open(dump_path, 'rb') as f_body:
-            raw_body_bytes = f_body.read()
-        body_hash = hashlib.sha256(raw_body_bytes).hexdigest()
+        # Push to each lite agent via gRPC with mTLS (HTTP fallback)
+        from services.grpc_sync.client import push_db_to_agent
 
         for agent in agents:
             target_ip = agent.wg_address or agent.private_ip or agent.host
             if not target_ip:
                 continue
-            url = f"http://{target_ip}/api/v1/transfers/incoming/db-backup/"
-            secret = str(getattr(settings, 'GATEWAY_SECRET', '') or getattr(settings, 'SECRET_KEY', ''))
-            timestamp = str(int(time.time()))
-            nonce = secrets.token_hex(16)
 
-            raw_sig = f"POST|/api/v1/transfers/incoming/db-backup/|{timestamp}|{nonce}|{body_hash}"
-            signature = hmac.new(secret.encode(), raw_sig.encode(), hashlib.sha256).hexdigest()
+            cert_dir = getattr(settings, 'GRPC_CERT_DIR', '/opt/smsly-hosting/certs/grpc')
+            cert_path = os.path.join(cert_dir, 'client.crt')
+            key_path = os.path.join(cert_dir, 'client.key')
+            ca_path = os.path.join(cert_dir, 'ca.crt')
 
-            try:
-                resp = requests.post(
-                    url,
-                    data=raw_body_bytes,
-                    headers={
-                        'X-Gateway-Signature-V2': signature,
-                        'X-Request-Timestamp': timestamp,
-                        'X-Request-Nonce': nonce,
-                        'Content-Type': 'application/gzip',
-                    },
-                    timeout=600,
-                )
-                if resp.ok:
-                    logger.info("sync_master_db_to_agents: pushed to agent %s (%s)", agent.name, target_ip)
-                else:
-                    logger.warning("sync_master_db_to_agents: agent %s returned %s", agent.name, resp.status_code)
-            except requests.RequestException as e:
-                logger.warning("sync_master_db_to_agents: failed to push to agent %s: %s", agent.name, e)
+            # Only pass certs if they exist; client falls back to HTTP otherwise
+            use_certs = all(os.path.exists(p) for p in [cert_path, key_path, ca_path])
+            success = push_db_to_agent(
+                target_wg_address=target_ip,
+                dump_path=dump_path,
+                source_wg_address=str(getattr(settings, 'WIREGUARD_ADDRESS', '')),
+                cert_path=cert_path if use_certs else None,
+                key_path=key_path if use_certs else None,
+                ca_path=ca_path if use_certs else None,
+            )
+            if success:
+                logger.info("sync_master_db_to_agents: pushed to agent %s (%s)", agent.name, target_ip)
+            else:
+                logger.warning("sync_master_db_to_agents: failed to push to agent %s", agent.name)
 
     except subprocess.TimeoutExpired:
         logger.error("sync_master_db_to_agents: pg_dump timed out")

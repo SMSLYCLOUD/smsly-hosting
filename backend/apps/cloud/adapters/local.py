@@ -8,8 +8,8 @@ import shlex
 from typing import Any
 
 import docker
-from kubernetes import config, client
 from django.conf import settings
+from kubernetes import client, config
 
 from .base import BaseCloudAdapter
 

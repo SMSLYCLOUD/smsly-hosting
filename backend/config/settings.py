@@ -1,4 +1,5 @@
 """Settings module."""
+import logging
 import os
 import re
 import sys
@@ -1160,12 +1161,15 @@ else:
 # Sentinel for automatic master failover.  Sentinel runs as a separate
 # overlay (docker-compose.ha-redis.yml) and is not required — when
 # absent, standalone Redis is used as before.
+
 from config.redis_sentinel import (
     SENTINEL_ENABLED,
     SENTINEL_SERVICE_NAME,
     sentinel_channel_layer_config,
     standalone_url,
 )
+
+logger = logging.getLogger(__name__)
 
 if SENTINEL_ENABLED:
     logger.info(

@@ -1,0 +1,26 @@
+syntax = "proto3";
+package smsly.dbsync;
+option python_package = "services.grpc_sync";
+
+service DbSync {
+  rpc SyncMasterDb (SyncRequest) returns (stream SyncChunk);
+  rpc AckSync (SyncAck) returns (google.protobuf.Empty);
+}
+
+message SyncRequest {
+  string source_wg_address = 1;
+  int64 timestamp = 2;
+  string body_hash = 3;
+}
+
+message SyncChunk {
+  bytes data = 1;
+  int64 byte_offset = 2;
+  bool is_last = 3;
+}
+
+message SyncAck {
+  bool success = 1;
+  string error = 2;
+  int64 bytes_received = 3;
+}

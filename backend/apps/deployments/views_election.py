@@ -264,6 +264,13 @@ def heartbeat_receive(request):
             ElectionService.receive_heartbeat(
                 cluster, int(term), leader_wg_address,
             )
+            from apps.deployments.services.heartbeat_bus import publish_heartbeat
+            publish_heartbeat(
+                peer_id=leader_wg_address,
+                wg_address=leader_wg_address,
+                status="alive",
+                term=int(term),
+            )
         except Exception as e:
             logger.error(f"Heartbeat receive error: {e}")
 

@@ -55,6 +55,12 @@ class ClusterState(models.Model):
         null=True, blank=True,
         help_text="Last heartbeat received from the leader",
     )
+    local_role = models.CharField(  # type: ignore[var-annotated]
+        max_length=20,
+        choices=[("LEADER", "Leader"), ("FOLLOWER", "Follower"), ("CANDIDATE", "Candidate")],
+        default="FOLLOWER",
+        help_text="Local server's role in the cluster",
+    )
 
     # Configuration
     heartbeat_interval_ms = models.IntegerField(  # type: ignore[var-annotated]

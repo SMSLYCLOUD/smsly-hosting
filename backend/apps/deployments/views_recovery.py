@@ -19,6 +19,11 @@ from .services.recovery import (
 logger = logging.getLogger(__name__)
 
 
+class RecoveryPhraseThrottle(AnonRateThrottle):
+    """Stricter rate limit for recovery phrase attempts."""
+    rate = '5/hour'  # 5 attempts per hour per IP
+
+
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
 def recovery_phrase_generate(request):
@@ -45,7 +50,7 @@ def recovery_phrase_generate(request):
 
 @api_view(['POST'])
 @permission_classes([permissions.AllowAny])
-@throttle_classes([AnonRateThrottle])
+@throttle_classes([RecoveryPhraseThrottle])
 def recovery_phrase_verify(request):
     """
     Verify a recovery phrase and log the user in.
@@ -80,14 +85,29 @@ def recovery_phrase_verify(request):
         return Response({'error': 'Recovery configuration is corrupted'},
                         status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    if not verify_recovery_phrase(words, stored_hash, salt):
-        client_ip = (
-            request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0].strip()
-            or request.META.get('REMOTE_ADDR', 'unknown')
+    client_ip = (
+        request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0].strip()
+        or request.META.get('REMOTE_ADDR', 'unknown')
+    )
+
+    # Track failed attempts in cache for lockout
+    from django.core.cache import cache
+    lockout_key = f"recovery_attempts:{client_ip}"
+    attempts = cache.get(lockout_key, 0)
+    if attempts >= 10:
+        return Response(
+            {'error': 'Too many failed attempts. Try again later.'},
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
         )
+    cache.set(lockout_key, attempts + 1, timeout=3600)  # 1 hour window
+
+    if not verify_recovery_phrase(words, stored_hash, salt):
         logger.warning("Failed recovery phrase attempt from %s for user '%s'", client_ip, username)
         return Response({'error': 'Invalid recovery phrase'},
                         status=status.HTTP_403_FORBIDDEN)
+
+    # Successful verification — clear lockout counter
+    cache.delete(lockout_key)
 
     User = get_user_model()
     user = User.objects.filter(username=username, is_superuser=True).first()

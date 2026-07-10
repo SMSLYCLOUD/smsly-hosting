@@ -27,9 +27,17 @@ def check_replication_health_task():
     - > 1MB: warning
     - > 10MB: critical alert
     - Node unreachable: error
+
+    C3: Also checks Patroni leader status and triggers ElectionService
+    re-election if Patroni reports no leader while election still has one.
+    H6: Dispatches replication_lag / replication_node_down notifications
+    with 15-minute rate limiting per node to avoid alert storms.
     """
     from apps.deployments.models_mesh import MeshNetwork
     from apps.deployments.services.replication_service import ReplicationService
+
+    RATE_LIMIT_KEY_PREFIX = "replication-alert:"
+    RATE_LIMIT_SECONDS = 900  # 15 minutes
 
     meshes = MeshNetwork.objects.filter(is_active=True)
     for mesh in meshes:
@@ -45,6 +53,12 @@ def check_replication_health_task():
                         f"Replication node {node['name']} ({node['wg_address']}) "
                         f"is UNREACHABLE"
                     )
+                    _dispatch_replication_alert(
+                        mesh, node,
+                        event_type="replication_node_down",
+                        rate_limit_key=f"{RATE_LIMIT_KEY_PREFIX}down:{node['wg_address']}",
+                        rate_limit_seconds=RATE_LIMIT_SECONDS,
+                    )
 
             for replica in health.get("replicas", []):
                 lag = replica.get("lag_bytes")
@@ -54,14 +68,67 @@ def check_replication_health_task():
                             f"CRITICAL replication lag on {replica['name']}: "
                             f"{lag / 1024 / 1024:.1f}MB"
                         )
+                        _dispatch_replication_alert(
+                            mesh, replica,
+                            event_type="replication_lag",
+                            lag_bytes=lag,
+                            rate_limit_key=f"{RATE_LIMIT_KEY_PREFIX}lag:{replica['wg_address']}",
+                            rate_limit_seconds=RATE_LIMIT_SECONDS,
+                        )
                     elif lag > 1024 * 1024:  # 1MB
                         logger.warning(
                             f"Replication lag on {replica['name']}: "
                             f"{lag / 1024:.0f}KB"
                         )
 
+            # C3: Bridge Patroni → ElectionService.
+            # If Patroni says there's no leader but our Raft state thinks there is,
+            # force an election re-check so stale leaders are demoted.
+            patroni_leader = health.get("patroni_leader")
+            if patroni_leader is None or patroni_leader == "":
+                try:
+                    from apps.deployments.services.election_service import ElectionService
+                    cluster = ElectionService.get_or_create_cluster(mesh=mesh)
+                    if cluster.leader_server is not None:
+                        logger.warning(
+                            "C3: Patroni reports no leader but election leader "
+                            "is %s — triggering re-election check",
+                            cluster.leader_server,
+                        )
+                        cluster.state = "ELECTION_NEEDED"
+                        cluster.save(update_fields=["state"])
+                except Exception as exc:
+                    logger.error("C3: Failed to bridge Patroni→Election: %s", exc)
+
         except Exception as e:
             logger.error(f"Replication health check failed for mesh {mesh.name}: {e}")
+
+
+def _dispatch_replication_alert(mesh, node, *, event_type, lag_bytes=None,
+                                rate_limit_key, rate_limit_seconds):
+    """Dispatch a replication notification with per-node rate limiting."""
+    from django.core.cache import cache
+
+    from apps.deployments.models_servers import ManagedServer
+    from apps.notifications.tasks import notify_replication_issue
+
+    if cache.get(rate_limit_key):
+        return  # Already alerted recently
+
+    wg_address = node.get('wg_address', '')
+    server = ManagedServer.objects.filter(wg_address=wg_address).first()
+    if not server or not server.owner_id:
+        return
+
+    notify_replication_issue.delay(
+        user_id=server.owner_id,
+        event_type=event_type,
+        mesh_name=mesh.name,
+        node_name=node.get('name', wg_address),
+        wg_address=wg_address,
+        lag_bytes=lag_bytes,
+    )
+    cache.set(rate_limit_key, "1", timeout=rate_limit_seconds)
 
 
 @shared_task(

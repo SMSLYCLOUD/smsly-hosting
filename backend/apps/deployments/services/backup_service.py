@@ -25,6 +25,7 @@ from cryptography.hazmat.primitives import hashes, hmac, padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from django.conf import settings
+from django.core.cache import cache
 from django.core.exceptions import PermissionDenied
 from django.utils import timezone
 from django.utils.text import slugify
@@ -34,6 +35,18 @@ from apps.deployments.models_backup import ServerBackup, ServiceBackup
 from apps.deployments.models_storage import Volume
 
 logger = logging.getLogger(__name__)
+
+
+def _acquire_service_lock(service_id: str, operation: str) -> bool:
+    """Try to acquire a Redis lock for a service operation."""
+    lock_key = f"backup_lock:{service_id}"
+    return cache.add(lock_key, operation, timeout=3600)
+
+
+def _release_service_lock(service_id: str):
+    """Release the Redis lock for a service operation."""
+    lock_key = f"backup_lock:{service_id}"
+    cache.delete(lock_key)
 
 
 def _copy_file_to_container(docker_client, container_id: str, local_path: str,
@@ -266,6 +279,14 @@ class BackupService:
         return decrypted_path, decrypted_path
 
     def backup_service(self, service_id, backup_id=None, backup_type='MANUAL', db_only=False) -> ServiceBackup:
+        if not _acquire_service_lock(str(service_id), 'backup'):
+            raise RuntimeError(f"Another backup/restore is already in progress for service {service_id}")
+        try:
+            return self._backup_service_inner(service_id, backup_id, backup_type, db_only)
+        finally:
+            _release_service_lock(str(service_id))
+
+    def _backup_service_inner(self, service_id, backup_id=None, backup_type='MANUAL', db_only=False) -> ServiceBackup:
         service = Service.objects.get(id=service_id)
 
         if backup_id:
@@ -543,7 +564,17 @@ class BackupService:
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
 
-    def restore_service(self, backup_id, target_service_id=None, requesting_user_id=None, raise_on_snapshot_failure=False):
+    def restore_service(self, backup_id, target_service_id=None, requesting_user_id=None, raise_on_snapshot_failure=True):
+        backup_qs_for_lock = ServiceBackup.objects.filter(id=backup_id)
+        service_id_for_lock = str(backup_qs_for_lock.values_list('service_id', flat=True).first() or backup_id)
+        if not _acquire_service_lock(service_id_for_lock, 'restore'):
+            raise RuntimeError(f"Another backup/restore is already in progress for service {service_id_for_lock}")
+        try:
+            return self._restore_service_inner(backup_id, target_service_id, requesting_user_id, raise_on_snapshot_failure)
+        finally:
+            _release_service_lock(service_id_for_lock)
+
+    def _restore_service_inner(self, backup_id, target_service_id=None, requesting_user_id=None, raise_on_snapshot_failure=True):
         """
         Restore a service from backup.
         If target_service_id is provided, restore into that service (overwrite).
@@ -946,7 +977,7 @@ class BackupService:
                 logger.warning(f"Could not resolve provider to queue deployment for restored remote service {target_service.id}")
                 target_service.status = Service.Status.ACTIVE
                 target_service.save()
-                _emergency_restart_remote_container(target_service, server)
+                _emergency_restart_remote_container(target_service, server_obj)
                 # Emergency restart: volumes are restored but no deploy was
                 # queued. Try to restart the stopped container directly so
                 # the service isn't left dead.
@@ -2329,7 +2360,7 @@ class BackupService:
                 return bool(config.backup_require_encryption)
         except Exception:  # pylint: disable=broad-exception-caught
             pass
-        return bool(getattr(settings, "BACKUP_REQUIRE_ENCRYPTION", False))
+        return bool(getattr(settings, "BACKUP_REQUIRE_ENCRYPTION", True))
 
     @staticmethod
     def decrypt_backup(path: str, key: str) -> str:
@@ -2949,8 +2980,11 @@ def _stop_service_for_restore(service, is_remote):
                 ctr = client.containers.get(container_name)
                 ctr.stop(timeout=30)
                 ctr.wait(condition='not-running', timeout=30)
-            except Exception:
-                pass
+            except Exception as stop_err:
+                logger.warning(
+                    "Failed to stop container for service %s (may still be running): %s",
+                    getattr(service, 'name', 'unknown'), stop_err,
+                )
         logger.info("Stopped service %s before restore", service.name)
     except Exception as exc:
         logger.warning("Could not stop service %s before restore: %s", service.name, exc)
@@ -3689,5 +3723,21 @@ def purge_user_backups(user_id) -> dict:
             id__in=[sb.id for sb in server_backups]
         ).delete()
     counters['server_backups_deleted'] = len(server_backups)
+
+    # Create audit log entry for GDPR deletion
+    try:
+        from apps.deployments.utils import log_event
+        log_event(
+            action='GDPR_BACKUP_PURGE',
+            target=f'User: {user_id}',
+            actor='system',
+            metadata={
+                'service_backups_deleted': counters.get('service_backups_deleted', 0),
+                'server_backups_deleted': counters.get('server_backups_deleted', 0),
+                'cloud_objects_deleted': counters.get('cloud_objects_deleted', 0),
+            },
+        )
+    except Exception:
+        pass  # Don't let audit failure block GDPR deletion
 
     return counters

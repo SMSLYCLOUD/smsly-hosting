@@ -522,3 +522,52 @@ def notify_backup_completed(user_id: int, backup_id: str, size_mb: float, succes
         message=message,
         metadata={'backup_id': backup_id, 'size_mb': size_mb, 'success': success},
     )
+
+
+@shared_task(name='notifications.notify_replication_issue', queue='fast')
+def notify_replication_issue(
+    user_id: int,
+    event_type: str,
+    mesh_name: str,
+    node_name: str,
+    wg_address: str,
+    lag_bytes: int | None = None,
+    message: str = "",
+):
+    """Fire a replication issue notification (lag or node down).
+
+    event_type must be 'replication_lag' or 'replication_node_down'.
+    """
+    if event_type == 'replication_node_down':
+        title = f"CRITICAL: Replication node {node_name} is DOWN"
+        body = (
+            f"Node {node_name} ({wg_address}) in mesh '{mesh_name}' is unreachable.\n"
+            f"Automatic failover may occur. Check replication health immediately.\n"
+            f"{message}"
+        )
+    elif lag_bytes is not None:
+        lag_mb = lag_bytes / (1024 * 1024)
+        severity = "CRITICAL" if lag_mb > 10 else "WARNING"
+        title = f"{severity}: Replication lag {lag_mb:.1f}MB on {node_name}"
+        body = (
+            f"Replica {node_name} ({wg_address}) in mesh '{mesh_name}' has "
+            f"{lag_mb:.1f}MB of replication lag.\n"
+            f"Automatic promotion will trigger at >10MB.\n"
+            f"{message}"
+        )
+    else:
+        title = f"Replication issue on {node_name}"
+        body = message or f"Unknown replication issue on {node_name} ({wg_address})."
+
+    dispatch_notification.delay(
+        event_type=event_type,
+        user_id=user_id,
+        title=title,
+        message=body,
+        metadata={
+            'mesh_name': mesh_name,
+            'node_name': node_name,
+            'wg_address': wg_address,
+            'lag_bytes': lag_bytes,
+        },
+    )

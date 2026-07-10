@@ -25,6 +25,7 @@ The keys remain encrypted with FIELD_ENCRYPTION_KEY — the operator needs
 the same FIELD_ENCRYPTION_KEY on the target master to decrypt them.
 """
 import json
+import os
 from datetime import UTC, datetime
 
 from django.core.management.base import BaseCommand
@@ -86,6 +87,8 @@ class Command(BaseCommand):
         output_path = options["output"]
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(json_str)
+
+        os.chmod(output_path, 0o600)
 
         self.stdout.write(
             self.style.SUCCESS(

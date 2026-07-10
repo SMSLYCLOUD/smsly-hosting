@@ -13,7 +13,6 @@ from urllib.parse import urlparse, urlunparse
 
 from django.conf import settings
 from django.utils import timezone
-from apps.deployments.services.pipeline import BuildError
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
@@ -183,16 +182,17 @@ class BuildManager:
             # Cleanup
             if self.work_dir.exists():
                 shutil.rmtree(self.work_dir)
-
     def _run_security_scan(self, image_tag):
         """
         Run Trivy vulnerability scan on the Docker image.
         Falls back to skip if Trivy is not installed.
+
         Reads settings from PlatformConfig (database) so the UI toggle
         actually controls the build pipeline.  Falls back to Django
         settings / env vars when PlatformConfig is unavailable.
         Raises BuildError when vulnerabilities at or above the threshold are found.
         """
+        from apps.deployments.services.pipeline import BuildError
         try:
             from apps.deployments.models_core import PlatformConfig
             config = PlatformConfig.load()

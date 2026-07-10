@@ -15,6 +15,8 @@ class NotificationPreference(models.Model):
         ('billing_due', 'Billing Due'),
         ('ssl_expiring', 'SSL Expiring'),
         ('backup_completed', 'Backup Completed'),
+        ('replication_lag', 'Replication Lag'),
+        ('replication_node_down', 'Replication Node Down'),
     ], max_length=50)
     channels = models.JSONField(default=list)  # type: ignore[var-annotated] # ['email', 'webhook', 'in_app']
 

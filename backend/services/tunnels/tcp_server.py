@@ -9,6 +9,7 @@ Team tier feature.
 """
 
 import asyncio
+import hmac
 import logging
 import uuid
 from dataclasses import dataclass, field
@@ -202,8 +203,10 @@ class TCPTunnelServer:
             logger.warning("Tunnel %s not found", tunnel_id)
             return False
 
-        # Verify Token
-        if tunnel.auth_token != auth_token:
+        # Verify Token (constant-time comparison to prevent timing attacks)
+        if not hmac.compare_digest(
+            tunnel.auth_token.encode(), auth_token.encode()
+        ):
             logger.warning("Invalid auth token for tunnel %s", tunnel_id)
             return False
 

@@ -214,7 +214,7 @@ def create_server_backup_task(self, backup_id=None, schedule_id=None, encryption
 
 
 @shared_task(bind=True, soft_time_limit=3600, max_retries=2, default_retry_delay=300)
-def restore_service_backup_task(self, backup_id, target_service_id=None, requesting_user_id=None, raise_on_snapshot_failure=False, encryption_key=None):
+def restore_service_backup_task(self, backup_id, target_service_id=None, requesting_user_id=None, raise_on_snapshot_failure=True, encryption_key=None):
     log_event(
         action='BACKUP_RESTORE',
         target=f'Backup: {backup_id}',

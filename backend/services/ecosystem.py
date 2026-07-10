@@ -1247,13 +1247,15 @@ def analyze_ecosystem_chunked(repos_data: list[dict], github_token: str | None =
         for rd in repos_data:
             current_vars = _safe_set(rd.get('env_vars_context', {}).keys())
             for other_rd in repos_data:
-                if other_rd['repo'] == rd['repo']: continue
+                if other_rd['repo'] == rd['repo']:
+                    continue
                 other_vars = _safe_set(other_rd.get('env_vars_context', {}).keys())
                 common = current_vars.intersection(other_vars)
                 if common:
                     cross_links.append(f"SHARED STATE: {rd['repo']} and {other_rd['repo']} share env keys: {list(common)}")
             for other in repo_names:
-                if other == rd.get('repo_name_short'): continue
+                if other == rd.get('repo_name_short'):
+                    continue
                 for path, content in rd.get('configs_summary', {}).items():
                     if other in content.lower():
                         cross_links.append(f"DEPENDENCY HINT: {rd['repo']} mentions {other} in {path}")
@@ -2185,7 +2187,7 @@ def _unify_same_name_secrets(services: list[dict]) -> None:
         real_vals = set()
         for v in svc_vals.values():
             if v.startswith("{{SHARED_SECRET:"):
-                sk = v.split("{{SHARED_SECRET:")[-1].rstrip("}}")
+                sk = v.split("{{SHARED_SECRET:")[-1].rstrip("}}").rstrip("}")
                 shared_keys.add(sk)
             elif v.startswith("{{") or v.startswith("REPLACE_") or v == "":
                 continue

@@ -273,11 +273,6 @@ _harden_falco_bootstrap() {
     local compose_file="$INSTALL_DIR/infrastructure/docker/docker-compose.falco.yml"
     [ -f "$compose_file" ] || return 1
 
-    # Auto-detect best driver
-    if [ -f /sys/kernel/btf/vmlinux ]; then
-        export FALCO_BPF_PROBE=""
-    fi
-
     # Blocking start — always recreate so config changes take effect
     docker compose \
         --env-file "$INSTALL_DIR/.env" \

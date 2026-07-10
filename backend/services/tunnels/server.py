@@ -8,8 +8,12 @@ Similar to ngrok, but integrated with SMSLY Hosting.
 """
 
 import asyncio
+import base64
+import hashlib
+import hmac
 import json
 import logging
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -85,6 +89,36 @@ class TunnelServer:  # pylint: disable=too-many-instance-attributes
         """Generate a unique subdomain."""
         return uuid.uuid4().hex[:8]
 
+    @staticmethod
+    def _verify_tunnel_token(token: str, tunnel_secret: str) -> dict | None:
+        """
+        Verify an HMAC-signed tunnel token.
+
+        Returns the decoded payload dict on success, or None if invalid.
+        Expected payload: { user_id: str, exp: float }
+        """
+        if not token or not tunnel_secret:
+            return None
+        try:
+            parts = token.split('.')
+            if len(parts) != 2:
+                return None
+            payload_b64, sig_b64 = parts
+            payload_bytes = base64.urlsafe_b64decode(payload_b64 + '==')
+            expected_sig = hmac.new(
+                tunnel_secret.encode(), payload_bytes, hashlib.sha256
+            ).digest()
+            actual_sig = base64.urlsafe_b64decode(sig_b64 + '==')
+            if not hmac.compare_digest(expected_sig, actual_sig):
+                return None
+            payload = json.loads(payload_bytes)
+            # Check expiry
+            if payload.get('exp', 0) < time.time():
+                return None
+            return payload
+        except Exception:  # pylint: disable=broad-exception-caught
+            return None
+
     async def handle_tunnel_connect(self, request: web.Request) -> web.WebSocketResponse:
         """
         Handle new tunnel WebSocket connection from CLI client.
@@ -92,12 +126,24 @@ class TunnelServer:  # pylint: disable=too-many-instance-attributes
         Client connects and receives assigned subdomain.
         Future HTTP requests to that subdomain are forwarded via WebSocket.
         """
+        # --- AUTH: Verify token before upgrading to WebSocket ---
+        token = request.query.get('token', '')
+        tunnel_secret = str(getattr(settings, 'TUNNEL_SECRET', '') or
+                            getattr(settings, 'GATEWAY_SECRET', ''))
+        payload = self._verify_tunnel_token(token, tunnel_secret)
+        if not payload:
+            ws = web.WebSocketResponse()
+            await ws.prepare(request)
+            await ws.send_json({'error': 'Authentication failed: invalid or expired token'})
+            await ws.close()
+            return ws
+
         ws = web.WebSocketResponse()
         await ws.prepare(request)
 
         # Get optional custom subdomain from query
         custom_subdomain = request.query.get('subdomain')
-        user_id = request.query.get('user_id')  # From auth token
+        user_id = str(payload.get('user_id', ''))
 
         if custom_subdomain:
             if custom_subdomain in self.tunnels:
@@ -247,8 +293,16 @@ class TunnelServer:  # pylint: disable=too-many-instance-attributes
             body=response_body,
         )
 
-    async def list_tunnels(self, request: web.Request) -> web.Response: # pylint: disable=unused-argument
-        """List all active tunnels (for dashboard)."""
+    async def list_tunnels(self, request: web.Request) -> web.Response:
+        """List tunnels for the authenticated user."""
+        token = request.query.get('token', '')
+        tunnel_secret = str(getattr(settings, 'TUNNEL_SECRET', '') or
+                            getattr(settings, 'GATEWAY_SECRET', ''))
+        payload = self._verify_tunnel_token(token, tunnel_secret)
+        if not payload:
+            return web.json_response({'error': 'Authentication required'}, status=401)
+
+        user_id = str(payload.get('user_id', ''))
         tunnels = [
             {
                 'tunnel_id': t.tunnel_id,
@@ -258,6 +312,7 @@ class TunnelServer:  # pylint: disable=too-many-instance-attributes
                 'request_count': t.request_count,
             }
             for t in self.tunnels.values()
+            if t.user_id == user_id
         ]
         return web.json_response({'tunnels': tunnels})
 

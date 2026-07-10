@@ -22,7 +22,7 @@ from rest_framework import permissions, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 
-from .rate_limit import rate_limit
+from .rate_limit import RateLimiter
 
 # Redis-backed storage (with in-memory fallback)
 from .storage import tunnel_storage
@@ -192,10 +192,14 @@ def tunnel_list(request):  # pylint: disable=too-many-return-statements
         }
 
         # Check rate limit
-        allowed, msg = rate_limit.check_rate_limit(user_id)
+        _limiter = RateLimiter(requests_per_minute=60, requests_per_minute_anon=20)
+        # Build a minimal request-like object for the limiter
+        allowed, info = _limiter.is_allowed(request)
         if not allowed:
             return Response(
-                {'error': msg}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+                {'error': 'Rate limit exceeded', 'retry_after': info.get('retry_after', 60)},
+                status=status.HTTP_429_TOO_MANY_REQUESTS
+            )
 
         tunnel_storage.set_tunnel(subdomain, tunnel)
         # No need to init empty log list for Redis, list created on push

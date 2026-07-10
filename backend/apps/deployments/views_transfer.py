@@ -889,6 +889,10 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         if not raw_body or len(raw_body) < 100:
             return Response({'error': 'Empty or invalid backup data'}, status=status.HTTP_400_BAD_REQUEST)
 
+        MAX_UPLOAD_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
+        if len(raw_body) > MAX_UPLOAD_SIZE:
+            return Response({'error': 'Backup exceeds maximum size (2GB)'}, status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
+
         backup_dir = getattr(settings, 'DB_BACKUP_DIR', '/opt/smsly-hosting/backups/master-db')
         try:
             os.makedirs(backup_dir, exist_ok=True)

@@ -182,6 +182,12 @@ app.conf.beat_schedule = {
         'schedule': 5.0,
         'options': {'expires': 10.0},
     },
+    # Cleanup old heartbeat logs every 10 minutes (deterministic)
+    'cleanup-heartbeat-logs-every-10m': {
+        'task': 'apps.deployments.tasks_election.cleanup_heartbeat_logs_task',
+        'schedule': 600.0,
+        'options': {'expires': 600.0},
+    },
     # Replication health check every 30 seconds
     'replication-health-every-30s': {
         'task': 'apps.deployments.tasks_replication.check_replication_health_task',

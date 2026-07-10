@@ -50,6 +50,7 @@ class WireGuardPeerSerializer(serializers.ModelSerializer):
 class MeshNetworkSerializer(serializers.ModelSerializer):
     peers = WireGuardPeerSerializer(many=True, read_only=True)
     peer_count = serializers.SerializerMethodField()
+    replication_last_result = serializers.SerializerMethodField()
 
     class Meta:
         model = MeshNetwork
@@ -70,6 +71,24 @@ class MeshNetworkSerializer(serializers.ModelSerializer):
 
     def get_peer_count(self, obj):
         return obj.peers.filter(is_active=True).count()
+
+    def get_replication_last_result(self, obj):
+        """Strip haproxy_stats_password from replication results before API exposure.
+
+        The HAProxy stats password is embedded in the compose config needed for
+        deployment but must never be returned to API consumers.
+        """
+        result = obj.replication_last_result or {}
+        if isinstance(result, dict):
+            # Remove sensitive keys at the top level and within any haproxy section
+            sanitized = {k: v for k, v in result.items() if 'password' not in k.lower()}
+            if 'haproxy' in result and isinstance(result['haproxy'], dict):
+                sanitized['haproxy'] = {
+                    k: v for k, v in result['haproxy'].items()
+                    if 'password' not in k.lower()
+                }
+            return sanitized
+        return result
 
 
 class MeshNetworkCreateSerializer(serializers.ModelSerializer):

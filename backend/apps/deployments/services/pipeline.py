@@ -16,7 +16,11 @@ import subprocess
 import tempfile
 import threading
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse as parse_url
+
+if TYPE_CHECKING:
+    from apps.deployments.services.manifest_env_resolver import ManifestEnvResolver
 
 import git
 import yaml
@@ -1890,7 +1894,6 @@ class PipelineManager:
 
                     # Qdrant: also set QDRANT_HOST/QDRANT_PORT
                     if addon_type == 'QDRANT':
-                        from urllib.parse import urlparse as parse_url
                         parsed = parse_url(url)
                         EnvironmentVariable.objects.update_or_create(
                             service=self.service, key='QDRANT_HOST',

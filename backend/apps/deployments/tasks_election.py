@@ -1,15 +1,21 @@
 import logging
 
-logger = logging.getLogger(__name__)
-import contextlib
-import logging
-import random
-
 from celery import shared_task
+
+logger = logging.getLogger(__name__)
 
 
 def _get_local_role() -> str:
-    """Read local server role from file."""
+    """Read local server role from DB, falling back to file."""
+    try:
+        from apps.deployments.models_mesh import MeshNetwork
+        from apps.deployments.services.election_service import ElectionService
+        mesh = MeshNetwork.objects.filter(is_active=True).first()
+        if mesh:
+            cluster = ElectionService.get_or_create_cluster(mesh=mesh)
+            return cluster.local_role
+    except Exception:
+        pass
     try:
         with open("/tmp/.smsly_cluster_role") as f:
             return f.read().strip()
@@ -53,10 +59,25 @@ def heartbeat_task():
             except Exception as e:
                 logger.error(f"Leader timeout check failed: {e}")
 
-        # Periodic cleanup of old heartbeat logs (every ~100 runs ≈ 8 min)
-        if random.randint(1, 100) == 1:
-            with contextlib.suppress(Exception):
-                ElectionService.cleanup_old_heartbeats(cluster)
+
+@shared_task(name="apps.deployments.tasks_election.cleanup_heartbeat_logs_task")
+def cleanup_heartbeat_logs_task():
+    """
+    Scheduled task (every 10 minutes): Clean up old heartbeat logs.
+
+    Previously this was a probabilistic random call inside heartbeat_task.
+    Running it on a deterministic schedule ensures cleanup always happens.
+    """
+    from apps.deployments.models_mesh import MeshNetwork
+    from apps.deployments.services.election_service import ElectionService
+
+    meshes = MeshNetwork.objects.filter(is_active=True)
+    for mesh in meshes:
+        try:
+            cluster = ElectionService.get_or_create_cluster(mesh=mesh)
+            ElectionService.cleanup_old_heartbeats(cluster)
+        except Exception as e:
+            logger.error(f"Heartbeat cleanup failed for mesh {mesh.name}: {e}")
 
 
 @shared_task(name="apps.deployments.tasks_election.force_election_task")

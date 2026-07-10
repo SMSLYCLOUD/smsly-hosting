@@ -42,6 +42,10 @@ ignore = [
   "SIM103",  # needless-bool — style preference, explicit is sometimes clearer
   "B007",    # unused-loop-control-variable — sometimes needed for unpacking
   "RUF059",  # unused-unpacked-variable — sometimes needed for unpacking
+  "B005",    # strip-with-multi-characters — false positive on rsplit patterns
+  "RUF005",  # collection-literal-concatenation — Django URL patterns use this idiom
+  "RUF006",  # asyncio-dangling-task — sometimes intentionally fire-and-forget
+  "SIM113",  # enumerate-for-loop — not always applicable when counting across branches
 ]
 
 [lint.per-file-ignores]

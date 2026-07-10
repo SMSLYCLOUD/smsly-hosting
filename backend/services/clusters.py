@@ -7,7 +7,7 @@ import logging
 import re
 import time
 
-from kubernetes import config, client
+from kubernetes import client, config
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)

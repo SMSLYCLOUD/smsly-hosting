@@ -21,15 +21,21 @@ receivers:
     webhook_configs:
       - url: 'http://127.0.0.1:5001/alerts'
         send_resolved: true
+      - url: 'http://127.0.0.1:5001/alerts/fallback'
+        send_resolved: true
 
   - name: 'critical'
     webhook_configs:
       - url: 'http://127.0.0.1:5001/alerts'
         send_resolved: true
+      - url: 'http://127.0.0.1:5001/alerts/fallback'
+        send_resolved: true
 
   - name: 'warning'
     webhook_configs:
       - url: 'http://127.0.0.1:5001/alerts'
+        send_resolved: true
+      - url: 'http://127.0.0.1:5001/alerts/fallback'
         send_resolved: true
 
 inhibit_rules:

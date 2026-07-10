@@ -82,6 +82,18 @@ class ReplicationService:
 
         cluster_state = "new" if is_fresh else "existing"
 
+        # Build synchronous replication env lines for small clusters
+        if len(peers) <= 3:
+            sync_lines = (
+                '                      PATRONI_SYNCHRONOUS_MODE: "on"\n'
+                "                      PATRONI_POSTGRESQL_PARAMETERS: "
+                "'synchronous_commit=on synchronous_standby_names=\\'\\'*\\''"
+            )
+        else:
+            sync_lines = (
+                '                      PATRONI_POSTGRESQL_PARAMETERS: "synchronous_commit=remote_apply"'
+            )
+
         configs = {}
         for idx, peer in enumerate(peers, 1):
             wg_ip = peer.wg_address
@@ -136,6 +148,7 @@ class ReplicationService:
                       PGPASSWORD_SUPERUSER: {_yaml_scalar(db_password)}
                       PGUSER_ADMIN: smsly_admin
                       PGPASSWORD_ADMIN: {_yaml_scalar(admin_password)}
+{sync_lines}
                     volumes:
                       - patroni-data:/home/postgres/pgdata
                     depends_on:
@@ -174,6 +187,9 @@ class ReplicationService:
             for i, p in enumerate(peers, 1)
         )
 
+        import secrets
+        haproxy_stats_password = secrets.token_urlsafe(24)
+
         config = textwrap.dedent(f"""\
             defaults
                 mode tcp
@@ -206,13 +222,15 @@ class ReplicationService:
                 mode http
                 stats enable
                 stats uri /
+                stats auth admin:{haproxy_stats_password}
+                stats refresh 10s
         """)
-        return config
+        return config, haproxy_stats_password
 
     @classmethod
     def generate_haproxy_compose(cls, mesh):
         """Generate docker-compose for HAProxy that routes to Patroni nodes."""
-        haproxy_cfg = cls.generate_haproxy_config(mesh)
+        haproxy_cfg, haproxy_stats_password = cls.generate_haproxy_config(mesh)
         haproxy_cfg_b64 = base64.b64encode(haproxy_cfg.encode()).decode()
 
         compose = textwrap.dedent(f"""\
@@ -862,6 +880,33 @@ class ReplicationService:
 
         if not target_name:
             raise ValueError(f"Target {target_wg_address} not found in mesh")
+
+        # Verify target replica is healthy and caught up
+        target_wg_address_for_check = target_wg_address
+        try:
+            target_resp = requests.get(
+                f"http://{target_wg_address_for_check}:8008/replica",
+                timeout=(2, 5),
+                allow_redirects=False,
+            )
+            if target_resp.status_code != 200:
+                raise RuntimeError(
+                    f"Target replica {target_wg_address_for_check} is not healthy (HTTP {target_resp.status_code}). "
+                    "Aborting failover to prevent data loss."
+                )
+            # Check replication lag
+            target_data = target_resp.json()
+            lag = target_data.get('replication_lag', target_data.get('lag', None))
+            if lag is not None and isinstance(lag, (int, float)) and lag > 10:
+                raise RuntimeError(
+                    f"Target replica {target_wg_address_for_check} has replication lag of {lag}s. "
+                    "Aborting failover to prevent data loss."
+                )
+        except requests.RequestException as e:
+            raise RuntimeError(
+                f"Cannot reach target replica {target_wg_address_for_check}: {e}. "
+                "Aborting failover."
+            ) from e
 
         # Trigger switchover via Patroni API
         resp = requests.post(

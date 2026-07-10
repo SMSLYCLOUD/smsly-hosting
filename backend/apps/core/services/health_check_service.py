@@ -1,7 +1,11 @@
 import logging
 import os
+import re
 import shutil
+import socket
+import ssl
 import time
+from datetime import UTC, datetime
 
 from celery import current_app
 from django.conf import settings
@@ -16,7 +20,6 @@ class HealthCheckService:
     @classmethod
     def _scrub_error(cls, error_msg):
         # Prevent leaking secrets in health check responses
-        import re
         msg = str(error_msg)
         msg = re.sub(r'://.*?:.*?@', '://***:***@', msg) # basic auth scrub
         msg = re.sub(r'password=.*?\s', 'password=*** ', msg)
@@ -112,8 +115,67 @@ class HealthCheckService:
 
     @classmethod
     def check_ssl(cls):
-        return {"ok": True}
+        """Check SSL certificate expiry for all configured domains."""
+        try:
+            domains = getattr(settings, 'SSL_CHECK_DOMAINS', [])
+            if not domains:
+                # Fallback: read from Caddy config or env
+                domain_str = os.environ.get('SSL_CHECK_DOMAINS', '')
+                domains = [d.strip() for d in domain_str.split(',') if d.strip()]
+            if not domains:
+                return {"ok": True, "skipped": True, "reason": "No domains configured"}
+
+            results = []
+            for domain in domains:
+                try:
+                    ctx = ssl.create_default_context()
+                    with ctx.wrap_socket(socket.socket(), server_hostname=domain) as s:
+                        s.settimeout(5)
+                        s.connect((domain, 443))
+                        cert = s.getpeercert()
+                        expiry_str = cert.get('notAfter', '')
+                        if expiry_str:
+                            expiry = datetime.strptime(expiry_str, '%b %d %H:%M:%S %Y %Z')
+                            expiry = expiry.replace(tzinfo=UTC)
+                            days_left = (expiry - datetime.now(UTC)).days
+                            ok = days_left > 7
+                            results.append({
+                                "domain": domain,
+                                "ok": ok,
+                                "expires_in_days": days_left,
+                            })
+                        else:
+                            results.append({"domain": domain, "ok": True, "expires_in_days": None})
+                except Exception as e:
+                    results.append({"domain": domain, "ok": False, "error": str(e)})
+
+            all_ok = all(r.get("ok", False) for r in results)
+            return {"ok": all_ok, "certificates": results}
+        except Exception as e:
+            return {"ok": False, "error": cls._scrub_error(e)}
 
     @classmethod
     def check_dns(cls):
-        return {"ok": True}
+        """Check DNS resolution for critical domains."""
+        try:
+            domains = getattr(settings, 'DNS_CHECK_DOMAINS', [])
+            if not domains:
+                domain_str = os.environ.get('DNS_CHECK_DOMAINS', '')
+                domains = [d.strip() for d in domain_str.split(',') if d.strip()]
+            if not domains:
+                return {"ok": True, "skipped": True, "reason": "No domains configured"}
+
+            results = []
+            for domain in domains:
+                try:
+                    start = time.time()
+                    socket.getaddrinfo(domain, 443, socket.AF_UNSPEC, socket.SOCK_STREAM)
+                    latency_ms = int((time.time() - start) * 1000)
+                    results.append({"domain": domain, "ok": True, "latency_ms": latency_ms})
+                except socket.gaierror as e:
+                    results.append({"domain": domain, "ok": False, "error": f"DNS resolution failed: {e}"})
+
+            all_ok = all(r.get("ok", False) for r in results)
+            return {"ok": all_ok, "resolutions": results}
+        except Exception as e:
+            return {"ok": False, "error": cls._scrub_error(e)}

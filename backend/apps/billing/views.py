@@ -18,7 +18,6 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
 
-from apps.deployments.models_core import PlatformConfig
 from apps.billing.models import (
     BillingAccount,
     BillingPayment,
@@ -39,6 +38,7 @@ from apps.billing.services.flutterwave import FlutterwaveService
 from apps.billing.services.metering import UsageMeter
 from apps.billing.services.stripe import StripeService
 from apps.billing.utils import _activate_paid_plan
+from apps.deployments.models_core import PlatformConfig
 from apps.permissions.drf import CanManageBilling, CanViewBilling
 
 logger = logging.getLogger(__name__)

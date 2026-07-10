@@ -225,108 +225,158 @@ class ElectionService:
         from apps.deployments.models_election import ElectionVote
 
         # Increment term and become candidate
-        cluster.term += 1
-        cluster.state = "ELECTION"
-        cluster.save(update_fields=["term", "state"])
-        cls._set_local_role("CANDIDATE")
+        with transaction.atomic():
+            cluster = cls.get_or_create_cluster(mesh=cluster.mesh)
+            cluster = type(cluster).objects.select_for_update().get(pk=cluster.pk)
+            cluster.term += 1
+            cluster.state = "ELECTION"
+            cluster.save(update_fields=["term", "state"])
+            cls._set_local_role("CANDIDATE")
 
-        new_term = cluster.term
-        logger.info(f"Starting election for term {new_term}")
+            new_term = cluster.term
+            logger.info(f"Starting election for term {new_term}")
 
-        # Vote for self
-        ElectionVote.objects.create(
-            cluster=cluster,
-            term=new_term,
-            voter_server=None,  # local
-            candidate_server=None,  # local
-            candidate_is_local=True,
-        )
-        votes_for_self = 1
+            # Vote for self
+            ElectionVote.objects.create(
+                cluster=cluster,
+                term=new_term,
+                voter_server=None,  # local
+                candidate_server=None,  # local
+                candidate_is_local=True,
+            )
+            votes_for_self = 1
 
-        # Get peers and total count
-        mesh = cluster.mesh
-        if not mesh:
-            # No mesh = auto-win (single server)
-            cls.promote_to_leader(cluster)
-            return True
+            # Get peers and total count
+            mesh = cluster.mesh
+            if not mesh:
+                # No mesh = auto-win (single server)
+                cls.promote_to_leader(cluster)
+                return True
 
-        local_peer = mesh.peers.filter(is_local=True).first()
-        remote_peers = list(
-            mesh.peers.filter(is_active=True).exclude(is_local=True)
-        )
-        total_servers = len(remote_peers) + 1  # +1 for self
-        majority = (total_servers // 2) + 1
+            local_peer = mesh.peers.filter(is_local=True).first()
+            remote_peers = list(
+                mesh.peers.filter(is_active=True).exclude(is_local=True)
+            )
+            total_servers = len(remote_peers) + 1  # +1 for self
+            majority = (total_servers // 2) + 1
 
-        # Get local gateway_secret for HMAC signing
-        local_server = local_peer.server if local_peer else None
-        local_gateway_secret = str(
-            getattr(local_server, "gateway_secret", "") or ""
-        ).strip()
-        if not local_gateway_secret:
-            local_gateway_secret = str(getattr(settings, "GATEWAY_SECRET", ""))
-        local_wg = local_peer.wg_address if local_peer else ""
+            # Get local gateway_secret for HMAC signing
+            local_server = local_peer.server if local_peer else None
+            local_gateway_secret = str(
+                getattr(local_server, "gateway_secret", "") or ""
+            ).strip()
+            if not local_gateway_secret:
+                local_gateway_secret = str(getattr(settings, "GATEWAY_SECRET", ""))
+            local_wg = local_peer.wg_address if local_peer else ""
 
-        # Request votes from peers
-        for peer in remote_peers:
-            try:
-                url = f"http://{peer.wg_address}:8000/api/v1/internal/vote/"
-                payload = {
-                    "term": new_term,
-                    "candidate_wg_address": local_wg,
-                    "sender_wg_address": local_wg,
-                }
-                hmac_headers = _build_election_hmac_headers(
-                    payload, local_wg, local_gateway_secret,
-                )
-                resp = requests.post(
-                    url,
-                    json=payload,
-                    headers=hmac_headers,
-                    timeout=5,
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if data.get("vote_granted"):
+            # Request votes from peers
+            for peer in remote_peers:
+                try:
+                    url = f"http://{peer.wg_address}:8000/api/v1/internal/vote/"
+                    payload = {
+                        "term": new_term,
+                        "candidate_wg_address": local_wg,
+                        "sender_wg_address": local_wg,
+                    }
+                    hmac_headers = _build_election_hmac_headers(
+                        payload, local_wg, local_gateway_secret,
+                    )
+                    resp = requests.post(
+                        url,
+                        json=payload,
+                        headers=hmac_headers,
+                        timeout=5,
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if data.get("vote_granted"):
+                            votes_for_self += 1
+                            ElectionVote.objects.create(
+                                cluster=cluster,
+                                term=new_term,
+                                voter_server=peer.server,
+                                candidate_server=None,
+                                candidate_is_local=True,
+                            )
+                    else:
+                        logger.warning(f"Vote denied by {peer.wg_address}: HTTP {resp.status_code}")
+                except Exception as e:
+                    logger.warning(f"Failed to request vote from {peer.wg_address}: {e}")
+
+            # --- SPECIAL CASE: Handle 2-node deadlock ---
+            # In a 2-node cluster, if 1 node is down, Raft cannot reach a majority (2/2).
+            # We allow a solo win ONLY after verifying the peer is genuinely unreachable.
+            if votes_for_self < majority and total_servers == 2:
+                peer = remote_peers[0]
+                logger.info("2-node deadlock detected. Probing peer %s...", peer.wg_address)
+
+                # Step 1: Probe the peer with an HTTP POST (timeout=3s)
+                peer_reachable = False
+                try:
+                    probe_url = f"http://{peer.wg_address}:8000/api/v1/internal/heartbeat/"
+                    probe_resp = requests.post(probe_url, json={"term": cluster.term, "leader_wg_address": local_wg}, timeout=3)
+                    peer_reachable = probe_resp.status_code == 200
+                except Exception:  # pylint: disable=broad-exception-caught
+                    peer_reachable = False
+
+                # Step 2: Also check recent heartbeat snapshots from Redis bus
+                if not peer_reachable:
+                    from apps.deployments.services.heartbeat_bus import get_latest_heartbeats
+                    recent_hbs = get_latest_heartbeats()
+                    now = time.time()
+                    for hb in recent_hbs:
+                        if (hb.get('wg_address') == peer.wg_address
+                                and hb.get('status') == 'alive'
+                                and (now - hb.get('ts', 0)) < 30):
+                            peer_reachable = True
+                            logger.info("Peer %s reachable via recent heartbeat bus snapshot", peer.wg_address)
+                            break
+
+                if not peer_reachable:
+                    # Fencing: Verify no other node has already claimed leadership
+                    # by checking if ANY heartbeat was received cluster-wide in the
+                    # last 30s (the leader would have sent one).
+                    from apps.deployments.services.heartbeat_bus import get_latest_heartbeats
+                    any_recent_leader_hb = False
+                    all_hbs = get_latest_heartbeats()
+                    now = time.time()
+                    for hb in all_hbs:
+                        if (hb.get('wg_address') != peer.wg_address
+                                and hb.get('status') == 'alive'
+                                and (now - hb.get('ts', 0)) < 30):
+                            any_recent_leader_hb = True
+                            break
+                    if not any_recent_leader_hb:
+                        # Safe to promote — peer is down, no other leader active
                         votes_for_self += 1
-                        ElectionVote.objects.create(
-                            cluster=cluster,
-                            term=new_term,
-                            voter_server=peer.server,
-                            candidate_server=None,
-                            candidate_is_local=True,
+                        logger.warning(
+                            "Force-promoting in 2-node cluster: peer %s unreachable "
+                            "and no leader heartbeat detected",
+                            peer.wg_address,
+                        )
+                    else:
+                        logger.warning(
+                            "Abstaining from 2-node force-promote: another "
+                            "leader heartbeat detected"
                         )
                 else:
-                    logger.warning(f"Vote denied by {peer.wg_address}: HTTP {resp.status_code}")
-            except Exception as e:
-                logger.warning(f"Failed to request vote from {peer.wg_address}: {e}")
+                    logger.info("Peer %s is reachable — cannot force promote", peer.wg_address)
 
-        # --- SPECIAL CASE: Handle 2-node deadlock ---
-        # In a 2-node cluster, if 1 node is down, Raft cannot reach a majority (2/2).
-        # We allow a solo win if the peer is unreachable and we have 'primary' preference
-        # or if the peer has been offline for > 60s.
-        if votes_for_self < majority and total_servers == 2:
-            peer = remote_peers[0]
-            # Check if peer is unreachable (no latency reported in logs)
-            # This is a safety heuristic for small clusters.
-            logger.info("2-node deadlock detected. Checking if we can force promote...")
-            votes_for_self += 1
-            logger.warning(f"Force-promoting single node in 2-node cluster (peer {peer.wg_address} unreachable)")
+            logger.info(
+                f"Election term {new_term}: {votes_for_self}/{total_servers} votes "
+                f"(need {majority} for majority)"
+            )
 
-        logger.info(
-            f"Election term {new_term}: {votes_for_self}/{total_servers} votes "
-            f"(need {majority} for majority)"
-        )
-
-        if votes_for_self >= majority:
-            cls.promote_to_leader(cluster)
-            return True
-        else:
-            # Didn't win — revert to follower
-            cls._set_local_role("FOLLOWER")
-            cluster.state = "STABLE"
-            cluster.save(update_fields=["state"])
-            logger.info("Election lost — reverting to follower")
-            return False
+            if votes_for_self >= majority:
+                cls.promote_to_leader(cluster)
+                return True
+            else:
+                # Didn't win — revert to follower
+                cls._set_local_role("FOLLOWER")
+                cluster.state = "STABLE"
+                cluster.save(update_fields=["state"])
+                logger.info("Election lost — reverting to follower")
+                return False
 
     # ── Promotion / Demotion ─────────────────────────────────────────────
 
@@ -458,21 +508,19 @@ class ElectionService:
 
     # ── Helpers ──────────────────────────────────────────────────────────
 
-    @staticmethod
-    def _set_local_role(role: str):
-        """
-        Set the local server's role.
-
-        Note: The 'local' server doesn't have a ManagedServer record.
-        We track its role via the ClusterState or a local config file.
-        For now, we log it; Phase 3 will use it for DB routing.
-        """
+    @classmethod
+    def _set_local_role(cls, role: str, cluster=None):
+        """Set the local server's role in the database."""
+        if cluster:
+            cluster.local_role = role
+            cluster.save(update_fields=["local_role"])
+        # Also write to /tmp for backward compatibility
         role_file = "/tmp/.smsly_cluster_role"
         try:
             with open(role_file, "w") as f:
                 f.write(role)
         except Exception:
-            pass  # Non-critical
+            pass
         logger.info(f"Local server role: {role}")
 
     @staticmethod
