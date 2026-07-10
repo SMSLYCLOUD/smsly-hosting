@@ -41,10 +41,6 @@ from apps.deployments.utils import (
 
 logger = logging.getLogger(__name__)
 
-# Pinned SHA-256 of the canonical install.sh. Used by _load_install_script
-# to verify the script hasn't been tampered with.
-EXPECTED_INSTALL_SCRIPT_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-
 
 def _env_int(name: str, default: int, minimum: int = 0) -> int:
     try:
@@ -77,6 +73,133 @@ def _installer_logs_confirm_success(logs: str) -> bool:
         "INSTALLATION SUCCESSFUL!" in text
         or re.search(r"All\s+\d+/\d+\s+verification checks passed", text)
     )
+
+
+class _ProvisioningResources:
+    """Tracks resources created during provisioning for rollback on failure.
+
+    Usage:
+        res = _ProvisioningResources(server)
+        res.track_db_user(username)
+        res.track_firewall_rule(ip, port)
+        ...
+        # On failure:
+        res.rollback()
+
+    Each resource type has a dedicated cleanup function that is idempotent
+    (safe to call even if the resource was already partially cleaned up).
+    """
+
+    def __init__(self, server: ManagedServer):
+        self.server = server
+        self._db_users: list[str] = []
+        self._firewall_rules: list[tuple[str, str]] = []  # (ip, port)
+        self._ssh_key_added = False
+        self._wg_peer_id: str | None = None
+
+    def track_db_user(self, username: str):
+        self._db_users.append(username)
+
+    def track_firewall_rule(self, node_ip: str, port: str):
+        self._firewall_rules.append((node_ip, port))
+
+    def track_ssh_key_added(self):
+        self._ssh_key_added = True
+
+    def track_wg_peer(self, peer_id: str):
+        self._wg_peer_id = peer_id
+
+    def rollback(self):
+        """Best-effort cleanup of all tracked resources. Never raises."""
+        for username in self._db_users:
+            self._drop_db_user(username)
+        for node_ip, port in self._firewall_rules:
+            self._remove_firewall_rule(node_ip, port)
+        if self._ssh_key_added:
+            self._remove_ssh_key()
+        if self._wg_peer_id:
+            self._remove_wg_peer()
+
+    def _drop_db_user(self, username: str):
+        master_db_url = os.environ.get("DATABASE_URL")
+        if not master_db_url:
+            return
+        try:
+            import psycopg2
+            from psycopg2 import sql
+            from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+            conn = psycopg2.connect(master_db_url)
+            conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+            with conn.cursor() as cur:
+                cur.execute(sql.SQL("DROP OWNED BY {} CASCADE").format(sql.Identifier(username)))
+                cur.execute(sql.SQL("DROP USER IF EXISTS {}").format(sql.Identifier(username)))
+            conn.close()
+            _append_log(self.server, f"🧹 Rolled back DB user: {username}")
+        except Exception as exc:
+            logger.warning("Rollback: failed to drop DB user %s: %s", username, exc)
+
+    def _remove_firewall_rule(self, node_ip: str, port: str):
+        try:
+            subprocess.run(
+                ["ufw", "delete", "allow", "from", node_ip,
+                 "to", "any", "port", port, "proto", "tcp"],
+                capture_output=True, timeout=5,
+            )
+            subprocess.run(
+                ["iptables", "-D", "DOCKER-USER",
+                 "-s", node_ip, "-p", "tcp", "--dport", "5000",
+                 "-j", "ACCEPT"],
+                capture_output=True, timeout=5,
+            )
+            _append_log(self.server, f"🧹 Rolled back firewall rule: {node_ip}:{port}")
+        except Exception as exc:
+            logger.warning("Rollback: failed to remove firewall rule %s:%s: %s", node_ip, port, exc)
+
+    def _remove_ssh_key(self):
+        if not self.server.ssh_key:
+            return
+        try:
+            import io
+            key_file = io.StringIO(self.server.ssh_key)
+            try:
+                pkey = paramiko.Ed25519Key.from_private_key(key_file)
+            except Exception:
+                key_file.seek(0)
+                pkey = paramiko.RSAKey.from_private_key(key_file)
+            # Connect with the generated key and remove it from authorized_keys
+            client = paramiko.SSHClient()
+            from apps.deployments.services.ssh_client import _get_tofu_policy
+            client.set_missing_host_key_policy(_get_tofu_policy(self.server.host, self.server.ssh_port))
+            connect_kwargs = {
+                "hostname": self.server.host,
+                "port": self.server.ssh_port,
+                "username": self.server.ssh_user,
+                "pkey": pkey,
+                "timeout": 10,
+            }
+            if self.server.ssh_password:
+                # Try key first, fall back to password
+                try:
+                    client.connect(**connect_kwargs)
+                except paramiko.AuthenticationException:
+                    connect_kwargs.pop("pkey")
+                    connect_kwargs["password"] = self.server.ssh_password
+                    client.connect(**connect_kwargs)
+            else:
+                client.connect(**connect_kwargs)
+            client.exec_command('sed -i "/smsly-self-heal/d" ~/.ssh/authorized_keys')
+            client.close()
+            _append_log(self.server, "🧹 Rolled back SSH key from remote node")
+        except Exception as exc:
+            logger.warning("Rollback: failed to remove SSH key: %s", exc)
+
+    def _remove_wg_peer(self):
+        try:
+            from apps.deployments.services.wireguard_service import WireGuardService
+            WireGuardService.remove_peer_from_mesh(self._wg_peer_id)
+            _append_log(self.server, f"🧹 Rolled back WireGuard peer: {self._wg_peer_id}")
+        except Exception as exc:
+            logger.warning("Rollback: failed to remove WG peer %s: %s", self._wg_peer_id, exc)
 
 
 def _shell_env_assignments(values: dict[str, object]) -> str:
@@ -405,7 +528,8 @@ def _harden_node_ssh(ssh, server: ManagedServer) -> None:
 
         import paramiko
         test_ssh = paramiko.SSHClient()
-        test_ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        from apps.deployments.services.ssh_client import _get_tofu_policy
+        test_ssh.set_missing_host_key_policy(_get_tofu_policy(server.host, server.ssh_port))
         pkey = paramiko.Ed25519Key.from_private_key(io.StringIO(server.ssh_key))
         test_ssh.connect(
             hostname=server.host,
@@ -673,6 +797,12 @@ def _load_install_script():
 
     def _verify(content: str, source: str):
         if not required_sha:
+            if source.startswith("url:"):
+                raise ValueError(
+                    "SMSLY_INSTALL_SCRIPT_SHA256 is not set and no local install.sh found. "
+                    "Refusing to execute an unverified script from the network. "
+                    "Set SMSLY_INSTALL_SCRIPT_SHA256 to the SHA-256 of your install.sh."
+                )
             logger.warning(
                 "SMSLY_INSTALL_SCRIPT_SHA256 is missing and no local install.sh found. "
                 "Skipping checksum verification for %s.", source
@@ -847,9 +977,9 @@ def _get_ssh_client(server: ManagedServer) -> paramiko.SSHClient:
     elif allow_auto_add:
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     else:
-        client.set_missing_host_key_policy(paramiko.WarningPolicy())
-        import warnings
-        warnings.warn("Strict SSH host key checking is disabled. This is insecure!", stacklevel=2)
+        # Default: TOFU — trust on first use, reject on key change.
+        from apps.deployments.services.ssh_client import _get_tofu_policy
+        client.set_missing_host_key_policy(_get_tofu_policy(server.host, server.ssh_port))
 
 
     connect_kwargs = {
@@ -920,7 +1050,7 @@ def _provision_node_db_credentials(server: ManagedServer):
 
     # Preserve existing password if already generated/stored
     metadata = server.provider_metadata or {}
-    existing_pass = metadata.get("node_db_password")
+    existing_pass = metadata.get("node_db_password") or server.node_db_password
 
     password = existing_pass or secrets.token_urlsafe(24)
 
@@ -966,12 +1096,14 @@ def _provision_node_db_credentials(server: ManagedServer):
         if not isinstance(server.provider_metadata, dict):
             server.provider_metadata = {}
         server.provider_metadata["node_db_user"] = username
-        server.provider_metadata["node_db_password"] = password
-        server.save(update_fields=["provider_metadata"])
+        # Store password in encrypted field, remove from plaintext metadata
+        server.node_db_password = password
+        server.provider_metadata.pop("node_db_password", None)
+        server.save(update_fields=["provider_metadata", "node_db_password"])
 
-        # Only restart PgCat if a new user pool was actually created
-        if is_new_user:
-            _restart_pgcat()
+        # Re-render PgCat config (hot-reload) so the new/changed password
+        # is picked up. This handles both new users AND password rotations.
+        _rerender_pgcat_config()
 
         return username, password
     except Exception as e:
@@ -986,62 +1118,125 @@ def _restart_pgcat():
     PgCat user pools for each.  A restart causes that script to run again,
     picking up any newly-provisioned node agent credentials.
 
-    NOTE: PgCat currently requires a full restart to pick up new user pools.
-    A hot-reload via SIGHUP could be investigated in the future to avoid the
-    brief (~10 s) connectivity disruption for existing nodes.
+    First attempts a hot-reload (docker exec + render + SIGHUP) to avoid
+    connection disruption. Falls back to full restart with retry on failure.
     """
     import time as _time
-    try:
-        import docker as docker_lib
-        client = docker_lib.from_env()
-        pgcat_name = None
-        for name in ("smsly-hosting-pgcat-1", "smsly-hosting-pgcat"):
-            try:
-                client.containers.get(name)
-                pgcat_name = name
-                break
-            except docker_lib.errors.NotFound:
-                continue
 
-        if not pgcat_name:
-            logger.warning(
-                "PgCat container not found — node agent pools will not be "
-                "active until the next PgCat restart."
-            )
-            return
+    def _find_pgcat_container():
+        try:
+            import docker as docker_lib
+            client = docker_lib.from_env()
+            for name in ("smsly-hosting-pgcat-1", "smsly-hosting-pgcat"):
+                try:
+                    return client.containers.get(name), name
+                except docker_lib.errors.NotFound:
+                    continue
+        except Exception as exc:
+            logger.warning("PgCat docker client init failed: %s", exc)
+        return None, None
 
-        container = client.containers.get(pgcat_name)
-        container.restart(timeout=10)
-        logger.info(
-            "Restarted PgCat container %s to pick up new node agent pools.",
-            pgcat_name,
-        )
-
-        # Wait for PgCat to become healthy so the newly provisioned agent
-        # does not encounter a connection-refused error on first connect.
-        deadline = _time.monotonic() + 30
+    def _wait_healthy(container, name, timeout=30):
+        deadline = _time.monotonic() + timeout
         while _time.monotonic() < deadline:
             try:
                 container.reload()
                 health = container.attrs.get("State", {}).get("Health", {}).get("Status")
                 if health == "healthy":
-                    logger.info("PgCat %s is healthy after restart.", pgcat_name)
-                    return
+                    logger.info("PgCat %s is healthy.", name)
+                    return True
             except Exception:
                 pass
             _time.sleep(2)
+        return False
 
+    container, pgcat_name = _find_pgcat_container()
+    if not container:
         logger.warning(
-            "PgCat %s did not become healthy within 30 s after restart. "
-            "Node agent pools may not be active.",
-            pgcat_name,
+            "PgCat container not found — node agent pools will not be "
+            "active until the next PgCat restart."
         )
-    except Exception as e:
-        logger.warning(
-            "Could not restart PgCat: %s — node agent pools may not be "
-            "active until the next PgCat restart.",
-            e,
+        return
+
+    # Strategy 1: Hot-reload via docker exec + SIGHUP (no connection drop)
+    try:
+        exit_code, output = container.exec_run(
+            ["python3", "/app/render_pgcat_config.py", "/tmp/pgcat.toml"],
+            demux=True,
         )
+        if exit_code == 0:
+            # Copy rendered config to the live path and send SIGHUP
+            container.exec_run(
+                ["sh", "-c", "cp /tmp/pgcat.toml /etc/pgcat/pgcat.toml && kill -HUP 1"],
+            )
+            _time.sleep(2)
+            logger.info("PgCat hot-reloaded config via docker exec + SIGHUP.")
+            return
+        logger.warning("PgCat render exited %d: %s", exit_code, (output or b"").decode(errors="replace"))
+    except Exception as exc:
+        logger.info("PgCat hot-reload failed (%s), falling back to restart.", exc)
+
+    # Strategy 2: Full restart with retry (3 attempts, exponential backoff)
+    for attempt in range(3):
+        try:
+            container.restart(timeout=10)
+            logger.info("Restarted PgCat container %s (attempt %d/3).", pgcat_name, attempt + 1)
+            if _wait_healthy(container, pgcat_name, timeout=20):
+                return
+            logger.warning("PgCat %s not healthy after restart attempt %d.", pgcat_name, attempt + 1)
+        except Exception as exc:
+            logger.warning("PgCat restart attempt %d failed: %s", attempt + 1, exc)
+        if attempt < 2:
+            _time.sleep(5 * (attempt + 1))
+
+    logger.warning(
+        "PgCat %s did not become healthy after 3 restart attempts. "
+        "Node agent pools may not be active.",
+        pgcat_name,
+    )
+
+
+def _rerender_pgcat_config():
+    """Hot-reload PgCat config without restarting the container.
+
+    Runs render_pgcat_config.py inside the container to regenerate
+    pgcat.toml, then sends SIGHUP so PgCat re-reads it. This is
+    preferred over _restart_pgcat() for config-only changes (new
+    users, password rotations, replica changes) because it avoids
+    connection disruption.
+
+    Falls back to _restart_pgcat() if docker exec fails.
+    """
+    import time as _time
+    try:
+        import docker as docker_lib
+        client = docker_lib.from_env()
+        container = None
+        for name in ("smsly-hosting-pgcat-1", "smsly-hosting-pgcat"):
+            try:
+                container = client.containers.get(name)
+                break
+            except docker_lib.errors.NotFound:
+                continue
+        if not container:
+            logger.warning("PgCat container not found for config re-render.")
+            return
+        exit_code, output = container.exec_run(
+            ["python3", "/app/render_pgcat_config.py", "/tmp/pgcat.toml"],
+            demux=True,
+        )
+        if exit_code == 0:
+            container.exec_run(
+                ["sh", "-c", "cp /tmp/pgcat.toml /etc/pgcat/pgcat.toml && kill -HUP 1"],
+            )
+            _time.sleep(1)
+            logger.info("PgCat config re-rendered and reloaded via SIGHUP.")
+        else:
+            logger.warning("PgCat render failed (exit %d): %s", exit_code, (output or b"").decode(errors="replace"))
+            _restart_pgcat()
+    except Exception as exc:
+        logger.warning("PgCat re-render failed (%s), falling back to restart.", exc)
+        _restart_pgcat()
 
 
 def _verify_agent_db_connectivity(ssh, server: ManagedServer):
@@ -1128,6 +1323,7 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
 
     ssh = None
     local_bundle_path = None
+    resources = _ProvisioningResources(server)
     try:
         # The installer repository is public/open source, so provisioning should not
         # depend on a user's linked GitHub OAuth token. Keep the local bundle path as
@@ -1140,6 +1336,9 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
 
         # -- Step 0: Harden Master Firewall --
         _harden_master_firewall(server)
+        if getattr(server, "is_lite_agent", False):
+            for port in ("5432", "6379", "5672"):
+                resources.track_firewall_rule(server.host, port)
 
         # -- Step 1: Connect --
         ssh = _get_ssh_client(server)
@@ -1150,6 +1349,8 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
         # master's IP address. This prevents credential theft from other
         # network locations.
         _restrict_ssh_key_to_master_ip(ssh, server)
+        if server.ssh_key:
+            resources.track_ssh_key_added()
 
         # -- Step 1c: Clear stored SSH password (key is now installed) --
         # Password auth stays enabled on the node for manual operator access,
@@ -1254,6 +1455,10 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                 _append_log(server, message)
             install_env.update(lite_env)
             install_args.append("--mode=agent-lite")
+            # Track DB user for rollback
+            node_db_user = (server.provider_metadata or {}).get("node_db_user")
+            if node_db_user:
+                resources.track_db_user(node_db_user)
         elif install_mode == "node":
             install_args.append("--mode=node")
 
@@ -1686,6 +1891,9 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                 deploy_async=True,
             )
             wg_assigned = bool(mesh_result.get("wg_address"))
+            wg_peer_id = mesh_result.get("peer_id")
+            if wg_peer_id:
+                resources.track_wg_peer(wg_peer_id)
             _append_log(
                 server,
                 f"VPN mesh auto-connect queued: {mesh_result.get('wg_address')}",
@@ -1807,6 +2015,7 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
 
     except SoftTimeLimitExceeded as exc:
         logger.exception("Provisioning soft-timeout for server %s", server_id)
+        resources.rollback()
         server.provision_status = ManagedServer.ProvisionStatus.FAILED
         server.save(update_fields=["provision_status", "updated_at"])
         _append_log(
@@ -1815,6 +2024,7 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
         )
     except Exception as exc:
         logger.exception("Provisioning failed for server %s", server_id)
+        resources.rollback()
         server.provision_status = ManagedServer.ProvisionStatus.FAILED
         server.save(update_fields=["provision_status", "updated_at"])
         _append_log(server, f"\n❌ Provisioning failed: {exc}")

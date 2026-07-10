@@ -5639,6 +5639,10 @@ class DomainConfigView(GenericAPIView):
             'enforce_device_trust': config.enforce_device_trust,
             # Traffic Geo
             'traffic_geo_enabled': config.traffic_geo_enabled,
+            'mapbox_token_set': bool(config.mapbox_token),
+            # CrowdSec
+            'crowdsec_bouncer_key_set': bool(config.crowdsec_bouncer_key),
+            'crowdsec_enroll_key_set': bool(config.crowdsec_enroll_key),
             # SMTP
             'smtp_host': config.smtp_host,
             'smtp_port': config.smtp_port,
@@ -5809,6 +5813,13 @@ class DomainConfigView(GenericAPIView):
             # Traffic Geo
             if 'traffic_geo_enabled' in data:
                 config.traffic_geo_enabled = _parse_bool(data.get('traffic_geo_enabled'))
+            if 'mapbox_token' in data:
+                config.mapbox_token = str(data.get('mapbox_token') or '').strip()
+            # CrowdSec
+            if 'crowdsec_bouncer_key' in data:
+                config.crowdsec_bouncer_key = str(data.get('crowdsec_bouncer_key') or '').strip()
+            if 'crowdsec_enroll_key' in data:
+                config.crowdsec_enroll_key = str(data.get('crowdsec_enroll_key') or '').strip()
             # Feature Flags
             for _field in ('smsly_disable_tier_gates', 'enable_legacy_tunnel_api', 'smsly_strict_ssh_host_key_check'):
                 if _field in data:

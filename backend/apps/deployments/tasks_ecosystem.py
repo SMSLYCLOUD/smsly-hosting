@@ -1905,13 +1905,14 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             pass
 
     # Ensure the ecosystem project always has its own ScopedRegistry.
-    # Ecosystem deployments must never fall back to the platform default
-    # registry.  This covers both the auto-created project path (above)
-    # and the case where the project was created by the view.
+    # Use the global PlatformConfig credentials (same as the registry container's
+    # htpasswd). Random per-project credentials would fail because the registry
+    # only authenticates against the htpasswd file.
     if project:
         try:
             from django.contrib.contenttypes.models import ContentType
 
+            from apps.deployments.models_core import PlatformConfig
             from apps.deployments.models_registry_scope import ScopedRegistry
 
             _ct = ContentType.objects.get_for_model(Project)
@@ -1919,16 +1920,8 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                 content_type=_ct, object_id=project.id,
             ).exists()
             if not _has_registry:
-                import secrets as _sec
-                import string as _str
-                raw_name = str(
-                    plan.get("project_name")
-                    or plan.get("name")
-                    or (services_plan[0].get("repo", "").split("/")[-1] if services_plan and services_plan[0].get("repo") else "")
-                    or "ecosystem"
-                ).strip()
-                _reg_user = f"eco-{_slugify_name(raw_name)[:24]}"
-                _reg_pass = "".join(_sec.choices(_str.ascii_letters + _str.digits, k=24))
+                _reg_user = PlatformConfig.get_config_value("registry_user") or "smsly-registry"
+                _reg_pass = PlatformConfig.get_config_value("registry_password") or ""
                 ScopedRegistry.objects.create(
                     content_type=_ct,
                     object_id=project.id,
@@ -1936,7 +1929,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                     password=_reg_pass,
                     is_active=True,
                 )
-                logger.info("Auto-created scoped registry for ecosystem project %s", project.id)
+                logger.info("Auto-created scoped registry for ecosystem project %s (user=%s)", project.id, _reg_user)
         except Exception as exc:
             logger.warning("Failed to ensure scoped registry for ecosystem project: %s", exc)
 

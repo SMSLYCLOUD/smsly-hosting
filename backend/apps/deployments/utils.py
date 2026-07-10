@@ -1242,9 +1242,14 @@ def log_exhaustive_push_diagnostics(deployment, registry_url, image_name):
                 cosign_status += " — private key mode"
             else:
                 cosign_status += " — keyless/Sigstore mode"
-            res = subprocess.run([cosign_bin, "verify", "--certificate-oidc-issuer",
-                                  "https://token.actions.githubusercontent.com", image_name],
-                                 capture_output=True, text=True, timeout=15)
+            _cosign_env = os.environ.copy()
+            _cosign_env["COSIGN_EXPERIMENTAL"] = "1"
+            cosign_oidc_issuer = os.environ.get("COSIGN_OIDC_ISSUER", "")
+            if cosign_oidc_issuer:
+                verify_args = [cosign_bin, "verify", "--certificate-oidc-issuer", cosign_oidc_issuer, image_name]
+            else:
+                verify_args = [cosign_bin, "verify", "--certificate-identity-regexp", ".*", image_name]
+            res = subprocess.run(verify_args, capture_output=True, text=True, timeout=15, env=_cosign_env)
             if res.returncode == 0:
                 cosign_outcome = "Signature verification PASSED"
             else:

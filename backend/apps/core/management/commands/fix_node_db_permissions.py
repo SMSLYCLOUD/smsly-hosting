@@ -196,8 +196,11 @@ class Command(BaseCommand):
 
                 if connected_as_admin and node_agent_user:
                     if node_agent_user in node_users:
+                        # SECURITY: Only sync password if it's non-empty and
+                        # is NOT the admin password. Syncing a stale or empty
+                        # password from the agent's env would poison the DB.
                         new_pass = _extract_node_password_from_url(db_url or direct_url or "")
-                        if new_pass:
+                        if new_pass and new_pass != pg_pass:
                             cur.execute(
                                 pg_sql.SQL("ALTER USER {} WITH PASSWORD %s").format(
                                     pg_sql.Identifier(node_agent_user)
@@ -210,6 +213,13 @@ class Command(BaseCommand):
                                 )
                             )
                             _reload_pgcat(self.stdout, self.style)
+                        elif new_pass == pg_pass:
+                            self.stdout.write(
+                                self.style.WARNING(
+                                    f"  Skipped password sync for {node_agent_user}: "
+                                    f"URL password matches admin password (likely stale)"
+                                )
+                            )
                     else:
                         self.stdout.write(
                             self.style.WARNING(

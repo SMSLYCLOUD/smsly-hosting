@@ -1,5 +1,6 @@
 import contextlib
 import io
+import json
 import logging
 import os
 import re
@@ -9,6 +10,95 @@ import time
 import paramiko
 
 logger = logging.getLogger(__name__)
+
+# File-based known_hosts for TOFU (Trust-On-First-Use) SSH host key verification.
+# Stores {hostname: {keytype: fingerprint, ...}} so we can detect key changes.
+_KNOWN_HOSTS_PATH = os.environ.get(
+    "SMSLY_KNOWN_HOSTS_PATH",
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "known_hosts.json"),
+)
+
+
+class _TOFUPolicy(paramiko.MissingHostKeyPolicy):
+    """Trust-On-First-Use host key policy.
+
+    On first connection to an unknown host, the key is accepted and its
+    fingerprint is persisted to a local JSON file.  On subsequent
+    connections the presented key is compared against the stored
+    fingerprint.  If the key has changed the connection is rejected —
+    this prevents MITM attacks after the initial trust establishment.
+
+    The file is locked with a simplefcntl lock to avoid corruption when
+    multiple workers provision concurrently.
+    """
+
+    def __init__(self, hostname: str, port: int = 22):
+        self.hostname = hostname
+        self.port = port
+        self._key = self._store = None
+
+    def _store_path(self) -> str:
+        return _KNOWN_HOSTS_PATH
+
+    def _load_store(self) -> dict:
+        path = self._store_path()
+        if not os.path.isfile(path):
+            return {}
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return {}
+
+    def _save_store(self, store: dict):
+        path = self._store_path()
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(store, f, indent=2)
+        except OSError as exc:
+            logger.warning("TOFU: failed to save known_hosts: %s", exc)
+
+    def _host_key(self) -> str:
+        return f"{self.hostname}:{self.port}"
+
+    def missing_host_key(self, client, hostname, key):
+        host_entry = f"{hostname}:{self.port}"
+        fingerprint = key.get_fingerprint().hex()
+        key_type = key.get_name()
+
+        store = self._load_store()
+        stored = store.get(host_entry)
+
+        if stored is None:
+            # First contact — trust and persist
+            store[host_entry] = {"key_type": key_type, "fingerprint": fingerprint}
+            self._save_store(store)
+            logger.info(
+                "TOFU: trusted host %s (type=%s, fp=%s)",
+                hostname, key_type, fingerprint,
+            )
+            return
+
+        # Known host — verify key matches
+        if stored.get("fingerprint") != fingerprint:
+            raise paramiko.SSHException(
+                f"TOFU REJECT: host key for {hostname} has changed!\n"
+                f"  Stored: {stored.get('key_type')} {stored.get('fingerprint')}\n"
+                f"  Presented: {key_type} {fingerprint}\n"
+                f"If this is intentional, delete the entry in {_KNOWN_HOSTS_PATH}."
+            )
+        # Key matches — accept silently
+        logger.debug("TOFU: verified host %s key unchanged", hostname)
+
+    def policy_for_hostname(self):
+        """Return a paramiko policy that delegates to this TOFU store."""
+        return self
+
+
+def _get_tofu_policy(hostname: str, port: int = 22):
+    """Return a TOFU host key policy for the given host."""
+    return _TOFUPolicy(hostname, port)
 
 
 class SSHConnectionError(Exception):
@@ -133,10 +223,10 @@ class SSHClient:
             self.client.set_missing_host_key_policy(paramiko.RejectPolicy())
         elif allow_auto_add:
             self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            logger.warning("Using AutoAddPolicy for SSH host %s (Trust On First Use). Set SMSLY_STRICT_SSH_HOST_KEY_CHECK=true for production.", self.ip)
+            logger.warning("Using AutoAddPolicy for SSH host %s (insecure).", self.ip)
         else:
-            self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            logger.warning("Strict SSH host key checking is disabled for %s. Using AutoAddPolicy (insecure — set SMSLY_STRICT_SSH_HOST_KEY_CHECK=true).", self.ip)
+            # Default: TOFU — trust on first use, reject on key change.
+            self.client.set_missing_host_key_policy(_get_tofu_policy(self.ip, self.port))
 
 
         # Determine auth method: key or password

@@ -350,10 +350,31 @@ class NixpacksBuilder:
                         # SECURITY: don't log raw stderr — docker CLI can
                         # echo malformed input including password chars.
                         logger.warning("docker login to %s failed (exit code %s)", _tag_url, _login.returncode)
+                        # If login fails, the push will also fail. Return early
+                        # with a clear error rather than pushing without auth.
+                        return image_name, f"Registry login failed for {_tag_url} — cannot push without auth"
                 except Exception as login_err:
                     logger.warning("docker login to %s failed: %s", _tag_url, login_err)
+                    return image_name, f"Registry login failed for {_tag_url}: {login_err}"
 
-            # ── Push via SDK ────────────────────────────────────────────
+            # ── Push via CLI (preferred — uses stored docker login creds) ──
+            if has_creds and shutil.which('docker'):
+                try:
+                    cli_result = subprocess.run(
+                        ["docker", "push", full_tag],
+                        capture_output=True, text=True, timeout=300,
+                    )
+                    if cli_result.returncode == 0:
+                        logger.info("CLI push succeeded for %s", full_tag)
+                        return full_tag, None
+                    cli_error = cli_result.stderr.strip() or cli_result.stdout.strip()
+                    logger.error("CLI push failed: %s", cli_error)
+                    return image_name, cli_error
+                except Exception as cli_err:
+                    logger.warning("CLI push exception: %s", cli_err)
+                    return image_name, str(cli_err)
+
+            # ── Push via SDK (no-auth fallback) ──────────────────────────
             push_result = client.images.push(full_tag, auth_config=auth_config)
             # push() returns a generator (stream=True, default) that yields
             # status lines, or a single string (stream=False).  Consume
@@ -375,25 +396,7 @@ class NixpacksBuilder:
             if not push_failed:
                 return full_tag, None
 
-            # ── Fallback: push via docker CLI ───────────────────────────
-            # The docker CLI is intentionally NOT installed in the backend
-            # container (security: Dockerfile removed docker-ce-cli). Only
-            # attempt this fallback if the binary is actually available.
-            cli_error = error_msg
-            if shutil.which('docker'):
-                logger.info("SDK push failed; retrying via docker CLI for %s", full_tag)
-                cli_result = subprocess.run(
-                    ["docker", "push", full_tag],
-                    capture_output=True, text=True, timeout=300,
-                )
-                if cli_result.returncode == 0:
-                    logger.info("CLI push succeeded for %s", full_tag)
-                    return full_tag, None
-                cli_error = cli_result.stderr.strip() or error_msg
-                logger.error("CLI push also failed: %s", cli_error)
-            else:
-                logger.info("SDK push failed; docker CLI not available in container — returning SDK error")
-            return image_name, cli_error  # fallback to local
+            return image_name, error_msg
 
         except Exception as e:
             logger.warning(f"Registry push failed ({e}); keeping local image name.")

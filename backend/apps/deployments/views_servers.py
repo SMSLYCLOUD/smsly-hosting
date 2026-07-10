@@ -1117,6 +1117,19 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
             qs = qs.filter(status=status_filter)
         return qs
 
+    def _get_object_for_agent(self, pk):
+        """Look up a server by PK without owner filtering.
+
+        Used by HMAC-authenticated agent endpoints where
+        request.user is AnonymousUser. The HMAC check in the
+        caller verifies authenticity before any data is returned.
+        """
+        try:
+            return ManagedServer.objects.get(pk=pk)
+        except ManagedServer.DoesNotExist:
+            from rest_framework.exceptions import NotFound
+            raise NotFound
+
     def get_serializer_class(self):
         if self.action == "provision_new":
             return ManagedServerProvisionSerializer
@@ -1369,7 +1382,7 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
             verify_agent_hmac,
         )
 
-        server = self.get_object()
+        server = self._get_object_for_agent(pk)
         if not verify_agent_hmac(request, server):
             return Response(
                 {"error": "Invalid or missing HMAC signature."},
@@ -1436,7 +1449,7 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
             verify_agent_hmac,
         )
 
-        server = self.get_object()
+        server = self._get_object_for_agent(pk)
         if not verify_agent_hmac(request, server):
             return Response(
                 {"error": "Invalid or missing HMAC signature."},

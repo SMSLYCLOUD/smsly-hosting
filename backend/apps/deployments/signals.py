@@ -397,7 +397,87 @@ def sync_infrastructure_on_config_change(sender, instance, **kwargs):
             except OSError as _exc:
                 logger.error("Failed to sync %s: %s", _env_path, _exc)
 
-        # 3. Re-generate and apply Caddyfile
+        # 3. Sync registry credentials to htpasswd if they changed
+        _reg_user = (instance.registry_user or "").strip()
+        _reg_pass = (instance.registry_password or "").strip()
+        if _reg_user and _reg_pass:
+            # Use a module-level cache to avoid regenerating htpasswd when
+            # credentials haven't changed.  bcrypt hashes are non-deterministic
+            # (random salt), so we compare raw credentials, not hash output.
+            _cred_key = f"{_reg_user}:{_reg_pass}"
+            if not getattr(sync_infrastructure_on_config_change, '_last_reg_creds', None) or \
+               sync_infrastructure_on_config_change._last_reg_creds != _cred_key:
+                _htpasswd_paths = ["/auth/htpasswd", "/app/auth/htpasswd"]
+                _htpasswd_written = False
+                for _hp in _htpasswd_paths:
+                    if not os.path.isdir(os.path.dirname(_hp)):
+                        continue
+                    try:
+                        import subprocess
+                        # Try htpasswd CLI first
+                        _result = subprocess.run(
+                            ["htpasswd", "-Bbn", _reg_user, _reg_pass],
+                            capture_output=True, text=True, timeout=10,
+                        )
+                        if _result.returncode == 0 and _result.stdout.strip():
+                            _htpasswd_content = _result.stdout.strip() + "\n"
+                        else:
+                            # Fallback: Python bcrypt
+                            import bcrypt
+                            _hashed = bcrypt.hashpw(_reg_pass.encode(), bcrypt.gensalt(10))
+                            _htpasswd_content = f"{_reg_user}:{_hashed.decode()}\n"
+
+                        with open(_hp, "w", encoding="utf-8") as _fh:
+                            _fh.write(_htpasswd_content)
+                        os.chmod(_hp, 0o644)
+                        _htpasswd_written = True
+                        logger.info("Synced htpasswd to %s for user %s", _hp, _reg_user)
+                        break
+                    except Exception as _exc:
+                        logger.warning("Failed to write htpasswd to %s: %s", _hp, _exc)
+
+                # Also sync to .env so future shell-script runs stay in sync.
+                # NOTE: .env is mounted read-only in production (:ro,z), so this
+                # is a best-effort attempt. The DB (PlatformConfig) is the source
+                # of truth; .env sync only matters for offline shell-script runs.
+                for _env_path in ("/app/.env", "/caddy-config/.env"):
+                    if not os.path.isfile(_env_path) or not os.access(_env_path, os.W_OK):
+                        continue
+                    try:
+                        _lines = []
+                        _updated = False
+                        with open(_env_path, encoding="utf-8") as _fh:
+                            for _line in _fh:
+                                if _line.startswith("REGISTRY_USER="):
+                                    _lines.append(f"REGISTRY_USER={_reg_user}\n")
+                                    _updated = True
+                                elif _line.startswith("REGISTRY_PASSWORD="):
+                                    _lines.append(f"REGISTRY_PASSWORD={_reg_pass}\n")
+                                    _updated = True
+                                else:
+                                    _lines.append(_line)
+                        if _updated:
+                            with open(_env_path, "w", encoding="utf-8") as _fh:
+                                _fh.writelines(_lines)
+                    except Exception:
+                        pass
+
+                # Restart the registry container so it picks up the new htpasswd
+                if _htpasswd_written:
+                    try:
+                        import subprocess
+                        subprocess.run(
+                            ["docker", "restart", "smsly-hosting-registry-1"],
+                            capture_output=True, timeout=30,
+                        )
+                        logger.info("Restarted registry container after htpasswd update")
+                    except Exception:
+                        pass
+
+                # Cache the credentials so next save is a no-op
+                sync_infrastructure_on_config_change._last_reg_creds = _cred_key
+
+        # 4. Re-generate and apply Caddyfile
         logger.info("Signal: Re-generating Caddyfile for domain %s", instance.domain)
         content = generate_caddyfile(instance)
         apply_caddyfile(
@@ -406,7 +486,7 @@ def sync_infrastructure_on_config_change(sender, instance, **kwargs):
             preserve_existing_token=True
         )
 
-        # 4. Log the event
+        # 5. Log the event
         log_event(
             actor='system',
             action='INFRA_SYNC',

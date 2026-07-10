@@ -670,7 +670,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
                 environment=env,
                 labels=labels,
                 network=network,
-                restart_policy={"Name": restart_policy},
+                restart_policy={"Name": restart_policy, "MaximumRetryCount": 0},
                 detach=True,
             )
             return Response({'container_id': container.id, 'status': 'running'})

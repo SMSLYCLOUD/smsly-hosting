@@ -162,28 +162,36 @@ class ScopedRegistry(models.Model):
         """Return ``{url, username, password}`` for the highest-priority scope.
 
         Walks: Deployment override → Project → Team → Organization → PlatformConfig
+
+        If a ScopedRegistry exists but has no ``registry_url``, its username and
+        password are still used — only the URL falls back to PlatformConfig.
         """
         registry = cls.get_for_object(obj)
-        if registry and registry.registry_url:
-            return {
-                "url": registry.registry_url,
-                "username": registry.username,
-                "password": registry.password,
-            }
-        # Fall back to PlatformConfig global
+
+        # Fall back to PlatformConfig global for any missing fields
         from .models_core import PlatformConfig
 
+        default_url = PlatformConfig.get_config_value(
+            "container_registry_url"
+        ) or getattr(
+            __import__("django.conf", fromlist=["settings"]).settings,
+            "CONTAINER_REGISTRY_URL",
+            "registry:5000",
+        )
+        default_user = PlatformConfig.get_config_value("registry_user") or "smsly-registry"
+        default_pass = PlatformConfig.get_config_value("registry_password") or ""
+
+        if registry:
+            return {
+                "url": registry.registry_url or default_url,
+                "username": registry.username or default_user,
+                "password": registry.password if registry.password else default_pass,
+            }
+
         return {
-            "url": PlatformConfig.get_config_value("container_registry_url")
-            or getattr(
-                __import__("django.conf", fromlist=["settings"]).settings,
-                "CONTAINER_REGISTRY_URL",
-                "registry:5000",
-            ),
-            "username": PlatformConfig.get_config_value("registry_user")
-            or "smsly-registry",
-            "password": PlatformConfig.get_config_value("registry_password")
-            or "",
+            "url": default_url,
+            "username": default_user,
+            "password": default_pass,
         }
 
     @classmethod

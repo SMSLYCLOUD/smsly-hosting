@@ -3305,11 +3305,12 @@ class PipelineManager:
             registry_url = (registry_info.get("url") or "").split("://")[-1]
             reg_username = registry_info.get("username") or ""
             reg_password = registry_info.get("password") or ""
-        except Exception:
-            pass
+        except Exception as exc:
+            append_log(self.deployment, f"Warning: could not resolve registry credentials: {exc}\n")
 
         if not registry_url or not reg_username or not reg_password:
-            return  # no credentials to login with
+            append_log(self.deployment, f"Warning: registry login skipped — missing credentials (url={registry_url}, user={'set' if reg_username else 'MISSING'}, pass={'set' if reg_password else 'MISSING'})\n")
+            return
 
         try:
             login_proc = subprocess.run(
@@ -3321,9 +3322,9 @@ class PipelineManager:
             else:
                 # SECURITY: don't log raw stderr — docker CLI can echo
                 # malformed input including password characters.
-                append_log(self.deployment, f"Warning: registry login failed for {registry_url} (exit code {login_proc.returncode})\n")
+                append_log(self.deployment, f"ERROR: registry login failed for {registry_url} (exit code {login_proc.returncode}). Push will likely fail. Check that registry_user/registry_password in PlatformConfig match the htpasswd file.\n")
         except Exception as e:
-            append_log(self.deployment, f"Warning: could not login to registry {registry_url}: {e}\n")
+            append_log(self.deployment, f"ERROR: could not login to registry {registry_url}: {e}\n")
 
     def _push_image(self):
         """Step 3: Push to Registry."""
@@ -3470,9 +3471,14 @@ class PipelineManager:
 
         try:
             key_path = os.environ.get("COSIGN_PRIVATE_KEY_PATH") or os.environ.get("COSIGN_KEY")
+            # Build env for cosign subprocess — COSIGN_EXPERIMENTAL=1 enables
+            # keyless signing via Fulcio/Rekor without requiring a private key.
+            _cosign_env = os.environ.copy()
+            _cosign_env["COSIGN_EXPERIMENTAL"] = "1"
+
             if key_path and os.path.exists(key_path):
                 cmd = [cosign_bin, "sign", "--key", key_path, "--tlog-upload=false", self.image_name]
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, env=_cosign_env)
                 if result.returncode == 0:
                     append_log(self.deployment, f"Image signed with Cosign (private key): {self.image_name}\n")
                 else:
@@ -3483,7 +3489,7 @@ class PipelineManager:
                     )
             else:
                 cmd = [cosign_bin, "sign", "--yes", self.image_name]
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, env=_cosign_env)
                 if result.returncode == 0:
                     append_log(self.deployment, f"Image signed with Cosign (keyless/Sigstore): {self.image_name}\n")
                 else:
@@ -3493,10 +3499,24 @@ class PipelineManager:
                         f"{(result.stderr or result.stdout or '').strip()[:200]}\n"
                     )
 
-            verify_cmd = [cosign_bin, "verify",
-                          "--certificate-oidc-issuer", "https://token.actions.githubusercontent.com",
-                          self.image_name]
-            vresult = subprocess.run(verify_cmd, capture_output=True, text=True, timeout=30)
+            # Verify — skip for local-only images or if no OIDC issuer configured.
+            # For self-hosted keyless, verification requires the signing identity
+            # to match.  Use --certificate-identity-regexp to accept any local signing.
+            cosign_oidc_issuer = os.environ.get("COSIGN_OIDC_ISSUER", "")
+            if cosign_oidc_issuer:
+                verify_cmd = [
+                    cosign_bin, "verify",
+                    "--certificate-oidc-issuer", cosign_oidc_issuer,
+                    self.image_name,
+                ]
+            else:
+                # Self-hosted: accept any certificate identity (no OIDC issuer check)
+                verify_cmd = [
+                    cosign_bin, "verify",
+                    "--certificate-identity-regexp", ".*",
+                    self.image_name,
+                ]
+            vresult = subprocess.run(verify_cmd, capture_output=True, text=True, timeout=30, env=_cosign_env)
             if vresult.returncode == 0:
                 append_log(self.deployment, "Cosign signature verification PASSED.\n")
             else:

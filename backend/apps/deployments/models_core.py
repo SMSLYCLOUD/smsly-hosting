@@ -88,6 +88,13 @@ class ManagedServer(models.Model):
     ssh_password = EncryptedCharField(max_length=255, blank=True, default="")
     ssh_key = EncryptedTextField(blank=True, default="")
 
+    # ── Node DB credentials (encrypted at rest) ──
+    node_db_password = EncryptedCharField(
+        max_length=255, blank=True, default="",
+        help_text="Dedicated PostgreSQL password for this node's agent. "
+                  "Encrypted at rest via FIELD_ENCRYPTION_KEY.",
+    )
+
     is_primary = models.BooleanField(default=False)  # type: ignore[var-annotated]
     allow_user_workloads = models.BooleanField(  # type: ignore[var-annotated]
         default=True,
@@ -1130,7 +1137,18 @@ class PlatformConfig(models.Model):
     mapbox_token = EncryptedCharField(
         max_length=512, blank=True, default='',
         help_text="Mapbox GL token for the traffic world map on the Metrics page. "
-                  "Falls back to NEXT_PUBLIC_MAPBOX_TOKEN env var if empty.")
+                  "Falls back to NEXT_PUBLIC_MAPBOX_TOKEN env var if empty. "
+                  "Can be left empty to use free OpenFreeMap tiles (no token needed).")
+
+    # ── CrowdSec WAF ──────────────────────────────────────────────────────
+    crowdsec_bouncer_key = EncryptedCharField(
+        max_length=256, blank=True, default='',
+        help_text="CrowdSec bouncer API key for Traefik authentication. "
+                  "Falls back to CROWDSEC_BOUNCER_KEY env var if empty.")
+    crowdsec_enroll_key = EncryptedCharField(
+        max_length=256, blank=True, default='',
+        help_text="CrowdSec console enrollment key (optional). "
+                  "Falls back to CROWDSEC_ENROLL_KEY env var if empty.")
 
     updated_at = models.DateTimeField(auto_now=True)  # type: ignore[var-annotated]
 
@@ -1203,6 +1221,8 @@ class PlatformConfig(models.Model):
         'sentry_traces_sample_rate': ('SENTRY_TRACES_SAMPLE_RATE', '0.0'),
         'sentry_profiles_sample_rate': ('SENTRY_PROFILES_SAMPLE_RATE', '0.0'),
         'mapbox_token': ('NEXT_PUBLIC_MAPBOX_TOKEN', ''),
+        'crowdsec_bouncer_key': ('CROWDSEC_BOUNCER_KEY', ''),
+        'crowdsec_enroll_key': ('CROWDSEC_ENROLL_KEY', ''),
     }
 
     @classmethod

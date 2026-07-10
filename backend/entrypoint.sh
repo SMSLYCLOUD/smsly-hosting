@@ -201,6 +201,18 @@ print(user + ":" + hashed.decode())
 }
 ensure_registry_bootstrap
 
+# Ensure /auth directory is writable by the smsly user (UID 1000) so that
+# the Django signal can sync htpasswd when registry credentials change.
+# This MUST run AFTER ensure_registry_bootstrap so the htpasswd file
+# (created as root) is chowned to UID 1000 before dropping privileges.
+ensure_auth_writable() {
+    if [ -d /auth ]; then
+        chown -R 1000:1000 /auth 2>/dev/null || true
+        chmod -R u+rwX,g+rwX /auth 2>/dev/null || true
+    fi
+}
+ensure_auth_writable
+
 # Write local docker-labels target files on every web container start
 if is_web_container "$@"; then
     python manage.py deploy_docker_labels_exporters --targets-only 2>&1 | \
