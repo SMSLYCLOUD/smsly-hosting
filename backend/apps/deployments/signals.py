@@ -351,6 +351,10 @@ def sync_infrastructure_on_config_change(sender, instance, **kwargs):
         for _env_path in ("/app/.env", "/caddy-config/.env"):
             if not (_new_domain and os.path.isfile(_env_path)):
                 continue
+            # Skip if file is not writable (e.g. read-only bind mount)
+            if not os.access(_env_path, os.W_OK):
+                logger.debug("Skipping .env sync: %s is not writable", _env_path)
+                continue
             try:
                 _updated = False
                 _lines = []
