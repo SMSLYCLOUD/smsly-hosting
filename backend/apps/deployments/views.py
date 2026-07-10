@@ -706,12 +706,16 @@ def _resolve_requested_deploy_target(request, service: Service):
     """
     raw_target = request.data.get('target_server_id', _DEPLOY_TARGET_MISSING)
     if raw_target is _DEPLOY_TARGET_MISSING:
+        effective_server = getattr(service, 'server', None)
+        # When no server is assigned to the service, fall back to local
+        # deployment so the provider resolution picks LOCAL and Caddy
+        # routing is set up correctly.
         return {
             "ok": True,
             "specified": False,
             "target_server": None,
-            "target_is_local": False,
-            "effective_server": getattr(service, 'server', None),
+            "target_is_local": effective_server is None,
+            "effective_server": effective_server,
         }
 
     if _is_local_deploy_target(raw_target):
@@ -854,7 +858,13 @@ class ServiceViewSet(viewsets.ModelViewSet):
             if server:
                 logger.info("Auto-assigning server %s to service %s", server.name, serializer.validated_data.get('name'))
             else:
-                logger.warning("No server available for service %s", serializer.validated_data.get('name'))
+                # No server available — still allow creation (local
+                # deployment will be used), but log clearly.
+                logger.warning(
+                    "No managed server available for service %s — "
+                    "deployments will target the local controller",
+                    serializer.validated_data.get('name'),
+                )
 
         if server:
             ServerGuard.assert_user_workload_allowed(server)

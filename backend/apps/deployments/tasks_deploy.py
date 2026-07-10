@@ -464,9 +464,12 @@ def _deployment_effective_server(deployment):
 
 
 def _is_local_deployment_server(server, config) -> bool:
+    if server is None:
+        # No server assigned — default to local deployment so Caddy
+        # routing and health checks are set up on the controller.
+        return True
     return (
-        not server
-        or bool(getattr(server, "is_primary", False))
+        bool(getattr(server, "is_primary", False))
         or str(getattr(server, "host", "") or "") == str(getattr(config, "server_ip", "") or "")
     )
 
