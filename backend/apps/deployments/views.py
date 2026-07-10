@@ -682,6 +682,53 @@ def _is_local_deploy_target(value) -> bool:
     return str(value).strip().lower() in _LOCAL_DEPLOY_TARGET_VALUES
 
 
+def _ensure_local_server_record():
+    """Auto-register the local controller as a ManagedServer if none exists.
+
+    Called when no ManagedServer is found during service creation. Creates
+    a primary ONLINE record so subsequent lookups succeed.
+    """
+    import socket
+    from .models_core import ManagedServer
+
+    # Determine the local IP (the one the host is reachable on)
+    try:
+        host = socket.gethostbyname(socket.gethostname())
+    except Exception:
+        host = "127.0.0.1"
+
+    # Load platform config for the domain
+    try:
+        from apps.deployments.models_core import PlatformConfig
+        config = PlatformConfig.load()
+        domain = getattr(config, "domain", "") or ""
+        api_url = f"http://{host}:8090"
+    except Exception:
+        domain = ""
+        api_url = f"http://{host}:8090"
+
+    # Use the first admin user as owner
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+    admin = User.objects.filter(is_superuser=True).first()
+    if not admin:
+        logger.warning("Cannot auto-register local server: no admin user found")
+        return None
+
+    server = ManagedServer.objects.create(
+        owner=admin,
+        name="Master Node (Auto-registered)",
+        host=host,
+        api_url=api_url,
+        is_primary=True,
+        status=ManagedServer.Status.ONLINE,
+        provision_status=ManagedServer.ProvisionStatus.DONE,
+        allow_user_workloads=False,
+    )
+    logger.info("Auto-registered local server record: %s (%s)", server.name, host)
+    return server
+
+
 def _resolve_local_provider():
     return CloudProvider.objects.filter(
         provider_type=CloudProvider.ProviderType.LOCAL,
@@ -855,11 +902,13 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 server = ManagedServer.objects.filter(
                     status='ONLINE'
                 ).order_by('?').first()
+            if not server:
+                # No ManagedServer exists at all — auto-register the local
+                # controller so future service creations find it.
+                server = _ensure_local_server_record()
             if server:
                 logger.info("Auto-assigning server %s to service %s", server.name, serializer.validated_data.get('name'))
             else:
-                # No server available — still allow creation (local
-                # deployment will be used), but log clearly.
                 logger.warning(
                     "No managed server available for service %s — "
                     "deployments will target the local controller",
@@ -6146,6 +6195,8 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'], url_path='list-keys')
     def list_keys(self, request):
         """Return stored backup encryption keys (fingerprints only, no key material)."""
+        if not request.user.is_superuser:
+            return Response({'error': 'Admin access required'}, status=status.HTTP_403_FORBIDDEN)
         from apps.deployments.models_backup import BackupEncryptionKey
         keys = BackupEncryptionKey.objects.all().order_by('-created_at')
         return Response([
@@ -6722,6 +6773,13 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
         service_id = request.data.get('service_id')
         if not file or not service_id:
             return Response({'error': 'file and service_id are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        MAX_UPLOAD_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
+        if file.size > MAX_UPLOAD_SIZE:
+            return Response(
+                {'error': f'File too large. Maximum size is {MAX_UPLOAD_SIZE // (1024*1024)}MB.'},
+                status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            )
 
         try:
             target_service = Service.objects.get(id=service_id)

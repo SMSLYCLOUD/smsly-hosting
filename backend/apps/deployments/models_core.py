@@ -184,8 +184,11 @@ class ManagedServer(models.Model):
 
     @classmethod
     def get_primary(cls):
-        """Return the primary/control-plane server."""
-        return cls.objects.filter(is_primary=True).first()
+        """Return the primary/control-plane server that is ONLINE."""
+        return cls.objects.filter(
+            is_primary=True,
+            status=cls.Status.ONLINE,
+        ).first()
 
     created_at = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
     updated_at = models.DateTimeField(auto_now=True)  # type: ignore[var-annotated]
