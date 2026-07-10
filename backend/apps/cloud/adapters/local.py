@@ -537,10 +537,10 @@ class LocalAdapter(BaseCloudAdapter):
         elif restart_policy == 'unless-stopped':
             rp = {"Name": "unless-stopped"}
         else:
-            rp = {"Name": restart_policy, "MaximumRetryCount": "5"}
+            rp = {"Name": restart_policy, "MaximumRetryCount": 5}
 
         if stage_before_cutover:
-            rp = {"Name": "on-failure", "MaximumRetryCount": "5"}
+            rp = {"Name": "on-failure", "MaximumRetryCount": 5}
 
         networking_config = self.docker_client.api.create_networking_config({
             network_name: self.docker_client.api.create_endpoint_config(
@@ -812,7 +812,7 @@ class LocalAdapter(BaseCloudAdapter):
         elif promoted_restart_policy == 'unless-stopped':
             rp = {"Name": "unless-stopped"}
         else:
-            rp = {"Name": promoted_restart_policy, "MaximumRetryCount": "5"}
+            rp = {"Name": promoted_restart_policy, "MaximumRetryCount": 5}
 
         old_container = None
         backup_name = ""
