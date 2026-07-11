@@ -71,6 +71,7 @@ def register_extra_tasks(sender, **kwargs):  # pylint: disable=unused-argument
     import apps.deployments.tasks_templates
     import apps.deployments.tasks_traffic
     import apps.intelligence.jules_fix.jules_fix  # noqa: F401
+    import apps.media.tasks  # noqa: F401
 
 # =============================================================================
 # Beat Schedule — Periodic tasks for metrics, health, autoscaling, cleanup
@@ -87,6 +88,8 @@ app.conf.task_queues = (
     Queue('celery', Exchange('celery'), routing_key='celery'),
     Queue('deploy', Exchange('deploy'), routing_key='deploy'),
     Queue('fast', Exchange('fast'), routing_key='fast'),
+    Queue('media-telemetry', Exchange('media-telemetry'), routing_key='media-telemetry'),
+    Queue('media-audit', Exchange('media-audit'), routing_key='media-audit'),
 )
 app.conf.task_create_missing_queues = True
 
@@ -318,6 +321,32 @@ app.conf.beat_schedule = {
         'task': 'apps.deployments.tasks_traffic.resolve_traffic_geolocations',
         'schedule': 30.0,
         'options': {'expires': 30.0, 'queue': 'fast'},
+    },
+    # ── Media Node periodic tasks ──
+    'check-stale-media-nodes-every-30s': {
+        'task': 'apps.media.tasks.check_stale_media_nodes',
+        'schedule': 30.0,
+        'options': {'expires': 30.0, 'queue': 'media-telemetry'},
+    },
+    'aggregate-media-capacity-every-60s': {
+        'task': 'apps.media.tasks.aggregate_media_capacity',
+        'schedule': 60.0,
+        'options': {'expires': 60.0, 'queue': 'media-telemetry'},
+    },
+    'flush-media-telemetry-to-db-every-5m': {
+        'task': 'apps.media.tasks.flush_telemetry_to_db',
+        'schedule': 300.0,
+        'options': {'expires': 300.0, 'queue': 'media-telemetry'},
+    },
+    'rotate-media-node-keys-daily': {
+        'task': 'apps.media.tasks.rotate_media_node_keys',
+        'schedule': crontab(hour=2, minute=0),
+        'options': {'expires': 3600.0, 'queue': 'deploy'},
+    },
+    'verify-federation-chains-hourly': {
+        'task': 'apps.media.tasks.verify_federation_chains',
+        'schedule': 3600.0,
+        'options': {'expires': 3600.0, 'queue': 'media-audit'},
     },
 }
 

@@ -119,6 +119,20 @@ class ManagedServer(models.Model):
     wg_address = models.GenericIPAddressField(  # type: ignore[var-annotated]
         protocol="IPv4", null=True, blank=True)
 
+    # ── Node Type ──
+    class NodeType(models.TextChoices):
+        MASTER = "master", "Master (full stack)"
+        NODE = "node", "Node (full stack, no Caddy)"
+        AGENT_LITE = "agent-lite", "Agent Lite (minimal)"
+        MEDIA = "media", "Media Node (voice + video baremetal)"
+
+    node_type = models.CharField(  # type: ignore[var-annotated]
+        max_length=20,
+        choices=NodeType.choices,
+        default=NodeType.AGENT_LITE,
+        help_text="Determines provisioning mode and available services.",
+    )
+
     # ── Provisioning ──
     is_lite_agent = models.BooleanField(  # type: ignore[var-annotated]
         default=False,
@@ -188,6 +202,10 @@ class ManagedServer(models.Model):
         blank=True,
         help_text="Registries this node can authenticate with for image pulls/deployments",
     )
+
+    @property
+    def is_media_node(self) -> bool:  # type: ignore[no-untyped-def]
+        return self.node_type == self.NodeType.MEDIA
 
     @classmethod
     def get_primary(cls):

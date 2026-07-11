@@ -105,6 +105,9 @@ if 'apps.intelligence' in settings.INSTALLED_APPS:
     urlpatterns.append(path('api/v1/ai/', include('apps.intelligence.urls')))
     urlpatterns.append(path('api/v1/', include('apps.intelligence.urls_openai')))
 
+if 'apps.media' in settings.INSTALLED_APPS:
+    urlpatterns.append(path('api/v1/media/', include('apps.media.urls')))
+
 # ─── Server Identity Attestation (Zero-Trust challenge-response) ──────────
 try:
     from apps.deployments.views_attestation import (

@@ -645,6 +645,7 @@ INSTALLED_APPS = [
     'apps.licensing',
     'apps.permissions',
     'apps.mcp',
+    'apps.media',
 ]
 
 if IS_AGENT_MODE:
