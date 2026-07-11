@@ -1170,10 +1170,10 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
                 _db_user="${POSTGRES_USER:-postgres}"
             fi
             if [ -n "$_db_container" ]; then
-                _db_exists=$(docker exec "$_db_container" psql -U "${_db_user}" -tc \
+                _db_exists=$(docker exec "$_db_container" psql -U "${_db_user}" -d "${POSTGRES_DB:-smsly_hosting}" -tc \
                     "SELECT 1 FROM pg_database WHERE datname='infisical'" 2>/dev/null | tr -d '[:space:]' || true)
                 if [ "$_db_exists" != "1" ]; then
-                    docker exec "$_db_container" psql -U "${_db_user}" -c \
+                    docker exec "$_db_container" psql -U "${_db_user}" -d "${POSTGRES_DB:-smsly_hosting}" -c \
                         "CREATE DATABASE infisical;" 2>/dev/null && \
                         echo -e "${GREEN}  ✓ Created infisical database${NC}" || \
                         echo -e "${YELLOW}  ⚠ Could not create infisical database (may already exist)${NC}"
