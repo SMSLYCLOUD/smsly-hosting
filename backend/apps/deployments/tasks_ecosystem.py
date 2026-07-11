@@ -38,6 +38,22 @@ _ACTIVE_BUILDS_CACHE_KEY = "smsly:ecosystem:active_builds"
 _BUILD_DEFER_SECONDS = 300        # 5 minutes deferral
 _DEFERRED_TASK_MAX_RETRIES = 5    # max retries per deferred build
 
+# Stack-aware default ports (used when no port is specified and detection fails)
+_STACK_DEFAULT_PORTS = {
+    "node": 3000,
+    "nextjs": 3000,
+    "nuxt": 3000,
+    "ruby": 3000,
+    "python": 8000,
+    "django": 8000,
+    "flask": 5000,
+    "go": 8080,
+    "rust": 8080,
+    "java": 8080,
+    "php": 8080,
+    "elixir": 4000,
+}
+
 _ADDON_ENV_ALIASES = {
     "POSTGRES": ("POSTGRESQL_URL", "PG_URL", "POSTGRES_URL"),
     "REDIS": ("REDIS_URL", "REDIS_URI"),
@@ -593,6 +609,111 @@ def _normalize_env_vars(raw_env: Any) -> dict[str, str]:
             normalized[key_text] = ""
 
     return normalized
+
+
+def _detect_service_port(svc_plan: dict, stack: str = "") -> int:
+    """Detect the internal port for a service from multiple sources.
+
+    Priority:
+      1. Explicit port in svc_plan (user-provided)
+      2. Dockerfile EXPOSE directive (cloned repo)
+      3. docker-compose.yml ports mapping
+      4. .env / .env.example PORT variable
+      5. Stack-aware default (e.g. Django=8000, Next.js=3000)
+      6. Global fallback (3000)
+    """
+    # 1. Explicit port in plan
+    explicit = svc_plan.get("port")
+    if explicit is not None:
+        try:
+            p = int(explicit)
+            if _VALID_PORT_RANGE[0] <= p <= _VALID_PORT_RANGE[1]:
+                return p
+        except (TypeError, ValueError):
+            pass
+
+    _clone_dir = svc_plan.get("_clone_dir", "")
+    if not _clone_dir:
+        # No cloned source — skip file-based detection
+        stack_l = str(stack or "").strip().lower()
+        return _STACK_DEFAULT_PORTS.get(stack_l, 3000)
+
+    import os
+
+    # 2. Dockerfile EXPOSE
+    dockerfile_path = svc_plan.get("dockerfile", "")
+    try:
+        df_path = os.path.join(_clone_dir, dockerfile_path or "Dockerfile")
+        if os.path.isfile(df_path):
+            with open(df_path, "r", errors="ignore") as f:
+                for line in f:
+                    stripped = line.strip()
+                    if stripped.upper().startswith("EXPOSE"):
+                        parts = stripped.split()
+                        if len(parts) >= 2:
+                            for part in parts[1:]:
+                                port_str = part.split("/")[0]
+                                try:
+                                    p = int(port_str)
+                                    if _VALID_PORT_RANGE[0] <= p <= _VALID_PORT_RANGE[1]:
+                                        return p
+                                except (TypeError, ValueError):
+                                    continue
+    except Exception:
+        pass
+
+    # 3. docker-compose.yml ports mapping (first "host:container" → container port)
+    for dc_name in ("docker-compose.yml", "docker-compose.yaml"):
+        try:
+            dc_path = os.path.join(_clone_dir, dc_name)
+            if os.path.isfile(dc_path):
+                with open(dc_path, "r", errors="ignore") as f:
+                    in_ports = False
+                    for line in f:
+                        stripped = line.strip()
+                        if stripped.startswith("ports:"):
+                            in_ports = True
+                            continue
+                        if in_ports:
+                            if stripped.startswith("- "):
+                                # e.g. "- 8080:3000" or "- "3000:3000""
+                                port_part = stripped.lstrip("- ").strip().strip('"').strip("'")
+                                container_port = port_part.split(":")[-1].split("/")[0]
+                                try:
+                                    p = int(container_port)
+                                    if _VALID_PORT_RANGE[0] <= p <= _VALID_PORT_RANGE[1]:
+                                        return p
+                                except (TypeError, ValueError):
+                                    continue
+                            else:
+                                in_ports = False
+        except Exception:
+            pass
+
+    # 4. .env / .env.example PORT variable
+    for env_name in (".env.example", ".env", ".env.local"):
+        try:
+            env_path = os.path.join(_clone_dir, env_name)
+            if os.path.isfile(env_path):
+                with open(env_path, "r", errors="ignore") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith("#"):
+                            continue
+                        if line.upper().startswith("PORT="):
+                            val = line.split("=", 1)[1].strip().strip('"').strip("'")
+                            try:
+                                p = int(val)
+                                if _VALID_PORT_RANGE[0] <= p <= _VALID_PORT_RANGE[1]:
+                                    return p
+                            except (TypeError, ValueError):
+                                continue
+        except Exception:
+            pass
+
+    # 5. Stack-aware default
+    stack_l = str(stack or "").strip().lower()
+    return _STACK_DEFAULT_PORTS.get(stack_l, 3000)
 
 
 def _stack_runtime_defaults(stack: str, port: int) -> dict[str, str]:
@@ -1905,12 +2026,15 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             pass
 
     # Ensure the ecosystem project always has its own ScopedRegistry.
-    # Use the global PlatformConfig credentials (same as the registry container's
-    # htpasswd). Random per-project credentials would fail because the registry
-    # only authenticates against the htpasswd file.
+    # Use .env credentials (which match the registry container's htpasswd) and
+    # verify with docker login before saving. PlatformConfig DB values may be
+    # stale if signals failed to sync htpasswd.
     if project:
         try:
+            import subprocess
+
             from django.contrib.contenttypes.models import ContentType
+            from django.conf import settings
 
             from apps.deployments.models_core import PlatformConfig
             from apps.deployments.models_registry_scope import ScopedRegistry
@@ -1920,8 +2044,36 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                 content_type=_ct, object_id=project.id,
             ).exists()
             if not _has_registry:
-                _reg_user = PlatformConfig.get_config_value("registry_user") or "smsly-registry"
-                _reg_pass = PlatformConfig.get_config_value("registry_password") or ""
+                # Prefer .env credentials (source of truth for htpasswd),
+                # fall back to PlatformConfig DB if .env is empty.
+                _reg_user = getattr(settings, 'REGISTRY_USER', '') or PlatformConfig.get_config_value("registry_user") or "smsly-registry"
+                _reg_pass = getattr(settings, 'REGISTRY_PASSWORD', '') or PlatformConfig.get_config_value("registry_password") or ""
+                _reg_url = getattr(settings, 'CONTAINER_REGISTRY_URL', '') or PlatformConfig.get_config_value("container_registry_url") or "registry:5000"
+
+                # Verify credentials with docker login before saving
+                _login_ok = False
+                if _reg_user and _reg_pass:
+                    try:
+                        _login_proc = subprocess.run(
+                            ['docker', 'login', _reg_url, '-u', _reg_user, '--password-stdin'],
+                            input=_reg_pass, capture_output=True, text=True, timeout=15,
+                        )
+                        _login_ok = _login_proc.returncode == 0
+                        if _login_ok:
+                            logger.info(
+                                "Registry login verified for %s (user=%s) — creating scoped registry",
+                                _reg_url, _reg_user,
+                            )
+                        else:
+                            logger.warning(
+                                "Registry login failed for %s (user=%s, exit=%d). "
+                                "ScopedRegistry will be created with .env credentials anyway — "
+                                "push may fail if htpasswd is out of sync.",
+                                _reg_url, _reg_user, _login_proc.returncode,
+                            )
+                    except Exception as login_exc:
+                        logger.warning("Registry login check errored: %s", login_exc)
+
                 ScopedRegistry.objects.create(
                     content_type=_ct,
                     object_id=project.id,
@@ -1929,7 +2081,11 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                     password=_reg_pass,
                     is_active=True,
                 )
-                logger.info("Auto-created scoped registry for ecosystem project %s (user=%s)", project.id, _reg_user)
+                logger.info(
+                    "Auto-created scoped registry for ecosystem project %s "
+                    "(user=%s, url=%s, login_verified=%s)",
+                    project.id, _reg_user, _reg_url, _login_ok,
+                )
         except Exception as exc:
             logger.warning("Failed to ensure scoped registry for ecosystem project: %s", exc)
 
@@ -2030,7 +2186,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                 svc_plan.get("branch") or svc_plan.get("default_branch") or "main"
             ).strip() or "main"
             try:
-                anchor_port = int(svc_plan.get("port", 3000) or 3000)
+                anchor_port = _detect_service_port(svc_plan, str(svc_plan.get("stack", "")))
             except (TypeError, ValueError):
                 anchor_port = 3000
 
@@ -2229,7 +2385,8 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             for alias in aliases:
                 created_services[alias] = service
 
-            _normalize_env_vars(svc_plan.get("env_vars", {}))
+            normalized_env = _normalize_env_vars(svc_plan.get("env_vars", {}))
+            svc_plan["env_vars"] = normalized_env
             service_addon_types = _service_plan_addon_types(svc_plan, plan.get("addons", []))
 
             # When shared addons are disabled, or this specific addon is not shared,
@@ -2247,7 +2404,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                     try:
                         svc_addon = Addon.objects.create(
                             service=service,
-                            name=f"{addon_type.lower()}-individual"[:255],
+                            name=f"{service.name}-{addon_type.lower()}"[:255],
                             addon_type=addon_type,
                             status=Addon.Status.PROVISIONING,
                         )

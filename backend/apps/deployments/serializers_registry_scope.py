@@ -69,6 +69,7 @@ class ScopedRegistryReadSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "scope_type",
+            "scope_label",
             "registry_url",
             "is_internal",
             "allowed_registry_hosts",

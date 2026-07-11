@@ -898,16 +898,27 @@ fi
             docker volume create infisical_data 2>/dev/null || true
 
             # Create the infisical database in Postgres if it doesn't exist
-            _db_container="$(docker ps --format '{{.Names}}' | grep -E 'db(-1)?$' | head -1)"
+            _db_container=""
+            # HA mode: smsly-postgres-primary
+            if docker ps --format '{{.Names}}' | grep -q '^smsly-postgres-primary$'; then
+                _db_container="smsly-postgres-primary"
+                _db_user="${POSTGRES_USER:-smsly_admin}"
+            # Standard mode: smsly-hosting-db-1
+            elif docker ps --format '{{.Names}}' | grep -q '^smsly-hosting-db-1$'; then
+                _db_container="smsly-hosting-db-1"
+                _db_user="${POSTGRES_USER:-postgres}"
+            fi
             if [ -n "$_db_container" ]; then
-                _db_exists=$(docker exec "$_db_container" psql -U "${POSTGRES_USER:-postgres}" -tc \
+                _db_exists=$(docker exec "$_db_container" psql -U "${_db_user}" -tc \
                     "SELECT 1 FROM pg_database WHERE datname='infisical'" 2>/dev/null | tr -d '[:space:]')
                 if [ "$_db_exists" != "1" ]; then
-                    docker exec "$_db_container" psql -U "${POSTGRES_USER:-postgres}" -c \
+                    docker exec "$_db_container" psql -U "${_db_user}" -c \
                         "CREATE DATABASE infisical;" 2>/dev/null && \
                         echo -e "${GREEN}  ✓ Created infisical database${NC}" || \
                         echo -e "${YELLOW}  ⚠ Could not create infisical database (may already exist)${NC}"
                 fi
+            else
+                echo -e "${YELLOW}  ⚠ No Postgres container found — skipping infisical database creation${NC}"
             fi
 
             # Generate env file on the volume (if not already present)

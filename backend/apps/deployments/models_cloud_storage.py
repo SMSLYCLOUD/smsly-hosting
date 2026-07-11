@@ -65,8 +65,11 @@ class CloudStorageDestination(models.Model):
         max_length=500, blank=True, default='',
         help_text='Custom endpoint for R2/MinIO/B2. Leave blank for AWS S3.',
     )
-    access_key = EncryptedCharField(max_length=255, blank=False)
-    secret_key = EncryptedCharField(max_length=255, blank=False)
+    # max_length=500: Fernet encryption adds ~120 bytes of base64url overhead
+    # on top of the plaintext credential. Old max_length=255 caused 400 Bad
+    # Request in production when storing longer S3/R2/MinIO keys (>64 chars).
+    access_key = EncryptedCharField(max_length=500, blank=False)
+    secret_key = EncryptedCharField(max_length=500, blank=False)
     is_active = models.BooleanField(default=True)  # type: ignore[var-annotated]
     created_at = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
     service = models.ForeignKey(  # type: ignore[var-annotated]

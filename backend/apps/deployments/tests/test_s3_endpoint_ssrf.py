@@ -5,6 +5,7 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from apps.deployments.models_cloud_storage import CloudStorageDestination
+from apps.deployments.views_cloud_storage import CloudStorageViewSet
 
 
 class CloudStorageEndpointSSRFTests(TestCase):
@@ -17,6 +18,18 @@ class CloudStorageEndpointSSRFTests(TestCase):
     """
 
     def setUp(self):
+        # Disable throttling for these tests.  We are verifying SSRF-protection
+        # logic, not rate-limiting behaviour.  Removing throttle_classes also
+        # makes the tests independent of whatever state other tests leave in
+        # DRF's api_settings cache (e.g. the throttle-test @override_settings
+        # only populates "cloud_templates", which would cause an
+        # ImproperlyConfigured crash for the "cloud_test" scope when those
+        # tests run first).
+        self._throttle_patcher = patch.object(
+            CloudStorageViewSet, "throttle_classes", new=[]
+        )
+        self._throttle_patcher.start()
+
         User = get_user_model()
         self.user = User.objects.create_user(
             username="s3-ssrf-user", password="p",
@@ -34,6 +47,7 @@ class CloudStorageEndpointSSRFTests(TestCase):
         )
 
     def tearDown(self):
+        self._throttle_patcher.stop()
         self.dest.delete()
         self.user.delete()
 

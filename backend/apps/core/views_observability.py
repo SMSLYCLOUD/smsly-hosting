@@ -225,7 +225,14 @@ def grafana_embed_url(request, dashboard_uid: str):
             value = value[0]
         query[key] = value
 
-    grafana_external = getattr(settings, 'GRAFANA_EXTERNAL_URL', 'https://localhost/grafana')
+    grafana_external = getattr(settings, 'GRAFANA_EXTERNAL_URL', None)
+    if not grafana_external:
+        site_url = getattr(settings, 'SITE_URL', '')
+        if site_url:
+            grafana_external = f"{site_url.rstrip('/')}/grafana"
+        else:
+            grafana_external = 'https://localhost/grafana'
+
     embed_url = (
         f"{grafana_external}/d/{dashboard.get('uid', dashboard_uid)}"
         f"/{urllib.parse.quote(dashboard.get('title', dashboard_uid), safe='')}"
@@ -262,7 +269,9 @@ def _resolve_service_var(var_service: str, user=None) -> str:
         )
     svc = qs.first()
     if svc:
-        return svc.compose_main_service or svc.name
+        # For Grafana dashboards, use service.name (matches docker-labels-exporter
+        # service_name label). compose_main_service (e.g. "web") does not match.
+        return svc.name
     if user:
         return ""
     return var_service

@@ -50,7 +50,6 @@ class CloudStorageTemplatesThrottleTests(TestCase):
         from apps.deployments.views_cloud_storage import (
             CloudStorageTemplatesRateThrottle,
         )
-        self._saved_throttle_rates = CloudStorageTemplatesRateThrottle.THROTTLE_RATES
         CloudStorageTemplatesRateThrottle.THROTTLE_RATES = (
             api_settings.DEFAULT_THROTTLE_RATES
         )
@@ -64,7 +63,17 @@ class CloudStorageTemplatesThrottleTests(TestCase):
         from apps.deployments.views_cloud_storage import (
             CloudStorageTemplatesRateThrottle,
         )
-        CloudStorageTemplatesRateThrottle.THROTTLE_RATES = self._saved_throttle_rates
+        # Delete the class-level THROTTLE_RATES attr we set in setUp so that
+        # CloudStorageTemplatesRateThrottle falls back through the MRO to
+        # SimpleRateThrottle.THROTTLE_RATES (the production dict set at import
+        # time).  Restoring self._saved_throttle_rates instead would leave a
+        # class-level attr that shadows the base class and can cause
+        # ImproperlyConfigured errors in tests that run after this class when
+        # the random seed changes test ordering.
+        try:
+            del CloudStorageTemplatesRateThrottle.THROTTLE_RATES
+        except AttributeError:
+            pass
         from rest_framework.settings import api_settings
         api_settings.reload()
 

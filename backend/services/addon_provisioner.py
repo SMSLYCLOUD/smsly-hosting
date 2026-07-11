@@ -1513,10 +1513,10 @@ class AddonProvisioner:
         Returns:
             Log text string, or empty string if container not found.
         """
+        import subprocess
         tail = min(tail, 2000)
         try:
             if follow:
-                import subprocess
                 proc = subprocess.Popen(
                     ['docker', 'logs', '--tail', str(tail), '-f', '--timestamps', container_name],
                     stdout=subprocess.PIPE,

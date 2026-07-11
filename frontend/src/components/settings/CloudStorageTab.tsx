@@ -99,9 +99,16 @@ export function CloudStorageTab({ serviceId }: { serviceId?: string }) {
     setTesting(id);
     try {
       const res = await api.post(`/cloud-storage/${id}/test/`);
-      toast({ title: res.data.status === "ok" ? "Connection OK" : "Connection failed", variant: res.data.status === "ok" ? "default" : "destructive" });
-    } catch { toast({ title: "Test failed", variant: "destructive" }); }
-    finally { setTesting(null); }
+      const ok = res.data.status === "ok";
+      toast({
+        title: ok ? "Connection OK" : "Connection failed",
+        description: ok ? undefined : (res.data.message ?? "Upload failed — check credentials and endpoint"),
+        variant: ok ? "default" : "destructive",
+      });
+    } catch (err: any) {
+      const msg = err?.response?.data?.message ?? err?.response?.data?.detail ?? "Could not reach the storage endpoint";
+      toast({ title: "Test failed", description: msg, variant: "destructive" });
+    } finally { setTesting(null); }
   };
 
   return (

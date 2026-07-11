@@ -2198,30 +2198,47 @@ class PipelineManager:
 
     def _write_compose_routing_override(self, main_service: str, project_name: str) -> str:
         """
-        Write a compose override file with Traefik labels.
+        Write a compose override file with Traefik labels and shared network.
 
         Docker labels are immutable after container creation, so labels must be
-        injected into compose config before `docker compose up`.
+        injected into compose config before ``docker compose up``.
+
+        All services are attached to ``smsly-net`` (the shared Docker bridge
+        network) so that every container can resolve addon hostnames via Docker
+        DNS.  Without this, secondary compose services (workers, sidecars)
+        remain on the compose-internal network and cannot reach addons whose
+        connection URLs use ``smsly-net`` network aliases.
         """
+        import os as _os
+
         routing_dir = self.build_dir or self.source_dir
         if not routing_dir:
             raise BuildError(
                 "Cannot write compose routing override: no build/source directory available"
             )
-        override_path = os.path.join(
+        override_path = _os.path.join(
             routing_dir,
             f".smsly-routing-{self.deployment.id}.yml",
         )
-        override_payload = {"services": {}}
+
+        network_name = _os.getenv('DOCKER_NETWORK', 'smsly-net')
+
+        override_payload: dict = {"services": {}}
+
+        # ── Declare the shared network as external so every service joins it ──
+        override_payload["networks"] = {
+            network_name: {"external": True, "name": network_name},
+        }
 
         # Add routing labels to the main service
         override_payload["services"][main_service] = {
             "labels": self._compose_traefik_labels(project_name),
+            "networks": [network_name],
         }
 
-        # Apply security_opt to ALL services in the compose file
-        compose_path = os.path.join(routing_dir, self.service.compose_file)
-        if os.path.isfile(compose_path):
+        # Apply security_opt + shared network to ALL services in the compose file
+        compose_path = _os.path.join(routing_dir, self.service.compose_file)
+        if _os.path.isfile(compose_path):
             try:
                 with open(compose_path, "r", encoding="utf-8") as f:
                     user_compose = yaml.safe_load(f) or {}
@@ -2229,6 +2246,13 @@ class PipelineManager:
                         # Detect sandboxed container runtime
                         from apps.deployments.services.container_runtime import detect_best_runtime
                         compose_runtime = detect_best_runtime()
+
+                        # Collect networks already declared in the user's compose file
+                        # so we don't create duplicate entries.
+                        user_networks = set(
+                            (user_compose.get("networks") or {}).keys()
+                        )
+
                         for svc_name in user_compose["services"]:
                             if svc_name not in override_payload["services"]:
                                 override_payload["services"][svc_name] = {}
@@ -2238,22 +2262,38 @@ class PipelineManager:
                             ]
                             if compose_runtime and compose_runtime != "runc":
                                 override_payload["services"][svc_name]["runtime"] = compose_runtime
+
+                            # Attach every service to the shared network so DNS
+                            # resolution for addon hostnames works.  If the user's
+                            # compose file already declares smsly-net for this
+                            # service, the merge is a harmless no-op.
+                            if network_name not in user_networks:
+                                svc_networks = override_payload["services"][svc_name].get("networks") or []
+                                if network_name not in svc_networks:
+                                    svc_networks.append(network_name)
+                                    override_payload["services"][svc_name]["networks"] = svc_networks
             except Exception:
                 # Fallback to just securing the main service if parsing fails
-                details = {"security_opt": [
-                    "no-new-privileges:true",
-                    "apparmor:docker-default"
-                ]}
+                details: dict = {
+                    "security_opt": [
+                        "no-new-privileges:true",
+                        "apparmor:docker-default"
+                    ],
+                    "networks": [network_name],
+                }
                 from apps.deployments.services.container_runtime import detect_best_runtime
                 compose_runtime = detect_best_runtime()
                 if compose_runtime and compose_runtime != "runc":
                     details["runtime"] = compose_runtime
                 override_payload["services"][main_service] = details
         else:
-            details = {"security_opt": [
-                "no-new-privileges:true",
-                "apparmor:docker-default"
-            ]}
+            details = {
+                "security_opt": [
+                    "no-new-privileges:true",
+                    "apparmor:docker-default"
+                ],
+                "networks": [network_name],
+            }
             from apps.deployments.services.container_runtime import detect_best_runtime
             compose_runtime = detect_best_runtime()
             if compose_runtime and compose_runtime != "runc":
@@ -2413,21 +2453,53 @@ class PipelineManager:
             except OSError:
                 pass
 
-        # Attach main service container to smsly-net for Traefik routing
-        container_name = f"{project_name}-{main_svc}-1"
+        # Attach ALL compose service containers to smsly-net so they can
+        # resolve addon hostnames via Docker DNS.  The override file above
+        # already declares smsly-net as external, but as a safety net we
+        # explicitly connect every container after compose up.
+        compose_services = list(compose_services)
         try:
-            subprocess.run(
-                ['docker', 'network', 'connect', network_name, container_name],
-                check=False, capture_output=True, text=True, timeout=30,
+            # Get actual running containers for this compose project
+            ps_result = subprocess.run(
+                ['docker', 'compose', '-p', project_name, 'ps', '-q'],
+                capture_output=True, text=True, timeout=15,
             )
+            container_ids = [
+                cid.strip() for cid in ps_result.stdout.strip().splitlines()
+                if cid.strip()
+            ]
+            if not container_ids:
+                # Fallback: construct expected container names
+                container_ids = [f"{project_name}-{svc}-1" for svc in compose_services]
+
+            connected = 0
+            for cid in container_ids:
+                # Resolve container name for logging
+                name_result = subprocess.run(
+                    ['docker', 'inspect', '-f', '{{.Name}}', cid],
+                    capture_output=True, text=True, timeout=5,
+                )
+                cname = name_result.stdout.strip().lstrip('/') if name_result.returncode == 0 else cid[:12]
+                result = subprocess.run(
+                    ['docker', 'network', 'connect', network_name, cid],
+                    check=False, capture_output=True, text=True, timeout=30,
+                )
+                if result.returncode == 0:
+                    connected += 1
+                elif 'already connected' not in (result.stderr or '').lower():
+                    append_log(
+                        self.deployment,
+                        f"  ⚠️ Could not connect {cname} to {network_name}: {result.stderr.strip()}\n"
+                    )
+
             append_log(
                 self.deployment,
-                f"  ✅ Connected {container_name} to {network_name}\n"
+                f"  ✅ Connected {connected}/{len(container_ids)} compose services to {network_name}\n"
             )
         except Exception as net_err:  # pylint: disable=broad-exception-caught
             append_log(
                 self.deployment,
-                f"  ⚠️ Could not connect to {network_name}: {net_err}\n"
+                f"  ⚠️ Could not connect compose services to {network_name}: {net_err}\n"
             )
 
         append_log(
@@ -2629,43 +2701,52 @@ class PipelineManager:
                     build_args_dict[k] = v
 
         # ── BuildKit secret resolution ──────────────────────────────────────
-        # If the Dockerfile declares ARG GITHUB_TOKEN, the build-arg filter
-        # above deliberately drops it (ends in _TOKEN = secret).  Instead we
-        # resolve a proper token here and inject it as a BuildKit secret mount
-        # so it never appears in image layers or docker history.
+        # The platform's own GitHub token (App installation or OAuth) is
+        # resolved here and injected as a build-arg so that RUN commands
+        # (e.g. ``pip install git+https://${GITHUB_TOKEN}@github.com/...``)
+        # can access private repos.  The token is NOT passed through the
+        # normal build-arg filter above because it ends in _TOKEN and would
+        # be skipped as a secret.
+        #
+        # docker-py (legacy Engine API) does not support BuildKit secret
+        # mounts, so the token is merged into buildargs at build time.
+        # It will be visible in ``docker history`` — acceptable for
+        # platform-internal tokens that are short-lived (1-hour App tokens).
         #
         # Token priority (see utils.get_github_token_for_repo):
         #   1. GitHub App installation token — repo-scoped, 1-hour expiry
         #   2. Service owner's OAuth token — broad fallback
         #   3. None — Dockerfile anonymous-install fallback path
         build_secrets: dict[str, str] = {}
-        if defined_args and "GITHUB_TOKEN" in defined_args:
-            try:
-                from apps.deployments.utils import get_github_token_for_repo
-                # Determine which shared repo the Dockerfile needs access to.
-                # Defaults to smsly-shared; overridable via service env var.
-                shared_repo = env_map.get(
-                    "SMSLY_SHARED_REPO", "SMSLYCLOUD/smsly-shared"
+        try:
+            from apps.deployments.utils import get_github_token_for_repo
+            # Determine which shared repo the Dockerfile needs access to.
+            # Defaults to smsly-shared; overridable via service env var.
+            shared_repo = env_map.get(
+                "SMSLY_SHARED_REPO", "SMSLYCLOUD/smsly-shared"
+            )
+            service_owner = getattr(self.service, "owner", None)
+            gh_token = get_github_token_for_repo(service_owner, shared_repo)
+            if gh_token:
+                build_secrets["github_token"] = gh_token
+                # Also inject as GITHUB_TOKEN so RUN commands that reference
+                # ${GITHUB_TOKEN} without a Dockerfile ARG declaration work.
+                build_secrets["GITHUB_TOKEN"] = gh_token
+                append_log(
+                    self.deployment,
+                    "GitHub token resolved via App/OAuth — "
+                    "injected as build-arg for private repo access.\n",
                 )
-                service_owner = getattr(self.service, "owner", None)
-                gh_token = get_github_token_for_repo(service_owner, shared_repo)
-                if gh_token:
-                    build_secrets["github_token"] = gh_token
-                    append_log(
-                        self.deployment,
-                        "GitHub token resolved via App/OAuth — "
-                        "will be injected as BuildKit secret (not a build-arg).\n",
-                    )
-                else:
-                    append_log(
-                        self.deployment,
-                        "⚠ No GitHub token available — private pip installs may fail. "
-                        "Configure GITHUB_APP_ID/GITHUB_APP_PRIVATE_KEY or connect GitHub.\n",
-                    )
-            except Exception as _exc:
-                logger.warning(
-                    "Failed to resolve GitHub token for build secrets: %s", _exc
+            else:
+                append_log(
+                    self.deployment,
+                    "⚠ No GitHub token available — private pip installs may fail. "
+                    "Configure GITHUB_APP_ID/GITHUB_APP_PRIVATE_KEY or connect GitHub.\n",
                 )
+        except Exception as _exc:
+            logger.warning(
+                "Failed to resolve GitHub token for build secrets: %s", _exc
+            )
 
         # Pre-flight: remove any orphaned buildkit containers that can
         # block the Docker build (common after a previous build crash/timeout).

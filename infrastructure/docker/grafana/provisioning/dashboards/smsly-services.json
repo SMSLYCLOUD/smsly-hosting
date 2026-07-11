@@ -103,10 +103,14 @@
     "list": [
       {
         "name": "service",
-        "type": "constant",
-        "query": "",
+        "type": "custom",
+        "query": ".*,",
+        "current": { "text": ".*", "value": ".*" },
         "hide": 2,
-        "current": { "text": "", "value": "" }
+        "options": [],
+        "refresh": 1,
+        "regex": "",
+        "sort": 1
       }
     ]
   },

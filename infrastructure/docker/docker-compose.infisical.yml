@@ -17,7 +17,7 @@ services:
       - /data/infisical.env
     environment:
       # Database — uses existing Postgres
-      DB_CONNECTION_URI: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres-primary:5432/infisical
+      DB_CONNECTION_URI: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/infisical
       REDIS_URL: redis://redis-primary:6379
       # App config
       SITE_URL: ${INFISICAL_SITE_URL:-https://secrets.${DOMAIN:-localhost}}

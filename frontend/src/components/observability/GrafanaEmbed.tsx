@@ -39,7 +39,7 @@ export function GrafanaEmbed({ dashboard, service, time }: GrafanaEmbedProps) {
         })
             .then((r) => (r.ok ? r.json() : null))
             .then((svc) => {
-                if (svc?.name) setResolvedService(svc.compose_main_service || svc.name);
+                if (svc?.name) setResolvedService(svc.name);
             })
             .catch(() => {});
     }, [service]);
