@@ -648,6 +648,7 @@ fi
             fi
 
             echo -e "${BLUE}  • Running database migrations...${NC}"
+            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py fix_sequences 2>/dev/null || true
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py migrate --noinput
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput
 
@@ -730,6 +731,7 @@ fi
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps backend
             fi
 
+            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py fix_sequences 2>/dev/null || true
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py migrate --noinput 2>/dev/null || true
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput 2>/dev/null || true
 
@@ -857,6 +859,7 @@ fi
             fi
 
             echo -e "${BLUE}  • Running database migrations...${NC}"
+            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py fix_sequences 2>/dev/null || true
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py migrate --noinput
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput
 

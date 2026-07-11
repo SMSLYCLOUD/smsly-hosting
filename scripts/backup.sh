@@ -2,6 +2,8 @@
 # SMSLY Hosting Database Backup Script
 # Run this daily via cron: 0 2 * * * /opt/smsly-hosting/scripts/backup.sh
 
+set -uo pipefail
+
 # Configuration
 BACKUP_DIR="${BACKUP_DIR:-/opt/smsly-hosting/backups}"
 RETENTION_DAYS="${RETENTION_DAYS:-7}"
@@ -27,7 +29,6 @@ DB_CONTAINER="smsly-postgres"
 
 # Check if container is running
 if ! docker ps --format '{{.Names}}' | grep -q "^${DB_CONTAINER}$"; then
-    # Try docker-compose container name
     DB_CONTAINER=$(docker ps --format '{{.Names}}' | grep -E "(postgres|db)" | head -1)
     if [ -z "$DB_CONTAINER" ]; then
         echo -e "${RED}Error: No PostgreSQL container found${NC}"
@@ -37,13 +38,18 @@ fi
 
 echo "Using database container: $DB_CONTAINER"
 
-# Perform backup using pg_dump inside the container
-docker exec "$DB_CONTAINER" pg_dump -U smsly_admin -d smsly_hosting | gzip | openssl enc -aes-256-cbc -salt -pbkdf2 -pass env:BACKUP_PASS -md sha256 > "$BACKUP_FILE" || \
-docker exec "$DB_CONTAINER" pg_dump -U smsly -d smsly_hosting | gzip | openssl enc -aes-256-cbc -salt -pbkdf2 -pass env:BACKUP_PASS -md sha256 > "$BACKUP_FILE" || \
-docker exec "$DB_CONTAINER" pg_dump -U postgres -d smsly_hosting | gzip | openssl enc -aes-256-cbc -salt -pbkdf2 -pass env:BACKUP_PASS -md sha256 > "$BACKUP_FILE"
+# Perform backup trying each database user
+DUMP_OK=false
+for DB_USER in smsly_admin smsly postgres; do
+    echo "Attempting pg_dump with user '${DB_USER}'..."
+    if docker exec "$DB_CONTAINER" pg_dump -U "$DB_USER" -d smsly_hosting | gzip | openssl enc -aes-256-cbc -salt -pbkdf2 -pass env:BACKUP_PASS -md sha256 > "$BACKUP_FILE"; then
+        DUMP_OK=true
+        break
+    fi
+done
 
-# Check if backup was successful
-if [ -s "$BACKUP_FILE" ]; then
+# Check if backup was successful (size > 1KB to ensure it contains real schema/data not just gzip header)
+if [ "$DUMP_OK" = "true" ] && [ -s "$BACKUP_FILE" ] && [ "$(stat -c%s "$BACKUP_FILE" 2>/dev/null || stat -f%z "$BACKUP_FILE" 2>/dev/null || echo 0)" -gt 500 ]; then
     BACKUP_SIZE=$(du -h "$BACKUP_FILE" | cut -f1)
     echo -e "${GREEN}✓ Backup created: $BACKUP_FILE ($BACKUP_SIZE)${NC}"
     BACKUP_SUCCESS=1

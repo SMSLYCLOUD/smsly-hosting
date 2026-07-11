@@ -169,6 +169,35 @@ else
         --set ON_ERROR_STOP=1 -f "$DEST"
 fi
 
+# Resynchronize sequences to prevent duplicate key IntegrityErrors on future inserts
+log "Resynchronizing database sequences..."
+docker exec "$DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" -c "
+DO \$\$
+DECLARE
+    seq_record RECORD;
+    max_val BIGINT;
+BEGIN
+    FOR seq_record IN 
+        SELECT
+            c.relname AS seq_name,
+            t.relname AS table_name,
+            a.attname AS col_name
+        FROM pg_class c
+        JOIN pg_depend d ON d.objid = c.oid AND d.classid = 'pg_class'::regclass AND d.refclassid = 'pg_class'::regclass
+        JOIN pg_class t ON t.oid = d.refobjid
+        JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = d.refobjsubid
+        WHERE c.relkind = 'S'
+    LOOP
+        EXECUTE format('SELECT max(%I) FROM %I', seq_record.col_name, seq_record.table_name) INTO max_val;
+        IF max_val IS NOT NULL THEN
+            EXECUTE format('SELECT setval(%L, %s)', seq_record.seq_name, max_val);
+        ELSE
+            EXECUTE format('SELECT setval(%L, 1, false)', seq_record.seq_name);
+        END IF;
+    END LOOP;
+END \$\$;
+" 2>/dev/null || log "${YELLOW}Warning: Could not resynchronize sequences automatically${NC}"
+
 RESTORE_END=$(date +%s)
 RESTORE_DURATION=$((RESTORE_END - RESTORE_START))
 
