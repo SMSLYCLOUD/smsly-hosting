@@ -9,6 +9,7 @@ from decimal import Decimal
 
 import stripe
 from django.conf import settings
+from django.db import transaction
 from django.db.models import Sum
 from django.utils import timezone
 from rest_framework import permissions, serializers, status, viewsets
@@ -380,20 +381,21 @@ class StripeWebhookView(GenericAPIView):
                 plan = ((obj.get("metadata") or {}).get("plan") or "").upper().strip()
 
                 if customer_id:
-                    account = BillingAccount.objects.filter(
-                        stripe_customer_id=customer_id
-                    ).first()
-                    if account:
-                        if subscription_id:
-                            account.stripe_subscription_id = subscription_id
-                        if plan in {
-                            BillingAccount.Plan.HOBBY,
-                            BillingAccount.Plan.PRO,
-                            BillingAccount.Plan.ENTERPRISE,
-                        }:
-                            account.plan = plan
-                        account.save(update_fields=["stripe_subscription_id", "plan"])
-                        StripeService.sync_subscription_from_stripe(account)
+                    with transaction.atomic():
+                        account = BillingAccount.objects.select_for_update().filter(
+                            stripe_customer_id=customer_id
+                        ).first()
+                        if account:
+                            if subscription_id:
+                                account.stripe_subscription_id = subscription_id
+                            if plan in {
+                                BillingAccount.Plan.HOBBY,
+                                BillingAccount.Plan.PRO,
+                                BillingAccount.Plan.ENTERPRISE,
+                            }:
+                                account.plan = plan
+                            account.save(update_fields=["stripe_subscription_id", "plan"])
+                            StripeService.sync_subscription_from_stripe(account)
 
             elif event_type in {"customer.subscription.updated", "customer.subscription.deleted"}:
                 subscription_id = obj.get("id")
@@ -401,24 +403,25 @@ class StripeWebhookView(GenericAPIView):
                 status_up = norm_status(obj.get("status"))
                 period_end = obj.get("current_period_end")
 
-                account = None
-                if subscription_id:
-                    account = BillingAccount.objects.filter(
-                        stripe_subscription_id=subscription_id
-                    ).first()
-                if not account and customer_id:
-                    account = BillingAccount.objects.filter(
-                        stripe_customer_id=customer_id
-                    ).first()
+                with transaction.atomic():
+                    account = None
+                    if subscription_id:
+                        account = BillingAccount.objects.select_for_update().filter(
+                            stripe_subscription_id=subscription_id
+                        ).first()
+                    if not account and customer_id:
+                        account = BillingAccount.objects.select_for_update().filter(
+                            stripe_customer_id=customer_id
+                        ).first()
 
-                if account:
-                    if status_up:
-                        account.subscription_status = status_up
-                    if isinstance(period_end, int):
-                        account.current_period_end = timezone.datetime.fromtimestamp(
-                            period_end, tz=timezone.get_current_timezone()
-                        )
-                    account.save(update_fields=["subscription_status", "current_period_end"])
+                    if account:
+                        if status_up:
+                            account.subscription_status = status_up
+                        if isinstance(period_end, int):
+                            account.current_period_end = timezone.datetime.fromtimestamp(
+                                period_end, tz=timezone.get_current_timezone()
+                            )
+                        account.save(update_fields=["subscription_status", "current_period_end"])
 
             # Ignore other events (invoice.* etc) for now.
         except Exception as e: # pylint: disable=broad-exception-caught
@@ -487,24 +490,25 @@ class FlutterwaveWebhookView(GenericAPIView):
             logger.warning("Flutterwave webhook for unknown tx_ref=%s", tx_ref)
             return Response({"ok": True})
 
-        if payment.status == BillingPayment.Status.PAID:
-            return Response({"ok": True})
+        with transaction.atomic():
+            payment = BillingPayment.objects.select_for_update().filter(id=payment.id).first()
+            if not payment or payment.status == BillingPayment.Status.PAID:
+                return Response({"ok": True})
 
-        payment.raw_webhook = event
-        if transaction_id is not None:
-            payment.provider_transaction_id = str(transaction_id)
+            payment.raw_webhook = event
+            if transaction_id is not None:
+                payment.provider_transaction_id = str(transaction_id)
 
-        if fw_status in {"successful", "success"}:
-            payment.status = BillingPayment.Status.PAID
-            payment.save()
-            _activate_paid_plan(user=payment.user, plan=payment.plan)
-        elif fw_status in {"failed"}:
-            payment.status = BillingPayment.Status.FAILED
-            payment.save()
-        else:
-            # pending/cancelled/unknown - keep pending but persist the webhook for debugging.
-            payment.status = BillingPayment.Status.PENDING
-            payment.save()
+            if fw_status in {"successful", "success"}:
+                payment.status = BillingPayment.Status.PAID
+                payment.save()
+                _activate_paid_plan(user=payment.user, plan=payment.plan)
+            elif fw_status in {"failed"}:
+                payment.status = BillingPayment.Status.FAILED
+                payment.save()
+            else:
+                payment.status = BillingPayment.Status.PENDING
+                payment.save()
 
         return Response({"ok": True})
 
@@ -557,29 +561,31 @@ class CryptomusWebhookView(GenericAPIView):
             logger.warning("Cryptomus webhook for unknown order_id=%s", order_id)
             return Response({"ok": True})
 
-        if payment.status == BillingPayment.Status.PAID:
-            return Response({"ok": True})
+        with transaction.atomic():
+            payment = BillingPayment.objects.select_for_update().filter(id=payment.id).first()
+            if not payment or payment.status == BillingPayment.Status.PAID:
+                return Response({"ok": True})
 
-        payment.raw_webhook = payload
-        if transaction_id is not None:
-            payment.provider_transaction_id = str(transaction_id)
+            payment.raw_webhook = payload
+            if transaction_id is not None:
+                payment.provider_transaction_id = str(transaction_id)
 
-        if cm_status in {"paid", "paid_over"}:
-            payment.status = BillingPayment.Status.PAID
-            payment.save()
-            _activate_paid_plan(user=payment.user, plan=payment.plan)
-        elif cm_status in {"expired"}:
-            payment.status = BillingPayment.Status.EXPIRED
-            payment.save()
-        elif cm_status in {"cancel", "canceled"}:
-            payment.status = BillingPayment.Status.CANCELED
-            payment.save()
-        elif cm_status in {"fail", "failed", "wrong_amount"}:
-            payment.status = BillingPayment.Status.FAILED
-            payment.save()
-        else:
-            payment.status = BillingPayment.Status.PENDING
-            payment.save()
+            if cm_status in {"paid", "paid_over"}:
+                payment.status = BillingPayment.Status.PAID
+                payment.save()
+                _activate_paid_plan(user=payment.user, plan=payment.plan)
+            elif cm_status in {"expired"}:
+                payment.status = BillingPayment.Status.EXPIRED
+                payment.save()
+            elif cm_status in {"cancel", "canceled"}:
+                payment.status = BillingPayment.Status.CANCELED
+                payment.save()
+            elif cm_status in {"fail", "failed", "wrong_amount"}:
+                payment.status = BillingPayment.Status.FAILED
+                payment.save()
+            else:
+                payment.status = BillingPayment.Status.PENDING
+                payment.save()
 
         return Response({"ok": True})
 
