@@ -1,0 +1,27 @@
+{
+  "node_id": "${NODE_ID}",
+  "node_type": "media",
+  "master_api_url": "${MASTER_API_URL}",
+  "gateway_secret": "${GATEWAY_SECRET}",
+  "telemetry_interval_secs": 15,
+  "heartbeat_interval_secs": 30,
+  "health_port": 9090,
+  "services": {
+    "postgres": {
+      "host": "127.0.0.1",
+      "port": 5432,
+      "password": "${POSTGRES_PASSWORD}"
+    },
+    "redis": {
+      "host": "127.0.0.1",
+      "port": 6379,
+      "password": "${REDIS_PASSWORD}"
+    },
+    "livekit": {
+      "host": "127.0.0.1",
+      "port": 7880,
+      "api_key": "${LIVEKIT_API_KEY}",
+      "api_secret": "${LIVEKIT_API_SECRET}"
+    }
+  }
+}

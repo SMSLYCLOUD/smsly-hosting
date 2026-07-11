@@ -1,0 +1,23 @@
+[Unit]
+Description=SMSLY Voice API Server
+After=network-online.target postgresql.service redis.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=smsly
+Group=smsly
+ExecStart=/usr/local/bin/smsly-voice-api
+Environment=RUST_LOG=smsly_voice_api=info,sqlx=warn
+EnvironmentFile=-/opt/smsly-hosting-media/.env
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/smsly /run/smsly /var/lib/freeswitch
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

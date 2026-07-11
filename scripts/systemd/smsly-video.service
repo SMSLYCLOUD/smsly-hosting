@@ -1,0 +1,23 @@
+[Unit]
+Description=SMSLY Video API Server
+After=network-online.target postgresql.service redis.service livekit-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=smsly
+Group=smsly
+ExecStart=/usr/local/bin/smsly-api
+Environment=RUST_LOG=smsly_api=info,smsly_sfu=info
+EnvironmentFile=-/opt/smsly-hosting-media/.env
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/smsly /run/smsly
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

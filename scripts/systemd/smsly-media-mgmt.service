@@ -1,0 +1,25 @@
+[Unit]
+Description=SMSLY Media Management Daemon
+After=network-online.target smsly-voice-api.service smsly-video.service livekit-server.service
+Wants=network-online.target
+Requires=smsly-voice-api.service smsly-video.service livekit-server.service
+
+[Service]
+Type=simple
+User=smsly
+Group=smsly
+ExecStart=/usr/local/bin/smsly-media-mgmt --config /etc/smsly/media-mgmt.json
+Environment=GATEWAY_SECRET=%h/.secrets/gateway_secret
+Environment=RUST_LOG=smsly_media_mgmt=info,tower_http=info
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/smsly /run/smsly
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

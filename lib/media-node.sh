@@ -376,3 +376,55 @@ install_media_node() {
     echo -e "${GREEN}  → Logs:   ${MEDIA_NODE_LOG}${NC}"
     echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
 }
+
+# ─── Media node update (rebuild binaries, restart services) ───────────────────
+update_media_node() {
+    local script_dir="$1"
+    echo -e "${BLUE}═══════════════════════════════════════════════════════════${NC}"
+    echo -e "${BLUE}  SMSLY Media Node — Update${NC}"
+    echo -e "${BLUE}═══════════════════════════════════════════════════════════${NC}"
+
+    if [ ! -d "$script_dir" ]; then
+        echo -e "${RED}  ERROR: Script directory not found: $script_dir${NC}"
+        exit 1
+    fi
+
+    # Pull latest code
+    echo -e "${BLUE}  → Pulling latest code...${NC}"
+    cd "$script_dir" && git pull --ff-only 2>/dev/null || {
+        echo -e "${YELLOW}  ⚠ git pull failed — using local copy${NC}"
+    }
+
+    # Rebuild smsly-media-mgmt if Cargo.toml exists
+    local mgmt_dir="$script_dir/../smsly-media-mgmt"
+    if [ -f "$mgmt_dir/Cargo.toml" ]; then
+        echo -e "${BLUE}  → Rebuilding smsly-media-mgmt...${NC}"
+        cd "$mgmt_dir" && cargo build --release 2>&1 | tail -5
+        if [ -f target/release/smsly-media-mgmt ]; then
+            cp target/release/smsly-media-mgmt /usr/local/bin/smsly-media-mgmt
+            systemctl restart smsly-media-mgmt
+            echo -e "${GREEN}  ✓ smsly-media-mgmt updated${NC}"
+        fi
+    fi
+
+    # Redeploy configs
+    echo -e "${BLUE}  → Updating configs...${NC}"
+    deploy_media_configs "$script_dir"
+    deploy_media_systemd_units "$script_dir"
+    if [ -f "$MEDIA_NODE_ENV" ]; then
+        template_media_configs "$MEDIA_NODE_ENV"
+    fi
+
+    # Restart all media services
+    echo -e "${BLUE}  → Restarting media services...${NC}"
+    for svc in smsly-media-mgmt smsly-voice-api smsly-video livekit-server rtpengine freeswitch kamailio coturn openresty; do
+        systemctl restart "$svc" 2>/dev/null || true
+    done
+
+    sleep 3
+    verify_media_services
+
+    echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
+    echo -e "${GREEN}  ✓ Media node update complete${NC}"
+    echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
+}

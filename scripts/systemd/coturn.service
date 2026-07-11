@@ -1,0 +1,19 @@
+[Unit]
+Description=coturn TURN Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/turnserver -c /etc/coturn/turnserver.conf
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/coturn /run
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

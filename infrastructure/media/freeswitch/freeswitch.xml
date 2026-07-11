@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE configuration SYSTEM "freeswitch-cfg.dtd">
+<!-- FreeSWITCH — SMSLY Media Node Minimal Config -->
+<configuration name="freeswitch.conf" description="FreeSWITCH Configuration">
+  <X-PRE-PROCESS cmd="set" data="domain=${DOMAIN}"/>
+  <X-PRE-PROCESS cmd="set" data="domain_name=${DOMAIN}"/>
+  <X-PRE-PROCESS cmd="set" data="bind_server_ip=${PRIVATE_IP}"/>
+  <X-PRE-PROCESS cmd="set" data="external_sip_ip=${PUBLIC_IP}"/>
+  <X-PRE-PROCESS cmd="set" data="external_rtp_ip=${PUBLIC_IP}"/>
+
+  <sections>
+    <configuration name="switch.conf" description="Core Configuration">
+      <settings>
+        <param name="log-to-console" value="false"/>
+        <param name="log-to-file" value="/var/log/freeswitch/freeswitch.log"/>
+        <param name="log-redundancy" value="true"/>
+        <param name="core-db-dsn" value=""/>
+        <param name="nat-map" value="true"/>
+        <param name="stun-enabled" value="false"/>
+        <param name="rtp-timeout-sec" value="30"/>
+        <param name="rtp-autoflush-during-bridge" value="true"/>
+        <param name="rtp-timer-name" value="soft"/>
+      </settings>
+    </configuration>
+
+    <configuration name="acl.conf" description="Network ACL">
+      <network-lists>
+        <list name="loopback.auto" default="allow">
+          <node type="allow" address="127.0.0.0/8"/>
+          <node type="allow" address="10.0.0.0/8"/>
+          <node type="allow" address="172.16.0.0/12"/>
+          <node type="allow" address="192.168.0.0/16"/>
+        </list>
+      </network-lists>
+    </configuration>
+
+    <configuration name="callcenter.conf" description="Call Center">
+      <settings>
+        <param name="odbc-dsn" value=""/>
+        <param name="dbname" value="/var/lib/freeswitch/db/callcenter.db"/>
+      </settings>
+    </configuration>
+  </sections>
+</configuration>

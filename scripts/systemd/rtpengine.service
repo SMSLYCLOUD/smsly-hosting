@@ -1,0 +1,19 @@
+[Unit]
+Description=RTPEngine Media Proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+ExecStart=/usr/sbin/rtpengine --config-file /etc/rtpengine/rtpengine.conf
+PIDFile=/run/rtpengine.pid
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+# rtpengine runs as root for raw socket access
+ProtectSystem=false
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
