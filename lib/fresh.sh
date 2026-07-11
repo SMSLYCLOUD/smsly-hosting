@@ -1130,6 +1130,9 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
         sync_agent_lite_rabbitmq_password
     else
         echo -e "${BLUE}  → Deploying Observability Stack...${NC}"
+        # Ensure scripts mounted into containers are executable (git may not preserve +x)
+        chmod +x "$INSTALL_DIR"/scripts/alertmanager-entrypoint.sh 2>/dev/null || true
+        chmod +x "$INSTALL_DIR"/infrastructure/docker/infisical-gen-env.sh 2>/dev/null || true
         if [ -f "infrastructure/docker/docker-compose.observability.yml" ]; then
             docker compose -f infrastructure/docker/docker-compose.observability.yml pull --ignore-pull-failures || \
                 echo -e "${YELLOW}  ⚠ Observability stack pull failed (non-fatal)${NC}"

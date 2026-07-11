@@ -955,6 +955,9 @@ fi
     # ─── Observability Stack Update (master mode only) ──────────────────────
     if [ "$MODE_AGENT_LITE" != "true" ] && [ "$MODE_NODE" != "true" ]; then
         echo -e "${BLUE}  → Updating observability stack...${NC}"
+        # Ensure scripts mounted into containers are executable (git may not preserve +x)
+        chmod +x "$INSTALL_DIR"/scripts/alertmanager-entrypoint.sh 2>/dev/null || true
+        chmod +x "$INSTALL_DIR"/infrastructure/docker/infisical-gen-env.sh 2>/dev/null || true
         mkdir -p /opt/smsly-hosting/prometheus-targets
         if ! chown -R 1000:1000 /opt/smsly-hosting/prometheus-targets 2>/dev/null; then
             echo -e "${YELLOW}  ⚠ Could not chown prometheus-targets to uid 1000${NC}"
