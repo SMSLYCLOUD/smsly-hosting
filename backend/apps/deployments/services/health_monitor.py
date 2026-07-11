@@ -56,6 +56,8 @@ LOW_RESOURCE_EXTRA_GRACE_SECONDS = _env_int(
 # When a container is dead (exited/crashed), use a fast
 # retry threshold instead of the full HTTP retry count.
 CRASH_FAST_RETRIES = _env_int("HEALTH_CRASH_FAST_RETRIES", 3, minimum=1)
+# Minimum seconds between health alerts for the same service (rate limiting).
+HEALTH_ALERT_COOLDOWN_SECONDS = _env_int("HEALTH_ALERT_COOLDOWN_SECONDS", 300, minimum=60)
 LOW_RESOURCE_CPU_THRESHOLD = _env_float(
     "HEALTH_LOW_RESOURCE_CPU_THRESHOLD",
     0.75,
@@ -95,12 +97,22 @@ def _container_state_key(service_id: str) -> str:
     return f"health:state:{service_id}"
 
 
+def _restart_count_key(service_id: str) -> str:
+    return f"health:restart_count:{service_id}"
+
+
+def _health_alert_key(service_id: str) -> str:
+    return f"health:alert_sent:{service_id}"
+
+
 def _clear_state(service_id: str, clear_restart: bool = False):
     cache.delete(_failure_key(service_id))
     if clear_restart:
         cache.delete(_restart_key(service_id))
     cache.delete(_last_check_key(service_id))
     cache.delete(_container_state_key(service_id))
+    cache.delete(_restart_count_key(service_id))
+    cache.delete(_health_alert_key(service_id))
 
 
 def _normalize_path(path: str) -> str:
@@ -420,29 +432,41 @@ def monitor_health_task():
 
 
 
-def _probe_container_state(container_id: str) -> tuple[str, int | None]:
-    """Fetch container status and exit code from Docker.
+def _probe_container_state(container_id: str) -> dict:
+    """Fetch container status, exit code, and restart metadata from Docker.
 
-    Returns (status: str, exit_code: int | None).
-    Status is one of: created, restarting, running, removing, paused,
-    exited, dead.  Returns ("unknown", None) if Docker is unreachable
-    or the container no longer exists.
+    Returns a dict:
+      status: str  — one of created, restarting, running, removing, paused,
+              exited, dead, not-found, unknown
+      exit_code: int | None
+      restart_count: int — Docker RestartCount (increases on each restart)
+      started_at: str — ISO timestamp of last start (resets on restart)
+
+    Returns {"status": "unknown", "exit_code": None, "restart_count": 0,
+             "started_at": ""} if Docker is unreachable.
     """
     import docker
 
     if not container_id:
-        return ("unknown", None)
+        return {"status": "unknown", "exit_code": None, "restart_count": 0, "started_at": ""}
     try:
         client = docker.from_env()
         container = client.containers.get(container_id)
         state = container.attrs.get("State", {})
         status = (state.get("Status") or "unknown").lower()
         exit_code = state.get("ExitCode")
-        return (status, exit_code)
+        restart_count = int(state.get("RestartCount") or 0)
+        started_at = state.get("StartedAt") or ""
+        return {
+            "status": status,
+            "exit_code": exit_code,
+            "restart_count": restart_count,
+            "started_at": started_at,
+        }
     except docker.errors.NotFound:
-        return ("not-found", None)
+        return {"status": "not-found", "exit_code": None, "restart_count": 0, "started_at": ""}
     except Exception:
-        return ("unknown", None)
+        return {"status": "unknown", "exit_code": None, "restart_count": 0, "started_at": ""}
 
 
 def _check_service_health(service, Deployment):
@@ -474,14 +498,35 @@ def _check_service_health(service, Deployment):
 
     # Check Docker container state: if the container is dead, fast-fail.
     container_id = (active.container_id or "").strip()
-    state, exit_code = _probe_container_state(container_id)
+    state_info = _probe_container_state(container_id)
+    state = state_info["status"]
+    exit_code = state_info["exit_code"]
+    restart_count = state_info["restart_count"]
     is_crashed = state in {"exited", "dead", "not-found", "restarting"}
 
-    cache_key = _container_state_key(service_key)
-    if is_crashed:
-        cache.set(cache_key, {"state": state, "exit_code": exit_code}, timeout=STATE_TTL_SECONDS)
+    # ── Restart-loop detection ──
+    # If the container shows "running" but its RestartCount keeps climbing,
+    # it's in a restart loop (process crashes, Docker restarts it, repeat).
+    # Detect this by comparing the cached restart_count with the current one.
+    is_restart_loop = False
+    if not is_crashed and state == "running" and restart_count > 0:
+        prev_restart_count = cache.get(_restart_count_key(service_key))
+        if prev_restart_count is not None and restart_count > prev_restart_count:
+            # RestartCount increased — container restarted since last check.
+            # If HTTP checks also fail, this is a restart loop.
+            is_restart_loop = True
+            logger.warning(
+                "%s restart loop detected: RestartCount increased %d -> %d, "
+                "container keeps crashing and restarting.",
+                service.name, prev_restart_count, restart_count,
+            )
+        cache.set(_restart_count_key(service_key), restart_count, timeout=STATE_TTL_SECONDS)
+
+    state_cache = _container_state_key(service_key)
+    if is_crashed or is_restart_loop:
+        cache.set(state_cache, {"state": state, "exit_code": exit_code, "restart_loop": is_restart_loop}, timeout=STATE_TTL_SECONDS)
     else:
-        cache.delete(cache_key)
+        cache.delete(state_cache)
 
     targets = _build_targets(service, active)
     if not targets:
@@ -541,10 +586,16 @@ def _handle_failure(service, service_key: str, reason: str):
     current_failures = int(cache.get(failure_key, 0) or 0) + 1
     cache.set(failure_key, current_failures, timeout=STATE_TTL_SECONDS)
 
-    # Use fast retries if the container is dead (exited/crashed/not-found),
-    # otherwise use the service's configured HTTP retry threshold.
+    # Use fast retries if the container is dead (exited/crashed/not-found)
+    # or in a restart loop (running but keeps crashing+restarting).
     state_info = cache.get(_container_state_key(service_key))
-    if state_info and isinstance(state_info, dict):
+    is_crash_or_loop = (
+        state_info
+        and isinstance(state_info, dict)
+        and (state_info.get("state") in {"exited", "dead", "not-found", "restarting"}
+             or state_info.get("restart_loop"))
+    )
+    if is_crash_or_loop:
         retries = max(2, CRASH_FAST_RETRIES)
     else:
         retries = max(2, int(service.health_check_retries or 8))
@@ -568,11 +619,13 @@ def _handle_failure(service, service_key: str, reason: str):
                 "reason": reason,
                 "consecutive_failures": current_failures,
                 "threshold": retries,
-                "auto_restart": service.auto_restart
+                "auto_restart": service.auto_restart,
+                "restart_loop": bool(is_crash_or_loop and state_info and state_info.get("restart_loop")),
             }
         )
         service.health_status = "unhealthy"
         service.save(update_fields=["health_status", "updated_at"])
+        _dispatch_health_alert(service, "unhealthy", reason)
 
     if not service.auto_restart:
         return
@@ -640,6 +693,48 @@ def _record_restart_attempt(service_key: str):
         {**state, "count": count, "last_restart": time.time()},
         timeout=STATE_TTL_SECONDS,
     )
+
+
+def _dispatch_health_alert(service, health_status: str, reason: str):
+    """Dispatch alert to the service owner when health status degrades.
+
+    Rate-limited to one alert per ``HEALTH_ALERT_COOLDOWN_SECONDS`` per
+    service to avoid notification storms.  Uses the same ``alert_user_task``
+    fan-out as deployment failures so the operator gets SMS / email / in-app
+    notifications based on their ``JULES_NOTIFY_*`` preferences.
+    """
+    from apps.deployments.models import Deployment
+
+    # Rate-limit: one alert per cooldown window per service.
+    alert_key = _health_alert_key(str(service.id))
+    if cache.get(alert_key):
+        return
+    cache.set(alert_key, True, timeout=HEALTH_ALERT_COOLDOWN_SECONDS)
+
+    # Find the latest active (or most recent) deployment to attach the alert to.
+    active = (
+        Deployment.objects.filter(service=service)
+        .order_by("-created_at")
+        .first()
+    )
+    if not active:
+        logger.warning("Cannot dispatch health alert for %s: no deployment found", service.name)
+        return
+
+    error_message = (
+        f"Service {service.name} is {health_status}. "
+        f"Reason: {reason}"
+    )
+
+    try:
+        from apps.deployments.tasks_alerts import alert_user_task
+        alert_user_task.delay(
+            deployment_id=str(active.id),
+            error_message=error_message,
+        )
+        logger.info("Health alert dispatched for %s (status=%s)", service.name, health_status)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.warning("Failed to dispatch health alert for %s: %s", service.name, exc)
 
 
 def _trigger_restart(service, service_key: str) -> bool:
@@ -717,6 +812,11 @@ def _trigger_restart(service, service_key: str) -> bool:
             )
             service.health_status = "needs_manual_intervention"
             service.save(update_fields=["health_status", "updated_at"])
+            _dispatch_health_alert(
+                service, "needs_manual_intervention",
+                f"{recent_failures} deployments failed in the last "
+                f"{AUTO_ROLLBACK_WINDOW_MINUTES} min; auto-rollback triggered",
+            )
             return False
 
         latest = Deployment.objects.filter(service=service).order_by("-created_at").first()
@@ -736,6 +836,10 @@ def _trigger_restart(service, service_key: str) -> bool:
                 if service.health_status != "needs_manual_intervention":
                     service.health_status = "needs_manual_intervention"
                     service.save(update_fields=["health_status", "updated_at"])
+                    _dispatch_health_alert(
+                        service, "needs_manual_intervention",
+                        f"Previous fallback deployment {last_fallback_id} failed",
+                    )
                 return False
 
         successful = (
@@ -753,6 +857,10 @@ def _trigger_restart(service, service_key: str) -> bool:
             if service.health_status != "needs_manual_intervention":
                 service.health_status = "needs_manual_intervention"
                 service.save(update_fields=["health_status", "updated_at"])
+                _dispatch_health_alert(
+                    service, "needs_manual_intervention",
+                    "No successful deployment available to fall back to",
+                )
             return False
 
         provider = service.provider or CloudProvider.objects.filter(is_active=True).first()
