@@ -910,8 +910,19 @@ restart_edge_stack() {
         non_traefik_services="socket-proxy route-fallback"
     fi
     echo -e "${BLUE}    [1/5] Ensuring socket-proxy + route-fallback running...${NC}"
-    timeout 30 docker compose -f "$COMPOSE_FILE" up -d --no-deps $non_traefik_services >/dev/null 2>&1 || \
-        timeout 30 docker compose -f "$COMPOSE_FILE" up -d $non_traefik_services >/dev/null 2>&1 || true
+    local all_running=true
+    for svc in $non_traefik_services; do
+        if ! docker compose -f "$COMPOSE_FILE" ps "$svc" 2>/dev/null | grep -q "Up"; then
+            all_running=false
+            break
+        fi
+    done
+    if [ "$all_running" = true ]; then
+        echo -e "${GREEN}      edge services already running, skipping restart${NC}"
+    else
+        timeout 30 docker compose -f "$COMPOSE_FILE" up -d --no-deps $non_traefik_services >/dev/null 2>&1 || \
+            timeout 30 docker compose -f "$COMPOSE_FILE" up -d $non_traefik_services >/dev/null 2>&1 || true
+    fi
 
     # Force-recreate ONLY Traefik (not socket-proxy) to trigger full container
     # re-discovery. Traefik v3.x removed pollInterval; a fresh start against a
@@ -922,7 +933,11 @@ restart_edge_stack() {
     # Docker events and does not need to be restarted. This eliminates the 2-5s downtime
     # for deployed user services during an update.
     echo -e "${BLUE}    [2/5] Ensuring traefik running...${NC}"
-    timeout 30 docker compose -f "$COMPOSE_FILE" up -d traefik >/dev/null 2>&1 || true
+    if docker compose -f "$COMPOSE_FILE" ps traefik 2>/dev/null | grep -q "Up"; then
+        echo -e "${GREEN}      traefik already running, skipping restart${NC}"
+    else
+        timeout 30 docker compose -f "$COMPOSE_FILE" up -d traefik >/dev/null 2>&1 || true
+    fi
 
     # Re-attach expected external networks AFTER Traefik restart so it
     # discovers containers with stable network topology (idempotent).

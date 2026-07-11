@@ -154,9 +154,20 @@ restart_edge_stack() {
 
     echo -e "${BLUE}  -> Refreshing edge proxy stack (caddy/traefik/socket-proxy/route-fallback)...${NC}"
     echo -e "${BLUE}    [1/5] Bringing up edge services...${NC}"
-    # NOTE(Zero-Downtime): Removed --force-recreate to eliminate downtime for deployed services.
-    timeout 30 docker compose -f "$COMPOSE_FILE" up -d --no-deps $edge_services >/dev/null 2>&1 || \
-        timeout 30 docker compose -f "$COMPOSE_FILE" up -d $edge_services >/dev/null 2>&1 || true
+    local all_running=true
+    for svc in $edge_services; do
+        if ! docker compose -f "$COMPOSE_FILE" ps "$svc" 2>/dev/null | grep -q "Up"; then
+            all_running=false
+            break
+        fi
+    done
+    if [ "$all_running" = true ]; then
+        echo -e "${GREEN}      edge services already running, skipping restart${NC}"
+    else
+        # NOTE(Zero-Downtime): Removed --force-recreate to eliminate downtime for deployed services.
+        timeout 30 docker compose -f "$COMPOSE_FILE" up -d --no-deps $edge_services >/dev/null 2>&1 || \
+            timeout 30 docker compose -f "$COMPOSE_FILE" up -d $edge_services >/dev/null 2>&1 || true
+    fi
 
     # Restart core app entrypoints so new upstream bindings are live.
     echo -e "${BLUE}    [2/5] Restarting frontend + backend...${NC}"
