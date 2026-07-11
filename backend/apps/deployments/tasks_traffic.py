@@ -15,7 +15,10 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-ACCESS_LOG = Path('/var/log/traefik/access.log')
+ACCESS_LOG_CANDIDATES = [
+    Path('/var/log/caddy/access.log'),
+    Path('/var/log/traefik/access.log'),
+]
 OFFSET_FILE = Path('/tmp/.traefik_log_offset')
 
 SKIP_PATHS = frozenset({'/ping', '/health', '/health/live', '/health/ready', '/metrics'})
@@ -46,15 +49,30 @@ def _is_traffic_geo_enabled() -> bool:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def _read_offset() -> int:
+def _get_active_access_log() -> Path | None:
+    import os
+    env_path = os.environ.get("TRAFFIC_ACCESS_LOG_PATH")
+    if env_path:
+        p = Path(env_path)
+        if p.exists():
+            return p
+    for path in ACCESS_LOG_CANDIDATES:
+        if path.exists():
+            return path
+    return None
+
+
+def _read_offset(log_path: Path) -> int:
+    offset_file = Path(f"/tmp/.traffic_log_offset_{abs(hash(str(log_path)))}")
     try:
-        return int(OFFSET_FILE.read_text().strip())
+        return int(offset_file.read_text().strip())
     except (FileNotFoundError, ValueError):
         return 0
 
 
-def _write_offset(pos: int) -> None:
-    OFFSET_FILE.write_text(str(pos))
+def _write_offset(log_path: Path, pos: int) -> None:
+    offset_file = Path(f"/tmp/.traffic_log_offset_{abs(hash(str(log_path)))}")
+    offset_file.write_text(str(pos))
 
 
 def _is_private_ip(ip: str) -> bool:
@@ -67,26 +85,55 @@ def _is_private_ip(ip: str) -> bool:
     return addr.is_private or addr.is_loopback or addr.is_link_local
 
 
+def _clean_domain(domain: str) -> str:
+    domain = (domain or "").strip().lower()
+    for prefix in ("https://", "http://"):
+        if domain.startswith(prefix):
+            domain = domain[len(prefix):]
+    if "/" in domain:
+        domain = domain.split("/")[0]
+    if ":" in domain:
+        domain = domain.split(":")[0]
+    return domain
+
+
 def _upsert_traffic_row(ip: str, domain: str) -> None:
     """Insert or increment traffic count for an IP+domain combination."""
     from .models import Service
     from .models_traffic import ServiceTrafficLog
 
-    if not domain:
+    clean_domain = _clean_domain(domain)
+    if not clean_domain:
         return
 
-    service = Service.objects.filter(public_domain__iexact=domain).first()
+    service = Service.objects.filter(public_domain__iexact=clean_domain).first()
     if not service:
-        service = Service.objects.filter(custom_domains__contains=[domain]).first()
+        service = Service.objects.filter(custom_domains__contains=[clean_domain]).first()
+    if not service:
+        for candidate in Service.objects.filter(public_domain__gt=''):
+            if _clean_domain(candidate.public_domain) == clean_domain:
+                service = candidate
+                break
     if not service:
         return
+
+    is_private = _is_private_ip(ip)
+    defaults = {
+        'request_count': 1,
+        'geo_resolved': is_private,
+        'country_code': 'LN' if is_private else '',
+        'country_name': 'Local Network' if is_private else '',
+        'city': 'Internal' if is_private else '',
+        'latitude': 0.0 if is_private else None,
+        'longitude': 0.0 if is_private else None,
+    }
 
     try:
         log_entry, created = ServiceTrafficLog.objects.get_or_create(
             service=service,
             ip_address=ip,
-            domain=domain,
-            defaults={'request_count': 1},
+            domain=clean_domain,
+            defaults=defaults,
         )
         if not created:
             ServiceTrafficLog.objects.filter(pk=log_entry.pk).update(
@@ -96,20 +143,64 @@ def _upsert_traffic_row(ip: str, domain: str) -> None:
         pass
 
 
+def _extract_log_fields(entry: dict) -> tuple[str, str, str, int]:
+    """Parse client_ip, request_host, request_uri, and status from Caddy/Traefik JSON logs."""
+    request_host = ""
+    req = entry.get("request", {})
+    if isinstance(req, dict):
+        request_host = req.get("host", "")
+    if not request_host:
+        request_host = entry.get("RequestHost", "") or entry.get("host", "")
+
+    client_ip = ""
+    if isinstance(req, dict):
+        headers = req.get("headers", {})
+        if isinstance(headers, dict):
+            xff = headers.get("X-Forwarded-For") or headers.get("x-forwarded-for")
+            if isinstance(xff, list) and xff:
+                client_ip = str(xff[0]).split(",")[0].strip()
+            elif isinstance(xff, str) and xff:
+                client_ip = xff.split(",")[0].strip()
+        if not client_ip:
+            client_ip = req.get("client_ip", "") or req.get("remote_ip", "")
+    if not client_ip:
+        client_ip = entry.get("ClientHost", "") or entry.get("client_ip", "") or entry.get("remote_ip", "")
+
+    if client_ip and client_ip.count(".") == 3 and ":" in client_ip:
+        client_ip = client_ip.split(":")[0]
+
+    request_uri = ""
+    if isinstance(req, dict):
+        request_uri = req.get("uri", "")
+    if not request_uri:
+        request_uri = entry.get("RequestURI", "") or entry.get("uri", "")
+
+    status = entry.get("status", 0)
+    if not status:
+        status = entry.get("DownstreamStatus", 0)
+    try:
+        status = int(status)
+    except (TypeError, ValueError):
+        status = 0
+
+    return client_ip.strip(), request_host.strip(), request_uri.strip(), status
+
+
 # ---------------------------------------------------------------------------
-# Task 1: Collect Traefik access log entries
+# Task 1: Collect Traefik / Caddy access log entries
 # ---------------------------------------------------------------------------
 @shared_task(bind=True, ignore_result=True, max_retries=2)
 def collect_traefik_logs(self):
-    """Tail Traefik access.log (JSON format), map RequestHost -> Service,
+    """Tail Traefik / Caddy access.log (JSON format), map RequestHost -> Service,
     and upsert ServiceTrafficLog rows. Runs every ~15 seconds."""
     if not _is_traffic_geo_enabled():
         return
-    if not ACCESS_LOG.exists():
+    log_path = _get_active_access_log()
+    if not log_path:
         return
 
-    offset = _read_offset()
-    file_size = ACCESS_LOG.stat().st_size
+    offset = _read_offset(log_path)
+    file_size = log_path.stat().st_size
 
     if file_size < offset:
         offset = 0
@@ -118,7 +209,7 @@ def collect_traefik_logs(self):
         return
 
     try:
-        with open(ACCESS_LOG, 'r', buffering=8192) as fh:
+        with open(log_path, 'r', buffering=8192) as fh:
             fh.seek(offset)
             new_lines = 0
             for line in fh:
@@ -130,37 +221,30 @@ def collect_traefik_logs(self):
                 except json.JSONDecodeError:
                     continue
 
-                client_ip = entry.get('ClientHost', '')
-                request_host = entry.get('RequestHost', '')
-                request_uri = entry.get('RequestURI', '')
-                status = entry.get('DownstreamStatus', 0)
-
-                if not client_ip or _is_private_ip(client_ip):
+                client_ip, request_host, request_uri, status = _extract_log_fields(entry)
+                if not client_ip or not request_host:
                     continue
 
                 path = request_uri.split('?')[0] if request_uri else ''
                 if path in SKIP_PATHS:
                     continue
 
-                try:
-                    if isinstance(status, int) and status >= 400:
-                        continue
-                except (TypeError, ValueError):
-                    pass
+                if status >= 400:
+                    continue
 
                 _upsert_traffic_row(client_ip, request_host)
                 new_lines += 1
 
                 if new_lines % 100 == 0:
-                    _write_offset(fh.tell())
+                    _write_offset(log_path, fh.tell())
 
-            _write_offset(fh.tell())
+            _write_offset(log_path, fh.tell())
 
         if new_lines:
-            logger.debug("Traefik log collector: processed %d new entries", new_lines)
+            logger.debug("Access log collector: processed %d new entries", new_lines)
 
     except Exception as exc:
-        logger.warning("Traefik log collector error: %s", exc, exc_info=True)
+        logger.warning("Access log collector error: %s", exc, exc_info=True)
         raise self.retry(countdown=5, exc=exc)
 
 
