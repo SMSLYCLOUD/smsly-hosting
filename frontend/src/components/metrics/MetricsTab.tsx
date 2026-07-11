@@ -347,7 +347,7 @@ export function MetricsTab({ serviceId }: { serviceId: string }) {
                 uniqueIps={trafficData?.unique_ips ?? 0}
                 topCountries={trafficData?.countries ?? []}
             />
-            <WorldTrafficMap serviceId={serviceId} />
+            <WorldTrafficMap serviceId={serviceId} trafficData={trafficData} />
         </div>
     );
 }

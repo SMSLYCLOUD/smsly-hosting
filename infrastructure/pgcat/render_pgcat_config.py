@@ -40,13 +40,16 @@ def _fetch_node_agent_users():
         )
         node_role_names = {row[0] for row in cur.fetchall()}
         cur.execute(
-            "SELECT provider_metadata FROM deployments_managedserver "
+            "SELECT provider_metadata, node_db_password FROM deployments_managedserver "
             "WHERE is_lite_agent = true AND provision_status IN ('DONE', 'PROVISIONING', 'FAILED')"
         )
         user_map = {}
         for row in cur.fetchall():
             meta = row[0] or {}
-            node_pass = meta.get("node_db_password")
+            # Password is stored in the encrypted node_db_password field;
+            # fall back to provider_metadata for backward compat with
+            # nodes provisioned before the migration.
+            node_pass = row[1] or meta.get("node_db_password")
             node_user = meta.get("node_db_user")
             if not node_user:
                 node_id = meta.get("node_id", "")
@@ -55,15 +58,17 @@ def _fetch_node_agent_users():
                     node_user = f"node_agent_{prefix}"
             if node_user and node_pass:
                 user_map[node_user] = node_pass
-        # Add any node_agent_* roles in Postgres that don't have a metadata
-        # entry yet (e.g. stale provisioning).  They'll work with the main
-        # pool password as fallback.
-        for role in node_role_names:
-            if role not in user_map:
-                user_map[role] = db_pass
+        # SECURITY: Do NOT fall back to smsly_admin password for orphaned
+        # roles. A stale node_agent_* role with the admin password is a
+        # privilege escalation vector. Skip orphaned roles instead.
+        orphaned = node_role_names - set(user_map.keys())
+        if orphaned:
+            print(f"WARNING: Skipping orphaned node_agent roles (no metadata): "
+                  f"{', '.join(sorted(orphaned))}", file=sys.stderr)
         cur.close()
         conn.close()
-        return list(user_map.items())
+        # Validate: reject any entry with empty password
+        return [(u, p) for u, p in user_map.items() if p]
     except Exception as exc:
         print(f"WARNING: Could not query node agent users: {exc}", file=sys.stderr)
         return []

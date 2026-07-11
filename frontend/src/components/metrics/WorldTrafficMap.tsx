@@ -7,7 +7,7 @@ import dynamic from 'next/dynamic';
 import { Skeleton } from '@/components/ui/skeleton';
 import { servicesApi, systemApi } from '@/lib/api';
 
-import 'mapbox-gl/dist/mapbox-gl.css';
+import 'maplibre-gl/dist/maplibre-gl.css';
 
 const MapComponent = dynamic(() => import('./WorldTrafficMapImpl'), {
     ssr: false,
@@ -31,9 +31,14 @@ interface TrafficGeoData {
     last_updated: string | null;
 }
 
-export function WorldTrafficMap({ serviceId }: { serviceId: string }) {
-    const [data, setData] = useState<TrafficGeoData | null>(null);
-    const [loading, setLoading] = useState(true);
+interface WorldTrafficMapProps {
+    serviceId: string;
+    trafficData?: TrafficGeoData | null;
+}
+
+export function WorldTrafficMap({ serviceId, trafficData: externalData }: WorldTrafficMapProps) {
+    const [data, setData] = useState<TrafficGeoData | null>(externalData ?? null);
+    const [loading, setLoading] = useState(!externalData);
     const [mapToken, setMapToken] = useState('');
 
     const fetchData = useCallback(async () => {
@@ -47,14 +52,25 @@ export function WorldTrafficMap({ serviceId }: { serviceId: string }) {
         }
     }, [serviceId]);
 
+    // Sync external data when parent re-fetches
     useEffect(() => {
-        fetchData();
+        if (externalData) {
+            setData(externalData);
+            setLoading(false);
+        }
+    }, [externalData]);
+
+    useEffect(() => {
         systemApi.getConfig().then((config: any) => {
             setMapToken(config?.MAPBOX_TOKEN || '');
         });
-        const interval = setInterval(fetchData, 60000);
-        return () => clearInterval(interval);
-    }, [serviceId, fetchData]);
+        // Only poll when we own the data (no parent-provided data)
+        if (!externalData) {
+            fetchData();
+            const interval = setInterval(fetchData, 60000);
+            return () => clearInterval(interval);
+        }
+    }, [serviceId, fetchData, externalData]);
 
     if (loading) {
         return (
@@ -82,21 +98,6 @@ export function WorldTrafficMap({ serviceId }: { serviceId: string }) {
         );
     }
 
-    if (!mapToken) {
-        return (
-            <Card className="p-6 border-border shadow-md">
-                <div className="flex items-center gap-2 mb-4">
-                    <Globe className="w-5 h-5 text-cyan-500" />
-                    <h3 className="font-bold">Traffic Map</h3>
-                </div>
-                <div className="h-[300px] flex items-center justify-center text-muted-foreground text-sm">
-                    Set <code>mapbox_token</code> in Platform Configuration to enable the interactive map.
-                </div>
-                <TrafficLegend countries={data.countries} />
-            </Card>
-        );
-    }
-
     return (
         <Card className="p-6 border-border shadow-md">
             <div className="flex items-center justify-between mb-4">
@@ -107,6 +108,11 @@ export function WorldTrafficMap({ serviceId }: { serviceId: string }) {
                 <div className="flex items-center gap-3 text-xs text-muted-foreground">
                     <span>{data.total_requests.toLocaleString()} requests</span>
                     <span>{data.unique_countries} countries</span>
+                    {data.last_updated && (
+                        <span title={data.last_updated}>
+                            Updated {new Date(data.last_updated).toLocaleTimeString()}
+                        </span>
+                    )}
                     <button onClick={fetchData} className="p-1 hover:bg-muted rounded">
                         <RefreshCw className="w-3 h-3" />
                     </button>

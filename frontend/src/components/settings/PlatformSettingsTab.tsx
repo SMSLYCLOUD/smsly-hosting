@@ -334,6 +334,20 @@ export function PlatformSettingsTab() {
                 onCheckedChange={(v) => handleChange("traffic_geo_enabled", v)}
               />
             </div>
+            {config.traffic_geo_enabled && (
+              <div className="space-y-2 ml-1">
+                <Label>Mapbox Token (optional)</Label>
+                <Input
+                  type="password"
+                  placeholder={config.mapbox_token_set ? "•••••••• (Saved)" : "Leave empty to use free OpenFreeMap tiles"}
+                  onChange={(e) => handleChange("mapbox_token", e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Optional. When empty, the map uses free OpenFreeMap tiles (no account needed).
+                  Get a token at <a href="https://mapbox.com" target="_blank" rel="noopener noreferrer" className="underline">mapbox.com</a> for premium styles.
+                </p>
+              </div>
+            )}
             <div className="flex items-center justify-between rounded-lg border p-4">
               <div className="space-y-0.5">
                 <Label className="text-base">Disable Tier Gates</Label>
@@ -442,6 +456,33 @@ export function PlatformSettingsTab() {
                   onCheckedChange={(v) => handleChange("enable_crowdsec_waf", v)}
                 />
               </div>
+              {config.enable_crowdsec_waf && (
+                <div className="space-y-4 mt-3 ml-1">
+                  <div className="space-y-2">
+                    <Label>CrowdSec Bouncer API Key</Label>
+                    <Input
+                      type="password"
+                      placeholder={config.crowdsec_bouncer_key_set ? "•••••••• (Saved)" : "64-char hex token from cscli bouncers add"}
+                      onChange={(e) => handleChange("crowdsec_bouncer_key", e.target.value)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      The bouncer key authenticates Traefik with CrowdSec.
+                      Generate with: <code className="bg-muted px-1 rounded">cscli bouncers add traefik_bouncer -o raw</code>
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>CrowdSec Enrollment Key (optional)</Label>
+                    <Input
+                      type="password"
+                      placeholder={config.crowdsec_enroll_key_set ? "•••••••• (Saved)" : "Console enrollment key (optional)"}
+                      onChange={(e) => handleChange("crowdsec_enroll_key", e.target.value)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Optional. Enroll in CrowdSec console for community threat intelligence.
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="border-t pt-4 mt-4">

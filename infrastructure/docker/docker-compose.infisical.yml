@@ -3,22 +3,23 @@
 # ============================================================
 # Adds: secret versioning, RBAC, audit logs, auto-reload
 # for user-deployed containers.
+#
+# Secrets are auto-generated on first boot by the install
+# scripts (update.sh / fresh.sh) and written to /data/infisical.env.
+# The env_file directive loads them into the container.
 # ============================================================
 
 services:
   infisical:
-    image: infisical/infisical:0.63 # TODO: pin to digest via dependabot/renovate
+    image: infisical/infisical:v0.162.2
     restart: unless-stopped
+    env_file:
+      - /data/infisical.env
     environment:
-      ENCRYPTION_KEY: ${INFISICAL_ENCRYPTION_KEY:?INFISICAL_ENCRYPTION_KEY is required}
-      JWT_SIGNUP_SECRET: ${INFISICAL_JWT_SIGNUP_SECRET:?INFISICAL_JWT_SIGNUP_SECRET is required}
-      JWT_REFRESH_SECRET: ${INFISICAL_JWT_REFRESH_SECRET:?INFISICAL_JWT_REFRESH_SECRET is required}
-      JWT_AUTH_SECRET: ${INFISICAL_JWT_AUTH_SECRET:?INFISICAL_JWT_AUTH_SECRET is required}
-      JWT_SERVICE_SECRET: ${INFISICAL_JWT_SERVICE_SECRET:?INFISICAL_JWT_SERVICE_SECRET is required}
-      JWT_MFA_SECRET: ${INFISICAL_JWT_MFA_SECRET:?INFISICAL_JWT_MFA_SECRET is required}
-      JWT_PROVIDER_AUTH_SECRET: ${INFISICAL_PROVIDER_AUTH_SECRET:-}
-      DB_CONNECTION_URI: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/infisical
-      REDIS_URL: redis://redis:6379
+      # Database — uses existing Postgres
+      DB_CONNECTION_URI: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres-primary:5432/infisical
+      REDIS_URL: redis://redis-primary:6379
+      # App config
       SITE_URL: ${INFISICAL_SITE_URL:-https://secrets.${DOMAIN:-localhost}}
       SMTP_HOST: ${INFISICAL_SMTP_HOST:-}
       SMTP_PORT: ${INFISICAL_SMTP_PORT:-587}
@@ -54,4 +55,9 @@ services:
           memory: 256M
 
 volumes:
-  infisical_data: null
+  infisical_data:
+
+networks:
+  smsly-net:
+    external: true
+    name: smsly-net

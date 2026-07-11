@@ -1144,6 +1144,48 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
             docker exec "$backend_container" python manage.py deploy_docker_labels_exporters 2>/dev/null || true
         fi
     fi
+
+    # ─── Infisical auto-provision (master mode only) ─────────────────────
+    _INFISICAL_COMPOSE="$INSTALL_DIR/infrastructure/docker/docker-compose.infisical.yml"
+    if [ "$MODE_AGENT_LITE" != "true" ] && [ -f "$_INFISICAL_COMPOSE" ]; then
+        _infisical_running=$(docker ps --filter "name=infisical" --format '{{.Names}}' 2>/dev/null | head -1)
+        if [ -n "$_infisical_running" ]; then
+            echo -e "${GREEN}  ✓ Infisical already running (${_infisical_running})${NC}"
+        else
+            echo -e "${BLUE}  → Provisioning Infisical secret manager...${NC}"
+            docker volume create infisical_data 2>/dev/null || true
+
+            # Create the infisical database in Postgres if it doesn't exist
+            _db_container="$(docker ps --format '{{.Names}}' | grep -E 'db(-1)?$' | head -1)"
+            if [ -n "$_db_container" ]; then
+                _db_exists=$(docker exec "$_db_container" psql -U "${POSTGRES_USER:-postgres}" -tc \
+                    "SELECT 1 FROM pg_database WHERE datname='infisical'" 2>/dev/null | tr -d '[:space:]')
+                if [ "$_db_exists" != "1" ]; then
+                    docker exec "$_db_container" psql -U "${POSTGRES_USER:-postgres}" -c \
+                        "CREATE DATABASE infisical;" 2>/dev/null && \
+                        echo -e "${GREEN}  ✓ Created infisical database${NC}" || \
+                        echo -e "${YELLOW}  ⚠ Could not create infisical database (may already exist)${NC}"
+                fi
+            fi
+
+            # Generate env file on the volume
+            _gen_script="$INSTALL_DIR/infrastructure/docker/infisical-gen-env.sh"
+            if [ -f "$_gen_script" ]; then
+                docker run --rm \
+                    -v infisical_data:/data \
+                    -v "$_gen_script":/tmp/infisical-gen-env.sh:ro \
+                    alpine:3.19 \
+                    sh /tmp/infisical-gen-env.sh /data/infisical.env 2>/dev/null || \
+                    echo -e "${YELLOW}  ⚠ Could not generate Infisical env${NC}"
+            fi
+
+            docker compose --env-file "$INSTALL_DIR/.env" \
+                -f "$_INFISICAL_COMPOSE" up -d --remove-orphans 2>/dev/null && \
+                echo -e "${GREEN}  ✓ Infisical is running${NC}" || \
+                echo -e "${YELLOW}  ⚠ Infisical startup failed (non-fatal — secrets remain in .env)${NC}"
+        fi
+    fi
+
     set_checkpoint "stack_deployed"
 
     # Docker login now that the registry is actually running

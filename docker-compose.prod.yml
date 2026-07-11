@@ -530,6 +530,10 @@ services:
     - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets:z
     - /opt/smsly-hosting/cosign-keys:/opt/smsly-hosting/cosign-keys:z
     - backups_data:/app/backups
+    # Mount auth directory so the signal can sync htpasswd when registry
+    # credentials change via the Settings UI. The entrypoint chowns this
+    # to UID 1000 (smsly) so the Django process can write htpasswd.
+    - ./auth:/auth:rw,z
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O- http://localhost:8000/health/live || exit 1"]
       interval: 30s

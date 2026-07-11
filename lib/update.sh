@@ -887,13 +887,57 @@ fi
             ;;
     esac
 
-    # ─── Infisical secret sync ──────────────────────────────────────────────
-    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "smsly-infisical"; then
-        echo -e "${BLUE}  → Syncing platform secrets to Infisical...${NC}"
-        backend_container="$(resolve_container_target "smsly-hosting-backend-1")"
-        if [ -n "$backend_container" ]; then
-            docker exec "$backend_container" python manage.py sync_infisical_secrets --push 2>/dev/null || \
-                echo -e "${YELLOW}  ⚠ Infisical sync failed (non-fatal — secrets remain in .env)${NC}"
+    # ─── Infisical auto-provision + secret sync ───────────────────────────
+    _INFISICAL_COMPOSE="$INSTALL_DIR/infrastructure/docker/docker-compose.infisical.yml"
+    if [ -f "$_INFISICAL_COMPOSE" ]; then
+        _infisical_running=$(docker ps --filter "name=infisical" --format '{{.Names}}' 2>/dev/null | head -1)
+        if [ -n "$_infisical_running" ]; then
+            echo -e "${GREEN}  ✓ Infisical already running (${_infisical_running})${NC}"
+        else
+            # Ensure the infisical data volume exists
+            docker volume create infisical_data 2>/dev/null || true
+
+            # Create the infisical database in Postgres if it doesn't exist
+            _db_container="$(docker ps --format '{{.Names}}' | grep -E 'db(-1)?$' | head -1)"
+            if [ -n "$_db_container" ]; then
+                _db_exists=$(docker exec "$_db_container" psql -U "${POSTGRES_USER:-postgres}" -tc \
+                    "SELECT 1 FROM pg_database WHERE datname='infisical'" 2>/dev/null | tr -d '[:space:]')
+                if [ "$_db_exists" != "1" ]; then
+                    docker exec "$_db_container" psql -U "${POSTGRES_USER:-postgres}" -c \
+                        "CREATE DATABASE infisical;" 2>/dev/null && \
+                        echo -e "${GREEN}  ✓ Created infisical database${NC}" || \
+                        echo -e "${YELLOW}  ⚠ Could not create infisical database (may already exist)${NC}"
+                fi
+            fi
+
+            # Generate env file on the volume (if not already present)
+            _gen_script="$INSTALL_DIR/infrastructure/docker/infisical-gen-env.sh"
+            if [ -f "$_gen_script" ]; then
+                docker run --rm \
+                    -v infisical_data:/data \
+                    -v "$_gen_script":/tmp/infisical-gen-env.sh:ro \
+                    alpine:3.19 \
+                    sh /tmp/infisical-gen-env.sh /data/infisical.env 2>/dev/null || \
+                    echo -e "${YELLOW}  ⚠ Could not generate Infisical env (may already exist)${NC}"
+            fi
+
+            # Bring up Infisical (env_file loaded from volume)
+            echo -e "${BLUE}  → Provisioning Infisical secret manager...${NC}"
+            docker compose --env-file "$INSTALL_DIR/.env" \
+                -f "$_INFISICAL_COMPOSE" up -d --remove-orphans 2>/dev/null && \
+                echo -e "${GREEN}  ✓ Infisical is running${NC}" || \
+                echo -e "${YELLOW}  ⚠ Infisical startup failed (non-fatal — secrets remain in .env)${NC}"
+        fi
+
+        # Sync platform secrets to Infisical if it's running
+        _infisical_running=$(docker ps --filter "name=infisical" --format '{{.Names}}' 2>/dev/null | head -1)
+        if [ -n "$_infisical_running" ]; then
+            echo -e "${BLUE}  → Syncing platform secrets to Infisical...${NC}"
+            backend_container="$(resolve_container_target "smsly-hosting-backend-1")"
+            if [ -n "$backend_container" ]; then
+                docker exec "$backend_container" python manage.py sync_infisical_secrets --push 2>/dev/null || \
+                    echo -e "${YELLOW}  ⚠ Infisical sync failed (non-fatal — secrets remain in .env)${NC}"
+            fi
         fi
     fi
 
