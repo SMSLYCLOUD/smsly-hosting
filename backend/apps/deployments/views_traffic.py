@@ -1,7 +1,7 @@
 """Traffic geolocation API endpoint."""
 import logging
 
-from django.db.models import Count, Sum
+from django.db.models import Avg, Count, Sum
 from rest_framework import permissions, status, viewsets
 from rest_framework.response import Response
 
@@ -44,6 +44,8 @@ class TrafficGeoViewSet(viewsets.ViewSet):
             .annotate(
                 total_requests=Sum('request_count'),
                 unique_ips=Count('ip_address', distinct=True),
+                lat=Avg('latitude'),
+                lon=Avg('longitude'),
             )
             .order_by('-total_requests')
         )
@@ -52,7 +54,11 @@ class TrafficGeoViewSet(viewsets.ViewSet):
             ServiceTrafficLog.objects
             .filter(service=service, geo_resolved=True, city__gt='')
             .values('city', 'country_code')
-            .annotate(total_requests=Sum('request_count'))
+            .annotate(
+                total_requests=Sum('request_count'),
+                lat=Avg('latitude'),
+                lon=Avg('longitude'),
+            )
             .order_by('-total_requests')[:10]
         )
 
@@ -72,6 +78,8 @@ class TrafficGeoViewSet(viewsets.ViewSet):
                 'count': count,
                 'percentage': round(count / total_requests * 100, 1) if total_requests > 0 else 0,
                 'unique_ips': row['unique_ips'],
+                'latitude': round(row['lat'], 4) if row.get('lat') is not None else None,
+                'longitude': round(row['lon'], 4) if row.get('lon') is not None else None,
             })
 
         last_seen = (
@@ -89,6 +97,8 @@ class TrafficGeoViewSet(viewsets.ViewSet):
                     'city': row['city'],
                     'country': row['country_code'],
                     'count': row['total_requests'] or 0,
+                    'latitude': round(row['lat'], 4) if row.get('lat') is not None else None,
+                    'longitude': round(row['lon'], 4) if row.get('lon') is not None else None,
                 }
                 for row in top_cities
             ],

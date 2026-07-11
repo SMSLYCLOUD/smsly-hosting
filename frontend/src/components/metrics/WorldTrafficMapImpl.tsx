@@ -9,6 +9,8 @@ interface CountryTraffic {
     count: number;
     percentage: number;
     unique_ips: number;
+    latitude?: number | null;
+    longitude?: number | null;
 }
 
 const COUNTRY_CENTERS: Record<string, [number, number]> = {
@@ -134,7 +136,11 @@ export default function WorldTrafficMapImpl({ token, countries, totalRequests }:
         const maxCount = Math.max(...countries.map(c => c.count), 1);
 
         countries.forEach(country => {
-            const center = COUNTRY_CENTERS[country.code];
+            const center: [number, number] | undefined =
+                COUNTRY_CENTERS[country.code] ||
+                (country.longitude != null && country.latitude != null
+                    ? [country.longitude, country.latitude]
+                    : undefined);
             if (!center) return;
 
             const size = Math.max(8, (country.count / maxCount) * 40);

@@ -82,12 +82,16 @@ def _upsert_traffic_row(ip: str, domain: str) -> None:
         return
 
     try:
-        ServiceTrafficLog.objects.update_or_create(
+        log_entry, created = ServiceTrafficLog.objects.get_or_create(
             service=service,
             ip_address=ip,
             domain=domain,
-            defaults={'request_count': F('request_count') + 1},
+            defaults={'request_count': 1},
         )
+        if not created:
+            ServiceTrafficLog.objects.filter(pk=log_entry.pk).update(
+                request_count=F('request_count') + 1
+            )
     except IntegrityError:
         pass
 
