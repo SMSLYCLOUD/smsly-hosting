@@ -286,6 +286,10 @@ services:
       # service below mounts the same host directory read-only at its own
       # /etc/prometheus/docker-labels-targets path and reloads on change.
       - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets:z
+      # Mount auth directory so the signal can sync htpasswd when registry
+      # credentials change via the Settings UI. The registry service mounts
+      # the same directory read-only at /auth/htpasswd.
+      - ./auth:/auth:rw,z
     # SECURITY: removed `./:/platform-src:ro` — see celery-deploy comment above.
     ports:
       - "127.0.0.1:8000:8000"

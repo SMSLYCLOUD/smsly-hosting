@@ -410,22 +410,49 @@ def sync_infrastructure_on_config_change(sender, instance, **kwargs):
                 _htpasswd_paths = ["/auth/htpasswd", "/app/auth/htpasswd"]
                 _htpasswd_written = False
                 for _hp in _htpasswd_paths:
-                    if not os.path.isdir(os.path.dirname(_hp)):
-                        continue
+                    _hp_dir = os.path.dirname(_hp)
+                    # Auto-create the directory if it doesn't exist yet
+                    # (e.g. first boot before docker-compose creates the bind mount).
+                    if not os.path.isdir(_hp_dir):
+                        try:
+                            os.makedirs(_hp_dir, mode=0o755, exist_ok=True)
+                        except OSError as _mk_exc:
+                            logger.debug("Cannot create auth dir %s: %s — skipping", _hp_dir, _mk_exc)
+                            continue
                     try:
-                        import subprocess
-                        # Try htpasswd CLI first
-                        _result = subprocess.run(
-                            ["htpasswd", "-Bbn", _reg_user, _reg_pass],
-                            capture_output=True, text=True, timeout=10,
-                        )
-                        if _result.returncode == 0 and _result.stdout.strip():
-                            _htpasswd_content = _result.stdout.strip() + "\n"
-                        else:
-                            # Fallback: Python bcrypt
+                        # Strategy: pure-Python bcrypt first (no external binary
+                        # dependency), then optionally replace with htpasswd CLI
+                        # output (which may use a different bcrypt variant).
+                        _htpasswd_content = None
+                        try:
                             import bcrypt
                             _hashed = bcrypt.hashpw(_reg_pass.encode(), bcrypt.gensalt(10))
                             _htpasswd_content = f"{_reg_user}:{_hashed.decode()}\n"
+                        except ImportError:
+                            pass
+
+                        # Prefer htpasswd CLI if available (Docker-registry
+                        # compatible bcrypt-2y variant), but don't fail if missing.
+                        try:
+                            import subprocess as _sp
+                            _result = _sp.run(
+                                ["htpasswd", "-Bbn", _reg_user, _reg_pass],
+                                capture_output=True, text=True, timeout=10,
+                            )
+                            if _result.returncode == 0 and _result.stdout.strip():
+                                _htpasswd_content = _result.stdout.strip() + "\n"
+                        except (FileNotFoundError, OSError):
+                            # htpasswd binary not installed — bcrypt fallback is fine
+                            pass
+                        except Exception as _cli_exc:
+                            logger.debug("htpasswd CLI error: %s — using bcrypt fallback", _cli_exc)
+
+                        if _htpasswd_content is None:
+                            logger.warning(
+                                "Cannot generate htpasswd for %s: neither bcrypt nor htpasswd CLI available",
+                                _hp,
+                            )
+                            continue
 
                         with open(_hp, "w", encoding="utf-8") as _fh:
                             _fh.write(_htpasswd_content)
@@ -435,6 +462,7 @@ def sync_infrastructure_on_config_change(sender, instance, **kwargs):
                         break
                     except Exception as _exc:
                         logger.warning("Failed to write htpasswd to %s: %s", _hp, _exc)
+
 
                 # Also sync to .env so future shell-script runs stay in sync.
                 # NOTE: .env is mounted read-only in production (:ro,z), so this
