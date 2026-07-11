@@ -1953,7 +1953,10 @@ class BackupService:
                 file_path=filepath,
                 status='COMPLETED'
             )
-            self.restore_service(temp_backup.id, target_service_id=service.id)
+            try:
+                self.restore_service(temp_backup.id, target_service_id=service.id)
+            finally:
+                temp_backup.delete()
 
         finally:
             if temp_dir and os.path.exists(temp_dir):

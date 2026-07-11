@@ -31,9 +31,8 @@ class BackupRestoreTest(TestCase):
         self.client.force_authenticate(user=self.user)
 
     @patch('apps.deployments.tasks.restore_service_backup_task.delay')
-    @unittest.skip('URL router resolution issues with servicebackup-restore')
     def test_restore_service_requires_confirmation(self, mock_task):
-        url = reverse('servicebackup-restore', args=[self.service_backup.id])
+        url = reverse('backup-restore', args=[self.service_backup.id])
 
         # Request without confirm=true
         response = self.client.post(url, format='json')
