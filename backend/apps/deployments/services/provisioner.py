@@ -927,15 +927,14 @@ def _registry_login_commands(server: ManagedServer) -> str:
             safe_pwd = shlex.quote(pwd)
             safe_url = shlex.quote(url)
             commands.append(
-                f"echo {safe_pwd} | docker login --username {safe_user} "
+                f"printf '%s\\n' {safe_pwd} | docker login --username {safe_user} "
                 f"--password-stdin {safe_url} 2>/dev/null || true"
             )
-        else:
-            # Unauthenticated / internal registry — just log in without creds
-            safe_url = shlex.quote(url)
-            commands.append(
-                f"docker login {safe_url} 2>/dev/null || true"
-            )
+        # else: unauthenticated / internal registry — skip docker login entirely.
+        # Running `docker login <url>` without credentials in a non-interactive SSH
+        # session will hang waiting for a prompt or silently fail. These registries
+        # must be listed in /etc/docker/daemon.json insecure-registries during
+        # provisioning instead.
     if commands:
         return " && ".join(commands)
     return "true"

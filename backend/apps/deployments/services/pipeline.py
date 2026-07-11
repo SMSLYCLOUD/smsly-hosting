@@ -3379,30 +3379,80 @@ class PipelineManager:
         except Exception as e:
             append_log(self.deployment, f"Warning: could not check/start registry container: {e}\n")
 
-    def _ensure_registry_login(self):
+    def _resolve_push_credentials(self) -> dict:
+        """Resolve registry URL + credentials for push/login.
+
+        Priority:
+          1. ``deployment.registry_override`` (per-deployment override)
+          2. ScopedRegistry chain (Project → Team → Organization)
+          3. PlatformConfig global fallback (always returns something)
+
+        URL is always stripped of ``http://`` / ``https://`` prefixes.
+        Returns a dict with keys ``url``, ``username``, ``password``.
+        """
+        from apps.deployments.models_registry_scope import ScopedRegistry
+
+        registry_url = ""
+        reg_username = ""
+        reg_password = ""
+
+        # 1. Per-deployment override
+        if self.deployment.registry_override:
+            registry_url = self.deployment.registry_override.get("url") or ""
+            reg_username = self.deployment.registry_override.get("username") or ""
+            reg_password = self.deployment.registry_override.get("password") or ""
+
+        # 2. ScopedRegistry chain — only walk scope objects (Project/Team/Org).
+        #    self.service.owner is a User, not a scope entity, so we only pass project.
+        if not registry_url:
+            scope_obj = self.service.project  # may be None → falls to PlatformConfig
+            registry_info = ScopedRegistry.resolve_registry_credentials(scope_obj)
+            registry_url = (registry_info.get("url") or "").split("://")[-1].rstrip("/")
+            reg_username = reg_username or registry_info.get("username") or ""
+            reg_password = reg_password or registry_info.get("password") or ""
+
+        # Normalise URL (strip scheme, trailing slash)
+        for scheme in ("https://", "http://"):
+            if registry_url.startswith(scheme):
+                registry_url = registry_url[len(scheme):]
+        registry_url = registry_url.rstrip("/")
+
+        return {
+            "url": registry_url,
+            "username": reg_username,
+            "password": reg_password,
+        }
+
+    def _ensure_registry_login(self, creds: dict | None = None):
         """Ensure Docker is logged in to the registry before pushing.
+
+        Accepts pre-resolved *creds* dict (from ``_resolve_push_credentials``)
+        so that login and push always use identical credentials without a
+        duplicate DB round-trip.
 
         Runs ``docker login`` with configured credentials so that
         ``docker push`` / ``docker pull`` commands succeed without
         requiring manual pre-authentication on the host.
         """
-        from apps.deployments.models_registry_scope import ScopedRegistry
+        if creds is None:
+            try:
+                creds = self._resolve_push_credentials()
+            except Exception as exc:
+                append_log(self.deployment, f"Warning: could not resolve registry credentials: {exc}\n")
+                return
 
-        registry_url = None
-        reg_username = None
-        reg_password = None
-
-        try:
-            scope_obj = self.service.project or self.service.owner
-            registry_info = ScopedRegistry.resolve_registry_credentials(scope_obj)
-            registry_url = (registry_info.get("url") or "").split("://")[-1]
-            reg_username = registry_info.get("username") or ""
-            reg_password = registry_info.get("password") or ""
-        except Exception as exc:
-            append_log(self.deployment, f"Warning: could not resolve registry credentials: {exc}\n")
+        registry_url = creds.get("url") or ""
+        reg_username = creds.get("username") or ""
+        reg_password = creds.get("password") or ""
 
         if not registry_url or not reg_username or not reg_password:
-            append_log(self.deployment, f"Warning: registry login skipped — missing credentials (url={registry_url}, user={'set' if reg_username else 'MISSING'}, pass={'set' if reg_password else 'MISSING'})\n")
+            append_log(
+                self.deployment,
+                f"Warning: registry login skipped — missing credentials "
+                f"(url={registry_url or 'MISSING'}, "
+                f"user={'set' if reg_username else 'MISSING'}, "
+                f"pass={'set' if reg_password else 'MISSING'})\n",
+            )
             return
 
         try:
@@ -3415,7 +3465,13 @@ class PipelineManager:
             else:
                 # SECURITY: don't log raw stderr — docker CLI can echo
                 # malformed input including password characters.
-                append_log(self.deployment, f"ERROR: registry login failed for {registry_url} (exit code {login_proc.returncode}). Push will likely fail. Check that registry_user/registry_password in PlatformConfig match the htpasswd file.\n")
+                append_log(
+                    self.deployment,
+                    f"ERROR: registry login failed for {registry_url} "
+                    f"(exit code {login_proc.returncode}). Push will likely fail. "
+                    f"Check that registry_user/registry_password in PlatformConfig "
+                    f"match the htpasswd file.\n",
+                )
         except Exception as e:
             append_log(self.deployment, f"ERROR: could not login to registry {registry_url}: {e}\n")
 
@@ -3431,31 +3487,23 @@ class PipelineManager:
         # ── Auto-ensure internal registry is running ──────────────
         self._ensure_registry_running()
 
-        # ── Auto-login to registry if credentials available ────────
-        self._ensure_registry_login()
-
-        # ── Resolve registry URL and credentials ─────────────────
+        # ── Resolve registry URL and credentials once ────────────
         # Priority: 1) deployment.registry_override
         #           2) ScopedRegistry chain (Project → Team → Organization)
         #           3) PlatformConfig global fallback
-        from apps.deployments.models_registry_scope import ScopedRegistry
+        # Resolved here so that login and push always use the same creds.
+        try:
+            creds = self._resolve_push_credentials()
+        except Exception as _cred_exc:
+            append_log(self.deployment, f"Warning: could not resolve registry credentials: {_cred_exc}\n")
+            creds = {"url": "", "username": "", "password": ""}
 
-        deployment = self.deployment
-        registry_url = None
-        reg_username = None
-        reg_password = None
+        registry_url = creds.get("url") or ""
+        reg_username = creds.get("username") or ""
+        reg_password = creds.get("password") or ""
 
-        if deployment.registry_override:
-            registry_url = deployment.registry_override.get("url")
-            reg_username = deployment.registry_override.get("username")
-            reg_password = deployment.registry_override.get("password")
-
-        if not registry_url:
-            scope_obj = self.service.project or self.service.owner
-            registry_info = ScopedRegistry.resolve_registry_credentials(scope_obj)
-            registry_url = registry_info.get("url")
-            reg_username = registry_info.get("username")
-            reg_password = registry_info.get("password")
+        # ── Auto-login to registry using the same resolved creds ──
+        self._ensure_registry_login(creds=creds)
 
         is_local = is_deployment_local(self.deployment)
         if not registry_url:

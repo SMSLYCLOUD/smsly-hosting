@@ -153,10 +153,39 @@ class SpawningService:
 
         login_cmd = ""
         if getattr(service, 'registry_credential_id', None) and service.registry_credential.is_active:
-            user = shlex.quote(service.registry_credential.username)
-            password = shlex.quote(service.registry_credential.password)
-            reg_url = shlex.quote(service.registry_credential.registry_url.replace("https://", "").replace("http://", "").split("/")[0])
-            login_cmd = f"echo {password} | docker login --username {user} --password-stdin {reg_url}; "
+            # Use per-service RegistryCredential (third-party registry pull)
+            raw_user = service.registry_credential.username
+            raw_pwd = service.registry_credential.password
+            raw_url = (
+                service.registry_credential.registry_url
+                .replace("https://", "").replace("http://", "")
+                .split("/")[0]
+            )
+            # SECURITY: Use printf '%s' instead of echo to avoid escape-sequence
+            # interpretation and to prevent the password appearing in shell history.
+            login_cmd = (
+                f"printf '%s\\n' {shlex.quote(raw_pwd)} "
+                f"| docker login --username {shlex.quote(raw_user)} "
+                f"--password-stdin {shlex.quote(raw_url)}; "
+            )
+        elif not login_cmd:
+            # Fall back to ScopedRegistry chain (Project → Team → Organization → PlatformConfig)
+            try:
+                from apps.deployments.models_registry_scope import ScopedRegistry
+                scope_obj = getattr(service, 'project', None)
+                registry_info = ScopedRegistry.resolve_registry_credentials(scope_obj)
+                raw_url = (registry_info.get("url") or "").split("://")[-1].rstrip("/")
+                raw_user = registry_info.get("username") or ""
+                raw_pwd = registry_info.get("password") or ""
+                if raw_url and raw_user and raw_pwd:
+                    login_cmd = (
+                        f"printf '%s\\n' {shlex.quote(raw_pwd)} "
+                        f"| docker login --username {shlex.quote(raw_user)} "
+                        f"--password-stdin {shlex.quote(raw_url)}; "
+                    )
+            except Exception:
+                logger.debug("Could not resolve scoped registry credentials for spawn; proceeding without auth")
+
 
         # Detect sandboxed runtime on the remote node
         runtime_flag = _detect_remote_runtime(ssh)
