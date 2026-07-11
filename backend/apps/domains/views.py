@@ -73,6 +73,8 @@ class GlobalDomainViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         from django.db.models import Q
         user = self.request.user
+        if user.is_superuser:
+            return Domain.objects.all().select_related('service').order_by('-created_at')
         return Domain.objects.filter(
             Q(service__owner=user) | Q(service__project__team__members__user=user)
         ).select_related('service').distinct().order_by('-created_at')

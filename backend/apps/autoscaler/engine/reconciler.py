@@ -119,7 +119,6 @@ class Reconciler:
                 return ScaleResult(rec, applied=True, spawned=spawned)
 
             # Priority 2: remote nodes
-            remaining - spawned
             candidates = ManagedServer.objects.filter(
                 status=ManagedServer.Status.ONLINE,
                 allow_user_workloads=True,
