@@ -299,8 +299,8 @@ reload_container_caddy() {
     # This is needed because the host Caddy (systemd) may not be running.
     local compose_f="${COMPOSE_FILE:-docker-compose.prod.yml}"
     if command -v docker &>/dev/null && docker compose -f "$compose_f" ps -q caddy 2>/dev/null | grep -q .; then
-        docker compose -f "$compose_f" exec -T caddy caddy reload --config /etc/caddy/Caddyfile 2>/dev/null || \
-            docker compose -f "$compose_f" restart caddy 2>/dev/null || true
+        timeout 20 docker compose -f "$compose_f" exec -T caddy caddy reload --config /etc/caddy/Caddyfile 2>/dev/null || \
+            timeout 20 docker compose -f "$compose_f" restart caddy 2>/dev/null || true
     fi
 }
 
@@ -827,7 +827,7 @@ SAFECADDY
 caddy_needs_fix() {
     should_manage_caddy || return 1
     local dest="${INSTALL_DIR:-/opt/smsly-hosting}/caddy-config/Caddyfile"
-    if ! docker compose -f "$COMPOSE_FILE" exec -T caddy caddy validate --config /etc/caddy/Caddyfile 2>/dev/null; then
+    if ! timeout 15 docker compose -f "$COMPOSE_FILE" exec -T caddy caddy validate --config /etc/caddy/Caddyfile 2>/dev/null; then
         return 0  # Syntax error
     fi
     if grep -q 'dns cloudflare' "$dest" 2>/dev/null && [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
@@ -909,8 +909,9 @@ restart_edge_stack() {
     if [ "$MODE_AGENT_LITE" != "true" ]; then
         non_traefik_services="socket-proxy route-fallback"
     fi
-    docker compose -f "$COMPOSE_FILE" up -d --no-deps $non_traefik_services >/dev/null 2>&1 || \
-        docker compose -f "$COMPOSE_FILE" up -d $non_traefik_services >/dev/null 2>&1 || true
+    echo -e "${BLUE}    [1/5] Ensuring socket-proxy + route-fallback running...${NC}"
+    timeout 30 docker compose -f "$COMPOSE_FILE" up -d --no-deps $non_traefik_services >/dev/null 2>&1 || \
+        timeout 30 docker compose -f "$COMPOSE_FILE" up -d $non_traefik_services >/dev/null 2>&1 || true
 
     # Force-recreate ONLY Traefik (not socket-proxy) to trigger full container
     # re-discovery. Traefik v3.x removed pollInterval; a fresh start against a
@@ -920,12 +921,14 @@ restart_edge_stack() {
     # NOTE(Zero-Downtime): We removed --force-recreate. Traefik dynamically listens to
     # Docker events and does not need to be restarted. This eliminates the 2-5s downtime
     # for deployed user services during an update.
-    docker compose -f "$COMPOSE_FILE" up -d traefik >/dev/null 2>&1 || true
+    echo -e "${BLUE}    [2/5] Ensuring traefik running...${NC}"
+    timeout 30 docker compose -f "$COMPOSE_FILE" up -d traefik >/dev/null 2>&1 || true
 
     # Re-attach expected external networks AFTER Traefik restart so it
     # discovers containers with stable network topology (idempotent).
     # If run before 'up -d', Docker Compose will forcefully strip 'smsly-proxy' 
     # since it's not defined in the compose file's networks block.
+    echo -e "${BLUE}    [3/5] Re-attaching external networks...${NC}"
     ensure_container_on_network "smsly-net" "smsly-hosting-traefik-1"
     if [ "$MODE_AGENT_LITE" != "true" ]; then
         ensure_container_on_network "smsly-net" "smsly-hosting-route-fallback-1"
@@ -935,10 +938,12 @@ restart_edge_stack() {
 
     # Validate Caddy config before restart (H1 fix)
     # Use Docker-based Caddy, not host-level binary
+    echo -e "${BLUE}    [4/5] Validating Caddy config...${NC}"
     if should_manage_caddy && docker compose -f "$COMPOSE_FILE" ps caddy 2>/dev/null | grep -q "Up"; then
         if caddy_needs_fix; then
             generate_safe_caddyfile "restart_edge_stack validation"
         fi
+        echo -e "${BLUE}    [5/5] Reloading Caddy...${NC}"
         reload_container_caddy 2>/dev/null || true
     fi
     echo -e "${GREEN}  OK Edge stack refreshed${NC}"
