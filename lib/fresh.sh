@@ -1466,6 +1466,10 @@ if ! is_checkpoint_done "caddy_configured" || [ "$REFRESH_MODE" = "true" ] || [ 
     mkdir -p /opt/smsly-hosting/caddy-config
     chown 1000:1000 /opt/smsly-hosting/caddy-config
     chmod 2775 /opt/smsly-hosting/caddy-config
+    # Caddy access logs (read by fail2ban on host)
+    mkdir -p /opt/smsly-hosting/caddy-logs
+    chown 1000:1000 /opt/smsly-hosting/caddy-logs
+    chmod 2775 /opt/smsly-hosting/caddy-logs
 
     # SEED: Create a temporary safety Caddyfile so the container doesn't crash on first start.
     # The backend will overwrite this within seconds of starting up.

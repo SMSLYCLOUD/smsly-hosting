@@ -56,31 +56,39 @@ bantime = 24h
 findtime = 1d
 maxretry = 3
 JAIL_EOF
-    # Enable nginx jails only when nginx is installed and logs exist
-    if command -v nginx >/dev/null 2>&1 && [ -d /var/log/nginx ]; then
-        cat <<'NGINX_JAIL_EOF' >> /etc/fail2ban/jail.local
+    # Enable Caddy jails when Caddy logs are available
+    if [ -d /var/log/caddy ] || docker volume ls --format '{{.Name}}' 2>/dev/null | grep -q caddy_logs; then
+        cat <<'CADDY_JAIL_EOF' >> /etc/fail2ban/jail.local
 
-[nginx-http-auth]
+[caddy-auth]
 enabled = true
-filter = nginx-http-auth
-logpath = /var/log/nginx/error.log
-maxretry = 5
-
-[http-get-dos]
-enabled = true
-filter = http-get-dos
+filter = caddy-auth
 port = http,https
-logpath = /var/log/nginx/access.log
+logpath = /var/log/caddy/access.log
+maxretry = 5
+bantime = 1h
+
+[caddy-dos]
+enabled = true
+filter = caddy-dos
+port = http,https
+logpath = /var/log/caddy/access.log
 findtime = 300
 maxretry = 300
 bantime = 600
-NGINX_JAIL_EOF
+CADDY_JAIL_EOF
     fi
-    # Create the http-get-dos filter that jail.local references
-    [ -f /etc/fail2ban/filter.d/http-get-dos.conf ] || cat <<'FILTER_EOF' > /etc/fail2ban/filter.d/http-get-dos.conf
+    # Caddy auth filter (JSON access log — 401/403 responses)
+    [ -f /etc/fail2ban/filter.d/caddy-auth.conf ] || cat <<'FILTER_EOF' > /etc/fail2ban/filter.d/caddy-auth.conf
 [Definition]
-failregex = ^<HOST> -.*"(GET|POST).*HTTP.*" 200 .*$
-ignoreregx =
+failregex = ^.*"remote_ip":"<HOST>".*"status":(401|403).*$
+ignoreregex =
+FILTER_EOF
+    # Caddy DoS filter (JSON access log — any request)
+    [ -f /etc/fail2ban/filter.d/caddy-dos.conf ] || cat <<'FILTER_EOF' > /etc/fail2ban/filter.d/caddy-dos.conf
+[Definition]
+failregex = ^.*"remote_ip":"<HOST>".*"method":"(GET|POST|HEAD|PUT|DELETE|PATCH)".*$
+ignoreregex =
 FILTER_EOF
 
     systemctl enable fail2ban >/dev/null 2>&1 || true
