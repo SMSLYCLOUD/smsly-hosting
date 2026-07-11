@@ -38,6 +38,11 @@ class CloudProviderViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = CloudProviderSerializer
 
+    def get_permissions(self):
+        if self.action in {'create', 'update', 'partial_update', 'destroy'}:
+            return [permissions.IsAdminUser()]
+        return [permissions.IsAuthenticated()]
+
     def get_queryset(self):
         # Only return active providers for regular users
         if self.request.user.is_staff:
@@ -201,7 +206,9 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         analyzer = LogAnalyzer()
         # analyzer.analyze_logs expects a string, not a list
         if isinstance(logs, list):
-            logs = "\n".join(logs)
+            logs = "\n".join(str(item) for item in logs)
+        elif not isinstance(logs, str):
+            logs = str(logs)
 
         analysis = analyzer.analyze_logs(logs)
 
