@@ -772,23 +772,24 @@ class BuildLogConsumer(AsyncWebsocketConsumer):
         await self.accept(subprotocol=get_websocket_subprotocol(self.scope))
 
         try:
-            # Authenticate
-            query_string = self.scope.get('query_string', b'').decode()
-            token_key = None
-            for param in query_string.split('&'):
-                if param.startswith('token='):
-                    token_key = param.split('=', 1)[1]
-                    break
+            # Authenticate via scope user (set by QueryStringAuthMiddleware)
+            self.user = self.scope.get('user')
 
-            if not token_key:
-                await self.send(text_data=json.dumps({'error': 'Missing token'}))
+            # Backward compatibility for clients passing token in query string
+            if not self.user or not getattr(self.user, 'is_authenticated', False):
+                query_string = self.scope.get('query_string', b'').decode()
+                token_key = None
+                for param in query_string.split('&'):
+                    if param.startswith('token='):
+                        token_key = param.split('=', 1)[1]
+                        break
+
+                if token_key:
+                    self.user = await self._authenticate_token(token_key)
+
+            if not self.user or not getattr(self.user, 'is_authenticated', False):
+                await self.send(text_data=json.dumps({'error': 'Missing or invalid token'}))
                 await self.close(code=4001)
-                return
-
-            self.user = await self._authenticate_token(token_key)
-            if not self.user:
-                await self.send(text_data=json.dumps({'error': 'Invalid token'}))
-                await self.close(code=4002)
                 return
 
             if not await self._verify_ownership():
