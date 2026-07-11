@@ -461,6 +461,8 @@ class CaddySecretOrAdminPermission(permissions.BasePermission):
         expected = self._get_expected_secret()
         if expected:
             provided = request.query_params.get("secret", "")
+            if "?domain=" in provided:
+                provided = provided.split("?domain=")[0]
             if provided and hmac.compare_digest(provided, expected):
                 return True
             # Also check X-Caddy-Secret header for older Caddyfile compatibility
@@ -3040,7 +3042,12 @@ class ServiceViewSet(viewsets.ModelViewSet):
         # Limit blast radius if DNS verification is bypassed: a single
         # apex may not consume more than CADDY_DAILY_CERT_CAP (default 20)
         # hostnames per UTC day.
-        raw_domain_for_cap = request.query_params.get('domain', '').strip().lower()
+        domain = request.query_params.get('domain', '')
+        if not domain:
+            secret_val = request.query_params.get('secret', '')
+            if '?domain=' in secret_val:
+                domain = secret_val.split('?domain=')[-1]
+        raw_domain_for_cap = domain.strip().lower()
         apex = (
             raw_domain_for_cap.split('.', 1)[-1]
             if '.' in raw_domain_for_cap
