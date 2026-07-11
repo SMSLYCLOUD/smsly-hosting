@@ -55,6 +55,10 @@ action = iptables-allports[name=recidive]
 bantime = 24h
 findtime = 1d
 maxretry = 3
+JAIL_EOF
+    # Enable nginx jails only when nginx is installed and logs exist
+    if command -v nginx >/dev/null 2>&1 && [ -d /var/log/nginx ]; then
+        cat <<'NGINX_JAIL_EOF' >> /etc/fail2ban/jail.local
 
 [nginx-http-auth]
 enabled = true
@@ -70,7 +74,8 @@ logpath = /var/log/nginx/access.log
 findtime = 300
 maxretry = 300
 bantime = 600
-JAIL_EOF
+NGINX_JAIL_EOF
+    fi
     # Create the http-get-dos filter that jail.local references
     [ -f /etc/fail2ban/filter.d/http-get-dos.conf ] || cat <<'FILTER_EOF' > /etc/fail2ban/filter.d/http-get-dos.conf
 [Definition]
