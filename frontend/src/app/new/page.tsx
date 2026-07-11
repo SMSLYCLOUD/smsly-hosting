@@ -173,8 +173,8 @@ export default function NewServicePage() {
       .then((data: any) => {
         if (Array.isArray(data)) {
           setBranches(data)
-          // Auto-select the first branch if current branch is empty or "main"
-          if (data.length > 0 && (!branch || branch === "main")) {
+          // Auto-select the first branch only if current branch is empty
+          if (data.length > 0 && !branch) {
             setBranch(data[0].name || data[0])
           }
         }
@@ -684,15 +684,16 @@ export default function NewServicePage() {
                     <div className="space-y-2">
                       <Label className="flex items-center gap-1.5"><GitBranch className="h-3.5 w-3.5" /> Branch</Label>
                       {branches.length > 0 ? (
-                        <select
-                          value={branch}
-                          onChange={(e) => setBranch(e.target.value)}
-                          className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                        >
-                          {branches.map((b: any) => (
-                            <option key={b.name || b} value={b.name || b}>{b.name || b}</option>
-                          ))}
-                        </select>
+                        <Select value={branch} onValueChange={setBranch}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select branch" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {branches.map((b: any) => (
+                              <SelectItem key={b.name || b} value={b.name || b}>{b.name || b}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
                       ) : (
                         <Input
                           placeholder={loadingBranches ? "Loading branches..." : "main"}
@@ -1097,15 +1098,16 @@ export default function NewServicePage() {
                   <div className="grid gap-2">
                     <Label className="flex items-center gap-1.5"><GitBranch className="h-3.5 w-3.5" /> Branch</Label>
                     {branches.length > 0 ? (
-                      <select
-                        value={branch}
-                        onChange={(e) => setBranch(e.target.value)}
-                        className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                      >
-                        {branches.map((b: any) => (
-                          <option key={b.name || b} value={b.name || b}>{b.name || b}</option>
-                        ))}
-                      </select>
+                      <Select value={branch} onValueChange={setBranch}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select branch" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {branches.map((b: any) => (
+                            <SelectItem key={b.name || b} value={b.name || b}>{b.name || b}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     ) : (
                       <Input value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="main" />
                     )}
