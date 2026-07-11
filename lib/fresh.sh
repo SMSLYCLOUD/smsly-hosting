@@ -1171,7 +1171,7 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
             fi
             if [ -n "$_db_container" ]; then
                 _db_exists=$(docker exec "$_db_container" psql -U "${_db_user}" -tc \
-                    "SELECT 1 FROM pg_database WHERE datname='infisical'" 2>/dev/null | tr -d '[:space:]')
+                    "SELECT 1 FROM pg_database WHERE datname='infisical'" 2>/dev/null | tr -d '[:space:]' || true)
                 if [ "$_db_exists" != "1" ]; then
                     docker exec "$_db_container" psql -U "${_db_user}" -c \
                         "CREATE DATABASE infisical;" 2>/dev/null && \
