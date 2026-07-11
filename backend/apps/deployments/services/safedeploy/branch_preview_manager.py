@@ -1,5 +1,7 @@
 import re
 
+from django.db import transaction
+
 from apps.deployments.models_core import Service
 from apps.deployments.models_safedeploy import (
     DatabaseClone,
@@ -26,6 +28,7 @@ class BranchPreviewManager:
                 "commit_sha must match ^[a-f0-9]{7,40}$"
             )
 
+    @transaction.atomic
     def create_preview(self, service: Service, branch_name: str, commit_sha: str, user=None) -> PreviewEnvironment:
         """
         Creates or returns an existing PreviewEnvironment. If one already
@@ -34,7 +37,7 @@ class BranchPreviewManager:
         commit, the existing one is rebuilt.
         """
         self._validate(branch_name, commit_sha)
-        existing = PreviewEnvironment.objects.filter(
+        existing = PreviewEnvironment.objects.select_for_update().filter(
             service=service,
             branch_name=branch_name,
         ).order_by('-created_at').first()
@@ -58,25 +61,29 @@ class BranchPreviewManager:
         preview.save(update_fields=['preview_url', 'updated_at'])
         return preview
 
+    @transaction.atomic
     def rebuild_preview(self, preview: PreviewEnvironment, commit_sha: str) -> PreviewEnvironment:
         """
         Updates the commit sha and rebuilds an existing preview.
         """
         self._validate(preview.branch_name, commit_sha)
-        preview.commit_sha = commit_sha
-        preview.status = PreviewEnvironment.Status.BUILDING
-        preview.error_message = ""
-        preview.save()
-        preview.artifacts.all().update(is_archived=True)
-        MigrationValidation.objects.filter(preview_environment=preview).delete()
-        return preview
+        locked = PreviewEnvironment.objects.select_for_update().get(pk=preview.pk)
+        locked.commit_sha = commit_sha
+        locked.status = PreviewEnvironment.Status.BUILDING
+        locked.error_message = ""
+        locked.save()
+        locked.artifacts.all().update(is_archived=True)
+        MigrationValidation.objects.filter(preview_environment=locked).delete()
+        return locked
 
+    @transaction.atomic
     def destroy_preview(self, preview: PreviewEnvironment) -> bool:
         """
         Tears down the preview infrastructure and database clone.
         """
-        preview.status = PreviewEnvironment.Status.DESTROYING
-        preview.save()
+        locked = PreviewEnvironment.objects.select_for_update().get(pk=preview.pk)
+        locked.status = PreviewEnvironment.Status.DESTROYING
+        locked.save()
         return True
 
     def inject_preview_environment_variables(self, preview: PreviewEnvironment) -> dict:

@@ -495,7 +495,8 @@ class ProductionDeploymentPipeline:
 
     @transaction.atomic
     def approve_deployment(self, deployment: Deployment, user) -> DeploymentApproval:
-        approval, _ = DeploymentApproval.objects.get_or_create(service=deployment.service, deployment=deployment)
+        deployment = Deployment.objects.select_for_update().get(pk=deployment.pk)
+        approval, _ = DeploymentApproval.objects.select_for_update().get_or_create(service=deployment.service, deployment=deployment)
         approval.status = DeploymentApproval.Status.APPROVED
         approval.approved_by = user
         approval.rejected_by = None
@@ -515,7 +516,8 @@ class ProductionDeploymentPipeline:
 
     @transaction.atomic
     def reject_deployment(self, deployment: Deployment, user, notes: str = "") -> DeploymentApproval:
-        approval, created = DeploymentApproval.objects.get_or_create(service=deployment.service, deployment=deployment)
+        deployment = Deployment.objects.select_for_update().get(pk=deployment.pk)
+        approval, created = DeploymentApproval.objects.select_for_update().get_or_create(service=deployment.service, deployment=deployment)
         if not created:
             approval.approved_by = approval.approved_by
         approval.status = DeploymentApproval.Status.REJECTED
