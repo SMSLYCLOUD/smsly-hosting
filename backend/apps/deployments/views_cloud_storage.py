@@ -90,24 +90,27 @@ class CloudStorageViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         service = serializer.validated_data.get('service')
+        if service is None and not self.request.user.is_superuser:
+            raise PermissionDenied("Only superusers can create platform-wide cloud storage destinations. Please specify a service.")
         if service and service.owner_id != self.request.user.id:
             raise PermissionDenied("You do not own that service.")
         serializer.save()
 
     def perform_update(self, serializer):
-        # Re-check service ownership on update to prevent reassigning a
-        # destination to a service the caller does not own. get_object()
-        # already uses the ownership-scoped queryset, so we only need to
-        # validate the new service FK value here.
-        service = serializer.validated_data.get('service')
+        instance = self.get_object()
+        if instance.service is None and not self.request.user.is_superuser:
+            raise PermissionDenied("Only superusers can modify platform-wide cloud storage destinations.")
+        service = serializer.validated_data.get('service', instance.service)
+        if service is None and not self.request.user.is_superuser:
+            raise PermissionDenied("Only superusers can convert a destination to platform-wide.")
         if service and service.owner_id != self.request.user.id:
             raise PermissionDenied("You do not own that service.")
         serializer.save()
 
-    # perform_destroy intentionally omitted: DRF's default get_object() uses
-    # self.filter_queryset(self.get_queryset()), so the ownership-scoped
-    # queryset already excludes other users' rows, raising 404 for cross-tenant
-    # delete attempts.
+    def perform_destroy(self, instance):
+        if instance.service is None and not self.request.user.is_superuser:
+            raise PermissionDenied("Only superusers can delete platform-wide cloud storage destinations.")
+        super().perform_destroy(instance)
 
     @action(detail=True, methods=['post'],
             throttle_classes=[CloudStorageTestRateThrottle])
