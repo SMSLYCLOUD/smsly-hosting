@@ -966,7 +966,8 @@ fi
         docker compose \
             --env-file /opt/smsly-hosting/.env \
             -f infrastructure/docker/docker-compose.observability.yml \
-            up -d --pull always
+            up -d --pull always || \
+            echo -e "${YELLOW}  ⚠ Observability stack had issues (non-fatal)${NC}"
         # Restart containers whose bind-mounted config or environment may have
         # changed.  docker compose up -d only recreates on IMAGE changes, so
         # config-file updates require an explicit restart.
