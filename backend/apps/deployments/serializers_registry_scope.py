@@ -62,6 +62,7 @@ class ScopedRegistryReadSerializer(serializers.ModelSerializer):
     """Lightweight read serializer — no password, no write-only fields."""
 
     scope_type = serializers.SerializerMethodField()
+    scope_id = serializers.SerializerMethodField()
     scope_label = serializers.SerializerMethodField()
 
     class Meta:
@@ -69,6 +70,7 @@ class ScopedRegistryReadSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "scope_type",
+            "scope_id",
             "scope_label",
             "registry_url",
             "is_internal",
@@ -82,6 +84,9 @@ class ScopedRegistryReadSerializer(serializers.ModelSerializer):
         if obj.content_type:
             return obj.content_type.model
         return None
+
+    def get_scope_id(self, obj) -> str | None:
+        return str(obj.object_id) if obj.object_id else None
 
     def get_scope_label(self, obj) -> str:
         return str(obj.scope) if obj.scope else "(orphaned)"

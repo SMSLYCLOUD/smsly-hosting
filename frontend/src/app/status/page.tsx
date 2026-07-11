@@ -4,7 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DashboardShell } from "@/components/layout/DashboardShell";
 import { systemApi } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
-import { Server, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Server, Loader2, CheckCircle2, AlertTriangle, RefreshCw, Shield, Activity, HardDrive, Cpu } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 
 const SERVICE_GROUPS = [
@@ -19,10 +20,23 @@ const SERVICE_GROUPS = [
   { label: "Other", keys: ["apt-cacher", "docker-labels"] },
 ];
 
+const CORE_REQUIRED_SERVICES = new Set([
+  "backend", "frontend", "celery", "celery-beat", "db", "postgres-primary", "redis", "redis-primary", "rabbitmq", "traefik"
+]);
+
+const OPTIONAL_SERVICES = new Set([
+  "db-replica", "postgres-replica", "pgbouncer", "pgbouncer-readonly", "pgcat",
+  "redis-replica", "redis-sentinel-1", "redis-sentinel-2", "redis-sentinel-3",
+  "celery-fast", "celery-deploy", "caddy", "route-fallback", "socket-proxy", "frps",
+  "grafana", "loki", "promtail", "prometheus", "alertmanager", "cadvisor", "node-exporter",
+  "crowdsec", "smsly-falco", "infisical", "registry", "docker-mirror", "verdaccio", "buildkitd",
+  "apt-cacher", "docker-labels"
+]);
+
 const HOST_SECURITY_ITEMS = [
-  { label: "UFW", key: "ufw" },
-  { label: "fail2ban", key: "fail2ban" },
-  { label: "auditd", key: "auditd" },
+  { label: "UFW Firewall", key: "ufw" },
+  { label: "fail2ban Intrusion Defense", key: "fail2ban" },
+  { label: "auditd Audit Logging", key: "auditd" },
 ];
 
 function colorForPercent(pct: number) {
@@ -96,33 +110,84 @@ export default function StatusPage() {
   const services = systemConfig.services as Record<string, { running: boolean; status: string }> | undefined;
   const hostSecurity = systemConfig.host_security as Record<string, { installed: boolean; active: boolean }> | undefined;
 
+  const coreOffline = services
+    ? Array.from(CORE_REQUIRED_SERVICES).filter(s => services[s] && !services[s].running)
+    : [];
+  const isHealthy = coreOffline.length === 0;
+
   return (
     <DashboardShell>
-      <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:py-10 relative z-10">
-        <h1 className="text-2xl font-bold tracking-tight mb-6">System Status</h1>
+      <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:py-10 relative z-10 space-y-6">
+        {/* Header & Controls */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight">System Status & Infrastructure Health</h1>
+            <p className="text-sm text-muted-foreground mt-1">
+              Live telemetry, service availability, and host security probes across the PaaS grid.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => fetchConfig()}
+            >
+              <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
+              Refresh
+            </Button>
+          </div>
+        </div>
+
+        {/* Overall System Health Banner */}
+        <div className={`p-4 rounded-xl border flex items-center justify-between ${
+          isHealthy
+            ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400"
+            : "bg-red-500/10 border-red-500/20 text-red-600 dark:text-red-400"
+        }`}>
+          <div className="flex items-center gap-3">
+            {isHealthy ? (
+              <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0" />
+            ) : (
+              <AlertTriangle className="w-5 h-5 text-red-500 shrink-0" />
+            )}
+            <div>
+              <div className="font-semibold text-sm">
+                {isHealthy ? "All Core Systems Operational" : `Platform Alert: ${coreOffline.length} Core Service(s) Offline`}
+              </div>
+              <div className="text-xs opacity-80">
+                {isHealthy
+                  ? "Primary database, Redis cache, task scheduler, and ingress gateway are operational."
+                  : `Offline core components: ${coreOffline.join(", ")}`}
+              </div>
+            </div>
+          </div>
+          <Badge variant={isHealthy ? "default" : "destructive"} className="text-xs">
+            {isHealthy ? "Operational" : "Degraded"}
+          </Badge>
+        </div>
 
         {/* Live Host Metrics */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <MetricCard
-            label="CPU"
+            label="CPU Utilization"
             value={`${cpu.toFixed(1)}%`}
-            subtext={`Load: ${(systemConfig.load_avg || [0, 0, 0]).join(" / ")}`}
+            subtext={`Load Avg: ${(systemConfig.load_avg || [0, 0, 0]).join(" / ")}`}
             color={colorForPercent(cpu)}
           />
           <MetricCard
-            label="Memory"
+            label="Memory Usage"
             value={`${ram.toFixed(1)}%`}
             subtext={`${systemConfig.ram_used_mb || 0} / ${systemConfig.ram_total_mb || 0} MB`}
             color={colorForPercent(ram)}
           />
           <MetricCard
-            label="Disk"
+            label="Disk Storage"
             value={`${disk.toFixed(1)}%`}
             subtext={`${systemConfig.disk_used_gb || systemConfig.STORAGE_USED_GB || 0} / ${systemConfig.disk_total_gb || systemConfig.STORAGE_TOTAL_GB || 0} GB`}
             color={colorForPercent(disk)}
           />
           <MetricCard
-            label="Uptime"
+            label="Host Uptime"
             value={uptime ? `${Math.floor(uptime / 86400)}d` : "--"}
             subtext={uptime ? `${Math.floor((uptime % 86400) / 3600)}h ${Math.floor((uptime % 3600) / 60)}m` : ""}
             color="text-cyan-500"
@@ -131,25 +196,57 @@ export default function StatusPage() {
 
         {/* PaaS Service Health */}
         {services && (
-          <div className="space-y-4 mb-8">
+          <div className="space-y-4">
             {SERVICE_GROUPS.map((group) => {
               const items = group.keys.filter((k) => services[k]);
               if (items.length === 0) return null;
               return (
-                <Card key={group.label}>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
+                <Card key={group.label} className="border-border/60">
+                  <CardHeader className="py-3 px-4 border-b border-border/40 bg-muted/20">
+                    <CardTitle className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
                       {group.label}
                     </CardTitle>
                   </CardHeader>
-                  <CardContent>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
+                  <CardContent className="p-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2.5">
                       {items.map((name) => {
                         const s = services[name];
+                        const isStandby = !s.running && OPTIONAL_SERVICES.has(name);
+
+                        let dotColor = "bg-emerald-500";
+                        let badgeText = "Running";
+                        let badgeVariant: "default" | "secondary" | "destructive" = "default";
+
+                        if (!s.running) {
+                          if (isStandby) {
+                            dotColor = "bg-slate-400 dark:bg-slate-600";
+                            badgeText = "Standby / Optional";
+                            badgeVariant = "secondary";
+                          } else {
+                            dotColor = "bg-red-500 animate-pulse";
+                            badgeText = "Offline";
+                            badgeVariant = "destructive";
+                          }
+                        }
+
                         return (
-                          <div key={name} className="flex items-center gap-2 p-2 rounded-lg border text-sm">
-                            <span className={`w-2 h-2 rounded-full shrink-0 ${s.running ? "bg-emerald-500" : "bg-red-500 animate-pulse"}`} />
-                            <span className="font-medium truncate">{name}</span>
+                          <div
+                            key={name}
+                            className={`flex items-center justify-between p-2.5 rounded-lg border transition-colors ${
+                              s.running
+                                ? "bg-card border-border/60"
+                                : isStandby
+                                ? "bg-muted/30 border-border/40 opacity-75"
+                                : "bg-red-500/5 border-red-500/30"
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className={`w-2 h-2 rounded-full shrink-0 ${dotColor}`} />
+                              <span className="font-medium text-xs truncate">{name}</span>
+                            </div>
+                            <Badge variant={badgeVariant} className="text-[10px] shrink-0 ml-2">
+                              {badgeText}
+                            </Badge>
                           </div>
                         );
                       })}
@@ -166,21 +263,24 @@ export default function StatusPage() {
           const items = HOST_SECURITY_ITEMS.filter((i) => hostSecurity[i.key]?.installed);
           if (items.length === 0) return null;
           return (
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
-                  Host Security
+            <Card className="border-border/60">
+              <CardHeader className="py-3 px-4 border-b border-border/40 bg-muted/20">
+                <CardTitle className="text-xs font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+                  <Shield className="w-3.5 h-3.5 text-emerald-500" />
+                  Host Security Controls
                 </CardTitle>
               </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+              <CardContent className="p-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   {items.map(({ label, key }) => {
                     const s = hostSecurity[key];
                     return (
-                      <div key={key} className="flex items-center gap-2 p-2 rounded-lg border text-sm">
-                        <span className={`w-2 h-2 rounded-full shrink-0 ${s.active ? "bg-emerald-500" : "bg-yellow-500"}`} />
-                        <span className="font-medium">{label}</span>
-                        <Badge variant={s.active ? "default" : "secondary"} className="ml-auto text-[10px]">
+                      <div key={key} className="flex items-center justify-between p-3 rounded-lg border border-border/60 bg-card text-xs">
+                        <div className="flex items-center gap-2">
+                          <span className={`w-2 h-2 rounded-full shrink-0 ${s.active ? "bg-emerald-500" : "bg-yellow-500"}`} />
+                          <span className="font-medium">{label}</span>
+                        </div>
+                        <Badge variant={s.active ? "default" : "secondary"} className="text-[10px]">
                           {s.active ? "Active" : "Inactive"}
                         </Badge>
                       </div>

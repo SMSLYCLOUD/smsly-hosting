@@ -1524,6 +1524,74 @@ def _cancel_all_remaining_deployments(
     return cancelled
 
 
+def _cancel_unreleased_deployments(waves: list[list[str]], from_wave_index: int, reason: str) -> int:
+    """Cancel remaining queued deployments when wave orchestration aborts (e.g. timeout)."""
+    to_cancel_ids: list[str] = []
+    for wave in waves[from_wave_index:]:
+        to_cancel_ids.extend(wave)
+    if not to_cancel_ids:
+        return 0
+    cancelled = 0
+    for deployment in Deployment.objects.filter(id__in=to_cancel_ids):
+        if deployment.status != Deployment.Status.QUEUED:
+            continue
+        deployment.status = Deployment.Status.CANCELLED
+        deployment.finished_at = timezone.now()
+        deployment.build_logs = (
+            f"{deployment.build_logs or ''}"
+            f"\n[Ecosystem] Cancelled: {reason}\n"
+        )
+        deployment.save(update_fields=["status", "finished_at", "build_logs"])
+        cancelled += 1
+    return cancelled
+
+
+def _finalize_ecosystem_plan(plan_id: str | None, waves: list[list[str]]):
+    """Sync final EcosystemPlan status when all waves have completed or aborted."""
+    if not plan_id:
+        return
+    from apps.deployments.models_ecosystem import EcosystemPlan
+    try:
+        plan_rec = EcosystemPlan.objects.filter(id=plan_id).first()
+        if not plan_rec:
+            return
+        all_ids = [str(dep_id) for wave in waves for dep_id in wave]
+        deployments = list(Deployment.objects.filter(id__in=all_ids).values("status"))
+        statuses = [d["status"] for d in deployments]
+        failed_states = {
+            Deployment.Status.FAILED,
+            Deployment.Status.BUILD_FAILED,
+            Deployment.Status.BACKUP_FAILED,
+            Deployment.Status.MIGRATION_FAILED,
+            Deployment.Status.CANCELLED,
+        }
+        in_progress_states = {
+            Deployment.Status.QUEUED,
+            Deployment.Status.REVIEW,
+            Deployment.Status.BUILDING,
+            Deployment.Status.AWAITING_APPROVAL,
+            Deployment.Status.BACKUP_RUNNING,
+            Deployment.Status.MIGRATION_PLANNING,
+            Deployment.Status.MIGRATION_RUNNING,
+            Deployment.Status.DEPLOYING,
+            Deployment.Status.HEALTH_CHECK,
+            "STARTING",
+        }
+        if any(st in in_progress_states for st in statuses):
+            return  # Still running
+        failed_count = sum(1 for st in statuses if st in failed_states)
+        if failed_count == 0 and statuses:
+            plan_rec.status = EcosystemPlan.Status.COMPLETED
+            plan_rec.completed_at = timezone.now()
+            plan_rec.error_message = ""
+        else:
+            plan_rec.status = EcosystemPlan.Status.FAILED
+            plan_rec.error_message = f"Ecosystem deploy finished with {failed_count}/{len(statuses)} service failures or cancellations."
+        plan_rec.save(update_fields=["status", "completed_at", "error_message", "updated_at"])
+    except Exception as exc:
+        logger.warning("Failed to finalize ecosystem plan %s: %s", plan_id, exc)
+
+
 def _apply_service_profile(service, svc_plan: dict[str, Any], provider, port: int, server=None):
     """Apply ecosystem plan profile to a service with production defaults.
 
@@ -1585,14 +1653,16 @@ def _apply_service_profile(service, svc_plan: dict[str, Any], provider, port: in
             pass
 
     # Only set cpu_cores/memory_mb from plan if still at model defaults.
-    if not service.cpu_cores or float(service.cpu_cores) == 1.0:
+    cpu_cores = getattr(service, "cpu_cores", None)
+    if not cpu_cores or float(cpu_cores) == 1.0:
         cpu = svc_plan.get("cpu_cores")
         if cpu:
             try:
                 service.cpu_cores = Decimal(str(cpu))
             except Exception:
                 pass
-    if not service.memory_mb or service.memory_mb == 2048:
+    memory_mb = getattr(service, "memory_mb", None)
+    if not memory_mb or memory_mb == 2048:
         mem = svc_plan.get("memory_mb")
         if mem:
             try:
@@ -1740,6 +1810,7 @@ def ecosystem_release_wave_task(
     dependencies: dict[str, set[str]] | None = None,
     deployment_by_repo_key: dict[str, str] | None = None,
     cancel_others_on_failure: bool = False,
+    plan_id: str | None = None,
 ) -> dict:
     """Release next wave, continuing successful branches and cancelling failed branches.
 
@@ -1748,10 +1819,14 @@ def ecosystem_release_wave_task(
     (not just the ones that transitively depend on the failed node).
     """
 
+    if dependencies:
+        dependencies = {k: list(v) if isinstance(v, (set, tuple)) else v for k, v in dependencies.items()}
+
     # Rebuild build counter from actual deployment statuses to prevent drift
     _rebuild_ecosystem_build_counter()
 
-    if not waves or wave_index >= len(waves):
+    if not waves or wave_index > len(waves):
+        _finalize_ecosystem_plan(plan_id, waves or [])
         return {"status": "completed", "waves": len(waves or [])}
 
     # Wave 0 has no previous wave to check — handle memory gating directly
@@ -1760,14 +1835,16 @@ def ecosystem_release_wave_task(
             self.app.send_task(
                 "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
                 args=[provider_id, waves, 0, recheck_count, max_rechecks, dependencies, deployment_by_repo_key, cancel_others_on_failure],
+                kwargs={"plan_id": plan_id},
                 countdown=_wave_recheck_countdown(),
             )
             return {"status": "deferred", "wave": 0, "reason": "low_memory"}
         queued = _queue_wave(self.app, waves[0], provider_id, wave_index=0)
-        if len(waves) > 1:
+        if len(waves) >= 1:
             self.app.send_task(
                 "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
                 args=[provider_id, waves, 1, 0, max_rechecks, dependencies, deployment_by_repo_key, cancel_others_on_failure],
+                kwargs={"plan_id": plan_id},
                 countdown=_wave_recheck_countdown(),
             )
         return {"status": "released", "wave": 1, "queued": queued}
@@ -1808,7 +1885,8 @@ def ecosystem_release_wave_task(
     for dep in deployments:
         if dep["status"] in failed_states and dep["status"] != Deployment.Status.CANCELLED:
             dep_obj = Deployment.objects.filter(id=dep["id"]).first()
-            if dep_obj and dep_obj.ecosystem_retry_count < 1:
+            retry_count = int(getattr(dep_obj, "ecosystem_retry_count", 0) or 0) if dep_obj and isinstance(getattr(dep_obj, "ecosystem_retry_count", 0), (int, float)) else 1
+            if dep_obj and retry_count < 1:
                 # Mark as queued to retry once
                 dep_obj.status = Deployment.Status.QUEUED
                 dep_obj.ecosystem_retry_count = (dep_obj.ecosystem_retry_count or 0) + 1
@@ -1852,6 +1930,8 @@ def ecosystem_release_wave_task(
                 )
             else:
                 cancelled = 0
+            cancelled += _cancel_unreleased_deployments(waves, wave_index, "ecosystem wave timed out")
+            _finalize_ecosystem_plan(plan_id, waves)
             return {
                 "status": "timed_out",
                 "wave": wave_index,
@@ -1861,6 +1941,7 @@ def ecosystem_release_wave_task(
         self.app.send_task(
             "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
             args=[provider_id, waves, wave_index, recheck_count + 1, max_rechecks, dependencies, deployment_by_repo_key, cancel_others_on_failure],
+            kwargs={"plan_id": plan_id},
             countdown=_wave_recheck_countdown(),
         )
         return {
@@ -1891,21 +1972,31 @@ def ecosystem_release_wave_task(
                 reason="upstream dependency deployment failed",
             )
 
+    if wave_index == len(waves):
+        _finalize_ecosystem_plan(plan_id, waves)
+        return {
+            "status": "completed",
+            "waves": len(waves),
+            "cancelled_dependents": cancelled,
+        }
+
     # Memory-aware gating: defer wave if system is under memory pressure
     if not _has_enough_memory():
         self.app.send_task(
             "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
             args=[provider_id, waves, wave_index, 0, max_rechecks, dependencies, deployment_by_repo_key, cancel_others_on_failure],
+            kwargs={"plan_id": plan_id},
             countdown=_wave_recheck_countdown(),
         )
         return {"status": "deferred", "wave": wave_index, "reason": "low_memory"}
 
     # We queue the next wave (which ignores CANCELLED statuses so only viable nodes deploy)
     queued = _queue_wave(self.app, waves[wave_index], provider_id, wave_index)
-    if wave_index + 1 < len(waves):
+    if wave_index + 1 <= len(waves):
         self.app.send_task(
             "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
             args=[provider_id, waves, wave_index + 1, 0, max_rechecks, dependencies, deployment_by_repo_key, cancel_others_on_failure],
+            kwargs={"plan_id": plan_id},
             countdown=_wave_recheck_countdown(),
         )
     return {
@@ -2575,16 +2666,18 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             self.app.send_task(
                 "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
                 args=[str(provider.id), waves, 0, 0, _MAX_WAVE_RECHECKS, safe_dependencies, deployment_by_repo_key, cancel_on_failure],
+                kwargs={"plan_id": plan_id},
                 countdown=_wave_recheck_countdown(),
             )
         else:
             queued_now = _queue_wave(self.app, waves[0], str(provider.id), wave_index=0)
-        if len(waves) > 1:
-            self.app.send_task(
-                "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
-                args=[str(provider.id), waves, 1, 0, _MAX_WAVE_RECHECKS, safe_dependencies, deployment_by_repo_key, cancel_on_failure],
-                countdown=_wave_recheck_countdown(),
-            )
+            if len(waves) >= 1:
+                self.app.send_task(
+                    "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
+                    args=[str(provider.id), waves, 1, 0, _MAX_WAVE_RECHECKS, safe_dependencies, deployment_by_repo_key, cancel_on_failure],
+                    kwargs={"plan_id": plan_id},
+                    countdown=_wave_recheck_countdown(),
+                )
 
     deploy_result = {
         "status": "deploying",

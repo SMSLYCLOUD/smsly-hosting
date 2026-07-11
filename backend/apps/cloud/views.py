@@ -974,10 +974,6 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
                     status=EcosystemPlan.Status.REVIEW,
                     plan=payload,
                 )
-                EcosystemPlan.objects.filter(deploy_task_id=task_id).update(
-                    status=EcosystemPlan.Status.COMPLETED,
-                    completed_at=timezone.now(),
-                )
             elif result.status == 'FAILURE':
                 EcosystemPlan.objects.filter(scan_task_id=task_id).update(
                     status=EcosystemPlan.Status.FAILED,

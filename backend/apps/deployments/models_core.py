@@ -675,6 +675,31 @@ class Service(TimeStampedModel):
         self.full_clean()
         super().save(*args, **kwargs)
 
+        if self.project_id:
+            try:
+                from apps.deployments.models_network_scope import ScopedNetwork
+                from apps.deployments.services.network_scope import ensure_scoped_network, apply_egress_restrictions
+                cfg = ScopedNetwork.resolve_network_config(self.project)
+                ensure_scoped_network(cfg)
+                apply_egress_restrictions(cfg["name"], cfg.get("allowed_egress_networks", ["0.0.0.0/0"]))
+            except Exception:
+                pass
+
+    def get_resolved_network_scope(self) -> dict:
+        """Resolve effective ScopedNetwork configuration for this service."""
+        from apps.deployments.models_network_scope import ScopedNetwork
+        if self.project:
+            return ScopedNetwork.resolve_network_config(self.project)
+        return {"name": "smsly-net", "driver": "bridge", "isolated": False}
+
+    def get_resolved_registry_scope(self) -> dict:
+        """Resolve effective ScopedRegistry credentials for this service."""
+        from apps.deployments.models_registry_scope import ScopedRegistry
+        scope_obj = self.project or self.owner
+        if scope_obj:
+            return ScopedRegistry.resolve_registry_credentials(scope_obj)
+        return {}
+
     def clean(self):
         super().clean()
         if (

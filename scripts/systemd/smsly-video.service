@@ -1,6 +1,6 @@
 [Unit]
 Description=SMSLY Video API Server
-After=network-online.target postgresql.service redis.service livekit-server.service
+After=network-online.target postgresql.service redis-server.service livekit-server.service
 Wants=network-online.target
 
 [Service]

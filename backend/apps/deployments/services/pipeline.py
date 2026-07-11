@@ -2113,6 +2113,18 @@ class PipelineManager:
 
         return domains
 
+    def _resolve_service_network_name(self) -> str:
+        """Resolve the effective Docker network name for this service's scope."""
+        from apps.deployments.models_network_scope import ScopedNetwork
+        project = getattr(self.service, "project", None)
+        if project:
+            scoped = ScopedNetwork.get_for_object(project)
+            if scoped and scoped.network_name:
+                return scoped.network_name
+            if scoped and scoped.isolated:
+                return ScopedNetwork.resolve_network_name(project)
+        return os.getenv("DOCKER_NETWORK", "smsly-net")
+
     def _compose_traefik_labels(self, project_name: str) -> dict:
         """Build Traefik labels for compose main service at create-time."""
         is_public = bool(self.service.is_public)
@@ -2123,7 +2135,7 @@ class PipelineManager:
         labels = {
             "managed_by": "smsly-hosting",
             "traefik.enable": "true" if is_public else "false",
-            "traefik.docker.network": os.getenv("DOCKER_NETWORK", "smsly-net"),
+            "traefik.docker.network": self._resolve_service_network_name(),
         }
         if not is_public:
             return labels
@@ -2221,7 +2233,7 @@ class PipelineManager:
             f".smsly-routing-{self.deployment.id}.yml",
         )
 
-        network_name = _os.getenv('DOCKER_NETWORK', 'smsly-net')
+        network_name = self._resolve_service_network_name()
 
         override_payload: dict = {"services": {}}
 
@@ -2379,8 +2391,8 @@ class PipelineManager:
             if env_key and addon.connection_url:
                 env.setdefault(env_key, addon.connection_url)
 
-        # Ensure smsly-net exists
-        network_name = os.getenv('DOCKER_NETWORK', 'smsly-net')
+        # Ensure scoped network exists
+        network_name = self._resolve_service_network_name()
 
         # ─── Phase 1: Build images while old containers keep serving ───
         # Separating build from deploy eliminates the build time from the
@@ -3293,7 +3305,7 @@ class PipelineManager:
         already present.  External networks (pre-created by the operator)
         are not touched.
         """
-        network_name = os.getenv('DOCKER_NETWORK', 'smsly-net')
+        network_name = self._resolve_service_network_name()
         try:
             result = subprocess.run(
                 ['docker', 'network', 'inspect', network_name],

@@ -14,6 +14,19 @@ nextval() is max_id + 1, matching PostgreSQL docs for the third argument:
 from django.db import migrations
 
 
+def reset_auditlog_sequence(apps, schema_editor):
+    if schema_editor.connection.vendor == "postgresql":
+        with schema_editor.connection.cursor() as cursor:
+            cursor.execute("""
+                SELECT setval(
+                    pg_get_serial_sequence('deployments_auditlog', 'id'),
+                    COALESCE(MAX(id), 1),
+                    true
+                )
+                FROM deployments_auditlog;
+            """)
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -21,18 +34,8 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.RunSQL(
-            # Forward: advance sequence past current max row ID.
-            # COALESCE handles an empty table (sets sequence to 1).
-            sql="""
-                SELECT setval(
-                    pg_get_serial_sequence('deployments_auditlog', 'id'),
-                    COALESCE(MAX(id), 1),
-                    true
-                )
-                FROM deployments_auditlog;
-            """,
-            # Reverse: no meaningful rollback for a sequence reset.
-            reverse_sql=migrations.RunSQL.noop,
+        migrations.RunPython(
+            reset_auditlog_sequence,
+            reverse_code=migrations.RunPython.noop,
         ),
     ]

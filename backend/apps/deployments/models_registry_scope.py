@@ -201,7 +201,7 @@ class ScopedRegistry(models.Model):
         Returns the platform-wide defaults **plus** any per-scope extensions
         from every level in the chain.  Closest wins for duplicates.
         """
-        from .registry_validation import ALLOWED_IMAGE_REGISTRY_HOSTS
+        from apps.deployments.services.registry_validation import ALLOWED_IMAGE_REGISTRY_HOSTS
 
         hosts = list(ALLOWED_IMAGE_REGISTRY_HOSTS)
 

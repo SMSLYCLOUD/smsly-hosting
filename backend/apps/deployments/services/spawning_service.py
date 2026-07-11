@@ -16,9 +16,20 @@ logger = logging.getLogger(__name__)
 def _scoped_network_for(service) -> str:
     """Get or create an isolated network for a user service.
 
-    Returns the network name.  The container is attached to this network
-    instead of the shared smsly-net, providing per-service isolation.
+    Checks if the service's project has a ScopedNetwork override configured.
+    If so, uses that network and egress policy. Otherwise defaults to per-service
+    bridge isolation.
     """
+    project = getattr(service, "project", None)
+    if project:
+        from apps.deployments.models_network_scope import ScopedNetwork
+        scoped = ScopedNetwork.get_for_object(project)
+        if scoped:
+            cfg = ScopedNetwork.resolve_network_config(project)
+            ensure_scoped_network(cfg)
+            apply_egress_restrictions(cfg["name"], cfg.get("allowed_egress_networks", ["0.0.0.0/0"]))
+            return cfg["name"]
+
     short_id = str(service.id).replace("-", "")[:12]
     net_name = f"smsly-svc-{short_id}"
     ensure_scoped_network({

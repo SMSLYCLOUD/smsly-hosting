@@ -1,6 +1,6 @@
 [Unit]
 Description=SMSLY Voice API Server
-After=network-online.target postgresql.service redis.service
+After=network-online.target postgresql.service redis-server.service
 Wants=network-online.target
 
 [Service]

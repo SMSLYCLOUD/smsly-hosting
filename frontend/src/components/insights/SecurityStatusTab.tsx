@@ -37,6 +37,8 @@ interface VulnReport {
 
 export function SecurityStatusTab({ serviceId }: { serviceId: string }) {
   const [report, setReport] = useState<VulnReport | null>(null);
+  const [crowdsec, setCrowdsec] = useState<any>(null);
+  const [serviceWafDisabled, setServiceWafDisabled] = useState<boolean>(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [latestDeployId, setLatestDeployId] = useState<string | null>(null);
@@ -45,9 +47,19 @@ export function SecurityStatusTab({ serviceId }: { serviceId: string }) {
     setLoading(true);
     setError(null);
     try {
-      const svcRes = await api.get(`/services/${serviceId}/`);
+      const [svcRes, sysRes] = await Promise.all([
+        api.get(`/services/${serviceId}/`),
+        api.get(`/system/security-status/`).catch(() => null),
+      ]);
       const service = svcRes.data;
       const latest = service?.latest_deployment;
+
+      setServiceWafDisabled(Boolean(service?.disable_crowdsec_waf));
+      if (sysRes?.data?.crowdsec) {
+        setCrowdsec(sysRes.data.crowdsec);
+      } else {
+        setCrowdsec(null);
+      }
 
       if (latest?.vulnerability_report) {
         setReport(latest.vulnerability_report);
@@ -90,6 +102,49 @@ export function SecurityStatusTab({ serviceId }: { serviceId: string }) {
 
   return (
     <div className="space-y-6">
+      {/* CrowdSec WAF & Threat Defense */}
+      <div className="p-4 rounded-xl border border-border bg-gradient-to-r from-emerald-500/5 to-blue-500/5">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <ShieldAlert className="w-4 h-4 text-emerald-500" />
+            <h3 className="text-sm font-bold">CrowdSec WAF & Threat Intelligence</h3>
+          </div>
+          <Badge
+            variant={!serviceWafDisabled && crowdsec?.enabled ? "default" : "secondary"}
+            className="text-[10px]"
+          >
+            {!serviceWafDisabled && crowdsec?.enabled ? "Protected" : "Disabled"}
+          </Badge>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+          <div className="p-2.5 rounded-lg bg-black/20 border border-border/50">
+            <div className="text-[10px] text-muted-foreground uppercase mb-1">WAF Status</div>
+            <div className="font-semibold text-foreground">
+              {serviceWafDisabled ? "Bypassed (Service)" : crowdsec?.enabled ? "Active" : "Platform Disabled"}
+            </div>
+          </div>
+          <div className="p-2.5 rounded-lg bg-black/20 border border-border/50">
+            <div className="text-[10px] text-muted-foreground uppercase mb-1">Engine Container</div>
+            <div className="font-semibold text-foreground flex items-center gap-1.5">
+              <span className={`w-2 h-2 rounded-full ${crowdsec?.running ? "bg-emerald-500" : "bg-red-500"}`} />
+              {crowdsec?.running ? "Running" : "Offline"}
+            </div>
+          </div>
+          <div className="p-2.5 rounded-lg bg-black/20 border border-border/50">
+            <div className="text-[10px] text-muted-foreground uppercase mb-1">Active Bans</div>
+            <div className="font-semibold text-foreground">
+              {crowdsec?.active_bans !== undefined && crowdsec?.active_bans >= 0
+                ? `${crowdsec.active_bans} decisions`
+                : "0 decisions"}
+            </div>
+          </div>
+          <div className="p-2.5 rounded-lg bg-black/20 border border-border/50">
+            <div className="text-[10px] text-muted-foreground uppercase mb-1">Bouncer Integration</div>
+            <div className="font-semibold text-emerald-400">Traefik Middleware</div>
+          </div>
+        </div>
+      </div>
+
       {/* Scan Report */}
       <div>
         <div className="flex items-center justify-between mb-4">

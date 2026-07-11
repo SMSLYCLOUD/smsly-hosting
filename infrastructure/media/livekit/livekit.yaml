@@ -3,8 +3,8 @@
 
 port: 7880
 rtc:
-  port_range_start: 30000
-  port_range_end: 31000
+  port_range_start: 42000
+  port_range_end: 43000
   tcp_port: 7881
   use_external_ip: true
   allow_tcp_fallback: false
@@ -20,15 +20,7 @@ redis:
   db: 0
 
 turn:
-  enabled: true
-  domain: ${DOMAIN}
-  tls_port: 3478
-  cert_file: /etc/ssl/certs/ssl-cert-snakeoil.pem
-  key_file: /etc/ssl/private/ssl-cert-snakeoil.key
-  ttl: 0s
-  ct:
-    enabled: true
-  external_tls_port: 5349
+  enabled: false
 
 keys:
   ${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}

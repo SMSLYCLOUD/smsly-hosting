@@ -140,6 +140,15 @@ EOF
 install_media_packages() {
     echo -e "${BLUE}  → Installing media infrastructure packages...${NC}"
 
+    # Ensure smsly system user exists (all systemd units run as this user)
+    if ! id smsly >/dev/null 2>&1; then
+        useradd -r -s /usr/sbin/nologin -u 1000 smsly 2>/dev/null || true
+        echo -e "${GREEN}  ✓ Created smsly system user${NC}"
+    fi
+
+    # Create required directories
+    mkdir -p /var/log/smsly /run/smsly /var/lib/freeswitch /var/lib/livekit /var/log/coturn /var/lib/rtpengine-recording
+
     apt-get update -qq
     apt-get install -y -qq \
         postgresql-15 \
@@ -154,6 +163,31 @@ install_media_packages() {
         netcat-openbsd \
         fs_cli \
         >/dev/null 2>&1
+
+    # Install RTPEngine (not in default Ubuntu repos — build from source or use PPA)
+    if ! command -v rtpengine >/dev/null 2>&1; then
+        echo -e "${BLUE}  → Installing RTPEngine...${NC}"
+        apt-get install -y -qq rtpengine 2>/dev/null || {
+            echo -e "${YELLOW}  ⚠ RTPEngine not in apt repos — installing from Sipwise PPA...${NC}"
+            apt-get install -y -qq software-properties-common 2>/dev/null || true
+            add-apt-repository -y ppa:sipwise/rtpengine 2>/dev/null || true
+            apt-get update -qq 2>/dev/null && apt-get install -y -qq rtpengine 2>/dev/null || {
+                echo -e "${YELLOW}  ⚠ RTPEngine auto-install failed — install manually${NC}"
+            }
+        }
+    fi
+
+    # Install LiveKit server (binary from GitHub releases)
+    if ! command -v livekit-server >/dev/null 2>&1; then
+        echo -e "${BLUE}  → Installing LiveKit server...${NC}"
+        local lk_arch
+        lk_arch="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
+        local lk_version="1.8.4"
+        curl -fsSL "https://github.com/livekit/livekit/releases/download/v${lk_version}/livekit_${lk_version}_linux_${lk_arch}.tar.gz" \
+            | tar xz -C /usr/local/bin livekit-server 2>/dev/null || {
+            echo -e "${YELLOW}  ⚠ LiveKit auto-install failed — install manually${NC}"
+        }
+    fi
 
     echo -e "${GREEN}  ✓ Packages installed${NC}"
 }
@@ -170,7 +204,9 @@ deploy_media_configs() {
     fi
 
     # Kamailio
-    [ -d /etc/kamailio ] && cp -f "$infra_dir/kamailio/kamailio.cfg" /etc/kamailio/ 2>/dev/null || true
+    [ -d /etc/kamailio ] || mkdir -p /etc/kamailio
+    cp -f "$infra_dir/kamailio/kamailio.cfg" /etc/kamailio/ 2>/dev/null || true
+    cp -f "$infra_dir/kamailio/tls.cfg" /etc/kamailio/ 2>/dev/null || true
 
     # FreeSWITCH
     [ -d /etc/freeswitch ] && cp -f "$infra_dir/freeswitch/freeswitch.xml" /etc/freeswitch/ 2>/dev/null || true
@@ -191,9 +227,9 @@ deploy_media_configs() {
     [ -d /usr/local/openresty/nginx/conf ] || mkdir -p /usr/local/openresty/nginx/conf
     cp -f "$infra_dir/openresty/nginx.conf" /usr/local/openresty/nginx/conf/ 2>/dev/null || true
 
-    # Attestation
+    # Attestation + media-mgmt config
     [ -d /etc/smsly ] || mkdir -p /etc/smsly
-    cp -f "$infra_dir/attestation/attestation.json" /etc/smsly/ 2>/dev/null || true
+    cp -f "$infra_dir/attestation/attestation.json" /etc/smsly/media-mgmt.json 2>/dev/null || true
 
     echo -e "${GREEN}  ✓ Configs deployed${NC}"
 }

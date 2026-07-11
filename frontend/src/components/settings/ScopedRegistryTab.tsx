@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/components/ui/use-toast";
 import { scopedRegistryApi } from "@/lib/api";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -16,6 +17,8 @@ import { useConfirm } from "@/components/ui/confirm-dialog";
 interface ScopedRegistryItem {
   id: string;
   scope_type: string;
+  scope_id?: string;
+  scope_label?: string;
   registry_url: string;
   is_internal: boolean;
   allowed_registry_hosts: string[];
@@ -63,6 +66,8 @@ export function ScopedRegistryTab({
   const [resolving, setResolving] = useState(false);
 
   const [form, setForm] = useState({
+    scope_type: scopeType || "project",
+    scope_id: scopeId || "",
     registry_url: "",
     username: "",
     password: "",
@@ -108,15 +113,17 @@ export function ScopedRegistryTab({
   }, [fetchRegistries, fetchResolved]);
 
   const handleCreate = async () => {
-    if (!form.registry_url || !scopeType || !scopeId) {
-      toast({ title: "Missing fields", description: "Registry URL and scope are required", variant: "destructive" });
+    const targetScopeType = scopeType || form.scope_type;
+    const targetScopeId = scopeId || form.scope_id;
+    if (!form.registry_url || !targetScopeType || !targetScopeId) {
+      toast({ title: "Missing fields", description: "Registry URL, Scope Type, and Scope ID are required", variant: "destructive" });
       return;
     }
     try {
       setSaving(true);
       await scopedRegistryApi.create({
-        scope_type: scopeType,
-        scope_id: scopeId,
+        scope_type: targetScopeType,
+        scope_id: targetScopeId,
         registry_url: form.registry_url,
         username: form.username || undefined,
         password: form.password || undefined,
@@ -127,7 +134,7 @@ export function ScopedRegistryTab({
           : undefined,
       });
       toast({ title: "Created", description: "Registry scope configured." });
-      setForm({ registry_url: "", username: "", password: "", is_internal: false, is_active: true, allowed_registry_hosts: "" });
+      setForm({ scope_type: scopeType || "project", scope_id: scopeId || "", registry_url: "", username: "", password: "", is_internal: false, is_active: true, allowed_registry_hosts: "" });
       fetchRegistries();
       fetchResolved();
     } catch (err: any) {
@@ -157,7 +164,7 @@ export function ScopedRegistryTab({
       });
       toast({ title: "Updated", description: "Registry scope saved." });
       setEditingId(null);
-      setForm({ registry_url: "", username: "", password: "", is_internal: false, is_active: true, allowed_registry_hosts: "" });
+      setForm({ scope_type: scopeType || "project", scope_id: scopeId || "", registry_url: "", username: "", password: "", is_internal: false, is_active: true, allowed_registry_hosts: "" });
       fetchRegistries();
       fetchResolved();
     } catch (err: any) {
@@ -183,6 +190,8 @@ export function ScopedRegistryTab({
   const handleEdit = (item: ScopedRegistryItem) => {
     setEditingId(item.id);
     setForm({
+      scope_type: item.scope_type || scopeType || "project",
+      scope_id: item.scope_id || scopeId || "",
       registry_url: item.registry_url || "",
       username: "",
       password: "",
@@ -194,10 +203,10 @@ export function ScopedRegistryTab({
 
   const handleCancelEdit = () => {
     setEditingId(null);
-    setForm({ registry_url: "", username: "", password: "", is_internal: false, is_active: true, allowed_registry_hosts: "" });
+    setForm({ scope_type: scopeType || "project", scope_id: scopeId || "", registry_url: "", username: "", password: "", is_internal: false, is_active: true, allowed_registry_hosts: "" });
   };
 
-  const scopeLabel = scopeType ? scopeTypeLabels[scopeType] || scopeType : "";
+  const scopeLabel = scopeType ? scopeTypeLabels[scopeType] || scopeType : "Scope";
 
   return (
     <div className="space-y-6">
@@ -294,9 +303,14 @@ export function ScopedRegistryTab({
                 {registries.map((reg) => (
                   <TableRow key={reg.id}>
                     <TableCell>
-                      <Badge variant="outline" className="capitalize">
-                        {scopeTypeLabels[reg.scope_type] || reg.scope_type}
-                      </Badge>
+                      <div className="flex flex-col gap-1">
+                        <Badge variant="outline" className="w-fit capitalize text-[10px]">
+                          {scopeTypeLabels[reg.scope_type] || reg.scope_type}
+                        </Badge>
+                        <span className="text-xs font-medium text-muted-foreground">
+                          {reg.scope_label || reg.scope_id || "-"}
+                        </span>
+                      </div>
                     </TableCell>
                     <TableCell className="font-mono text-xs">{reg.registry_url || "(inherited)"}</TableCell>
                     <TableCell>
@@ -334,83 +348,109 @@ export function ScopedRegistryTab({
       </Card>
 
       {/* Add/Edit form */}
-      {scopeType && scopeId && (
-        <Card>
-          <CardHeader>
-            <CardTitle>{editingId ? "Edit Registry Scope" : "Configure Registry Scope"}</CardTitle>
-            <CardDescription>
-              {editingId
-                ? "Update the registry configuration for this scope."
-                : `Set a custom container registry for this ${scopeLabel.toLowerCase()}.`}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2 col-span-2">
-                <Label>Registry URL</Label>
-                <Input
-                  placeholder="e.g. registry.example.com:5000"
-                  value={form.registry_url}
-                  onChange={e => setForm({ ...form, registry_url: e.target.value })}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Username</Label>
-                <Input
-                  placeholder="Registry login username"
-                  value={form.username}
-                  onChange={e => setForm({ ...form, username: e.target.value })}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Password / Token</Label>
-                <Input
-                  type="password"
-                  placeholder={editingId ? "Leave blank to keep current" : "Registry password or token"}
-                  value={form.password}
-                  onChange={e => setForm({ ...form, password: e.target.value })}
-                />
-              </div>
-              <div className="flex items-center gap-3">
-                <Switch
-                  checked={form.is_internal}
-                  onCheckedChange={v => setForm({ ...form, is_internal: v })}
-                />
-                <Label>Internal Registry (mesh VPN)</Label>
-              </div>
-              <div className="flex items-center gap-3">
-                <Switch
-                  checked={form.is_active}
-                  onCheckedChange={v => setForm({ ...form, is_active: v })}
-                />
-                <Label>Active</Label>
-              </div>
-              <div className="space-y-2 col-span-2">
-                <Label>Allowed Registry Hosts</Label>
-                <Input
-                  placeholder="Comma-separated hosts, e.g. gcr.io, ghcr.io"
-                  value={form.allowed_registry_hosts}
-                  onChange={e => setForm({ ...form, allowed_registry_hosts: e.target.value })}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Additional hosts appended to the platform-wide allowlist for this scope.
-                </p>
-              </div>
-            </div>
-          </CardContent>
-          <CardFooter className="gap-2">
-            <Button onClick={editingId ? () => handleUpdate(editingId) : handleCreate} disabled={saving}>
-              {saving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : editingId ? null : <Plus className="h-4 w-4 mr-2" />}
-              {editingId ? "Save Changes" : "Configure Registry"}
-            </Button>
-            {editingId && (
-              <Button variant="outline" onClick={handleCancelEdit}>
-                Cancel
-              </Button>
+      <Card>
+        <CardHeader>
+          <CardTitle>{editingId ? "Edit Registry Scope" : "Configure Registry Scope"}</CardTitle>
+          <CardDescription>
+            {editingId
+              ? "Update the registry configuration for this scope."
+              : scopeType && scopeId
+              ? `Set a custom container registry override for this ${scopeLabel.toLowerCase()}.`
+              : "Attach a container registry override to an organization, team, or project."}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            {!scopeType && !editingId && (
+              <>
+                <div className="space-y-2">
+                  <Label>Scope Type</Label>
+                  <Select
+                    value={form.scope_type}
+                    onValueChange={v => setForm({ ...form, scope_type: v })}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="organization">Organization</SelectItem>
+                      <SelectItem value="team">Team</SelectItem>
+                      <SelectItem value="project">Project</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Target Scope ID (UUID)</Label>
+                  <Input
+                    placeholder="e.g. 550e8400-e29b-41d4-a716-446655440000"
+                    value={form.scope_id}
+                    onChange={e => setForm({ ...form, scope_id: e.target.value })}
+                  />
+                </div>
+              </>
             )}
-          </CardFooter>
-        </Card>
-      )}
+            <div className="space-y-2 col-span-2">
+              <Label>Registry URL</Label>
+              <Input
+                placeholder="e.g. registry.example.com:5000"
+                value={form.registry_url}
+                onChange={e => setForm({ ...form, registry_url: e.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Username</Label>
+              <Input
+                placeholder="Registry login username"
+                value={form.username}
+                onChange={e => setForm({ ...form, username: e.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Password / Token</Label>
+              <Input
+                type="password"
+                placeholder={editingId ? "Leave blank to keep current" : "Registry password or token"}
+                value={form.password}
+                onChange={e => setForm({ ...form, password: e.target.value })}
+              />
+            </div>
+            <div className="flex items-center gap-3">
+              <Switch
+                checked={form.is_internal}
+                onCheckedChange={v => setForm({ ...form, is_internal: v })}
+              />
+              <Label>Internal Registry (mesh VPN)</Label>
+            </div>
+            <div className="flex items-center gap-3">
+              <Switch
+                checked={form.is_active}
+                onCheckedChange={v => setForm({ ...form, is_active: v })}
+              />
+              <Label>Active</Label>
+            </div>
+            <div className="space-y-2 col-span-2">
+              <Label>Allowed Registry Hosts</Label>
+              <Input
+                placeholder="Comma-separated hosts, e.g. gcr.io, ghcr.io"
+                value={form.allowed_registry_hosts}
+                onChange={e => setForm({ ...form, allowed_registry_hosts: e.target.value })}
+              />
+              <p className="text-xs text-muted-foreground">
+                Additional hosts appended to the platform-wide allowlist for this scope.
+              </p>
+            </div>
+          </div>
+        </CardContent>
+        <CardFooter className="gap-2">
+          <Button onClick={editingId ? () => handleUpdate(editingId) : handleCreate} disabled={saving}>
+            {saving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : editingId ? null : <Plus className="h-4 w-4 mr-2" />}
+            {editingId ? "Save Changes" : "Configure Registry"}
+          </Button>
+          {editingId && (
+            <Button variant="outline" onClick={handleCancelEdit}>
+              Cancel
+            </Button>
+          )}
+        </CardFooter>
+      </Card>
     </div>
   );
 }

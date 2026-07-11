@@ -5,13 +5,15 @@ import { api } from "@/lib/api";
 import {
   Brain, Sparkles, AlertTriangle, CheckCircle2, Loader2, GitBranch, Clock, Wrench,
   XCircle, TrendingUp, Cpu, Gauge, BarChart3, Shield, Activity, DollarSign,
-  Server, Wifi, WifiOff, Bug, FileWarning, RefreshCw, Zap, Siren
+  Server, Wifi, WifiOff, Bug, FileWarning, RefreshCw, Zap, Siren, Terminal
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SecurityStatusTab } from "@/components/insights/SecurityStatusTab";
 import { IncidentReportTab } from "@/components/settings/IncidentReportTab";
+import { LogsTab } from "@/components/logs/LogsTab";
+import { LogsView } from "@/components/logs/LogsView";
 
 interface JulesEntry {
   deployment_id: string;
@@ -43,6 +45,7 @@ export function AIInsightsTab({ serviceId }: { serviceId: string }) {
   const [serviceInfo, setServiceInfo] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [logsSubTab, setLogsSubTab] = useState<'live' | 'loki'>('live');
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -102,6 +105,7 @@ export function AIInsightsTab({ serviceId }: { serviceId: string }) {
       <Tabs defaultValue="ai" className="w-full">
         <TabsList>
           <TabsTrigger value="ai"><Brain className="w-4 h-4 mr-1" /> AI Insights</TabsTrigger>
+          <TabsTrigger value="logs"><Terminal className="w-4 h-4 mr-1" /> Logs & Diagnostics</TabsTrigger>
           <TabsTrigger value="security"><Shield className="w-4 h-4 mr-1" /> Security</TabsTrigger>
           <TabsTrigger value="incidents"><Siren className="w-4 h-4 mr-1" /> Incidents</TabsTrigger>
           <TabsTrigger value="platform"><Server className="w-4 h-4 mr-1" /> Platform</TabsTrigger>
@@ -253,6 +257,48 @@ export function AIInsightsTab({ serviceId }: { serviceId: string }) {
           </div>
         </div>
       )}
+        </TabsContent>
+
+        <TabsContent value="logs" className="mt-6 space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-sm font-bold flex items-center gap-2">
+                <Terminal className="w-4 h-4 text-violet-500" />
+                Live Service & Container Diagnostics
+              </h3>
+              <p className="text-xs text-muted-foreground">
+                Inspect real-time container runtime logs, build stream, and historical observability logs.
+              </p>
+            </div>
+            <div className="flex bg-muted rounded-lg p-1 gap-1 text-xs font-medium">
+              <button
+                type="button"
+                onClick={() => setLogsSubTab('live')}
+                className={`px-3 py-1.5 rounded-md transition-all ${
+                  logsSubTab === 'live' ? 'bg-background shadow text-foreground' : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                Live Container Stream
+              </button>
+              <button
+                type="button"
+                onClick={() => setLogsSubTab('loki')}
+                className={`px-3 py-1.5 rounded-md transition-all ${
+                  logsSubTab === 'loki' ? 'bg-background shadow text-foreground' : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                Historical Logs (Loki)
+              </button>
+            </div>
+          </div>
+
+          <div className="border border-border rounded-xl overflow-hidden bg-card">
+            {logsSubTab === 'live' ? (
+              <LogsTab deployment={serviceInfo?.latest_deployment || null} />
+            ) : (
+              <LogsView searchParams={{ service: serviceId }} embed={true} />
+            )}
+          </div>
         </TabsContent>
 
         <TabsContent value="security" className="mt-6">
