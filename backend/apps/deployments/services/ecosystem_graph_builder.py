@@ -52,6 +52,40 @@ def _db_host_port() -> tuple:
     return host, port
 
 
+def _registry_host_port() -> tuple:
+    """Extract registry host and port from settings."""
+    from apps.deployments.models_core import PlatformConfig
+    url = PlatformConfig.get_config_value("container_registry_url") or getattr(
+        settings, 'CONTAINER_REGISTRY_URL', 'registry:5000',
+    )
+    # Strip http(s):// prefix if present
+    url = url.split('://')[-1].rstrip('/')
+    host, _, port_part = url.partition(':')
+    port = int(port_part) if port_part.isdigit() else 5000
+    return host or 'registry', port
+
+
+def _backend_host_port() -> tuple:
+    """Extract backend host and port from settings."""
+    host = getattr(settings, 'BACKEND_HOST', 'backend')
+    port = int(getattr(settings, 'BACKEND_PORT', 8000))
+    return host, port
+
+
+def _frontend_host_port() -> tuple:
+    """Extract frontend host and port from settings."""
+    host = getattr(settings, 'FRONTEND_HOST', 'frontend')
+    port = int(getattr(settings, 'FRONTEND_PORT', 3000))
+    return host, port
+
+
+def _socket_proxy_host_port() -> tuple:
+    """Extract socket-proxy host and port from settings."""
+    host = getattr(settings, 'SOCKET_PROXY_HOST', 'socket-proxy')
+    port = int(getattr(settings, 'SOCKET_PROXY_PORT', 2375))
+    return host, port
+
+
 class EcosystemGraphBuilder:
     """Builds a topology graph of the entire SMSLY platform infrastructure."""
 
@@ -86,7 +120,7 @@ class EcosystemGraphBuilder:
             "type": "platform",
             "kind": "COMPUTE",
             "label": "Backend (Django)",
-            "health_check": {"type": "http", "host": "backend", "port": 8000, "path": "/health/live"},
+            "health_check": {"type": "dynamic", "fn": "_backend_host_port", "path": "/health/live"},
             "metadata": {"ports": ["8000"], "role": "REST API / WebSocket / Admin"},
         },
         {
@@ -94,7 +128,7 @@ class EcosystemGraphBuilder:
             "type": "platform",
             "kind": "COMPUTE",
             "label": "Frontend (Next.js)",
-            "health_check": {"type": "tcp", "host": "frontend", "port": 3000},
+            "health_check": {"type": "dynamic", "fn": "_frontend_host_port"},
             "metadata": {"ports": ["3000"], "role": "Web Dashboard"},
         },
         {
@@ -158,7 +192,7 @@ class EcosystemGraphBuilder:
             "type": "proxy",
             "kind": "PROXY",
             "label": "Socket Proxy",
-            "health_check": {"type": "tcp", "host": "socket-proxy", "port": 2375},
+            "health_check": {"type": "dynamic", "fn": "_socket_proxy_host_port"},
             "metadata": {"ports": ["2375"], "role": "Docker API Proxy"},
         },
         {
@@ -166,7 +200,7 @@ class EcosystemGraphBuilder:
             "type": "registry",
             "kind": "STORAGE",
             "label": "Docker Registry",
-            "health_check": {"type": "tcp", "host": "registry", "port": 5000},
+            "health_check": {"type": "dynamic", "fn": "_registry_host_port"},
             "metadata": {"ports": ["5000"], "role": "Image Storage"},
         },
         {

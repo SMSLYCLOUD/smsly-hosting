@@ -2033,8 +2033,8 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
         try:
             import subprocess
 
-            from django.contrib.contenttypes.models import ContentType
             from django.conf import settings
+            from django.contrib.contenttypes.models import ContentType
 
             from apps.deployments.models_core import PlatformConfig
             from apps.deployments.models_registry_scope import ScopedRegistry
@@ -2281,7 +2281,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
         build_method = entry["build"]
 
         try:
-            port = int(svc_plan.get("port", 3000) or 3000)
+            port = _detect_service_port(svc_plan, stack)
         except (TypeError, ValueError):
             port = 3000
         port = max(1, min(65535, port))
