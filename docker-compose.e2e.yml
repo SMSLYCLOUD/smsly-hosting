@@ -20,9 +20,12 @@ services:
     ports:
       - "8000:8000"
     depends_on:
-      - db
-      - redis
-      - rabbitmq
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     command: python manage.py runserver 0.0.0.0:8000
 
   celery-worker:
@@ -41,7 +44,14 @@ services:
       - ALLOW_SSH_AUTOADD=true
       - SMSLY_STRICT_SSH_HOST_KEY_CHECK=false
     depends_on:
-      - control-plane
+      control-plane:
+        condition: service_started
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     command: celery -A config worker -l info
 
   # Infrastructure components
