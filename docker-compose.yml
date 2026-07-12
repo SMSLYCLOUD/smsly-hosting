@@ -93,6 +93,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    image: smsly-hosting-backend:latest
     env_file: .env
     environment:
       - DOCKER_HOST=tcp://socket-proxy:2375
@@ -127,6 +128,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    image: smsly-hosting-backend:latest
     env_file: .env
     environment:
       - DOCKER_HOST=tcp://socket-proxy:2375
@@ -168,6 +170,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    image: smsly-hosting-backend:latest
     env_file: .env
     environment:
       - DOCKER_HOST=tcp://socket-proxy:2375
@@ -274,6 +277,7 @@ services:
       - no-new-privileges:true
       - apparmor:docker-default
     build: ./backend
+    image: smsly-hosting-backend:latest
     restart: unless-stopped
     volumes:
       - ./backend:/app:z
@@ -335,6 +339,7 @@ services:
       - no-new-privileges:true
       - apparmor:docker-default
     build: ./backend
+    image: smsly-hosting-backend:latest
     restart: unless-stopped
     command: celery -A config beat -l info --pidfile=/tmp/celerybeat.pid --schedule=/tmp/celerybeat-schedule
     volumes:

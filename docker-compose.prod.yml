@@ -470,6 +470,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    image: smsly-hosting-backend:latest
     command: gunicorn config.asgi:application --bind 0.0.0.0:8000 --workers ${GUNICORN_WORKERS:-4} --worker-class
       uvicorn.workers.UvicornWorker --timeout ${GUNICORN_TIMEOUT:-600}
     restart: unless-stopped
@@ -573,6 +574,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    image: smsly-hosting-backend:latest
     command: celery -A config worker -l info --autoscale=${CELERY_AUTOSCALE:-12,4} -Q celery
     restart: unless-stopped
     env_file: .env
@@ -627,6 +629,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    image: smsly-hosting-backend:latest
     command: celery -A config beat -l info -S redbeat.RedBeatScheduler --pidfile=/app/celerybeat.pid
     restart: unless-stopped
     env_file: .env
@@ -708,6 +711,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    image: smsly-hosting-backend:latest
     command: celery -A config worker -l info --autoscale=${CELERY_FAST_AUTOSCALE:-8,2} -Q fast
     restart: always
     env_file: .env
@@ -761,6 +765,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    image: smsly-hosting-backend:latest
     command: celery -A config worker -l info --autoscale=${CELERY_DEPLOY_AUTOSCALE:-8,2} -Q deploy --hostname=deploy@%h
     restart: unless-stopped
     env_file: .env
