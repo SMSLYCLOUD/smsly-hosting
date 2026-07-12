@@ -4048,6 +4048,7 @@ fi
             else
                 docker compose -f "$COMPOSE_FILE" up -d --no-deps backend
             fi
+            wait_for_container_ready "smsly-hosting-backend-1" 120 || true
 
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput
 
@@ -4128,6 +4129,7 @@ fi
             else
                 docker compose -f "$COMPOSE_FILE" up -d --no-deps backend
             fi
+            wait_for_container_ready "smsly-hosting-backend-1" 120 || true
 
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput 2>/dev/null || true
 
@@ -4275,6 +4277,7 @@ fi
             else
                 docker compose -f "$COMPOSE_FILE" up -d --no-deps backend
             fi
+            wait_for_container_ready "smsly-hosting-backend-1" 120 || true
 
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput
 

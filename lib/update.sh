@@ -646,10 +646,10 @@ fi
             else
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps backend
             fi
+            wait_for_container_ready "smsly-hosting-backend-1" 120 || true
 
-            echo -e "${BLUE}  • Running database migrations...${NC}"
+            echo -e "${BLUE}  • Running post-migration tasks...${NC}"
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py fix_sequences 2>/dev/null || true
-            timeout 300 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py migrate --noinput
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput
 
             set_checkpoint "update_db_migrated"
@@ -730,9 +730,9 @@ fi
             else
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps backend
             fi
+            wait_for_container_ready "smsly-hosting-backend-1" 120 || true
 
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py fix_sequences 2>/dev/null || true
-            timeout 300 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py migrate --noinput 2>/dev/null || true
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput 2>/dev/null || true
 
             # 5. Clean celerybeat-schedule and restart celery workers
@@ -857,10 +857,10 @@ fi
             else
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps backend
             fi
+            wait_for_container_ready "smsly-hosting-backend-1" 120 || true
 
-            echo -e "${BLUE}  • Running database migrations...${NC}"
+            echo -e "${BLUE}  • Running post-migration tasks...${NC}"
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py fix_sequences 2>/dev/null || true
-            timeout 300 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py migrate --noinput
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput
 
             # 11. Clean celerybeat-schedule and restart beat
