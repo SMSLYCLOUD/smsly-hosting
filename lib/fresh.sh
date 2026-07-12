@@ -1282,7 +1282,7 @@ sleep 5
     # PgCat connection pools all compete with the migration.
     MIGRATION_STOPPED_SVCS="backend celery celery-deploy celery-fast celery-beat $(grep -q "^  *pgcat:" "${COMPOSE_FILE:-docker-compose.prod.yml}" 2>/dev/null && echo "pgcat")"
     echo -e "${BLUE}    Stopping ${MIGRATION_STOPPED_SVCS} to prevent lock contention...${NC}"
-    docker compose -f "$COMPOSE_FILE" stop ${MIGRATION_STOPPED_SVCS} >/dev/null 2>&1 || true
+    docker compose -f "$COMPOSE_FILE" stop --timeout 15 ${MIGRATION_STOPPED_SVCS} >/dev/null 2>&1 || true
     sleep 3
 
     # Kill every backend on the database so the migration owns it exclusively
@@ -1327,7 +1327,7 @@ echo -e "${BLUE}  → Collecting Static Files...${NC}"
     # Fix volume ownership — Docker creates named volumes as root
     docker compose -f "$COMPOSE_FILE" exec -T --user root backend chown -R 1000:1000 /app/staticfiles /app/media /app/backups 2>/dev/null || true
     docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py fix_sequences 2>/dev/null || true
-    docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py migrate --noinput
+    timeout 300 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py migrate --noinput
     docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic --noinput
 
     sync_platform_domain_state "$INSTALL_DIR/.env"

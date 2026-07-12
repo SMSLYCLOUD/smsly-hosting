@@ -169,7 +169,7 @@ run_backend_migrations() {
     fi
     # SECURITY/HARDENING: avoid set +e / set -e toggling. Capture rc via
     # explicit conditional so set -e stays in effect the whole time.
-    if ! docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T \
+    if ! timeout "$((timeout_seconds + 60))" docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T \
         "${user_args[@]}" \
         -e SMSLY_DISABLE_STARTUP_TASKS=true \
         -e SMSLY_MIGRATION_MODE=true \
@@ -195,7 +195,7 @@ run_backend_migrations() {
     # TODO(install): replace set -e toggle with explicit conditional (the
     # trailing `|| true` already swallows failures, so set +e is redundant).
     echo -e "${BLUE}  -> Fixing node agent database permissions...${NC}"
-    docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T \
+    timeout 60 docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T \
         "${user_args[@]}" \
         -e SMSLY_DISABLE_STARTUP_TASKS=true \
         backend python manage.py fix_node_db_permissions 2>&1 || true
@@ -205,7 +205,7 @@ run_backend_migrations() {
     # that connect through pgcat and would otherwise get "No pool configured".
     if [ "$MODE_AGENT_LITE" != "true" ] && [ -n "$(get_pgcat_if_exists)" ] && docker compose -f "$COMPOSE_FILE" ps pgcat 2>/dev/null | grep -q "Up"; then
         echo -e "${BLUE}  -> Reloading PgCat to pick up node agent pools...${NC}"
-        docker compose -f "$COMPOSE_FILE" restart pgcat >/dev/null 2>&1
+        timeout 20 docker compose -f "$COMPOSE_FILE" restart pgcat >/dev/null 2>&1
         sleep 5
         echo -e "${GREEN}  ✓ PgCat reloaded${NC}"
     fi
@@ -376,7 +376,7 @@ recreate_traefik_preserving_certs() {
     fi
 
     echo -e "${BLUE}  → Recreating traefik (preserves letsencrypt_data volume + acme.json)...${NC}"
-    docker compose -f "$compose_f" up -d --force-recreate traefik 2>&1 | sed 's/^/    /'
+    timeout 60 docker compose -f "$compose_f" up -d --force-recreate traefik 2>&1 | sed 's/^/    /'
 
     echo -e "${BLUE}  → Reconnecting traefik to smsly-proxy network (recreate can drop external nets)...${NC}"
     ensure_container_on_network "smsly-proxy" "smsly-hosting-traefik-1"
@@ -511,7 +511,7 @@ compose_stack_build_service_args() {
 
 stop_node_excluded_services() {
     is_node_mode || return 0
-    docker compose -f "$COMPOSE_FILE" stop frontend caddy >/dev/null 2>&1 || true
+    docker compose -f "$COMPOSE_FILE" stop --timeout 15 frontend caddy >/dev/null 2>&1 || true
     docker compose -f "$COMPOSE_FILE" rm -f frontend caddy >/dev/null 2>&1 || true
 }
 
@@ -531,7 +531,7 @@ prune_stopped_conflicting() {
 
 cleanup_stale_containers() {
     local compose_f="${COMPOSE_FILE:-docker-compose.prod.yml}"
-    docker compose -f "$compose_f" down --remove-orphans 2>/dev/null || true
+    timeout 30 docker compose -f "$compose_f" down --remove-orphans 2>/dev/null || true
     prune_stopped_conflicting "smsly-hosting"
     prune_stopped_conflicting "smsly-"
 }
@@ -553,9 +553,9 @@ compose_stack_build() {
         stop_node_excluded_services
         services="$(compose_stack_build_service_args)"
         [ -n "$services" ] || return 1
-        docker compose -f "$COMPOSE_FILE" build "$@" $services
+        timeout 300 docker compose -f "$COMPOSE_FILE" build "$@" $services
     else
-        docker compose -f "$COMPOSE_FILE" build "$@"
+        timeout 300 docker compose -f "$COMPOSE_FILE" build "$@"
     fi
 }
 
@@ -565,9 +565,9 @@ compose_stack_up() {
         stop_node_excluded_services
         services="$(compose_stack_service_args)"
         [ -n "$services" ] || return 1
-        docker compose -f "$COMPOSE_FILE" up -d --force-recreate "$@" $services
+        timeout 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate "$@" $services
     else
-        docker compose -f "$COMPOSE_FILE" up -d --force-recreate "$@"
+        timeout 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate "$@"
     fi
 }
 
@@ -728,7 +728,7 @@ generate_safe_caddyfile() {
 
     # 1. Discover domain: DB first, .env fallback
     local domain=""
-    domain="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+    domain="$(timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import PlatformConfig
 c = PlatformConfig.load()
 d = (c.domain or '').strip()
@@ -741,7 +741,7 @@ if d and d != 'localhost':
 
     # 2. Discover ALL deployed service domains from DB (public + custom)
     local svc_blocks=""
-    svc_blocks="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+    svc_blocks="$(timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 import os
 upstream = os.environ.get('SMSLY_SERVICE_PROXY_UPSTREAM', 'traefik:80')
 from apps.deployments.models import Service
@@ -1042,8 +1042,8 @@ refresh_runtime_services() {
     fi
 
     if [ "${#app_services[@]}" -gt 0 ]; then
-        docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "${app_services[@]}" >/dev/null 2>&1 || \
-            docker compose -f "$COMPOSE_FILE" up -d --force-recreate "${app_services[@]}" >/dev/null 2>&1 || true
+        timeout 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "${app_services[@]}" >/dev/null 2>&1 || \
+            timeout 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate "${app_services[@]}" >/dev/null 2>&1 || true
     fi
 
     ensure_container_on_network "smsly-net" "smsly-hosting-pgcat-1"
@@ -1077,8 +1077,8 @@ refresh_runtime_services() {
     done
 
     if [ "${#failed_services[@]}" -eq 0 ] && [ "${#edge_services[@]}" -gt 0 ]; then
-        docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "${edge_services[@]}" >/dev/null 2>&1 || \
-            docker compose -f "$COMPOSE_FILE" up -d --force-recreate "${edge_services[@]}" >/dev/null 2>&1 || true
+        timeout 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "${edge_services[@]}" >/dev/null 2>&1 || \
+            timeout 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate "${edge_services[@]}" >/dev/null 2>&1 || true
 
         ensure_container_on_network "smsly-net" "smsly-hosting-route-fallback-1"
         ensure_container_on_network "smsly-net" "smsly-hosting-traefik-1"

@@ -126,7 +126,7 @@ fix_domain_sync() {
 
     # 2. Sync DB PlatformConfig
     if docker compose -f "$COMPOSE_FILE" ps -q backend 2>/dev/null | grep -q .; then
-        docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+        timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import PlatformConfig
 cfg = PlatformConfig.load()
 cfg.domain = '$target_domain'
@@ -189,8 +189,8 @@ CADDYFIX
 
     # 4. Reload Caddy
     if docker compose -f "$COMPOSE_FILE" ps -q caddy 2>/dev/null | grep -q .; then
-        docker compose -f "$COMPOSE_FILE" exec caddy caddy reload --config /etc/caddy/Caddyfile 2>/dev/null || \
-            docker compose -f "$COMPOSE_FILE" restart caddy 2>/dev/null || true
+        timeout 20 docker compose -f "$COMPOSE_FILE" exec caddy caddy reload --config /etc/caddy/Caddyfile 2>/dev/null || \
+            timeout 20 docker compose -f "$COMPOSE_FILE" restart caddy 2>/dev/null || true
         echo -e "${GREEN}  ✓ Caddy reloaded${NC}"
     fi
 
@@ -597,7 +597,7 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
     fi
 
     # Deployed service domains
-    ALL_SVC_DOMAINS="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+    ALL_SVC_DOMAINS="$(timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import Service
 for s in Service.objects.exclude(public_domain__isnull=True).exclude(public_domain=''):
     print(f'{s.name}|{s.public_domain.strip()}')

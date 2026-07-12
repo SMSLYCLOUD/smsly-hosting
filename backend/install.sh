@@ -2534,7 +2534,7 @@ fix_domain_sync() {
 
     # 2. Sync DB PlatformConfig
     if docker compose -f "$COMPOSE_FILE" ps -q backend 2>/dev/null | grep -q .; then
-        docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+        timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import PlatformConfig
 cfg = PlatformConfig.load()
 cfg.domain = '$target_domain'
@@ -2718,7 +2718,7 @@ compose_stack_build_service_args() {
 
 stop_node_excluded_services() {
     is_node_mode || return 0
-    docker compose -f "$COMPOSE_FILE" stop frontend caddy >/dev/null 2>&1 || true
+    docker compose -f "$COMPOSE_FILE" stop --timeout 15 frontend caddy >/dev/null 2>&1 || true
     docker compose -f "$COMPOSE_FILE" rm -f frontend caddy >/dev/null 2>&1 || true
 }
 
@@ -2894,7 +2894,7 @@ generate_safe_caddyfile() {
 
     # 1. Discover domain: DB first, .env fallback
     local domain=""
-    domain="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+    domain="$(timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import PlatformConfig
 c = PlatformConfig.load()
 d = (c.domain or '').strip()
@@ -2907,7 +2907,7 @@ if d and d != 'localhost':
 
     # 2. Discover ALL deployed service domains from DB (public + custom)
     local svc_blocks=""
-    svc_blocks="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+    svc_blocks="$(timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 import os
 upstream = os.environ.get('SMSLY_SERVICE_PROXY_UPSTREAM', 'traefik:80')
 from apps.deployments.models import Service
@@ -4032,7 +4032,7 @@ fi
             # Stop backend, celery & pgcat so their DB connections don't block
             # migrations (ALTER TABLE requires exclusive locks).
             echo -e "${BLUE}  → Stopping backend, celery & pgcat for migrations...${NC}"
-            docker compose -f "$COMPOSE_FILE" stop backend celery celery-deploy celery-fast celery-beat pgcat 2>/dev/null || true
+            docker compose -f "$COMPOSE_FILE" stop --timeout 15 backend celery celery-deploy celery-fast celery-beat pgcat 2>/dev/null || true
 
             echo -e "${BLUE}  → Running migrations...${NC}"
             run_backend_migrations --root || {
@@ -4108,7 +4108,7 @@ fi
             # 2. Stop backend, celery & pgcat so their DB connections don't block
             #    migrations (ALTER TABLE requires exclusive locks).
             echo -e "${BLUE}  → Stopping backend, celery & pgcat for migrations...${NC}"
-            docker compose -f "$COMPOSE_FILE" stop backend celery celery-deploy celery-fast celery-beat pgcat 2>/dev/null || true
+            docker compose -f "$COMPOSE_FILE" stop --timeout 15 backend celery celery-deploy celery-fast celery-beat pgcat 2>/dev/null || true
 
             # 3. Run migrations
             echo -e "${BLUE}  → Running migrations...${NC}"
@@ -4233,7 +4233,7 @@ fi
             # 8. Stop backend, celery & pgcat so their DB connections don't block
             #    migrations (ALTER TABLE requires exclusive locks).
             echo -e "${BLUE}  → Stopping backend, celery & pgcat for migrations...${NC}"
-            docker compose -f "$COMPOSE_FILE" stop backend celery celery-deploy celery-fast celery-beat pgcat 2>/dev/null || true
+            docker compose -f "$COMPOSE_FILE" stop --timeout 15 backend celery celery-deploy celery-fast celery-beat pgcat 2>/dev/null || true
 
             # 9. Run migrations
             echo -e "${BLUE}  → Running migrations...${NC}"
@@ -4346,7 +4346,7 @@ cp, created = CloudProvider.objects.get_or_create(
 if not created and not cp.is_active:
     cp.is_active = True
     cp.save()
-" | docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null || true
+" | timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null || true
     # ─── Self-Healing: Docker Socket Permissions ──────────────────────────────
     echo -e "${BLUE}  → Hardening Docker socket permissions...${NC}"
     # NOTE: Removed chmod 666 — world-writable docker.sock is a security risk.
@@ -4448,7 +4448,7 @@ if a_count > 0:
         fi
         # Fallback: read from PlatformConfig in the database (set via Settings UI)
         if [ -z "$CF_TOKEN" ] || [ "$CF_TOKEN" = "fake" ]; then
-            DB_TOKEN="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+            DB_TOKEN="$(timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import PlatformConfig
 config = PlatformConfig.load()
 token = (getattr(config, 'cloudflare_api_token', '') or '').strip()
@@ -4475,7 +4475,7 @@ if token and token.lower() not in ('fake', 'changeme', 'test', ''):
 
             # Discover domain
             cf_domain=""
-            cf_domain="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+            cf_domain="$(timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import PlatformConfig
 c = PlatformConfig.load()
 d = (c.domain or '').strip()
@@ -4493,7 +4493,7 @@ if d and d != 'localhost':
             # - Unknown wildcard hosts route to /notice on frontend.
             # - External custom domains keep explicit direct on-demand TLS blocks with Host rewrite.
             cf_wildcard_known_hosts=""
-            cf_wildcard_known_hosts="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+            cf_wildcard_known_hosts="$(timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import Service
 from apps.domains.models import Domain, DomainStatus
 from django.db.models import Q
@@ -4513,7 +4513,7 @@ print(' '.join(sorted(hosts)))
 " 2>/dev/null | tr -d '\r' | tr -d '\n' || true)"
 
             cf_svc_blocks=""
-            cf_svc_blocks="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+            cf_svc_blocks="$(timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 import os
 upstream = os.environ.get('SMSLY_SERVICE_PROXY_UPSTREAM', 'traefik:80')
 from apps.deployments.models import Service
@@ -4633,7 +4633,7 @@ CFCADDY
             echo -e "${YELLOW}  ⚠ Caddy failed to start. Run: journalctl -u caddy --no-pager -n 20${NC}"
         fi
 
-        POST_CADDY_DOMAIN="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+        POST_CADDY_DOMAIN="$(timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import PlatformConfig
 c = PlatformConfig.load()
 d = (c.domain or '').strip()
@@ -6007,7 +6007,7 @@ sleep 5
     # PgCat connection pools all compete with the migration.
     MIGRATION_STOPPED_SVCS="backend celery celery-deploy celery-fast celery-beat pgcat"
     echo -e "${BLUE}    Stopping ${MIGRATION_STOPPED_SVCS} to prevent lock contention...${NC}"
-    docker compose -f "$COMPOSE_FILE" stop ${MIGRATION_STOPPED_SVCS} >/dev/null 2>&1 || true
+    docker compose -f "$COMPOSE_FILE" stop --timeout 15 ${MIGRATION_STOPPED_SVCS} >/dev/null 2>&1 || true
     sleep 3
 
     # Kill every backend on the database so the migration owns it exclusively
