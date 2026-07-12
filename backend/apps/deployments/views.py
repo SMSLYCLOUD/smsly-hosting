@@ -1054,6 +1054,22 @@ class ServiceViewSet(viewsets.ModelViewSet):
             },
         )
 
+        if force:
+            from apps.deployments.services.deletion_orchestrator import DeletionOrchestrator
+            logger.info("Force-purging service %s from database synchronously.", instance.name)
+            try:
+                orchestrator = DeletionOrchestrator()
+                orchestrator.delete_service_resources(instance, force=True)
+            except Exception as exc:
+                logger.warning("Resource cleanup failed during force-purge of %s: %s", instance.id, exc)
+            try:
+                instance.delete()
+                logger.info("Force-purge complete for service %s.", instance.id)
+            except Exception as exc:
+                logger.error("Force-purge DB deletion failed for %s: %s", instance.id, exc)
+            self._sync_caddy()
+            return
+
         delete_service_task.delay(str(instance.id), force=force)
         self._sync_caddy()
 
@@ -1067,6 +1083,23 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
         instance.status = Service.Status.DELETION_PENDING
         instance.save(update_fields=['status'])
+
+        if force:
+            from apps.deployments.services.deletion_orchestrator import DeletionOrchestrator
+            logger.info("Force-purging service %s via retry-delete.", instance.id)
+            try:
+                orchestrator = DeletionOrchestrator()
+                orchestrator.delete_service_resources(instance, force=True)
+            except Exception as exc:
+                logger.warning("Resource cleanup failed during retry force-purge of %s: %s", instance.id, exc)
+            try:
+                instance.delete()
+                logger.info("Force-purge complete for service %s via retry-delete.", instance.id)
+            except Exception as exc:
+                logger.error("Force-purge DB deletion failed for %s: %s", instance.id, exc)
+            self._sync_caddy()
+            return Response({"message": "Force-purge complete.", "force": force}, status=status.HTTP_200_OK)
+
         from .tasks import delete_service_task
         delete_service_task.delay(str(instance.id), force=force)
 

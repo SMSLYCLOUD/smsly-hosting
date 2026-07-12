@@ -322,33 +322,45 @@ app.conf.beat_schedule = {
         'schedule': 30.0,
         'options': {'expires': 30.0, 'queue': 'fast'},
     },
-    # ── Media Node periodic tasks ──
-    'check-stale-media-nodes-every-30s': {
-        'task': 'apps.media.tasks.check_stale_media_nodes',
-        'schedule': 30.0,
-        'options': {'expires': 30.0, 'queue': 'media-telemetry'},
-    },
-    'aggregate-media-capacity-every-60s': {
-        'task': 'apps.media.tasks.aggregate_media_capacity',
-        'schedule': 60.0,
-        'options': {'expires': 60.0, 'queue': 'media-telemetry'},
-    },
-    'flush-media-telemetry-to-db-every-5m': {
-        'task': 'apps.media.tasks.flush_telemetry_to_db',
-        'schedule': 300.0,
-        'options': {'expires': 300.0, 'queue': 'media-telemetry'},
-    },
-    'rotate-media-node-keys-daily': {
-        'task': 'apps.media.tasks.rotate_media_node_keys',
-        'schedule': crontab(hour=2, minute=0),
-        'options': {'expires': 3600.0, 'queue': 'deploy'},
-    },
+    # ── Media Node periodic tasks (opt-in via SMSLY_ENABLE_MEDIA_NODES) ──
     'verify-federation-chains-hourly': {
         'task': 'apps.media.tasks.verify_federation_chains',
         'schedule': 3600.0,
         'options': {'expires': 3600.0, 'queue': 'media-audit'},
     },
 }
+
+# Media node tasks are opt-in — only run when SMSLY_ENABLE_MEDIA_NODES is set.
+# This avoids unnecessary CPU load and orphan queues on hosts that don't
+# run media nodes.
+if os.environ.get('SMSLY_ENABLE_MEDIA_NODES'):
+    app.conf.beat_schedule.update({
+        'check-stale-media-nodes-every-30s': {
+            'task': 'apps.media.tasks.check_stale_media_nodes',
+            'schedule': 30.0,
+            'options': {'expires': 30.0, 'queue': 'media-telemetry'},
+        },
+        'aggregate-media-capacity-every-60s': {
+            'task': 'apps.media.tasks.aggregate_media_capacity',
+            'schedule': 60.0,
+            'options': {'expires': 60.0, 'queue': 'media-telemetry'},
+        },
+        'flush-media-telemetry-to-db-every-5m': {
+            'task': 'apps.media.tasks.flush_telemetry_to_db',
+            'schedule': 300.0,
+            'options': {'expires': 300.0, 'queue': 'media-telemetry'},
+        },
+        'rotate-media-node-keys-daily': {
+            'task': 'apps.media.tasks.rotate_media_node_keys',
+            'schedule': crontab(hour=2, minute=0),
+            'options': {'expires': 3600.0, 'queue': 'deploy'},
+        },
+        'verify-federation-chains-hourly': {
+            'task': 'apps.media.tasks.verify_federation_chains',
+            'schedule': 3600.0,
+            'options': {'expires': 3600.0, 'queue': 'media-audit'},
+        },
+    })
 
 
 @app.task(bind=True, ignore_result=True)
