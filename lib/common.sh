@@ -830,8 +830,14 @@ caddy_needs_fix() {
     if ! timeout 15 docker compose -f "$COMPOSE_FILE" exec -T caddy caddy validate --config /etc/caddy/Caddyfile 2>/dev/null; then
         return 0  # Syntax error
     fi
-    if grep -q 'dns cloudflare' "$dest" 2>/dev/null && [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
-        return 0  # dns cloudflare without token = runtime crash
+    if grep -q 'dns cloudflare' "$dest" 2>/dev/null; then
+        local _env_token="${CLOUDFLARE_API_TOKEN:-}"
+        if [ -z "$_env_token" ] && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ]; then
+            _env_token="$(grep -m1 '^CLOUDFLARE_API_TOKEN=' "${INSTALL_DIR:-/opt/smsly-hosting}/.env" 2>/dev/null | cut -d= -f2- || true)"
+        fi
+        if [ -z "$_env_token" ] || [ "$_env_token" = "fake" ]; then
+            return 0  # dns cloudflare without token = runtime crash
+        fi
     fi
     return 1  # Config is fine
 }
