@@ -4285,7 +4285,7 @@ fi
             echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule 2>/dev/null || true
             
-            restart_svcs="celery-beat celery-deploy celery-fast"
+            restart_svcs="celery celery-beat celery-deploy celery-fast"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 restart_svcs="celery-worker"
             fi
@@ -4652,6 +4652,19 @@ if d and d != 'localhost':
     fi
 
     safe_refresh_runtime_services
+
+    # ─── Self-healing: restore any celery workers that are still down ──
+    echo -e "${BLUE}  → Verifying celery workers are running...${NC}"
+    for _ce in celery celery-deploy celery-fast celery-beat; do
+        if docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null | grep -qx "$_ce"; then
+            if ! docker compose -f "$COMPOSE_FILE" ps "$_ce" 2>/dev/null | grep -q "Up"; then
+                echo -e "${YELLOW}    $_ce is down, restarting...${NC}"
+                timeout 30 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "$_ce" >/dev/null 2>&1 || true
+                wait_for_container_ready "smsly-hosting-${_ce}-1" 120 || true
+            fi
+        fi
+    done
+    echo -e "${GREEN}  ✓ Celery workers running${NC}"
 
     # ─── Auto-redeploy active services when platform code or domain state changes ──
     PRE_HEAD="$(cat "$INSTALL_DIR/.pre-update-head" 2>/dev/null || true)"

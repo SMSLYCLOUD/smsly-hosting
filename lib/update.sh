@@ -867,7 +867,7 @@ fi
             echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule 2>/dev/null || true
             
-            restart_svcs="celery-beat celery-deploy celery-fast"
+            restart_svcs="celery celery-beat celery-deploy celery-fast"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 restart_svcs="celery-worker"
             fi
@@ -1366,6 +1366,7 @@ if d and d != 'localhost':
     fi
 
     safe_refresh_runtime_services
+    ensure_celery_workers_running
 
     # ─── Auto-redeploy active services when platform code or domain state changes ──
     PRE_HEAD="$(cat "$INSTALL_DIR/.pre-update-head" 2>/dev/null || true)"

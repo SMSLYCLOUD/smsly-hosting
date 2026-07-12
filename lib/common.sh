@@ -1137,6 +1137,44 @@ safe_refresh_runtime_services() {
     refresh_runtime_services
 }
 
+ensure_celery_workers_running() {
+    local celery_services=()
+    local down_services=()
+    for svc in celery celery-deploy celery-fast celery-beat; do
+        if docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null | grep -qx "$svc"; then
+            celery_services+=("$svc")
+        fi
+    done
+    if [ "${#celery_services[@]}" -eq 0 ]; then
+        echo -e "${BLUE}  → No celery services configured, skipping celery check${NC}"
+        return 0
+    fi
+    for svc in "${celery_services[@]}"; do
+        if ! docker compose -f "$COMPOSE_FILE" ps "$svc" 2>/dev/null | grep -q "Up"; then
+            down_services+=("$svc")
+        fi
+    done
+    if [ "${#down_services[@]}" -eq 0 ]; then
+        echo -e "${GREEN}  ✓ All celery workers are running${NC}"
+        return 0
+    fi
+    echo -e "${YELLOW}  ⚠ Celery workers down: ${down_services[*]}. Restarting...${NC}"
+    timeout 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "${down_services[@]}" >/dev/null 2>&1 || \
+        timeout 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate "${down_services[@]}" >/dev/null 2>&1 || true
+    local all_ok=true
+    for svc in "${down_services[@]}"; do
+        if wait_for_container_ready "smsly-hosting-${svc}-1" 120; then
+            echo -e "${GREEN}    ✓ $svc is running${NC}"
+        else
+            echo -e "${RED}    ✗ $svc failed to start${NC}"
+            all_ok=false
+        fi
+    done
+    if [ "$all_ok" = true ]; then
+        echo -e "${GREEN}  ✓ All celery workers recovered${NC}"
+    fi
+}
+
 wait_for_container_ready() {
     local raw_target="$1"
     local timeout_seconds="${2:-180}"
