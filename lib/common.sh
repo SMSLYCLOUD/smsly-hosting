@@ -121,7 +121,7 @@ get_migration_database_alias() {
         direct_url="postgresql://${POSTGRES_USER:-smsly_admin}:${POSTGRES_PASSWORD:-}@${POSTGRES_HOST:-db}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-smsly_hosting}"
     fi
     migrate_db="$(
-        docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T \
+        docker compose -f "$COMPOSE_FILE" run --no-deps -T \
             -e SMSLY_DISABLE_STARTUP_TASKS=true \
             -e SMSLY_MIGRATION_MODE=true \
             -e DIRECT_DATABASE_URL="$direct_url" \
@@ -129,6 +129,7 @@ get_migration_database_alias() {
             "from django.conf import settings; print('direct' if 'direct' in settings.DATABASES else ('session' if 'session' in settings.DATABASES else 'default'))" \
             2>/dev/null | tail -n 1 | tr -d '\r'
     )"
+    docker compose -f "$COMPOSE_FILE" rm -f backend-run 2>/dev/null || true
 
     case "$migrate_db" in
         direct|session|default) printf '%s\n' "$migrate_db" ;;
@@ -170,8 +171,12 @@ run_backend_migrations() {
 
     # Run migrations inside a one-shot container.
     # Capture the exit code explicitly so set -e stays in effect.
+    # NOTE: --rm is omitted intentionally.  Under heavy Docker daemon load
+    # (e.g. concurrent image builds), `docker compose run --rm` can hang
+    # for minutes waiting for container removal.  Without --rm the container
+    # exits immediately and Docker cleans it up asynchronously.
     set +e
-    timeout "$((timeout_seconds + 60))" docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T \
+    timeout "$((timeout_seconds + 60))" docker compose -f "$COMPOSE_FILE" run --no-deps -T \
         "${user_args[@]}" \
         -e SMSLY_DISABLE_STARTUP_TASKS=true \
         -e SMSLY_MIGRATION_MODE=true \
@@ -180,6 +185,9 @@ run_backend_migrations() {
         python manage.py migrate --database="$migrate_db" --noinput
     rc=$?
     set -e
+
+    # Clean up the one-shot migration container (best-effort).
+    docker compose -f "$COMPOSE_FILE" rm -f backend-run 2>/dev/null || true
 
     if [ "$rc" -ne 0 ]; then
         if [ "$rc" -eq 124 ]; then
@@ -195,10 +203,11 @@ run_backend_migrations() {
     # Best-effort — wrapped in timeout so a hung Docker daemon can't
     # block the entire update pipeline (which needs to restart backend/celery).
     echo -e "${BLUE}  -> Fixing node agent database permissions...${NC}"
-    timeout 60 docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T \
+    timeout 60 docker compose -f "$COMPOSE_FILE" run --no-deps -T \
         "${user_args[@]}" \
         -e SMSLY_DISABLE_STARTUP_TASKS=true \
         backend python manage.py fix_node_db_permissions 2>&1 || true
+    docker compose -f "$COMPOSE_FILE" rm -f backend-run 2>/dev/null || true
 
     return 0
 }
