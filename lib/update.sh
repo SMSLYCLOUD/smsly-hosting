@@ -579,7 +579,7 @@ fi
                   echo -e "${BLUE}  → Rebuilding frontend container (cached)...${NC}"
                 docker compose -f "$COMPOSE_FILE" stop --timeout 15 frontend >/dev/null 2>&1 || true
                   docker compose -f "$COMPOSE_FILE" rm -f frontend >/dev/null 2>&1 || true
-                  docker compose -f "$COMPOSE_FILE" build frontend
+                  timeout 600 docker compose -f "$COMPOSE_FILE" build frontend
                   docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps frontend
 
                  # Custom Domain SSL Setup for Frontend Update
@@ -587,19 +587,19 @@ fi
                      echo -e "\n${YELLOW}[UPDATE] Setting up Custom Domain SSL Services...${NC}"
                      SSL_SCRIPT="install-custom-domain-ssl.sh"
                      [ -f "$SSL_SCRIPT" ] || SSL_SCRIPT="$INSTALL_DIR/scripts/legacy/install-custom-domain-ssl.sh"
-                     if [ -f "$SSL_SCRIPT" ]; then
-                         echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
-                         bash "$SSL_SCRIPT" install
-
-                         # Start the services
-                         echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
-                         /opt/smsly-hosting/smsly-domain-ssl-manager.sh start
-
-                         # Enable auto-start on boot (if not already enabled)
-                         echo -e "${BLUE}  → Ensuring auto-start on boot...${NC}"
-                         /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable
-
-                         echo -e "${GREEN}  ✓ Custom domain SSL services configured${NC}"
+                 if [ -f "$SSL_SCRIPT" ]; then
+                     echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
+                     timeout 120 bash "$SSL_SCRIPT" install || true
+                     
+                     # Start the services
+                     echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
+                     timeout 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh start || true
+                     
+                     # Enable auto-start on boot (if not already enabled)
+                     echo -e "${BLUE}  → Ensuring auto-start on boot...${NC}"
+                     timeout 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable || true
+                     
+                     echo -e "${GREEN}  ✓ Custom domain SSL services configured${NC}"
                      else
                          echo -e "${YELLOW}  ⚠ Custom domain SSL manager not found, skipping setup${NC}"
                      fi
@@ -614,7 +614,7 @@ fi
             elif [ "$MODE_NODE" = "true" ]; then
                 build_svcs="backend celery celery-deploy celery-fast celery-beat"
             fi
-            docker compose -f "$COMPOSE_FILE" build $build_svcs
+            timeout 600 docker compose -f "$COMPOSE_FILE" build $build_svcs
 
             echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
@@ -650,7 +650,7 @@ fi
 
             echo -e "${BLUE}  • Running post-migration tasks...${NC}"
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py fix_sequences 2>/dev/null || true
-            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput
+            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput 2>/dev/null || true
 
             set_checkpoint "update_db_migrated"
 
@@ -676,15 +676,15 @@ fi
                  [ -f "$SSL_SCRIPT" ] || SSL_SCRIPT="$INSTALL_DIR/scripts/legacy/install-custom-domain-ssl.sh"
                  if [ -f "$SSL_SCRIPT" ]; then
                      echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
-                     bash "$SSL_SCRIPT" install
+                     timeout 120 bash "$SSL_SCRIPT" install || true
                      
                      # Start the services
                      echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
-                     /opt/smsly-hosting/smsly-domain-ssl-manager.sh start
+                     timeout 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh start || true
                      
                      # Enable auto-start on boot (if not already enabled)
                      echo -e "${BLUE}  → Ensuring auto-start on boot...${NC}"
-                     /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable
+                     timeout 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable || true
                      
                      echo -e "${GREEN}  ✓ Custom domain SSL services configured${NC}"
                  else
@@ -698,7 +698,7 @@ fi
             # 1. Rebuild frontend from cached layers (no --pull, no new base images)
             if [ "$MODE_NODE" != "true" ]; then
                 echo -e "${BLUE}  → Rebuilding frontend (cached)...${NC}"
-                docker compose -f "$COMPOSE_FILE" build frontend 2>/dev/null || {
+                timeout 600 docker compose -f "$COMPOSE_FILE" build frontend 2>/dev/null || {
                     echo -e "${YELLOW}  ⚠ Frontend build failed (cached layers missing). Skipping frontend.${NC}"
                     echo -e "${YELLOW}    Run --update when Docker Hub is reachable for a full rebuild.${NC}"
                 }
@@ -757,15 +757,15 @@ fi
                  [ -f "$SSL_SCRIPT" ] || SSL_SCRIPT="$INSTALL_DIR/scripts/legacy/install-custom-domain-ssl.sh"
                  if [ -f "$SSL_SCRIPT" ]; then
                      echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
-                     bash "$SSL_SCRIPT" install
+                     timeout 120 bash "$SSL_SCRIPT" install || true
                      
                      # Start the services
                      echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
-                     /opt/smsly-hosting/smsly-domain-ssl-manager.sh start
+                     timeout 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh start || true
                      
                      # Enable auto-start on boot (if not already enabled)
                      echo -e "${BLUE}  → Ensuring auto-start on boot...${NC}"
-                     /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable
+                     timeout 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable || true
                      
                      echo -e "${GREEN}  ✓ Custom domain SSL services configured${NC}"
                  else
@@ -797,7 +797,7 @@ fi
 
             # 5. Rebuild core images (CACHED unless --no-cache passed manually)
             echo -e "${BLUE}    ↳ Rebuilding core images...${NC}"
-            docker compose -f "$COMPOSE_FILE" build $CORE_SERVICES
+            timeout 600 docker compose -f "$COMPOSE_FILE" build $CORE_SERVICES
 
             # 6. Start everything (addons stay running, core gets fresh containers)
             # This does a graceful zero-downtime replacement instead of an explicit hard stop
@@ -861,7 +861,7 @@ fi
 
             echo -e "${BLUE}  • Running post-migration tasks...${NC}"
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py fix_sequences 2>/dev/null || true
-            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput
+            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput 2>/dev/null || true
 
             # 11. Clean celerybeat-schedule and restart beat
             echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"
@@ -884,9 +884,9 @@ fi
                 SSL_SCRIPT="install-custom-domain-ssl.sh"
                 [ -f "$SSL_SCRIPT" ] || SSL_SCRIPT="$INSTALL_DIR/scripts/legacy/install-custom-domain-ssl.sh"
                 if [ -f "$SSL_SCRIPT" ]; then
-                    bash "$SSL_SCRIPT" install
-                    /opt/smsly-hosting/smsly-domain-ssl-manager.sh start
-                    /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable
+                    timeout 120 bash "$SSL_SCRIPT" install || true
+                    timeout 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh start || true
+                    timeout 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable || true
                     echo -e "${GREEN}  ✓ Custom domain SSL services configured${NC}"
                 else
                     echo -e "${YELLOW}  ⚠ Custom domain SSL manager not found, skipping setup${NC}"

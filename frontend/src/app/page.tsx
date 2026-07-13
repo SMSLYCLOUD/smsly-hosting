@@ -1,16 +1,40 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
     Server, Activity, Globe, Database, Cpu, Network, Shield, HardDrive, Lock,
     CheckCircle2, ArrowRight, Zap, Code, Sparkles, Terminal, Cloud, Rocket, GitBranch,
     ArrowUpRight, Blocks, RefreshCw, Brain, FileCode, ShieldCheck, Eye, Wifi,
     Container, Fingerprint, ScanLine, Bug, ShieldAlert,
 } from "lucide-react";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { NatureBackground } from "@/components/effects/NatureBackground";
 import { EcosystemDeployVisual } from "@/components/effects/EcosystemDeployVisual";
+
+// ============================================
+// HERO SLIDES — Carousel data
+// ============================================
+const heroSlides = [
+    {
+        badge: "Open Source PaaS",
+        heading: "The sovereign PaaS for ",
+        gradient: "modern infrastructure.",
+        subtitle: "Connect your VPS. Deploy apps, services, databases, and workers. PostgreSQL HA with Patroni. Redis Sentinel failover. AI auto-remediation. WireGuard VPN mesh. No vendor lock-in.",
+    },
+    {
+        badge: "Multi-Server by Design",
+        heading: "One control plane, ",
+        gradient: "infinite possibilities.",
+        subtitle: "Orchestrate a mesh of VPS nodes through a single dashboard. Zero-trust WireGuard VPN, automated peer discovery, and built-in load balancing. Grow from one server to one hundred — no configuration drift.",
+    },
+    {
+        badge: "AI-Powered Reliability",
+        heading: "Your infrastructure ",
+        gradient: "heals itself.",
+        subtitle: "The AI Senate continuously monitors your fleet. When a node degrades, it auto-remediates before you notice. Self-healing PostgreSQL HA, Redis Sentinel failover, and predictive disk alerts — zero manual toil.",
+    },
+];
 
 // ============================================
 // DASHBOARD MOCKUP — Real product visualization
@@ -637,6 +661,17 @@ const platformStats = [
 ];
 
 export default function Home() {
+    const [current, setCurrent] = useState(0);
+    const [isHovered, setIsHovered] = useState(false);
+
+    useEffect(() => {
+        if (isHovered) return;
+        const timer = setInterval(() => {
+            setCurrent((prev) => (prev + 1) % heroSlides.length);
+        }, 7000);
+        return () => clearInterval(timer);
+    }, [isHovered]);
+
     return (
         <main className="min-h-screen relative overflow-x-hidden">
 
@@ -648,39 +683,76 @@ export default function Home() {
                     <NatureBackground />
                 </div>
 
-                <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center z-10">
+                <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center z-10"
+                    onMouseEnter={() => setIsHovered(true)}
+                    onMouseLeave={() => setIsHovered(false)}
+                >
+                    {/* Badge */}
+                    <AnimatePresence mode="wait">
+                        <motion.div
+                            key={heroSlides[current].badge}
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -20 }}
+                            transition={{ duration: 0.35 }}
+                            className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-100 dark:border-emerald-500/20 rounded-full mb-8 shadow-sm"
+                        >
+                            <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                            <span className="text-sm font-semibold text-emerald-800 dark:text-emerald-400">{heroSlides[current].badge}</span>
+                        </motion.div>
+                    </AnimatePresence>
+
+                    {/* Heading */}
+                    <AnimatePresence mode="wait">
+                        <motion.h1
+                            key={heroSlides[current].heading}
+                            initial={{ opacity: 0, y: 30 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -30 }}
+                            transition={{ duration: 0.35 }}
+                            className="text-4xl md:text-5xl lg:text-6xl font-extrabold text-slate-900 dark:text-white tracking-tight leading-tight mb-6"
+                        >
+                            {heroSlides[current].heading}
+                            <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-600 to-teal-500">
+                                {heroSlides[current].gradient}
+                            </span>
+                        </motion.h1>
+                    </AnimatePresence>
+
+                    {/* Subtitle */}
+                    <AnimatePresence mode="wait">
+                        <motion.p
+                            key={heroSlides[current].subtitle}
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -20 }}
+                            transition={{ duration: 0.35 }}
+                            className="text-lg md:text-xl text-slate-600 dark:text-slate-400 max-w-3xl mx-auto leading-relaxed font-medium"
+                        >
+                            {heroSlides[current].subtitle}
+                        </motion.p>
+                    </AnimatePresence>
+
+                    {/* Dots */}
                     <motion.div
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.5 }}
-                        className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-100 dark:border-emerald-500/20 rounded-full mb-8 shadow-sm"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        transition={{ delay: 0.3, duration: 0.5 }}
+                        className="mt-8 flex items-center justify-center gap-3"
                     >
-                        <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-                        <span className="text-sm font-semibold text-emerald-800 dark:text-emerald-400">Open Source PaaS</span>
+                        {heroSlides.map((_, i) => (
+                            <button
+                                key={i}
+                                onClick={() => setCurrent(i)}
+                                className={`w-2.5 h-2.5 rounded-full transition-all duration-300 ${
+                                    i === current
+                                        ? "bg-emerald-500 w-8"
+                                        : "bg-slate-300 dark:bg-slate-600 hover:bg-emerald-300 dark:hover:bg-emerald-600"
+                                }`}
+                                aria-label={`Go to slide ${i + 1}`}
+                            />
+                        ))}
                     </motion.div>
-
-                    <motion.h1
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: 0.1, duration: 0.5 }}
-                        className="text-4xl md:text-5xl lg:text-6xl font-extrabold text-slate-900 dark:text-white tracking-tight leading-tight mb-6"
-                    >
-                        The sovereign PaaS for{' '}
-                        <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-600 to-teal-500">
-                            modern infrastructure.
-                        </span>
-                    </motion.h1>
-
-                    <motion.p
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: 0.2, duration: 0.5 }}
-                        className="text-lg md:text-xl text-slate-600 dark:text-slate-400 max-w-3xl mx-auto leading-relaxed font-medium"
-                    >
-                        Connect your VPS. Deploy apps, services, databases, and workers.
-                        PostgreSQL HA with Patroni. Redis Sentinel failover.
-                        AI auto-remediation. WireGuard VPN mesh. No vendor lock-in.
-                    </motion.p>
 
                     <motion.div
                         initial={{ opacity: 0, y: 20 }}

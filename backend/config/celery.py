@@ -322,12 +322,6 @@ app.conf.beat_schedule = {
         'schedule': 30.0,
         'options': {'expires': 30.0, 'queue': 'fast'},
     },
-    # ── Media Node periodic tasks (opt-in via SMSLY_ENABLE_MEDIA_NODES) ──
-    'verify-federation-chains-hourly': {
-        'task': 'apps.media.tasks.verify_federation_chains',
-        'schedule': 3600.0,
-        'options': {'expires': 3600.0, 'queue': 'media-audit'},
-    },
 }
 
 # Media node tasks are opt-in — only run when SMSLY_ENABLE_MEDIA_NODES is set.

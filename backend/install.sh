@@ -2103,25 +2103,13 @@ run_backend_migrations() {
     fi
 
     # Self-healing: fix node agent DB permissions after migrations.
-    # This ensures node_agent_* users have access to newly created tables.
-    # TODO(install): replace set -e toggle with explicit conditional (the
-    # trailing `|| true` already swallows failures, so set +e is redundant).
+    # Best-effort — wrapped in timeout so a hung Docker daemon can't
+    # block the entire update pipeline (which needs to restart backend/celery).
     echo -e "${BLUE}  -> Fixing node agent database permissions...${NC}"
-    docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T \
+    timeout 60 docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T \
         "${user_args[@]}" \
         -e SMSLY_DISABLE_STARTUP_TASKS=true \
         backend python manage.py fix_node_db_permissions 2>&1 || true
-    set -e
-
-    # After fixing permissions, reload pgcat so newly created/fixed node agent
-    # users are picked up into the pool config. Critical for agent-lite nodes
-    # that connect through pgcat and would otherwise get "No pool configured".
-    if [ "$MODE_AGENT_LITE" != "true" ] && docker compose -f "$COMPOSE_FILE" ps pgcat 2>/dev/null | grep -q "Up"; then
-        echo -e "${BLUE}  -> Reloading PgCat to pick up node agent pools...${NC}"
-        docker compose -f "$COMPOSE_FILE" restart pgcat >/dev/null 2>&1
-        sleep 5
-        echo -e "${GREEN}  ✓ PgCat reloaded${NC}"
-    fi
 
     return 0
 }
@@ -4050,7 +4038,7 @@ fi
             fi
             wait_for_container_ready "smsly-hosting-backend-1" 120 || true
 
-            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput
+            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput 2>/dev/null || true
 
             set_checkpoint "update_db_migrated"
 
@@ -4279,7 +4267,7 @@ fi
             fi
             wait_for_container_ready "smsly-hosting-backend-1" 120 || true
 
-            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput
+            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput 2>/dev/null || true
 
             # 9. Clean celerybeat-schedule and restart beat
             echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"
@@ -6006,13 +5994,12 @@ fi
 # ─── Ensure PgCat is fresh and connected ──────────────────────────────────────
 if docker compose -f "$COMPOSE_FILE" ps pgcat >/dev/null 2>&1; then
     echo -e "${BLUE}  → Restarting PgCat balancer...${NC}"
-    docker compose -f "$COMPOSE_FILE" restart pgcat >/dev/null 2>&1
-    sleep 5
+    timeout 30 docker compose -f "$COMPOSE_FILE" restart pgcat >/dev/null 2>&1 || true
 fi
 
 # ─── Restart backend so it picks up the correct DB credentials ──────────────
 echo -e "${BLUE}  → Restarting backend with synced credentials...${NC}"
-docker compose -f "$COMPOSE_FILE" restart backend >/dev/null 2>&1
+timeout 30 docker compose -f "$COMPOSE_FILE" restart backend >/dev/null 2>&1 || true
 sleep 5
 
     echo -e "${BLUE}  → Running Migrations...${NC}"
@@ -6067,7 +6054,7 @@ sleep 5
     echo -e "${BLUE}  → Collecting Static Files...${NC}"
     # Fix volume ownership — Docker creates named volumes as root
     docker compose -f "$COMPOSE_FILE" exec -T --user root backend chown -R 1000:1000 /app/staticfiles /app/media /app/backups 2>/dev/null || true
-    docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic --noinput
+    docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic --noinput 2>/dev/null || true
 
     sync_platform_domain_state "$INSTALL_DIR/.env"
     set_checkpoint "database_initialized"

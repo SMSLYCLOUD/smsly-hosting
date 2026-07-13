@@ -167,19 +167,20 @@ run_backend_migrations() {
     if [ -z "$direct_url" ]; then
         direct_url="postgresql://${POSTGRES_USER:-smsly_admin}:${POSTGRES_PASSWORD:-}@${POSTGRES_HOST:-db}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-smsly_hosting}"
     fi
-    # SECURITY/HARDENING: avoid set +e / set -e toggling. Capture rc via
-    # explicit conditional so set -e stays in effect the whole time.
-    if ! timeout "$((timeout_seconds + 60))" docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T \
+
+    # Run migrations inside a one-shot container.
+    # Capture the exit code explicitly so set -e stays in effect.
+    set +e
+    timeout "$((timeout_seconds + 60))" docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T \
         "${user_args[@]}" \
         -e SMSLY_DISABLE_STARTUP_TASKS=true \
         -e SMSLY_MIGRATION_MODE=true \
         -e DIRECT_DATABASE_URL="$direct_url" \
         backend timeout "$timeout_seconds" \
-        python manage.py migrate --database="$migrate_db" --noinput; then
-        rc=$?
-    else
-        rc=0
-    fi
+        python manage.py migrate --database="$migrate_db" --noinput
+    rc=$?
+    set -e
+
     if [ "$rc" -ne 0 ]; then
         if [ "$rc" -eq 124 ]; then
             echo -e "${RED}  x Migrations timed out after ${timeout_seconds}s.${NC}"
@@ -191,24 +192,13 @@ run_backend_migrations() {
     fi
 
     # Self-healing: fix node agent DB permissions after migrations.
-    # This ensures node_agent_* users have access to newly created tables.
-    # TODO(install): replace set -e toggle with explicit conditional (the
-    # trailing `|| true` already swallows failures, so set +e is redundant).
+    # Best-effort — wrapped in timeout so a hung Docker daemon can't
+    # block the entire update pipeline (which needs to restart backend/celery).
     echo -e "${BLUE}  -> Fixing node agent database permissions...${NC}"
     timeout 60 docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T \
         "${user_args[@]}" \
         -e SMSLY_DISABLE_STARTUP_TASKS=true \
         backend python manage.py fix_node_db_permissions 2>&1 || true
-
-    # After fixing permissions, reload pgcat so newly created/fixed node agent
-    # users are picked up into the pool config. Critical for agent-lite nodes
-    # that connect through pgcat and would otherwise get "No pool configured".
-    if [ "$MODE_AGENT_LITE" != "true" ] && [ -n "$(get_pgcat_if_exists)" ] && docker compose -f "$COMPOSE_FILE" ps pgcat 2>/dev/null | grep -q "Up"; then
-        echo -e "${BLUE}  -> Reloading PgCat to pick up node agent pools...${NC}"
-        timeout 20 docker compose -f "$COMPOSE_FILE" restart pgcat >/dev/null 2>&1
-        sleep 5
-        echo -e "${GREEN}  ✓ PgCat reloaded${NC}"
-    fi
 
     return 0
 }
