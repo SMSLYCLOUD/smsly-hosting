@@ -2032,6 +2032,9 @@ get_migration_database_alias() {
     if [ -z "$direct_url" ]; then
         direct_url="postgresql://${POSTGRES_USER:-smsly_admin}:${POSTGRES_PASSWORD:-}@${POSTGRES_HOST:-db}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-smsly_hosting}"
     fi
+    # Pre-cleanup: remove orphaned run containers from previous invocations
+    # that could block the next docker compose run (naming collision).
+    docker rm -f smsly-hosting-backend-run 2>/dev/null || true
     migrate_db="$(
         docker compose -f "$COMPOSE_FILE" run --no-deps -T \
             -e SMSLY_DISABLE_STARTUP_TASKS=true \
@@ -2041,7 +2044,9 @@ get_migration_database_alias() {
             "from django.conf import settings; print('direct' if 'direct' in settings.DATABASES else ('session' if 'session' in settings.DATABASES else 'default'))" \
             2>/dev/null | tail -n 1 | tr -d '\r'
     )"
-    docker compose -f "$COMPOSE_FILE" rm -f backend-run 2>/dev/null || true
+    # Post-cleanup: force-remove the run container (docker compose rm targets
+    # service names and would be a no-op for run containers).
+    docker rm -f smsly-hosting-backend-run 2>/dev/null || true
 
     case "$migrate_db" in
         direct|session|default) printf '%s\n' "$migrate_db" ;;
@@ -2085,18 +2090,23 @@ run_backend_migrations() {
     # NOTE: --rm is omitted intentionally — under heavy Docker daemon load
     # (e.g. concurrent image builds), `docker compose run --rm` can hang
     # for minutes waiting for container removal.
-    if ! docker compose -f "$COMPOSE_FILE" run --no-deps -T \
+    # Pre-cleanup: remove any orphaned run container from get_migration_database_alias
+    docker rm -f smsly-hosting-backend-run 2>/dev/null || true
+    set +e
+    timeout "$((timeout_seconds + 60))" docker compose -f "$COMPOSE_FILE" run --no-deps -T \
         "${user_args[@]}" \
         -e SMSLY_DISABLE_STARTUP_TASKS=true \
         -e SMSLY_MIGRATION_MODE=true \
         -e DIRECT_DATABASE_URL="$direct_url" \
         backend timeout "$timeout_seconds" \
-        python manage.py migrate --database="$migrate_db" --noinput; then
-        rc=$?
-    else
-        rc=0
-    fi
-    docker compose -f "$COMPOSE_FILE" rm -f backend-run 2>/dev/null || true
+        python manage.py migrate --database="$migrate_db" --noinput
+    rc=$?
+    set -e
+    # Clean up the one-shot migration container (best-effort).
+    # Use docker rm (not docker compose rm) — compose rm targets service
+    # names and "backend-run" is not a service; the run container is named
+    # smsly-hosting-backend-run by Docker Compose.
+    docker rm -f smsly-hosting-backend-run 2>/dev/null || true
     if [ "$rc" -ne 0 ]; then
         if [ "$rc" -eq 124 ]; then
             echo -e "${RED}  x Migrations timed out after ${timeout_seconds}s.${NC}"
@@ -2111,11 +2121,12 @@ run_backend_migrations() {
     # Best-effort — wrapped in timeout so a hung Docker daemon can't
     # block the entire update pipeline (which needs to restart backend/celery).
     echo -e "${BLUE}  -> Fixing node agent database permissions...${NC}"
+    docker rm -f smsly-hosting-backend-run 2>/dev/null || true
     timeout 60 docker compose -f "$COMPOSE_FILE" run --no-deps -T \
         "${user_args[@]}" \
         -e SMSLY_DISABLE_STARTUP_TASKS=true \
         backend python manage.py fix_node_db_permissions 2>&1 || true
-    docker compose -f "$COMPOSE_FILE" rm -f backend-run 2>/dev/null || true
+    docker rm -f smsly-hosting-backend-run 2>/dev/null || true
 
     return 0
 }
