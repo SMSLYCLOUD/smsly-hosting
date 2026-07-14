@@ -2032,22 +2032,22 @@ get_migration_database_alias() {
     if [ -z "$direct_url" ]; then
         direct_url="postgresql://${POSTGRES_USER:-smsly_admin}:${POSTGRES_PASSWORD:-}@${POSTGRES_HOST:-db}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-smsly_hosting}"
     fi
-    # Pre-cleanup: remove orphaned run containers from previous invocations.
-    # docker compose run creates hash-suffixed names (e.g. smsly-hosting-backend-run-a1b2c3).
-    # stdout must go to /dev/null — this function is called in $() so any
-    # leaked output (e.g. container IDs from docker rm) corrupts the alias.
-    docker ps -a -q --filter "name=smsly-hosting-backend-run" | xargs -r docker rm -f >/dev/null 2>&1 || true
+    # Use bare docker run --rm instead of docker compose run.
+    # docker compose run with --user root triggers the entrypoint's su PID-1
+    # privilege drop, which hangs in waitpid() after the child exits.
+    # --user 1000 skips su entirely — this probe only needs DB access.
     migrate_db="$(
-        docker compose -f "$COMPOSE_FILE" run --no-deps -T \
+        docker run --rm --network smsly-net \
+            --user 1000 \
+            --env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env" \
             -e SMSLY_DISABLE_STARTUP_TASKS=true \
             -e SMSLY_MIGRATION_MODE=true \
             -e DIRECT_DATABASE_URL="$direct_url" \
-            backend python manage.py shell -c \
+            smsly-hosting-backend:latest \
+            python manage.py shell -c \
             "from django.conf import settings; print('direct' if 'direct' in settings.DATABASES else ('session' if 'session' in settings.DATABASES else 'default'))" \
             2>/dev/null | tail -n 1 | tr -d '\r'
     )"
-    # Post-cleanup: force-remove the run container (stdout to /dev/null, same reason).
-    docker ps -a -q --filter "name=smsly-hosting-backend-run" | xargs -r docker rm -f >/dev/null 2>&1 || true
 
     case "$migrate_db" in
         direct|session|default) printf '%s\n' "$migrate_db" ;;
@@ -2086,25 +2086,22 @@ run_backend_migrations() {
     if [ -z "$direct_url" ]; then
         direct_url="postgresql://${POSTGRES_USER:-smsly_admin}:${POSTGRES_PASSWORD:-}@${POSTGRES_HOST:-db}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-smsly_hosting}"
     fi
-    # SECURITY/HARDENING: avoid set +e / set -e toggling. Capture rc via
-    # explicit conditional so set -e stays in effect the whole time.
-    # NOTE: --rm is omitted intentionally — under heavy Docker daemon load
-    # (e.g. concurrent image builds), `docker compose run --rm` can hang
-    # for minutes waiting for container removal.
-    # Pre-cleanup: remove any orphaned run containers (hash-suffixed names).
-    docker ps -a -q --filter "name=smsly-hosting-backend-run" | xargs -r docker rm -f 2>/dev/null || true
+    # Run migrations inside a one-shot container via bare docker run --rm.
+    # docker compose run with --user root triggers the entrypoint's su PID-1
+    # privilege drop, which hangs in waitpid() after the child process exits.
+    # --user 1000 skips the su block entirely; the migration only needs DB access.
     set +e
-    timeout "$((timeout_seconds + 60))" docker compose -f "$COMPOSE_FILE" run --no-deps -T \
-        "${user_args[@]}" \
+    timeout "$((timeout_seconds + 60))" docker run --rm --network smsly-net \
+        --user 1000 \
+        --env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env" \
         -e SMSLY_DISABLE_STARTUP_TASKS=true \
         -e SMSLY_MIGRATION_MODE=true \
         -e DIRECT_DATABASE_URL="$direct_url" \
-        backend timeout "$timeout_seconds" \
+        smsly-hosting-backend:latest \
+        timeout "$timeout_seconds" \
         python manage.py migrate --database="$migrate_db" --noinput
     rc=$?
     set -e
-    # Post-cleanup: remove the one-shot migration container (hash-suffixed name).
-    docker ps -a -q --filter "name=smsly-hosting-backend-run" | xargs -r docker rm -f 2>/dev/null || true
     if [ "$rc" -ne 0 ]; then
         if [ "$rc" -eq 124 ]; then
             echo -e "${RED}  x Migrations timed out after ${timeout_seconds}s.${NC}"
@@ -2116,15 +2113,13 @@ run_backend_migrations() {
     fi
 
     # Self-healing: fix node agent DB permissions after migrations.
-    # Best-effort — wrapped in timeout so a hung Docker daemon can't
-    # block the entire update pipeline (which needs to restart backend/celery).
     echo -e "${BLUE}  -> Fixing node agent database permissions...${NC}"
-    docker ps -a -q --filter "name=smsly-hosting-backend-run" | xargs -r docker rm -f 2>/dev/null || true
-    timeout 60 docker compose -f "$COMPOSE_FILE" run --no-deps -T \
-        "${user_args[@]}" \
+    timeout 60 docker run --rm --network smsly-net \
+        --user 1000 \
+        --env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env" \
         -e SMSLY_DISABLE_STARTUP_TASKS=true \
-        backend python manage.py fix_node_db_permissions 2>&1 || true
-    docker ps -a -q --filter "name=smsly-hosting-backend-run" | xargs -r docker rm -f 2>/dev/null || true
+        smsly-hosting-backend:latest \
+        python manage.py fix_node_db_permissions 2>&1 || true
 
     return 0
 }
