@@ -211,6 +211,16 @@ run_backend_migrations() {
         smsly-hosting-backend:latest \
         python manage.py fix_node_db_permissions 2>&1 || true
 
+    # Reload PgCat so newly created/fixed node agent users are picked up
+    # into the pool config. Critical for agent-lite nodes that connect
+    # through PgCat and would otherwise get "No pool configured".
+    if [ "$MODE_AGENT_LITE" != "true" ] && [ -n "$(get_pgcat_if_exists)" ] && docker compose -f "$COMPOSE_FILE" ps pgcat 2>/dev/null | grep -q "Up"; then
+        echo -e "${BLUE}  -> Reloading PgCat to pick up node agent pools...${NC}"
+        timeout 20 docker compose -f "$COMPOSE_FILE" restart pgcat >/dev/null 2>&1
+        sleep 5
+        echo -e "${GREEN}  ✓ PgCat reloaded${NC}"
+    fi
+
     return 0
 }
 
@@ -931,20 +941,13 @@ restart_edge_stack() {
             timeout 30 docker compose -f "$COMPOSE_FILE" up -d $non_traefik_services >/dev/null 2>&1 || true
     fi
 
-    # Force-recreate ONLY Traefik (not socket-proxy) to trigger full container
-    # re-discovery. Traefik v3.x removed pollInterval; a fresh start against a
-    # stable socket-proxy is the only way to guarantee complete provider re-scan
-    # after network topology changes.
+    # Force-recreate Traefik during full-update restart to guarantee label
+    # re-discovery after core services get new container IPs. Traefik v3.x
+    # watches Docker events but misses label changes when services are
+    # recreated underneath it — stale routes cause 502 across all services.
     # Brief downtime: ~2-5s while Traefik restarts. Caddy retries through it.
-    # NOTE(Zero-Downtime): We removed --force-recreate. Traefik dynamically listens to
-    # Docker events and does not need to be restarted. This eliminates the 2-5s downtime
-    # for deployed user services during an update.
-    echo -e "${BLUE}    [2/5] Ensuring traefik running...${NC}"
-    if docker compose -f "$COMPOSE_FILE" ps traefik 2>/dev/null | grep -q "Up"; then
-        echo -e "${GREEN}      traefik already running, skipping restart${NC}"
-    else
-        timeout 30 docker compose -f "$COMPOSE_FILE" up -d traefik >/dev/null 2>&1 || true
-    fi
+    echo -e "${BLUE}    [2/5] Restarting traefik (force label re-discovery)...${NC}"
+    timeout 30 docker compose -f "$COMPOSE_FILE" up -d --force-recreate traefik >/dev/null 2>&1 || true
 
     # Re-attach expected external networks AFTER Traefik restart so it
     # discovers containers with stable network topology (idempotent).
