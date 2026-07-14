@@ -30,6 +30,11 @@ BUILDKIT_CACHE_ERROR_SIGNATURES = [
     'registry cache importer',
     'insufficient_scope',
     'failed to configure registry cache',
+    # BuildKit daemon crashes (OOM kills, gRPC transport failures)
+    # that corrupt internal solver state.
+    'execop',
+    'signal: killed',
+    'out of memory',
 ]
 
 
