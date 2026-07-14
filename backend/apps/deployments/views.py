@@ -882,9 +882,17 @@ class ServiceViewSet(viewsets.ModelViewSet):
             return self.queryset.none()
         if user.is_superuser or is_remote_sync_request(self.request):
             return self.queryset.all().select_related('project').prefetch_related('deployments')
-        return self.queryset.filter(
+        qs = self.queryset.filter(
             get_team_q_filter(user, request=self.request)
-        ).select_related('project').prefetch_related('deployments')
+        )
+        # Hide services that are being deleted or already deleted from list
+        # view only — detail endpoints (retry-delete, force-purge) must still
+        # resolve these by PK.
+        if self.action == 'list':
+            qs = qs.exclude(
+                status__in=[Service.Status.DELETED, Service.Status.DELETION_PENDING]
+            )
+        return qs.select_related('project').prefetch_related('deployments')
 
     def _is_remote_sync_request(self):
         return is_remote_sync_request(self.request)

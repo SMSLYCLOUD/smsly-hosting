@@ -1075,7 +1075,7 @@ if not created and not cp.is_active:
     echo -e "${BLUE}  → Checking for stalled deployments/addons in QUEUED state...${NC}"
     backend_container="$(resolve_container_target "smsly-hosting-backend-1")"
     timeout 30 docker exec -i "$backend_container" python manage.py shell -c "
-from apps.deployments.models import Deployment
+from apps.deployments.models import Deployment, Service
 from apps.deployments.models_addons import Addon
 from apps.deployments.tasks import provision_addon_task, recover_stalled_queued_deployments
 from django.db.models import Count
@@ -1096,6 +1096,14 @@ if a_count > 0:
     print(f'  [Jump-Start] Re-queueing {a_count} stalled addons...')
     for a in Addon.objects.filter(status='QUEUED'):
         provision_addon_task.delay(str(a.id))
+
+# Re-queue stalled service deletions (lost during worker restart)
+d_count = Service.objects.filter(status='DELETION_PENDING').count()
+if d_count > 0:
+    print(f'  [Jump-Start] Re-queueing {d_count} stalled deletion tasks...')
+    from apps.deployments.tasks import delete_service_task
+    for s in Service.objects.filter(status='DELETION_PENDING'):
+        delete_service_task.delay(str(s.id))
 " 2>/dev/null || true
 
     # ─── Verification: Celery Worker Health ─────────────────────────────────
