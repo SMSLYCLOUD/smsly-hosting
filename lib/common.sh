@@ -121,9 +121,10 @@ get_migration_database_alias() {
         direct_url="postgresql://${POSTGRES_USER:-smsly_admin}:${POSTGRES_PASSWORD:-}@${POSTGRES_HOST:-db}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-smsly_hosting}"
     fi
     # Pre-cleanup: remove orphaned run containers from previous invocations.
-    # docker compose run creates hash-suffixed names (e.g. smsly-hosting-backend-run-a1b2c3)
-    # — exact-name docker rm is a no-op.  Use a filter to catch them all.
-    docker ps -a -q --filter "name=smsly-hosting-backend-run" 2>/dev/null | xargs -r docker rm -f 2>/dev/null || true
+    # docker compose run creates hash-suffixed names (e.g. smsly-hosting-backend-run-a1b2c3).
+    # stdout must go to /dev/null — this function is called in $() so any
+    # leaked output (e.g. container IDs from docker rm) corrupts the alias.
+    docker ps -a -q --filter "name=smsly-hosting-backend-run" 2>/dev/null | xargs -r docker rm -f >/dev/null 2>&1 || true
     migrate_db="$(
         docker compose -f "$COMPOSE_FILE" run --no-deps -T \
             -e SMSLY_DISABLE_STARTUP_TASKS=true \
@@ -133,8 +134,8 @@ get_migration_database_alias() {
             "from django.conf import settings; print('direct' if 'direct' in settings.DATABASES else ('session' if 'session' in settings.DATABASES else 'default'))" \
             2>/dev/null | tail -n 1 | tr -d '\r'
     )"
-    # Post-cleanup: force-remove the run container.
-    docker ps -a -q --filter "name=smsly-hosting-backend-run" | xargs -r docker rm -f 2>/dev/null || true
+    # Post-cleanup: force-remove the run container (stdout to /dev/null, same reason).
+    docker ps -a -q --filter "name=smsly-hosting-backend-run" | xargs -r docker rm -f >/dev/null 2>&1 || true
 
     case "$migrate_db" in
         direct|session|default) printf '%s\n' "$migrate_db" ;;
