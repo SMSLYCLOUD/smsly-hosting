@@ -146,6 +146,15 @@ class ServiceHealthWebhookView(APIView):
                 deployment.save(update_fields=["status", "updated_at"])
                 activated += 1
 
+                # Post success commit status to GitHub (non-blocking)
+                try:
+                    from apps.deployments.tasks_commit_status import update_commit_status
+                    update_commit_status.delay(
+                        str(deployment.id), 'success', 'Deployment active'
+                    )
+                except Exception:
+                    pass
+
             AuditLog.objects.create(
                 actor="system",
                 action="HEALTH_WEBHOOK_APPLIED",

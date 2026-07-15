@@ -117,6 +117,16 @@ class ProductionDeploymentPipeline:
 
         deployment.status = Deployment.Status.ACTIVE
         deployment.save()
+
+        # Post success commit status to GitHub (non-blocking)
+        try:
+            from apps.deployments.tasks_commit_status import update_commit_status
+            update_commit_status.delay(
+                str(deployment.id), 'success', 'Deployment active'
+            )
+        except Exception:
+            pass
+
         return deployment
 
     def _get_latest_validation_for_commit(self, service_id, commit_hash):

@@ -93,7 +93,7 @@ safe_update_snapshot() {
     local prev_branch; prev_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
     local backup_file="$BACKUP_DIR/pre-update-$(date +%Y%m%d-%H%M%S).sql"
 
-    docker exec smsly-postgres-primary pg_dump -U smsly_admin smsly_hosting > "$backup_file" 2>/dev/null && \
+    timeout 300 docker exec smsly-postgres-primary pg_dump -U smsly_admin smsly_hosting > "$backup_file" 2>/dev/null && \
         _ok "DB backup: $(du -h "$backup_file" | cut -f1)" || \
         { _warn "DB backup failed — continuing without safety net"; backup_file=""; }
 

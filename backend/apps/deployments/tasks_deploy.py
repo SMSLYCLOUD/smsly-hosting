@@ -88,6 +88,16 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
         if deployment.status == Deployment.Status.CANCELLED:
             logger.info("Deployment %s cancelled before start", deployment_id)
             return
+
+        # Post pending commit status to GitHub (non-blocking)
+        try:
+            from .tasks_commit_status import update_commit_status
+            update_commit_status.delay(
+                str(deployment.id), 'pending', 'Deployment started'
+            )
+        except Exception:
+            pass  # Don't let status posting block the deployment
+
         skip_review = skip_review or deployment.is_rollback or should_skip_review_for_commit_message(
             deployment.commit_message
         )
@@ -296,101 +306,10 @@ def resume_deploy_task(self, deployment_id: str, provider_id: str):
         _handle_failure(self, deployment, str(e), "System Failure")
 
 
-
-def enqueue_smart_deploy_task(
-    deployment_id: str,
-    provider_id: str,
-    skip_review: bool = False,
-):
-    """
-    Enqueue a deployment, using a dedicated node queue on lite agents.
-
-    Full installs and lite agents both use a broker local to the server that
-    receives the API request. Lite agents still route API-triggered deploys to
-    their per-node queue so only that node's worker consumes them.
-    """
-    kwargs = {
-        "deployment_id": str(deployment_id),
-        "provider_id": str(provider_id),
-        "skip_review": skip_review,
-    }
-    queue = _current_agent_node_queue()
-    if queue:
-        return smart_deploy_task.apply_async(
-            kwargs=kwargs,
-            queue=queue,
-            routing_key=queue,
-        )
-    return smart_deploy_task.delay(**kwargs)
-
-
-
-def recover_stalled_queued_deployments(limit: int = 100) -> dict:
-    """
-    Re-publish queued deployment tasks after a platform restart/update.
-
-    Automated deployments keep their auto-approval semantics even when the
-    original Celery publish was lost during an update.
-    """
-    from celery.result import AsyncResult
-
-    results = {"seen": 0, "queued": 0, "skipped": 0, "failed": 0}
-    deployments = (
-        Deployment.objects.filter(status=Deployment.Status.QUEUED)
-        .select_related("service", "service__provider")
-        .order_by("created_at")[:limit]
-    )
-    for deployment in deployments:
-        results["seen"] += 1
-        try:
-            task_state = AsyncResult(str(deployment.id)).state
-        except Exception:
-            task_state = None
-        if task_state in ("STARTED", "RECEIVED", "RETRY"):
-            logger.info(
-                "Skipping re-queue for %s: task is in state %s",
-                deployment.id,
-                task_state,
-            )
-            results["skipped"] += 1
-            continue
-        provider = _resolve_provider_for_service(
-            deployment.service,
-            prefer_local=bool(getattr(deployment, "target_is_local", False)),
-        )
-        if not provider:
-            append_log(
-                deployment,
-                "\n[queue-restore] No active provider available; leaving deployment queued.\n",
-            )
-            results["skipped"] += 1
-            continue
-
-        skip_review = deployment.is_rollback or should_skip_review_for_commit_message(
-            deployment.commit_message
-        )
-        try:
-            enqueue_smart_deploy_task(
-                deployment_id=str(deployment.id),
-                provider_id=str(provider.id),
-                skip_review=skip_review,
-            )
-            append_log(
-                deployment,
-                f"\n[queue-restore] Requeued deployment task (skip_review={skip_review}).\n",
-            )
-            results["queued"] += 1
-        except Exception as exc:  # pragma: no cover - broker/runtime failure
-            logger.exception(
-                "Failed to restore queued deployment task for deployment=%s",
-                deployment.id,
-            )
-            append_log(
-                deployment,
-                f"\n[queue-restore] Failed to requeue deployment task: {exc}\n",
-            )
-            results["failed"] += 1
-    return results
+# Re-export canonical versions from tasks.py to avoid duplicate definitions.
+# These functions are identical; the tasks.py versions are the source of truth.
+from .tasks import enqueue_smart_deploy_task  # noqa: E402, F401
+from .tasks import recover_stalled_queued_deployments  # noqa: E402, F401
 
 
 
@@ -766,6 +685,15 @@ def _do_promote(deployment, provider):
 
         broadcast_status(deployment)
 
+        # Post success commit status to GitHub (non-blocking)
+        try:
+            from .tasks_commit_status import update_commit_status
+            update_commit_status.delay(
+                str(deployment.id), 'success', 'Deployment active'
+            )
+        except Exception:
+            pass
+
         _regenerate_caddyfile()
         return
 
@@ -789,6 +717,16 @@ def _do_promote(deployment, provider):
     service.save(update_fields=['active_target_type', 'active_host_ip', 'active_runtime_id'])
 
     broadcast_status(deployment)
+
+    # Post success commit status to GitHub (non-blocking)
+    try:
+        from .tasks_commit_status import update_commit_status
+        update_commit_status.delay(
+            str(deployment.id), 'success', 'Deployment active'
+        )
+    except Exception:
+        pass
+
     _regenerate_caddyfile()
     append_log(
         deployment,
@@ -889,6 +827,16 @@ def _deploy_container(deployment, provider, image_name):
                 (timezone.now() - start).total_seconds()
             )
             broadcast_status(deployment)
+
+            # Post success commit status to GitHub (non-blocking)
+            try:
+                from .tasks_commit_status import update_commit_status
+                update_commit_status.delay(
+                    str(deployment.id), 'success', 'Deployment active'
+                )
+            except Exception:
+                pass
+
             _regenerate_caddyfile()
             append_log(
                 deployment,
@@ -1107,6 +1055,16 @@ def _deploy_container(deployment, provider, image_name):
             (timezone.now() - start).total_seconds()
         )
         broadcast_status(deployment)
+
+        # Post success commit status to GitHub (non-blocking)
+        try:
+            from .tasks_commit_status import update_commit_status
+            update_commit_status.delay(
+                str(deployment.id), 'success', 'Deployment active'
+            )
+        except Exception:
+            pass
+
         # Regenerate local Caddyfile routing so new service domains resolve
         if provider.provider_type == CloudProvider.ProviderType.LOCAL:
             _regenerate_caddyfile()
@@ -1394,6 +1352,15 @@ def _handle_failure(task, deployment, error_msg, reason):
             deployment.status = 'FAILED'
             deployment.finished_at = timezone.now()
 
+            # Post failure commit status to GitHub (non-blocking)
+            try:
+                from .tasks_commit_status import update_commit_status
+                update_commit_status.delay(
+                    str(deployment.id), 'failure', f'{reason}: {error_msg}'[:140]
+                )
+            except Exception:
+                pass
+
             # Sanitize inputs for PostgreSQL
             safe_reason = str(reason).replace('\x00', '')
             safe_msg = str(error_msg).replace('\x00', '')
@@ -1552,103 +1519,7 @@ def _handle_failure(task, deployment, error_msg, reason):
     logger.error("Deployment failed (%s), not retrying: %s", reason, error_msg)
 
 
-
-@shared_task(bind=True, max_retries=3)
-def delete_service_task(self, service_id: str, force: bool = False):
-    """Async reliable deletion of a Service"""
-    from apps.deployments.models_core import Service
-    from apps.deployments.services.deletion_orchestrator import DeletionOrchestrator
-
-    try:
-        service = Service.objects.get(id=service_id)
-    except Service.DoesNotExist:
-        return
-
-    success = False
-
-    # 1. Handle remote server cleanup if applicable
-    try:
-        from apps.deployments.utils_target import resolve_active_execution_target
-        target = resolve_active_execution_target(service)
-        active_server = target["server_obj"]
-    except Exception:
-        active_server = getattr(service, 'server', None)
-
-    if active_server and not active_server.is_primary:
-        try:
-            logger.info("Decommissioning service %s on remote node %s", service.name, active_server.host)
-            remote = RemoteOrchestrator(active_server)
-            success = remote.delete_service_for_local(service, force=force)
-
-            # If force=True, we proceed even if remote call fails (best-effort local cleanup)
-            if force:
-                success = True
-        except Exception as exc:
-            logger.warning("Remote deletion failed for service %s: %s.", service.name, exc)
-            success = force
-    else:
-        # 2. Local cleanup
-        orchestrator = DeletionOrchestrator()
-        success = orchestrator.delete_service_resources(service, force=force)
-
-        # 2b. Clean up addon runtime resources before DB cascade
-        for addon in Addon.objects.filter(service=service):
-            server = getattr(addon.service, 'server', None)
-            if (server and not server.is_primary
-                    and not getattr(server, 'is_lite_agent', False)):
-                container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
-                ok = addon_provisioner.deprovision_remote(
-                    addon.coolify_uuid or container_name, server, container_name,
-                )
-            elif orchestrator.docker_client:
-                ok = orchestrator.delete_addon_resources(addon)
-            else:
-                ok = True
-            if not ok:
-                logger.warning("Failed to clean up addon %s (%s) for service %s.",
-                               addon.id, addon.addon_type, service.name)
-                if not force:
-                    success = False
-
-        # 3. Resilience: If force=True, we proceed regardless of resource cleanup success.
-        # This ensures the DB record is purged when the user explicitly requests a force-delete.
-        if force:
-            logger.info("Force-purging service %s from database after best-effort cleanup.", service.name)
-            success = True
-        elif not success and not service.server and not orchestrator.docker_client:
-            logger.warning("Docker client unavailable for service %s. Forcing database-only deletion.", service.name)
-            success = True
-
-    if success:
-        # Capture project reference and owner before deleting the service.
-        service_project = getattr(service, 'project', None)
-        service_owner_id = getattr(service, 'owner_id', None)
-
-        # GDPR right-to-erasure: delete all backup tarballs and DB rows
-        # owned by this service's user BEFORE the CASCADE fires. The
-        # backup file paths are not recoverable once the ServiceBackup row
-        # is gone.
-        try:
-            from .services.backup_service import purge_user_backups
-            purge_user_backups(service_owner_id)
-        except Exception as cleanup_exc:
-            logger.warning(
-                "Backup purge during service deletion failed for %s: %s",
-                service.id, cleanup_exc,
-            )
-
-        service.delete()
-
-        # After deleting an LLM consumer, check if shared Ollama CPP
-        # is still needed. If no remaining services need it, clean it up
-        # to free VPS resources.
-        if service_project:
-            try:
-                _cleanup_shared_ollama_if_unused(service_project)
-            except Exception as cleanup_exc:
-                logger.warning("Shared Ollama cleanup check failed for project %s: %s",
-                               service_project.id, cleanup_exc)
-    else:
-        service.status = Service.Status.DELETION_FAILED
-        service.deletion_error = "Failed to remove some runtime resources. If this node is unassigned or unreachable, use 'Retry' or manual DB cleanup."
-        service.save(update_fields=['status', 'deletion_error'])
+# Re-export the canonical delete_service_task from tasks.py to avoid duplication.
+# All callers should import from tasks.py directly; this alias exists for
+# backward compatibility with tasks_ai_router.py and tasks_safedeploy.py.
+from .tasks import delete_service_task  # noqa: E402, F401

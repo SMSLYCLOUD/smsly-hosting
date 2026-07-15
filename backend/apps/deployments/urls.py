@@ -35,6 +35,13 @@ from .views_database_replica import DatabaseReplicaViewSet
 from .views_device import list_devices, register_device, revoke_device
 from .views_election import ClusterViewSet, heartbeat_receive, vote_request
 from .views_github import github_branches, github_commits, github_repos
+from .views_github_app import (
+    github_app_callback,
+    github_app_install_url,
+    github_app_installation_delete,
+    github_app_installation_repos,
+    github_app_installations,
+)
 from .views_gitlab import gitlab_branches, gitlab_commits, gitlab_repos
 from .views_health_webhook import ServiceHealthWebhookView
 from .views_integrations import (
@@ -184,6 +191,12 @@ urlpatterns = [
     # API-based OAuth (bypasses session cookies for SPA compatibility)
     path('integrations/github/oauth-url/', github_oauth_url, name='github-oauth-url'),
     path('integrations/github/oauth-callback/', github_oauth_callback, name='github-oauth-callback'),
+    # GitHub App installation flow
+    path('integrations/github/app/install-url/', github_app_install_url, name='github-app-install-url'),
+    path('integrations/github/app/callback/', github_app_callback, name='github-app-callback'),
+    path('integrations/github/app/installations/', github_app_installations, name='github-app-installations'),
+    path('integrations/github/app/installations/<int:installation_id>/repos/', github_app_installation_repos, name='github-app-installation-repos'),
+    path('integrations/github/app/installations/<int:installation_id>/', github_app_installation_delete, name='github-app-installation-delete'),
     # GitLab integration
     path('integrations/gitlab/', gitlab_connection, name='gitlab-connection'),
     path('integrations/gitlab/oauth-url/', gitlab_oauth_url, name='gitlab-oauth-url'),

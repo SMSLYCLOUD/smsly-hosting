@@ -913,47 +913,28 @@ bust_core_build_cache() {
 }
 
 restart_edge_stack() {
-    local edge_services="socket-proxy traefik"
+    local all_edge_services="socket-proxy traefik"
     if [ "$MODE_AGENT_LITE" != "true" ]; then
-        edge_services="socket-proxy traefik route-fallback"
+        all_edge_services="socket-proxy traefik route-fallback"
     fi
 
-    echo -e "${BLUE}  -> Refreshing edge proxy stack (traefik/socket-proxy/route-fallback)...${NC}"
-    # First ensure socket-proxy and route-fallback are running (no recreate).
-    # Only Traefik is force-recreated below to avoid disruption to the Docker
-    # event stream that socket-proxy provides to Traefik.
-    local non_traefik_services="socket-proxy"
-    if [ "$MODE_AGENT_LITE" != "true" ]; then
-        non_traefik_services="socket-proxy route-fallback"
-    fi
-    echo -e "${BLUE}    [1/5] Ensuring socket-proxy + route-fallback running...${NC}"
-    local all_running=true
-    for svc in $non_traefik_services; do
-        if ! docker compose -f "$COMPOSE_FILE" ps "$svc" 2>/dev/null | grep -q "Up"; then
-            all_running=false
-            break
+    echo -e "${BLUE}  -> Checking edge proxy stack (traefik/socket-proxy/route-fallback)...${NC}"
+    local down_services=""
+    for svc in $all_edge_services; do
+        if docker compose -f "$COMPOSE_FILE" ps "$svc" 2>/dev/null | grep -q "Up"; then
+            echo -e "${GREEN}    ✓ $svc already running${NC}"
+        else
+            echo -e "${YELLOW}    ⚠ $svc is down — starting...${NC}"
+            down_services="$down_services $svc"
         fi
     done
-    if [ "$all_running" = true ]; then
-        echo -e "${GREEN}      edge services already running, skipping restart${NC}"
-    else
-        timeout 30 docker compose -f "$COMPOSE_FILE" up -d --no-deps $non_traefik_services >/dev/null 2>&1 || \
-            timeout 30 docker compose -f "$COMPOSE_FILE" up -d $non_traefik_services >/dev/null 2>&1 || true
+
+    if [ -n "$down_services" ]; then
+        timeout 30 docker compose -f "$COMPOSE_FILE" up -d --no-deps $down_services >/dev/null 2>&1 || \
+            timeout 30 docker compose -f "$COMPOSE_FILE" up -d $down_services >/dev/null 2>&1 || true
     fi
 
-    # Force-recreate Traefik during full-update restart to guarantee label
-    # re-discovery after core services get new container IPs. Traefik v3.x
-    # watches Docker events but misses label changes when services are
-    # recreated underneath it — stale routes cause 502 across all services.
-    # Brief downtime: ~2-5s while Traefik restarts. Caddy retries through it.
-    echo -e "${BLUE}    [2/5] Restarting traefik (force label re-discovery)...${NC}"
-    timeout 30 docker compose -f "$COMPOSE_FILE" up -d --force-recreate traefik >/dev/null 2>&1 || true
-
-    # Re-attach expected external networks AFTER Traefik restart so it
-    # discovers containers with stable network topology (idempotent).
-    # If run before 'up -d', Docker Compose will forcefully strip 'smsly-proxy' 
-    # since it's not defined in the compose file's networks block.
-    echo -e "${BLUE}    [3/5] Re-attaching external networks...${NC}"
+    echo -e "${BLUE}  -> Re-attaching external networks...${NC}"
     ensure_container_on_network "smsly-net" "smsly-hosting-traefik-1"
     if [ "$MODE_AGENT_LITE" != "true" ]; then
         ensure_container_on_network "smsly-net" "smsly-hosting-route-fallback-1"
@@ -961,17 +942,14 @@ restart_edge_stack() {
     ensure_container_on_network "smsly-proxy" "smsly-hosting-traefik-1"
     ensure_container_on_network "smsly-proxy" "smsly-hosting-socket-proxy-1"
 
-    # Validate Caddy config before restart (H1 fix)
-    # Use Docker-based Caddy, not host-level binary
-    echo -e "${BLUE}    [4/5] Validating Caddy config...${NC}"
     if should_manage_caddy && docker compose -f "$COMPOSE_FILE" ps caddy 2>/dev/null | grep -q "Up"; then
         if caddy_needs_fix; then
             generate_safe_caddyfile "restart_edge_stack validation"
         fi
-        echo -e "${BLUE}    [5/5] Reloading Caddy...${NC}"
+        echo -e "${BLUE}  -> Reloading Caddy...${NC}"
         reload_container_caddy 2>/dev/null || true
     fi
-    echo -e "${GREEN}  OK Edge stack refreshed${NC}"
+    echo -e "${GREEN}  OK Edge stack healthy${NC}"
 }
 
 wait_for_traefik_api() {
@@ -1081,8 +1059,20 @@ refresh_runtime_services() {
     done
 
     if [ "${#failed_services[@]}" -eq 0 ] && [ "${#edge_services[@]}" -gt 0 ]; then
-        timeout 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "${edge_services[@]}" >/dev/null 2>&1 || \
-            timeout 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate "${edge_services[@]}" >/dev/null 2>&1 || true
+        local down_edge=()
+        for svc in "${edge_services[@]}"; do
+            container_name="smsly-hosting-${svc}-1"
+            if docker compose -f "$COMPOSE_FILE" ps "$svc" 2>/dev/null | grep -q "Up"; then
+                echo -e "${GREEN}  ✓ $svc already running${NC}"
+            else
+                echo -e "${YELLOW}  ⚠ $svc is down — starting...${NC}"
+                down_edge+=("$svc")
+            fi
+        done
+        if [ "${#down_edge[@]}" -gt 0 ]; then
+            timeout 30 docker compose -f "$COMPOSE_FILE" up -d --no-deps "${down_edge[@]}" >/dev/null 2>&1 || \
+                timeout 30 docker compose -f "$COMPOSE_FILE" up -d "${down_edge[@]}" >/dev/null 2>&1 || true
+        fi
 
         ensure_container_on_network "smsly-net" "smsly-hosting-route-fallback-1"
         ensure_container_on_network "smsly-net" "smsly-hosting-traefik-1"

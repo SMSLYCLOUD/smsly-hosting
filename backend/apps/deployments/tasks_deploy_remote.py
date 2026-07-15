@@ -94,6 +94,16 @@ def _handle_remote_deployment_legacy(deployment, server):
             deployment.save(update_fields=['status', 'finished_at'])
             update_stage(deployment, 'Remote Deploy', 'success')
             broadcast_status(deployment)
+
+            # Post success commit status to GitHub (non-blocking)
+            try:
+                from .tasks_commit_status import update_commit_status
+                update_commit_status.delay(
+                    str(deployment.id), 'success', 'Deployment active'
+                )
+            except Exception:
+                pass
+
             append_log(deployment, "✅ Remote deployment successful!\n")
             log_exhaustive_remote_orchestration_diagnostics(deployment, server, remote_dep_id, status="SUCCESS ✅")
             return
@@ -449,6 +459,16 @@ def _poll_remote_deployment(
 
                         update_stage(deployment, 'Remote Deploy', 'success')
                         broadcast_status(deployment)
+
+                        # Post success commit status to GitHub (non-blocking)
+                        try:
+                            from .tasks_commit_status import update_commit_status
+                            update_commit_status.delay(
+                                str(deployment.id), 'success', 'Deployment active'
+                            )
+                        except Exception:
+                            pass
+
                         append_log(deployment, "Remote deployment completed and VERIFIED successfully.\n")
                         log_exhaustive_remote_orchestration_diagnostics(deployment, orchestrator.server, remote_dep_id, status="VERIFIED ACTIVE ✅")
                         return

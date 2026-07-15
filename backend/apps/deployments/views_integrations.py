@@ -871,7 +871,16 @@ def bitbucket_oauth_callback(request):
             defaults={"user": request.user, "extra_data": profile},
         )
 
-        token_defaults = {"token": access_token, "token_secret": token_data.get("refresh_token", ""), "app": app}
+        from datetime import timedelta
+        from django.utils import timezone
+
+        expires_in = int(token_data.get("expires_in", 3600))
+        token_defaults = {
+            "token": access_token,
+            "token_secret": token_data.get("refresh_token", ""),
+            "app": app,
+            "expires_at": timezone.now() + timedelta(seconds=expires_in),
+        }
         SocialToken.objects.update_or_create(account=account, defaults=token_defaults)
     except Exception as exc:
         logger.error("Failed to save Bitbucket account: %s", exc)

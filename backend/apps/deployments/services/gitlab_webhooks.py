@@ -77,6 +77,7 @@ def setup_gitlab_webhook(user, repo_url: str) -> bool:
             json={
                 'url': webhook_url,
                 'push_events': True,
+                'merge_request_events': True,
                 'token': secret,
                 'enable_ssl_verification': base_url.startswith('https'),
             },
@@ -94,12 +95,6 @@ def setup_gitlab_webhook(user, repo_url: str) -> bool:
 
 
 def _get_gitlab_token(user):
-    from allauth.socialaccount.models import SocialAccount, SocialToken
-    try:
-        account = SocialAccount.objects.get(user=user, provider='gitlab')
-        token = SocialToken.objects.get(account=account)
-        if token.expires_at and token.expires_at <= timezone.now():
-            return None
-        return token.token
-    except (SocialAccount.DoesNotExist, SocialToken.DoesNotExist):
-        return None
+    """Retrieve the stored GitLab OAuth token for *user*, refreshing if expired."""
+    from apps.deployments.views_gitlab import _get_gitlab_token as _get_token
+    return _get_token(user)

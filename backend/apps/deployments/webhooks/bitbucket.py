@@ -1,7 +1,8 @@
-"""Bitbucket webhook handler — push events trigger deployments."""
+"""Bitbucket webhook handler — push and pull request events."""
 import hashlib
 import hmac
 import logging
+import re
 
 from apps.deployments.models import Deployment, Service
 from apps.deployments.models_audit import WebhookDelivery
@@ -35,7 +36,7 @@ class BitbucketWebhookHandler:
         if event_type.startswith('repo:push'):
             return self._handle_push(data)
         elif event_type.startswith('pullrequest:'):
-            return self._handle_pull_request(data)
+            return self._handle_pull_request(data, event_type)
         return False
 
     def _handle_push(self, payload):
@@ -77,14 +78,136 @@ class BitbucketWebhookHandler:
             )
             provider_id = str(service.provider.id) if service.provider else None
             if provider_id:
-                smart_deploy_task.delay(deployment_id=str(deployment.id), provider_id=provider_id)
+                skip = getattr(service, 'can_auto_deploy', False)
+                smart_deploy_task.delay(deployment_id=str(deployment.id), provider_id=provider_id, skip_review=skip)
             else:
                 logger.warning("No provider for service %s — webhook deploy not queued.", service.name)
             count += 1
         return count > 0
 
-    def _handle_pull_request(self, payload):
-        return False
+    def _handle_pull_request(self, payload, event_type=''):
+        """Handle Pull Request events for preview environments."""
+        pr = payload.get('pullrequest', {})
+        repo = payload.get('repository', {})
+
+        pr_number = pr.get('id')
+        source_branch = (pr.get('source', {}) or {}).get('branch', {}).get('name', '')
+        target_branch = (pr.get('destination', {}) or {}).get('branch', {}).get('name', '')
+        commit_hash = (pr.get('source', {}) or {}).get('commit', {}).get('hash', '')
+
+        repo_full_name = repo.get('full_name', '')
+
+        if not all([repo_full_name, pr_number, source_branch, target_branch]):
+            return False
+
+        # Map event_type to action
+        # pullrequest:created, pullrequest:updated, pullrequest:approved → create/update
+        # pullrequest:fulfilled, pullrequest:rejected → destroy
+        is_create = event_type in (
+            'pullrequest:created', 'pullrequest:updated', 'pullrequest:approved',
+        )
+        is_destroy = event_type in (
+            'pullrequest:fulfilled', 'pullrequest:rejected',
+        )
+
+        if not (is_create or is_destroy):
+            return False
+
+        # Find parent service on the target branch
+        from ..services.repo_matcher import match_service_repo
+        candidates = Service.objects.filter(
+            branch=target_branch, deploy_type='GIT', is_preview=False,
+        )
+        parent_services = [
+            s for s in candidates
+            if s.repository_url and match_service_repo(s.repository_url, repo_full_name)
+        ]
+        if not parent_services:
+            return False
+
+        triggered = 0
+        for parent in parent_services:
+            if is_create:
+                triggered += self._create_or_update_preview(
+                    parent, int(pr_number), source_branch, commit_hash
+                )
+            elif is_destroy:
+                triggered += self._destroy_preview(parent, int(pr_number))
+
+        return triggered > 0
+
+    def _create_or_update_preview(self, parent, pr_number, branch, commit_hash):
+        """Create or update a preview service for a Bitbucket pull request."""
+        preview_name = f"{parent.name}-pr-{pr_number}"
+        preview_slug = re.sub(r'[^a-z0-9-]+', '-', preview_name.lower()).strip('-')
+        preview_slug = (preview_slug[:48]).strip('-') or f"pr-{pr_number}"
+        base_domain = Service.default_public_base_domain()
+
+        preview_service, created = Service.objects.get_or_create(
+            name=preview_name,
+            defaults={
+                'parent_service': parent,
+                'is_preview': True,
+                'pr_number': pr_number,
+                'repository_url': parent.repository_url,
+                'provider': parent.provider,
+                'deploy_type': 'GIT',
+                'owner': parent.owner,
+                'build_command': parent.build_command,
+                'start_command': parent.start_command,
+                'root_directory': parent.root_directory,
+                'internal_port': parent.internal_port,
+                'cpu_cores': parent.cpu_cores,
+                'memory_mb': parent.memory_mb,
+                'public_domain': f"{preview_slug}.{base_domain}",
+            },
+        )
+
+        if preview_service.branch != branch:
+            preview_service.branch = branch
+            preview_service.save()
+
+        deployment = Deployment.objects.create(
+            service=preview_service,
+            commit_hash=commit_hash,
+            commit_message=f"Preview deployment for PR #{pr_number}",
+            status=Deployment.Status.QUEUED,
+        )
+
+        provider_id = str(preview_service.provider.id) if preview_service.provider else None
+        if provider_id:
+            skip = getattr(preview_service.parent_service, 'can_auto_deploy', False) if preview_service.parent_service else False
+            smart_deploy_task.delay(
+                deployment_id=str(deployment.id),
+                provider_id=provider_id,
+                skip_review=skip,
+            )
+            return 1
+        return 0
+
+    def _destroy_preview(self, parent, pr_number):
+        """Destroy the preview service for a Bitbucket pull request."""
+        try:
+            preview_service = Service.objects.get(
+                parent_service=parent, pr_number=pr_number, is_preview=True,
+            )
+            name = preview_service.name
+
+            from apps.cloud.services.factory import get_cloud_adapter
+            if preview_service.provider:
+                adapter = get_cloud_adapter(preview_service.provider)
+                if hasattr(adapter, 'docker_client') and adapter.docker_client:
+                    try:
+                        c = adapter.docker_client.containers.get(name)
+                        c.remove(force=True)
+                    except Exception:
+                        pass
+
+            preview_service.delete()
+            logger.info("Destroyed preview service %s", name)
+            return 1
+        except Service.DoesNotExist:
+            return 0
 
 
 def _check_duplicate_delivery(delivery_id, event_type):

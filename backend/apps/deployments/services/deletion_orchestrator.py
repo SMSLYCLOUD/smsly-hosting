@@ -229,6 +229,8 @@ class DeletionOrchestrator:
         try:
             logger.info(f"Stopping container {container.name} ({container.id})")
             container.stop(timeout=10)
+        except docker.errors.NotFound:
+            return True
         except Exception as e:
             logger.warning(f"Failed to stop container {container.name}: {e}")
 
@@ -250,7 +252,6 @@ class DeletionOrchestrator:
         except docker.errors.NotFound:
             return True
         except docker.errors.APIError as e:
-            # Volume might be in use by another container (e.g. stale deployment)
             logger.error(f"Failed to remove volume {volume.name} (API Error): {e}")
             return False
         except Exception as e:

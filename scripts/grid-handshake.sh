@@ -1,4 +1,4 @@
-#!/bash
+#!/bin/bash
 # =============================================================================
 # SMSLY Grid - Infrastructure Handshake & Health Stabilization
 # Ensures superuser, API tokens, and DB consistency on Master/Agent nodes.
@@ -40,7 +40,11 @@ echo -e "  → Detected Backend: ${GREEN}${BACKEND_CONTAINER}${NC}"
 
 # ─── 1. Run Migrations ───────────────────────────────────────────────────────
 echo -e "${BLUE}  → Reconciling Database Schema...${NC}"
-docker exec "$BACKEND_CONTAINER" python manage.py migrate --noinput
+if [ "${SMSLY_MIGRATIONS_DONE:-0}" = "1" ]; then
+    echo -e "${YELLOW}  ⚠ Skipping migrations (already run by update pipeline)${NC}"
+else
+    docker exec "$BACKEND_CONTAINER" python manage.py migrate --noinput
+fi
 
 # ─── 2. Ensure Superuser ─────────────────────────────────────────────────────
 echo -e "${BLUE}  → Reconciling Administrative Identity...${NC}"

@@ -656,7 +656,7 @@ def destroy_preview_environment_job(preview_id: str):
 
             transient_service.status = Service.Status.DELETION_PENDING
             transient_service.save()
-            from apps.deployments.tasks_deploy import delete_service_task
+            from apps.deployments.tasks import delete_service_task
             delete_service_task.delay(str(transient_service.id))
             time.sleep(5)
 

@@ -1126,7 +1126,7 @@ if d_count > 0:
 
     echo -e "\n${GREEN}  ✨ Update complete. Self-healing applied.${NC}"
 
-    sync_platform_domain_state "$INSTALL_DIR/.env"
+    timeout 120 sync_platform_domain_state "$INSTALL_DIR/.env"
 
     # Refresh proxy/runtime edge stack so routing and TLS state is always clean.
     # NOTE: restart_edge_stack now handles Caddy validation internally (H1+H2 fix).
@@ -1373,8 +1373,8 @@ if d and d != 'localhost':
     fi
     fi
 
-    safe_refresh_runtime_services
-    ensure_celery_workers_running
+    timeout 600 safe_refresh_runtime_services
+    timeout 300 ensure_celery_workers_running
 
     # ─── Auto-redeploy active services when platform code or domain state changes ──
     PRE_HEAD="$(cat "$INSTALL_DIR/.pre-update-head" 2>/dev/null || true)"
@@ -1711,7 +1711,7 @@ RESTORE_EOF
     # Infrastructure Handshake & Health Stabilization
     echo -e "\n${BLUE}  🔄 Running infrastructure handshake and stabilization...${NC}"
     chmod +x scripts/grid-handshake.sh 2>/dev/null || true
-    bash scripts/grid-handshake.sh || \
+    SMSLY_MIGRATIONS_DONE=1 bash scripts/grid-handshake.sh || \
         echo -e "${YELLOW}  ⚠️ Handshake stabilization failed (non-fatal). You can run it manually later.${NC}"
 
     # ─── Fix .env permissions (ensures domain signal can write back) ─────

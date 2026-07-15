@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Github, Loader2, Link as LinkIcon, GitBranch, GitMerge } from "lucide-react";
+import { Github, Loader2, Link as LinkIcon, GitBranch, GitMerge, Package, ExternalLink, Trash2 } from "lucide-react";
 import api from "@/lib/api";
 
 type GitConnection = {
@@ -19,6 +19,17 @@ type GitConnection = {
   warning?: string;
 };
 
+type GitHubInstallation = {
+  id: string;
+  installation_id: number;
+  account_login: string;
+  account_type: string;
+  account_avatar_url: string;
+  repository_selection: string;
+  repo_count: number;
+  created_at: string;
+};
+
 interface GitIntegrationCardProps {
   provider: "github" | "gitlab" | "bitbucket";
 }
@@ -28,6 +39,11 @@ export function GitIntegrationCard({ provider }: GitIntegrationCardProps) {
   const [connecting, setConnecting] = useState(false);
   const [data, setData] = useState<GitConnection | null>(null);
   const [connectError, setConnectError] = useState<string | null>(null);
+
+  // GitHub App installation state
+  const [installations, setInstallations] = useState<GitHubInstallation[]>([]);
+  const [installLoading, setInstallLoading] = useState(false);
+  const [installError, setInstallError] = useState<string | null>(null);
 
   const fetchStatus = useCallback(async () => {
     setLoading(true);
@@ -41,9 +57,21 @@ export function GitIntegrationCard({ provider }: GitIntegrationCardProps) {
     }
   }, [provider]);
 
+  const fetchInstallations = useCallback(async () => {
+    if (provider !== "github") return;
+    setInstallError(null);
+    try {
+      const res = await api.get("/integrations/github/app/installations/");
+      setInstallations(res.data?.installations || []);
+    } catch {
+      setInstallError("Could not load installations.");
+    }
+  }, [provider]);
+
   useEffect(() => {
     fetchStatus();
-  }, [fetchStatus]);
+    fetchInstallations();
+  }, [fetchStatus, fetchInstallations]);
 
   const startConnectFlow = async () => {
     setConnectError(null);
@@ -61,6 +89,32 @@ export function GitIntegrationCard({ provider }: GitIntegrationCardProps) {
       setConnectError(String(message));
     } finally {
       setConnecting(false);
+    }
+  };
+
+  const startGitHubAppInstall = async () => {
+    setInstallLoading(true);
+    try {
+      const res = await api.get("/integrations/github/app/install-url/");
+      const target = res.data?.url;
+      if (!target) throw new Error("No install URL returned");
+      window.location.assign(target);
+    } catch (e: any) {
+      const message =
+        e?.response?.data?.error || "Unable to start GitHub App installation.";
+      setConnectError(String(message));
+    } finally {
+      setInstallLoading(false);
+    }
+  };
+
+  const removeInstallation = async (installationId: number) => {
+    const prev = installations;
+    setInstallations((p) => p.filter((i) => i.installation_id !== installationId));
+    try {
+      await api.delete(`/integrations/github/app/installations/${installationId}/`);
+    } catch {
+      setInstallations(prev);
     }
   };
 
@@ -150,6 +204,82 @@ export function GitIntegrationCard({ provider }: GitIntegrationCardProps) {
                   {connecting ? <Loader2 className="w-4 h-4 animate-spin" /> : <LinkIcon className="w-4 h-4" />}
                   Connect {details.name} Account
                 </Button>
+              </div>
+            )}
+
+            {/* GitHub App Installation Section */}
+            {provider === "github" && (
+              <div className="pt-4 mt-4 border-t border-slate-100 dark:border-slate-800">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <Package className="h-4 w-4 text-slate-500" />
+                    <h4 className="text-sm font-medium">GitHub App</h4>
+                    <Badge variant="outline" className="text-xs font-normal">Recommended</Badge>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={startGitHubAppInstall}
+                    disabled={installLoading}
+                    className="gap-1.5"
+                  >
+                    {installLoading ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <ExternalLink className="w-3.5 h-3.5" />
+                    )}
+                    Install App
+                  </Button>
+                </div>
+
+                <p className="text-xs text-muted-foreground mb-3">
+                  Install the GitHub App for automatic webhooks, commit deployment statuses, and PR preview environments.{' '}
+                  <a href="/docs/github-app" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                    Setup guide
+                  </a>
+                </p>
+
+                {installError ? (
+                  <p className="text-xs text-red-500">{installError}</p>
+                ) : installations.length > 0 ? (
+                  <div className="space-y-2">
+                    {installations.map((inst) => (
+                      <div
+                        key={inst.installation_id}
+                        className="flex items-center justify-between p-2.5 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-100 dark:border-slate-800"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          {inst.account_avatar_url ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={inst.account_avatar_url} alt="" className="w-7 h-7 rounded-full bg-slate-200" />
+                          ) : (
+                            <div className="w-7 h-7 rounded-full bg-slate-200 dark:bg-slate-800 flex items-center justify-center">
+                              <Github className="h-3.5 w-3.5 text-slate-400" />
+                            </div>
+                          )}
+                          <div>
+                            <p className="text-sm font-medium">{inst.account_login}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {inst.repo_count} {inst.repo_count === 1 ? "repo" : "repos"} · {inst.account_type}
+                            </p>
+                          </div>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => removeInstallation(inst.installation_id)}
+                          className="h-7 w-7 p-0 text-slate-400 hover:text-red-500"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground italic">
+                    No installations linked yet. Click &quot;Install App&quot; to get started.
+                  </p>
+                )}
               </div>
             )}
           </div>

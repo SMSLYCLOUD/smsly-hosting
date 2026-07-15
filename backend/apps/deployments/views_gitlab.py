@@ -101,8 +101,10 @@ def gitlab_repos(request):
         return Response({"error": "GitLab not connected.", "repos": []}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
+        from django.conf import settings as django_settings
+        gitlab_url = getattr(django_settings, 'GITLAB_URL', GITLAB_DEFAULT_URL) or GITLAB_DEFAULT_URL
         resp = requests.get(
-            f"{GITLAB_DEFAULT_URL}/api/v4/projects",
+            f"{gitlab_url.rstrip('/')}/api/v4/projects",
             headers={"Authorization": f"Bearer {token}"},
             params={"membership": True, "per_page": 100, "order_by": "updated_at"},
             timeout=15,
@@ -143,8 +145,10 @@ def gitlab_branches(request):
 
     project_path = repo.replace("/", "%2F")
     try:
+        from django.conf import settings as django_settings
+        gitlab_url = getattr(django_settings, 'GITLAB_URL', GITLAB_DEFAULT_URL) or GITLAB_DEFAULT_URL
         resp = requests.get(
-            f"{GITLAB_DEFAULT_URL}/api/v4/projects/{project_path}/repository/branches",
+            f"{gitlab_url.rstrip('/')}/api/v4/projects/{project_path}/repository/branches",
             headers={"Authorization": f"Bearer {token}"},
             params={"per_page": 50},
             timeout=15,
@@ -173,8 +177,10 @@ def gitlab_commits(request):
 
     project_path = repo.replace("/", "%2F")
     try:
+        from django.conf import settings as django_settings
+        gitlab_url = getattr(django_settings, 'GITLAB_URL', GITLAB_DEFAULT_URL) or GITLAB_DEFAULT_URL
         resp = requests.get(
-            f"{GITLAB_DEFAULT_URL}/api/v4/projects/{project_path}/repository/commits",
+            f"{gitlab_url.rstrip('/')}/api/v4/projects/{project_path}/repository/commits",
             headers={"Authorization": f"Bearer {token}"},
             params={"ref_name": branch, "per_page": 30},
             timeout=15,

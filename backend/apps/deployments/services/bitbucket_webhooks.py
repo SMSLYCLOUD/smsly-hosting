@@ -65,7 +65,14 @@ def setup_bitbucket_webhook(user, repo_url: str) -> bool:
                 'description': 'SMSLY Auto-Deploy',
                 'url': webhook_url,
                 'active': True,
-                'events': ['repo:push'],
+                'events': [
+                    'repo:push',
+                    'pullrequest:created',
+                    'pullrequest:updated',
+                    'pullrequest:approved',
+                    'pullrequest:fulfilled',
+                    'pullrequest:rejected',
+                ],
             },
             timeout=10,
         )
@@ -81,11 +88,6 @@ def setup_bitbucket_webhook(user, repo_url: str) -> bool:
 
 
 def _get_bitbucket_token(user):
-    try:
-        account = SocialAccount.objects.get(user=user, provider='bitbucket_oauth2')
-        token = SocialToken.objects.get(account=account)
-        if token.expires_at and token.expires_at <= timezone.now():
-            return None
-        return token.token
-    except (SocialAccount.DoesNotExist, SocialToken.DoesNotExist):
-        return None
+    """Retrieve the stored Bitbucket OAuth token for *user*, refreshing if expired."""
+    from apps.deployments.views_bitbucket import _get_bitbucket_token as _get_token
+    return _get_token(user)

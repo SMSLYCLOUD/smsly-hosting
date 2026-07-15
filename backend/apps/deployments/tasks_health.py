@@ -129,7 +129,7 @@ def check_managed_servers_health_task():
 
 
 
-@shared_task(bind=True, max_retries=0, soft_time_limit=300, time_limit=330)
+@shared_task(bind=True, name="apps.deployments.tasks.node_watchdog_task", max_retries=0, soft_time_limit=300, time_limit=330)
 def node_watchdog_task(self):
     """
     Periodic watchdog that checks all managed servers for health issues.

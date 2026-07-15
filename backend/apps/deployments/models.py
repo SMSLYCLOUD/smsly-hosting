@@ -33,6 +33,7 @@ from .models_core import (  # noqa: F401
 from .models_cron import CronJob  # noqa: F401
 from .models_database_replica import DatabaseReplica  # noqa: F401
 from .models_ecosystem import EcosystemPlan  # noqa: F401
+from .models_github_app import GitHubAppInstallation  # noqa: F401
 from .models_election import (  # noqa: F401
     ClusterState,
     ElectionVote,

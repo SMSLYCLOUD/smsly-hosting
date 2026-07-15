@@ -78,6 +78,10 @@ class GitHubWebhookHandler:
             return self._handle_push(payload, delivery_id)
         if event_type == 'pull_request':
             return self._handle_pull_request(payload, delivery_id)
+        if event_type == 'installation':
+            return self._handle_installation(payload, delivery_id)
+        if event_type == 'installation_repositories':
+            return self._handle_installation_repositories(payload, delivery_id)
         return False
 
     def _handle_push(self, payload: dict, delivery_id: str = ''):
@@ -265,3 +269,106 @@ class GitHubWebhookHandler:
             logger.warning(
                 f"Preview service for PR #{pr_number} not found during cleanup")
             return 0
+
+    # ── GitHub App installation events ────────────────────────────────────────
+
+    def _handle_installation(self, payload: dict, delivery_id: str = ''):
+        """Handle GitHub App installation created/deleted/suspend/unsuspend events."""
+        from django.utils import timezone as tz
+
+        from apps.deployments.models_github_app import GitHubAppInstallation
+
+        action = payload.get('action')
+        installation = payload.get('installation', {})
+        installation_id = installation.get('id')
+        account = installation.get('account', {})
+        repositories = payload.get('repositories', [])
+
+        if not installation_id:
+            return False
+
+        if action == 'created':
+            GitHubAppInstallation.objects.update_or_create(
+                installation_id=installation_id,
+                defaults={
+                    'account_login': account.get('login', ''),
+                    'account_id': account.get('id', 0),
+                    'account_type': account.get('type', 'User'),
+                    'account_avatar_url': account.get('avatar_url', ''),
+                    'status': GitHubAppInstallation.Status.ACTIVE,
+                    'repository_selection': installation.get('repository_selection', 'selected'),
+                    'repositories': [
+                        {'id': r['id'], 'name': r['full_name']}
+                        for r in repositories
+                    ],
+                    'permissions': installation.get('permissions', {}),
+                    'events': installation.get('events', []),
+                    'suspended_at': None,
+                    'deleted_at': None,
+                },
+            )
+            logger.info(
+                "GitHub App installed: installation_id=%s account=%s",
+                installation_id, account.get('login'),
+            )
+
+        elif action == 'deleted':
+            GitHubAppInstallation.objects.filter(
+                installation_id=installation_id,
+            ).update(status=GitHubAppInstallation.Status.DELETED, deleted_at=tz.now())
+            logger.info("GitHub App uninstalled: installation_id=%s", installation_id)
+
+        elif action == 'suspend':
+            GitHubAppInstallation.objects.filter(
+                installation_id=installation_id,
+            ).update(status=GitHubAppInstallation.Status.SUSPENDED, suspended_at=tz.now())
+            logger.info("GitHub App suspended: installation_id=%s", installation_id)
+
+        elif action == 'unsuspend':
+            GitHubAppInstallation.objects.filter(
+                installation_id=installation_id,
+            ).update(status=GitHubAppInstallation.Status.ACTIVE, suspended_at=None)
+            logger.info("GitHub App unsuspended: installation_id=%s", installation_id)
+
+        return True
+
+    def _handle_installation_repositories(self, payload: dict, delivery_id: str = ''):
+        """Handle repos added/removed from a GitHub App installation."""
+        from apps.deployments.models_github_app import GitHubAppInstallation
+
+        action = payload.get('action')
+        installation_id = payload.get('installation', {}).get('id')
+        repos_added = payload.get('repositories_added', [])
+        repos_removed = payload.get('repositories_removed', [])
+
+        if not installation_id:
+            return False
+
+        try:
+            inst = GitHubAppInstallation.objects.select_for_update().get(installation_id=installation_id)
+        except GitHubAppInstallation.DoesNotExist:
+            logger.warning(
+                "installation_repositories event for unknown installation %s",
+                installation_id,
+            )
+            return False
+
+        current = list(inst.repositories or [])
+        existing_names = {r['name'] for r in current}
+
+        for repo in repos_added:
+            name = repo.get('full_name', '')
+            if name and name not in existing_names:
+                current.append({'id': repo.get('id', 0), 'name': name})
+
+        removed_names = {r.get('full_name', '') for r in repos_removed}
+        current = [r for r in current if r['name'] not in removed_names]
+
+        inst.repositories = current
+        inst.save(update_fields=['repositories', 'updated_at'])
+
+        logger.info(
+            "installation_repositories %s: installation_id=%s, added=%d, removed=%d",
+            action, installation_id, len(repos_added), len(repos_removed),
+        )
+        return True

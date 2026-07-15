@@ -9,22 +9,24 @@ class CustomAccountAdapter(DefaultAccountAdapter):
 
 
 class CustomSocialAccountAdapter(DefaultSocialAccountAdapter):
-    """Custom social account adapter that applies provider-specific callback URL overrides."""
+    """Custom social account adapter that applies provider-specific callback URL overrides.
+
+    Only applies the override for the **account linking** flow (user is already
+    authenticated).  For the **SSO login** flow (user is NOT authenticated), the
+    default allauth callback URL is used so that allauth can establish the session.
+    """
 
     def get_connect_redirect_url(self, request, socialaccount):
         return settings.LOGIN_REDIRECT_URL
 
     def get_callback_url(self, request, provider):
-        """
-        Build the OAuth callback URL, checking provider-specific env overrides first.
-        Falls back to the standard allauth reverse('PROVIDER_callback') pattern.
+        # If the user is NOT authenticated, this is the SSO login flow.
+        # Let allauth handle the callback normally so it can create the session.
+        if not getattr(request, 'user', None) or not request.user.is_authenticated:
+            return super().get_callback_url(request, provider)
 
-        NOTE: allauth OAuth adapters expose the provider slug as
-        ``provider_id`` (e.g. 'github'), NOT as ``.id``. The original
-        implementation used ``hasattr(provider, 'id')`` which always
-        fell through to ``str(provider)``, producing a garbage Python
-        repr that never matched the overrides dict.
-        """
+        # User IS authenticated — this is the account linking flow.
+        # Apply provider-specific callback URL overrides (SPA callback pages).
         provider_id = getattr(provider, 'provider_id', None) or str(provider)
         overrides = {
             'github': getattr(settings, 'GITHUB_OAUTH_CALLBACK_URL', None),

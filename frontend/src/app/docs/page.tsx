@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { BookOpen, Download, Rocket, Terminal, Code2, Puzzle, ChevronRight, ArrowRight, Server, ArrowLeftRight, Network, Brain, Activity, Code, Zap } from 'lucide-react';
+import { BookOpen, Download, Rocket, Terminal, Code2, Puzzle, ChevronRight, ArrowRight, Server, ArrowLeftRight, Network, Brain, Activity, Code, Zap, Github } from 'lucide-react';
 
 const docSections = [
   {
@@ -19,6 +19,15 @@ const docSections = [
     color: 'text-blue-600 dark:text-blue-400',
     bg: 'bg-blue-50 dark:bg-blue-950/40',
     border: 'border-blue-200 dark:border-blue-800',
+  },
+  {
+    href: '/docs/github-app',
+    title: 'GitHub App Setup',
+    desc: 'Create and configure a GitHub App for automatic deployments, PR previews, and commit deployment statuses.',
+    icon: Github,
+    color: 'text-slate-700 dark:text-slate-300',
+    bg: 'bg-slate-50 dark:bg-slate-900/60',
+    border: 'border-slate-200 dark:border-slate-700',
   },
   {
     href: '/docs/migration',

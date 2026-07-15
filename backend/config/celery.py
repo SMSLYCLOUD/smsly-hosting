@@ -56,8 +56,14 @@ def register_extra_tasks(sender, **kwargs):  # pylint: disable=unused-argument
     import apps.deployments.services.health_monitor
     import apps.deployments.services.provisioner
     import apps.deployments.tasks_ai_router
+    import apps.deployments.tasks_ai
+    import apps.deployments.tasks_commit_status
+    import apps.deployments.tasks_github_status
     import apps.deployments.tasks_alerts
+    import apps.deployments.tasks_addons
+    import apps.deployments.tasks_autoscale
     import apps.deployments.tasks_backup
+    import apps.deployments.tasks_bundles
     import apps.deployments.tasks_code_intelligence
     import apps.deployments.tasks_cron
     import apps.deployments.tasks_ecosystem
@@ -68,8 +74,10 @@ def register_extra_tasks(sender, **kwargs):  # pylint: disable=unused-argument
     import apps.deployments.tasks_platform_update
     import apps.deployments.tasks_replication
     import apps.deployments.tasks_safedeploy
+    import apps.deployments.tasks_server_update
     import apps.deployments.tasks_templates
     import apps.deployments.tasks_traffic
+    import apps.deployments.tasks_transfer
     import apps.intelligence.jules_fix.jules_fix  # noqa: F401
     import apps.media.tasks  # noqa: F401
 
@@ -114,10 +122,10 @@ app.conf.task_routes = {
     'apps.deployments.tasks_safedeploy.run_preview_health_check_job': {'queue': 'deploy'},
     'apps.deployments.tasks_safedeploy.expire_stale_previews_job': {'queue': 'fast'},
     'apps.deployments.tasks_safedeploy.destroy_preview_environment_job': {'queue': 'deploy'},
-    'apps.deployments.tasks_server_update.update_remote_server_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.update_remote_server_task': {'queue': 'deploy'},
     'apps.deployments.tasks_deploy_remote.self_heal_remote_deployment': {'queue': 'deploy'},
     'apps.deployments.tasks.delete_service_task': {'queue': 'deploy'},
-    'apps.deployments.tasks_deploy.delete_service_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.recover_stalled_deletions': {'queue': 'deploy'},
     # -- Duplicate stubs in tasks.py that delegate to specialized modules --
     # These are re-exports, but their task names resolve to tasks.* so they
     # need explicit routes to keep Docker operations on the deploy queue.
@@ -169,7 +177,6 @@ app.conf.task_routes = {
     'apps.deployments.tasks.one_click_deploy_template_task': {'queue': 'deploy'},
     'apps.deployments.tasks_templates.one_click_deploy_template_task': {'queue': 'deploy'},
     'apps.deployments.tasks.node_watchdog_task': {'queue': 'deploy'},
-    'apps.deployments.tasks_health.node_watchdog_task': {'queue': 'deploy'},
     'apps.addons.tasks.addon_health_check_all': {'queue': 'deploy'},
     'apps.addons.tasks.addon_auto_vacuum': {'queue': 'deploy'},
     'apps.addons.tasks.rotate_addon_credentials_task': {'queue': 'deploy'},
@@ -209,6 +216,12 @@ app.conf.beat_schedule = {
     # Mark interrupted/stale server provisioning runs as failed
     'cleanup-stale-server-provisioning-every-5m': {
         'task': 'apps.deployments.services.provisioner.cleanup_stale_server_provisioning',
+        'schedule': 300.0,
+        'options': {'expires': 300.0},
+    },
+    # Re-queue services stuck in DELETION_PENDING (worker crash, Docker hang, etc.)
+    'recover-stalled-deletions-every-5m': {
+        'task': 'apps.deployments.tasks.recover_stalled_deletions',
         'schedule': 300.0,
         'options': {'expires': 300.0},
     },

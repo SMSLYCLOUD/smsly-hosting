@@ -33,6 +33,18 @@ class SessionTokenView(GenericAPIView):
     it.
     """
     serializer_class = EmptySerializer
+    # CsrfExemptSessionAuthentication is required here: allauth's SSO login
+    # flow establishes a Django session via Set-Cookie, then redirects to
+    # /auth/callback which POSTs here with credentials:include. The session
+    # cookie authenticates the user, but the SPA doesn't have a CSRF token
+    # at this point (it was set during the allauth redirect, but the SPA
+    # callback page doesn't read it). This endpoint is safe without CSRF
+    # because it only exchanges a valid session for a DRF token.
+    from apps.core.auth import CsrfExemptSessionAuthentication
+    authentication_classes = [
+        CsrfExemptSessionAuthentication,
+        'apps.core.auth.CookieAwareTokenAuthentication',
+    ]
     permission_classes = [permissions.IsAuthenticated]
     http_method_names = ['post', 'options', 'head']
 

@@ -55,6 +55,19 @@ class GitHubAppService:
         self._app_id = str(app_id).strip()
         self._private_key = private_key_pem.strip()
 
+    def _auth_headers(self, token: str | None = None) -> dict:
+        """Return standard GitHub API headers. Uses JWT if no token provided."""
+        if token is None:
+            token = self._generate_jwt()
+            auth = f"Bearer {token}"
+        else:
+            auth = f"token {token}"
+        return {
+            "Authorization": auth,
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+
     # ── JWT (App-level auth) ──────────────────────────────────────────────────
 
     def _generate_jwt(self) -> str:
@@ -216,6 +229,174 @@ class GitHubAppService:
         )
         return None
 
+    # ── App metadata ──────────────────────────────────────────────────────────
+
+    def get_app_info(self) -> dict | None:
+        """Fetch the App's metadata from GitHub (slug, name, etc.)."""
+        try:
+            resp = requests.get(
+                f"{_GH_API}/app",
+                headers=self._auth_headers(),
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            logger.error(
+                "GitHubAppService: failed to get app info (status %s)", resp.status_code
+            )
+        except Exception:
+            logger.exception("GitHubAppService: error fetching app info")
+        return None
+
+    def get_app_slug(self) -> str | None:
+        """Fetch the App's slug from GitHub for constructing redirect URLs."""
+        info = self.get_app_info()
+        return info.get("slug") if info else None
+
+    def get_installation(self, installation_id: int) -> dict | None:
+        """Fetch installation details from GitHub by installation_id."""
+        try:
+            resp = requests.get(
+                f"{_GH_API}/app/installations/{installation_id}",
+                headers=self._auth_headers(),
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            logger.error(
+                "GitHubAppService: failed to get installation %s (status %s)",
+                installation_id, resp.status_code,
+            )
+        except Exception:
+            logger.exception(
+                "GitHubAppService: error fetching installation %s", installation_id
+            )
+        return None
+
+    # ── Installation-level operations ─────────────────────────────────────────
+
+    def get_installation_token_for_id(
+        self, installation_id: int, repo_names: list[str] | None = None
+    ) -> str | None:
+        """Get an installation token for a specific installation_id.
+
+        Args:
+            installation_id: The GitHub installation ID.
+            repo_names: Optional list of repo names to scope the token to.
+                        If None, the token covers all repos in the installation.
+        """
+        try:
+            payload: dict = {}
+            if repo_names:
+                payload["repositories"] = repo_names
+            resp = requests.post(
+                f"{_GH_API}/app/installations/{installation_id}/access_tokens",
+                headers=self._auth_headers(),
+                json=payload,
+                timeout=10,
+            )
+            if resp.status_code == 201:
+                token = resp.json().get("token")
+                if token:
+                    logger.info(
+                        "GitHubAppService: installation token issued for installation %s",
+                        installation_id,
+                    )
+                    return token
+            logger.error(
+                "GitHubAppService: failed to create token for installation %s (status %s): %s",
+                installation_id,
+                resp.status_code,
+                resp.text[:200],
+            )
+        except Exception:
+            logger.exception(
+                "GitHubAppService: error creating token for installation %s",
+                installation_id,
+            )
+        return None
+
+    def list_installation_repos(self, installation_id: int) -> list[dict]:
+        """List repositories accessible to an installation.
+
+        Returns a list of dicts with at least 'id', 'full_name', 'private' keys.
+        """
+        try:
+            token = self.get_installation_token_for_id(installation_id)
+            if not token:
+                return []
+            resp = requests.get(
+                f"{_GH_API}/installation/repositories",
+                headers=self._auth_headers(token),
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                return resp.json().get("repositories", [])
+            logger.error(
+                "GitHubAppService: failed to list repos for installation %s (status %s)",
+                installation_id,
+                resp.status_code,
+            )
+        except Exception:
+            logger.exception(
+                "GitHubAppService: error listing repos for installation %s",
+                installation_id,
+            )
+        return []
+
+    def create_commit_status(
+        self,
+        installation_id: int,
+        repo_full_name: str,
+        sha: str,
+        state: str,
+        description: str,
+        context: str,
+        target_url: str = "",
+    ) -> bool:
+        """Create a commit status on a repository using an installation token.
+
+        Args:
+            installation_id: The GitHub installation ID.
+            repo_full_name: e.g. "owner/repo".
+            sha: The commit SHA to attach the status to.
+            state: One of 'pending', 'success', 'failure', 'error'.
+            description: Short description (max 140 chars).
+            context: Status context string, e.g. "smsly/deploy".
+            target_url: URL to link from the status.
+        """
+        try:
+            token = self.get_installation_token_for_id(installation_id)
+            if not token:
+                return False
+            payload = {"state": state, "description": description, "context": context}
+            if target_url:
+                payload["target_url"] = target_url
+            resp = requests.post(
+                f"{_GH_API}/repos/{repo_full_name}/statuses/{sha}",
+                headers=self._auth_headers(token),
+                json=payload,
+                timeout=10,
+            )
+            if resp.status_code == 201:
+                logger.info(
+                    "GitHubAppService: commit status '%s' set on %s@%s",
+                    state,
+                    repo_full_name,
+                    sha[:7],
+                )
+                return True
+            logger.error(
+                "GitHubAppService: failed to create commit status (status %s): %s",
+                resp.status_code,
+                resp.text[:200],
+            )
+        except Exception:
+            logger.exception(
+                "GitHubAppService: error creating commit status on %s", repo_full_name
+            )
+        return False
+
 
 # ── Factory ───────────────────────────────────────────────────────────────────
 
@@ -260,3 +441,38 @@ def get_installation_token_for_repo(repo_full_name: str) -> str | None:
     if svc is None:
         return None
     return svc.get_installation_token(repo_full_name)
+
+
+def get_installation_token_for_installation_id(installation_id: int) -> str | None:
+    """Convenience wrapper: get a token for a stored installation_id."""
+    svc = get_github_app_service()
+    if svc is None:
+        return None
+    return svc.get_installation_token_for_id(installation_id)
+
+
+def get_installation_for_repo(repo_full_name: str):  # noqa: ANN201
+    """Look up the GitHubAppInstallation that covers a given repo.
+
+    Returns the installation instance or None.
+    """
+    from apps.deployments.models_github_app import GitHubAppInstallation
+
+    # Check installations with explicit repo lists
+    inst = GitHubAppInstallation.objects.filter(
+        status=GitHubAppInstallation.Status.ACTIVE,
+        repository_selection="selected",
+        repositories__contains=[{"name": repo_full_name}],
+    ).first()
+    if inst:
+        return inst
+
+    # Check "all repos" installations — match by account_login (owner)
+    owner = repo_full_name.split("/")[0] if "/" in repo_full_name else ""
+    if owner:
+        inst = GitHubAppInstallation.objects.filter(
+            status=GitHubAppInstallation.Status.ACTIVE,
+            repository_selection="all",
+            account_login=owner,
+        ).first()
+    return inst
