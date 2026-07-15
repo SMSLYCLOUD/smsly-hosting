@@ -58,7 +58,6 @@ def register_extra_tasks(sender, **kwargs):  # pylint: disable=unused-argument
     import apps.deployments.tasks_ai_router
     import apps.deployments.tasks_ai
     import apps.deployments.tasks_commit_status
-    import apps.deployments.tasks_github_status
     import apps.deployments.tasks_alerts
     import apps.deployments.tasks_addons
     import apps.deployments.tasks_autoscale
