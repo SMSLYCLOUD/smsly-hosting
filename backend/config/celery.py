@@ -116,6 +116,8 @@ app.conf.task_routes = {
     'apps.deployments.tasks_safedeploy.destroy_preview_environment_job': {'queue': 'deploy'},
     'apps.deployments.tasks_server_update.update_remote_server_task': {'queue': 'deploy'},
     'apps.deployments.tasks_deploy_remote.self_heal_remote_deployment': {'queue': 'deploy'},
+    'apps.deployments.tasks.delete_service_task': {'queue': 'deploy'},
+    'apps.deployments.tasks_deploy.delete_service_task': {'queue': 'deploy'},
 }
 
 app.conf.beat_schedule = {
