@@ -7,7 +7,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("organizations", "0001_initial"),
+        ("organizations", "0001_add_organizations_and_sso"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
         ("deployments", "0151_managedserver_node_type"),
     ]
