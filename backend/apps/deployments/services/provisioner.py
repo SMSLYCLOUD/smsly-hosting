@@ -240,6 +240,8 @@ def server_install_mode(server: ManagedServer) -> str:
     """Return the installer topology for a managed server."""
     if getattr(server, "is_lite_agent", False):
         return "agent-lite"
+    if getattr(server, "node_type", None) == "media":
+        return "media"
     if not bool(getattr(server, "is_primary", False)):
         return "node"
     return "master"
@@ -1315,6 +1317,18 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
             )
     except ManagedServer.DoesNotExist:
         logger.error("Server %s not found", server_id)
+        return
+
+    if server_install_mode(server) == "media":
+        _append_log(server, "⛔ Media nodes cannot be provisioned via provision_server.")
+        _append_log(
+            server,
+            "Media nodes use install-media-node.sh for bare-metal systemd deployment. "
+            "Provision them manually on the target host, then register via "
+            "POST /api/v1/media/media-nodes/ with the ManagedServer ID.",
+        )
+        server.provision_status = ManagedServer.ProvisionStatus.FAILED
+        server.save(update_fields=["provision_status", "provision_logs", "updated_at"])
         return
 
     _append_log(server, "🚀 Starting Grid provisioning...")
