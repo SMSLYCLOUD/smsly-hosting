@@ -419,9 +419,10 @@ class Service(TimeStampedModel):
 
     # Auto-Scaling
     autoscale_enabled = models.BooleanField(  # type: ignore[var-annotated]
-        default=True, null=True,
+        null=True,
         help_text="Master toggle for horizontal autoscaling. When disabled, "
-                  "the service will not be auto-scaled regardless of other settings.",
+                  "the service will not be auto-scaled regardless of other settings. "
+                  "NULL/None is treated as enabled by autoscaling query filters.",
     )
     min_replicas = models.IntegerField(  # type: ignore[var-annotated]
         default=1, validators=[MinValueValidator(1)])

@@ -18,13 +18,14 @@ _CONFIGURED_TARGETS_DIR = os.environ.get(
 _FALLBACK_TARGETS_DIR = os.path.join(tempfile.gettempdir(), "smsly-prometheus-targets")
 
 TARGETS_DIR = _CONFIGURED_TARGETS_DIR
+_FALLBACK_WARNED = False
 
 DOCKER_LABELS_PORT = int(os.environ.get("DOCKER_LABELS_PORT", "9234"))
 
 
 def _ensure_target_dir_writable() -> bool:
     """Try to make TARGETS_DIR writable. Falls back to a temp directory."""
-    global TARGETS_DIR
+    global TARGETS_DIR, _FALLBACK_WARNED
 
     with contextlib.suppress(OSError):
         os.makedirs(TARGETS_DIR, exist_ok=True)
@@ -47,10 +48,12 @@ def _ensure_target_dir_writable() -> bool:
         os.makedirs(TARGETS_DIR, exist_ok=True)
 
     if os.access(TARGETS_DIR, os.W_OK):
-        logger.info(
-            "Prometheus targets directory not writable, using fallback: %s",
-            TARGETS_DIR,
-        )
+        if not _FALLBACK_WARNED:
+            logger.warning(
+                "Prometheus targets directory not writable, using fallback: %s",
+                TARGETS_DIR,
+            )
+            _FALLBACK_WARNED = True
         return True
 
     return False
