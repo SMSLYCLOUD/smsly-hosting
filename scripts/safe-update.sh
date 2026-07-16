@@ -135,7 +135,7 @@ safe_update_snapshot() {
 
     # Snapshot current images to prevent pruning and enable instant rollback
     _step "Snapshotting Docker Images"
-    for img in smsly-hosting_backend smsly-hosting_frontend smsly-hosting_celery; do
+    for img in smsly-hosting-backend smsly-hosting-frontend smsly-hosting-celery; do
         if docker image inspect "$img:latest" ; then
             docker tag "$img:latest" "$img:rollback-safe"  && _ok "Tagged $img:rollback-safe" || _warn "Failed to tag $img:rollback-safe"
         fi
@@ -242,15 +242,19 @@ safe_update_rollback() {
     
     # Instant rollback: restore images from snapshot instead of rebuilding
     _step "Restoring Docker Images"
-    for img in smsly-hosting_backend smsly-hosting_frontend smsly-hosting_celery; do
+    for img in smsly-hosting-backend smsly-hosting-frontend smsly-hosting-celery; do
         if docker image inspect "$img:rollback-safe" ; then
             docker tag "$img:rollback-safe" "$img:latest"  && _ok "Restored $img:latest" || _warn "Failed to restore $img:latest"
         fi
     done
     
     # Ensure the database is up before restoring into it.
-    docker compose -f "$COMPOSE_FILE" up -d --no-deps postgres-primary \
+    docker compose -f "$COMPOSE_FILE" up -d --wait --no-deps postgres-primary \
         || _warn "Could not ensure postgres-primary is running"
+
+    # Stop any app containers left from the failed attempt so the --clean dump
+    # does not drop objects while they are connected (avoids partial restore).
+    docker compose -f "$COMPOSE_FILE" stop backend frontend celery celery-deploy celery-fast celery-beat pgcat 2>/dev/null || true
 
     # Restore DB BEFORE bringing app containers up, so the --clean dump does not
     # drop objects while backend/celery are connected (transient errors and can
@@ -262,7 +266,7 @@ safe_update_rollback() {
     fi
 
     # Restart core services with the restored images (DB is now consistent).
-    docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps backend frontend celery celery-deploy celery-fast celery-beat $(grep -q "^  *pgcat:" "${COMPOSE_FILE:-docker-compose.prod.yml}"  && echo "pgcat")  || _warn "Docker compose up had issues during rollback"
+    docker compose -f "$COMPOSE_FILE" up -d --force-recreate --wait --no-deps backend frontend celery celery-deploy celery-fast celery-beat $(grep -q "^  *pgcat:" "${COMPOSE_FILE:-docker-compose.prod.yml}"  && echo "pgcat")  || _warn "Docker compose up had issues during rollback"
 
     # Fix perms
     [ -d /opt/smsly-hosting/prometheus-targets ] && {
@@ -295,7 +299,7 @@ safe_update_cleanup() {
     
     # Clean up the rollback tags so old images can be pruned
     _step "Cleaning Up Image Snapshots"
-    for img in smsly-hosting_backend smsly-hosting_frontend smsly-hosting_celery; do
+    for img in smsly-hosting-backend smsly-hosting-frontend smsly-hosting-celery; do
         if docker image inspect "$img:rollback-safe" ; then
             docker rmi "$img:rollback-safe"  && _ok "Removed tag $img:rollback-safe" || true
         fi
