@@ -759,13 +759,7 @@ ensure_registry_bootstrap() {
 
 
             _reg_pass=$(python3 -c "import secrets; print(secrets.token_urlsafe(18))"  \
-
-
-
                 || openssl rand -hex 12  \
-
-
-
                 || echo "auto-generated-change-me")
 
 
