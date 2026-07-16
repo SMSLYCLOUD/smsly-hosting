@@ -13,6 +13,11 @@ BACKUP_PASS="${BACKUP_PASS:?BACKUP_PASS environment variable must be set}"
 export BACKUP_PASS
 BACKUP_SUCCESS=0
 
+# Load deployment .env so POSTGRES_DB / POSTGRES_USER reflect the real config.
+if [ -f /opt/smsly-hosting/.env ]; then
+    set -a; . /opt/smsly-hosting/.env; set +a
+fi
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -25,7 +30,7 @@ mkdir -p "$BACKUP_DIR"
 echo -e "${YELLOW}[$(date)] Starting database backup...${NC}"
 
 # Get database credentials from running container
-DB_CONTAINER="smsly-postgres"
+DB_CONTAINER="${DB_CONTAINER:-smsly-postgres-primary}"
 
 # Check if container is running
 if ! docker ps --format '{{.Names}}' | grep -q "^${DB_CONTAINER}$"; then
@@ -40,9 +45,9 @@ echo "Using database container: $DB_CONTAINER"
 
 # Perform backup trying each database user
 DUMP_OK=false
-for DB_USER in smsly_admin smsly postgres; do
+for DB_USER in "${POSTGRES_USER:-smsly_admin}" smsly postgres; do
     echo "Attempting pg_dump with user '${DB_USER}'..."
-    if timeout 300 sh -c 'docker exec "$1" pg_dump -U "$2" -d smsly_hosting | gzip | openssl enc -aes-256-cbc -salt -pbkdf2 -pass env:BACKUP_PASS -md sha256' _ "$DB_CONTAINER" "$DB_USER" > "$BACKUP_FILE"; then
+    if timeout 300 sh -c 'docker exec "$1" pg_dump -U "$2" -d "$3" | gzip | openssl enc -aes-256-cbc -salt -pbkdf2 -pass env:BACKUP_PASS -md sha256' _ "$DB_CONTAINER" "$DB_USER" "${POSTGRES_DB:-smsly_hosting}" > "$BACKUP_FILE"; then
         DUMP_OK=true
         break
     fi

@@ -723,9 +723,6 @@ if [ "${NO_SCREEN:-false}" != "true" ] && [ "$NON_INTERACTIVE" != "true" ] && [ 
 
 
             screen -L -Logfile /var/log/smsly-screen.log -S "$SCREEN_SESSION" \
-
-
-
                 bash -c 'bash "$0" --no-screen "$@"; rc=$?; echo; echo "Installer exited with code $rc."; echo "Press ENTER to close this screen."; read -r _; exit "$rc"' "$SCRIPT_PATH" "$@"
 
 
@@ -735,9 +732,6 @@ if [ "${NO_SCREEN:-false}" != "true" ] && [ "$NON_INTERACTIVE" != "true" ] && [ 
 
 
             screen -L -S "$SCREEN_SESSION" \
-
-
-
                 bash -c 'bash "$0" --no-screen "$@"; rc=$?; echo; echo "Installer exited with code $rc."; echo "Press ENTER to close this screen."; read -r _; exit "$rc"' "$SCRIPT_PATH" "$@"
 
 
@@ -3459,13 +3453,7 @@ is_master_mode() {
 
 
     [ "${INSTALL_MODE:-master}" = "master" ] \
-
-
-
         && [ "${MODE_AGENT_LITE:-false}" != "true" ] \
-
-
-
         && [ "${MODE_NODE:-false}" != "true" ]
 
 
@@ -4943,33 +4931,12 @@ sync_platform_domain_state() {
 
 
         docker compose -f "$COMPOSE_FILE" exec -T \
-
-
-
             -e SMSLY_DISABLE_STARTUP_TASKS=true \
-
-
-
             -e SMSLY_SYNC_DOMAIN="$sync_domain" \
-
-
-
             -e SMSLY_SYNC_USE_SSL="$sync_use_ssl" \
-
-
-
             -e SMSLY_SYNC_WILDCARD="$sync_wildcard" \
-
-
-
             -e SMSLY_SYNC_CF_TOKEN="$sync_cf_token" \
-
-
-
             -e SMSLY_SYNC_PUBLIC_IP="$sync_public_ip" \
-
-
-
             backend python manage.py shell <<'PY'
 
 
@@ -5711,21 +5678,9 @@ queue_active_service_redeploys() {
 
 
     docker compose -f "$COMPOSE_FILE" exec -T \
-
-
-
         -e SMSLY_DISABLE_STARTUP_TASKS=true \
-
-
-
         -e SMSLY_REDEPLOY_REASON="$reason" \
-
-
-
         -e SMSLY_SERVICE_IDS="$service_ids" \
-
-
-
         backend python manage.py shell <<'PY'
 
 
@@ -8155,41 +8110,14 @@ get_migration_database_alias() {
 
 
         docker run --rm --network smsly-net \
-
-
-
             --user 1000 \
-
-
-
             --env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env" \
-
-
-
             -e SMSLY_DISABLE_STARTUP_TASKS=true \
-
-
-
             -e SMSLY_MIGRATION_MODE=true \
-
-
-
             -e DIRECT_DATABASE_URL="$direct_url" \
-
-
-
             smsly-hosting-backend:latest \
-
-
-
             python manage.py shell -c \
-
-
-
             "from django.conf import settings; print('direct' if 'direct' in settings.DATABASES else ('session' if 'session' in settings.DATABASES else 'default'))" \
-
-
-
   | tail -n 1 | tr -d '\r'
 
 
@@ -8247,37 +8175,13 @@ diagnose_migration_locks() {
 
 
     docker compose -f "$COMPOSE_FILE" exec -T \
-
-
-
         -e PGPASSWORD="${POSTGRES_PASSWORD:-}" \
-
-
-
         db psql \
-
-
-
             -U "${POSTGRES_USER:-smsly_admin}" \
-
-
-
             -d "${POSTGRES_DB:-smsly_hosting}" \
-
-
-
             -v ON_ERROR_STOP=1 \
-
-
-
             -P pager=off \
-
-
-
             -c "SELECT pid, usename, application_name, state, wait_event_type, wait_event, now() - COALESCE(xact_start, query_start) AS age, left(regexp_replace(query, '\s+', ' ', 'g'), 180) AS query FROM pg_stat_activity WHERE datname = current_database() ORDER BY COALESCE(xact_start, query_start) NULLS LAST LIMIT 20;" \
-
-
-
   || echo -e "${YELLOW}  -> Could not read pg_stat_activity.${NC}"
 
 
@@ -8371,37 +8275,13 @@ run_backend_migrations() {
 
 
     timeout "$((timeout_seconds + 60))" docker run --rm --network smsly-net \
-
-
-
         --user 1000 \
-
-
-
         --env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env" \
-
-
-
         -e SMSLY_DISABLE_STARTUP_TASKS=true \
-
-
-
         -e SMSLY_MIGRATION_MODE=true \
-
-
-
         -e DIRECT_DATABASE_URL="$direct_url" \
-
-
-
         smsly-hosting-backend:latest \
-
-
-
         timeout "$timeout_seconds" \
-
-
-
         python manage.py migrate --database="$migrate_db" --noinput
 
 
@@ -8463,25 +8343,10 @@ run_backend_migrations() {
 
 
     timeout 60 docker run --rm --network smsly-net \
-
-
-
         --user 1000 \
-
-
-
         --env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env" \
-
-
-
         -e SMSLY_DISABLE_STARTUP_TASKS=true \
-
-
-
         smsly-hosting-backend:latest \
-
-
-
         python manage.py fix_node_db_permissions  || true
 
 
@@ -8759,21 +8624,9 @@ EOF
 
 
     openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
-
-
-
         -keyout "$key_file" \
-
-
-
         -out "$cert_file" \
-
-
-
         -config "$ssl_config" \
-
-
-
   || {
 
 
@@ -8887,9 +8740,6 @@ reload_container_caddy() {
 
 
         timeout 20 docker compose -f "$compose_f" exec -T caddy caddy reload --config /etc/caddy/Caddyfile  || \
-
-
-
             timeout 20 docker compose -f "$compose_f" restart caddy  || true
 
 
@@ -10427,9 +10277,6 @@ CADDYFIX
 
 
         docker compose -f "$COMPOSE_FILE" exec caddy caddy reload --config /etc/caddy/Caddyfile  || \
-
-
-
             docker compose -f "$COMPOSE_FILE" restart caddy  || true
 
 
@@ -12093,13 +11940,7 @@ is_real_domain_name() {
 
 
     [ -n "$host" ] \
-
-
-
         && [ "$host" != "localhost" ] \
-
-
-
         && ! echo "$host" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'
 
 
@@ -12421,9 +12262,6 @@ restart_edge_stack() {
 
 
         timeout 30 docker compose -f "$COMPOSE_FILE" up -d --no-deps $non_traefik_services  || \
-
-
-
             timeout 30 docker compose -f "$COMPOSE_FILE" up -d $non_traefik_services  || true
 
 
@@ -12861,9 +12699,6 @@ refresh_runtime_services() {
 
 
         docker compose -f "$COMPOSE_FILE" up -d --no-deps "${app_services[@]}"  || \
-
-
-
             docker compose -f "$COMPOSE_FILE" up -d "${app_services[@]}"  || true
 
 
@@ -13005,9 +12840,6 @@ refresh_runtime_services() {
 
 
         docker compose -f "$COMPOSE_FILE" up -d --no-deps "${edge_services[@]}"  || \
-
-
-
             docker compose -f "$COMPOSE_FILE" up -d "${edge_services[@]}"  || true
 
 
@@ -13601,17 +13433,8 @@ recover_runtime_stack() {
 
 
         if openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
-
-
-
             -keyout "${_tmp_dir}/registry.key" \
-
-
-
             -out    "${_tmp_dir}/registry.crt" \
-
-
-
             -subj "/CN=registry" ; then
 
 
@@ -14933,9 +14756,6 @@ for s in Service.objects.exclude(public_domain__isnull=True).exclude(public_doma
 
 
     docker compose -f "$COMPOSE_FILE" ps --format "table {{.Name}}\t{{.Status}}"  || \
-
-
-
         docker compose -f "$COMPOSE_FILE" ps  || true
 
 
@@ -19693,9 +19513,6 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
 
 
     docker compose -f "$COMPOSE_FILE" ps --format "table {{.Name}}\t{{.Status}}"  || \
-
-
-
         docker compose -f "$COMPOSE_FILE" ps  || true
 
 
@@ -19745,9 +19562,6 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
 
 
             sed -i "s|^Environment=AUTOSCALER_API_TOKEN=.*|Environment=AUTOSCALER_API_TOKEN=${AUTOSCALER_API_TOKEN}|" \
-
-
-
                 /etc/systemd/system/smsly-autoscaler.service
 
 
@@ -19865,9 +19679,6 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
 
 
     bash scripts/grid-handshake.sh || \
-
-
-
         echo -e "${YELLOW}  ⚠️ Handshake stabilization failed (non-fatal). You can run it manually later.${NC}"
 
 
@@ -21125,13 +20936,7 @@ if ! command -v docker &> /dev/null; then
 
 
     echo \
-
-
-
       "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-
-
-
       $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
 
 
@@ -22309,17 +22114,8 @@ else
 
 
     pip3 install cryptography -q --break-system-packages  || \
-
-
-
         pip3 install cryptography -q  || \
-
-
-
         (echo -e "${YELLOW}  → Retrying cryptography install...${NC}" && \
-
-
-
          pip3 install cryptography 2>&1 | tail -3) || true
 
 
@@ -22597,9 +22393,6 @@ except Exception:
 
 
         _master_db_pw="$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes root@${MASTER_IP} \
-
-
-
             "grep '^POSTGRES_PASSWORD=' /opt/smsly-hosting/.env  | head -1 | cut -d= -f2"  || true)"
 
 
@@ -23473,17 +23266,8 @@ if ! _registry_certs_ok; then
 
 
     if openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
-
-
-
         -keyout "${_tmp_dir}/registry.key" \
-
-
-
         -out    "${_tmp_dir}/registry.crt" \
-
-
-
         -subj "/CN=registry" ; then
 
 
@@ -23601,9 +23385,6 @@ print(f'${REGISTRY_USER:-smsly-registry}:' + bcrypt.hashpw(pw.encode(), bcrypt.g
 
 
 " "$REGISTRY_PASS" > "$INSTALL_DIR/auth/htpasswd"  || \
-
-
-
         echo -e "${YELLOW}    ⚠ Failed to generate htpasswd (neither htpasswd nor python bcrypt available)${NC}"
 
 
@@ -24033,13 +23814,7 @@ echo -e "${BLUE}  → Syncing database password...${NC}"
 
 
 if docker compose -f "$COMPOSE_FILE" exec -T db \
-
-
-
     psql -U postgres -c "ALTER USER smsly_admin WITH PASSWORD '${POSTGRES_PASSWORD}';" \
-
-
-
  ; then
 
 
@@ -24049,9 +23824,6 @@ if docker compose -f "$COMPOSE_FILE" exec -T db \
 
 
 elif docker compose -f "$COMPOSE_FILE" exec -T -e PGPASSWORD="${POSTGRES_PASSWORD}" db \
-
-
-
     psql -U smsly_admin -d smsly_hosting -c "SELECT 1;" ; then
 
 
@@ -24073,13 +23845,7 @@ else
 
 
     docker compose -f "$COMPOSE_FILE" exec -T db \
-
-
-
         psql -U postgres -c "ALTER USER smsly_admin WITH PASSWORD '${POSTGRES_PASSWORD}';" \
-
-
-
   || echo -e "${RED}  ✗ Could not sync password. Check pg_hba.conf${NC}"
 
 
@@ -24185,17 +23951,8 @@ sleep 5
 
 
     docker compose -f "$COMPOSE_FILE" exec -T db \
-
-
-
         psql -U smsly_admin -d smsly_hosting \
-
-
-
         -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND backend_type = 'client backend'" \
-
-
-
   || true
 
 
@@ -24245,17 +24002,8 @@ sleep 5
 
 
         docker compose -f "$COMPOSE_FILE" exec -T db \
-
-
-
             psql -U smsly_admin -d smsly_hosting \
-
-
-
             -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND backend_type = 'client backend'" \
-
-
-
   || true
 
 
@@ -24917,13 +24665,7 @@ EOF
 
 
             ACME_CHECK=$(curl -fsS -m 10 \
-
-
-
                 "http://${DOMAIN}/.well-known/acme-challenge/000000000000000000000000000000000000" \
-
-
-
   || true)
 
 
@@ -26017,13 +25759,7 @@ if command -v iptables ; then
 
 
         iptables -L DOCKER-USER --line-numbers -n  | \
-
-
-
             grep "dpt:5000" | awk '{print $1}' | sort -rn | \
-
-
-
             while read -r num; do iptables -D DOCKER-USER "$num"  || true
 
 
@@ -26117,9 +25853,6 @@ if command -v iptables ; then
 
 
     iptables -C DOCKER-USER -j RETURN  || \
-
-
-
         iptables -A DOCKER-USER -j RETURN  || true
 
 
@@ -26341,29 +26074,11 @@ AGENT_SERVICES="$(docker compose -f "$COMPOSE_FILE" config --services  || true)"
 
 
 if printf '%s\n' "$AGENT_SERVICES" | grep -qx "backend" \
-
-
-
    && printf '%s\n' "$AGENT_SERVICES" | grep -qx "celery-worker" \
-
-
-
    && printf '%s\n' "$AGENT_SERVICES" | grep -qx "traefik" \
-
-
-
    && printf '%s\n' "$AGENT_SERVICES" | grep -qx "socket-proxy" \
-
-
-
    && printf '%s\n' "$AGENT_SERVICES" | grep -qx "redis" \
-
-
-
    && printf '%s\n' "$AGENT_SERVICES" | grep -qx "rabbitmq" \
-
-
-
    && ! printf '%s\n' "$AGENT_SERVICES" | grep -Eq "^(frontend|db|pgcat)$"; then
 
 
@@ -26869,9 +26584,6 @@ else
 
 
     if docker inspect -f '{{.State.Running}}' "$traefik_container"  | grep -q "true" \
-
-
-
        && curl -fsS --max-time 5 "$TRAEFIK_CHECK_URL" ; then
 
 
@@ -26917,9 +26629,6 @@ echo -e "\n${BLUE}Container Status:${NC}"
 
 
 docker compose -f "$COMPOSE_FILE" ps --format "table {{.Name}}\t{{.Status}}"  || \
-
-
-
     docker compose -f "$COMPOSE_FILE" ps  || true
 
 
@@ -27225,9 +26934,6 @@ if [ -d "$INSTALL_DIR/cli" ]; then
 
 
     pip3 install -q --break-system-packages "$INSTALL_DIR/cli"  || \
-
-
-
         pip3 install -q "$INSTALL_DIR/cli"  || true
 
 
@@ -27473,9 +27179,6 @@ chmod +x scripts/grid-handshake.sh  || true
 
 
 bash scripts/grid-handshake.sh || \
-
-
-
     echo -e "${YELLOW}  ⚠️ Handshake stabilization failed (non-fatal). You can run it manually later.${NC}"
 
 

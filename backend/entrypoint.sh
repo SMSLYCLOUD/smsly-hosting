@@ -776,51 +776,27 @@ ensure_registry_bootstrap() {
 
 
 
-        if command -v htpasswd ; then
-
-
-
-            htpasswd -Bbn "$_reg_user" "$_reg_pass" > /auth/htpasswd  || true
-
-
-
-        else
-
-
-
-            # Use env vars to avoid shell injection via password interpolation
-
-
-
-            REGISTRY_USER="$_reg_user" REGISTRY_PASSWORD="$_reg_pass" python3 -c '
-
-
-
-import os, bcrypt
-
-
-
-user = os.environ["REGISTRY_USER"]
-
-
-
-pw = os.environ["REGISTRY_PASSWORD"].encode()
-
-
-
-hashed = bcrypt.hashpw(pw, bcrypt.gensalt(10))
-
-
-
-print(user + ":" + hashed.decode())
-
-
-
-' > /auth/htpasswd  || echo "[entrypoint] WARNING: htpasswd generation failed" >&2
-
-
-
+                _htpasswd_ok=0
+        if command -v htpasswd >/dev/null 2>&1; then
+            if htpasswd -Bbn "$_reg_user" "$_reg_pass" > /auth/htpasswd.tmp                 && mv /auth/htpasswd.tmp /auth/htpasswd; then
+                _htpasswd_ok=1
+            else
+                rm -f /auth/htpasswd.tmp
+            fi
         fi
+        if [ "$_htpasswd_ok" -ne 1 ]; then
+            # Fallback to Python bcrypt (env vars avoid shell injection)
+            REGISTRY_USER="$_reg_user" REGISTRY_PASSWORD="$_reg_pass" python3 -c '
+import os, bcrypt
+user = os.environ["REGISTRY_USER"]
+pw = os.environ["REGISTRY_PASSWORD"].encode()
+hashed = bcrypt.hashpw(pw, bcrypt.gensalt(10))
+print(user + ":" + hashed.decode())
+' > /auth/htpasswd  || echo "[entrypoint] WARNING: htpasswd generation failed" >&2
+        fi
+
+
+
 
 
 

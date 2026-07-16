@@ -21,6 +21,17 @@ BACKUP_DIR="$INSTALL_DIR/.update-backups"
 CLEAN_LOG="/var/log/smsly-clean.log"
 MIN_DISK_MB=5120
 
+# Load .env so POSTGRES_USER / POSTGRES_DB reflect the real deployment.
+# Without this the backup/restore below would target the wrong database or user
+# if the deployment overrides the defaults.
+if [ -f "$INSTALL_DIR/.env" ]; then
+    set -a
+    . "$INSTALL_DIR/.env"
+    set +a
+fi
+POSTGRES_USER="${POSTGRES_USER:-smsly_admin}"
+POSTGRES_DB="${POSTGRES_DB:-smsly_hosting}"
+
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'
 _log()  { printf "[%s] %s\n" "$(date +%H:%M:%S)" "$*" >> "$CLEAN_LOG"; }
 _ok()   { echo -e "${GREEN}  ✓${NC} $*"; _log "OK: $*"; }
@@ -95,9 +106,7 @@ safe_update_snapshot() {
     local backup_file="$BACKUP_DIR/pre-update-$(date +%Y%m%d-%H%M%S).sql"
 
     _progress "Backing up database (timeout: 120s)..."
-    if timeout 120 docker exec smsly-postgres-primary pg_dump -U smsly_admin smsly_hosting > "$backup_file" ; then
-        _ok "DB backup: $(du -h "$backup_file" | cut -f1)"
-    elif timeout 120 docker exec smsly-postgres-primary pg_dump -U "$POSTGRES_USER" smsly_hosting > "$backup_file" ; then
+    if timeout 120 docker exec smsly-postgres-primary pg_dump --clean --if-exists -U "$POSTGRES_USER" "$POSTGRES_DB" > "$backup_file" ; then
         _ok "DB backup: $(du -h "$backup_file" | cut -f1)"
     else
         _warn "DB backup failed — continuing without safety net"
@@ -239,15 +248,21 @@ safe_update_rollback() {
         fi
     done
     
-    # Restart core services with the restored images
-    docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps backend frontend celery celery-deploy celery-fast celery-beat $(grep -q "^  *pgcat:" "${COMPOSE_FILE:-docker-compose.prod.yml}"  && echo "pgcat")  || _warn "Docker compose up had issues during rollback"
+    # Ensure the database is up before restoring into it.
+    docker compose -f "$COMPOSE_FILE" up -d --no-deps postgres-primary \
+        || _warn "Could not ensure postgres-primary is running"
 
-    # Restore DB if backed up
+    # Restore DB BEFORE bringing app containers up, so the --clean dump does not
+    # drop objects while backend/celery are connected (transient errors and can
+    # leave behind new-version tables from a partial migration).
     if [ -n "${BACKUP_FILE:-}" ] && [ -f "$BACKUP_FILE" ]; then
         _warn "Restoring database from backup..."
-        docker exec -i smsly-postgres-primary psql -U smsly_admin smsly_hosting < "$BACKUP_FILE"  && \
+        docker exec -i smsly-postgres-primary psql -U "$POSTGRES_USER" "$POSTGRES_DB" < "$BACKUP_FILE"  && \
             _ok "DB restored" || _warn "DB restore failed"
     fi
+
+    # Restart core services with the restored images (DB is now consistent).
+    docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps backend frontend celery celery-deploy celery-fast celery-beat $(grep -q "^  *pgcat:" "${COMPOSE_FILE:-docker-compose.prod.yml}"  && echo "pgcat")  || _warn "Docker compose up had issues during rollback"
 
     # Fix perms
     [ -d /opt/smsly-hosting/prometheus-targets ] && {
