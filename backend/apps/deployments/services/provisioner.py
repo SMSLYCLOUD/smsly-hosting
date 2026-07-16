@@ -196,7 +196,10 @@ class _ProvisioningResources:
     def _remove_wg_peer(self):
         try:
             from apps.deployments.services.wireguard_service import WireGuardService
-            WireGuardService.remove_peer_from_mesh(self._wg_peer_id)
+            from apps.deployments.models_mesh import WireGuardPeer
+            peer_obj = WireGuardPeer.objects.filter(id=self._wg_peer_id).first()
+            if peer_obj:
+                WireGuardService.remove_peer_from_mesh(peer_obj)
             _append_log(self.server, f"🧹 Rolled back WireGuard peer: {self._wg_peer_id}")
         except Exception as exc:
             logger.warning("Rollback: failed to remove WG peer %s: %s", self._wg_peer_id, exc)
@@ -1478,9 +1481,9 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
             # --- Node Provisioning & Automated TLS ---
             from apps.deployments.models_core import PlatformConfig
             from apps.deployments.services.dns import ensure_dns_records
-            config = PlatformConfig.get_config()
+            config = PlatformConfig.load()
             cf_token = config.cloudflare_api_token
-            root_domain = config.root_domain
+            root_domain = config.domain
 
             if cf_token and root_domain:
                 node_slug = str(server.id).split('-')[0]
@@ -1904,7 +1907,7 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                 deploy_async=True,
             )
             wg_assigned = bool(mesh_result.get("wg_address"))
-            wg_peer_id = mesh_result.get("peer_id")
+            wg_peer_id = mesh_result.get("peer")
             if wg_peer_id:
                 resources.track_wg_peer(wg_peer_id)
             _append_log(
