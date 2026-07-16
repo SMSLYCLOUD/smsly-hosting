@@ -420,7 +420,7 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
-    image: sameersbn/apt-cacher-ng:3.1-20240122 # TODO: pin to digest via dependabot/renovate
+    image: sameersbn/apt-cacher-ng:latest
     container_name: smsly-apt-cacher
     restart: unless-stopped
     volumes:
@@ -1106,7 +1106,7 @@ services:
         limits:
           memory: ${RABBITMQ_MEMORY_LIMIT:-1G}
   buildkitd:
-    image: moby/buildkit:0.18 # TODO: pin to digest via dependabot/renovate
+    image: moby/buildkit:v0.18.2
     container_name: smsly-buildkitd
     restart: unless-stopped
     security_opt:

@@ -21,12 +21,13 @@ BACKUP_DIR="$INSTALL_DIR/.update-backups"
 CLEAN_LOG="/var/log/smsly-clean.log"
 MIN_DISK_MB=5120
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; BLUE='\033[0;34m'; NC='\033[0m'
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'
 _log()  { printf "[%s] %s\n" "$(date +%H:%M:%S)" "$*" >> "$CLEAN_LOG"; }
 _ok()   { echo -e "${GREEN}  ✓${NC} $*"; _log "OK: $*"; }
 _warn() { echo -e "${YELLOW}  ⚠${NC} $*"; _log "WARN: $*"; }
 _fail() { echo -e "${RED}  ✗${NC} $*"; _log "FAIL: $*"; }
 _step() { echo -e "\n${BLUE}── $* ──${NC}"; _log "STEP: $*"; }
+_progress() { echo -e "  ${CYAN}→${NC} $*"; _log "PROGRESS: $*"; }
 
 # ══════════════════════════════════════════════════════════════════════════════
 safe_update_preflight() {
@@ -93,9 +94,15 @@ safe_update_snapshot() {
     local prev_branch; prev_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
     local backup_file="$BACKUP_DIR/pre-update-$(date +%Y%m%d-%H%M%S).sql"
 
-    timeout -k 5 300 docker exec smsly-postgres-primary pg_dump -U smsly_admin smsly_hosting > "$backup_file" 2>/dev/null && \
-        _ok "DB backup: $(du -h "$backup_file" | cut -f1)" || \
-        { _warn "DB backup failed — continuing without safety net"; backup_file=""; }
+    _progress "Backing up database (timeout: 120s)..."
+    if timeout 120 docker exec smsly-postgres-primary pg_dump -U smsly_admin smsly_hosting > "$backup_file" 2>&1; then
+        _ok "DB backup: $(du -h "$backup_file" | cut -f1)"
+    elif timeout 120 docker exec smsly-postgres-primary pg_dump -U "$POSTGRES_USER" smsly_hosting > "$backup_file" 2>&1; then
+        _ok "DB backup: $(du -h "$backup_file" | cut -f1)"
+    else
+        _warn "DB backup failed — continuing without safety net"
+        backup_file=""
+    fi
 
     # Backup .env (restored on rollback)
     if [ -f "$INSTALL_DIR/.env" ]; then
@@ -103,15 +110,15 @@ safe_update_snapshot() {
     fi
 
     # Redis RDB snapshot (non-fatal — container may not be running)
-    if docker exec smsly-hosting-redis-1 redis-cli SAVE 2>/dev/null; then
+    if timeout 10 docker exec smsly-hosting-redis-1 redis-cli SAVE 2>/dev/null; then
         _ok "Redis RDB saved"
-        docker cp smsly-hosting-redis-1:/data/dump.rdb "$BACKUP_DIR/pre-update-redis.rdb" 2>/dev/null || true
+        timeout 10 docker cp smsly-hosting-redis-1:/data/dump.rdb "$BACKUP_DIR/pre-update-redis.rdb" 2>/dev/null || true
     else
         _warn "Redis backup skipped (container may not be running)"
     fi
 
     # RabbitMQ definitions export (non-fatal — container or rabbitmqadmin may not be available)
-    if docker exec smsly-hosting-rabbitmq-1 rabbitmqadmin export "$BACKUP_DIR/pre-update-rabbitmq-defs.json" 2>/dev/null; then
+    if timeout 15 docker exec smsly-hosting-rabbitmq-1 rabbitmqadmin export "$BACKUP_DIR/pre-update-rabbitmq-defs.json" 2>/dev/null; then
         _ok "RabbitMQ definitions exported"
     else
         _warn "RabbitMQ export skipped (container or rabbitmqadmin not available)"
