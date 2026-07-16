@@ -165,15 +165,15 @@ restart_edge_stack() {
         echo -e "${GREEN}      edge services already running, skipping restart${NC}"
     else
         # NOTE(Zero-Downtime): Removed --force-recreate to eliminate downtime for deployed services.
-        timeout 30 docker compose -f "$COMPOSE_FILE" up -d --no-deps $edge_services >/dev/null 2>&1 || \
-            timeout 30 docker compose -f "$COMPOSE_FILE" up -d $edge_services >/dev/null 2>&1 || true
+        timeout -k 5 30 docker compose -f "$COMPOSE_FILE" up -d --no-deps $edge_services >/dev/null 2>&1 || \
+            timeout -k 5 30 docker compose -f "$COMPOSE_FILE" up -d $edge_services >/dev/null 2>&1 || true
     fi
 
     # Restart core app entrypoints so new upstream bindings are live.
     echo -e "${BLUE}    [2/5] Restarting frontend + backend...${NC}"
-    timeout 30 docker compose -f "$COMPOSE_FILE" restart frontend backend >/dev/null 2>&1 || true
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" restart frontend backend >/dev/null 2>&1 || true
     echo -e "${BLUE}    [3/5] Restarting edge services...${NC}"
-    timeout 30 docker compose -f "$COMPOSE_FILE" restart $edge_services >/dev/null 2>&1 || true
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" restart $edge_services >/dev/null 2>&1 || true
 
     # Re-attach expected external networks (idempotent).
     echo -e "${BLUE}    [4/5] Re-attaching external networks...${NC}"

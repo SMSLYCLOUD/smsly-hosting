@@ -61,7 +61,6 @@ def _builtin_classify(name: str):
         "smsly-hosting-socket-proxy",
         "smsly-hosting-route-fallback",
         "smsly-hosting-postgresql",
-        "smsly-hosting-celery",
         "smsly-hosting-caddy",
         "smsly-system",
     )

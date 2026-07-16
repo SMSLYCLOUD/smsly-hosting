@@ -161,7 +161,7 @@ verify_installation() {
     
     # Test domain verification
     log "Testing domain verification"
-    if timeout 60 "$DOMAIN_SSL_MANAGER" start; then
+    if timeout -k 5 60 "$DOMAIN_SSL_MANAGER" start; then
         log_success "Domain verification test passed"
     else
         log_warning "Domain verification test timed out"

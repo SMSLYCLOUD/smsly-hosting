@@ -837,6 +837,12 @@ def _deploy_container(deployment, provider, image_name):
             except Exception:
                 pass
 
+            try:
+                from .tasks_alerts import notify_deployment_success
+                notify_deployment_success.delay(str(deployment.id))
+            except Exception:
+                pass
+
             _regenerate_caddyfile()
             append_log(
                 deployment,
@@ -1062,6 +1068,12 @@ def _deploy_container(deployment, provider, image_name):
             update_commit_status.delay(
                 str(deployment.id), 'success', 'Deployment active'
             )
+        except Exception:
+            pass
+
+        try:
+            from .tasks_alerts import notify_deployment_success
+            notify_deployment_success.delay(str(deployment.id))
         except Exception:
             pass
 
@@ -1432,6 +1444,9 @@ def _handle_failure(task, deployment, error_msg, reason):
             try:
                 from apps.deployments.tasks_alerts import alert_user_task
                 alert_user_task.delay(deployment_id=str(deployment.id), error_message=f"{reason}: {error_msg}")
+                if getattr(deployment.service, 'is_production', False):
+                    from apps.deployments.tasks_alerts import voice_alert_critical_task
+                    voice_alert_critical_task.delay(deployment_id=str(deployment.id), error_message=f"{reason}: {error_msg}")
             except Exception as alert_err:  # pylint: disable=broad-exception-caught
                 logger.warning("Failed to queue deployment failure alert: %s", alert_err)
 

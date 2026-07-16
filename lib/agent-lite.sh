@@ -176,7 +176,7 @@ verify_agent_lite_connectivity() {
 
     # 2. Check Database port via mesh IP (internal services use WireGuard)
     local db_check_ip="${MASTER_MESH_IP}"
-    if ! timeout 2 bash -c "</dev/tcp/${db_check_ip}/5432" 2>/dev/null; then
+    if ! timeout -k 5 2 bash -c "</dev/tcp/${db_check_ip}/5432" 2>/dev/null; then
         echo -e "${RED}  ✗ ERROR: Master Database (port 5432) is unreachable on ${db_check_ip}.${NC}"
         echo -e "${YELLOW}    Ensure the Master allows port 5432 from this node's IP via WireGuard mesh.${NC}"
         return 1
@@ -187,7 +187,7 @@ verify_agent_lite_connectivity() {
 
     # 4. The deploy path pulls master-built images from the master's registry.
     local registry_check_ip="${MASTER_MESH_IP}"
-    if ! timeout 2 bash -c "</dev/tcp/${registry_check_ip}/5000" 2>/dev/null; then
+    if ! timeout -k 5 2 bash -c "</dev/tcp/${registry_check_ip}/5000" 2>/dev/null; then
         echo -e "${RED}  ✗ ERROR: Master container registry (port 5000) is unreachable on ${registry_check_ip}.${NC}"
         echo -e "${YELLOW}    Ensure the Master registry is running and the mesh/firewall allows port 5000 from this node.${NC}"
         return 1

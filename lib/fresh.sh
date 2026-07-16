@@ -1265,12 +1265,12 @@ fi
 # ─── Ensure PgCat is fresh and connected ──────────────────────────────────────
 if [ -f "${COMPOSE_FILE:-docker-compose.prod.yml}" ] && grep -q "^  *pgcat:" "${COMPOSE_FILE:-docker-compose.prod.yml}" 2>/dev/null && docker compose -f "$COMPOSE_FILE" ps pgcat >/dev/null 2>&1; then
     echo -e "${BLUE}  → Restarting PgCat balancer...${NC}"
-    timeout 30 docker compose -f "$COMPOSE_FILE" restart pgcat >/dev/null 2>&1 || true
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" restart pgcat >/dev/null 2>&1 || true
 fi
 
 # ─── Restart backend so it picks up the correct DB credentials ──────────────
 echo -e "${BLUE}  → Restarting backend with synced credentials...${NC}"
-timeout 30 docker compose -f "$COMPOSE_FILE" restart backend >/dev/null 2>&1 || true
+timeout -k 5 30 docker compose -f "$COMPOSE_FILE" restart backend >/dev/null 2>&1 || true
 sleep 5
 
     echo -e "${BLUE}  → Running Migrations...${NC}"
@@ -1281,7 +1281,7 @@ sleep 5
     # PgCat connection pools all compete with the migration.
     MIGRATION_STOPPED_SVCS="backend celery celery-deploy celery-fast celery-beat $(grep -q "^  *pgcat:" "${COMPOSE_FILE:-docker-compose.prod.yml}" 2>/dev/null && echo "pgcat")"
     echo -e "${BLUE}    Stopping ${MIGRATION_STOPPED_SVCS} to prevent lock contention...${NC}"
-    docker compose -f "$COMPOSE_FILE" stop --timeout 15 ${MIGRATION_STOPPED_SVCS} >/dev/null 2>&1 || true
+    docker compose -f "$COMPOSE_FILE" stop --timeout -k 5 15 ${MIGRATION_STOPPED_SVCS} >/dev/null 2>&1 || true
     sleep 3
 
     # Kill every backend on the database so the migration owns it exclusively
@@ -1326,7 +1326,7 @@ echo -e "${BLUE}  → Collecting Static Files...${NC}"
     # Fix volume ownership — Docker creates named volumes as root
     docker compose -f "$COMPOSE_FILE" exec -T --user root backend chown -R 1000:1000 /app/staticfiles /app/media /app/backups 2>/dev/null || true
     docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py fix_sequences 2>/dev/null || true
-    timeout 300 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py migrate --noinput
+    timeout -k 5 300 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py migrate --noinput
     docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic --noinput 2>/dev/null || true
 
     sync_platform_domain_state "$INSTALL_DIR/.env"

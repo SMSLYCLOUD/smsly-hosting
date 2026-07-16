@@ -21,7 +21,7 @@ done
 echo ""
 echo "=== 2. Django system check ==="
 cd "$BASE/backend"
-CHECK_OUT=$(timeout 60 python manage.py check 2>&1 || true)
+CHECK_OUT=$(timeout -k 5 60 python manage.py check 2>&1 || true)
 if echo "$CHECK_OUT" | grep -q "no issues"; then
     echo "  OK   Django check passed (0 issues)"
 elif echo "$CHECK_OUT" | grep -qiE "Error|Traceback|ImportError|NameError|IndentationError|SyntaxError"; then

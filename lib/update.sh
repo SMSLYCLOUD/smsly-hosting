@@ -426,7 +426,7 @@ fi
              # immediately but ensure the HA stack is up first.
              echo -e "${BLUE}  → HA stack already has data — ensuring services are up...${NC}"
              docker compose -f "$INSTALL_DIR/docker-compose.prod.yml" \
-                 up -d --wait --wait-timeout 120 \
+                 up -d --wait --wait-timeout -k 5 120 \
                  postgres-primary postgres-replica pgcat redis-primary redis-replica \
                  2>/dev/null || echo -e "${YELLOW}  ⚠ Some HA services may not be healthy yet${NC}"
              echo -e "${YELLOW}  → Switching COMPOSE_FILE: docker-compose.yml → docker-compose.prod.yml${NC}"
@@ -447,7 +447,7 @@ fi
                      # before the migration script tries to dump into them.
                      echo -e "${BLUE}  → Starting HA stack (postgres-primary, pgcat, redis-primary)...${NC}"
                      docker compose -f "$INSTALL_DIR/docker-compose.prod.yml" \
-                         up -d --wait --wait-timeout 120 \
+                         up -d --wait --wait-timeout -k 5 120 \
                          postgres-primary postgres-replica pgcat redis-primary redis-replica \
                          2>/dev/null || echo -e "${YELLOW}  ⚠ Some HA services may not be healthy yet${NC}"
 
@@ -471,7 +471,7 @@ fi
                  # Otherwise manage.py migrate will fail with DNS errors.
                  echo -e "${BLUE}  → Starting HA stack (fresh install)...${NC}"
                  docker compose -f "$INSTALL_DIR/docker-compose.prod.yml" \
-                     up -d --wait --wait-timeout 120 \
+                     up -d --wait --wait-timeout -k 5 120 \
                      postgres-primary postgres-replica pgcat redis-primary redis-replica \
                      2>/dev/null || echo -e "${YELLOW}  ⚠ Some HA services may not be healthy yet${NC}"
                  echo -e "${YELLOW}  → Switching COMPOSE_FILE: docker-compose.yml → docker-compose.prod.yml${NC}"
@@ -577,9 +577,9 @@ fi
                   echo -e "${YELLOW}  → Node mode: no frontend to update. Skipping.${NC}"
               else
                   echo -e "${BLUE}  → Rebuilding frontend container (cached)...${NC}"
-                docker compose -f "$COMPOSE_FILE" stop --timeout 15 frontend >/dev/null 2>&1 || true
+                docker compose -f "$COMPOSE_FILE" stop --timeout -k 5 15 frontend >/dev/null 2>&1 || true
                   docker compose -f "$COMPOSE_FILE" rm -f frontend >/dev/null 2>&1 || true
-                  timeout 600 docker compose -f "$COMPOSE_FILE" build frontend
+                  timeout -k 5 600 docker compose -f "$COMPOSE_FILE" build frontend
                   docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps frontend
 
                  # Custom Domain SSL Setup for Frontend Update
@@ -589,15 +589,15 @@ fi
                      [ -f "$SSL_SCRIPT" ] || SSL_SCRIPT="$INSTALL_DIR/scripts/legacy/install-custom-domain-ssl.sh"
                  if [ -f "$SSL_SCRIPT" ]; then
                      echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
-                     timeout 120 bash "$SSL_SCRIPT" install || true
+                     timeout -k 5 120 bash "$SSL_SCRIPT" install || true
                      
                      # Start the services
                      echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
-                     timeout 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh start || true
+                     timeout -k 5 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh start || true
                      
                      # Enable auto-start on boot (if not already enabled)
                      echo -e "${BLUE}  → Ensuring auto-start on boot...${NC}"
-                     timeout 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable || true
+                     timeout -k 5 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable || true
                      
                      echo -e "${GREEN}  ✓ Custom domain SSL services configured${NC}"
                      else
@@ -614,7 +614,7 @@ fi
             elif [ "$MODE_NODE" = "true" ]; then
                 build_svcs="backend celery celery-deploy celery-fast celery-beat"
             fi
-            timeout 600 docker compose -f "$COMPOSE_FILE" build $build_svcs
+            timeout -k 5 600 docker compose -f "$COMPOSE_FILE" build $build_svcs
 
             echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
@@ -630,7 +630,7 @@ fi
             # Stop backend, celery & pgcat so their DB connections don't block
             # migrations (ALTER TABLE requires exclusive locks).
             echo -e "${BLUE}  → Stopping backend, celery & pgcat for migrations...${NC}"
-            docker compose -f "$COMPOSE_FILE" stop --timeout 15 backend celery celery-deploy celery-fast celery-beat $(get_pgcat_if_exists) 2>/dev/null || true
+            docker compose -f "$COMPOSE_FILE" stop --timeout -k 5 15 backend celery celery-deploy celery-fast celery-beat $(get_pgcat_if_exists) 2>/dev/null || true
 
             echo -e "${BLUE}  → Running migrations...${NC}"
             run_backend_migrations --root || {
@@ -676,15 +676,15 @@ fi
                  [ -f "$SSL_SCRIPT" ] || SSL_SCRIPT="$INSTALL_DIR/scripts/legacy/install-custom-domain-ssl.sh"
                  if [ -f "$SSL_SCRIPT" ]; then
                      echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
-                     timeout 120 bash "$SSL_SCRIPT" install || true
+                     timeout -k 5 120 bash "$SSL_SCRIPT" install || true
                      
                      # Start the services
                      echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
-                     timeout 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh start || true
+                     timeout -k 5 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh start || true
                      
                      # Enable auto-start on boot (if not already enabled)
                      echo -e "${BLUE}  → Ensuring auto-start on boot...${NC}"
-                     timeout 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable || true
+                     timeout -k 5 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable || true
                      
                      echo -e "${GREEN}  ✓ Custom domain SSL services configured${NC}"
                  else
@@ -698,11 +698,11 @@ fi
             # 1. Rebuild frontend from cached layers (no --pull, no new base images)
             if [ "$MODE_NODE" != "true" ]; then
                 echo -e "${BLUE}  → Rebuilding frontend (cached)...${NC}"
-                timeout 600 docker compose -f "$COMPOSE_FILE" build frontend 2>/dev/null || {
+                timeout -k 5 600 docker compose -f "$COMPOSE_FILE" build frontend 2>/dev/null || {
                     echo -e "${YELLOW}  ⚠ Frontend build failed (cached layers missing). Skipping frontend.${NC}"
                     echo -e "${YELLOW}    Run --update when Docker Hub is reachable for a full rebuild.${NC}"
                 }
-                docker compose -f "$COMPOSE_FILE" stop --timeout 15 frontend >/dev/null 2>&1 || true
+                docker compose -f "$COMPOSE_FILE" stop --timeout -k 5 15 frontend >/dev/null 2>&1 || true
                 docker compose -f "$COMPOSE_FILE" rm -f frontend >/dev/null 2>&1 || true
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps frontend 2>/dev/null || true
             fi
@@ -710,7 +710,7 @@ fi
             # 2. Stop backend, celery & pgcat so their DB connections don't block
             #    migrations (ALTER TABLE requires exclusive locks).
             echo -e "${BLUE}  → Stopping backend, celery & pgcat for migrations...${NC}"
-            docker compose -f "$COMPOSE_FILE" stop --timeout 15 backend celery celery-deploy celery-fast celery-beat $(get_pgcat_if_exists) 2>/dev/null || true
+            docker compose -f "$COMPOSE_FILE" stop --timeout -k 5 15 backend celery celery-deploy celery-fast celery-beat $(get_pgcat_if_exists) 2>/dev/null || true
 
             # 3. Run migrations
             echo -e "${BLUE}  → Running migrations...${NC}"
@@ -757,15 +757,15 @@ fi
                  [ -f "$SSL_SCRIPT" ] || SSL_SCRIPT="$INSTALL_DIR/scripts/legacy/install-custom-domain-ssl.sh"
                  if [ -f "$SSL_SCRIPT" ]; then
                      echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
-                     timeout 120 bash "$SSL_SCRIPT" install || true
+                     timeout -k 5 120 bash "$SSL_SCRIPT" install || true
                      
                      # Start the services
                      echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
-                     timeout 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh start || true
+                     timeout -k 5 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh start || true
                      
                      # Enable auto-start on boot (if not already enabled)
                      echo -e "${BLUE}  → Ensuring auto-start on boot...${NC}"
-                     timeout 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable || true
+                     timeout -k 5 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable || true
                      
                      echo -e "${GREEN}  ✓ Custom domain SSL services configured${NC}"
                  else
@@ -797,7 +797,7 @@ fi
 
             # 5. Rebuild core images (CACHED unless --no-cache passed manually)
             echo -e "${BLUE}    ↳ Rebuilding core images...${NC}"
-            timeout 600 docker compose -f "$COMPOSE_FILE" build $CORE_SERVICES
+            timeout -k 5 600 docker compose -f "$COMPOSE_FILE" build $CORE_SERVICES
 
             # 6. Start everything (addons stay running, core gets fresh containers)
             # This does a graceful zero-downtime replacement instead of an explicit hard stop
@@ -828,7 +828,7 @@ fi
             # 8. Stop backend, celery & pgcat so their DB connections don't block
             #    migrations (ALTER TABLE requires exclusive locks).
             echo -e "${BLUE}  → Stopping backend, celery & pgcat for migrations...${NC}"
-            docker compose -f "$COMPOSE_FILE" stop --timeout 15 backend celery celery-deploy celery-fast celery-beat $(get_pgcat_if_exists) 2>/dev/null || true
+            docker compose -f "$COMPOSE_FILE" stop --timeout -k 5 15 backend celery celery-deploy celery-fast celery-beat $(get_pgcat_if_exists) 2>/dev/null || true
 
             # 9. Run migrations
             echo -e "${BLUE}  → Running migrations...${NC}"
@@ -884,9 +884,9 @@ fi
                 SSL_SCRIPT="install-custom-domain-ssl.sh"
                 [ -f "$SSL_SCRIPT" ] || SSL_SCRIPT="$INSTALL_DIR/scripts/legacy/install-custom-domain-ssl.sh"
                 if [ -f "$SSL_SCRIPT" ]; then
-                    timeout 120 bash "$SSL_SCRIPT" install || true
-                    timeout 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh start || true
-                    timeout 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable || true
+                    timeout -k 5 120 bash "$SSL_SCRIPT" install || true
+                    timeout -k 5 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh start || true
+                    timeout -k 5 30 /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable || true
                     echo -e "${GREEN}  ✓ Custom domain SSL services configured${NC}"
                 else
                     echo -e "${YELLOW}  ⚠ Custom domain SSL manager not found, skipping setup${NC}"
@@ -1044,7 +1044,7 @@ cp, created = CloudProvider.objects.get_or_create(
 if not created and not cp.is_active:
     cp.is_active = True
     cp.save()
-" | timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null || true
+" | timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null || true
     # ─── Self-Healing: Docker Socket Permissions ──────────────────────────────
     echo -e "${BLUE}  → Hardening Docker socket permissions...${NC}"
     # NOTE: Removed chmod 666 — world-writable docker.sock is a security risk.
@@ -1074,7 +1074,7 @@ if not created and not cp.is_active:
     # ─── Self-Healing: Automatic Queue Restoration ──────────────────────────
     echo -e "${BLUE}  → Checking for stalled deployments/addons in QUEUED state...${NC}"
     backend_container="$(resolve_container_target "smsly-hosting-backend-1")"
-    timeout 30 docker exec -i "$backend_container" python manage.py shell -c "
+    timeout -k 5 30 docker exec -i "$backend_container" python manage.py shell -c "
 from apps.deployments.models import Deployment, Service
 from apps.deployments.models_addons import Addon
 from apps.deployments.tasks import provision_addon_task, recover_stalled_queued_deployments
@@ -1126,7 +1126,7 @@ if d_count > 0:
 
     echo -e "\n${GREEN}  ✨ Update complete. Self-healing applied.${NC}"
 
-    timeout 120 sync_platform_domain_state "$INSTALL_DIR/.env"
+    timeout -k 5 120 sync_platform_domain_state "$INSTALL_DIR/.env"
 
     # Refresh proxy/runtime edge stack so routing and TLS state is always clean.
     # NOTE: restart_edge_stack now handles Caddy validation internally (H1+H2 fix).
@@ -1156,7 +1156,7 @@ if d_count > 0:
         fi
         # Fallback: read from PlatformConfig in the database (set via Settings UI)
         if [ -z "$CF_TOKEN" ] || [ "$CF_TOKEN" = "fake" ]; then
-            DB_TOKEN="$(timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+            DB_TOKEN="$(timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import PlatformConfig
 config = PlatformConfig.load()
 token = (getattr(config, 'cloudflare_api_token', '') or '').strip()
@@ -1183,7 +1183,7 @@ if token and token.lower() not in ('fake', 'changeme', 'test', ''):
 
             # Discover domain
             cf_domain=""
-            cf_domain="$(timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+            cf_domain="$(timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import PlatformConfig
 c = PlatformConfig.load()
 d = (c.domain or '').strip()
@@ -1201,7 +1201,7 @@ if d and d != 'localhost':
             # - Unknown wildcard hosts route to /notice on frontend.
             # - External custom domains keep explicit direct on-demand TLS blocks with Host rewrite.
             cf_wildcard_known_hosts=""
-            cf_wildcard_known_hosts="$(timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+            cf_wildcard_known_hosts="$(timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import Service
 from apps.domains.models import Domain, DomainStatus
 from django.db.models import Q
@@ -1221,7 +1221,7 @@ print(' '.join(sorted(hosts)))
 " 2>/dev/null | tr -d '\r' | tr -d '\n' || true)"
 
             cf_svc_blocks=""
-            cf_svc_blocks="$(timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+            cf_svc_blocks="$(timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 import os
 upstream = os.environ.get('SMSLY_SERVICE_PROXY_UPSTREAM', 'traefik:80')
 from apps.deployments.models import Service
@@ -1337,7 +1337,7 @@ CFCADDY
         # environment routing. Django's generate_caddyfile() includes direct
         # container routing for local preview environments, so we overlay it.
         echo -e "${BLUE}  → Overlaying preview-aware Caddyfile from Django...${NC}"
-        timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+        timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import PlatformConfig
 from services.caddy_manager import generate_caddyfile, apply_caddyfile
 config = PlatformConfig.load()
@@ -1358,7 +1358,7 @@ print(result.get('message', 'ok'))
             echo -e "${YELLOW}  ⚠ Caddy failed to start. Run: journalctl -u caddy --no-pager -n 20${NC}"
         fi
 
-        POST_CADDY_DOMAIN="$(timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+        POST_CADDY_DOMAIN="$(timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import PlatformConfig
 c = PlatformConfig.load()
 d = (c.domain or '').strip()
@@ -1373,8 +1373,8 @@ if d and d != 'localhost':
     fi
     fi
 
-    timeout 600 safe_refresh_runtime_services
-    timeout 300 ensure_celery_workers_running
+    timeout -k 5 600 safe_refresh_runtime_services
+    timeout -k 5 300 ensure_celery_workers_running
 
     # ─── Auto-redeploy active services when platform code or domain state changes ──
     PRE_HEAD="$(cat "$INSTALL_DIR/.pre-update-head" 2>/dev/null || true)"
@@ -1459,7 +1459,7 @@ if d and d != 'localhost':
     # ── Check 2: HTTPS platform domain (auto-discovered from DB → through Caddy) ──
     echo -e "${BLUE}  [2/3] HTTPS platform domain...${NC}"
     # Auto-discover domain from PlatformConfig in DB — zero config needed
-    EP_DOMAIN="$(timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+    EP_DOMAIN="$(timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import PlatformConfig
 config = PlatformConfig.load()
 d = (config.domain or '').strip()
@@ -1512,7 +1512,7 @@ if d and d != 'localhost':
     echo -e "${BLUE}  [3/N] Deployed services routing...${NC}"
 
     # Query ALL active service domains from the DB (public + custom)
-    ALL_SVC_DOMAINS="$(timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+    ALL_SVC_DOMAINS="$(timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import Service
 for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_domain='').order_by('name'):
     print(f'{svc.name}|{svc.public_domain.strip()}')

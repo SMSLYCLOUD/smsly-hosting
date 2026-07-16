@@ -79,6 +79,19 @@ def register_extra_tasks(sender, **kwargs):  # pylint: disable=unused-argument
     import apps.deployments.tasks_transfer
     import apps.intelligence.jules_fix.jules_fix  # noqa: F401
     import apps.media.tasks  # noqa: F401
+    import apps.deployments.tasks_mesh  # noqa: F401
+    import apps.deployments.services.heartbeat_bus  # noqa: F401
+    import apps.cloud.services.ssl_monitor  # noqa: F401
+    import apps.permissions.tasks  # noqa: F401
+    import apps.intelligence.tasks  # noqa: F401
+    import apps.deployments.tasks_deploy_remote  # noqa: F401
+    import apps.deployments.tasks_deploy  # noqa: F401
+    import apps.addons.tasks  # noqa: F401
+    import apps.autoscaler.tasks  # noqa: F401
+    import apps.billing.tasks  # noqa: F401
+    import apps.notifications.tasks  # noqa: F401
+    import apps.domains.tasks  # noqa: F401
+    import apps.cloud.views_code_analysis  # noqa: F401
 
 # =============================================================================
 # Beat Schedule — Periodic tasks for metrics, health, autoscaling, cleanup
@@ -101,8 +114,8 @@ app.conf.task_queues = (
 app.conf.task_create_missing_queues = True
 
 app.conf.task_routes = {
-    'apps.deployments.tasks_deploy.smart_deploy_task': {'queue': 'deploy'},
-    'apps.deployments.tasks_deploy.resume_deploy_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.smart_deploy_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.resume_deploy_task': {'queue': 'deploy'},
     'apps.deployments.tasks_addons.provision_addon_task': {'queue': 'deploy'},
     'apps.deployments.tasks_addons.deprovision_addon_task': {'queue': 'deploy'},
     'apps.deployments.tasks_addons.backup_addon_task': {'queue': 'deploy'},
@@ -179,6 +192,14 @@ app.conf.task_routes = {
     'apps.addons.tasks.addon_health_check_all': {'queue': 'deploy'},
     'apps.addons.tasks.addon_auto_vacuum': {'queue': 'deploy'},
     'apps.addons.tasks.rotate_addon_credentials_task': {'queue': 'deploy'},
+    'apps.deployments.services.heartbeat_bus.persist_heartbeats_task': {'queue': 'fast'},
+    'apps.cloud.services.ssl_monitor.check_ssl_certificates_task': {'queue': 'deploy'},
+    'apps.deployments.tasks_deploy._post_deploy_monitor': {'queue': 'deploy'},
+    'apps.permissions.tasks.deactivate_expired_memberships': {'queue': 'deploy'},
+    'apps.intelligence.tasks.detect_anomalies_task': {'queue': 'deploy'},
+    'apps.intelligence.tasks.proactive_health_scan_task': {'queue': 'deploy'},
+    'apps.intelligence.tasks.daily_intelligence_report_task': {'queue': 'deploy'},
+    'apps.intelligence.tasks.ai_deployment_review_task': {'queue': 'deploy'},
 }
 
 app.conf.beat_schedule = {
@@ -229,6 +250,37 @@ app.conf.beat_schedule = {
         'task': 'apps.intelligence.tasks.detect_anomalies_task',
         'schedule': 180.0,
         'options': {'expires': 180.0},
+    },
+    # ── Billing & Revenue Tasks ──────────────────────────────────────────────
+    # Snapshot active services and calculate cost hourly
+    'billing-collect-usage-hourly': {
+        'task': 'apps.billing.tasks.collect_usage_task',
+        'schedule': crontab(minute=0),
+        'options': {'expires': 3600.0},
+    },
+    # Generate invoices on the 1st of each month
+    'billing-generate-invoices-monthly': {
+        'task': 'apps.billing.tasks.generate_monthly_invoices',
+        'schedule': crontab(minute=0, hour=0, day_of_month='1'),
+        'options': {'expires': 86400.0},
+    },
+    # Send payment reminders daily
+    'billing-send-reminders-daily': {
+        'task': 'apps.billing.tasks.send_payment_reminders',
+        'schedule': crontab(minute=0, hour=8),
+        'options': {'expires': 3600.0},
+    },
+    # Snapshot yesterday's revenue at midnight
+    'billing-aggregate-daily-revenue': {
+        'task': 'apps.billing.tasks.aggregate_daily_revenue',
+        'schedule': crontab(minute=0, hour=0),
+        'options': {'expires': 3600.0},
+    },
+    # Pull cloud infrastructure costs at midnight
+    'billing-calculate-infrastructure-costs': {
+        'task': 'apps.billing.tasks.calculate_infrastructure_costs',
+        'schedule': crontab(minute=0, hour=0),
+        'options': {'expires': 3600.0},
     },
     # SSL certificate expiry scan every 6 hours
     'check-ssl-certificates-every-6h': {

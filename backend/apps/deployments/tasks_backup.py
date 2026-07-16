@@ -49,15 +49,32 @@ def create_service_backup_task(self, service_id, backup_type='MANUAL', backup_id
                 original_key = os.environ.get('BACKUP_ENCRYPTION_KEY', '')
                 os.environ['BACKUP_ENCRYPTION_KEY'] = encryption_key
                 try:
-                    backup_service.backup_service(service_id, backup_id=backup_id, backup_type=backup_type, db_only=db_only)
+                    result = backup_service.backup_service(service_id, backup_id=backup_id, backup_type=backup_type, db_only=db_only)
                 finally:
                     if original_key:
                         os.environ['BACKUP_ENCRYPTION_KEY'] = original_key
                     else:
                         os.environ.pop('BACKUP_ENCRYPTION_KEY', None)
         else:
-            backup_service.backup_service(service_id, backup_id=backup_id, backup_type=backup_type, db_only=db_only)
+            result = backup_service.backup_service(service_id, backup_id=backup_id, backup_type=backup_type, db_only=db_only)
+            
+        try:
+            from apps.notifications.tasks import notify_backup_completed
+            size_mb = (result.file_size or 0) / (1024 * 1024)
+            notify_backup_completed.delay(result.service.owner.id, str(result.id), size_mb, True)
+        except Exception as alert_exc:
+            logger.warning("Failed to queue backup success notification: %s", alert_exc)
+
     except Exception as exc:
+        try:
+            from apps.deployments.models import Service
+            from apps.notifications.tasks import notify_backup_completed
+            owner = Service.objects.get(id=service_id).owner
+            if owner:
+                notify_backup_completed.delay(owner.id, str(backup_id) if backup_id else "unknown", 0.0, False)
+        except Exception as alert_exc:
+            logger.warning("Failed to queue backup failure notification: %s", alert_exc)
+
         if self.request.retries < self.max_retries:
             raise self.retry(exc=exc)
         raise

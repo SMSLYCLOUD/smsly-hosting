@@ -185,12 +185,12 @@ _registry_self_heal() {
         local code
 
         # Try HEAD /v2/ — if it returns anything (even 401/403), the registry is reachable
-        code=$(timeout 5 curl -sfk -o /dev/null -w "%{http_code}" "https://${url}/v2/" 2>/dev/null)
+        code=$(timeout -k 5 5 curl -sfk -o /dev/null -w "%{http_code}" "https://${url}/v2/" 2>/dev/null)
         if echo "$code" | grep -qE '^(200|401|403)$'; then
             echo -e "  \033[0;32m→ $url OK (HTTPS $code)\033[0m"
             return 0
         fi
-        code=$(timeout 5 curl -sfk -o /dev/null -w "%{http_code}" "http://${url}/v2/" 2>/dev/null)
+        code=$(timeout -k 5 5 curl -sfk -o /dev/null -w "%{http_code}" "http://${url}/v2/" 2>/dev/null)
         if echo "$code" | grep -qE '^(200|401|403)$'; then
             echo -e "  \033[0;32m→ $url OK (HTTP $code)\033[0m"
             return 0
@@ -198,12 +198,12 @@ _registry_self_heal() {
 
         # Diagnostics: show the actual failure reason for debugging
         local curl_err
-        curl_err=$(timeout 3 curl -sv "http://${url}/v2/" 2>&1 | grep -E '^(curl:|Connected|Connection refused|Operation timed out|resolve|ssl|SSL)' | head -5)
+        curl_err=$(timeout -k 5 3 curl -sv "http://${url}/v2/" 2>&1 | grep -E '^(curl:|Connected|Connection refused|Operation timed out|resolve|ssl|SSL)' | head -5)
         [ -n "$curl_err" ] && echo -e "  \033[0;33m  ↳ $url ${code:-timeout/error} — ${curl_err//$'\n'/ | }\033[0m"
 
         # Fallback: try docker pull
         local pull_out pull_short
-        pull_out=$(timeout 10 docker pull "${url}/alpine:latest" 2>&1 || true)
+        pull_out=$(timeout -k 5 10 docker pull "${url}/alpine:latest" 2>&1 || true)
         if echo "$pull_out" | grep -qE "Pulled|up to date|Image is up to date"; then
             echo -e "  \033[0;32m→ $url OK (docker pull)\033[0m"
             return 0

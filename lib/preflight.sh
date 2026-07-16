@@ -1,6 +1,6 @@
 check_internet() {
     echo -e "${BLUE}  → Checking internet connectivity...${NC}"
-    if ! curl -Is --connect-timeout 5 https://google.com >/dev/null; then
+    if ! curl -Is --connect-timeout -k 5 5 https://google.com >/dev/null; then
         echo -e "${RED}  ✗ No internet access. Check your firewall/network settings.${NC}"
         exit 1
     fi

@@ -39,7 +39,7 @@ configure_docker_mirror() {
         if ! docker image inspect "$test_img" >/dev/null 2>&1; then
             test_img="alpine"
         fi
-        if ! timeout 15 docker run --rm "$test_img" nslookup registry.npmjs.org >/dev/null 2>&1; then
+        if ! timeout -k 5 15 docker run --rm "$test_img" nslookup registry.npmjs.org >/dev/null 2>&1; then
             echo -e "${YELLOW}  ⚠ Docker container DNS test failed. Enabling public DNS fallback (8.8.8.8, 1.1.1.1)...${NC}"
             use_dns_fallback=true
         else

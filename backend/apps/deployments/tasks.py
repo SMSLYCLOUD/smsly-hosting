@@ -4781,7 +4781,24 @@ def delete_service_task(self, service_id: str, force: bool = False):
                     service.id, cleanup_exc,
                 )
 
-            service.delete()
+            try:
+                service.delete()
+            except Exception as del_exc:
+                from django.db import ProgrammingError as _PE
+                if isinstance(del_exc, _PE) and 'does not exist' in str(del_exc):
+                    logger.warning(
+                        "Optional table missing during delete of %s — "
+                        "force-deleting via raw SQL: %s",
+                        service.id, del_exc,
+                    )
+                    from django.db import connection
+                    with connection.cursor() as cur:
+                        cur.execute(
+                            "DELETE FROM deployments_service WHERE id = %s",
+                            [service.id],
+                        )
+                else:
+                    raise
 
             # After deleting an LLM consumer, check if shared Ollama CPP
             # is still needed. If no remaining services need it, clean it up
@@ -4816,7 +4833,7 @@ def delete_service_task(self, service_id: str, force: bool = False):
         raise self.retry(exc=exc, countdown=30)
 
 
-@shared_task(bind=True, max_retries=3)
+@shared_task(bind=True, max_retries=3, soft_time_limit=300, time_limit=330)
 def delete_addon_task(self, addon_id: str):
     """Async reliable deletion of an Addon"""
     from services.addon_provisioner import addon_provisioner
@@ -4828,92 +4845,53 @@ def delete_addon_task(self, addon_id: str):
     except Addon.DoesNotExist:
         return
 
-    # Remote full-stack node addons: deprovision via SSH
-    server = getattr(addon.service, 'server', None)
-    if (server and not server.is_primary
-            and not getattr(server, 'is_lite_agent', False)):
-        container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
-        success = addon_provisioner.deprovision_remote(
-            addon.coolify_uuid or container_name, server, container_name,
-        )
-    else:
-        orchestrator = DeletionOrchestrator()
-        success = orchestrator.delete_addon_resources(addon)
-        # Resilience: If local docker client is missing
-        if not success and not orchestrator.docker_client:
-            logger.warning("Docker client unavailable for addon %s. Forcing database-only deletion.", addon.id)
-            success = True
-
-    if success:
-        addon.delete()
-    else:
-        addon.status = Addon.Status.DELETION_FAILED
-        addon.deletion_error = "Failed to remove some runtime resources. If the system is offline, use manual DB cleanup."
-        addon.save(update_fields=['status', 'deletion_error'])
-
-
-@shared_task(name="apps.deployments.tasks.auto_authenticate_nodes_task")
-def auto_authenticate_nodes_task():
-    """
-    Periodic task to automatically repair inter-node authentication.
-
-    Checks for ManagedServer records missing API tokens and attempts to
-    retrieve them via SSH using RemoteOrchestrator.
-    """
-    from apps.deployments.models import ManagedServer
-
-    # Target nodes missing tokens but having SSH access
-    servers = ManagedServer.objects.filter(api_token='')
-    count = 0
-    for server in servers:
-        if server.ssh_key or server.ssh_password:
-            try:
-                logger.info("Auto-Auth Task: Attempting SSH retrieval for %s", server.host)
-                orch = RemoteOrchestrator(server)
-                if orch.auto_authenticate():
-                    count += 1
-            except Exception as e:
-                logger.warning("Auto-Auth Task failed for %s: %s", server.host, e)
-
-    if count > 0:
-        logger.info("Auto-Auth Task completed: Fixed %d node(s)", count)
-    return count
-
-
-@shared_task(name="apps.deployments.tasks.check_managed_servers_health_task")
-def check_managed_servers_health_task():
-    """
-    Periodic task (every 5 min) to check health of all managed servers.
-    Updates ManagedServer.status to ONLINE or OFFLINE based on /health response.
-    """
-    from apps.deployments.models_servers import ManagedServer
-    from apps.deployments.views_servers import _refresh_managed_server_health
-
-    servers = ManagedServer.objects.exclude(
-        provision_status__in=("pending", "provisioning", "failed")
-    )
-    checked = 0
-    for server in servers:
-        try:
-            _refresh_managed_server_health(server)
-            checked += 1
-        except Exception as exc:
-            logger.warning("Health check failed for %s (%s): %s", server.name, server.host, exc)
-
-    # Refresh Prometheus target files. Agent deployment (docker-labels, Promtail,
-    # cAdvisor, Node Exporter) is handled by node_watchdog_task to avoid redundant
-    # SSH connections per cycle.
     try:
-        from apps.deployments.services.prometheus_targets import (
-            write_docker_labels_targets,
-        )
-        write_docker_labels_targets()
-    except Exception as exc:
-        logger.debug("Prometheus target update skipped: %s", exc)
+        # Remote full-stack node addons: deprovision via SSH
+        server = getattr(addon.service, 'server', None)
+        if (server and not server.is_primary
+                and not getattr(server, 'is_lite_agent', False)):
+            container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
+            success = addon_provisioner.deprovision_remote(
+                addon.coolify_uuid or container_name, server, container_name,
+            )
+        else:
+            orchestrator = DeletionOrchestrator()
+            success = orchestrator.delete_addon_resources(addon)
+            # Resilience: If local docker client is missing
+            if not success and not orchestrator.docker_client:
+                logger.warning("Docker client unavailable for addon %s. Forcing database-only deletion.", addon.id)
+                success = True
 
-    if checked:
-        logger.info("Health check task: refreshed %d/%d servers", checked, servers.count())
-    return checked
+        if success:
+            addon.delete()
+        else:
+            addon.status = Addon.Status.DELETION_FAILED
+            addon.deletion_error = "Failed to remove some runtime resources. If the system is offline, use manual DB cleanup."
+            addon.save(update_fields=['status', 'deletion_error'])
+
+    except SoftTimeLimitExceeded:
+        logger.error("Soft time limit exceeded deleting addon %s", addon_id)
+        addon.refresh_from_db()
+        if addon.status != Addon.Status.DELETION_FAILED:
+            addon.status = Addon.Status.DELETION_FAILED
+            addon.deletion_error = "Deletion timed out. Please retry or use manual cleanup."
+            addon.save(update_fields=['status', 'deletion_error'])
+    except self.MaxRetriesExceededError:
+        logger.error("Max retries exceeded for delete_addon_task addon=%s", addon_id)
+        addon.refresh_from_db()
+        if addon.status != Addon.Status.DELETION_FAILED:
+            addon.status = Addon.Status.DELETION_FAILED
+            addon.deletion_error = "Deletion failed after multiple retries. Please use manual cleanup."
+            addon.save(update_fields=['status', 'deletion_error'])
+    except Exception as exc:
+        logger.exception("delete_addon_task failed for addon=%s: %s", addon_id, exc)
+        raise self.retry(exc=exc, countdown=30)
+
+
+from .tasks_health import (
+    auto_authenticate_nodes_task,
+    check_managed_servers_health_task,
+)
 
 
 REMOTE_UPDATE_LOG_LIMIT = 300_000

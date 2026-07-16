@@ -45,14 +45,14 @@ fi
 
 # 3. Connectivity
 echo -n "Checking Internet... "
-if curl -Is --connect-timeout 5 https://google.com >/dev/null 2>&1; then
+if curl -Is --connect-timeout -k 5 5 https://google.com >/dev/null 2>&1; then
     echo -e "${GREEN}OK${NC}"
 else
     echo -e "${RED}FAILED (google.com)${NC}"
 fi
 
 echo -n "Checking GitHub Access... "
-if curl -Is --connect-timeout 5 https://github.com >/dev/null 2>&1; then
+if curl -Is --connect-timeout -k 5 5 https://github.com >/dev/null 2>&1; then
     echo -e "${GREEN}OK${NC}"
 else
     echo -e "${RED}FAILED (github.com)${NC}"

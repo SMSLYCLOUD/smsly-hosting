@@ -135,7 +135,7 @@ update_existing_installation() {
     
     # Start domain verification
     log "Running initial domain verification"
-    if timeout 120 "$DOMAIN_SSL_MANAGER" start; then
+    if timeout -k 5 120 "$DOMAIN_SSL_MANAGER" start; then
         log_success "Initial domain verification completed"
     else
         log_warning "Initial domain verification timed out"

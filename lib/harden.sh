@@ -487,7 +487,7 @@ _harden_trivy_bootstrap() {
     tmp_deb="$(mktemp /tmp/trivy.XXXXXX.deb)"
 
     # Attempt 1: Direct DEB download with retries and timeouts
-    if curl --retry 3 --retry-delay 2 --connect-timeout 15 -fsSL "$deb_url" -o "$tmp_deb" 2>/dev/null; then
+    if curl --retry 3 --retry-delay 2 --connect-timeout -k 5 15 -fsSL "$deb_url" -o "$tmp_deb" 2>/dev/null; then
         if ! dpkg -i "$tmp_deb" 2>/dev/null; then
             apt-get install -f -y 2>/dev/null || true
             dpkg -i "$tmp_deb" 2>/dev/null || true
@@ -503,7 +503,7 @@ _harden_trivy_bootstrap() {
         apt-get update -qq 2>/dev/null || true
         if ! apt-get install -y trivy 2>/dev/null; then
             if command -v gpg >/dev/null 2>&1; then
-                curl --retry 2 --connect-timeout 10 -fsSL https://aquasecurity.github.io/trivy-repo/deb/public.key 2>/dev/null | gpg --dearmor -o /usr/share/keyrings/trivy.gpg 2>/dev/null || true
+                curl --retry 2 --connect-timeout -k 5 10 -fsSL https://aquasecurity.github.io/trivy-repo/deb/public.key 2>/dev/null | gpg --dearmor -o /usr/share/keyrings/trivy.gpg 2>/dev/null || true
                 echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc 2>/dev/null || echo stable) main" > /etc/apt/sources.list.d/trivy.list 2>/dev/null || true
                 apt-get update -qq 2>/dev/null || true
                 apt-get install -y trivy 2>/dev/null || true
@@ -513,7 +513,7 @@ _harden_trivy_bootstrap() {
 
     # Attempt 3: Official Contrib script fallback
     if ! command -v trivy >/dev/null 2>&1; then
-        curl --retry 2 --connect-timeout 10 -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin 2>/dev/null || true
+        curl --retry 2 --connect-timeout -k 5 10 -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin 2>/dev/null || true
     fi
 
     if command -v trivy >/dev/null 2>&1; then

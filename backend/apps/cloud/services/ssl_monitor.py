@@ -151,12 +151,11 @@ class SSLMonitorService:
         msg = f"SSL Certificate for {domain} expires in {days} days."
         logger.warning(msg)
         if owner:
-            Notification.objects.create(
-                user=owner,
-                title="SSL Expiry Warning",
-                message=msg,
-                event_type="ssl_expiring"
-            )
+            try:
+                from apps.notifications.tasks import notify_ssl_expiring
+                notify_ssl_expiring.delay(owner.id, domain, days)
+            except Exception as e:
+                logger.error("Failed to queue SSL expiry notification: %s", e)
 
     def _attempt_renew(self, domain):
         # Caddy auto-renews certs. Trigger a safe config apply/reload so

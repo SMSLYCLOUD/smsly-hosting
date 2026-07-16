@@ -204,7 +204,7 @@ run_backend_migrations() {
 
     # Self-healing: fix node agent DB permissions after migrations.
     echo -e "${BLUE}  -> Fixing node agent database permissions...${NC}"
-    timeout 60 docker run --rm --network smsly-net \
+    timeout -k 5 60 docker run --rm --network smsly-net \
         --user 1000 \
         --env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env" \
         -e SMSLY_DISABLE_STARTUP_TASKS=true \
@@ -216,7 +216,7 @@ run_backend_migrations() {
     # through PgCat and would otherwise get "No pool configured".
     if [ "$MODE_AGENT_LITE" != "true" ] && [ -n "$(get_pgcat_if_exists)" ] && docker compose -f "$COMPOSE_FILE" ps pgcat 2>/dev/null | grep -q "Up"; then
         echo -e "${BLUE}  -> Reloading PgCat to pick up node agent pools...${NC}"
-        timeout 20 docker compose -f "$COMPOSE_FILE" restart pgcat >/dev/null 2>&1
+        timeout -k 5 20 docker compose -f "$COMPOSE_FILE" restart pgcat >/dev/null 2>&1
         sleep 5
         echo -e "${GREEN}  ✓ PgCat reloaded${NC}"
     fi
@@ -310,8 +310,8 @@ reload_container_caddy() {
     # This is needed because the host Caddy (systemd) may not be running.
     local compose_f="${COMPOSE_FILE:-docker-compose.prod.yml}"
     if command -v docker &>/dev/null && docker compose -f "$compose_f" ps -q caddy 2>/dev/null | grep -q .; then
-        timeout 20 docker compose -f "$compose_f" exec -T caddy caddy reload --config /etc/caddy/Caddyfile 2>/dev/null || \
-            timeout 20 docker compose -f "$compose_f" restart caddy 2>/dev/null || true
+        timeout -k 5 20 docker compose -f "$compose_f" exec -T caddy caddy reload --config /etc/caddy/Caddyfile 2>/dev/null || \
+            timeout -k 5 20 docker compose -f "$compose_f" restart caddy 2>/dev/null || true
     fi
 }
 
@@ -387,7 +387,7 @@ recreate_traefik_preserving_certs() {
     fi
 
     echo -e "${BLUE}  → Recreating traefik (preserves letsencrypt_data volume + acme.json)...${NC}"
-    timeout 60 docker compose -f "$compose_f" up -d --force-recreate traefik 2>&1 | sed 's/^/    /'
+    timeout -k 5 60 docker compose -f "$compose_f" up -d --force-recreate traefik 2>&1 | sed 's/^/    /'
 
     echo -e "${BLUE}  → Reconnecting traefik to smsly-proxy network (recreate can drop external nets)...${NC}"
     ensure_container_on_network "smsly-proxy" "smsly-hosting-traefik-1"
@@ -522,7 +522,7 @@ compose_stack_build_service_args() {
 
 stop_node_excluded_services() {
     is_node_mode || return 0
-    docker compose -f "$COMPOSE_FILE" stop --timeout 15 frontend caddy >/dev/null 2>&1 || true
+    docker compose -f "$COMPOSE_FILE" stop --timeout -k 5 15 frontend caddy >/dev/null 2>&1 || true
     docker compose -f "$COMPOSE_FILE" rm -f frontend caddy >/dev/null 2>&1 || true
 }
 
@@ -542,7 +542,7 @@ prune_stopped_conflicting() {
 
 cleanup_stale_containers() {
     local compose_f="${COMPOSE_FILE:-docker-compose.prod.yml}"
-    timeout 30 docker compose -f "$compose_f" down --remove-orphans 2>/dev/null || true
+    timeout -k 5 30 docker compose -f "$compose_f" down --remove-orphans 2>/dev/null || true
     prune_stopped_conflicting "smsly-hosting"
     prune_stopped_conflicting "smsly-"
 }
@@ -564,9 +564,9 @@ compose_stack_build() {
         stop_node_excluded_services
         services="$(compose_stack_build_service_args)"
         [ -n "$services" ] || return 1
-        timeout 300 docker compose -f "$COMPOSE_FILE" build "$@" $services
+        timeout -k 5 300 docker compose -f "$COMPOSE_FILE" build "$@" $services
     else
-        timeout 300 docker compose -f "$COMPOSE_FILE" build "$@"
+        timeout -k 5 300 docker compose -f "$COMPOSE_FILE" build "$@"
     fi
 }
 
@@ -576,9 +576,9 @@ compose_stack_up() {
         stop_node_excluded_services
         services="$(compose_stack_service_args)"
         [ -n "$services" ] || return 1
-        timeout 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate "$@" $services
+        timeout -k 5 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate "$@" $services
     else
-        timeout 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate "$@"
+        timeout -k 5 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate "$@"
     fi
 }
 
@@ -663,7 +663,7 @@ resolve_container_target() {
     [ -z "$target" ] && return 0
 
     # 1. If target is already a valid container ID or name inspectable by docker, return it
-    if docker container inspect "$target" >/dev/null 2>&1; then
+    if timeout -k 5 10 docker container inspect "$target" >/dev/null 2>&1; then
         echo "$target"
         return 0
     fi
@@ -672,12 +672,12 @@ resolve_container_target() {
     local compose_f="${COMPOSE_FILE:-docker-compose.prod.yml}"
     if [ -f "$compose_f" ]; then
         local services
-        services="$(docker compose -f "$compose_f" config --services 2>/dev/null)"
+        services="$(timeout -k 5 10 docker compose -f "$compose_f" config --services 2>/dev/null)"
         if [ -n "$services" ]; then
             for svc in $services; do
                 if [[ "$target" == *"-${svc}-"* || "$target" == *"_${svc}_"* || "$target" == *"-${svc}" || "$target" == *"_${svc}" || "$target" == "$svc" ]]; then
                     local cid
-                    cid="$(docker compose -f "$compose_f" ps -q "$svc" 2>/dev/null | head -n 1 || true)"
+                    cid="$(timeout -k 5 10 docker compose -f "$compose_f" ps -q "$svc" 2>/dev/null | head -n 1 || true)"
                     if [ -n "$cid" ]; then
                         echo "$cid"
                         return 0
@@ -739,7 +739,7 @@ generate_safe_caddyfile() {
 
     # 1. Discover domain: DB first, .env fallback
     local domain=""
-    domain="$(timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+    domain="$(timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import PlatformConfig
 c = PlatformConfig.load()
 d = (c.domain or '').strip()
@@ -752,7 +752,7 @@ if d and d != 'localhost':
 
     # 2. Discover ALL deployed service domains from DB (public + custom)
     local svc_blocks=""
-    svc_blocks="$(timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+    svc_blocks="$(timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 import os
 upstream = os.environ.get('SMSLY_SERVICE_PROXY_UPSTREAM', 'traefik:80')
 from apps.deployments.models import Service
@@ -838,7 +838,7 @@ SAFECADDY
 caddy_needs_fix() {
     should_manage_caddy || return 1
     local dest="${INSTALL_DIR:-/opt/smsly-hosting}/caddy-config/Caddyfile"
-    if ! timeout 15 docker compose -f "$COMPOSE_FILE" exec -T caddy caddy validate --config /etc/caddy/Caddyfile 2>/dev/null; then
+    if ! timeout -k 5 15 docker compose -f "$COMPOSE_FILE" exec -T caddy caddy validate --config /etc/caddy/Caddyfile 2>/dev/null; then
         return 0  # Syntax error
     fi
     if grep -q 'dns cloudflare' "$dest" 2>/dev/null; then
@@ -930,8 +930,8 @@ restart_edge_stack() {
     done
 
     if [ -n "$down_services" ]; then
-        timeout 30 docker compose -f "$COMPOSE_FILE" up -d --no-deps $down_services >/dev/null 2>&1 || \
-            timeout 30 docker compose -f "$COMPOSE_FILE" up -d $down_services >/dev/null 2>&1 || true
+        timeout -k 5 30 docker compose -f "$COMPOSE_FILE" up -d --no-deps $down_services >/dev/null 2>&1 || \
+            timeout -k 5 30 docker compose -f "$COMPOSE_FILE" up -d $down_services >/dev/null 2>&1 || true
     fi
 
     echo -e "${BLUE}  -> Re-attaching external networks...${NC}"
@@ -1024,8 +1024,8 @@ refresh_runtime_services() {
     fi
 
     if [ "${#app_services[@]}" -gt 0 ]; then
-        timeout 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "${app_services[@]}" >/dev/null 2>&1 || \
-            timeout 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate "${app_services[@]}" >/dev/null 2>&1 || true
+        timeout -k 5 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "${app_services[@]}" >/dev/null 2>&1 || \
+            timeout -k 5 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate "${app_services[@]}" >/dev/null 2>&1 || true
     fi
 
     ensure_container_on_network "smsly-net" "smsly-hosting-pgcat-1"
@@ -1070,8 +1070,8 @@ refresh_runtime_services() {
             fi
         done
         if [ "${#down_edge[@]}" -gt 0 ]; then
-            timeout 30 docker compose -f "$COMPOSE_FILE" up -d --no-deps "${down_edge[@]}" >/dev/null 2>&1 || \
-                timeout 30 docker compose -f "$COMPOSE_FILE" up -d "${down_edge[@]}" >/dev/null 2>&1 || true
+            timeout -k 5 30 docker compose -f "$COMPOSE_FILE" up -d --no-deps "${down_edge[@]}" >/dev/null 2>&1 || \
+                timeout -k 5 30 docker compose -f "$COMPOSE_FILE" up -d "${down_edge[@]}" >/dev/null 2>&1 || true
         fi
 
         ensure_container_on_network "smsly-net" "smsly-hosting-route-fallback-1"
@@ -1153,8 +1153,8 @@ ensure_celery_workers_running() {
         return 0
     fi
     echo -e "${YELLOW}  ⚠ Celery workers down: ${down_services[*]}. Restarting...${NC}"
-    timeout 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "${down_services[@]}" >/dev/null 2>&1 || \
-        timeout 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate "${down_services[@]}" >/dev/null 2>&1 || true
+    timeout -k 5 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "${down_services[@]}" >/dev/null 2>&1 || \
+        timeout -k 5 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate "${down_services[@]}" >/dev/null 2>&1 || true
     local all_ok=true
     for svc in "${down_services[@]}"; do
         if wait_for_container_ready "smsly-hosting-${svc}-1" 120; then
@@ -1240,13 +1240,13 @@ ensure_security_tools() {
     export PATH="/usr/local/bin:$PATH"
     if ! command -v trivy >/dev/null 2>&1 && [ ! -x "/usr/local/bin/trivy" ]; then
         echo -e "${BLUE}  → Installing Trivy vulnerability scanner...${NC}"
-        curl -sfL --connect-timeout 15 --max-time 120 https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin 2>/dev/null || true
+        curl -sfL --connect-timeout -k 5 15 --max-time 120 https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin 2>/dev/null || true
     fi
     if ! command -v cosign >/dev/null 2>&1 && [ ! -x "/usr/local/bin/cosign" ]; then
         echo -e "${BLUE}  → Installing Cosign image attestation utility...${NC}"
         local cosign_arch
         cosign_arch="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
-        curl -sfL --connect-timeout 15 --max-time 120 -o /usr/local/bin/cosign "https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-${cosign_arch}" 2>/dev/null && chmod +x /usr/local/bin/cosign || true
+        curl -sfL --connect-timeout -k 5 15 --max-time 120 -o /usr/local/bin/cosign "https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-${cosign_arch}" 2>/dev/null && chmod +x /usr/local/bin/cosign || true
     fi
     return 0
 }
