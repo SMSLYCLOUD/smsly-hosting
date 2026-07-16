@@ -130,7 +130,10 @@ class DecisionEngine:
             spawning_in_progress=self.spawning_in_progress,
         )
 
-        # Emergency: OOM or crash → always urgent scale up
+        # Emergency: OOM or crash → always urgent scale up.
+        # Checked BEFORE the metrics-unavailable guard because Loki
+        # can report OOM/crash even when Prometheus/DB/Docker metrics
+        # are silent (e.g. container restarting).
         if self.metrics.oom_detected or self.metrics.crash_loop:
             if at_capacity:
                 r.reason = 'OOM/crash detected but at capacity.'

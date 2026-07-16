@@ -23,7 +23,7 @@ def _get_local_role() -> str:
         return "FOLLOWER"
 
 
-@shared_task(name="apps.deployments.tasks_election.heartbeat_task")
+@shared_task(name="apps.deployments.tasks_election.heartbeat_task", soft_time_limit=30, time_limit=45)
 def heartbeat_task():
     """
     Periodic task (every 5s):
@@ -60,7 +60,7 @@ def heartbeat_task():
                 logger.error(f"Leader timeout check failed: {e}")
 
 
-@shared_task(name="apps.deployments.tasks_election.cleanup_heartbeat_logs_task")
+@shared_task(name="apps.deployments.tasks_election.cleanup_heartbeat_logs_task", soft_time_limit=60, time_limit=90)
 def cleanup_heartbeat_logs_task():
     """
     Scheduled task (every 10 minutes): Clean up old heartbeat logs.
@@ -80,7 +80,7 @@ def cleanup_heartbeat_logs_task():
             logger.error(f"Heartbeat cleanup failed for mesh {mesh.name}: {e}")
 
 
-@shared_task(name="apps.deployments.tasks_election.force_election_task")
+@shared_task(name="apps.deployments.tasks_election.force_election_task", soft_time_limit=30, time_limit=45)
 def force_election_task(mesh_id: str | None = None):
     """
     Force a new election (admin action).

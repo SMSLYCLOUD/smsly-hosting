@@ -9,6 +9,7 @@ Replaces the three independent metric paths previously used by:
 All callers go through ``MetricsCollector.collect(service)`` and get the
 same dict shape regardless of backend.
 """
+import http.client
 import json
 import logging
 import os
@@ -95,9 +96,9 @@ class MetricsCollector:
     def _from_prometheus(self) -> MetricsSnapshot:
         label = f'service_name="{self.service_name}"'
         queries = {
-            'cpu_percent': f'avg(rate(docker_container_cpu_usage_seconds_total{{{label}}}[5m])) * 100',
-            'memory_mb': f'docker_container_memory_usage_bytes{{{label}}} / 1024 / 1024',
-            'memory_trend': f'deriv(docker_container_memory_usage_bytes{{{label}}}[15m]) / 1024 / 1024',
+            'cpu_percent': f'max(rate(docker_container_cpu_usage_seconds_total{{{label}}}[5m]) * 100)',
+            'memory_mb': f'max(docker_container_memory_usage_bytes{{{label}}} / 1024 / 1024)',
+            'memory_trend': f'max(deriv(docker_container_memory_usage_bytes{{{label}}}[15m]) / 1024 / 1024)',
         }
         out: dict = {}
         for key, query in queries.items():
@@ -147,18 +148,15 @@ class MetricsCollector:
         if not os.path.exists('/var/run/docker.sock'):
             return MetricsSnapshot(source='docker')
         try:
-            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)  # type: ignore[attr-defined]  # Unix-only socket family; not exposed on Windows where this fallback never runs.
+            conn = http.client.HTTPConnection('localhost', timeout=10)
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             sock.settimeout(10)
             sock.connect('/var/run/docker.sock')
-            sock.sendall(b"GET /containers/json?all=true HTTP/1.0\r\nHost: localhost\r\n\r\n")
-            data = b""
-            while True:
-                chunk = sock.recv(4096)
-                if not chunk:
-                    break
-                data += chunk
-            sock.close()
-            containers = json.loads(data.split(b"\r\n\r\n", 1)[1])
+            conn.sock = sock
+            conn.request('GET', '/containers/json?all=true')
+            resp = conn.getresponse()
+            containers = json.loads(resp.read())
+            conn.close()
 
             for c in containers:
                 labels = c.get('Labels', {}) or {}
@@ -168,20 +166,15 @@ class MetricsCollector:
                 if self.service_name not in (canonical, compose_svc):
                     continue
 
-                sock2 = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)  # type: ignore[attr-defined]  # Unix-only socket family; not exposed on Windows.
+                conn2 = http.client.HTTPConnection('localhost', timeout=10)
+                sock2 = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
                 sock2.settimeout(10)
                 sock2.connect('/var/run/docker.sock')
-                sock2.sendall(
-                    f"GET /containers/{cid}/stats?stream=false HTTP/1.0\r\nHost: localhost\r\n\r\n".encode()
-                )
-                sdata = b""
-                while True:
-                    chunk = sock2.recv(4096)
-                    if not chunk:
-                        break
-                    sdata += chunk
-                sock2.close()
-                stats = json.loads(sdata.split(b"\r\n\r\n", 1)[1])
+                conn2.sock = sock2
+                conn2.request('GET', f'/containers/{cid}/stats?stream=false')
+                resp2 = conn2.getresponse()
+                stats = json.loads(resp2.read())
+                conn2.close()
 
                 cpu = stats.get('cpu_stats', {})
                 precpu = stats.get('precpu_stats', {})

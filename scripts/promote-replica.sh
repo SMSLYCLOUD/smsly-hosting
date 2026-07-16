@@ -51,7 +51,7 @@ echo ""
 echo -e "${BLUE}→ Step 1: Checking primary status...${NC}"
 
 PRIMARY_UP=false
-if docker exec "$PRIMARY_CONTAINER" pg_isready -U smsly_admin >/dev/null 2>&1; then
+if timeout 10 docker exec "$PRIMARY_CONTAINER" pg_isready -U smsly_admin >/dev/null 2>&1; then
     PRIMARY_UP=true
 fi
 
@@ -82,7 +82,7 @@ if ! docker ps --format '{{.Names}}' | grep -qx "$REPLICA_CONTAINER"; then
     exit 1
 fi
 
-IN_RECOVERY=$(docker exec "$REPLICA_CONTAINER" \
+IN_RECOVERY=$(timeout 10 docker exec "$REPLICA_CONTAINER" \
     psql -U smsly_admin -d smsly_hosting -t -A \
     -c "SELECT pg_is_in_recovery();" 2>/dev/null || echo "")
 
@@ -97,7 +97,7 @@ echo -e "${GREEN}  ✓ Replica is in recovery (standby mode)${NC}"
 echo ""
 echo -e "${BLUE}→ Step 3: Checking replication lag...${NC}"
 
-LAG=$(docker exec "$REPLICA_CONTAINER" \
+LAG=$(timeout 10 docker exec "$REPLICA_CONTAINER" \
     psql -U smsly_admin -d smsly_hosting -t -A \
     -c "SELECT CASE WHEN pg_last_wal_receive_lsn() = pg_last_wal_replay_lsn() THEN 0 ELSE EXTRACT(EPOCH FROM now() - pg_last_xact_replay_timestamp())::int END;" \
     2>/dev/null || echo "unknown")
@@ -113,21 +113,41 @@ if [ "$LAG" != "unknown" ] && [ "$LAG" -gt 60 ]; then
     fi
 fi
 
-# ── Step 4: Promote the replica ──────────────────────────────────────────────
+# ── Step 4: Drain connections from old primary ──────────────────────────
 echo ""
-echo -e "${BLUE}→ Step 4: Promoting replica to primary...${NC}"
+echo -e "${BLUE}→ Step 4: Draining connections from old primary...${NC}"
+
+if [ "$DRY_RUN" = true ]; then
+    echo -e "${YELLOW}  [DRY RUN] Would drain connections and promote${NC}"
+else
+    if docker ps --format '{{.Names}}' | grep -q "^${PRIMARY_CONTAINER}$"; then
+        echo -e "  Terminating active connections on ${PRIMARY_CONTAINER}..."
+        timeout 30 docker exec "$PRIMARY_CONTAINER" \
+            psql -U smsly_admin -d smsly_hosting \
+            -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND state = 'active';" \
+            2>/dev/null || true
+        sleep 2
+        echo -e "${GREEN}  ✓ Connections drained from old primary${NC}"
+    else
+        echo -e "  Old primary not running — skipping drain"
+    fi
+fi
+
+# ── Step 5: Promote the replica ──────────────────────────────────────────────
+echo ""
+echo -e "${BLUE}→ Step 5: Promoting replica to primary...${NC}"
 
 if [ "$DRY_RUN" = true ]; then
     echo -e "${YELLOW}  [DRY RUN] Would run: SELECT pg_promote();${NC}"
 else
-    docker exec "$REPLICA_CONTAINER" \
-        psql -U smsly_admin -d smsly_hosting -c "SELECT pg_promote();" 2>/dev/null
+    timeout 10 docker exec "$REPLICA_CONTAINER" \
+        psql -U smsly_admin -d smsly_hosting -c "SELECT pg_promote();" 2>/dev/null || true
 
     # Wait for promotion to complete
     echo -n "  Waiting for promotion"
     for i in $(seq 1 30); do
         sleep 1
-        IS_PRIMARY=$(docker exec "$REPLICA_CONTAINER" \
+        IS_PRIMARY=$(timeout 10 docker exec "$REPLICA_CONTAINER" \
             psql -U smsly_admin -d smsly_hosting -t -A \
             -c "SELECT pg_is_in_recovery();" 2>/dev/null || echo "")
         if [ "$IS_PRIMARY" = "f" ]; then
@@ -146,9 +166,9 @@ else
     fi
 fi
 
-# ── Step 5: Update pgcat to point to the new primary ─────────────────────────
+# ── Step 6: Update pgcat to point to the new primary ─────────────────────────
 echo ""
-echo -e "${BLUE}→ Step 5: Updating pgcat config...${NC}"
+echo -e "${BLUE}→ Step 6: Updating pgcat config...${NC}"
 
 # The new primary is now the replica container (smsly-postgres-replica)
 # But pgcat needs to connect to it as the primary
@@ -162,12 +182,12 @@ if [ "$DRY_RUN" = true ]; then
 else
     # Build new DB_REPLICA_HOSTS (empty — no replicas after failover)
     # The old primary is down, so we remove it from the replica list
-    docker exec "$PGCAT_CONTAINER" \
+    timeout 30 docker exec "$PGCAT_CONTAINER" \
         python3 /scripts/render_pgcat_config.py /etc/pgcat/pgcat.toml 2>/dev/null || true
 
     # The render script reads DB_HOST from env, which is postgres-primary
     # We need to override it to point to the new primary
-    docker exec -e "DB_HOST=${NEW_PRIMARY_HOST}" "$PGCAT_CONTAINER" \
+    timeout 30 docker exec -e "DB_HOST=${NEW_PRIMARY_HOST}" "$PGCAT_CONTAINER" \
         python3 /scripts/render_pgcat_config.py /etc/pgcat/pgcat.toml 2>/dev/null || true
 
     # Reload pgcat
@@ -177,7 +197,7 @@ else
     echo -e "${GREEN}  ✓ PgCat config updated and reloaded${NC}"
 fi
 
-# ── Step 6: Summary ─────────────────────────────────────────────────────────
+# ── Step 7: Summary ─────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}═══ Failover complete ═══${NC}"
 echo ""

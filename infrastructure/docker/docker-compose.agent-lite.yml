@@ -230,7 +230,6 @@ services:
     command:
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
-      - --providers.docker.network=smsly-net
       - --providers.docker.endpoint=tcp://socket-proxy:2375
       - --entrypoints.web.address=:80
       - --ping=true

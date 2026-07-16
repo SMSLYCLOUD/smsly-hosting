@@ -15,6 +15,7 @@ services:
       REPLICATION_PASSWORD: ${REPLICATION_PASSWORD:?REPLICATION_PASSWORD must be set in .env}
     volumes:
       - postgres-primary-data:/var/lib/postgresql/data
+      - postgres-archive:/var/lib/postgresql/archive
       - ./infrastructure/docker/postgres/init-primary.sh:/docker-entrypoint-initdb.d/init-primary.sh:ro
     command: >
       postgres
@@ -27,7 +28,7 @@ services:
       -c max_slot_wal_keep_size=${PG_MAX_SLOT_WAL_KEEP_SIZE:-5GB}
       -c wal_sender_timeout=60s
       -c synchronous_commit=${PG_SYNCHRONOUS_COMMIT:-on}
-      -c synchronous_standby_names=${PG_SYNCHRONOUS_STANDBY_NAMES:-}
+      -c synchronous_standby_names=${PG_SYNCHRONOUS_STANDBY_NAMES:-'*'}
       -c archive_mode=on
       -c archive_command='mkdir -p /var/lib/postgresql/archive && cp %p /var/lib/postgresql/archive/%f'
       -c max_connections=${DB_MAX_CONNECTIONS:-200}
@@ -69,6 +70,7 @@ services:
       PGPASSWORD: ${REPLICATION_PASSWORD:-}
     volumes:
       - postgres-replica-data:/var/lib/postgresql/data
+      - postgres-archive:/var/lib/postgresql/archive
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -833,7 +835,9 @@ services:
       COMMIT: 1
       EXEC: 1
       POST: 1
-      DELETE: 0
+      AUTH: 1
+      PUT: 1
+      DELETE: 1
     volumes:
     - /var/run/docker.sock:/var/run/docker.sock:ro,z
     healthcheck:
@@ -853,6 +857,34 @@ services:
       resources:
         limits:
           memory: ${SOCKET_PROXY_MEMORY_LIMIT:-256M}
+  traefik-socket-proxy:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
+    image: tecnativa/docker-socket-proxy:0.1.2
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      NETWORKS: 1
+      INFO: 1
+      VERSION: 1
+      AUTH: 1
+    volumes:
+    - /var/run/docker.sock:/var/run/docker.sock:ro,z
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2375/version || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    labels:
+    - managed_by=smsly-hosting
+    networks:
+    - traefik-proxy-net
+    deploy:
+      resources:
+        limits:
+          memory: ${TRAEFIK_SOCKET_PROXY_MEMORY_LIMIT:-128M}
   route-fallback:
     security_opt:
       - no-new-privileges:true
@@ -926,9 +958,8 @@ services:
     command:
     - --providers.docker=true
     - --providers.docker.exposedbydefault=false
-    - --providers.docker.network=smsly-net
-    - --providers.docker.endpoint=tcp://socket-proxy:2375
-    - --providers.docker.httpClientTimeout=300s
+    - --providers.docker.endpoint=tcp://traefik-socket-proxy:2375
+    - --providers.docker.httpClientTimeout=30s
     - --entrypoints.web.address=:80
     - --entrypoints.web.forwardedHeaders.trustedIPs=127.0.0.1/32,172.16.0.0/12,10.0.0.0/8
     - --entrypoints.websecure.address=:443
@@ -970,7 +1001,7 @@ services:
     - letsencrypt_data:/letsencrypt
     - traefik_logs:/var/log/traefik
     depends_on:
-      socket-proxy:
+      traefik-socket-proxy:
         condition: service_healthy
       crowdsec:
         condition: service_healthy
@@ -988,10 +1019,10 @@ services:
     - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.crowdsecMode=live"
     - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.crowdsecLapiScheme=http"
     - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.crowdsecLapiHost=crowdsec:8080"
-    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.crowdsecLapiKey=$${CROWDSEC_BOUNCER_KEY:-}"
+    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.crowdsecLapiKey=${CROWDSEC_BOUNCER_KEY:-}"
     networks:
     - smsly-net
-    - socket-proxy
+    - traefik-proxy-net
     deploy:
       resources:
         limits:
@@ -1145,11 +1176,15 @@ networks:
   socket-proxy:
     driver: bridge
     internal: true
+  traefik-proxy-net:
+    driver: bridge
+    internal: true
   smsly-proxy:
     external: true
 volumes:
   postgres-primary-data:
   postgres-replica-data:
+  postgres-archive:
   redis-primary-data:
   redis-replica-data:
   registry_data: null

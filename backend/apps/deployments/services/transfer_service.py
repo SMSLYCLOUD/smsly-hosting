@@ -638,7 +638,10 @@ class ServerTransferService:
         # Remap env vars for the target platform
         self._remap_target_platform_env()
 
-        # Generate and send deploy command via REST
+        # Resolve scoped network for this service
+        from ..models_network_scope import ScopedNetwork
+        scoped_net = ScopedNetwork.resolve_network_name(self.transfer.service.project) if self.transfer.service.project else 'smsly-net'
+
         self._update(90, 'Starting service container on target...')
         env_vars = metadata.get('env_vars', [])
         env_dict = {e['key']: e['value'] for e in env_vars}
@@ -647,7 +650,7 @@ class ServerTransferService:
         domain = self.transfer.service.public_domain
         labels = {
             'traefik.enable': 'true',
-            'traefik.docker.network': 'smsly-net',
+            'traefik.docker.network': scoped_net,
             f'traefik.http.routers.{name}.rule': f'Host(`{domain}`)',
             f'traefik.http.routers.{name}.service': name,
             f'traefik.http.services.{name}.loadbalancer.server.port': str(port),
@@ -659,7 +662,7 @@ class ServerTransferService:
             'container_name': name,
             'env': env_dict,
             'labels': labels,
-            'network': 'smsly-net',
+            'network': scoped_net,
         })
         self._seed_target_deployment_record(metadata)
 
@@ -675,7 +678,10 @@ class ServerTransferService:
             self._update(75, 'Pulling service image on lite agent...')
             self._node_api_request('incoming/pull-image', body={'image': image})
 
-        # Start service container via REST
+        # Resolve scoped network for this service
+        from ..models_network_scope import ScopedNetwork
+        scoped_net = ScopedNetwork.resolve_network_name(self.transfer.service.project) if self.transfer.service.project else 'smsly-net'
+
         self._update(90, 'Starting service container on lite agent...')
         env_vars = metadata.get('env_vars', [])
         env_dict = {e['key']: e['value'] for e in env_vars}
@@ -684,7 +690,7 @@ class ServerTransferService:
         domain = self.transfer.service.public_domain
         labels = {
             'traefik.enable': 'true',
-            'traefik.docker.network': 'smsly-net',
+            'traefik.docker.network': scoped_net,
             f'traefik.http.routers.{name}.rule': f'Host(`{domain}`)',
             f'traefik.http.routers.{name}.service': name,
             f'traefik.http.services.{name}.loadbalancer.server.port': str(port),
@@ -696,7 +702,7 @@ class ServerTransferService:
             'container_name': name,
             'env': env_dict,
             'labels': labels,
-            'network': 'smsly-net',
+            'network': scoped_net,
         })
 
     def _exec_on_target(self, script, container='backend', timeout=120):
@@ -2187,10 +2193,21 @@ if __name__ == '__main__':
 
         config = PlatformConfig.load()
 
+        # Resolve scoped network for this service
+        from ..models_network_scope import ScopedNetwork
+        net = ScopedNetwork.resolve_network_name(service.project) if service.project else 'smsly-net'
+
         # Build command parts safely
         run_args = ["docker", "run", "-d", "--name", name, "--restart", "unless-stopped"]
-
-        net = "smsly-net"
+        run_args.extend([
+            "--security-opt", "no-new-privileges:true",
+            "--cap-drop=ALL",
+            "--cap-add=NET_BIND_SERVICE",
+            "--cap-add=CHOWN",
+            "--cap-add=SETUID",
+            "--cap-add=SETGID",
+            "--pids-limit", "1024",
+        ])
         run_args.extend(["--network", net])
 
         env_vars = metadata.get('env_vars', [])
@@ -2246,9 +2263,23 @@ if __name__ == '__main__':
         safe_run = " ".join(shlex.quote(arg) for arg in run_args)
 
         safe_net = shlex.quote(net)
+        safe_br = shlex.quote(f"br-$(docker network inspect {safe_net} --format '{{{{.Id}}}}' 2>/dev/null | head -c 12)")
         net_cmd = (
             f"docker network inspect {safe_net} >/dev/null 2>&1 "
-            f"|| docker network create {safe_net} >/dev/null"
+            f"|| docker network create {safe_net} >/dev/null; "
+            # Apply egress restrictions: isolate from other user bridges
+            f"BR=$(docker network inspect {safe_net} --format '{{{{.Id}}}}' 2>/dev/null | tr -d '-' | head -c 12); "
+            f"if [ -n \"$BR\" ] && ! iptables -C DOCKER-USER -i br-$BR -o br-+ -j DROP 2>/dev/null; then "
+            f"iptables -I DOCKER-USER -i br-$BR -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN; "
+            f"iptables -I DOCKER-USER -i br-$BR -o br-$BR -j RETURN; "
+            f"iptables -I DOCKER-USER -i br-$BR -o eth+ -j RETURN; "
+            f"iptables -I DOCKER-USER -i br-$BR -o enp+ -j RETURN; "
+            f"iptables -I DOCKER-USER -i br-$BR -o wl+ -j RETURN; "
+            f"iptables -I DOCKER-USER -i br-$BR -d 169.254.169.254/32 -j DROP; "
+            f"iptables -I DOCKER-USER -i br-$BR -p udp --dport 53 -j RETURN; "
+            f"iptables -I DOCKER-USER -i br-$BR -o br-+ -j DROP; "
+            f"iptables -I DOCKER-USER -i br-$BR -j DROP; "
+            f"fi"
         )
         rm_cmd = f"docker rm -f {shlex.quote(name)} || true"
 

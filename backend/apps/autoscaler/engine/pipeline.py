@@ -17,7 +17,9 @@ It is the only function any of the three legacy entry points need to
 call. All three are kept as thin wrappers for backward compatibility.
 """
 import logging
+import os
 
+from django.core.cache import cache as django_cache
 from django.utils import timezone
 
 from .decision import DecisionEngine, Recommendation
@@ -25,6 +27,33 @@ from .metrics import MetricsCollector
 from .reconciler import Reconciler, ScaleResult
 
 logger = logging.getLogger(__name__)
+
+# Circuit breaker: when all metric sources fail consecutively this many
+# times, the pipeline switches to "metrics starvation" mode and refuses
+# to scale down until at least one successful metric read.
+_METRICS_STARVATION_LIMIT = int(os.environ.get("SCALE_METRICS_STARVATION_LIMIT", "3"))
+
+
+def _starvation_key(service_id: str) -> str:
+    return f"autoscale_metrics_starved:{service_id}"
+
+
+def _check_starvation(service_id: str) -> bool:
+    """Return True if the service is in metrics-starvation mode."""
+    count = django_cache.get(_starvation_key(service_id)) or 0
+    return count >= _METRICS_STARVATION_LIMIT
+
+
+def _record_metrics_outage(service_id: str):
+    """Increment the consecutive-outage counter."""
+    key = _starvation_key(service_id)
+    count = django_cache.get(key) or 0
+    django_cache.set(key, count + 1, timeout=300)  # 5 min TTL
+
+
+def _clear_starvation(service_id: str):
+    """Reset the counter after a successful metric read."""
+    django_cache.delete(_starvation_key(service_id))
 
 
 def analyze_and_apply(service, *, now=None, min_interval_seconds: int = 0) -> ScaleResult:
@@ -39,8 +68,6 @@ def analyze_and_apply(service, *, now=None, min_interval_seconds: int = 0) -> Sc
     passes 120 so the slower 3-min sweep always wins for services
     that qualify for both.
     """
-    from django.core.cache import cache as django_cache
-
     from apps.deployments.models_core import Service
 
     now = now or timezone.now()
@@ -67,6 +94,20 @@ def analyze_and_apply(service, *, now=None, min_interval_seconds: int = 0) -> Sc
 
     # 1. Metrics
     metrics = MetricsCollector(service).collect()
+
+    # Circuit breaker: if all metric sources fail, track consecutive
+    # outages. Once the limit is reached, refuse to scale down (the
+    # DecisionEngine will see cpu_percent=None and return 'none').
+    if metrics.cpu_percent is None:
+        _record_metrics_outage(str(service.id))
+        if _check_starvation(str(service.id)):
+            logger.warning(
+                "Metrics starvation for %s (%d+ consecutive outages) — "
+                "scaling decisions deferred.",
+                service.name, _METRICS_STARVATION_LIMIT,
+            )
+    else:
+        _clear_starvation(str(service.id))
 
     # 2. Running replicas + last spawn for cooldown
     from apps.deployments.models_replica import ServiceReplica

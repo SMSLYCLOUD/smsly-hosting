@@ -8,7 +8,9 @@ from apps.intelligence.providers import _cached_ask
 
 logger = logging.getLogger(__name__)
 
-# Vars managed by platform addon provisioning — AI Senate must NOT fill these.
+# Vars managed by platform — AI Senate must NOT fill these.
+# Includes addon-provisioned vars (DB, Redis, S3) and domain vars
+# (ALLOWED_HOSTS, PUBLIC_DOMAIN) that are resolved at deploy time.
 _PLATFORM_MANAGED_VARS = frozenset({
     "DATABASE_URL", "POSTGRES_URL", "DB_URL", "DB_URI",
     "SQLALCHEMY_DATABASE_URI", "SQLALCHEMY_DATABASE_URL",
@@ -20,6 +22,12 @@ _PLATFORM_MANAGED_VARS = frozenset({
     "DB_HOST", "DB_PORT", "DB_USER", "DB_NAME", "DB_PASSWORD",
     "SQL_HOST", "POSTGRES_HOST", "POSTGRES_PORT", "POSTGRES_USER",
     "POSTGRES_DB", "POSTGRES_PASSWORD",
+    # Domain-aware — resolved at deploy time from service.public_domain
+    "PUBLIC_DOMAIN", "ALLOWED_HOSTS", "DJANGO_ALLOWED_HOSTS",
+    "MARKETER_ALLOWED_HOSTS", "API_INTERNAL_URL",
+    # Platform URLs — resolved by ecosystem linker at deploy time
+    "SMSLY_BACKEND_URL", "BACKEND_URL",
+    "IDENTITY_SERVICE_URL", "PLATFORM_API_URL",
 })
 
 class EnvironmentIntelligenceService:
@@ -29,23 +37,20 @@ class EnvironmentIntelligenceService:
     """
 
     SYSTEM_PROMPT = (
-        "You are the SMSLY AI Senate Committee. Your mission is to provide a 100% complete, "
-        "production-ready environment configuration. \n"
+        "You are the SMSLY AI Senate Committee. Your mission is to suggest production-safe "
+        "values for the environment variables listed in the request only.\n"
         "RULES:\n"
-        "1. EXHAUSTIVENESS: Every variable detected must have a value. Never return null or empty.\n"
+        "1. NEVER invent new variables — only fill the ones listed below. Skip anything you cannot determine.\n"
         "2. SECRETS: Use 'GENERATE' for keys/tokens/passwords. We will generate high-entropy hex strings.\n"
-        "3. LINKING: Use internal service names (e.g., http://service-name:PORT) for cross-service dependencies.\n"
+        "3. LINKING: Use internal service names (e.g., http://service-name:PORT) for cross-service URLs.\n"
         "4. NEVER set PORT — the platform manages it.\n"
-        "5. STACK AWARENESS:\n"
-        "   - For Next.js/Nuxt/frontend: only set NEXT_PUBLIC_*, NODE_ENV, and framework vars.\n"
-        "     Do NOT set Django vars (ALLOWED_HOSTS, DJANGO_*, SECRET_KEY, ADMIN_EMAIL, etc.).\n"
-        "   - For Django/Python: set Django-specific vars.\n"
-        "   - For Node.js APIs: set NODE_ENV, HOSTNAME, framework vars.\n"
-        "6. CATEGORIES:\n"
-        "   - SECRET: JWT_SECRET, API_KEY, etc.\n"
-        "   - SERVICE_URL: db, redis, rabbitmq, and sibling microservices.\n"
-        "   - CONFIG_FLAG: DEBUG=False, ENVIRONMENT=production.\n"
-        "Return valid JSON only."
+        "5. STACK AWARENESS: Only set vars appropriate for the detected stack.\n"
+        "6. USE PROPER JSON TYPES:\n"
+        "   - Numbers: write 8000 not \"8000\"\n"
+        "   - Booleans: write true/false not \"true\"/\"false\"\n"
+        "   - Strings: only use quotes for actual string values\n"
+        "7. If you cannot determine a proper value, omit the variable entirely (return null for that key).\n"
+        "Return valid JSON only, containing ONLY the variables listed in the request."
     )
 
     @classmethod
@@ -128,21 +133,26 @@ class EnvironmentIntelligenceService:
                 if any(p in var_upper for p in _CONFIG_PATTERNS):
                     final_env[var] = str(val)
                     continue
-                # Expanded secret detection list: includes SALT, HEADER_VALUE, and specific POLICY tokens
-                is_secret = val == "GENERATE" or any(k in var_upper for k in [
-                    "SECRET", "KEY", "TOKEN", "PASSWORD", "HASH", "SALT",
-                    "HEADER_VALUE", "SIGNATURE", "AUTH"
-                ])
-
-                if is_secret:
-                    if "ENCRYPTION_KEY" in var_upper:
-                        # Fernet requires 32 url-safe base64-encoded bytes
-                        import base64
-                        final_env[var] = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode('utf-8')
+                # Only generate secrets when AI explicitly says "GENERATE".
+                # If AI returned a real value, trust it even if the var name
+                # matches secret patterns — the AI knew what it was doing.
+                if val == "GENERATE":
+                    # Only actually generate a secret if the var name
+                    # clearly indicates it's a secret. If the AI marked
+                    # something non-secret as GENERATE, leave it empty.
+                    if any(k in var_upper for k in ["SECRET", "KEY", "TOKEN", "PASSWORD", "SALT"]):
+                        if "ENCRYPTION_KEY" in var_upper:
+                            import base64
+                            final_env[var] = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode('utf-8')
+                        else:
+                            final_env[var] = secrets.token_hex(32)
                     else:
-                        # High-entropy hex for standard secrets
-                        final_env[var] = secrets.token_hex(32)
-                elif "URL" in var_upper or "HOST" in var_upper:
+                        # AI's GENERATE on a non-secret var — don't fill
+                        continue
+                    continue
+
+                # AI provided a value — trust it.
+                if "URL" in var_upper or "HOST" in var_upper:
                     # Sanitize URL suggestions to be internal-first
                     if "localhost" in str(val) or "127.0.0.1" in str(val):
                         final_env[var] = str(val).replace("localhost", service_name).replace("127.0.0.1", service_name)
@@ -155,21 +165,17 @@ class EnvironmentIntelligenceService:
 
         except Exception as e:
             logger.error("AI Senate failed to resolve environment for %s: %s", service_name, e)
-            _CONFIG_PATTERNS_FB = {
-                "TTL", "TIMEOUT", "SECONDS", "DAYS", "HOURS", "MINUTES",
-                "MAX_", "MIN_", "LIMIT", "COUNT", "COOLDOWN",
-                "CACHE_TTL", "ROTATION_", "INTERVAL", "RETRIES", "SIZE",
-            }
             fallback = {}
             import base64
             for var in env_context:
                 var_upper = var.upper()
-                # Skip PORT entirely — platform manages it
-                if "PORT" in var_upper:
+                if var_upper in _PLATFORM_MANAGED_VARS:
                     continue
-                if any(p in var_upper for p in _CONFIG_PATTERNS_FB):
-                    fallback[var] = "8000"
-                elif any(k in var_upper for k in ["SECRET", "KEY", "TOKEN", "PASSWORD", "SALT"]):
+                if var_upper == "PORT" or var_upper.endswith("_PORT"):
+                    continue
+                # Only generate secrets for clearly secret-named vars.
+                # Everything else is left empty — the user must fill it.
+                if any(k in var_upper for k in ["SECRET", "KEY", "TOKEN", "PASSWORD", "SALT"]):
                     if "ENCRYPTION_KEY" in var_upper:
                         fallback[var] = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode('utf-8')
                     else:
@@ -225,13 +231,19 @@ class EnvironmentIntelligenceService:
                     final_env = {}
                     for var, val in suggestions.items():
                         var_u = var.upper()
-                        # Skip PORT entirely — platform manages it
                         if var_u == "PORT" or var_u.endswith("_PORT"):
+                            continue
+                        if var_u in _PLATFORM_MANAGED_VARS:
                             continue
                         if any(p in var_u for p in _CONFIG_ECO):
                             final_env[var] = str(val)
-                        elif val == "GENERATE" or any(k in var.upper() for k in ["SECRET", "KEY", "TOKEN"]):
-                            final_env[var] = secrets.token_hex(32)
+                        elif val == "GENERATE":
+                            if any(k in var_u for k in ["SECRET", "KEY", "TOKEN", "PASSWORD", "SALT"]):
+                                if "ENCRYPTION_KEY" in var_u:
+                                    import base64
+                                    final_env[var] = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode('utf-8')
+                                else:
+                                    final_env[var] = secrets.token_hex(32)
                         else:
                             final_env[var] = str(val)
                     svc['env_vars'] = final_env
@@ -300,17 +312,48 @@ class EnvironmentIntelligenceService:
 
         suggestions = cls.resolve_environment(env_context, stack, service_name)
 
+        # Only accept suggestions for vars that were detected from the user's
+        # code or already exist on the service with placeholder values.
+        # AI-invented keys are discarded — the user didn't ask for them.
+        known_keys = set(env_context.keys())
+        for ev in service.env_vars.all():
+            known_keys.add(ev.key)
+
         injected = []
         for key, val in suggestions.items():
+            if key not in known_keys:
+                logger.info(
+                    "Senate suggested env var '%s' for %s but it was not in the "
+                    "user's detected vars — discarding (AI hallucination).",
+                    key, service_name,
+                )
+                continue
             if not re.match(r'^[A-Za-z0-9_][A-Za-z0-9_.-]*$', key):
                 logger.warning("Skipping invalid env var key from AI: %s", key)
                 continue
+            # Validate the AI suggestion — if it's itself a placeholder,
+            # don't write it to the database.
+            if _needs_real_value(str(val)):
+                logger.info(
+                    "Senate returned placeholder value '%s' for '%s' on %s — discarding instead of writing.",
+                    val, key, service_name,
+                )
+                # If the var looks like a secret, generate one instead.
+                if any(k in key.upper() for k in ["SECRET", "KEY", "TOKEN", "PASSWORD", "SALT"]):
+                    if "ENCRYPTION_KEY" in key.upper():
+                        import base64
+                        val = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode('utf-8')
+                    else:
+                        val = secrets.token_hex(32)
+                else:
+                    continue  # skip entirely — can't provide a real value
+
             ev, created = EnvironmentVariable.objects.get_or_create(
                 service=service,
                 key=key,
                 defaults={
                     'value': val,
-                    'is_secret': any(k in key.upper() for k in ["SECRET", "KEY", "TOKEN", "PASSWORD"]),
+                    'is_secret': any(k in key.upper() for k in ["SECRET", "KEY", "TOKEN", "PASSWORD", "SALT"]),
                     'source': 'SYSTEM'
                 }
             )
@@ -319,13 +362,11 @@ class EnvironmentIntelligenceService:
                 if getattr(ev, 'is_locked', False):
                     continue
 
-                val_str = str(ev.value or "").strip()
-                if _needs_real_value(val_str):
+                existing_val = str(ev.value or "").strip()
+                if _needs_real_value(existing_val):
                     ev.value = val
                     ev.save()
                     injected.append(key)
-            else:
-                injected.append(key)
 
         return suggestions, injected
 

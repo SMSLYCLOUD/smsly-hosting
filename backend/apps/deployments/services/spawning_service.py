@@ -43,21 +43,6 @@ def _scoped_network_for(service) -> str:
     return net_name
 
 
-def _connect_to_traefik_network(container_id: str) -> None:
-    """Connect a container to the shared smsly-net so Traefik can route to it."""
-    import docker
-    try:
-        client = docker.from_env()
-        traefik_net = client.networks.get("smsly-net")
-        try:
-            traefik_net.connect(container_id)
-        except docker.errors.APIError:
-            pass  # already connected
-    except docker.errors.NotFound:
-        logger.debug("smsly-net not found — Traefik routing will not be available")
-    except Exception:
-        logger.exception("Failed to connect container to Traefik network")
-
 
 def _detect_remote_runtime(ssh) -> str | None:
     """Detect sandboxed container runtime on a remote node via SSH.
@@ -68,6 +53,7 @@ def _detect_remote_runtime(ssh) -> str | None:
         out, _, _ = ssh.exec_command(
             "docker info --format '{{json .Runtimes}}'",
             raise_on_error=False,
+            timeout=300,
         )
         runtimes = json.loads(out.strip() or "{}")
         if "kata-runtime" in runtimes:
@@ -125,13 +111,12 @@ class SpawningService:
         domain = service.public_domain or f"{name}.localhost"
         scoped_net = _scoped_network_for(service)
         net = scoped_net  # primary network — isolate from other services
-        traefik_net = "smsly-net"  # secondary — for Traefik auto-discovery
         router = name.replace('.', '-').replace('_', '-')
 
-        # Traefik labels — point Traefik at the smsly-net interface
+        # Traefik labels — point Traefik at the scoped bridge for routing
         labels = [
             "traefik.enable=true",
-            f"traefik.docker.network={traefik_net}",
+            f"traefik.docker.network={net}",
             f"traefik.http.routers.{router}.rule=Host(`{domain}`)",
             f"traefik.http.routers.{router}.entrypoints=web",
             f"traefik.http.services.{router}.loadbalancer.server.port={port}",
@@ -208,11 +193,9 @@ class SpawningService:
             f"--restart unless-stopped --network {shlex.quote(net)} "
             f"{label_args} {env_args} "
             f"{shlex.quote(image)}; "
-            # Connect to Traefik network for public routing (secondary network)
-            f"docker network connect {shlex.quote(traefik_net)} {shlex.quote(name)} 2>/dev/null; "
         )
 
-        _out, err, exit_code = ssh.exec_command(cmd, raise_on_error=False)
+        _out, err, exit_code = ssh.exec_command(cmd, raise_on_error=False, timeout=300)
         if exit_code != 0:
             raise RuntimeError(f"Failed to spawn replica on {node.name}: {err}")
 
@@ -220,6 +203,7 @@ class SpawningService:
         cid_out, _, _ = ssh.exec_command(
             f"docker inspect --format='{{{{.Id}}}}' {shlex.quote(name)}",
             raise_on_error=False,
+            timeout=300,
         )
         replica.container_id = cid_out.strip()[:64]
         replica.container_name = name
@@ -246,6 +230,7 @@ class SpawningService:
             ssh.exec_command(
                 f"docker stop {name} 2>/dev/null; docker rm -f {name} 2>/dev/null",
                 raise_on_error=False,
+                timeout=300,
             )
         except Exception as exc:
             logger.warning("Failed to destroy replica %s: %s", replica.container_name, exc)
@@ -282,12 +267,11 @@ class SpawningService:
         domain = service.public_domain or f"{name}.localhost"
         scoped_net = _scoped_network_for(service)
         net = scoped_net
-        traefik_net = "smsly-net"
         router = name.replace('.', '-').replace('_', '-')
 
         labels = {
             "traefik.enable": "true",
-            "traefik.docker.network": traefik_net,
+            "traefik.docker.network": net,
             f"traefik.http.routers.{router}.rule": f"Host(`{domain}`)",
             f"traefik.http.routers.{router}.entrypoints": "web",
             f"traefik.http.services.{router}.loadbalancer.server.port": port,
@@ -331,7 +315,6 @@ class SpawningService:
             pids_limit=1024,
             runtime=runtime,
         )
-        _connect_to_traefik_network(container.id)
         replica.container_id = container.id[:64]
         replica.container_name = name
         replica.status = 'RUNNING'
@@ -365,6 +348,7 @@ class SpawningService:
             out, _, _ = ssh.exec_command(
                 "free -m | awk '/^Mem:/{print ($4+$7) \" \" $2}'",
                 raise_on_error=False,
+                timeout=300,
             )
             parts = out.strip().split()
             if len(parts) >= 2:

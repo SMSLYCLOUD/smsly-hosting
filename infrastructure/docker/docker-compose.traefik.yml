@@ -22,7 +22,6 @@ services:
       # Docker provider (direct socket mount)
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
-      - "--providers.docker.network=smsly-proxy"
       
       # Entrypoints (Caddy handles SSL, forwards to traefik:80)
       - "--entrypoints.web.address=:80"

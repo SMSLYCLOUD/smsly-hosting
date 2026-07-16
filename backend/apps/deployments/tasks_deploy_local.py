@@ -481,6 +481,14 @@ def _ensure_database_exists(base_url: str, db_name: str):
         from psycopg2 import sql
         from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
+        from urllib.parse import urlparse
+        parsed = urlparse(base_url)
+        if not parsed.hostname or parsed.hostname in ('localhost', '127.0.0.1', '0.0.0.0'):
+            db_host = os.environ.get('DB_HOST', os.environ.get('DATABASE_HOST', 'db'))
+            base_url = base_url.replace(f'@{parsed.hostname or ""}:', f'@{db_host}:')
+            if '@' not in base_url:
+                base_url = base_url.replace('://', f'://{db_host}:5432/', 1)
+
         conn = psycopg2.connect(base_url)
         conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
         with conn.cursor() as cur:

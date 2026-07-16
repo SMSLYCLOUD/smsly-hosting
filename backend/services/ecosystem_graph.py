@@ -157,7 +157,7 @@ def rewrite_database_url(base_url: str, db_name: str,
         # Replace path (database name)
         new_path = f"/{db_name}"
         # Optionally replace user/password
-        netloc = parsed.hostname or 'localhost'
+        netloc = parsed.hostname or os.environ.get('DB_HOST', os.environ.get('DATABASE_HOST', 'db'))
         port = parsed.port or 5432
         user = db_user or parsed.username or 'postgres'
         password = db_password or parsed.password or ''

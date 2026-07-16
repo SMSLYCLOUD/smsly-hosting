@@ -11,7 +11,7 @@ from celery import shared_task
 logger = logging.getLogger(__name__)
 
 
-@shared_task(bind=True, max_retries=3)
+@shared_task(bind=True, max_retries=3, soft_time_limit=1200, time_limit=1500)
 def provision_bundle_task(
     self,
     bundle_id: str,
@@ -146,7 +146,7 @@ def provision_bundle_task(
         raise self.retry(exc=exc, countdown=30)
 
 
-@shared_task(bind=True, max_retries=3)
+@shared_task(bind=True, max_retries=3, soft_time_limit=1200, time_limit=1500)
 def reprovision_bundle_task(
     self,
     bundle_id: str,
@@ -259,7 +259,7 @@ def reprovision_bundle_task(
         raise self.retry(exc=exc, countdown=30)
 
 
-@shared_task(bind=True, max_retries=3)
+@shared_task(bind=True, max_retries=3, soft_time_limit=600, time_limit=660)
 def deprovision_bundle_task(
     self,
     bundle_id: str,
@@ -319,7 +319,7 @@ def deprovision_bundle_task(
             raise self.retry(exc=exc, countdown=30)
 
 
-@shared_task(bind=True, max_retries=3)
+@shared_task(bind=True, max_retries=3, soft_time_limit=600, time_limit=660)
 def backup_bundle_component_task(
     self,
     component_id: str,
@@ -380,7 +380,7 @@ def backup_bundle_component_task(
         raise self.retry(exc=exc, countdown=30)
 
 
-@shared_task(bind=True, max_retries=3)
+@shared_task(bind=True, max_retries=3, soft_time_limit=600, time_limit=660)
 def restore_bundle_component_task(self, backup_id: str):
     """Restore a backup to a bundle component."""
     from services.bundle_provisioner import bundle_provisioner
@@ -414,7 +414,7 @@ def restore_bundle_component_task(self, backup_id: str):
             raise self.retry(exc=exc, countdown=30)
 
 
-@shared_task
+@shared_task(soft_time_limit=600, time_limit=660)
 def delete_bundle_task(bundle_id: str):
     """Full deletion of a bundle: deprovision + remove DB records."""
     from services.bundle_provisioner import bundle_provisioner

@@ -580,11 +580,49 @@ def _check_service_health(service, Deployment):
     _handle_failure(service, service_key, failure_reason)
 
 
+def _fetch_container_logs(service) -> str:
+    """Fetch container logs for a service. Returns empty string on failure."""
+    try:
+        import docker
+        from apps.deployments.models import Deployment as D
+        active = D.objects.filter(service=service, status=D.Status.ACTIVE).order_by("-created_at").first()
+        if not active or not active.container_id:
+            return ""
+        client = docker.from_env()
+        container = client.containers.get(active.container_id)
+        logs = container.logs(tail=200, stdout=True, stderr=True, timestamps=True)
+        return logs.decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+def _save_container_logs_to_deployment(service, exit_code=None):
+    """Save container runtime logs to the latest deployment's build_logs."""
+    try:
+        from apps.deployments.models import Deployment as D
+        latest = D.objects.filter(service=service).order_by("-created_at").first()
+        if not latest:
+            return
+        logs = _fetch_container_logs(service)
+        if logs:
+            latest.build_logs += (
+                f"\n--- Runtime Failure Logs (exit code: {exit_code}) ---\n"
+                f"{logs[-4000:]}\n"
+                f"--- End Failure Logs ---\n"
+            )
+            latest.save(update_fields=["build_logs", "updated_at"])
+    except Exception as exc:
+        logger.warning("Failed to save container logs to deployment: %s", exc)
+
+
 def _handle_failure(service, service_key: str, reason: str):
     """Handle failed health checks and trigger guarded auto-restart."""
     failure_key = _failure_key(service_key)
-    current_failures = int(cache.get(failure_key, 0) or 0) + 1
-    cache.set(failure_key, current_failures, timeout=STATE_TTL_SECONDS)
+    try:
+        current_failures = cache.incr(failure_key)
+    except ValueError:
+        current_failures = 1
+        cache.set(failure_key, current_failures, timeout=STATE_TTL_SECONDS)
 
     # Use fast retries if the container is dead (exited/crashed/not-found)
     # or in a restart loop (running but keeps crashing+restarting).
@@ -612,6 +650,10 @@ def _handle_failure(service, service_key: str, reason: str):
         return
 
     if service.health_status != "unhealthy":
+        # Capture and save container logs to deployment before transitioning
+        exit_code = (state_info or {}).get("exit_code") if state_info else None
+        _save_container_logs_to_deployment(service, exit_code=exit_code)
+
         log_event(
             action="SERVICE_UNHEALTHY",
             target=f"Service: {service.name}",
@@ -621,11 +663,12 @@ def _handle_failure(service, service_key: str, reason: str):
                 "threshold": retries,
                 "auto_restart": service.auto_restart,
                 "restart_loop": bool(is_crash_or_loop and state_info and state_info.get("restart_loop")),
+                "exit_code": exit_code,
             }
         )
         service.health_status = "unhealthy"
         service.save(update_fields=["health_status", "updated_at"])
-        _dispatch_health_alert(service, "unhealthy", reason)
+        _dispatch_health_alert(service, "unhealthy", reason, exit_code=exit_code)
 
     if not service.auto_restart:
         return
@@ -695,7 +738,7 @@ def _record_restart_attempt(service_key: str):
     )
 
 
-def _dispatch_health_alert(service, health_status: str, reason: str):
+def _dispatch_health_alert(service, health_status: str, reason: str, exit_code=None):
     """Dispatch alert to the service owner when health status degrades.
 
     Rate-limited to one alert per ``HEALTH_ALERT_COOLDOWN_SECONDS`` per
@@ -721,10 +764,17 @@ def _dispatch_health_alert(service, health_status: str, reason: str):
         logger.warning("Cannot dispatch health alert for %s: no deployment found", service.name)
         return
 
+    # Fetch container logs to include in alert
+    container_logs = _fetch_container_logs(service)
+    log_excerpt = container_logs[-500:] if container_logs else "(no logs available)"
+
     error_message = (
         f"Service {service.name} is {health_status}. "
         f"Reason: {reason}"
     )
+    if exit_code is not None:
+        error_message += f"\nExit code: {exit_code}"
+    error_message += f"\nRecent container logs:\n{log_excerpt}"
 
     try:
         from apps.deployments.tasks_alerts import alert_user_task

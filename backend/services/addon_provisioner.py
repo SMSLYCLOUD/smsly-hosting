@@ -137,6 +137,19 @@ class AddonProvisioner:
             if addon not in self.ENV_KEY_MAP and 'env_url' in addon_cfg:
                 self.ENV_KEY_MAP[addon] = addon_cfg['env_url']
 
+    def _write_env_file(self, env_vars: dict[str, str]) -> str:
+        """Write env vars to a temporary file and return the path.
+
+        Using ``--env-file`` instead of ``-e KEY=VAL`` prevents passwords
+        from appearing in the process table (``ps aux``).
+        """
+        import tempfile
+        fd, path = tempfile.mkstemp(prefix='smsly-addon-env-', suffix='.env', text=True)
+        with os.fdopen(fd, 'w') as f:
+            for key, value in env_vars.items():
+                f.write(f"{key}={value}\n")
+        return path
+
     def _append_traefik_labels(self, cmd_list: list, router_name: str, domain: str, target_port: int):
         """Append standard Traefik labels to expose an addon container publicly."""
         import os
@@ -180,6 +193,48 @@ class AddonProvisioner:
                     logger.debug(f"Connected {container_name} to {self.proxy_network_name}")
         except Exception as e:
             logger.warning(f"Could not connect {container_name} to proxy network: {e}")
+
+    def _connect_to_service_scoped_network(self, container_name: str, addon) -> None:
+        """Connect the addon container to the service's scoped bridge for DNS resolution.
+
+        This allows the service container (on its isolated bridge) to resolve
+        the addon's hostname via Docker DNS on that bridge instead of relying
+        exclusively on ``smsly-net``.
+        """
+        try:
+            from apps.deployments.models_network_scope import ScopedNetwork as _Net
+            project = getattr(addon.service, 'project', None)
+            if not project:
+                return
+            network_name = _Net.resolve_network_name(project)
+            if not network_name or network_name == self.network_name:
+                return
+            # Verify the network actually exists on this Docker daemon
+            inspect = subprocess.run(
+                ['docker', 'network', 'inspect', network_name],
+                capture_output=True, text=True, timeout=5,
+            )
+            if inspect.returncode != 0:
+                return
+            alias = getattr(addon, 'name', None) or f"{addon.addon_type.lower()}-{addon.service.name}"
+            # Check if already connected
+            ct_inspect = subprocess.run(
+                ['docker', 'inspect', '-f', '{{range .NetworkSettings.Networks}}{{.NetworkID}}{{end}}', container_name],
+                capture_output=True, text=True,
+            )
+            net_id = subprocess.run(
+                ['docker', 'network', 'inspect', '-f', '{{.Id}}', network_name],
+                capture_output=True, text=True,
+            )
+            if net_id.returncode == 0 and net_id.stdout.strip() not in ct_inspect.stdout:
+                subprocess.run(
+                    ['docker', 'network', 'connect', '--alias', alias, network_name, container_name],
+                    capture_output=True, check=False,
+                )
+                logger.info("Connected %s to scoped network %s (alias: %s)",
+                            container_name, network_name, alias)
+        except Exception:
+            logger.exception("Failed to connect %s to scoped network", container_name)
 
     def _container_status(self, container_name: str) -> tuple[str | None, bool]:
         """
@@ -437,6 +492,7 @@ class AddonProvisioner:
 
                 # Ensure proxy network connection as well
                 self._connect_to_proxy_network(container_name)
+                self._connect_to_service_scoped_network(container_name, addon)
             except Exception as e:
                 logger.debug("Network reconnect failed/ignored for %s: %s", container_name, e)
 
@@ -617,6 +673,7 @@ class AddonProvisioner:
 
         # Final bridge connection for new/missing containers
         self._connect_to_proxy_network(container_name)
+        self._connect_to_service_scoped_network(container_name, addon)
 
         # ── LITE AGENT ROUTING ──
         # If we are provisioning on the Master but the service is on a Remote Node (Lite Agent),
@@ -915,14 +972,18 @@ class AddonProvisioner:
         """Provision a RabbitMQ container with management plugin enabled."""
         user = "appuser"
         vhost = "/"
+        env_file = self._write_env_file({
+            'RABBITMQ_DEFAULT_USER': user,
+            'RABBITMQ_DEFAULT_PASS': password,
+            'RABBITMQ_DEFAULT_VHOST': vhost,
+        })
         cmd = [
             'docker', 'run', '-d',
             '--name', container_name,
             '--network', self.network_name,
             '--restart', 'unless-stopped',
-            '-e', f'RABBITMQ_DEFAULT_USER={user}',
-            '-e', f'RABBITMQ_DEFAULT_PASS={password}',
-            '-e', f'RABBITMQ_DEFAULT_VHOST={vhost}',
+            *self.SECURITY_OPTS,
+            '--env-file', env_file,
             '-v', f'{container_name}-data:/var/lib/rabbitmq',
         ]
         if public_domain:
@@ -932,7 +993,11 @@ class AddonProvisioner:
             cmd.extend(['--network-alias', alias_name])
         cmd.append(self.ADDON_IMAGES['RABBITMQ'])
 
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        finally:
+            with contextlib.suppress(Exception):
+                os.remove(env_file)
         container_id = result.stdout.strip()[:12]
 
         hostname = alias_name or container_name
@@ -945,17 +1010,21 @@ class AddonProvisioner:
                          password: str, port: int,
                          alias_name: str = '', username: str = 'admin', public_domain: str | None = None) -> tuple[str, str]:
         """Provision a MinIO container."""
+        env_file = self._write_env_file({
+            'MINIO_ROOT_USER': username,
+            'MINIO_ROOT_PASSWORD': password,
+        })
         cmd = [
             'docker', 'run', '-d',
             '--name', container_name,
             '--network', self.network_name,
             '--restart', 'unless-stopped',
-            '-e', f'MINIO_ROOT_USER={username}',
-            '-e', f'MINIO_ROOT_PASSWORD={password}',
+            *self.SECURITY_OPTS,
+            '--env-file', env_file,
             '-v', f'{container_name}-data:/data',
         ]
         if public_domain:
-            self._append_traefik_labels(cmd, container_name.replace(".", "-").replace("_", "-"), public_domain, 9001) # Expose Web Console, not API
+            self._append_traefik_labels(cmd, container_name.replace(".", "-").replace("_", "-"), public_domain, 9001)
 
         if alias_name:
             cmd.extend(['--network-alias', alias_name])
@@ -964,11 +1033,15 @@ class AddonProvisioner:
             'server', '/data', '--console-address', ':9001'
         ])
 
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=True)
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True)
+        finally:
+            with contextlib.suppress(Exception):
+                os.remove(env_file)
         container_id = result.stdout.strip()[:12]
 
         hostname = alias_name or container_name
@@ -1004,11 +1077,20 @@ class AddonProvisioner:
                            password: str, port: int, alias_name: str, config: dict,
                            username: str = '', db_name: str = '', public_domain: str | None = None, host_port: int | None = None) -> tuple[str, str]:
         """Provision a generic addon from GENERIC_ADDONS_CONFIG."""
+        hostname = alias_name or container_name
+        user = username or 'admin'
+        db = db_name or 'app_db'
+        cluster_id = self._generate_kraft_cluster_id()
+
+        env_file = self._write_env_file(self._build_generic_env(config, password, hostname, cluster_id, user, db))
+
         cmd = [
             'docker', 'run', '-d',
             '--name', container_name,
             '--network', self.network_name,
             '--restart', 'unless-stopped',
+            *self.SECURITY_OPTS,
+            '--env-file', env_file,
             '-v', f'{container_name}-data:/data'
         ]
 
@@ -1016,37 +1098,11 @@ class AddonProvisioner:
             cmd.extend(['-p', f'{host_port}:{port}'])
 
         if public_domain:
-            # Use dashboard port if explicitly defined for this addon, otherwise default API port
             target_port = cast(int, config.get('dashboard_port', port))
             self._append_traefik_labels(cmd, container_name.replace(".", "-").replace("_", "-"), public_domain, target_port)
 
         if alias_name:
             cmd.extend(['--network-alias', alias_name])
-
-        # Add dynamic environment variables
-        hostname = alias_name or container_name
-        user = username or 'admin'
-        db = db_name or 'app_db'
-        cluster_id = self._generate_kraft_cluster_id()
-
-        if config.get('user_env'):
-            cmd.extend(['-e', f'{config["user_env"]}={user}'])
-        if config.get('pass_env'):
-            cmd.extend(['-e', f'{config["pass_env"]}={password}'])
-        if config.get('root_pass_env'):
-            cmd.extend(['-e', f'{config["root_pass_env"]}={password}'])
-        if config.get('db_env'):
-            cmd.extend(['-e', f'{config["db_env"]}={db}'])
-
-        env_extra = cast(dict, config.get('env') or {})
-        for k, v in env_extra.items():
-            # Format custom variables if they need placeholder injection
-            val = (
-                v.replace('{password}', password)
-                .replace('{hostname}', hostname)
-                .replace('{cluster_id}', cluster_id)
-            )
-            cmd.extend(['-e', f'{k}={val}'])
 
         cmd.append(config['image'])
 
@@ -1054,10 +1110,13 @@ class AddonProvisioner:
             cmd_args = [arg.replace('{password}', password).replace('{hostname}', hostname) for arg in cast(list, config['command'])]
             cmd.extend(cmd_args)
 
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        finally:
+            with contextlib.suppress(Exception):
+                os.remove(env_file)
         container_id = result.stdout.strip()[:12]
 
-        # Build connection URL
         scheme = cast(str, config.get('scheme', addon_type.lower()))
         if config.get('auth'):
             if config.get('user_env'):
@@ -1080,6 +1139,35 @@ class AddonProvisioner:
                 timeout=int(config.get('ready_timeout', 30))
             )
         return container_id, connection_url
+
+    SECURITY_OPTS = [
+        '--security-opt', 'no-new-privileges:true',
+        '--cap-drop=ALL',
+        '--cap-add=NET_BIND_SERVICE',
+        '--cap-add=CHOWN',
+        '--cap-add=SETUID',
+        '--cap-add=SETGID',
+        '--pids-limit', '1024',
+    ]
+
+    def _build_generic_env(self, config: dict, password: str, hostname: str, cluster_id: str, user: str, db: str) -> dict[str, str]:
+        """Build env var dict for a generic addon, with placeholder substitution."""
+        env: dict[str, str] = {}
+        if config.get('user_env'):
+            env[config['user_env']] = user
+        if config.get('pass_env'):
+            env[config['pass_env']] = password
+        if config.get('root_pass_env'):
+            env[config['root_pass_env']] = password
+        if config.get('db_env'):
+            env[config['db_env']] = db
+        for k, v in (config.get('env') or {}).items():
+            env[k] = (
+                v.replace('{password}', password)
+                .replace('{hostname}', hostname)
+                .replace('{cluster_id}', cluster_id)
+            )
+        return env
 
     def _generate_kraft_cluster_id(self) -> str:
         """Generate a valid 22-char KRaft cluster id."""
@@ -1131,14 +1219,18 @@ class AddonProvisioner:
         db_user = str(db_user)[:63]
         db_name = str(db_name)[:63]
 
+        env_file = self._write_env_file({
+            'POSTGRES_PASSWORD': password,
+            'POSTGRES_USER': db_user,
+            'POSTGRES_DB': db_name,
+        })
         cmd = [
             'docker', 'run', '-d',
             '--name', container_name,
             '--network', self.network_name,
             '--restart', 'unless-stopped',
-            '-e', f'POSTGRES_PASSWORD={password}',
-            '-e', f'POSTGRES_USER={db_user}',
-            '-e', f'POSTGRES_DB={db_name}',
+            *self.SECURITY_OPTS,
+            '--env-file', env_file,
             '-v', f'{container_name}-data:/var/lib/postgresql/data',
         ]
 
@@ -1152,11 +1244,15 @@ class AddonProvisioner:
             cmd.extend(['--network-alias', alias_name])
         cmd.append(self.ADDON_IMAGES['POSTGRES'])
 
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=True)
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True)
+        finally:
+            with contextlib.suppress(Exception):
+                os.remove(env_file)
         container_id = result.stdout.strip()[:12]
 
         # Use alias_name as hostname so apps reach the DB by friendly name
@@ -1188,11 +1284,16 @@ class AddonProvisioner:
                          alias_name: str = '', public_domain: str | None = None,
                          host_port: int | None = None) -> tuple[str, str]:
         """Provision a Redis container with authentication."""
+        env_file = self._write_env_file({
+            'REDIS_PASSWORD': password,
+        })
         cmd = [
             'docker', 'run', '-d',
             '--name', container_name,
             '--network', self.network_name,
             '--restart', 'unless-stopped',
+            *self.SECURITY_OPTS,
+            '--env-file', env_file,
             '-v', f'{container_name}-data:/data',
         ]
         if host_port:
@@ -1207,11 +1308,15 @@ class AddonProvisioner:
             'redis-server', '--requirepass', password, '--appendonly', 'yes'
         ])
 
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=True)
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True)
+        finally:
+            with contextlib.suppress(Exception):
+                os.remove(env_file)
         container_id = result.stdout.strip()[:12]
 
         hostname = alias_name or container_name
@@ -1227,15 +1332,19 @@ class AddonProvisioner:
         db_name = "app_db"
         db_user = "app_user"
 
+        env_file = self._write_env_file({
+            'MYSQL_ROOT_PASSWORD': password,
+            'MYSQL_DATABASE': db_name,
+            'MYSQL_USER': db_user,
+            'MYSQL_PASSWORD': password,
+        })
         cmd = [
             'docker', 'run', '-d',
             '--name', container_name,
             '--network', self.network_name,
             '--restart', 'unless-stopped',
-            '-e', f'MYSQL_ROOT_PASSWORD={password}',
-            '-e', f'MYSQL_DATABASE={db_name}',
-            '-e', f'MYSQL_USER={db_user}',
-            '-e', f'MYSQL_PASSWORD={password}',
+            *self.SECURITY_OPTS,
+            '--env-file', env_file,
             '-v', f'{container_name}-data:/var/lib/mysql',
         ]
         if public_domain:
@@ -1245,11 +1354,15 @@ class AddonProvisioner:
             cmd.extend(['--network-alias', alias_name])
         cmd.append(self.ADDON_IMAGES['MYSQL'])
 
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=True)
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True)
+        finally:
+            with contextlib.suppress(Exception):
+                os.remove(env_file)
         container_id = result.stdout.strip()[:12]
 
         connection_url = f"mysql://{db_user}:{password}@{container_name}:{port}/{db_name}"
@@ -1267,13 +1380,17 @@ class AddonProvisioner:
         db_user = "app_user"
         db_name = "app_db"
 
+        env_file = self._write_env_file({
+            'MONGO_INITDB_ROOT_USERNAME': db_user,
+            'MONGO_INITDB_ROOT_PASSWORD': password,
+        })
         cmd = [
             'docker', 'run', '-d',
             '--name', container_name,
             '--network', self.network_name,
             '--restart', 'unless-stopped',
-            '-e', f'MONGO_INITDB_ROOT_USERNAME={db_user}',
-            '-e', f'MONGO_INITDB_ROOT_PASSWORD={password}',
+            *self.SECURITY_OPTS,
+            '--env-file', env_file,
             '-v', f'{container_name}-data:/data/db',
         ]
         if public_domain:
@@ -1283,11 +1400,15 @@ class AddonProvisioner:
             cmd.extend(['--network-alias', alias_name])
         cmd.append(self.ADDON_IMAGES['MONGODB'])
 
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=True)
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True)
+        finally:
+            with contextlib.suppress(Exception):
+                os.remove(env_file)
         container_id = result.stdout.strip()[:12]
 
         connection_url = f"mongodb://{db_user}:{password}@{container_name}:{port}/{db_name}?authSource=admin"  # pylint: disable=line-too-long
@@ -1304,6 +1425,7 @@ class AddonProvisioner:
             '--name', container_name,
             '--network', self.network_name,
             '--restart', 'unless-stopped',
+            *self.SECURITY_OPTS,
             '-e', 'QDRANT__SERVICE__GRPC_PORT=6334',
             '-v', f'{container_name}-data:/qdrant/storage',
         ]
@@ -1336,6 +1458,7 @@ class AddonProvisioner:
             '--name', container_name,
             '--network', self.network_name,
             '--restart', 'unless-stopped',
+            *self.SECURITY_OPTS,
             '-e', 'discovery.type=single-node',
             '-e', 'xpack.security.enabled=false',
             '-e', 'ES_JAVA_OPTS=-Xms256m -Xmx256m',

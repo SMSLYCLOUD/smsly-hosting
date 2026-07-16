@@ -4378,7 +4378,7 @@ if not created and not cp.is_active:
     # ─── Self-Healing: Automatic Queue Restoration ──────────────────────────
     echo -e "${BLUE}  → Checking for stalled deployments/addons in QUEUED state...${NC}"
     backend_container="$(resolve_container_target "smsly-hosting-backend-1")"
-    docker exec -i "$backend_container" python manage.py shell -c "
+    timeout -k 5 120 docker exec -i "$backend_container" python manage.py shell -c "
 from apps.deployments.models import Deployment, Service
 from apps.deployments.models_addons import Addon
 from apps.deployments.tasks import provision_addon_task, recover_stalled_queued_deployments
@@ -4430,7 +4430,13 @@ if d_count > 0:
 
     echo -e "\n${GREEN}  ✨ Update complete. Self-healing applied.${NC}"
 
-    sync_platform_domain_state "$INSTALL_DIR/.env"
+    timeout -k 5 120 bash -c "
+export COMPOSE_FILE='$COMPOSE_FILE'
+source '$INSTALL_DIR/lib/env.sh'
+source '$INSTALL_DIR/lib/common.sh'
+source '$INSTALL_DIR/lib/platform.sh'
+sync_platform_domain_state '$INSTALL_DIR/.env'
+" || echo -e "${YELLOW}  ⚠ Domain state sync timed out (non-fatal)${NC}"
 
     # Refresh proxy/runtime edge stack so routing and TLS state is always clean.
     # NOTE: restart_edge_stack now handles Caddy validation internally (H1+H2 fix).
@@ -6077,7 +6083,13 @@ sleep 5
     docker compose -f "$COMPOSE_FILE" exec -T --user root backend chown -R 1000:1000 /app/staticfiles /app/media /app/backups 2>/dev/null || true
     docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic --noinput 2>/dev/null || true
 
-    sync_platform_domain_state "$INSTALL_DIR/.env"
+    timeout -k 5 120 bash -c "
+export COMPOSE_FILE='$COMPOSE_FILE'
+source '$INSTALL_DIR/lib/env.sh'
+source '$INSTALL_DIR/lib/common.sh'
+source '$INSTALL_DIR/lib/platform.sh'
+sync_platform_domain_state '$INSTALL_DIR/.env'
+" || echo -e "${YELLOW}  ⚠ Domain state sync timed out (non-fatal)${NC}"
     set_checkpoint "database_initialized"
 fi
 fi

@@ -2141,6 +2141,30 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                 _reg_pass = getattr(settings, 'REGISTRY_PASSWORD', '') or PlatformConfig.get_config_value("registry_password") or ""
                 _reg_url = getattr(settings, 'CONTAINER_REGISTRY_URL', '') or PlatformConfig.get_config_value("container_registry_url") or "registry:5000"
 
+                # Auto-generate a registry password if none is configured anywhere.
+                # This ensures ecosystem projects always have valid credentials
+                # for the platform's own internal registry.
+                if not _reg_pass:
+                    import secrets
+                    _reg_pass = secrets.token_urlsafe(18)
+                    logger.info(
+                        "Auto-generated registry password for ecosystem project %s "
+                        "(no REGISTRY_PASSWORD was configured)",
+                        project.id,
+                    )
+                    try:
+                        _cfg = PlatformConfig.load()
+                        _cfg.registry_password = _reg_pass
+                        _cfg.save(update_fields=['registry_password'])
+                        logger.info("Persisted auto-generated registry password to PlatformConfig")
+                    except Exception as _pw_exc:
+                        logger.warning(
+                            "Could not persist auto-generated registry password "
+                            "to PlatformConfig: %s. Password is set on ScopedRegistry "
+                            "but htpasswd may need manual sync.",
+                            _pw_exc,
+                        )
+
                 # Verify credentials with docker login before saving
                 _login_ok = False
                 if _reg_user and _reg_pass:
@@ -2170,6 +2194,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                     object_id=project.id,
                     username=_reg_user,
                     password=_reg_pass,
+                    is_internal=True,
                     is_active=True,
                 )
                 logger.info(

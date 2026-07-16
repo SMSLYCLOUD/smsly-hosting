@@ -29,7 +29,9 @@ def check_autoscale_task():
     from apps.autoscaler.engine.pipeline import analyze_and_apply
     from apps.deployments.models import Service
 
-    services = Service.objects.filter(max_replicas__gt=1)
+    services = Service.objects.filter(
+        autoscale_enabled=True, max_replicas__gt=1,
+    )
 
     for service in services:
         try:

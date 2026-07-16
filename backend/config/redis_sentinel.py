@@ -57,8 +57,15 @@ except (ValueError, TypeError):
 
 # Module-level cache — Sentinel instance is expensive to create (opens
 # connections to all sentinels) so we create it once and reuse.
+# Fork-safety: gunicorn/uwsgi prefork models inherit the parent's
+# Sentinel connections, which causes BrokenPipeError in children.
+# Reset on fork so each child creates its own connections.
 _sentinel_instance = None
 _sentinel_lock = threading.Lock()
+try:
+    os.register_at_fork(after_in_child=lambda: globals().update(_sentinel_instance=None))  # type: ignore[attr-defined]
+except AttributeError:
+    pass  # Not POSIX (e.g. Windows) — skip fork handler
 
 
 def get_sentinel():
@@ -100,7 +107,6 @@ def get_master_connection(password: str | None = None, db: int = 0):
         'db': db,
         'socket_timeout': SENTINEL_SOCKET_TIMEOUT,
         'socket_connect_timeout': SENTINEL_SOCKET_CONNECT_TIMEOUT,
-        'decode_responses': True,
     }
     if password:
         connection_kwargs['password'] = password
@@ -122,7 +128,6 @@ def get_slave_connection(password: str | None = None, db: int = 0):
         'db': db,
         'socket_timeout': SENTINEL_SOCKET_TIMEOUT,
         'socket_connect_timeout': SENTINEL_SOCKET_CONNECT_TIMEOUT,
-        'decode_responses': True,
     }
     if password:
         connection_kwargs['password'] = password

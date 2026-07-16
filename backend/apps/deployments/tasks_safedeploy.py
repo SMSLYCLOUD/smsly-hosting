@@ -211,7 +211,7 @@ def checkout_code(repo_url: str, branch: str, commit_sha: str, target_dir: str, 
         logger.error(f"Git clone failed: {e!s}")
         return ""
 
-@shared_task
+@shared_task(soft_time_limit=600, time_limit=660)
 def create_preview_environment_job(preview_id: str):
     try:
         preview = PreviewEnvironment.objects.get(id=preview_id)
@@ -227,7 +227,7 @@ def create_preview_environment_job(preview_id: str):
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.exception("Failed to mark preview as BUILD_FAILED: %s", exc)
 
-@shared_task
+@shared_task(soft_time_limit=600, time_limit=660)
 def create_database_clone_job(preview_id: str):
     """Provision an isolated preview PostgreSQL container (no data clone from production).
 
@@ -297,7 +297,7 @@ def create_database_clone_job(preview_id: str):
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.exception("Failed to mark preview as DB_CLONE_FAILED: %s", exc)
 
-@shared_task
+@shared_task(soft_time_limit=1200, time_limit=1500)
 def run_migration_validation_job(preview_id: str):
     workspace_dir = None
     try:
@@ -469,7 +469,7 @@ def run_migration_validation_job(preview_id: str):
         if workspace_dir:
             shutil.rmtree(workspace_dir, ignore_errors=True)
 
-@shared_task
+@shared_task(soft_time_limit=600, time_limit=660)
 def run_preview_tests_job(preview_id: str):
     try:
         preview = PreviewEnvironment.objects.get(id=preview_id)
@@ -503,7 +503,7 @@ def run_preview_tests_job(preview_id: str):
     except Exception as e:
         logger.error(f"Error in run_preview_tests_job for {preview_id}: {e}", exc_info=True)
 
-@shared_task
+@shared_task(soft_time_limit=600, time_limit=660)
 def provision_preview_service_job(preview_id: str):
     try:
         preview = PreviewEnvironment.objects.get(id=preview_id)
@@ -607,7 +607,7 @@ def provision_preview_service_job(preview_id: str):
         except Exception:
             pass
 
-@shared_task
+@shared_task(soft_time_limit=120, time_limit=150)
 def run_preview_health_check_job(preview_id: str):
     try:
         from apps.deployments.services.safedeploy.health_checks import (
@@ -629,7 +629,7 @@ def run_preview_health_check_job(preview_id: str):
     except Exception as e:
         logger.error(f"Health check failed for preview {preview_id}: {e}", exc_info=True)
 
-@shared_task
+@shared_task(soft_time_limit=600, time_limit=660)
 def destroy_preview_environment_job(preview_id: str):
     try:
         preview = PreviewEnvironment.objects.get(id=preview_id)
@@ -690,7 +690,7 @@ def destroy_preview_environment_job(preview_id: str):
             pass
 
 
-@shared_task
+@shared_task(soft_time_limit=120, time_limit=150)
 def expire_stale_previews_job():
     from apps.deployments.models_safedeploy import PreviewEnvironment
     now = timezone.now()

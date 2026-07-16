@@ -20,11 +20,14 @@ from .decision import Recommendation
 
 logger = logging.getLogger(__name__)
 
-
 # Service-level lock to prevent the two Celery beat tasks
 # (check_autoscale_task + analyze_all_services_task) from concurrently
 # spawning replicas for the same service. Keyed by service.id str.
+# Bounded at MAX_LOCKS entries — least-recently-used entries are evicted
+# to prevent unbounded memory growth on large platforms.
+_MAX_LOCKS = 1000
 _SPAWN_LOCKS: dict[str, threading.Lock] = {}
+_SPAWN_LOCKS_ORDER: list[str] = []
 _SPAWN_LOCKS_GUARD = threading.Lock()
 
 
@@ -32,8 +35,20 @@ def _lock_for(service_id: str) -> threading.Lock:
     with _SPAWN_LOCKS_GUARD:
         lock = _SPAWN_LOCKS.get(service_id)
         if lock is None:
+            # Evict oldest entry if at capacity
+            if len(_SPAWN_LOCKS) >= _MAX_LOCKS:
+                oldest = _SPAWN_LOCKS_ORDER.pop(0)
+                _SPAWN_LOCKS.pop(oldest, None)
             lock = threading.Lock()
             _SPAWN_LOCKS[service_id] = lock
+            _SPAWN_LOCKS_ORDER.append(service_id)
+        else:
+            # Move to end (most recently used)
+            try:
+                _SPAWN_LOCKS_ORDER.remove(service_id)
+            except ValueError:
+                pass
+            _SPAWN_LOCKS_ORDER.append(service_id)
         return lock
 
 
@@ -93,12 +108,11 @@ class Reconciler:
             spawner = SpawningService()
             remaining = rec.scale_up_by
 
-            # Priority 1: local if there's headroom
-            try:
-                spawner._check_local_capacity(self.service)
-                local_ok = True
-            except RuntimeError:
-                local_ok = False
+            # Priority 1: try local spawn directly (spawn_local checks
+            # capacity internally). No separate _check_local_capacity
+            # call — that would create a TOCTOU race where capacity
+            # passes but spawn_local fails, skipping local entirely.
+            local_ok = True
 
             while spawned < remaining and local_ok:
                 replica = ServiceReplica.objects.create(
@@ -110,6 +124,10 @@ class Reconciler:
                     spawned += 1
                 except Exception as exc:
                     logger.warning("Local spawn failed for %s: %s", self.service.name, exc)
+                    try:
+                        spawner.destroy(replica)
+                    except Exception:
+                        pass
                     replica.status = 'DESTROYED'
                     replica.save(update_fields=['status'])
                     local_ok = False
@@ -149,6 +167,10 @@ class Reconciler:
                 except Exception as exc:
                     logger.warning("Remote spawn failed for %s on %s: %s",
                                    self.service.name, node.name, exc)
+                    try:
+                        spawner.destroy(replica)
+                    except Exception:
+                        pass
                     replica.status = 'DESTROYED'
                     replica.save(update_fields=['status'])
             if spawned > 0:

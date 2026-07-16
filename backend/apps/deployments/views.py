@@ -1463,6 +1463,14 @@ class ServiceViewSet(viewsets.ModelViewSet):
             if runtime_status == 'running' and health_status == 'unhealthy':
                 effective_status = 'unhealthy'
 
+            exit_code = state.get('ExitCode')
+            restart_count = int(state.get('RestartCount') or 0)
+
+            # Also fetch saved crash logs from latest deployment
+            from apps.deployments.models import Deployment as DepModel
+            latest_deploy = DepModel.objects.filter(service=service).order_by("-created_at").first()
+            saved_logs = latest_deploy.build_logs[-2000:] if latest_deploy and latest_deploy.build_logs else ""
+
             return Response({
                 'service_id': str(service.id),
                 'service_name': service.name,
@@ -1472,6 +1480,10 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 'container_id': container.id,
                 'container_name': container.name,
                 'image': ','.join(getattr(container.image, 'tags', []) or []),
+                'exit_code': exit_code,
+                'restart_count': restart_count,
+                'saved_logs': saved_logs,
+                'saved_logs_source': 'build_logs' if saved_logs else None,
             })
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning("Service runtime status failed for %s: %s", service.id, exc)
@@ -2015,6 +2027,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         on the specified branch with a unique subdomain.
         """
         parent = self.get_object()
+        assert_can_write(request.user, parent, action='create preview for')
         branch = request.data.get('branch') or request.data.get('branch_name')
         pr_number = request.data.get('pr_number')
 
@@ -2158,6 +2171,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         Body: { "preview_id": "uuid" }
         """
         parent = self.get_object()
+        assert_can_write(request.user, parent, action='destroy preview for')
         preview_id = request.data.get('preview_id') or request.query_params.get('preview_id')
 
         if not preview_id:
@@ -2212,6 +2226,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         from .models_servers import ManagedServer
 
         service = self.get_object()
+        assert_can_write(request.user, service, action='multi-deploy')
         ref = str(request.data.get('ref', 'HEAD'))[:200]
         server_ids = request.data.get('server_ids', [])
         include_local = request.data.get('include_local', True)
@@ -2408,6 +2423,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
             )
 
         service = self.get_object()
+        assert_can_write(request.user, service, action='instant rollback')
         guard = ServerGuard.check_user_workload_allowed(getattr(service, 'server', None))
         if not guard["ok"]:
             return Response(guard, status=status.HTTP_400_BAD_REQUEST)
@@ -4995,10 +5011,20 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             )
 
             if not containers:
+                # Container is dead or removed — fallback to saved crash logs
+                saved_logs = deployment.build_logs or ""
+                # Extract the most recent crash logs section if present
+                import re as _re
+                crash_match = _re.search(
+                    r"--- (?:Runtime Crash Logs|Runtime Failure Logs)[^\n]*\n(.*?)--- End (?:Crash|Failure) Logs ---",
+                    saved_logs, _re.DOTALL
+                )
+                fallback_logs = crash_match.group(1).strip() if crash_match else (saved_logs[-4000:] if saved_logs else "")
                 return Response({
                     'id': str(deployment.id),
-                    'runtime_logs': '',
-                    'message': 'No running container found for this service.',
+                    'runtime_logs': fallback_logs,
+                    'source': 'build_logs',
+                    'message': 'Container is not running. Showing saved crash logs from deployment.',
                 })
 
             container = containers[0]
@@ -5015,6 +5041,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
                 'container_id': container.short_id,
                 'container_status': container.status,
                 'runtime_logs': log_text,
+                'source': 'live_container',
             })
 
         except ImportError:
@@ -5028,10 +5055,14 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             err_msg = str(e)
             if any(term in err_msg.lower() for term in ["nameresolutionerror", "socket-proxy", "connection", "maxretryerror", "getaddrinfo"]):
                 err_msg = "Cannot connect to Docker daemon or socket-proxy. Please verify Docker is running and reachable."
+            # Fallback to saved build_logs
+            saved_logs = deployment.build_logs or ""
+            fallback_logs = saved_logs[-4000:] if saved_logs else ""
             return Response({
                 'id': str(deployment.id),
-                'runtime_logs': '',
-                'message': f'Could not fetch runtime logs: {err_msg}',
+                'runtime_logs': fallback_logs,
+                'source': 'build_logs',
+                'message': f'Could not fetch live runtime logs: {err_msg}. Showing saved crash logs.',
             })
 
     @action(detail=True, methods=['post'])
@@ -5426,15 +5457,25 @@ class SystemConfigView(GenericAPIView):
         # Redis
         redis_ok = False
         try:
-            import redis as redis_lib
-            r = redis_lib.Redis(
-                host=getattr(settings, 'REDIS_HOST', 'redis'),
-                port=int(getattr(settings, 'REDIS_PORT', 6379)),
-                password=getattr(settings, 'REDIS_PASSWORD', '') or None,
-                socket_timeout=2,
-            )
-            r.ping()
-            redis_ok = True
+            from config.redis_sentinel import SENTINEL_ENABLED, get_master_connection
+            if SENTINEL_ENABLED:
+                conn = get_master_connection(
+                    password=getattr(settings, 'REDIS_PASSWORD', None),
+                    db=0,
+                )
+                if conn is not None:
+                    conn.ping()
+                    redis_ok = True
+            else:
+                import redis as redis_lib
+                r = redis_lib.Redis(
+                    host=getattr(settings, 'REDIS_HOST', 'redis'),
+                    port=int(getattr(settings, 'REDIS_PORT', 6379)),
+                    password=getattr(settings, 'REDIS_PASSWORD', '') or None,
+                    socket_timeout=2,
+                )
+                r.ping()
+                redis_ok = True
         except Exception:
             pass
 

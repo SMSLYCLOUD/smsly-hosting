@@ -23,9 +23,13 @@ services:
       # Write operations (needed for deployment)
       BUILD: 1
       POST: 1
+      PUT: 1
+      DELETE: 1
+      
+      # Required for docker login / private image pulls
+      AUTH: 1
       
       # Disabled for security
-      AUTH: 0
       SECRETS: 0
       SWARM: 0
       EXEC: 1  # Required for container terminal access and database administration

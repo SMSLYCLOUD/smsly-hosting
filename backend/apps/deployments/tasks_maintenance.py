@@ -134,7 +134,7 @@ def _clear_orphaned_runtime_resources() -> dict:
 
 
 
-@shared_task(bind=True, soft_time_limit=300, time_limit=360)
+@shared_task(bind=True, soft_time_limit=300, time_limit=360, name="apps.deployments.tasks.run_maintenance_task")
 def run_maintenance_task(self, command_flag: str, lock_key: str = ""):
     """
     Run maintenance commands via the Docker API from inside the Celery container.
@@ -270,7 +270,7 @@ class ThrottledLogAppender:
 
 
 
-@shared_task(soft_time_limit=600, time_limit=900)
+@shared_task(soft_time_limit=600, time_limit=900, name="apps.deployments.tasks.registry_garbage_collection_task")
 def registry_garbage_collection_task():
     """
     Periodically run Docker registry garbage collection to reclaim disk

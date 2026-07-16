@@ -24,9 +24,10 @@ private IP ranges that aren't our own.
 """
 import re
 
-# Same allowlist as serializers._ALLOWED_IMAGE_REGISTRIES; kept
-# here in one place so the policy cannot drift between the
-# API boundary and the internal callers.
+# Canonical allowlist; consumed by serializers.py and
+# models_registry_scope.py via ``all_allowed_registry_hosts()``
+# so the policy cannot drift between the API boundary and the
+# internal callers.
 ALLOWED_IMAGE_REGISTRY_HOSTS = (
     # host:port[:/] prefix — these are the registries the platform
     # actually supports.
@@ -42,6 +43,34 @@ ALLOWED_IMAGE_REGISTRY_HOSTS = (
     "mcr.microsoft.com",
     "public.ecr.aws",
 )
+
+
+def all_allowed_registry_hosts() -> list[str]:
+    """Return the static allowlist plus the platform's configured
+    ``CONTAINER_REGISTRY_URL`` (e.g. ``registry.smsly.cloud``).
+
+    The static tuple covers well-known internal and public registries.
+    The configured registry URL is appended at runtime so the platform
+    automatically allows its own public/shareable registry domain without
+    a manual edit to the tuple above.
+    """
+    hosts = list(ALLOWED_IMAGE_REGISTRY_HOSTS)
+    try:
+        from urllib.parse import urlparse
+
+        from django.conf import settings
+
+        _cfg_url = getattr(settings, "CONTAINER_REGISTRY_URL", "") or ""
+        if _cfg_url:
+            if "://" in _cfg_url:
+                _cfg_host = (urlparse(_cfg_url).netloc or "").rstrip("/")
+            else:
+                _cfg_host = _cfg_url.split("/")[0].rstrip("/")
+            if _cfg_host and _cfg_host not in hosts:
+                hosts.append(_cfg_host)
+    except Exception:
+        pass
+    return hosts
 
 
 # Shell metacharacters that would let an image ref break out of
@@ -89,24 +118,7 @@ def validate_image_registry(image: str, service=None) -> str:
         )
     prefix = _registry_prefix_for(image)
 
-    allowed_hosts = list(ALLOWED_IMAGE_REGISTRY_HOSTS)
-
-    # Always allow the platform's configured registry URL
-    try:
-        from urllib.parse import urlparse as _urlparse
-
-        from django.conf import settings
-
-        _cfg_url = getattr(settings, "CONTAINER_REGISTRY_URL", "") or ""
-        if _cfg_url:
-            if "://" in _cfg_url:
-                _cfg_host = (_urlparse(_cfg_url).netloc or "").rstrip("/")
-            else:
-                _cfg_host = _cfg_url.split("/")[0].rstrip("/")
-            if _cfg_host and _cfg_host not in allowed_hosts:
-                allowed_hosts.append(_cfg_host)
-    except Exception:
-        pass
+    allowed_hosts = all_allowed_registry_hosts()
 
     # Per-scope allowlist: append hosts from Project → Team → Organization chain
     if service and getattr(service, "project_id", None):

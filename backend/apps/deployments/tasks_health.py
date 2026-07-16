@@ -251,7 +251,7 @@ def node_watchdog_task(self):
 
 
 
-@shared_task(bind=True, max_retries=2)
+@shared_task(bind=True, max_retries=2, soft_time_limit=600, time_limit=900, name="apps.deployments.tasks.refresh_managed_server_health")
 def refresh_managed_server_health(self, server_id: str):
     """Refresh the health/status of a single managed server."""
     from .models_servers import ManagedServer
@@ -266,7 +266,7 @@ def refresh_managed_server_health(self, server_id: str):
 
 
 
-@shared_task(soft_time_limit=600, time_limit=900)
+@shared_task(soft_time_limit=600, time_limit=900, name="apps.deployments.tasks.sync_master_db_to_agents_task")
 def sync_master_db_to_agents_task():
     """
     Periodically push a compressed pg_dump of the master database to all

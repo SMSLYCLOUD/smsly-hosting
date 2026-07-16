@@ -11,7 +11,7 @@ from apps.deployments.models import (
 from apps.deployments.models_addons import Addon, Backup
 
 
-@shared_task(bind=True, max_retries=3)
+@shared_task(bind=True, max_retries=3, soft_time_limit=600, time_limit=660, name="apps.deployments.tasks.provision_addon_task")
 def provision_addon_task(self, addon_id: str):
     """Provision an addon Docker container and inject env vars."""
     import time as _time
@@ -79,8 +79,8 @@ def provision_addon_task(self, addon_id: str):
 
 
 
-@shared_task
-def deprovision_addon_task(addon_id: str):
+@shared_task(bind=True, max_retries=3, soft_time_limit=600, time_limit=660, name="apps.deployments.tasks.deprovision_addon_task")
+def deprovision_addon_task(self, addon_id: str):
     """Delete addon container."""
     try:
         addon = Addon.objects.get(id=addon_id)
@@ -91,10 +91,11 @@ def deprovision_addon_task(addon_id: str):
         addon.save()
     except Exception as e: # pylint: disable=broad-exception-caught
         logger.error("Deprovision failed: %s", e)
+        raise self.retry(exc=e, countdown=30)
 
 
 
-@shared_task(bind=True, max_retries=3)
+@shared_task(bind=True, max_retries=3, soft_time_limit=1200, time_limit=1500, name="apps.deployments.tasks.backup_addon_task")
 def backup_addon_task(self, addon_id: str):
     """Create a backup for the specified addon."""
     backup = None
@@ -156,19 +157,20 @@ def backup_addon_task(self, addon_id: str):
 
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, soft_time_limit=1200, time_limit=1500, max_retries=2, default_retry_delay=60, name="apps.deployments.tasks.restore_addon_task")
 def restore_addon_task(self, backup_id: str):
     """Restore a backup to the addon."""
-    # pylint: disable=unused-argument
     try:
         backup = Backup.objects.get(id=backup_id)
         addon_provisioner.restore_backup(backup.addon, backup.file_path)
-    except Exception as e:
-        raise e
+    except Backup.DoesNotExist:
+        logger.warning("restore_addon_task: backup %s not found", backup_id)
+    except Exception as exc:
+        raise self.retry(exc=exc)
 
 
 
-@shared_task(bind=True, max_retries=3)
+@shared_task(bind=True, max_retries=3, soft_time_limit=600, time_limit=660, name="apps.deployments.tasks.delete_addon_task")
 def delete_addon_task(self, addon_id: str):
     """Async reliable deletion of an Addon"""
     from services.addon_provisioner import addon_provisioner

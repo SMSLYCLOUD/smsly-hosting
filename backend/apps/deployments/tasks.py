@@ -843,13 +843,12 @@ def _build_runtime_env(service: Service, image_name: str | None = None) -> dict:
             all_hosts.append(d.strip())
     hosts_csv = ','.join(all_hosts)
 
-    # Set all ALLOWED_HOSTS variants the app might use (only if not already set)
-    if not env_vars.get('ALLOWED_HOSTS'):
-        env_vars['ALLOWED_HOSTS'] = hosts_csv
-    if not env_vars.get('DJANGO_ALLOWED_HOSTS'):
-        env_vars['DJANGO_ALLOWED_HOSTS'] = hosts_csv
-    if not env_vars.get('MARKETER_ALLOWED_HOSTS'):
-        env_vars['MARKETER_ALLOWED_HOSTS'] = hosts_csv
+    # Always overwrite ALLOWED_HOSTS variants — these are platform-managed
+    # domain vars that must reflect the current domains regardless of what
+    # the AI Senate or manifest resolver may have set.
+    env_vars['ALLOWED_HOSTS'] = hosts_csv
+    env_vars['DJANGO_ALLOWED_HOSTS'] = hosts_csv
+    env_vars['MARKETER_ALLOWED_HOSTS'] = hosts_csv
 
     if service.public_domain:
 
@@ -1175,6 +1174,14 @@ def _ensure_database_exists(base_url: str, db_name: str):
         from psycopg2 import sql
         from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
+        from urllib.parse import urlparse
+        parsed = urlparse(base_url)
+        if not parsed.hostname or parsed.hostname in ('localhost', '127.0.0.1', '0.0.0.0'):
+            db_host = os.environ.get('DB_HOST', os.environ.get('DATABASE_HOST', 'db'))
+            base_url = base_url.replace(f'@{parsed.hostname or ""}:', f'@{db_host}:')
+            if '@' not in base_url:
+                base_url = base_url.replace('://', f'://{db_host}:5432/', 1)
+
         conn = psycopg2.connect(base_url)
         conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
         with conn.cursor() as cur:
@@ -1224,259 +1231,6 @@ def _safe_extract_zip(zip_path: str, destination: str):
         zf.extractall(dest_root)
 
 
-@shared_task(
-    bind=True,
-    max_retries=3,
-    soft_time_limit=3600,  # 1 hour (reduced to prevent queue staleness)
-    time_limit=3900,       # 1h 5m hard kill
-)
-def smart_deploy_task(self, deployment_id: str, provider_id: str,
-                     skip_review: bool = False):
-    """
-    Orchestrates a deployment using PipelineManager for build steps.
-
-    For fresh GIT deploys (manual): runs analysis only, pauses at REVIEW.
-    For rollbacks, restarts, webhooks, and non-GIT: runs full pipeline.
-
-    Args:
-        skip_review: If True, bypass the REVIEW gate (used by restarts,
-                     webhooks, and any automated deploy path).
-    """
-    # pylint: disable=too-many-locals
-    deployment = None
-    try:
-        deployment = Deployment.objects.get(id=deployment_id)
-        if deployment.status == Deployment.Status.CANCELLED:
-            logger.info("Deployment %s cancelled before start", deployment_id)
-            return
-
-        # Post pending commit status to GitHub (non-blocking)
-        try:
-            from .tasks_commit_status import update_commit_status
-            update_commit_status.delay(
-                str(deployment.id), 'pending', 'Deployment started'
-            )
-        except Exception:
-            pass
-
-        skip_review = skip_review or deployment.is_rollback or should_skip_review_for_commit_message(
-            deployment.commit_message
-        )
-
-        service = deployment.service
-
-        # Capture a pre-deployment snapshot
-        try:
-            from apps.deployments.services.snapshot_service import SnapshotService
-            SnapshotService.capture_snapshot(
-                service_id=str(service.id),
-                trigger='PRE_DEPLOY',
-                label=f"Auto pre-deploy snapshot (deployment {deployment.id})",
-                created_by=None,
-            )
-        except Exception as exc:
-            logger.warning("Failed to capture auto pre-deploy snapshot for deployment %s: %s", deployment.id, exc)
-
-        if not provider_id or provider_id == "None":
-            provider = _resolve_provider_for_service(service, prefer_local=True)
-            if not provider:
-                raise RuntimeError("Could not resolve cloud provider for deployment.")
-        else:
-            provider = CloudProvider.objects.get(id=provider_id)
-
-        # Smart Deployment Queue / Intelligence Integration:
-        # Before executing build or deployment, ensure remaining/placeholder environment variables are filled by AI Senate
-        if not getattr(deployment, 'is_rollback', False) and getattr(settings, "SENATE_ENABLED", True):
-            try:
-                from apps.intelligence.services.env_intelligence import EnvironmentIntelligenceService
-                _sugg, _inj = EnvironmentIntelligenceService.apply_intelligence_to_service(service, scan_results={})
-                if _inj:
-                    logger.info("Smart Deployment Queue: AI Senate auto-filled %d remaining environment variables for %s: %s", len(_inj), service.name, ", ".join(_inj))
-                    if deployment.build_logs is not None:
-                        deployment.build_logs = f"{deployment.build_logs}\n🧠 Smart Deployment Queue: AI Senate auto-filled {len(_inj)} remaining environment variables.\n"
-                        deployment.save(update_fields=["build_logs"])
-            except Exception as _senate_err:
-                logger.warning("Smart Deployment Queue env enrichment failed for %s: %s", service.name, _senate_err)
-
-        is_delegated = deployment.source_node is not None
-
-        if not skip_review and getattr(service, 'safedeploy_enabled', False) \
-                and not getattr(deployment, 'is_rollback', False) and not is_delegated:
-            from apps.deployments.services.safedeploy.deployment_pipeline import (
-                ProductionDeploymentPipeline,
-            )
-            ProductionDeploymentPipeline().process_deployment(deployment)
-            if deployment.status == Deployment.Status.AWAITING_APPROVAL:
-                return  # parked; will resume on approve
-
-        # 0. Remote Delegation
-        from apps.deployments.models import PlatformConfig
-        config = PlatformConfig.load()
-
-        # Remote delegation: if this deployment was triggered by a remote
-        # master (source_node is set), the current node should build the
-        # image and then deploy to the remote via the orchestrator.
-        if is_delegated:
-            from apps.deployments.models_core import ManagedServer
-
-            # Build-agent optimization: if the master sent a pre-built
-            # image (docker_image is populated), don't delegate back —
-            # handle it locally with the pre-built image (pull + run).
-            prebuilt = str(service.docker_image or "").strip()
-            if prebuilt:
-                is_delegated = False
-            else:
-                # The source_node holds the IP of the node that sent the
-                # deploy request.  Deploy back to that node.
-                target = ManagedServer.objects.filter(host=deployment.source_node).first()
-                if target:
-                    _handle_remote_deployment(deployment, target, skip_review=skip_review)
-                    return
-
-        # Use the per-deployment target first. Explicit local deployments must
-        # stay local even when the service is normally assigned to a remote node.
-        effective_server = _deployment_effective_server(deployment)
-        is_local = _is_local_deployment_server(effective_server, config)
-
-        if not is_local:
-            if deployment.remote_deployment_id:
-                _resume_remote_deployment(deployment, effective_server)
-                return
-
-            # Build-agent optimization: for GIT services on remote
-            # nodes, build and push the image on the master first,
-            # then delegate with the pre-built image name so the
-            # remote node skips the build and just pulls + runs.
-            if service.deploy_type == 'GIT' and not str(service.docker_image or "").strip():
-                with fleet_build_lock(deployment):
-                    pipeline = PipelineManager(deployment)
-                    if skip_review:
-                        built_image = pipeline.run()
-                    else:
-                        pipeline.run_analysis_only()
-                        broadcast_status(deployment)
-                        return
-                _handle_remote_deployment(
-                    deployment, effective_server,
-                    skip_review=skip_review, image_name=built_image,
-                )
-                return
-
-            _handle_remote_deployment(deployment, effective_server, skip_review=skip_review)
-            return
-
-        # 1. Build Phase (Pipeline)
-        if service.deploy_type == 'GIT':
-            # A pre-built image was sent by the master (build agent
-            # optimization) — skip the build phase entirely.
-            prebuilt = str(service.docker_image or "").strip()
-            if prebuilt and deployment.source_node:
-                image_name = prebuilt
-            elif deployment.is_rollback or skip_review:
-                with fleet_build_lock(deployment):
-                    manager = PipelineManager(deployment)
-                    image_name = manager.run()
-            else:
-                # Fresh manual deploy → analysis only, pause for review
-                manager = PipelineManager(deployment)
-                manager.run_analysis_only()
-                broadcast_status(deployment)
-                return  # Paused at REVIEW → user must approve
-
-        elif service.deploy_type == 'FUNCTION':
-            with fleet_build_lock(deployment):
-                image_name = _build_function(deployment, service)
-
-        elif service.deploy_type == 'DOCKER':
-            image_name = service.docker_image
-
-        elif service.deploy_type == 'UPLOAD':
-            with fleet_build_lock(deployment):
-                image_name = _build_uploaded_source(deployment, service)
-
-        else:
-            raise ValueError(f"Unsupported deploy type: {service.deploy_type}")
-
-        # 2. Deploy Phase (only reached for rollbacks/non-GIT)
-        _deploy_container(deployment, provider, image_name)
-
-    except PipelineError as e:
-        _handle_failure(self, deployment, str(e), "Pipeline Failure")
-    except Exception as e: # pylint: disable=broad-exception-caught
-        _handle_failure(self, deployment, str(e), "System Failure")
-
-
-@shared_task(
-    bind=True,
-    max_retries=2,
-    soft_time_limit=3600,
-    time_limit=3900,
-)
-def resume_deploy_task(self, deployment_id: str, provider_id: str):
-    """
-    Phase 2: Build + Deploy after user approves review.
-    Called when user hits POST /api/v1/deployments/{id}/approve/.
-    """
-    deployment = None
-    try:
-        deployment = Deployment.objects.get(id=deployment_id)
-        if deployment.status == Deployment.Status.CANCELLED:
-            logger.info("Deployment %s cancelled", deployment_id)
-            return
-
-        service = deployment.service
-        if not provider_id or provider_id == "None":
-            provider = _resolve_provider_for_service(service, prefer_local=True)
-            if not provider:
-                raise RuntimeError("Could not resolve cloud provider for deployment.")
-        else:
-            provider = CloudProvider.objects.get(id=provider_id)
-
-        # 0. Remote Delegation
-        from apps.deployments.models import PlatformConfig
-        config = PlatformConfig.load()
-
-        # Loop Prevention: If this is already a delegated deployment, handle it locally.
-        is_delegated = deployment.source_node is not None
-        effective_server = _deployment_effective_server(deployment)
-        is_local = is_delegated or _is_local_deployment_server(effective_server, config)
-
-        if not is_local:
-            if deployment.remote_deployment_id:
-                _resume_remote_deployment(deployment, effective_server)
-                return
-
-            # Build-agent optimization: build locally, then delegate
-            # with the pre-built image name.
-            prebuilt = str(service.docker_image or "").strip()
-            if prebuilt and deployment.source_node:
-                built_image = prebuilt
-            else:
-                with fleet_build_lock(deployment):
-                    manager = PipelineManager(deployment)
-                    built_image = manager.run_build_only()
-
-            _handle_remote_deployment(
-                deployment, effective_server, image_name=built_image,
-            )
-            return
-
-        # Build phase — skip if master already pushed a pre-built image
-        prebuilt = str(service.docker_image or "").strip()
-        if prebuilt and deployment.source_node:
-            image_name = prebuilt
-        else:
-            with fleet_build_lock(deployment):
-                manager = PipelineManager(deployment)
-                image_name = manager.run_build_only()
-
-        # Deploy phase
-        _deploy_container(deployment, provider, image_name)
-
-    except PipelineError as e:
-        _handle_failure(self, deployment, str(e), "Build Failure")
-    except Exception as e:  # pylint: disable=broad-exception-caught
-        _handle_failure(self, deployment, str(e), "System Failure")
 
 
 def _handle_remote_deployment_legacy(deployment, server):
@@ -2264,7 +2018,7 @@ def _wait_for_local_container_healthy(
             deployment,
             "[HEALTH-CHECK] Docker SDK unavailable; skipping container health wait.\n",
         )
-        return True
+        return False
 
     try:
         client = docker.from_env()
@@ -2273,7 +2027,7 @@ def _wait_for_local_container_healthy(
             deployment,
             f"[HEALTH-CHECK] Docker client unavailable ({exc}); skipping container health wait.\n",
         )
-        return True
+        return False
 
     deadline = time.monotonic() + timeout_seconds
     last_state = "unknown"
@@ -2560,7 +2314,7 @@ def _deploy_container(deployment, provider, image_name):
                 if service.is_public:
                     _wait_for_local_route_ready(
                         deployment, service,
-                        timeout_seconds=0,  # keep polling until active
+                        timeout_seconds=300,  # 5 minute cap
                     )
 
             deployment.status = Deployment.Status.ACTIVE
@@ -2930,194 +2684,6 @@ def _do_promote(deployment, provider):
         )
 
 
-@shared_task(bind=True, max_retries=0, soft_time_limit=120, time_limit=150)
-def _post_deploy_monitor(self, deployment_id: str, provider_id: str, container_id: str,
-                         image_name: str):
-    """
-    Real-time post-deploy health monitor.
-
-    Watches container logs for 30s after deploy. If the container crashes:
-    1. Pattern resolver scans logs instantly for known errors (no API call)
-    2. If a pattern matches and has an auto-fix → fix + auto-redeploy
-    3. If patterns can't explain → escalate to AI models with code context
-    """
-    try:
-        deployment = Deployment.objects.get(id=deployment_id)
-        service = deployment.service
-    except Deployment.DoesNotExist:
-        return
-
-    try:
-        client = docker.from_env()
-    except Exception:
-        logger.warning("Docker not available for post-deploy monitor")
-        return
-
-    append_log(deployment, "\n🔍 Post-deploy health monitor active (30s)...\n")
-    broadcast_status(deployment)
-
-    # Poll container status for 30 seconds
-    crash_detected = False
-    container_logs = ""
-    for check in range(6):  # 6 checks × 5s = 30s
-        time.sleep(5)
-
-        try:
-            container = client.containers.get(container_id)
-            status = container.status  # running, exited, restarting, dead
-            container_logs = container.logs(tail=200).decode(
-                'utf-8', errors='replace'
-            )
-
-            if status in ('exited', 'dead'):
-                crash_detected = True
-                append_log(
-                    deployment,
-                    f"\n🔴 Container crashed (status: {status}) "
-                    f"after {(check + 1) * 5}s\n"
-                )
-                break
-
-            if status == 'restarting':
-                # Wait one more cycle to see if it stabilises
-                if check >= 2:
-                    crash_detected = True
-                    append_log(
-                        deployment,
-                        f"\n🔴 Container stuck in restart loop "
-                        f"after {(check + 1) * 5}s\n"
-                    )
-                    break
-
-        except docker.errors.NotFound:
-            crash_detected = True
-            append_log(deployment, "\n🔴 Container disappeared after deploy\n")
-            break
-        except Exception as e:
-            logger.warning("Monitor check failed: %s", e)
-            continue
-
-    if not crash_detected:
-        append_log(deployment, "✅ Container stable — no crashes detected during 30s monitoring.\n")
-        broadcast_status(deployment)
-        return
-
-    try:
-        from apps.deployments.tasks_alerts import alert_user_task
-        alert_user_task.delay(
-            deployment_id=str(deployment.id),
-            error_message="Runtime crash detected during post-deploy monitoring",
-        )
-    except Exception as alert_err:  # pylint: disable=broad-exception-caught
-        logger.warning("Failed to queue runtime crash alert: %s", alert_err)
-
-    # ── CRASH DETECTED — Run real-time diagnosis ──
-    deployment.refresh_from_db()
-
-    # Step 1: Pattern resolver (instant, no API call)
-    from apps.deployments.services.error_resolver import diagnose_runtime_logs
-    results = diagnose_runtime_logs(
-        container_logs,
-        service=service,
-        deployment=deployment,
-        auto_apply=True,
-    )
-
-    auto_fixed = [r for r in results if r.get('auto_fixed')]
-
-    if auto_fixed:
-        # ── Auto-fix generation cap ──
-        # Count how many auto-fix generations preceded this deployment.
-        # Stop after MAX_AUTO_FIX_GENERATIONS to prevent infinite fix→crash→fix loops.
-        MAX_AUTO_FIX_GENERATIONS = 2
-        generation = (deployment.commit_message or '').count('[auto-fix]')
-        # Also count parent chain via commit_hash lineage
-        from datetime import timedelta as _timedelta
-        parent_autofix_count = Deployment.objects.filter(
-            service=service,
-            commit_message__contains='[auto-fix]',
-            created_at__gte=timezone.now() - _timedelta(hours=1),
-        ).count()
-        effective_generation = max(generation, parent_autofix_count)
-
-        if effective_generation >= MAX_AUTO_FIX_GENERATIONS:
-            append_log(
-                deployment,
-                f"\n⛔ Auto-fix cap reached ({effective_generation}/{MAX_AUTO_FIX_GENERATIONS}). "
-                f"Manual intervention required.\n"
-            )
-            deployment.status = 'FAILED'
-            deployment.build_logs += f"\n--- Runtime Crash Logs ---\n{container_logs[-3000:]}\n"
-            deployment.finished_at = timezone.now()
-            deployment.save()
-            broadcast_status(deployment)
-            return
-
-        # Auto-fix applied → trigger automatic redeploy
-        append_log(
-            deployment,
-            f"\n🔧 {len(auto_fixed)} issue(s) auto-fixed "
-            f"(generation {effective_generation + 1}/{MAX_AUTO_FIX_GENERATIONS}). "
-            f"Triggering automatic redeploy...\n"
-        )
-        deployment.status = 'FAILED'
-        deployment.build_logs += f"\n--- Runtime Crash Logs ---\n{container_logs[-3000:]}\n"
-        deployment.save()
-        broadcast_status(deployment)
-
-        # Create a new deployment with the fix applied
-        new_deployment = Deployment.objects.create(
-            service=service,
-            status='QUEUED',
-            commit_hash=deployment.commit_hash,
-            commit_message=f"[auto-fix] {', '.join(r['category'] for r in auto_fixed)}",
-            is_rollback=False,
-        )
-        provider = CloudProvider.objects.get(id=provider_id)
-        try:
-            enqueue_smart_deploy_task(
-                deployment_id=str(new_deployment.id),
-                provider_id=str(provider.id),
-                skip_review=True,
-            )
-        except Exception as exc:  # pragma: no cover - broker/runtime failure
-            logger.exception(
-                "Failed to enqueue auto-fix deployment %s",
-                new_deployment.id,
-            )
-            new_deployment.status = Deployment.Status.FAILED
-            new_deployment.finished_at = timezone.now()
-            new_deployment.build_logs = (
-                (new_deployment.build_logs or "")
-                + f"\n[ERROR] Failed to queue auto-fix deploy task: {exc}\n"
-            )
-            new_deployment.save(update_fields=["status", "finished_at", "build_logs", "updated_at"])
-        return
-
-    # Step 2: No pattern match → escalate to AI models
-    _escalate_to_ai(deployment, service, container_logs)
-
-    # Step 3: Jules auto-fix (async) — tries to fix and redeploy
-    try:
-        from apps.intelligence.jules_fix import jules_fix_deployment_failure
-        jules_fix_deployment_failure.delay(
-            deployment_id=str(deployment.id),
-            logs=container_logs,
-            repo_path=None,
-            repo_url=service.repository_url or "",
-        )
-        logger.info("Jules auto-fix triggered for runtime crash on deployment %s", deployment.id)
-    except ImportError:
-        pass
-    except Exception as e:
-        logger.warning("Failed to trigger Jules auto-fix for runtime crash: %s", e)
-
-    # Mark deployment as failed
-    deployment.status = 'FAILED'
-    deployment.build_logs += f"\n--- Runtime Crash Logs ---\n{container_logs[-3000:]}\n"
-    deployment.finished_at = timezone.now()
-    deployment.save()
-    broadcast_status(deployment)
 
 
 def _escalate_to_ai(deployment, service, container_logs):
@@ -3319,121 +2885,7 @@ def _handle_failure(task, deployment, error_msg, reason):
     logger.error("Deployment failed (%s), not retrying: %s", reason, error_msg)
 
 
-@shared_task(bind=True, max_retries=0, soft_time_limit=600, time_limit=660)
-def self_heal_remote_deployment(self, deployment_id: str, server_id: str):
-    """
-    Self-healing task for remote deployment failures.
-
-    Triggered when a remote deployment fails. Attempts automated diagnosis
-    and recovery via SSH before marking the deployment as permanently failed.
-
-    Recovery actions include:
-    - Container restart
-    - Stack restart (docker compose up -d)
-    - Image/volume pruning (disk space)
-    - Network repair
-    - AI escalation for complex failures
-    """
-    try:
-        deployment = Deployment.objects.get(id=deployment_id)
-    except Deployment.DoesNotExist:
-        logger.warning("Self-heal: deployment %s not found", deployment_id)
-        return
-
-    try:
-        from apps.deployments.models_core import ManagedServer
-        server = ManagedServer.objects.get(id=server_id)
-    except Exception as exc:
-        logger.warning("Self-heal: server %s not found: %s", server_id, exc)
-        return
-
-    if not (server.ssh_key or server.ssh_password):
-        logger.info("Self-heal: no SSH credentials for server %s", server.name)
-        return
-
-    append_log(deployment, "\n🔧 Self-healing: diagnosing remote node failure...\n")
-    broadcast_status(deployment)
-
-    try:
-        from apps.deployments.services.self_healing_orchestrator import (
-            RecoveryAction,
-            SelfHealingOrchestrator,
-        )
-
-        orchestrator = SelfHealingOrchestrator(server)
-        result = orchestrator.heal_deployment_failure(deployment)
-
-        append_log(deployment, f"[Self-Heal] Action: {result.action_taken.value}\n")
-        append_log(deployment, f"[Self-Heal] Success: {result.success}\n")
-        append_log(deployment, f"[Self-Heal] Details: {result.details}\n")
-
-        if result.success:
-            append_log(deployment, f"[Self-Heal] Recovery succeeded: {result.action_taken.value}\n")
-            append_log(deployment, f"[Self-Heal] Post-recovery status: {result.post_recovery_status}\n")
-
-            if result.next_action:
-                append_log(deployment, f"[Self-Heal] Suggested next action: {result.next_action.value}\n")
-
-            deployment.refresh_from_db()
-            if deployment.status == Deployment.Status.FAILED:
-                deployment.status = Deployment.Status.QUEUED
-                deployment.build_logs += "\n[Self-Heal] Retrying deployment after successful recovery...\n"
-                deployment.save(update_fields=["status", "build_logs", "updated_at"])
-                broadcast_status(deployment)
-
-                try:
-                    provider = deployment.service.provider
-                    if provider:
-                        enqueue_smart_deploy_task(
-                            deployment_id=str(deployment.id),
-                            provider_id=str(provider.id),
-                            skip_review=True,
-                        )
-                        append_log(deployment, "[Self-Heal] Deployment retry queued\n")
-                except Exception as exc:
-                    append_log(deployment, f"[Self-Heal] Failed to queue retry: {exc}\n")
-                    logger.warning("Self-heal retry queue failed: %s", exc)
-
-        elif result.next_action == RecoveryAction.ESCALATE_TO_AI:
-            append_log(deployment, "[Self-Heal] Escalating to system intelligence (AI)...\n")
-
-            try:
-                diagnostics = orchestrator.run_full_diagnostics(deployment)
-                ai_result = orchestrator.escalate_to_ai(deployment, diagnostics)
-
-                if ai_result.get("success"):
-                    append_log(deployment, "[Self-Heal] AI analysis received\n")
-                    commands = ai_result.get("suggested_commands", [])
-                    if commands:
-                        append_log(deployment, "[Self-Heal] AI suggested commands:\n")
-                        for cmd in commands[:5]:
-                            append_log(deployment, f"  CMD: {cmd}\n")
-
-                    deployment.ai_diagnosis = ai_result.get("ai_response", "")[:2000]
-                    deployment.save(update_fields=["ai_diagnosis", "updated_at"])
-                else:
-                    append_log(deployment, f"[Self-Heal] AI escalation failed: {ai_result.get('error', 'unknown')}\n")
-
-            except Exception as exc:
-                append_log(deployment, f"[Self-Heal] AI escalation error: {exc}\n")
-                logger.warning("Self-heal AI escalation failed: %s", exc)
-
-        else:
-            append_log(deployment, f"[Self-Heal] Recovery failed: {result.details}\n")
-            if result.next_action:
-                append_log(deployment, f"[Self-Heal] Suggested next action: {result.next_action.value}\n")
-
-        heal_log = orchestrator.get_heal_log()
-        if heal_log:
-            append_log(deployment, "[Self-Heal] Heal log:\n")
-            for entry in heal_log[-10:]:
-                append_log(deployment, f"  - {entry}\n")
-
-    except Exception as exc:
-        append_log(deployment, f"[Self-Heal] Exception: {exc}\n")
-        logger.exception("Self-healing task failed for deployment %s", deployment_id)
-    finally:
-        broadcast_status(deployment)
+from .tasks_deploy_remote import self_heal_remote_deployment  # noqa: F401
 
 
 SHARED_OLLAMA_NAME_PREFIX = "ollama-cpp-shared"
@@ -3673,636 +3125,13 @@ def _cleanup_shared_ollama_if_unused(project):
         logger.warning("Shared Ollama cleanup check failed: %s", exc)
 
 
-@shared_task(bind=True, max_retries=0)
-def one_click_deploy_template_task(self, service_id: str, template_id: str):
-    """
-    Background orchestration for template deployments.
-    """
-    # pylint: disable=unused-argument
-    try:
-        service = Service.objects.get(id=service_id)
-    except Service.DoesNotExist:
-        return
-
-    # Load template
-    template_path = os.path.join(
-        settings.BASE_DIR, 'apps/deployments/fixtures/templates.json'
-    )
-    try:
-        with open(template_path, encoding='utf-8') as f:
-            templates = json.load(f)
-        template = next((t for t in templates if t.get('id') == template_id), None)
-    except Exception as exc: # pylint: disable=broad-exception-caught
-        logger.exception("Exception reading template JSON: %s", exc)
-        template = None
-
-    def _verify_image_available(image: str):
-        """
-        Best-effort check: docker manifest inspect <image>.
-        Skippable via SKIP_TEMPLATE_IMAGE_VERIFY=true.
-        """
-        skip = os.environ.get("SKIP_TEMPLATE_IMAGE_VERIFY", "").lower() in {"1", "true", "yes", "on"}
-        if skip or not image:
-            return
-        try:
-            result = subprocess.run(
-                ["docker", "manifest", "inspect", image],
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 0:
-                raise RuntimeError(result.stderr.strip() or f"manifest inspect failed for {image}")
-        except FileNotFoundError as exc:  # docker not installed
-            logger.warning("Docker not available to verify image %s: %s", image, exc)
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            logger.error("Template image %s not available: %s", image, exc)
-            raise
-
-    # Provision addons
-    required_addons = (template.get('required_addons') or []) if template else []
-
-    # Honor template minimum RAM hints (e.g. Ollama models).
-    if template:
-        try:
-            min_ram_gb = int(template.get("min_ram_gb") or 0)
-        except (TypeError, ValueError):
-            min_ram_gb = 0
-        if min_ram_gb > 0:
-            min_ram_mb = min_ram_gb * 1024
-            try:
-                current_mb = int(service.memory_mb or 0)
-            except (TypeError, ValueError):
-                current_mb = 0
-            if current_mb < min_ram_mb:
-                service.memory_mb = min_ram_mb
-                service.save(update_fields=["memory_mb"])
-
-    # Template-specific minimum requirements / defaults
-    if template and template.get('id') == 'khoj':
-        # Khoj requires pgvector; ensure Postgres addon is present
-        if 'POSTGRES' not in required_addons:
-            required_addons.append('POSTGRES')
-    if template and template.get('id') == 'librechat':
-        # LibreChat needs a JWT secret; inject default if missing
-        env_list = template.setdefault('env_vars', [])
-        has_jwt = any((str(ev.get('key') or '').upper() == 'JWT_SECRET') for ev in env_list)
-        if not has_jwt:
-            env_list.append({
-                "key": "JWT_SECRET",
-                "value": "${RANDOM_PASSWORD}",
-                "is_secret": True
-            })
-        has_cfg = any((str(ev.get('key') or '').upper() == 'LIBRECHAT_CONFIG_PATH') for ev in env_list)
-        if not has_cfg:
-            env_list.append({
-                "key": "LIBRECHAT_CONFIG_PATH",
-                "value": "/app/librechat.yaml",
-                "is_secret": False
-            })
-
-    # Template crash-clarity: enforce required envs for intelligence templates
-    intelligence_templates = {
-        'librechat', 'khoj', 'flowise', 'langflow',
-        'dify', 'memgpt', 'anythingllm', 'ai-router'
-    }
-    if template and template.get('id') in intelligence_templates:
-        env_list = template.setdefault('env_vars', [])
-        existing = {str(ev.get('key') or '').upper() for ev in env_list}
-        required_defaults = {
-            'JWT_SECRET': '${RANDOM_PASSWORD}',
-            'SECRET_KEY': '${RANDOM_PASSWORD}',
-            'DATABASE_URL': '${DATABASE_URL}',
-            'REDIS_URL': '${REDIS_URL}',
-        }
-        for key, val in required_defaults.items():
-            if key not in existing:
-                env_list.append({
-                    "key": key,
-                    "value": val,
-                    "is_secret": 'SECRET' in key or 'PASSWORD' in key,
-                })
-    if template and template.get('docker_image'):
-        _verify_image_available(template['docker_image'])
-    supported_addons = set(addon_provisioner.ADDON_IMAGES.keys())
-
-    # Track addon URLs for template rendering
-    addon_urls = {}
-
-    for addon_type in required_addons:
-        if addon_type not in supported_addons:
-            logger.warning("Template addon %s is not supported yet; skipping", addon_type)
-            continue
-
-        # Check if service already has this addon type active
-        addon = Addon.objects.filter(service=service, addon_type=addon_type, status=Addon.Status.ACTIVE).first()
-        if not addon:
-            addon = Addon.objects.create(
-                service=service,
-                name=f"{addon_type.lower()}-{service.name}"[:255],
-                addon_type=addon_type,
-                status=Addon.Status.PROVISIONING,
-            )
-            try:
-                _, url = addon_provisioner.provision_dispatch(addon)
-                addon.connection_url = url
-                addon.status = Addon.Status.ACTIVE
-                addon.save()
-            except Exception as e:
-                logger.error(f"Failed to provision {addon_type} for template: {e}")
-                addon.status = Addon.Status.FAILED
-                addon.save()
-                return
-
-        addon_urls[addon_type] = addon.connection_url
-
-        # Parse connection URL to get host:port for template DB_HOST vars
-        addon_hostname = ""
-        addon_port = ""
-        try:
-            parsed_addon = urlparse(addon.connection_url)
-            if parsed_addon.hostname:
-                addon_hostname = parsed_addon.hostname
-                addon_port = str(parsed_addon.port or "")
-        except Exception:
-            pass
-
-        # Inject Env (legacy/direct injection)
-        key_map = {
-            'POSTGRES': 'DATABASE_URL',
-            'REDIS': 'REDIS_URL',
-            'MONGODB': 'MONGODB_URI',
-            'MYSQL': 'MYSQL_URL',
-            'ELASTICSEARCH': 'ELASTICSEARCH_URL',
-        }
-        key = key_map.get(addon_type, f"{addon_type}_URL")
-        EnvironmentVariable.objects.update_or_create(
-            service=service, key=key,
-            defaults={'value': addon.connection_url, 'is_secret': True}
-        )
-
-        # Update template-specific DB_HOST vars so apps find the addon
-        # (e.g. WordPress expects WORDPRESS_DB_HOST, not MYSQL_URL)
-        host_port = f"{addon_hostname}:{addon_port}" if addon_hostname and addon_port else addon_hostname
-        if host_port and addon_type == 'MYSQL':
-            db_host_keys = ['WORDPRESS_DB_HOST', 'DB_HOST']
-            for db_host_key in db_host_keys:
-                existing = EnvironmentVariable.objects.filter(
-                    service=service, key=db_host_key
-                ).first()
-                if existing:
-                    # Only overwrite if it looks like a placeholder
-                    val = str(existing.value or "")
-                    if not val or val == 'db:3306' or 'localhost' in val:
-                        existing.value = host_port
-                        existing.save(update_fields=['value'])
-        if host_port and addon_type in ('POSTGRES', 'MYSQL', 'MONGODB'):
-            # Generic DB_HOST for any app that needs it
-            generic = EnvironmentVariable.objects.filter(
-                service=service, key='DB_HOST'
-            ).first()
-            if not generic and host_port:
-                EnvironmentVariable.objects.create(
-                    service=service, key='DB_HOST',
-                    value=host_port, is_secret=False
-                )
-
-    # Render and store template environment variables
-    def render_value(raw: str) -> str:
-        import secrets
-        v = str(raw or '')
-        v = v.replace('${RANDOM_PASSWORD}', secrets.token_urlsafe(24))
-        v = v.replace('${DOMAIN}', service.public_domain or '')
-        v = v.replace('${MONGODB_URL}', addon_urls.get('MONGODB', ''))
-        v = v.replace('${MONGODB_URI}', addon_urls.get('MONGODB', ''))
-        v = v.replace('${DATABASE_URL}', addon_urls.get('POSTGRES', os.environ.get('DATABASE_URL', '')))
-        v = v.replace('${POSTGRES_URL}', addon_urls.get('POSTGRES', os.environ.get('DATABASE_URL', '')))
-        v = v.replace('${REDIS_URL}', addon_urls.get('REDIS', os.environ.get('REDIS_URL', '')))
-        v = v.replace('${MYSQL_URL}', addon_urls.get('MYSQL', os.environ.get('MYSQL_URL', '')))
-        v = v.replace('${ELASTICSEARCH_URL}', addon_urls.get('ELASTICSEARCH', os.environ.get('ELASTICSEARCH_URL', '')))
-
-        # Shared Ollama URL — use the freshly injected service env var if available,
-        # fall back to OS environment, then default.
-        injected_ollama = (
-            EnvironmentVariable.objects
-            .filter(service=service, key='OLLAMA_BASE_URL')
-            .values_list('value', flat=True)
-            .first()
-        )
-        ollama_base_default = injected_ollama or os.environ.get('OLLAMA_BASE_URL', 'http://ollama:11434')
-
-        # System Environment Overrides & Defaults
-        default_ai_senate = os.environ.get('AI_SENATE_URL') or 'http://ollama:11434'
-        v = v.replace('${AI_SENATE_URL}', default_ai_senate)
-        v = v.replace('${LITELLM_MASTER_KEY}', os.environ.get('LITELLM_MASTER_KEY', ''))
-        v = v.replace('${OLLAMA_BASE_URL}', ollama_base_default)
-        v = v.replace('${OLLAMA_MODEL}', os.environ.get('OLLAMA_MODEL', 'llama3'))
-        v = v.replace('${AI_ROUTER_API_BASE}', os.environ.get('AI_ROUTER_API_BASE', DEFAULT_AI_ROUTER_API_BASE))
-        v = v.replace('${AI_ROUTER_UI_BASE}', os.environ.get('AI_ROUTER_UI_BASE', DEFAULT_AI_ROUTER_UI_BASE))
-        v = v.replace('${AI_ROUTER_BRAID_ALIAS}', os.environ.get('AI_ROUTER_BRAID_ALIAS', DEFAULT_BRAID_ALIAS))
-
-        return v
-
-    if template and 'env_vars' in template:
-        env_vars = template.get('env_vars') or []
-        if isinstance(env_vars, list):
-            for item in env_vars:
-                if not isinstance(item, dict):
-                    continue
-                key = str(item.get('key') or '').strip()
-                if not key:
-                    continue
-                EnvironmentVariable.objects.update_or_create(
-                    service=service,
-                    key=key,
-                    defaults={
-                        'value': render_value(item.get('value', '')),
-                        'is_secret': bool(item.get('is_secret', False)),
-                    }
-                )
-
-                # Generic custom domain handling from Env Vars
-                if key == 'CUSTOM_DOMAINS':
-                    rendered_val = render_value(item.get('value', ''))
-                    domains = [d.strip() for d in rendered_val.split(',') if d.strip()]
-                    current_domains = service.custom_domains or []
-                    updated = False
-                    for domain in domains:
-                        if domain not in current_domains:
-                            current_domains.append(domain)
-                            updated = True
-                    if updated:
-                        service.custom_domains = current_domains
-                        service.save(update_fields=['custom_domains'])
-
-    if template and template.get('id') == 'ai-router':
-        update_fields = []
-        start_command = "--port 4000 --host 0.0.0.0"
-
-        if service.internal_port != 4000:
-            service.internal_port = 4000
-            update_fields.append('internal_port')
-        if (service.health_check_path or '').strip() in {'', '/health'}:
-            service.health_check_path = '/'
-            update_fields.append('health_check_path')
-        if (service.start_command or '').strip() != start_command:
-            service.start_command = start_command
-            update_fields.append('start_command')
-        if int(service.memory_mb or 0) < 1024:
-            service.memory_mb = 1024
-            update_fields.append('memory_mb')
-        try:
-            cpu_cores = float(service.cpu_cores or 0)
-        except (TypeError, ValueError):
-            cpu_cores = 0.0
-        if cpu_cores < 1.0:
-            service.cpu_cores = 1.0
-            update_fields.append('cpu_cores')
-
-        # Ensure we set a Prisma migration env var instead of nonexistent model fields
-        if not EnvironmentVariable.objects.filter(service=service, key="RUN_PRISMA_MIGRATE").exists():
-            EnvironmentVariable.objects.create(
-                service=service,
-                key="RUN_PRISMA_MIGRATE",
-                value="true",
-                is_secret=False
-            )
-
-        # Critical env hints
-        required = {
-            "LITELLM_MASTER_KEY": "sk-${RANDOM_PASSWORD}",
-            "AI_ROUTER_API_BASE": DEFAULT_AI_ROUTER_API_BASE,
-            "AI_ROUTER_UI_BASE": DEFAULT_AI_ROUTER_UI_BASE,
-            "AI_ROUTER_AUTO_DISCOVER_MODELS": "true",
-            "AI_ROUTER_SELECTED_SERVICE_IDS": "[]",
-            "AI_ROUTER_BRAID_ALIAS": DEFAULT_BRAID_ALIAS,
-            "AI_ROUTER_BRAID_ENABLED": "true",
-        }
-        # Remove explicit DB migrations since we are running stateless
-        env_list = template.setdefault('env_vars', [])
-        existing_keys = {str(ev.get("key") or "").upper() for ev in env_list}
-        for key, val in required.items():
-            if key not in existing_keys:
-                env_list.append({"key": key, "value": val, "is_secret": True})
-        existing_service_keys = {
-            str(key or "").upper()
-            for key in EnvironmentVariable.objects.filter(service=service).values_list('key', flat=True)
-        }
-        for key, val in required.items():
-            if key in existing_service_keys:
-                continue
-            EnvironmentVariable.objects.create(
-                service=service,
-                key=key,
-                value=render_value(val),
-                is_secret=key in {"LITELLM_MASTER_KEY"},
-            )
-            existing_service_keys.add(key)
-        if update_fields:
-            service.save(update_fields=update_fields)
 
 
 
-    provider = service.provider or CloudProvider.objects.filter(is_active=True).first()
-
-    # ── Shared Ollama CPP Orchestration ─────────────────────────────────
-    # Intelligently manages a single Ollama CPP instance per project.
-    # When deploying any LLM that needs Ollama, the system auto-creates a
-    # shared Ollama CPP runtime if one doesn't exist, and wires the new
-    # service to it. When the last LLM consumer is deleted, the shared
-    # Ollama is removed to free VPS resources.
-    # ────────────────────────────────────────────────────────────────────
-    shared_ollama_id = _ensure_shared_ollama_cpp(service, provider)
-    shared_ollama_url = ""
-    if shared_ollama_id:
-        try:
-            shared_ollama = Service.objects.get(id=shared_ollama_id)
-            shared_name = shared_ollama.name
-            shared_port = shared_ollama.internal_port or 11434
-            shared_ollama_url = f"http://{shared_name}:{shared_port}"
-        except Service.DoesNotExist:
-            shared_ollama_id = None
-
-    # Inject OLLAMA_BASE_URL for any LLM that references it
-    if shared_ollama_url:
-        ollama_base_key = 'OLLAMA_BASE_URL'
-        if template:
-            env_vars = template.get('env_vars') or []
-            has_ollama_ref = any(
-                str(item.get('key') or '').upper() in {'OLLAMA_BASE_URL', 'OLLAMA_MODEL'}
-                for item in env_vars if isinstance(item, dict)
-            )
-            # Also detect Ollama-based templates by their docker image
-            docker_img = str(template.get('docker_image') or '').lower()
-            is_ollama_template = docker_img.startswith('ollama/') or docker_img == 'ollama/ollama:latest'
-            if has_ollama_ref or is_ollama_template:
-                EnvironmentVariable.objects.update_or_create(
-                    service=service,
-                    key=ollama_base_key,
-                    defaults={'value': shared_ollama_url, 'is_secret': False}
-                )
-                # For Ollama-native templates, also set OLLAMA_HOST so they
-                # know the host to talk to for ollama pull / API calls
-                if is_ollama_template and shared_ollama_id:
-                    EnvironmentVariable.objects.update_or_create(
-                        service=service,
-                        key='OLLAMA_HOST',
-                        defaults={'value': shared_ollama_url.replace('http://', '').replace(':11434', ':11434'), 'is_secret': False}
-                    )
-
-    # One-Click AI Router + Ollama auto-deployment
-    if provider and template and template.get('id') == 'ai-router':
-        import re
-        def slugify(value: str) -> str:
-            value = (value or 'service').lower()
-            value = re.sub(r'[^a-z0-9]+', '-', value).strip('-')
-            return (value[:48] or 'service')
-
-        # AI Router uses shared Ollama CPP — no need for 3 separate containers.
-        # Register companion models via the shared Ollama instead.
-        if shared_ollama_id:
-            companion_service_ids = [str(shared_ollama_id)]
-
-            # Pull required default models into the shared Ollama
-            _pull_ollama_models_into_shared(
-                shared_ollama_id,
-                ['llama3.1:7b', 'qwen2.5:0.5b', 'nomic-embed-text'],
-            )
-
-            # Automatically update the AI_ROUTER_SELECTED_SERVICE_IDS
-            try:
-                import json
-                EnvironmentVariable.objects.update_or_create(
-                    service=service,
-                    key='AI_ROUTER_SELECTED_SERVICE_IDS',
-                    defaults={
-                        'value': json.dumps(companion_service_ids),
-                        'is_secret': False,
-                    }
-                )
-            except Exception:
-                pass
-
-            # Wire OLLAMA_BASE_URL even if not in template env_vars
-            EnvironmentVariable.objects.update_or_create(
-                service=service,
-                key='OLLAMA_BASE_URL',
-                defaults={'value': shared_ollama_url, 'is_secret': False}
-            )
-        else:
-            # Fallback: shared Ollama unavailable — deploy separate companions
-            companion_templates = ['llama3.1-7b', 'qwen2.5-0.5b', 'ollama-nomic-embed-text']
-            companion_service_ids = []
-
-            for c_template_id in companion_templates:
-                c_template = next((t for t in templates if t.get('id') == c_template_id), None)
-                if not c_template:
-                    continue
-
-                c_name = f"{slugify(c_template_id)}-{secrets.token_hex(4)}"[:63]
-                c_internal_port = int(c_template.get('default_port') or 11434)
-
-                c_service = Service.objects.create(
-                    name=c_name,
-                    deploy_type='DOCKER',
-                    docker_image=str(c_template.get('docker_image', 'ollama/ollama:latest')),
-                    internal_port=c_internal_port,
-                    owner=service.owner,
-                    provider=provider,
-                    project=service.project,
-                    memory_mb=int(c_template.get('min_ram_gb') or 1) * 1024,
-                    cpu_cores=float(c_template.get('min_cpu_cores') or 1.0)
-                )
-                companion_service_ids.append(str(c_service.id))
-
-                EnvironmentVariable.objects.update_or_create(
-                    service=c_service,
-                    key='PORT',
-                    defaults={'value': str(c_internal_port), 'is_secret': False}
-                )
-                EnvironmentVariable.objects.update_or_create(
-                    service=c_service,
-                    key='PUBLIC_DOMAIN',
-                    defaults={'value': c_service.public_domain, 'is_secret': False}
-                )
-
-                c_env_vars = c_template.get('env_vars') or []
-                for item in c_env_vars:
-                    key = str(item.get('key') or '').strip()
-                    if key:
-                        EnvironmentVariable.objects.update_or_create(
-                            service=c_service,
-                            key=key,
-                            defaults={
-                                'value': render_value(item.get('value', '')),
-                                'is_secret': bool(item.get('is_secret', False)),
-                            }
-                        )
-
-                c_deployment = Deployment.objects.create(
-                    service=c_service,
-                    status='QUEUED',
-                    commit_hash='template',
-                    commit_message=f"Auto-companion Template: {c_template_id}"
-                )
-                smart_deploy_task.delay(deployment_id=str(c_deployment.id), provider_id=str(provider.id))
-
-            if companion_service_ids:
-                try:
-                    import json
-                    EnvironmentVariable.objects.update_or_create(
-                        service=service,
-                        key='AI_ROUTER_SELECTED_SERVICE_IDS',
-                        defaults={
-                            'value': json.dumps(companion_service_ids),
-                            'is_secret': False,
-                        }
-                    )
-                except Exception:
-                    pass
-
-    # ── Ollama model pull for standalone Ollama templates ──────────────
-    # When deploying a standalone Ollama model (e.g. deepseek-r1) and
-    # shared Ollama CPP is handling it, schedule a model pull.
-    if template and shared_ollama_id and shared_ollama_url:
-        docker_img = str(template.get('docker_image') or '').lower()
-        if docker_img.startswith('ollama/'):
-            env_vars = template.get('env_vars') or []
-            ollama_model = ""
-            for item in (env_vars or []):
-                if isinstance(item, dict) and str(item.get('key') or '').upper() == 'OLLAMA_MODEL':
-                    ollama_model = render_value(item.get('value', ''))
-                    break
-            if ollama_model:
-                _pull_ollama_models_into_shared(shared_ollama_id, [ollama_model])
-
-    # Trigger deploy for the main template
-    if provider:
-        deployment = Deployment.objects.create(
-            service=service,
-            status='QUEUED',
-            commit_hash='template',
-            commit_message=f"Template: {template_id}"
-        )
-        smart_deploy_task.delay(deployment_id=str(deployment.id), provider_id=str(provider.id))
-
-        # Post-deploy hook: if prisma migrate requested, annotate deployment for follow-up
-        if any(ev.key == "RUN_PRISMA_MIGRATE" and ev.value.lower() in {"1", "true", "yes"} for ev in service.env_vars.all()):
-            append_log(deployment, "\nℹ️ Prisma migration will run post-deploy for this template.\n")
 
 
-@shared_task(bind=True, max_retries=3)
-def provision_addon_task(self, addon_id: str):
-    """Provision an addon Docker container and inject env vars."""
-    import time as _time
-    _start_ts = _time.monotonic()
-    try:
-        addon = Addon.objects.get(id=addon_id)
-        cid, url = addon_provisioner.provision_dispatch(addon)
-        addon.connection_url = url
-        addon.status = Addon.Status.ACTIVE
-        addon.coolify_uuid = cid
-        addon.save()
-        try:
-            from config.metrics import ADDON_PROVISION_DURATION
-            ADDON_PROVISION_DURATION.labels(addon_type=addon.addon_type).observe(
-                _time.monotonic() - _start_ts
-            )
-        except Exception as _metric_exc:
-            logger.debug("addon provision metric failed: %s", _metric_exc)
-
-        # If public domain is assigned, regenerate Caddy configuration
-        if addon.public_domain:
-            try:
-                from services.caddy_manager import apply_caddyfile, generate_caddyfile
-
-                from .models import PlatformConfig  # type: ignore[attr-defined]
-                cfg = PlatformConfig.load()
-                caddy_content = generate_caddyfile(cfg)
-                apply_caddyfile(caddy_content)
-            except Exception as ce:
-                logger.warning("Failed to sync Caddy configuration for addon %s: %s", addon.id, ce)
-
-        # Auto-inject addon credentials as env vars
-        creds = addon.parsed_credentials
-        for key, value in creds.items():
-            EnvironmentVariable.objects.update_or_create(
-                service=addon.service,
-                key=key,
-                defaults={
-                    'value': value,
-                    'is_secret': key.endswith('_PASSWORD') or key.endswith('_URL'),
-                    'source': 'ADDON',
-                }
-            )
-
-        # RabbitMQ: also inject common broker aliases for Celery/worker stacks
-        if addon.addon_type == 'RABBITMQ':
-            for extra_key in ("CELERY_BROKER_URL", "AMQP_URL"):
-                EnvironmentVariable.objects.update_or_create(
-                    service=addon.service,
-                    key=extra_key,
-                    defaults={'value': url, 'is_secret': True, 'source': 'ADDON'},
-                )
-    except Exception as e:
-        logger.error("Addon provisioning failed for %s: %s", addon_id, e)
-        try:
-            addon = Addon.objects.get(id=addon_id)
-            if self.request.retries >= self.max_retries:
-                addon.status = Addon.Status.FAILED
-                addon.save()
-                logger.error("Addon %s marked FAILED after %d retries", addon_id, self.max_retries)
-                return
-        except Addon.DoesNotExist:
-            return
-        raise self.retry(exc=e, countdown=30)
 
 
-@shared_task
-def deprovision_addon_task(addon_id: str):
-    """Delete addon container."""
-    try:
-        addon = Addon.objects.get(id=addon_id)
-        if addon.coolify_uuid:
-            container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
-            addon_provisioner.deprovision_dispatch(addon.coolify_uuid, addon, container_name)
-        addon.status = Addon.Status.DELETED
-        addon.save()
-    except Exception as e: # pylint: disable=broad-exception-caught
-        logger.error("Deprovision failed: %s", e)
-
-
-@shared_task(bind=True, max_retries=3)
-def backup_addon_task(self, addon_id: str):
-    """Create a backup for the specified addon."""
-    backup = None
-    try:
-        addon = Addon.objects.get(id=addon_id)
-        backup = Backup.objects.create(addon=addon, status=Backup.Status.PENDING)
-        path = addon_provisioner.create_backup(addon)
-        backup.file_path = path
-        backup.status = Backup.Status.COMPLETED
-        backup.save()
-    except Exception as e:
-        logger.error("Backup failed for addon %s: %s", addon_id, e)
-        if self.request.retries >= self.max_retries:
-            if backup:
-                backup.status = Backup.Status.FAILED
-                backup.error_message = str(e)[:500]
-                backup.save()
-            logger.error("Backup for addon %s marked FAILED after %d retries", addon_id, self.max_retries)
-            return
-        raise self.retry(exc=e, countdown=30)
-
-
-@shared_task(bind=True)
-def restore_addon_task(self, backup_id: str):
-    """Restore a backup to the addon."""
-    # pylint: disable=unused-argument
-    try:
-        backup = Backup.objects.get(id=backup_id)
-        addon_provisioner.restore_backup(backup.addon, backup.file_path)
-    except Exception as e:
-        raise e
 
 # ── Backup tasks re-exported from tasks_backup (single source of truth) ──
 # These tasks are defined in tasks_backup.py with correct signatures,
@@ -4310,144 +3139,10 @@ def restore_addon_task(self, backup_id: str):
 # view imports (which reference .tasks) continue to work without
 # maintaining duplicate definitions.
 
-from apps.deployments.tasks_backup import (  # noqa: F401
-    cleanup_old_backups_task,
-    create_server_backup_task,
-    create_service_backup_task,
-    purge_user_backups_task,
-    restore_server_backup_task,
-    restore_service_backup_task,
-)
 
 
-@shared_task(bind=True, soft_time_limit=3600, time_limit=4200)
-def execute_server_transfer_task(self, transfer_id):
-    from apps.deployments.services.transfer_service import _redact_transfer_text
-
-    from .models_transfer import ServerTransfer as TransferModel
-
-    lock_key = f"server-transfer:{transfer_id}"
-    if not cache.add(lock_key, "1", timeout=3600):
-        logger.warning("Transfer Task: duplicate execution ignored for %s", transfer_id)
-        return {"status": "skipped", "reason": "already_running"}
-
-    try:
-        transfer = TransferModel.objects.get(id=transfer_id)
-    except TransferModel.DoesNotExist:
-        logger.error("Transfer Task: transfer %s not found", transfer_id)
-        cache.delete(lock_key)
-        return {"status": "missing"}
-
-    if transfer.status in {"COMPLETED", "FAILED", "ROLLED_BACK", "CANCELLED"}:
-        cache.delete(lock_key)
-        return {"status": "skipped", "reason": f"terminal:{transfer.status}"}
-
-    try:
-        engine = ServerTransferService(transfer)
-        engine.execute()
-        transfer.refresh_from_db(fields=["status"])
-        if transfer.status == "COMPLETED":
-            transfer.target_ssh_key = ""
-            transfer.target_ssh_password = ""
-            transfer.source_ssh_key = ""
-            transfer.source_ssh_password = ""
-            transfer.save(update_fields=[
-                "target_ssh_key",
-                "target_ssh_password",
-                "source_ssh_key",
-                "source_ssh_password",
-            ])
-        return {"status": transfer.status}
-    except Exception as exc:
-        logger.exception("Transfer Task: unhandled failure for %s: %s", transfer_id, exc)
-        transfer.status = "FAILED"
-        transfer.error_message = _redact_transfer_text(str(exc))[:4000]
-        transfer.target_ssh_key = ""
-        transfer.target_ssh_password = ""
-        transfer.source_ssh_key = ""
-        transfer.source_ssh_password = ""
-        transfer.save(update_fields=[
-            "status",
-            "error_message",
-            "target_ssh_key",
-            "target_ssh_password",
-            "source_ssh_key",
-            "source_ssh_password",
-        ])
-        return {"status": "FAILED", "error": str(exc)}
-    finally:
-        cache.delete(lock_key)
 
 
-@shared_task(bind=True)
-def rollback_transfer_task(self, transfer_id):
-    from .models_transfer import ServerTransfer as TransferModel
-
-    lock_key = f"server-transfer-rollback:{transfer_id}"
-    if not cache.add(lock_key, "1", timeout=1800):
-        logger.warning("Transfer Rollback Task: duplicate rollback ignored for %s", transfer_id)
-        return {"status": "skipped", "reason": "already_running"}
-
-    try:
-        transfer = TransferModel.objects.get(id=transfer_id)
-        if transfer.status in {"COMPLETED", "FAILED", "ROLLED_BACK", "CANCELLED"}:
-            cache.delete(lock_key)
-            return {"status": "skipped", "reason": f"terminal:{transfer.status}"}
-        engine = ServerTransferService(transfer)
-        engine.rollback()
-        return {"status": "ROLLED_BACK"}
-    except TransferModel.DoesNotExist:
-        logger.error("Transfer Rollback Task: transfer %s not found", transfer_id)
-        return {"status": "missing"}
-    except Exception as exc:
-        logger.exception("Transfer Rollback Task failed for %s: %s", transfer_id, exc)
-        return {"status": "FAILED", "error": str(exc)}
-    finally:
-        cache.delete(lock_key)
-
-
-@shared_task(bind=True, max_retries=0, acks_late=False, reject_on_worker_lost=False)
-def platform_update_task(self, update_id: str):
-    """Execute platform update in background."""
-    from services.platform_updater import perform_update
-
-    from .models_updates import PlatformUpdate
-
-    try:
-        update = PlatformUpdate.objects.get(id=update_id)
-    except PlatformUpdate.DoesNotExist:
-        return
-
-    if update.status != 'PENDING':
-        logger.warning(
-            "Platform update %s is already in state %s; skipping re-execution to prevent restart loop.",
-            update_id, update.status,
-        )
-        return
-
-    perform_update(update)
-
-
-@shared_task(bind=True, max_retries=0, acks_late=False, reject_on_worker_lost=False)
-def platform_rollback_task(self, update_id: str):
-    """Execute platform rollback in background (avoids blocking the request thread)."""
-    from services.platform_updater import _rollback
-
-    from .models_updates import PlatformUpdate
-
-    try:
-        update = PlatformUpdate.objects.get(id=update_id)
-    except PlatformUpdate.DoesNotExist:
-        return
-
-    if update.status in {'ROLLED_BACK', 'FAILED'}:
-        logger.warning(
-            "Platform rollback %s is already in terminal state %s; skipping re-execution.",
-            update_id, update.status,
-        )
-        return
-
-    _rollback(update)
 
 
 def _clear_directory_contents(path: str) -> dict:
@@ -4590,111 +3285,6 @@ def _clear_orphaned_runtime_resources() -> dict:
     }
 
 
-@shared_task(bind=True, soft_time_limit=300, time_limit=360)
-def run_maintenance_task(self, command_flag: str, lock_key: str = ""):
-    """
-    Run maintenance commands via the Docker API from inside the Celery container.
-    Valid flags: --clear, --update, --refresh
-    """
-    if command_flag not in ['--clear', '--update', '--update-frontend', '--refresh']:
-        logger.error(f"Invalid maintenance command: {command_flag}")
-        return {"status": "error", "reason": "invalid_command", "message": "Invalid maintenance command."}
-
-    try:
-        logger.info(f"Running maintenance command: {command_flag}")
-        self.update_state(
-            state="STARTED",
-            meta={
-                "status": "running",
-                "message": f"Running maintenance command {command_flag}.",
-            },
-        )
-
-        if command_flag == '--clear':
-            details = _clear_orphaned_runtime_resources()
-            return {
-                "status": "success",
-                "message": (
-                    "Cleanup complete. Removed "
-                    f"{details['removed_count']} orphaned container(s) and flushed cache directories."
-                ),
-                "details": details,
-            }
-
-        elif command_flag == '--refresh':
-            # Restart caddy via the shared volume .reload flag
-            from services.caddy_manager import apply_caddyfile, generate_caddyfile
-
-            from apps.deployments.models import PlatformConfig
-
-            config = PlatformConfig.load()
-            content = generate_caddyfile(config)
-            cf_token = (getattr(config, "cloudflare_api_token", "") or "").strip()
-
-            result = apply_caddyfile(content, cloudflare_token=cf_token)
-            if result.get('ok'):
-                logger.info("Proxy refresh flag written to shared volume successfully.")
-                return {
-                    "status": "success",
-                    "message": "Proxy refresh flag written. The host will reload Caddy shortly.",
-                    "details": result,
-                }
-            else:
-                return {
-                    "status": "error",
-                    "message": result.get('message', 'Failed to write proxy reload flag.'),
-                    "details": result,
-                }
-
-        elif command_flag in ['--update', '--update-frontend']:
-            from .models_updates import PlatformUpdate
-
-            # Clear any stuck/stale in-progress updates before starting a new one
-            stale_in_progress = PlatformUpdate.objects.filter(
-                status__in=['PENDING', 'PULLING', 'BACKING_UP', 'RESTARTING', 'HEALTH_CHECK', 'MIGRATING']
-            )
-            if stale_in_progress.exists():
-                cleared_count = 0
-                for stale in stale_in_progress:
-                    stale.status = 'FAILED'
-                    stale.error_message = 'Cleared stale update to allow new update to proceed.'
-                    stale.completed_at = timezone.now()
-                    stale.append_log('✗ Cleared as stale to allow new update to proceed.')
-                    stale.save()
-                    cleared_count += 1
-                    logger.info("Cleared stale platform update %s (was %s)", stale.id, stale.status)
-
-                if cleared_count:
-                    self.update_state(
-                        state="STARTED",
-                        meta={
-                            "status": "running",
-                            "message": f"Cleared {cleared_count} stale update(s). Starting fresh update...",
-                        },
-                    )
-
-            # Create the update record
-            update = PlatformUpdate.objects.create(
-                initiated_by='system_maintenance',
-                current_step='Initiating via maintenance task'
-            )
-
-            # Trigger the resilient update task
-            platform_update_task.delay(update_id=str(update.id))
-
-            logger.info(f"Platform update {update.id} initiated via maintenance action.")
-            return {
-                "status": "success",
-                "message": "Platform update initiated using the resilient updater. You can track progress in the Platform Updates log.",
-                "task_id": str(update.id)
-            }
-
-    except Exception as e:
-        logger.exception(f"Exception during maintenance {command_flag}: {e}")
-        return {"status": "error", "reason": str(e), "message": f"Maintenance failed: {e}"}
-    finally:
-        if lock_key:
-            cache.delete(lock_key)
 
 @shared_task(bind=True, max_retries=3, soft_time_limit=300, time_limit=330)
 def delete_service_task(self, service_id: str, force: bool = False):
@@ -4794,6 +3384,14 @@ def delete_service_task(self, service_id: str, force: bool = False):
                     from django.db import connection
                     with connection.cursor() as cur:
                         cur.execute(
+                            "DELETE FROM deployments_addon WHERE service_id = %s",
+                            [service.id],
+                        )
+                        cur.execute(
+                            "DELETE FROM deployments_deployment WHERE service_id = %s",
+                            [service.id],
+                        )
+                        cur.execute(
                             "DELETE FROM deployments_service WHERE id = %s",
                             [service.id],
                         )
@@ -4833,65 +3431,8 @@ def delete_service_task(self, service_id: str, force: bool = False):
         raise self.retry(exc=exc, countdown=30)
 
 
-@shared_task(bind=True, max_retries=3, soft_time_limit=300, time_limit=330)
-def delete_addon_task(self, addon_id: str):
-    """Async reliable deletion of an Addon"""
-    from services.addon_provisioner import addon_provisioner
-
-    from apps.deployments.models_addons import Addon
-    from apps.deployments.services.deletion_orchestrator import DeletionOrchestrator
-    try:
-        addon = Addon.objects.get(id=addon_id)
-    except Addon.DoesNotExist:
-        return
-
-    try:
-        # Remote full-stack node addons: deprovision via SSH
-        server = getattr(addon.service, 'server', None)
-        if (server and not server.is_primary
-                and not getattr(server, 'is_lite_agent', False)):
-            container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
-            success = addon_provisioner.deprovision_remote(
-                addon.coolify_uuid or container_name, server, container_name,
-            )
-        else:
-            orchestrator = DeletionOrchestrator()
-            success = orchestrator.delete_addon_resources(addon)
-            # Resilience: If local docker client is missing
-            if not success and not orchestrator.docker_client:
-                logger.warning("Docker client unavailable for addon %s. Forcing database-only deletion.", addon.id)
-                success = True
-
-        if success:
-            addon.delete()
-        else:
-            addon.status = Addon.Status.DELETION_FAILED
-            addon.deletion_error = "Failed to remove some runtime resources. If the system is offline, use manual DB cleanup."
-            addon.save(update_fields=['status', 'deletion_error'])
-
-    except SoftTimeLimitExceeded:
-        logger.error("Soft time limit exceeded deleting addon %s", addon_id)
-        addon.refresh_from_db()
-        if addon.status != Addon.Status.DELETION_FAILED:
-            addon.status = Addon.Status.DELETION_FAILED
-            addon.deletion_error = "Deletion timed out. Please retry or use manual cleanup."
-            addon.save(update_fields=['status', 'deletion_error'])
-    except self.MaxRetriesExceededError:
-        logger.error("Max retries exceeded for delete_addon_task addon=%s", addon_id)
-        addon.refresh_from_db()
-        if addon.status != Addon.Status.DELETION_FAILED:
-            addon.status = Addon.Status.DELETION_FAILED
-            addon.deletion_error = "Deletion failed after multiple retries. Please use manual cleanup."
-            addon.save(update_fields=['status', 'deletion_error'])
-    except Exception as exc:
-        logger.exception("delete_addon_task failed for addon=%s: %s", addon_id, exc)
-        raise self.retry(exc=exc, countdown=30)
 
 
-from .tasks_health import (
-    auto_authenticate_nodes_task,
-    check_managed_servers_health_task,
-)
 
 
 REMOTE_UPDATE_LOG_LIMIT = 300_000
@@ -5029,162 +3570,57 @@ def _run_ssh_command(ssh, command: str, timeout: int | None = None, raise_on_err
     return stdout, stderr, code
 
 
-# Re-export the canonical update_remote_server_task from tasks_server_update.
-# The tasks_server_update version includes notification dispatch and helper functions.
-from .tasks_server_update import update_remote_server_task  # noqa: E402, F401
 
 
-# Re-export the canonical node_watchdog_task from tasks_health.
+
+
+
+
+# ── Re-exports from specialized modules ──────────────────────────
+# These tasks are defined in their own modules but re-exported from
+# tasks.py so that the Celery task names (apps.deployments.tasks.*)
+# remain stable regardless of import order.
+
+from .tasks_addons import (
+    provision_addon_task,
+    deprovision_addon_task,
+    backup_addon_task,
+    restore_addon_task,
+    delete_addon_task,
+)
+from .tasks_transfer import (
+    execute_server_transfer_task,
+    rollback_transfer_task,
+)
+from .tasks_platform_update import (
+    platform_update_task,
+    platform_rollback_task,
+)
+from .tasks_maintenance import (
+    run_maintenance_task,
+    registry_garbage_collection_task,
+)
+from .tasks_templates import one_click_deploy_template_task  # noqa: F401
+from .tasks_deploy import (
+    smart_deploy_task,
+    resume_deploy_task,
+    _post_deploy_monitor,
+)
 # The tasks_health version has the explicit name= override matching the beat schedule.
-from .tasks_health import node_watchdog_task  # noqa: E402, F401
+from .tasks_health import (
+    node_watchdog_task,  # noqa: E402
+    auto_authenticate_nodes_task,
+    check_managed_servers_health_task,
+    refresh_managed_server_health,
+    sync_master_db_to_agents_task,
+)
+from .tasks_server_update import update_remote_server_task  # noqa: E402
 
-
-@shared_task(bind=True, max_retries=2)
-def refresh_managed_server_health(self, server_id: str):
-    """Refresh the health/status of a single managed server."""
-    from .models_servers import ManagedServer
-    from .views_servers import _refresh_managed_server_health
-    try:
-        server = ManagedServer.objects.get(id=server_id)
-        _refresh_managed_server_health(server)
-    except ManagedServer.DoesNotExist:
-        logger.warning("refresh_managed_server_health: server %s not found", server_id)
-    except Exception as exc:
-        logger.exception("refresh_managed_server_health failed for %s: %s", server_id, exc)
-
-
-@shared_task(soft_time_limit=600, time_limit=900)
-def sync_master_db_to_agents_task():
-    """
-    Periodically push a compressed pg_dump of the master database to all
-    connected lite agents. Enables disaster recovery: if the master goes
-    down, any agent's backup can restore the database on a replacement master.
-
-    Runs every 6 hours via Celery beat.
-    """
-    import shutil
-    import subprocess
-    import tempfile
-
-    from django.conf import settings
-
-    from .models_servers import ManagedServer
-
-    agents = ManagedServer.objects.filter(
-        is_lite_agent=True,
-        status=ManagedServer.Status.ONLINE,
-    )
-    if not agents.exists():
-        logger.info("sync_master_db_to_agents: no lite agents connected — skipping")
-        return
-
-    db_url = getattr(settings, 'DATABASE_URL', '')
-    if not db_url:
-        logger.warning("sync_master_db_to_agents: DATABASE_URL not configured — skipping")
-        return
-
-    tmp_dir = tempfile.mkdtemp(prefix='master_db_sync_')
-    dump_path = os.path.join(tmp_dir, 'master_db.sql.gz')
-
-    try:
-        # Create compressed pg_dump
-        result = subprocess.run(
-            ['pg_dump', db_url, '--no-owner', '--no-acl', '-Z', '9', '-f', dump_path],
-            capture_output=True, text=True, timeout=300,
-        )
-        if result.returncode != 0:
-            logger.error("sync_master_db_to_agents: pg_dump failed: %s", result.stderr[:500])
-            return
-
-        file_size = os.path.getsize(dump_path)
-        logger.info("sync_master_db_to_agents: dump created (%.1f MB), pushing to %d agents",
-                    file_size / (1024 * 1024), agents.count())
-
-        # Push to each lite agent via REST API
-        # Send raw binary in body (not multipart) so body_hash computed
-        # from file content matches request.body on the receiving end.
-        with open(dump_path, 'rb') as f_body:
-            raw_body_bytes = f_body.read()
-        body_hash = hashlib.sha256(raw_body_bytes).hexdigest()
-
-        for agent in agents:
-            target_ip = agent.wg_address or agent.private_ip or agent.host
-            if not target_ip:
-                continue
-            url = f"http://{target_ip}/api/v1/transfers/incoming/db-backup/"
-            secret = str(getattr(settings, 'GATEWAY_SECRET', '') or getattr(settings, 'SECRET_KEY', ''))
-            timestamp = str(int(time.time()))
-            nonce = secrets.token_hex(16)
-
-            raw_sig = f"POST|/api/v1/transfers/incoming/db-backup/|{timestamp}|{nonce}|{body_hash}"
-            signature = hmac.new(secret.encode(), raw_sig.encode(), hashlib.sha256).hexdigest()
-
-            try:
-                resp = requests.post(
-                    url,
-                    data=raw_body_bytes,
-                    headers={
-                        'X-Gateway-Signature-V2': signature,
-                        'X-Request-Timestamp': timestamp,
-                        'X-Request-Nonce': nonce,
-                        'Content-Type': 'application/gzip',
-                    },
-                    timeout=600,
-                )
-                if resp.ok:
-                    logger.info("sync_master_db_to_agents: pushed to agent %s (%s)", agent.name, target_ip)
-                else:
-                    logger.warning("sync_master_db_to_agents: agent %s returned %s", agent.name, resp.status_code)
-            except requests.RequestException as e:
-                logger.warning("sync_master_db_to_agents: failed to push to agent %s: %s", agent.name, e)
-
-    except subprocess.TimeoutExpired:
-        logger.error("sync_master_db_to_agents: pg_dump timed out")
-    except Exception as e:
-        logger.error("sync_master_db_to_agents: failed: %s", e)
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-
-
-@shared_task(soft_time_limit=600, time_limit=900)
-def registry_garbage_collection_task():
-    """
-    Periodically run Docker registry garbage collection to reclaim disk
-    space from deleted/unused image layers.
-
-    Runs: docker exec <registry> registry garbage-collect /etc/docker/registry/config.yml
-    Removes blobs that are no longer referenced by any manifest.
-    Safe to run while the registry is serving reads.
-    """
-    registry_container = "smsly-hosting-registry-1"
-
-    try:
-        dry_run = subprocess.run(
-            ["docker", "exec", registry_container, "registry", "garbage-collect",
-             "--dry-run", "/etc/docker/registry/config.yml"],
-            capture_output=True, text=True, timeout=120,
-        )
-        if dry_run.returncode != 0:
-            logger.warning("registry_gc: dry-run failed: %s", dry_run.stderr[:500])
-            return
-
-        freed_lines = [line for line in dry_run.stdout.split('\n') if 'marking blob' in line.lower() or 'blob eligible' in line.lower()]
-        logger.info("registry_gc: dry-run found %d blobs eligible for removal", len(freed_lines))
-
-        result = subprocess.run(
-            ["docker", "exec", registry_container, "registry", "garbage-collect",
-             "/etc/docker/registry/config.yml"],
-            capture_output=True, text=True, timeout=300,
-        )
-        if result.returncode == 0:
-            for line in result.stdout.split('\n'):
-                if 'recovered' in line.lower() or 'blob' in line.lower():
-                    logger.info("registry_gc: %s", line.strip())
-            logger.info("registry_gc: garbage collection completed successfully")
-        else:
-            logger.warning("registry_gc: failed: %s", result.stderr[:500])
-
-    except subprocess.TimeoutExpired:
-        logger.error("registry_gc: timed out")
-    except Exception as e:
-        logger.error("registry_gc: error: %s", e)
+from apps.deployments.tasks_backup import (  # noqa: F401
+    cleanup_old_backups_task,
+    create_server_backup_task,
+    create_service_backup_task,
+    purge_user_backups_task,
+    restore_server_backup_task,
+    restore_service_backup_task,
+)

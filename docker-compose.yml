@@ -751,7 +751,6 @@ services:
     command:
     - --providers.docker=true
     - --providers.docker.exposedbydefault=false
-    - --providers.docker.network=smsly-net
     - --providers.docker.endpoint=tcp://socket-proxy:2375
     - --providers.docker.httpClientTimeout=600s
     - --entrypoints.web.address=:80
@@ -812,7 +811,7 @@ services:
     - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.crowdsecMode=live"
     - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.crowdsecLapiScheme=http"
     - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.crowdsecLapiHost=crowdsec:8080"
-    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.crowdsecLapiKey=$${CROWDSEC_BOUNCER_KEY:-}"
+    - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.crowdsecLapiKey=${CROWDSEC_BOUNCER_KEY:-}"
 
   # ============================================================
   # Caddy (TLS termination + main routing)

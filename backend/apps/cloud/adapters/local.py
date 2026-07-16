@@ -167,6 +167,14 @@ class LocalAdapter(BaseCloudAdapter):
             pass
         return network_name
 
+    def _apply_egress_restrictions(self, network_name: str) -> None:
+        """Apply iptables egress restrictions to a service's scoped bridge."""
+        try:
+            from apps.deployments.services.network_scope import apply_egress_restrictions
+            apply_egress_restrictions(network_name, ["0.0.0.0/0"])
+        except Exception:
+            logger.exception("Failed to apply egress restrictions for %s", network_name)
+
     def _get_traefik_labels(self, name: str, host_rule: str, port: str,
                             is_public: bool = True, network_name: str | None = None) -> dict[str, str]:
         """Generate consistent Traefik labels for routing."""
@@ -542,6 +550,8 @@ class LocalAdapter(BaseCloudAdapter):
         if stage_before_cutover:
             rp = {"Name": "on-failure", "MaximumRetryCount": 5}
 
+        self._apply_egress_restrictions(network_name)
+
         networking_config = self.docker_client.api.create_networking_config({
             network_name: self.docker_client.api.create_endpoint_config(
                 aliases=aliases
@@ -557,11 +567,10 @@ class LocalAdapter(BaseCloudAdapter):
             "labels": labels,
             "volumes": docker_volumes if docker_volumes else None,
             "restart_policy": rp,
-            # Container hardening: drop all capabilities, block privilege escalation,
-            # restrict to Docker's default seccomp profile (plus apparmor if host supports it).
-            "security_opt": ["no-new-privileges:true"],
+            "security_opt": ["no-new-privileges:true", "apparmor:docker-default"],
             "cap_drop": ["ALL"],
-            "cap_add": ["NET_BIND_SERVICE", "CHOWN", "DAC_OVERRIDE", "SETGID", "SETUID", "SYS_CHROOT"],
+            "cap_add": ["NET_BIND_SERVICE", "CHOWN", "SETUID", "SETGID"],
+            "pids_limit": 1024,
             **run_kwargs,
         }
         if docker_healthcheck is not None:
@@ -854,6 +863,8 @@ class LocalAdapter(BaseCloudAdapter):
                 )
             })
 
+            self._apply_egress_restrictions(network_name)
+
             create_kwargs = {
                 "image": image_ref,
                 "name": name,
@@ -865,9 +876,10 @@ class LocalAdapter(BaseCloudAdapter):
                 "restart_policy": rp,
                 "command": green_cmd,
                 "entrypoint": green_entrypoint,
-                "security_opt": ["no-new-privileges:true"],
+                "security_opt": ["no-new-privileges:true", "apparmor:docker-default"],
                 "cap_drop": ["ALL"],
-                "cap_add": ["NET_BIND_SERVICE", "CHOWN", "DAC_OVERRIDE", "SETGID", "SETUID", "SYS_CHROOT"],
+                "cap_add": ["NET_BIND_SERVICE", "CHOWN", "SETUID", "SETGID"],
+                "pids_limit": 1024,
                 **run_kwargs,
             }
             if green_healthcheck is not None:
@@ -1104,14 +1116,21 @@ class LocalAdapter(BaseCloudAdapter):
         else:
             code_mount = code_zip
 
+        # Validate handler: must be valid Python/JS identifiers separated by dots
+        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)+$', handler):
+            raise ValueError(
+                f"Invalid handler format: {handler!r}. "
+                "Must be module.function (e.g. 'main.handler')."
+            )
+
         # Wrapper Command: Simple HTTP Server that imports handler
         # This is a 'poor man's' OpenFaaS watchdog
         if 'python' in runtime:
             # Assumes handler format: module.function_name
-            module_name, func_name = handler.split('.')
+            module_name, func_name = handler.rsplit('.', 1)
             cmd = f"""
             pip install flask &&
-            cat <<EOF > server.py
+            cat <<'SERVEREOF' > server.py
 from flask import Flask, request
 import {module_name}
 
@@ -1123,20 +1142,21 @@ def handle():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080)
-EOF
+SERVEREOF
             python server.py
             """
             entrypoint = ["/bin/sh", "-c", cmd]
         elif 'node' in runtime:
+            module_part, func_part = handler.rsplit('.', 1)
             cmd = f"""
              npm install express &&
              node -e "
              const express = require('express');
              const app = express();
              app.use(express.json());
-             const handler = require('./{handler.split('.', maxsplit=1)[0]}');
+             const handler = require('./{module_part}');
              app.all('/', async (req, res) => {{
-                 const result = await handler.{handler.split('.')[1]}(req.body);
+                 const result = await handler.{func_part}(req.body);
                  res.send(result);
              }});
              app.listen(8080, '0.0.0.0');
@@ -1199,7 +1219,10 @@ EOF
                 working_dir='/app',
                 entrypoint=entrypoint,
                 mem_limit='128m',
-                cpu_quota=10000
+                cpu_quota=10000,
+                security_opt=["no-new-privileges:true"],
+                cap_drop=["ALL"],
+                cap_add=["NET_BIND_SERVICE", "CHOWN", "SETUID", "SETGID"],
             )
             return f"docker-function://{container.id}"
         except Exception as e:
@@ -1232,7 +1255,10 @@ EOF
                     "POSTGRES_DB": db_name
                 },
                 detach=True,
-                network=network_name
+                network=network_name,
+                security_opt=["no-new-privileges:true"],
+                cap_drop=["ALL"],
+                cap_add=["NET_BIND_SERVICE", "CHOWN", "SETUID", "SETGID"],
             )
             # Return connection URL with generated credentials
             logger.info(

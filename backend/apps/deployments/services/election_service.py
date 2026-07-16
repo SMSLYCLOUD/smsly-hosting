@@ -191,10 +191,12 @@ class ElectionService:
         Returns True if election was started.
         """
         if not cluster.last_heartbeat:
-            # No heartbeat ever received — start election if we have peers
-            if cls._get_peer_count(cluster) > 0:
+            peer_count = cls._get_peer_count(cluster)
+            if peer_count > 0:
                 return cls.start_election(cluster)
-            return False
+            # No mesh or zero peers — single-server mode, promote self
+            cls.promote_to_leader(cluster)
+            return True
 
         elapsed_ms = (
             timezone.now() - cluster.last_heartbeat

@@ -1249,9 +1249,10 @@ REDIS_CACHE_URL = config('REDIS_CACHE_URL', default=standalone_url(_REDIS_BASE_U
 #   "Redis URL must specify one of the following schemes (redis://, ...)"
 # Operators can still override via the CELERY_REDBEAT_REDIS_URL env var.
 #
-# NOTE: When Sentinel is enabled, the .env heredoc should set
-# CELERY_REDBEAT_REDIS_URL to a sentinel-aware URL (see fresh.sh).
-# The default fallback uses the standalone URL.
+# NOTE: When Sentinel is enabled, CELERY_REDBEAT_REDIS_URL is used only
+# to extract the DB number — the SentinelRedBeatScheduler connects via
+# get_master_connection() for true failover.  The default fallback uses
+# the standalone URL.
 _REDBEAT_REDIS_URL = standalone_url(_REDIS_BASE_URL, 3)
 CELERY_REDBEAT_REDIS_URL = config(
     'CELERY_REDBEAT_REDIS_URL',
@@ -1267,7 +1268,7 @@ if IS_TESTING:
 else:
     CACHES = {
         "default": {
-            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "BACKEND": "config.sentinel_redis_cache.SentinelRedisCache",
             "LOCATION": REDIS_CACHE_URL,
             "OPTIONS": {
                 "socket_connect_timeout": REDIS_SOCKET_TIMEOUT,
@@ -1347,7 +1348,7 @@ CELERY_WORKER_MAX_TASKS_PER_CHILD = 500
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1  # fair dispatch — don't hoard tasks
 CELERY_TASK_ACKS_LATE = True           # ack after execution — prevents lost tasks on crash
 CELERY_TASK_TRACK_STARTED = True       # report STARTED state for monitoring
-CELERY_BEAT_SCHEDULER = 'redbeat.RedBeatScheduler'  # Redis-locked beat — multiple instances safe
+CELERY_BEAT_SCHEDULER = 'config.sentinel_redbeat_scheduler.SentinelRedBeatScheduler'  # Redis-locked beat — multiple instances safe
 # NOTE: Beat schedule is defined in config/celery.py (the authoritative source)
 
 # CORS - allow "*" only in DEBUG when explicitly enabled.

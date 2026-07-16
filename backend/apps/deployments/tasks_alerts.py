@@ -288,7 +288,7 @@ def _dispatch_failure_alert(deployment, error_message: str) -> dict[str, Any]:
     }
 
 
-@shared_task
+@shared_task(soft_time_limit=300, time_limit=360)
 def scan_running_containers_logs_task():
     """
     Periodically scans logs of all active containers for crashing errors.
@@ -346,7 +346,7 @@ def scan_running_containers_logs_task():
             logger.warning("Error scanning logs for deployment %s: %s", deployment.id, exc)
 
 
-@shared_task(bind=True, max_retries=3)
+@shared_task(bind=True, max_retries=3, soft_time_limit=120, time_limit=150)
 def alert_user_task(self, deployment_id: str, error_message: str):
     """
     Fan out deployment failure notifications across configured channels.
@@ -366,7 +366,7 @@ def alert_user_task(self, deployment_id: str, error_message: str):
         raise self.retry(exc=exc, countdown=30)
 
 
-@shared_task(bind=True, max_retries=2)
+@shared_task(bind=True, max_retries=2, soft_time_limit=120, time_limit=150)
 def voice_alert_critical_task(self, deployment_id: str, error_message: str):
     """
     Sends a voice call alert for critical failures.
@@ -408,8 +408,8 @@ def voice_alert_critical_task(self, deployment_id: str, error_message: str):
         logger.exception("Failed to send voice alert: %s", exc)
         raise self.retry(exc=exc, countdown=60)
 
-@shared_task
-def notify_deployment_success(deployment_id: str):
+@shared_task(bind=True, soft_time_limit=60, time_limit=90)
+def notify_deployment_success(self, deployment_id: str):
     """
     Optional success notification via SMS.
     """
@@ -447,8 +447,8 @@ def notify_deployment_success(deployment_id: str):
         return {"status": "error", "reason": str(exc)}
 
 
-@shared_task
-def notify_auto_rollback(service_id: str, trigger: str, reason: str, target_commit: str):
+@shared_task(bind=True, soft_time_limit=60, time_limit=90)
+def notify_auto_rollback(self, service_id: str, trigger: str, reason: str, target_commit: str):
     """
     Notification fired by the centralized auto-rollback engine.
 
@@ -542,7 +542,7 @@ def _send_discord_alert(message, env_map):
         return {"ok": False, "reason": str(exc)}
 
 
-@shared_task
+@shared_task(soft_time_limit=60, time_limit=90)
 def _send_alerts_for_backup_cloud_failure(service_id: str, backup_id: str, reason: str, bucket: str, key: str):
     """Dispatch alerts when a backup succeeded locally but cloud upload failed.
 

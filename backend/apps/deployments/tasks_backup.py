@@ -5,12 +5,13 @@ logger = logging.getLogger(__name__)
 import os
 
 from celery import shared_task
+from celery.exceptions import MaxRetriesExceededError
 
 # Serializes backup/restore tasks that carry a per-request encryption key.
 # Without this lock, two concurrent Celery workers can clobber each other's
 # BACKUP_ENCRYPTION_KEY in os.environ (process-wide).  Tasks that use the
 # default key from the environment do NOT acquire the lock.
-_backup_key_lock = threading.Lock()
+_backup_key_lock = threading.Lock()  # NOTE: not cooperative with gevent/eventlet pools; assumes prefork workers
 from django.utils import timezone
 
 from apps.deployments.models_backup import BackupSchedule
@@ -60,7 +61,7 @@ def create_service_backup_task(self, service_id, backup_type='MANUAL', backup_id
             
         try:
             from apps.notifications.tasks import notify_backup_completed
-            size_mb = (result.file_size or 0) / (1024 * 1024)
+            size_mb = (result.size_bytes or 0) / (1024 * 1024)
             notify_backup_completed.delay(result.service.owner.id, str(result.id), size_mb, True)
         except Exception as alert_exc:
             logger.warning("Failed to queue backup success notification: %s", alert_exc)
@@ -202,35 +203,40 @@ def create_server_backup_task(self, backup_id=None, schedule_id=None, encryption
             'encryption_key_provided': bool(encryption_key),
         },
     )
-    db_only = False
-    if schedule_id:
-        from apps.deployments.models_backup import BackupSchedule
-        try:
-            sched = BackupSchedule.objects.get(id=schedule_id)
-            db_only = sched.db_only
-        except BackupSchedule.DoesNotExist:
-            pass
-
-    backup_service = BackupService()
-    if encryption_key:
-        with _backup_key_lock:
-            original_key = os.environ.get('BACKUP_ENCRYPTION_KEY', '')
-            os.environ['BACKUP_ENCRYPTION_KEY'] = encryption_key
+    try:
+        db_only = False
+        if schedule_id:
+            from apps.deployments.models_backup import BackupSchedule
             try:
-                backup_service.backup_server(backup_id=backup_id, db_only=db_only)
-            finally:
-                if original_key:
-                    os.environ['BACKUP_ENCRYPTION_KEY'] = original_key
-                else:
-                    os.environ.pop('BACKUP_ENCRYPTION_KEY', None)
-    else:
-        backup_service.backup_server(backup_id=backup_id, db_only=db_only)
-    if schedule_id:
-        _touch_schedule_last_run(schedule_id)
+                sched = BackupSchedule.objects.get(id=schedule_id)
+                db_only = sched.db_only
+            except BackupSchedule.DoesNotExist:
+                pass
+
+        backup_service = BackupService()
+        if encryption_key:
+            with _backup_key_lock:
+                original_key = os.environ.get('BACKUP_ENCRYPTION_KEY', '')
+                os.environ['BACKUP_ENCRYPTION_KEY'] = encryption_key
+                try:
+                    backup_service.backup_server(backup_id=backup_id, db_only=db_only)
+                finally:
+                    if original_key:
+                        os.environ['BACKUP_ENCRYPTION_KEY'] = original_key
+                    else:
+                        os.environ.pop('BACKUP_ENCRYPTION_KEY', None)
+        else:
+            backup_service.backup_server(backup_id=backup_id, db_only=db_only)
+        if schedule_id:
+            _touch_schedule_last_run(schedule_id)
+    except Exception as exc:
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=exc, countdown=600)
+        raise
 
 
 
-@shared_task(bind=True, soft_time_limit=3600, max_retries=2, default_retry_delay=300)
+@shared_task(bind=True, soft_time_limit=3600, time_limit=3900, max_retries=2, default_retry_delay=300)
 def restore_service_backup_task(self, backup_id, target_service_id=None, requesting_user_id=None, raise_on_snapshot_failure=True, encryption_key=None):
     log_event(
         action='BACKUP_RESTORE',
@@ -273,7 +279,8 @@ def restore_service_backup_task(self, backup_id, target_service_id=None, request
 
 
 
-@shared_task(bind=True, soft_time_limit=7200, time_limit=7500)
+@shared_task(bind=True, soft_time_limit=7200, time_limit=7500, max_retries=0)
+# max_retries=0: destructive operation — no automatic retry on partial restore
 def restore_server_backup_task(self, backup_id, requesting_user_id=None, encryption_key=None):
     log_event(
         action='BACKUP_RESTORE',
@@ -349,7 +356,7 @@ def purge_user_backups_task(self, user_id, actor: str = 'system', force: bool = 
 
 
 
-@shared_task
+@shared_task(soft_time_limit=600, time_limit=900)
 def cleanup_old_backups_task():
     """Delete backups older than retention_days per schedule, including cloud objects."""
     from datetime import timedelta
@@ -443,7 +450,7 @@ def _make_aware(dt):
     return dt
 
 
-@shared_task
+@shared_task(soft_time_limit=3600, time_limit=3900)
 def run_scheduled_backups_task():
     """Execute all due BackupSchedule entries."""
     import croniter  # type: ignore[import-untyped]
@@ -477,7 +484,7 @@ def run_scheduled_backups_task():
     return ran
 
 
-@shared_task
+@shared_task(soft_time_limit=3600, time_limit=3900)
 def run_scheduled_snapshots_task():
     """Execute all due SnapshotSchedule entries."""
     import croniter  # type: ignore[import-untyped]
@@ -512,7 +519,7 @@ def run_scheduled_snapshots_task():
     return ran
 
 
-@shared_task(bind=True, soft_time_limit=300, max_retries=2, default_retry_delay=60)
+@shared_task(bind=True, soft_time_limit=300, time_limit=360, max_retries=2, default_retry_delay=60)
 def create_snapshot_task(self, service_id: str, trigger: str = 'MANUAL', label: str = '', created_by_id: str | None = None):
     from django.contrib.auth import get_user_model
 

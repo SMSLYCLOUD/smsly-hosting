@@ -418,6 +418,11 @@ class Service(TimeStampedModel):
     memory_mb = models.IntegerField(default=2048)  # type: ignore[var-annotated]
 
     # Auto-Scaling
+    autoscale_enabled = models.BooleanField(  # type: ignore[var-annotated]
+        default=True,
+        help_text="Master toggle for horizontal autoscaling. When disabled, "
+                  "the service will not be auto-scaled regardless of other settings.",
+    )
     min_replicas = models.IntegerField(  # type: ignore[var-annotated]
         default=1, validators=[MinValueValidator(1)])
     max_replicas = models.IntegerField(  # type: ignore[var-annotated]

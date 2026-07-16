@@ -32,7 +32,9 @@ def analyze_all_services_task(self):
         base = ServiceReplica.objects.filter(status='RUNNING').values_list(
             'service_id', flat=True
         )
-        qs = Service.objects.filter(status='ACTIVE').distinct()
+        qs = Service.objects.filter(
+            status='ACTIVE', autoscale_enabled=True,
+        ).distinct()
         qs = qs.filter(
             db_models.Q(id__in=base) | db_models.Q(compose_file='', deploy_mode='SINGLE')
         )
@@ -68,5 +70,7 @@ def analyze_and_scale_service(service_id):
         except (Service.DoesNotExist, ValueError, TypeError):
             logger.warning("Auto-scale task: service %s not found", service_id)
             return None
-    return analyze_and_apply(service)
+    # Pass dedup window so the 3-min sweep and the 30s quick-check
+    # share the same cache key and never race on the same service.
+    return analyze_and_apply(service, min_interval_seconds=120)
 

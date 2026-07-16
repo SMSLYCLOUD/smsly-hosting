@@ -212,7 +212,10 @@ def collect_traefik_logs(self):
         with open(log_path, 'r', buffering=8192) as fh:
             fh.seek(offset)
             new_lines = 0
-            for line in fh:
+            while True:
+                line = fh.readline()
+                if not line:
+                    break
                 line = line.strip()
                 if not line:
                     continue

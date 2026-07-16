@@ -95,7 +95,7 @@ def _simulate_stats(service):
     }
 
 
-@shared_task
+@shared_task(soft_time_limit=300, time_limit=360)
 def collect_metrics_task():
     """
     Collect metrics for all active services with running deployments.
@@ -156,7 +156,7 @@ def collect_metrics_task():
     logger.info("Collected metrics for %d services", collected)
 
 
-@shared_task
+@shared_task(soft_time_limit=300, time_limit=360)
 def cleanup_build_cache_task():
     """Clean up Docker build cache to free disk space."""
     client = _get_docker_client()

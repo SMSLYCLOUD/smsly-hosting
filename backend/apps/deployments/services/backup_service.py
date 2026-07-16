@@ -13,6 +13,7 @@ import struct
 import sys
 import tarfile
 import tempfile
+import subprocess
 import time
 import traceback
 import uuid
@@ -1575,7 +1576,7 @@ class BackupService:
                            "--lock-wait-timeout=5000",
                            "--clean", "--if-exists",
                            "--no-owner", "--no-acl"]
-                    res = pg_container.exec_run(cmd, environment={'PGPASSWORD': password})
+                    res = pg_container.exec_run(cmd, environment={'PGPASSWORD': password}, timeout=600)
                     if res.exit_code == 0:
                         with open(db_file, 'wb') as f:
                             f.write(res.output)
@@ -1590,25 +1591,24 @@ class BackupService:
                         res = container.exec_run(
                             ["pg_dump", "-U", user, "-d", name,
                              "--clean", "--if-exists",
-                             "--no-owner", "--no-acl"])
+                             "--no-owner", "--no-acl"],
+                            timeout=600)
                         if res.exit_code == 0:
                             with open(db_file, 'wb') as f:
                                 f.write(res.output)
                         else:
                             raise Exception(f"pg_dump failed: {res.output}")
                     except Exception:
-                        import subprocess
                         cmd = ["pg_dump", "-h", host, "-p", str(port), "-U", user, name,
                                "--clean", "--if-exists", "--no-owner", "--no-acl"]
                         with open(db_file, 'w') as f:
-                            subprocess.run(cmd, env=env, stdout=f, check=True)
+                            subprocess.run(cmd, env=env, stdout=f, check=True, timeout=600)
                 else:
                     # Fallback: run pg_dump locally via pgcat's upstream
-                    import subprocess
                     cmd = ["pg_dump", "-h", host, "-p", str(port), "-U", user, name,
                            "--clean", "--if-exists", "--no-owner", "--no-acl"]
                     with open(db_file, 'w') as f:
-                        subprocess.run(cmd, env=env, stdout=f, check=True)
+                        subprocess.run(cmd, env=env, stdout=f, check=True, timeout=600)
 
             except Exception as e:
                 logger.error("Database backup FAILED — aborting server backup: %s", e)
@@ -1812,18 +1812,22 @@ class BackupService:
                 self._restore_platform_config(platform_config_path)
 
             # Create pre-restore safety snapshots for each existing service
-            # (only on a running server — skip for fresh restore targets)
+            # AFTER the database has been restored but BEFORE service configs are
+            # overwritten.  At this point the DB reflects the backup state while
+            # containers still run their pre-restore volumes — these snapshots
+            # capture that boundary state so operators can recover if service
+            # restoration fails and the DB alone has been rolled back.
             if requesting_user_id:
                 from apps.deployments.models import Service
                 for service in Service.objects.all():
                     try:
                         self.backup_service(service.id, backup_type='PRE_TRANSFER')
-                        logger.info("Pre-restore snapshot created for service %s", service.name)
+                        logger.info("Post-DB-restore snapshot created for service %s", service.name)
                     except Exception as e:
-                        logger.warning("Pre-restore snapshot failed for service %s: %s", service.name, e)
+                        logger.warning("Post-DB-restore snapshot failed for service %s: %s", service.name, e)
                         if raise_on_snapshot_failure:
                             raise RuntimeError(
-                                f"Pre-restore snapshot failed for {service.name}: {e}. "
+                                f"Post-DB-restore snapshot failed for {service.name}: {e}. "
                                 "Refusing to restore."
                             ) from e
 
@@ -1885,6 +1889,7 @@ class BackupService:
                  '--single-transaction',
                  '-f', '/tmp/db_dump.sql'],
                 demux=False,
+                timeout=1800,
             )
             if psql_res.exit_code != 0:
                 raise RuntimeError(
@@ -2900,6 +2905,7 @@ def _dump_container_database(container_name, image_tag, temp_dir):
                  '--clean', '--if-exists',
                  '--no-owner', '--no-acl'],
                 environment={'PGPASSWORD': pg_password},
+                timeout=600,
             )
             if result.exit_code == 0:
                 with open(dump_file, 'wb') as f:
@@ -2967,10 +2973,11 @@ def _stop_service_for_restore(service, is_remote):
                 key_content=server.ssh_key, wg_address=server.wg_address,
             )
             client.connect()
-            client.exec_command(f"docker stop {container_name} 2>/dev/null || true", raise_on_error=False)
+            safe_name = shlex.quote(container_name)
+            client.exec_command(f"docker stop {safe_name} 2>/dev/null || true", raise_on_error=False)
             client.exec_command(
                 f"for i in $(seq 1 15); do "
-                f"  docker inspect -f '{{{{.State.Status}}}}' {container_name} 2>/dev/null | grep -q exited && break; "
+                f"  docker inspect -f '{{{{.State.Status}}}}' {safe_name} 2>/dev/null | grep -q exited && break; "
                 f"  sleep 1; "
                 f"done",
                 raise_on_error=False,
@@ -3023,7 +3030,8 @@ def _emergency_restart_remote_container(service, server):
             key_content=server.ssh_key, wg_address=server.wg_address,
         )
         ssh.connect()
-        ssh.exec_command(f"docker start {container_name} 2>/dev/null || true", raise_on_error=False)
+        safe_name = shlex.quote(container_name)
+        ssh.exec_command(f"docker start {safe_name} 2>/dev/null || true", raise_on_error=False)
         ssh.close()
         logger.info("Emergency remote restart: started container %s on %s", container_name, server.host)
     except Exception as exc:
@@ -3207,7 +3215,7 @@ def _get_s3_client(endpoint='', region='us-east-1',
     kwargs = {'aws_access_key_id': access_key,
               'aws_secret_access_key': secret_key,
               'region_name': region,
-              'config': Config(signature_version='s3v4')}
+              'config': Config(signature_version='s3v4', connect_timeout=30, read_timeout=60)}
     if endpoint:
         if not endpoint.startswith(('http://', 'https://')):
             endpoint = 'https://' + endpoint
@@ -3385,7 +3393,7 @@ def _upload_backup_to_cloud(backup, filepath, service_name):
 
         if dest:
             s3_bucket = dest.bucket
-            s3_endpoint = dest.endpoint_url
+            s3_endpoint = dest.endpoint
             s3_region = dest.region
             s3_access_key = dest.access_key
             s3_secret_key = dest.secret_key

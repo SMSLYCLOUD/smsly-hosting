@@ -68,6 +68,7 @@ from .tasks_utils import (
     max_retries=3,
     soft_time_limit=3600,  # 1 hour (reduced to prevent queue staleness)
     time_limit=3900,       # 1h 5m hard kill
+    name="apps.deployments.tasks.smart_deploy_task",
 )
 def smart_deploy_task(self, deployment_id: str, provider_id: str,
                      skip_review: bool = False):
@@ -238,6 +239,7 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
     max_retries=2,
     soft_time_limit=3600,
     time_limit=3900,
+    name="apps.deployments.tasks.resume_deploy_task",
 )
 def resume_deploy_task(self, deployment_id: str, provider_id: str):
     """
@@ -1102,7 +1104,7 @@ def _deploy_container(deployment, provider, image_name):
 
 
 
-@shared_task(bind=True, max_retries=0, soft_time_limit=120, time_limit=150)
+@shared_task(bind=True, max_retries=0, soft_time_limit=120, time_limit=150, name="apps.deployments.tasks._post_deploy_monitor")
 def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
                          image_name):
     """
@@ -1131,6 +1133,7 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
     # Poll container status for 30 seconds
     crash_detected = False
     container_logs = ""
+    exit_code = None
     for check in range(6):  # 6 checks × 5s = 30s
         time.sleep(5)
 
@@ -1140,12 +1143,13 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
             container_logs = container.logs(tail=200).decode(
                 'utf-8', errors='replace'
             )
+            exit_code = container.attrs.get("State", {}).get("ExitCode")
 
             if status in ('exited', 'dead'):
                 crash_detected = True
                 append_log(
                     deployment,
-                    f"\n🔴 Container crashed (status: {status}) "
+                    f"\n🔴 Container crashed (status: {status}, exit code: {exit_code}) "
                     f"after {(check + 1) * 5}s\n"
                 )
                 break
@@ -1154,9 +1158,10 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
                 # Wait one more cycle to see if it stabilises
                 if check >= 2:
                     crash_detected = True
+                    exit_code = container.attrs.get("State", {}).get("ExitCode")
                     append_log(
                         deployment,
-                        f"\n🔴 Container stuck in restart loop "
+                        f"\n🔴 Container stuck in restart loop (exit code: {exit_code}) "
                         f"after {(check + 1) * 5}s\n"
                     )
                     break
@@ -1233,11 +1238,25 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
         broadcast_status(deployment)
         return
 
+    # Preserve container logs to deployment before alerting
+    deployment.refresh_from_db()
+    deployment.build_logs += (
+        f"\n--- Runtime Crash Logs (exit code: {exit_code}) ---\n"
+        f"{container_logs[-4000:]}\n"
+        f"--- End Crash Logs ---\n"
+    )
+    deployment.save(update_fields=["build_logs", "updated_at"])
+
     try:
         from apps.deployments.tasks_alerts import alert_user_task
+        log_excerpt = container_logs[-500:] if container_logs else "(no logs)"
         alert_user_task.delay(
             deployment_id=str(deployment.id),
-            error_message="Runtime crash detected during post-deploy monitoring",
+            error_message=(
+                f"Runtime crash detected during post-deploy monitoring. "
+                f"Exit code: {exit_code}. "
+                f"Recent logs:\n{log_excerpt}"
+            ),
         )
     except Exception as alert_err:  # pylint: disable=broad-exception-caught
         logger.warning("Failed to queue runtime crash alert: %s", alert_err)

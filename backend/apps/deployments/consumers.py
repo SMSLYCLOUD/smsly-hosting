@@ -772,20 +772,7 @@ class BuildLogConsumer(AsyncWebsocketConsumer):
         await self.accept(subprotocol=get_websocket_subprotocol(self.scope))
 
         try:
-            # Authenticate via scope user (set by QueryStringAuthMiddleware)
             self.user = self.scope.get('user')
-
-            # Backward compatibility for clients passing token in query string
-            if not self.user or not getattr(self.user, 'is_authenticated', False):
-                query_string = self.scope.get('query_string', b'').decode()
-                token_key = None
-                for param in query_string.split('&'):
-                    if param.startswith('token='):
-                        token_key = param.split('=', 1)[1]
-                        break
-
-                if token_key:
-                    self.user = await self._authenticate_token(token_key)
 
             if not self.user or not getattr(self.user, 'is_authenticated', False):
                 await self.send(text_data=json.dumps({'error': 'Missing or invalid token'}))
@@ -1229,20 +1216,7 @@ class AddonLogConsumer(AsyncWebsocketConsumer):
         await self.accept(subprotocol=get_websocket_subprotocol(self.scope))
 
         try:
-            # Support both query-string token and HttpOnly cookie auth
-            # (the QueryStringAuthMiddleware already populated scope['user']
-            # from the cookie if no query-string token was present).
-            query_string = self.scope.get('query_string', b'').decode()
-            token_key = None
-            for param in query_string.split('&'):
-                if param.startswith('token='):
-                    token_key = param.split('=', 1)[1]
-                    break
-
-            if token_key:
-                self.user = await self._authenticate_token(token_key)
-            else:
-                self.user = self.scope.get('user')
+            self.user = self.scope.get('user')
 
             if not self.user or self.user.is_anonymous:
                 await self.send(text_data=json.dumps({'error': 'Authentication required'}))
@@ -1321,10 +1295,11 @@ class AddonLogConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def _verify_ownership(self):
+        from django.db.models import Q
         from .models_addons import Addon
         try:
             addon = Addon.objects.select_related('service', 'service__owner').get(id=self.addon_id)
-            return addon.service.owner_id == self.user.id
+            return addon.service.owner_id == self.user.id or addon.service.project.team.members.filter(user=self.user).exists()
         except Addon.DoesNotExist:
             return False
 
@@ -1411,20 +1386,14 @@ class BackupProgressConsumer(AsyncWebsocketConsumer):
         self.backup_id = self.scope['url_route']['kwargs']['backup_id']
         await self.accept(subprotocol=get_websocket_subprotocol(self.scope))
         try:
-            query_string = self.scope.get('query_string', b'').decode()
-            token_key = None
-            for param in query_string.split('&'):
-                if param.startswith('token='):
-                    token_key = param.split('=', 1)[1]
-                    break
-            if not token_key:
-                await self.send(text_data=json.dumps({'error': 'Missing token'}))
+            self.user = self.scope.get('user')
+            if not self.user or not getattr(self.user, 'is_authenticated', False):
+                await self.send(text_data=json.dumps({'error': 'Authentication required'}))
                 await self.close(code=4001)
                 return
-            self.user = await self._authenticate_token(token_key)
-            if not self.user:
-                await self.send(text_data=json.dumps({'error': 'Invalid token'}))
-                await self.close(code=4002)
+            if not await self._verify_ownership():
+                await self.send(text_data=json.dumps({'error': 'Access denied'}))
+                await self.close(code=4003)
                 return
             self.group_name = f"backup_progress_{self.backup_id}"
             await self.channel_layer.group_add(self.group_name, self.channel_name)
@@ -1455,6 +1424,29 @@ class BackupProgressConsumer(AsyncWebsocketConsumer):
 
     async def _authenticate_token(self, token_key):
         return await authenticate_ws_token(token_key)
+
+    @database_sync_to_async
+    def _verify_ownership(self):
+        from django.db.models import Q
+        from .models_backup import ServiceBackup, ServerBackup
+        try:
+            sb = ServiceBackup.objects.filter(id=self.backup_id).select_related(
+                'service', 'service__owner', 'service__project__team'
+            ).first()
+            if sb:
+                return (
+                    sb.service.owner_id == self.user.id
+                    or sb.service.project.team.members.filter(user=self.user).exists()
+                )
+        except Exception:
+            pass
+        try:
+            server_bu = ServerBackup.objects.filter(id=self.backup_id).first()
+            if server_bu:
+                return True
+        except Exception:
+            pass
+        return False
 
 
 class PlatformUpdateConsumer(AsyncWebsocketConsumer):

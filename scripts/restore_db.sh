@@ -124,7 +124,7 @@ fi
 log "Using container: $DB_CONTAINER"
 
 # ── 3. Check if target DB has tables ──────────────────────────────────
-EXISTING_TABLES=$(docker exec "$DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" -tAc \
+EXISTING_TABLES=$(timeout 10 docker exec "$DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" -tAc \
     "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public';" 2>/dev/null || echo 0)
 
 if [[ "$EXISTING_TABLES" -gt 0 ]]; then
@@ -138,7 +138,7 @@ fi
 # ── 4. Safety backup before destructive operation ────────────────────
 SAFETY_BACKUP="/tmp/smsly_pre_restore_${DB_NAME}_$(date +%Y%m%d%H%M%S).sql.gz"
 log "Creating safety backup of current database..."
-if docker exec "$DB_CONTAINER" pg_dump -U "$DB_USER" "$DB_NAME" 2>/dev/null | gzip > "$SAFETY_BACKUP"; then
+if timeout 300 docker exec "$DB_CONTAINER" pg_dump -U "$DB_USER" "$DB_NAME" 2>/dev/null | gzip > "$SAFETY_BACKUP"; then
     log "${GREEN}Safety backup saved to $SAFETY_BACKUP${NC}"
 else
     log "${YELLOW}WARNING: Could not create safety backup (database may not exist)${NC}"
@@ -162,10 +162,10 @@ log "Restoring database (this may take a while)..."
 RESTORE_START=$(date +%s)
 
 if [[ "$DUMP_TYPE" == "custom" ]]; then
-    docker exec "$DB_CONTAINER" pg_restore -U "$DB_USER" -d "$DB_NAME" \
+    timeout 3600 docker exec "$DB_CONTAINER" pg_restore -U "$DB_USER" -d "$DB_NAME" \
         --no-owner --role="$DB_USER" --exit-on-error "$DEST"
 else
-    docker exec "$DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" \
+    timeout 3600 docker exec "$DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" \
         --set ON_ERROR_STOP=1 -f "$DEST"
 fi
 

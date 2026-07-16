@@ -8,7 +8,7 @@ from apps.deployments.models_transfer import ServerTransfer as TransferModel
 from apps.deployments.services.transfer_service import ServerTransferService
 
 
-@shared_task(bind=True, soft_time_limit=3600, time_limit=4200)
+@shared_task(bind=True, soft_time_limit=3600, time_limit=4200, name="apps.deployments.tasks.execute_server_transfer_task")
 def execute_server_transfer_task(self, transfer_id):
     from apps.deployments.services.transfer_service import (
         ServerTransferService,
@@ -71,7 +71,7 @@ def execute_server_transfer_task(self, transfer_id):
 
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, name="apps.deployments.tasks.rollback_transfer_task")
 def rollback_transfer_task(self, transfer_id):
 
     lock_key = f"server-transfer-rollback:{transfer_id}"

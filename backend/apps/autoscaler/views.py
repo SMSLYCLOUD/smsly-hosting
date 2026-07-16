@@ -219,7 +219,20 @@ def _apply_scaling(decision: dict):
     if k8s_available():
         try:
             apps_v1 = k8s_client.AppsV1Api()
+            autoscaling_v1 = k8s_client.AutoscalingV1Api()
             namespace = "default"
+            # Skip if HPA exists for this deployment — HPA owns
+            # replica count reconciliation; direct patching would
+            # fight the HPA control loop.
+            try:
+                autoscaling_v1.read_namespaced_horizontal_pod_autoscaler(name, namespace)
+                logger.info(
+                    "Autoscaler: HPA exists for %s/%s — delegating to HPA",
+                    namespace, name,
+                )
+                return
+            except Exception:
+                pass  # no HPA — proceed with direct scaling
             deployment = apps_v1.read_namespaced_deployment(name, namespace)
             deployment.spec.replicas = target
             apps_v1.patch_namespaced_deployment(name, namespace, deployment)

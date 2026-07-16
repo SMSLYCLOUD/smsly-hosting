@@ -672,6 +672,10 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
                 network=network,
                 restart_policy={"Name": restart_policy, "MaximumRetryCount": 0},
                 detach=True,
+                security_opt=["no-new-privileges:true"],
+                cap_drop=["ALL"],
+                cap_add=["NET_BIND_SERVICE", "CHOWN", "SETUID", "SETGID"],
+                pids_limit=1024,
             )
             return Response({'container_id': container.id, 'status': 'running'})
         except Exception:

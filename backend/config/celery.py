@@ -194,7 +194,7 @@ app.conf.task_routes = {
     'apps.addons.tasks.rotate_addon_credentials_task': {'queue': 'deploy'},
     'apps.deployments.services.heartbeat_bus.persist_heartbeats_task': {'queue': 'fast'},
     'apps.cloud.services.ssl_monitor.check_ssl_certificates_task': {'queue': 'deploy'},
-    'apps.deployments.tasks_deploy._post_deploy_monitor': {'queue': 'deploy'},
+    'apps.deployments.tasks._post_deploy_monitor': {'queue': 'deploy'},
     'apps.permissions.tasks.deactivate_expired_memberships': {'queue': 'deploy'},
     'apps.intelligence.tasks.detect_anomalies_task': {'queue': 'deploy'},
     'apps.intelligence.tasks.proactive_health_scan_task': {'queue': 'deploy'},

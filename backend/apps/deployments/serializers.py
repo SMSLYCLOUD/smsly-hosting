@@ -28,7 +28,7 @@ from .serializers_transfer import ServerTransferCreateSerializer, ServerTransfer
 #
 # The canonical allowlist lives in registry_validation.py to prevent
 # policy drift between the API-boundary serializer and internal callers.
-from .services.registry_validation import ALLOWED_IMAGE_REGISTRY_HOSTS as _ALLOWED_IMAGE_REGISTRIES
+from .services.registry_validation import all_allowed_registry_hosts as _all_allowed_registry_hosts
 
 
 def _validate_docker_image(image: str) -> str:
@@ -65,13 +65,14 @@ def _validate_docker_image(image: str) -> str:
         registry_prefix = "docker.io"
     else:
         registry_prefix = image[:first_slash]
+    _allowed = _all_allowed_registry_hosts()
     if not any(
         registry_prefix == allowed or registry_prefix.startswith(allowed + "/")
-        for allowed in _ALLOWED_IMAGE_REGISTRIES
+        for allowed in _allowed
     ):
         raise serializers.ValidationError(
             f"docker_image registry {registry_prefix!r} is not on the platform allowlist. "
-            f"Allowed: {', '.join(_ALLOWED_IMAGE_REGISTRIES)}."
+            f"Allowed: {', '.join(_allowed)}."
         )
     return image
 

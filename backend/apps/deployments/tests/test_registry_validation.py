@@ -122,12 +122,13 @@ class AllowlistConsistencyTests(TestCase):
     """
 
     def test_allowlist_matches_serializers(self):
-        from apps.deployments.serializers import _ALLOWED_IMAGE_REGISTRIES
+        from apps.deployments.serializers import _all_allowed_registry_hosts as serializer_allowed_hosts
+        from apps.deployments.services.registry_validation import all_allowed_registry_hosts
+
         self.assertEqual(
-            set(ALLOWED_IMAGE_REGISTRY_HOSTS),
-            set(_ALLOWED_IMAGE_REGISTRIES),
-            "registry_validation.ALLOWED_IMAGE_REGISTRY_HOSTS must "
-            "match serializers._ALLOWED_IMAGE_REGISTRIES to avoid "
-            "policy drift between the API boundary and internal "
-            "callers.",
+            serializer_allowed_hosts(),
+            all_allowed_registry_hosts(),
+            "serializers.py and registry_validation.py must return "
+            "the same allowlist to avoid policy drift between the "
+            "API boundary and internal callers.",
         )

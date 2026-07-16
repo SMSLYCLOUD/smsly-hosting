@@ -182,11 +182,20 @@ class ScopedRegistry(models.Model):
         default_pass = PlatformConfig.get_config_value("registry_password") or ""
 
         if registry:
-            return {
+            result = {
                 "url": registry.registry_url or default_url,
                 "username": registry.username or default_user,
-                "password": registry.password if registry.password else default_pass,
             }
+            if registry.is_internal:
+                # Internal registries use the platform's own registry password
+                # as fallback when the scoped record has no explicit password.
+                result["password"] = registry.password if registry.password else default_pass
+            else:
+                # External/user registries: never fall back to the platform's
+                # internal password.  If the credential has no password, keep
+                # it empty — the caller's docker login guard will skip auth.
+                result["password"] = registry.password or ""
+            return result
 
         return {
             "url": default_url,
@@ -201,9 +210,9 @@ class ScopedRegistry(models.Model):
         Returns the platform-wide defaults **plus** any per-scope extensions
         from every level in the chain.  Closest wins for duplicates.
         """
-        from apps.deployments.services.registry_validation import ALLOWED_IMAGE_REGISTRY_HOSTS
+        from apps.deployments.services.registry_validation import all_allowed_registry_hosts
 
-        hosts = list(ALLOWED_IMAGE_REGISTRY_HOSTS)
+        hosts = all_allowed_registry_hosts()
 
         chain = cls._get_scope_chain(obj)
         for scope_obj in chain:

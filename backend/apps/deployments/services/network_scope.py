@@ -87,20 +87,25 @@ def apply_egress_restrictions(network_name: str, allowed_egress_networks: list[s
 
     Uses the DOCKER-USER chain so rules survive Docker restarts.
 
-    If any entry in ``allowed_egress_networks`` is ``0.0.0.0/0`` the function
-    treats the request as "no restriction" and returns without touching
-    iptables — there is nothing meaningful to allow beyond ``0.0.0.0/0``.
+    If ``allowed_egress_networks`` contains ``0.0.0.0/0`` the function
+    treats the request as unrestricted and applies cross-bridge isolation
+    (containers on different bridges cannot reach each other via host
+    routing) while allowing internet outbound, DNS, and same-bridge addon
+    traffic.
 
-    Insertion order matters because ``iptables -I`` prepends:
+    If specific CIDRs are given, only those destinations are allowed (plus
+    DNS), and everything else is dropped.  Cloud metadata is always blocked.
 
-      1. DROP for the bridge (catch-all)
-      2. RETURN for each CIDR in the allowlist
-      3. RETURN for DNS (port 53)
+    Insertion order is important — the function inserts rules from
+    bottom-of-chain to top-of-chain so the final evaluation order is:
 
-    Each subsequent insertion moves to the top of the chain, so by the time
-    the loop finishes the chain reads top-down as: DNS-return, cidr-return,
-    ... cidr-return, DROP. Specific RETURNs win and pass control back to FORWARD,
-    DROP catches everything else, DNS is never shadowed.
+      1. ESTABLISHED,RELATED → RETURN   (response traffic)
+      2. Outbound via eth/enp/wl+        (internet access)
+      3. Same-bridge (addon)             (local addon traffic)
+      4. DNS                             (name resolution)
+      5. Cloud metadata DROP             (IAM credential guard)
+      6. Cross-bridge DROP               (inter-container isolation)
+      7. Catch-all DROP                  (default deny)
     """
     if not allowed_egress_networks:
         return
@@ -140,15 +145,24 @@ def apply_egress_restrictions(network_name: str, allowed_egress_networks: list[s
     # 1. DROP first (catch-all, ends up at the bottom of the final chain).
     _run(["iptables", "-I", "DOCKER-USER", "-i", bridge_iface, "-j", "DROP"])
 
-    # 2. RETURN each CIDR (or 0.0.0.0/0 with RFC1918 blocks).
+    # 2. RETURN each CIDR (or 0.0.0.0/0 with cross-bridge isolation).
     if is_unrestricted:
         logger.info(
-            "apply_egress_restrictions: %s requested unrestricted egress (0.0.0.0/0); applying RFC1918 and metadata blocking",
+            "apply_egress_restrictions: %s unrestricted — isolating from other bridges, "
+            "allowing internet + same-bridge addon traffic",
             network_name,
         )
-        _run(["iptables", "-I", "DOCKER-USER", "-i", bridge_iface, "-d", "0.0.0.0/0", "-j", "RETURN"])
-        for drop_cidr in ("192.168.0.0/16", "172.16.0.0/12", "10.0.0.0/8"):
-            _run(["iptables", "-I", "DOCKER-USER", "-i", bridge_iface, "-d", drop_cidr, "-j", "DROP"])
+        # Cross-bridge traffic DROP — containers on different bridges cannot
+        # communicate via host routing (this is the primary isolation mechanism).
+        _run(["iptables", "-I", "DOCKER-USER", "-i", bridge_iface, "-o", "br-+", "-j", "DROP"])
+        # Same-bridge RETURN — addon containers on this bridge are reachable.
+        _run(["iptables", "-I", "DOCKER-USER", "-i", bridge_iface, "-o", bridge_iface, "-j", "RETURN"])
+        # Internet outbound via physical interfaces.
+        for phys in ("wl+", "enp+", "eth+"):
+            _run(["iptables", "-I", "DOCKER-USER", "-i", bridge_iface, "-o", phys, "-j", "RETURN"])
+        # ESTABLISHED,RELATED must come BEFORE the cross-bridge DROP so that
+        # responses (e.g. from Traefik or internet) reach the container.
+        _run(["iptables", "-I", "DOCKER-USER", "-i", bridge_iface, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "RETURN"])
     else:
         for cidr in valid_cidrs:
             _run([

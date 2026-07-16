@@ -42,7 +42,7 @@ echo "Using database container: $DB_CONTAINER"
 DUMP_OK=false
 for DB_USER in smsly_admin smsly postgres; do
     echo "Attempting pg_dump with user '${DB_USER}'..."
-    if docker exec "$DB_CONTAINER" pg_dump -U "$DB_USER" -d smsly_hosting | gzip | openssl enc -aes-256-cbc -salt -pbkdf2 -pass env:BACKUP_PASS -md sha256 > "$BACKUP_FILE"; then
+    if timeout 300 sh -c 'docker exec "$1" pg_dump -U "$2" -d smsly_hosting | gzip | openssl enc -aes-256-cbc -salt -pbkdf2 -pass env:BACKUP_PASS -md sha256' _ "$DB_CONTAINER" "$DB_USER" > "$BACKUP_FILE"; then
         DUMP_OK=true
         break
     fi

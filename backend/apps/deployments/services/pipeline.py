@@ -827,56 +827,55 @@ class PipelineManager:
                 else:
                     append_log(self.deployment, "  ℹ️ All detected variables are already configured.\n")
 
-                # Determine if AI Senate needs to fill vars the manifest
-                # resolver couldn't provide real values for.
-                _needs_senate = False
-                _senate_vars: list[str] = []
+                # Send ALL detected env vars through the AI Senate.
+                # The Senate is the primary resolver; heuristic defaults
+                # are only used as a last-resort fallback when the Senate
+                # is unavailable or returns no value for a particular var.
                 if not resolver.is_frontend:
-                    if resolver.unresolved_vars:
-                        _needs_senate = True
-                        _senate_vars.extend(resolver.unresolved_vars)
-                    if getattr(resolver, 'heuristic_vars', []):
-                        _needs_senate = True
-                        _senate_vars.extend(resolver.heuristic_vars)
-                    # Also check for empty/placeholder values the manifest
-                    # resolver returned but didn't inject (e.g. already existed
-                    # on the service with a placeholder).
-                    for _k, _v in resolved_env.items():
-                        if _k not in _senate_vars and (
-                            not _v or _v in ("", "{{GENERATE}}", "{{FILL_ME}}", "CHANGEME", "TODO")
-                        ):
-                            _needs_senate = True
-                            _senate_vars.append(_k)
+                    # Inject heuristic/unresolved vars from manifest resolver
+                    # into scan_result so the Senate sees everything the
+                    # resolver detected but couldn't give real values for.
+                    _ctx = scan_result.setdefault('env_vars_context', {})
+                    for _k in getattr(resolver, 'heuristic_vars', []):
+                        _ctx.setdefault(_k, [f"Heuristic default from manifest resolver for {self.service.name}"])
+                    for _k in getattr(resolver, 'unresolved_vars', []):
+                        _ctx.setdefault(_k, [f"Unresolved required var from manifest resolver for {self.service.name}"])
 
-                    # No-manifest case: scanner detected env vars but manifest
-                    # resolver returned nothing. All detected vars need real values.
-                    if not _needs_senate and not resolved_env:
-                        _detected = scan_result.get('env_vars', [])
-                        if _detected:
-                            _needs_senate = True
-                            _senate_vars = list(_detected)
-
-                if _needs_senate:
-                    append_log(self.deployment, f"  🧠 AI Senate resolving {len(_senate_vars)} variables needing real values...\n")
+                    total = len(_ctx) + sum(
+                        1 for _ev in self.service.env_vars.all()
+                        if not str(getattr(_ev, 'value', '') or '').strip()
+                        or str(getattr(_ev, 'value', '') or '').strip()
+                           in ("", "{{GENERATE}}", "{{FILL_ME}}", "CHANGEME", "TODO")
+                    )
+                    append_log(self.deployment, f"  🧠 AI Senate resolving {total} variables...\n")
                     try:
                         _sugg, _inj = EnvironmentIntelligenceService.apply_intelligence_to_service(
                             self.service, scan_result, source_dir=None
                         )
                         if _inj:
-                            append_log(self.deployment, f"  ✅ AI Senate intelligence auto-filled {len(_inj)} remaining variables: {', '.join(_inj[:10])}...\n")
+                            append_log(
+                                self.deployment,
+                                f"  ✅ AI Senate auto-filled {len(_inj)} variables: {', '.join(_inj[:10])}...\n",
+                            )
                         else:
-                            append_log(self.deployment, "  ℹ️ AI Senate: all detected variables already have production values.\n")
-                        # Update unresolved list
+                            append_log(
+                                self.deployment,
+                                "  ℹ️ AI Senate: all detected variables already have production values.\n",
+                            )
+                        # Update unresolved list with vars the Senate
+                        # couldn't fill.
                         if resolver.unresolved_vars:
-                            resolver.unresolved_vars = [k for k in resolver.unresolved_vars if k not in (_inj or [])]
+                            resolver.unresolved_vars = [
+                                k for k in resolver.unresolved_vars if k not in (_inj or [])
+                            ]
                             _rs = self.deployment.review_summary or {}
                             if resolver.unresolved_vars:
-                                _rs['unresolved_external_vars'] = resolver.unresolved_vars
+                                _rs["unresolved_external_vars"] = resolver.unresolved_vars
                             else:
-                                _rs.pop('unresolved_external_vars', None)
+                                _rs.pop("unresolved_external_vars", None)
                             self.deployment.review_summary = _rs
                     except Exception as _senate_err:
-                        logger.warning("AI Senate enrichment for remaining vars failed: %s", _senate_err)
+                        logger.warning("AI Senate enrichment failed: %s", _senate_err)
             except Exception as e:
                 logger.warning("Manifest env resolution failed: %s", e)
                 append_log(self.deployment, f"\n⚠️ Manifest env resolution failed: {e!s}. Falling back to AI Senate.\n")
@@ -2210,16 +2209,16 @@ class PipelineManager:
 
     def _write_compose_routing_override(self, main_service: str, project_name: str) -> str:
         """
-        Write a compose override file with Traefik labels and shared network.
+        Write a compose override file with Traefik labels and scoped network.
 
         Docker labels are immutable after container creation, so labels must be
         injected into compose config before ``docker compose up``.
 
-        All services are attached to ``smsly-net`` (the shared Docker bridge
-        network) so that every container can resolve addon hostnames via Docker
-        DNS.  Without this, secondary compose services (workers, sidecars)
-        remain on the compose-internal network and cannot reach addons whose
-        connection URLs use ``smsly-net`` network aliases.
+        All services are attached to the scoped Docker network so that every
+        container can resolve addon hostnames via Docker DNS.  Addon containers
+        are dual-homed to both ``smsly-net`` (infrastructure) and the scoped
+        network (service resolution), so DNS resolves addon aliases on whichever
+        network the query arrives from.
         """
         import os as _os
 
@@ -2255,6 +2254,20 @@ class PipelineManager:
                 with open(compose_path, "r", encoding="utf-8") as f:
                     user_compose = yaml.safe_load(f) or {}
                     if "services" in user_compose and isinstance(user_compose["services"], dict):
+                        # SECURITY: reject privileged modes and host network
+                        for svc_name, svc_config in user_compose["services"].items():
+                            if isinstance(svc_config, dict):
+                                if svc_config.get("privileged") is True:
+                                    raise BuildError(
+                                        f"Compose service '{svc_name}' has privileged: true "
+                                        f"which is not allowed for security reasons."
+                                    )
+                                if svc_config.get("network_mode") == "host":
+                                    raise BuildError(
+                                        f"Compose service '{svc_name}' has network_mode: host "
+                                        f"which is not allowed for security reasons."
+                                    )
+
                         # Detect sandboxed container runtime
                         from apps.deployments.services.container_runtime import detect_best_runtime
                         compose_runtime = detect_best_runtime()
@@ -2465,55 +2478,6 @@ class PipelineManager:
             except OSError:
                 pass
 
-        # Attach ALL compose service containers to smsly-net so they can
-        # resolve addon hostnames via Docker DNS.  The override file above
-        # already declares smsly-net as external, but as a safety net we
-        # explicitly connect every container after compose up.
-        compose_services = list(compose_services)
-        try:
-            # Get actual running containers for this compose project
-            ps_result = subprocess.run(
-                ['docker', 'compose', '-p', project_name, 'ps', '-q'],
-                capture_output=True, text=True, timeout=15,
-            )
-            container_ids = [
-                cid.strip() for cid in ps_result.stdout.strip().splitlines()
-                if cid.strip()
-            ]
-            if not container_ids:
-                # Fallback: construct expected container names
-                container_ids = [f"{project_name}-{svc}-1" for svc in compose_services]
-
-            connected = 0
-            for cid in container_ids:
-                # Resolve container name for logging
-                name_result = subprocess.run(
-                    ['docker', 'inspect', '-f', '{{.Name}}', cid],
-                    capture_output=True, text=True, timeout=5,
-                )
-                cname = name_result.stdout.strip().lstrip('/') if name_result.returncode == 0 else cid[:12]
-                result = subprocess.run(
-                    ['docker', 'network', 'connect', network_name, cid],
-                    check=False, capture_output=True, text=True, timeout=30,
-                )
-                if result.returncode == 0:
-                    connected += 1
-                elif 'already connected' not in (result.stderr or '').lower():
-                    append_log(
-                        self.deployment,
-                        f"  ⚠️ Could not connect {cname} to {network_name}: {result.stderr.strip()}\n"
-                    )
-
-            append_log(
-                self.deployment,
-                f"  ✅ Connected {connected}/{len(container_ids)} compose services to {network_name}\n"
-            )
-        except Exception as net_err:  # pylint: disable=broad-exception-caught
-            append_log(
-                self.deployment,
-                f"  ⚠️ Could not connect compose services to {network_name}: {net_err}\n"
-            )
-
         append_log(
             self.deployment,
             f"  📛 Traefik labels prepared at container creation for {main_svc}\n"
@@ -2539,11 +2503,10 @@ class PipelineManager:
                 if res.returncode == 0:
                     append_log(self.deployment, "[hook] Prisma migrate deploy succeeded.\n")
                 else:
-                    append_log(
-                        self.deployment,
-                        "[hook] Prisma migrate deploy failed:\n"
-                        f"{res.stdout}\n{res.stderr}\n"
+                    redacted_prisma = redact_values(
+                        f"{res.stdout}\n{res.stderr}\n", self.secret_values
                     )
+                    append_log(self.deployment, redacted_prisma)
 
             if is_ollama_service(self.service):
                 self._pull_ollama_model(container_name, env_map)
@@ -2893,10 +2856,20 @@ class PipelineManager:
         # Since docker-py (legacy Docker Engine build API) does not accept a
         # `secrets=` keyword argument in `client.images.build()`, we pass any
         # build secrets via `buildargs` so they are accessible during the build.
+        # SECURITY WARNING: BuildKit ARG values are written into image history
+        # and are visible via `docker history <image>`. Anyone with pull access
+        # to the registry can retrieve these values. For production, use
+        # BuildKit's `--secret=id=mysecret,src=path` mount instead.
         merged_buildargs = dict(buildargs or {})
         for secret_id, secret_val in (secrets or {}).items():
             merged_buildargs[secret_id] = secret_val
             merged_buildargs[secret_id.upper()] = secret_val
+        if secrets:
+            append_log(
+                self.deployment,
+                "WARNING: Build secrets are passed as ARG (visible in docker history).\n"
+                "  For production, use BuildKit --secret mounts instead.\n"
+            )
 
         max_attempts = 2
         for attempt in range(1, max_attempts + 1):
@@ -3245,7 +3218,8 @@ class PipelineManager:
 
         # NixpacksBuilder returns dict with stdout/stderr
         if result.get("stderr"):
-            append_log(self.deployment, f"[Nixpacks Log]\n{result['stderr']}\n")
+            redacted_stderr = redact_values(result['stderr'], self.secret_values)
+            append_log(self.deployment, f"[Nixpacks Log]\n{redacted_stderr}\n")
 
     def _run_subprocess(self, cmd: list, cwd: str):
         """Helper to run shell commands with logging."""
@@ -3300,28 +3274,34 @@ class PipelineManager:
     def _ensure_docker_network(self):
         """Ensure the Docker network for deployed services exists.
 
-        Creates ``smsly-net`` (or the configured ``DOCKER_NETWORK``) if it
-        does not already exist.  This is a no-op when the network is
-        already present.  External networks (pre-created by the operator)
-        are not touched.
+        Creates the scoped network (with configured driver, subnet, etc.)
+        if it does not already exist.  Uses ``ensure_scoped_network`` to
+        honour ScopedNetwork model config (internal, enable_ipv6, subnet).
         """
+        from .network_scope import ensure_scoped_network, apply_egress_restrictions
+        from apps.deployments.models_network_scope import ScopedNetwork
+
         network_name = self._resolve_service_network_name()
         try:
-            result = subprocess.run(
-                ['docker', 'network', 'inspect', network_name],
-                capture_output=True, text=True, timeout=5,
-            )
-            if result.returncode == 0:
-                return  # network exists
-            # Create the network
-            subprocess.run(
-                ['docker', 'network', 'create', network_name],
-                capture_output=True, text=True, timeout=10,
-            )
-            append_log(self.deployment, f"Docker network '{network_name}' created.\n")
+            project = getattr(self.service, 'project', None)
+            if project:
+                cfg = ScopedNetwork.resolve_network_config(project)
+                ensure_scoped_network(cfg)
+                egress = list(cfg.get("allowed_egress_networks", []))
+                if egress:
+                    apply_egress_restrictions(cfg["name"], egress)
+            else:
+                result = subprocess.run(
+                    ['docker', 'network', 'inspect', network_name],
+                    capture_output=True, text=True, timeout=5,
+                )
+                if result.returncode != 0:
+                    subprocess.run(
+                        ['docker', 'network', 'create', network_name],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    append_log(self.deployment, f"Docker network '{network_name}' created.\n")
         except Exception as e:
-            # Non-fatal: if the network can't be created, the push may
-            # still work if the registry is on a reachable network.
             append_log(self.deployment, f"Warning: could not ensure Docker network '{network_name}': {e}\n")
 
     def _ensure_registry_running(self):
@@ -3552,7 +3532,7 @@ class PipelineManager:
                     )
             else:
                 if push_error:
-                    append_log(self.deployment, f"Registry error details: {push_error}\n")
+                    append_log(self.deployment, f"Registry error details: {redact_values(push_error, self.secret_values)}\n")
                 if not is_local:
                     raise SystemError(
                         f"Image push failed: Local fallback is not allowed for remote deployments. "

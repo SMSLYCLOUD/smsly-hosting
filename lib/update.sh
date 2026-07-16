@@ -1074,7 +1074,7 @@ if not created and not cp.is_active:
     # ─── Self-Healing: Automatic Queue Restoration ──────────────────────────
     echo -e "${BLUE}  → Checking for stalled deployments/addons in QUEUED state...${NC}"
     backend_container="$(resolve_container_target "smsly-hosting-backend-1")"
-    timeout -k 5 30 docker exec -i "$backend_container" python manage.py shell -c "
+    timeout -k 5 120 docker exec -i "$backend_container" python manage.py shell -c "
 from apps.deployments.models import Deployment, Service
 from apps.deployments.models_addons import Addon
 from apps.deployments.tasks import provision_addon_task, recover_stalled_queued_deployments
@@ -1126,7 +1126,13 @@ if d_count > 0:
 
     echo -e "\n${GREEN}  ✨ Update complete. Self-healing applied.${NC}"
 
-    timeout -k 5 120 sync_platform_domain_state "$INSTALL_DIR/.env"
+    timeout -k 5 120 bash -c "
+export COMPOSE_FILE='$COMPOSE_FILE'
+source '$INSTALL_DIR/lib/env.sh'
+source '$INSTALL_DIR/lib/common.sh'
+source '$INSTALL_DIR/lib/platform.sh'
+sync_platform_domain_state '$INSTALL_DIR/.env'
+" || echo -e "${YELLOW}  ⚠ Domain state sync timed out (non-fatal)${NC}"
 
     # Refresh proxy/runtime edge stack so routing and TLS state is always clean.
     # NOTE: restart_edge_stack now handles Caddy validation internally (H1+H2 fix).
@@ -1373,8 +1379,16 @@ if d and d != 'localhost':
     fi
     fi
 
-    timeout -k 5 600 safe_refresh_runtime_services
-    timeout -k 5 300 ensure_celery_workers_running
+    timeout -k 5 600 bash -c "
+export COMPOSE_FILE='$COMPOSE_FILE'
+source '$INSTALL_DIR/lib/common.sh' 2>/dev/null
+safe_refresh_runtime_services
+" || true
+    timeout -k 5 300 bash -c "
+export COMPOSE_FILE='$COMPOSE_FILE'
+source '$INSTALL_DIR/lib/common.sh' 2>/dev/null
+ensure_celery_workers_running
+" || true
 
     # ─── Auto-redeploy active services when platform code or domain state changes ──
     PRE_HEAD="$(cat "$INSTALL_DIR/.pre-update-head" 2>/dev/null || true)"

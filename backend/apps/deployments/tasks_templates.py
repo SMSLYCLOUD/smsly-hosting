@@ -32,7 +32,7 @@ from .tasks_ai_router import _ensure_shared_ollama_cpp, _pull_ollama_models_into
 from .tasks_deploy import enqueue_smart_deploy_task
 
 
-@shared_task(bind=True, max_retries=0)
+@shared_task(bind=True, max_retries=0, name="apps.deployments.tasks.one_click_deploy_template_task")
 def one_click_deploy_template_task(self, service_id: str, template_id: str):
     """
     Background orchestration for template deployments.
