@@ -29,7 +29,6 @@ from apps.deployments.utils import (
 )
 
 from .tasks_ai_router import _ensure_shared_ollama_cpp, _pull_ollama_models_into_shared
-from .tasks_deploy import enqueue_smart_deploy_task
 
 
 @shared_task(bind=True, max_retries=0, name="apps.deployments.tasks.one_click_deploy_template_task")
@@ -38,6 +37,10 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
     Background orchestration for template deployments.
     """
     # pylint: disable=unused-argument
+    # Lazy import to break circular import chain:
+    # tasks_templates → tasks_deploy → tasks
+    from .tasks_deploy import enqueue_smart_deploy_task  # noqa: F811
+
     try:
         service = Service.objects.get(id=service_id)
     except Service.DoesNotExist:
