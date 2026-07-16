@@ -8,6 +8,7 @@ from django.utils import timezone
 from rest_framework import permissions, serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.throttling import UserRateThrottle
 
 from .models import CloudProvider, CloudResource
 from .serializers import (
@@ -187,6 +188,10 @@ class CloudResourceViewSet(viewsets.ModelViewSet):
 
 class IntelligencePayloadSerializer(serializers.Serializer):
     data = serializers.JSONField(required=False)  # type: ignore[assignment]
+
+
+class EcosystemBulkEnvRateThrottle(UserRateThrottle):
+    scope = 'ecosystem_bulk_env'
 
 
 class IntelligenceViewSet(viewsets.GenericViewSet):
@@ -660,7 +665,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-    @action(detail=False, methods=['post'])
+    @action(detail=False, methods=['post'], throttle_classes=[UserRateThrottle])
     def ecosystem_scan(self, request):
         """
         Scan all accessible GitHub repositories and generate a zero-click deploy plan.
@@ -670,6 +675,16 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         """
         from apps.deployments.models_ecosystem import EcosystemPlan
         from apps.deployments.tasks_ecosystem import ecosystem_scan_task
+
+        # Guard: no concurrent active scan or deploy
+        if EcosystemPlan.objects.filter(
+            user=request.user,
+            status__in=['scanning', 'deploying'],
+        ).exists():
+            return Response(
+                {'error': 'A scan or deploy is already in progress.'},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
 
         ai_provider = request.data.get('ai_provider')
         selected_repos = request.data.get('selected_repos')
@@ -724,7 +739,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             'status': 'scanning',
         })
 
-    @action(detail=False, methods=['post'])
+    @action(detail=False, methods=['post'], throttle_classes=[EcosystemBulkEnvRateThrottle])
     def ecosystem_bulk_env(self, request):
         """
         Set environment variables across multiple services at once.
@@ -755,7 +770,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
                     continue
 
                 # Simple heuristic for secrets
-                is_secret = any(hint in key_upper for hint in ("KEY", "SECRET", "PASSWORD", "TOKEN", "DSN"))
+                is_secret = any(hint in key_upper for hint in ("KEY", "SECRET", "PASSWORD", "TOKEN", "DSN", "_URL", "_URI"))
 
                 EnvironmentVariable.objects.update_or_create(
                     service=service,
@@ -770,7 +785,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             'keys_set': len(env_vars)
         })
 
-    @action(detail=False, methods=['post'])
+    @action(detail=False, methods=['post'], throttle_classes=[UserRateThrottle])
     def ecosystem_deploy(self, request):
         """
         Deploy a previously generated ecosystem plan.
@@ -899,6 +914,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         if not result.ready():
             stale_plan = EcosystemPlan.objects.filter(
                 scan_task_id=task_id,
+                user=request.user,
                 status=EcosystemPlan.Status.SCANNING,
                 updated_at__lt=timezone.now() - timezone.timedelta(seconds=STALE_THRESHOLD_SECONDS),
             ).first()
@@ -959,6 +975,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         if not result.ready():
             plan_with_progress = EcosystemPlan.objects.filter(
                 scan_task_id=task_id,
+                user=request.user,
             ).values_list('scan_progress', flat=True).first()
             if plan_with_progress:
                 response_data['scan_progress'] = plan_with_progress
@@ -970,16 +987,16 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
                 cache.set(cache_key, payload, timeout=1800)
 
             if result.status == 'SUCCESS':
-                EcosystemPlan.objects.filter(scan_task_id=task_id).update(
+                EcosystemPlan.objects.filter(scan_task_id=task_id, user=request.user).update(
                     status=EcosystemPlan.Status.REVIEW,
                     plan=payload,
                 )
             elif result.status == 'FAILURE':
-                EcosystemPlan.objects.filter(scan_task_id=task_id).update(
+                EcosystemPlan.objects.filter(scan_task_id=task_id, user=request.user).update(
                     status=EcosystemPlan.Status.FAILED,
                     error_message=str(payload.get('error', '')),
                 )
-                EcosystemPlan.objects.filter(deploy_task_id=task_id).update(
+                EcosystemPlan.objects.filter(deploy_task_id=task_id, user=request.user).update(
                     status=EcosystemPlan.Status.FAILED,
                     error_message=str(payload.get('error', '')),
                 )
@@ -1064,8 +1081,15 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         services_export = {}
         for service in plan_data['services']:
             name = service.get('name', 'unknown')
+            raw_env = (service.get('env_vars', {}) or {})
+            # Mask secret values in download
+            masked_env = {}
+            for k, v in raw_env.items():
+                key_upper = str(k).strip().upper()
+                is_secret = any(hint in key_upper for hint in ("KEY", "SECRET", "PASSWORD", "TOKEN", "DSN", "_URL", "_URI"))
+                masked_env[k] = '********' if is_secret else v
             services_export[name] = {
-                'env_vars': (service.get('env_vars', {}) or {}),
+                'env_vars': masked_env,
                 'addons': service.get('addons', []) or [],
                 'depends_on': service.get('depends_on', []) or [],
                 'port': service.get('port'),
@@ -1075,13 +1099,20 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
                 'skip': service.get('skip', False),
             }
 
+        shared_env = plan_data.get('shared_env', {}) or {}
+        masked_shared = {}
+        for k, v in shared_env.items():
+            key_upper = str(k).strip().upper()
+            is_secret = any(hint in key_upper for hint in ("KEY", "SECRET", "PASSWORD", "TOKEN", "DSN", "_URL", "_URI"))
+            masked_shared[k] = '********' if is_secret else v
+
         payload = {
             'plan_id': str(plan.id),
             'status': plan.status,
             'generated_at': plan.updated_at.isoformat() if plan.updated_at else None,
             'deploy_sequence': plan_data.get('deploy_sequence', []),
             'addons': plan_data.get('addons', []),
-            'shared_env': plan_data.get('shared_env', {}) or {},
+            'shared_env': masked_shared,
             'services': services_export,
         }
 

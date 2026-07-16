@@ -1028,9 +1028,9 @@ def _cleanup_server_dns_record(server):
     from .models_core import PlatformConfig
     from .services.dns import delete_dns_record
     log = logging.getLogger(__name__)
-    config = PlatformConfig.get_config()
+    config = PlatformConfig.load()
     cf_token = config.cloudflare_api_token
-    root_domain = config.root_domain
+    root_domain = config.domain
     if not cf_token or not root_domain:
         return
     node_slug = str(server.id).split("-")[0]

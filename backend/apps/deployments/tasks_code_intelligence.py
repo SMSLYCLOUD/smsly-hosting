@@ -9,7 +9,7 @@ from services.code_intelligence import analyze_codebase_chunked
 User = get_user_model()
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, soft_time_limit=600, time_limit=660)
 def deep_scan_and_verify_task(self, user_id, repos_data, deploy_plan, ai_provider=None):
     """
     Background task to perform a deep codebase scan and cross-verify with the deployment plan.

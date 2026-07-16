@@ -32,6 +32,7 @@ from celery import shared_task
 from django.conf import settings
 
 from apps.deployments.models import Deployment
+from apps.deployments.tasks import enqueue_smart_deploy_task
 from apps.intelligence.models import AIProviderSettings
 from apps.intelligence.providers import ask_with_fallback
 from apps.intelligence.views import _json_safe

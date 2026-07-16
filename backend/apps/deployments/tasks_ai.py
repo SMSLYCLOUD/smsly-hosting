@@ -35,7 +35,7 @@ def _sanitize_for_llm(logs: str) -> str:
     return out
 
 
-@shared_task
+@shared_task(soft_time_limit=180, time_limit=210)
 def analyze_failure_task(deployment_id):
     """
     Uses Jules AI (via SMSLY Platform) to analyze build logs and suggest fixes.

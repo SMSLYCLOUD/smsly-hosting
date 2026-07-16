@@ -1555,6 +1555,12 @@ def _finalize_ecosystem_plan(plan_id: str | None, waves: list[list[str]]):
         plan_rec = EcosystemPlan.objects.filter(id=plan_id).first()
         if not plan_rec:
             return
+        if not waves:
+            plan_rec.status = EcosystemPlan.Status.COMPLETED
+            plan_rec.completed_at = timezone.now()
+            plan_rec.error_message = ""
+            plan_rec.save(update_fields=["status", "completed_at", "error_message", "updated_at"])
+            return
         all_ids = [str(dep_id) for wave in waves for dep_id in wave]
         deployments = list(Deployment.objects.filter(id__in=all_ids).values("status"))
         statuses = [d["status"] for d in deployments]
@@ -1587,6 +1593,7 @@ def _finalize_ecosystem_plan(plan_id: str | None, waves: list[list[str]]):
         else:
             plan_rec.status = EcosystemPlan.Status.FAILED
             plan_rec.error_message = f"Ecosystem deploy finished with {failed_count}/{len(statuses)} service failures or cancellations."
+        _rebuild_ecosystem_build_counter()
         plan_rec.save(update_fields=["status", "completed_at", "error_message", "updated_at"])
     except Exception as exc:
         logger.warning("Failed to finalize ecosystem plan %s: %s", plan_id, exc)
@@ -1685,7 +1692,7 @@ def _update_plan_progress(plan_id: str, msg: str) -> None:
         pass
 
 
-@shared_task(bind=True, queue='deploy', soft_time_limit=1800, time_limit=2100)
+@shared_task(bind=True, queue='deploy', soft_time_limit=1800, time_limit=2100, max_retries=2, default_retry_delay=30, autoretry_for=(Exception,))
 def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provider: str | None = None, selected_repos: list | None = None, plan_id: str | None = None, project_id: str | None = None) -> dict:
     """
     Scan all of a user's GitHub repos and return a deploy plan.
@@ -1709,7 +1716,7 @@ def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provi
         return {"error": "GitHub not connected. Please link your GitHub account first."}
 
     try:
-        logger.info(f"Starting ecosystem scan for user {user_id} with selected_repos: {selected_repos}")
+        logger.info("Starting ecosystem scan for user %s with selected_repos: %s", user_id, selected_repos)
 
         # Persist initial progress so the frontend can show it on resume
         if plan_id:
@@ -1799,7 +1806,7 @@ def ecosystem_deferred_build_task(self, deployment_id: str, provider_id: str, wa
     return {"status": "dispatched", "deployment_id": deployment_id}
 
 
-@shared_task(bind=True, queue='fast', soft_time_limit=1800, time_limit=2400)
+@shared_task(bind=True, queue='fast', soft_time_limit=1800, time_limit=2400, max_retries=3, default_retry_delay=60, autoretry_for=(Exception,))
 def ecosystem_release_wave_task(
     self,
     provider_id: str,
@@ -2081,8 +2088,8 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
     if not project and plan_id:
         from apps.deployments.models_ecosystem import EcosystemPlan
         try:
-            _plan_rec = EcosystemPlan.objects.get(id=plan_id)
-            if _plan_rec.project:
+            _plan_rec = EcosystemPlan.objects.filter(id=plan_id, user=user).first()
+            if _plan_rec and _plan_rec.project:
                 project = _plan_rec.project
         except Exception:
             pass
@@ -2109,7 +2116,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
     if plan_id:
         from apps.deployments.models_ecosystem import EcosystemPlan
         try:
-            _plan_rec = EcosystemPlan.objects.get(id=plan_id)
+            _plan_rec = EcosystemPlan.objects.filter(id=plan_id, user=user).first()
             if project and not _plan_rec.project:
                 _plan_rec.project = project
                 _plan_rec.save(update_fields=["project", "updated_at"])
@@ -2719,19 +2726,20 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
         "services": results,
     }
 
-    if plan_id:
-        from apps.deployments.models_ecosystem import EcosystemPlan
-        try:
-            plan_record = EcosystemPlan.objects.get(id=plan_id)
-            plan_record.services_created = results
-            if deploy_result.get("failed", 0) == len(results):
-                plan_record.status = EcosystemPlan.Status.FAILED
-                plan_record.error_message = "All services failed to deploy"
-            else:
-                plan_record.status = EcosystemPlan.Status.DEPLOYING
-            plan_record.save(update_fields=['services_created', 'status', 'error_message', 'updated_at'])
-        except Exception:
-            pass
+    try:
+        if plan_id:
+            from apps.deployments.models_ecosystem import EcosystemPlan
+            plan_record = EcosystemPlan.objects.filter(id=plan_id, user=user).first()
+            if plan_record:
+                plan_record.services_created = results
+                if deploy_result.get("failed", 0) == len(results):
+                    plan_record.status = EcosystemPlan.Status.FAILED
+                    plan_record.error_message = "All services failed to deploy"
+                else:
+                    plan_record.status = EcosystemPlan.Status.DEPLOYING
+                plan_record.save(update_fields=['services_created', 'status', 'error_message', 'updated_at'])
+    except Exception:
+        pass
 
     return deploy_result
 
@@ -2764,4 +2772,5 @@ def _rollback_ecosystem_deploy(
     if service_ids:
         Service.objects.filter(id__in=service_ids).delete()
 
+    _rebuild_ecosystem_build_counter()
     logger.info("Rollback complete")
