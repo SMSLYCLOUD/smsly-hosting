@@ -30,14 +30,14 @@ detect_public_ip() {
     )
 
     for endpoint in "${endpoints[@]}"; do
-        candidate="$(curl -4 -fsS -m 5 "$endpoint" 2>/dev/null | tr -d '\r\n' || true)"
+        candidate="$(curl -4 -fsS -m 5 "$endpoint"  | tr -d '\r\n' || true)"
         if is_valid_ipv4 "$candidate"; then
             echo "$candidate"
             return 0
         fi
     done
 
-    candidate="$(hostname -I 2>/dev/null | awk '{print $1}' | tr -d '\r\n' || true)"
+    candidate="$(hostname -I  | awk '{print $1}' | tr -d '\r\n' || true)"
     if is_valid_ipv4 "$candidate"; then
         echo "$candidate"
         return 0
@@ -80,11 +80,11 @@ ROLLBACK_NEEDED=false
 CADDY_LAST_GOOD="$INSTALL_DIR/caddy-config/Caddyfile.smsly-last-good"
 
 acquire_install_lock() {
-    if command -v flock >/dev/null 2>&1; then
+    if command -v flock ; then
         exec 9<>"$LOCK_FILE"
         if ! flock -n 9; then
             local pid
-            pid="$(cat "$LOCK_FILE" 2>/dev/null || true)"
+            pid="$(cat "$LOCK_FILE"  || true)"
             echo -e "${RED}ERROR: Another installer instance${pid:+ (PID $pid)} is already running.${NC}"
             echo -e "If you are sure no other instance is running, remove $LOCK_FILE and try again."
             exit 1
@@ -94,8 +94,8 @@ acquire_install_lock() {
     else
         if [ -f "$LOCK_FILE" ]; then
             local pid
-            pid="$(cat "$LOCK_FILE" 2>/dev/null || true)"
-            if [ "$pid" != "$$" ] && kill -0 "$pid" 2>/dev/null; then
+            pid="$(cat "$LOCK_FILE"  || true)"
+            if [ "$pid" != "$$" ] && kill -0 "$pid" ; then
                 echo -e "${RED}ERROR: Another installer instance (PID $pid) is already running.${NC}"
                 echo -e "If you are sure no other instance is running, remove $LOCK_FILE and try again."
                 exit 1
@@ -106,17 +106,17 @@ acquire_install_lock() {
 }
 
 release_install_lock() {
-    if command -v flock >/dev/null 2>&1; then
-        flock -u 9 2>/dev/null || true
-        exec 9>&- 2>/dev/null || true
+    if command -v flock ; then
+        flock -u 9  || true
+        exec 9>&-  || true
     fi
-    rm -f "$LOCK_FILE" 2>/dev/null || true
+    rm -f "$LOCK_FILE"  || true
 }
 
 get_migration_database_alias() {
     local migrate_db
     local direct_url
-    direct_url="$(env_get_value "${INSTALL_DIR:-.}/.env" "DIRECT_DATABASE_URL" 2>/dev/null || true)"
+    direct_url="$(env_get_value "${INSTALL_DIR:-.}/.env" "DIRECT_DATABASE_URL"  || true)"
     if [ -z "$direct_url" ]; then
         direct_url="postgresql://${POSTGRES_USER:-smsly_admin}:${POSTGRES_PASSWORD:-}@${POSTGRES_HOST:-db}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-smsly_hosting}"
     fi
@@ -134,7 +134,7 @@ get_migration_database_alias() {
             smsly-hosting-backend:latest \
             python manage.py shell -c \
             "from django.conf import settings; print('direct' if 'direct' in settings.DATABASES else ('session' if 'session' in settings.DATABASES else 'default'))" \
-            2>/dev/null | tail -n 1 | tr -d '\r'
+             | tail -n 1 | tr -d '\r'
     )"
 
     case "$migrate_db" in
@@ -145,7 +145,7 @@ get_migration_database_alias() {
 
 diagnose_migration_locks() {
     local env_file="${INSTALL_DIR:-.}/.env"
-    [ -f "$env_file" ] && source "$env_file" 2>/dev/null || true
+    [ -f "$env_file" ] && source "$env_file"  || true
 
     echo -e "${YELLOW}  -> PostgreSQL activity snapshot (lock diagnosis):${NC}"
     timeout 30 docker compose -f "$COMPOSE_FILE" exec -T \
@@ -156,7 +156,7 @@ diagnose_migration_locks() {
             -v ON_ERROR_STOP=1 \
             -P pager=off \
             -c "SELECT pid, usename, application_name, state, wait_event_type, wait_event, now() - COALESCE(xact_start, query_start) AS age, left(regexp_replace(query, '\s+', ' ', 'g'), 180) AS query FROM pg_stat_activity WHERE datname = current_database() ORDER BY COALESCE(xact_start, query_start) NULLS LAST LIMIT 20;" \
-        2>/dev/null || echo -e "${YELLOW}  -> Could not read pg_stat_activity.${NC}"
+         || echo -e "${YELLOW}  -> Could not read pg_stat_activity.${NC}"
 }
 
 run_backend_migrations() {
@@ -170,7 +170,7 @@ run_backend_migrations() {
     timeout_seconds="${MIGRATION_TIMEOUT_SECONDS:-900}"
     echo -e "${BLUE}  -> Migration database: ${migrate_db}${NC}"
     local direct_url
-    direct_url="$(env_get_value "${INSTALL_DIR:-.}/.env" "DIRECT_DATABASE_URL" 2>/dev/null || true)"
+    direct_url="$(env_get_value "${INSTALL_DIR:-.}/.env" "DIRECT_DATABASE_URL"  || true)"
     if [ -z "$direct_url" ]; then
         direct_url="postgresql://${POSTGRES_USER:-smsly_admin}:${POSTGRES_PASSWORD:-}@${POSTGRES_HOST:-db}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-smsly_hosting}"
     fi
@@ -209,12 +209,12 @@ run_backend_migrations() {
         --env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env" \
         -e SMSLY_DISABLE_STARTUP_TASKS=true \
         smsly-hosting-backend:latest \
-        python manage.py fix_node_db_permissions 2>&1 || echo -e "${YELLOW}    ⚠ fix_node_db_permissions failed${NC}"
+        python manage.py fix_node_db_permissions  || echo -e "${YELLOW}    ⚠ fix_node_db_permissions failed${NC}"
 
     # Reload PgCat so newly created/fixed node agent users are picked up
     # into the pool config. Critical for agent-lite nodes that connect
     # through PgCat and would otherwise get "No pool configured".
-    if [ "$MODE_AGENT_LITE" != "true" ] && [ -n "$(get_pgcat_if_exists)" ] && docker compose -f "$COMPOSE_FILE" ps pgcat 2>/dev/null | grep -q "Up"; then
+    if [ "$MODE_AGENT_LITE" != "true" ] && [ -n "$(get_pgcat_if_exists)" ] && docker compose -f "$COMPOSE_FILE" ps pgcat  | grep -q "Up"; then
         echo -e "${BLUE}  -> Reloading PgCat to pick up node agent pools...${NC}"
         timeout -k 5 20 docker compose -f "$COMPOSE_FILE" restart pgcat || echo -e "${YELLOW}    ⚠ PgCat restart failed${NC}"
         sleep 5
@@ -233,7 +233,7 @@ restore_last_good_caddy() {
 }
 
 reload_caddy_preserving_previous() {
-    reload_container_caddy 2>/dev/null || true
+    reload_container_caddy  || true
     return 0
 }
 
@@ -249,9 +249,9 @@ ensure_selfsigned_cert() {
     local ssl_config="$cert_dir/openssl.cnf"
 
     mkdir -p "$cert_dir"
-    chmod 700 "$cert_dir" 2>/dev/null || true
+    chmod 700 "$cert_dir"  || true
 
-    if ! command -v openssl &>/dev/null; then
+    if ! command -v openssl ; then
         echo -e "${YELLOW}  ⚠ openssl not available; skipping self-signed cert generation${NC}"
         return 0
     fi
@@ -282,7 +282,7 @@ EOF
         -keyout "$key_file" \
         -out "$cert_file" \
         -config "$ssl_config" \
-        2>/dev/null || {
+         || {
         echo -e "${YELLOW}  ⚠ Failed to generate self-signed cert (non-fatal)${NC}"
         rm -f "$ssl_config"
         return 0
@@ -293,13 +293,13 @@ EOF
     # reads cert AND key as UID 1000; we chown the key to that user so the
     # Caddy container can open it. Cert stays world-readable (chmod 644) for
     # chain-bundle consumers; key is never world-readable.
-    chmod 644 "$cert_file" 2>/dev/null || true
-    chmod 600 "$key_file" 2>/dev/null || true
+    chmod 644 "$cert_file"  || true
+    chmod 600 "$key_file"  || true
     # Hand ownership to Caddy (UID 1000) when run as root via sudo.
     if [ -n "${SUDO_USER:-}" ]; then
-        chown "${SUDO_USER}:${SUDO_USER}" "$key_file" 2>/dev/null || chown 1000:1000 "$key_file" 2>/dev/null || true
+        chown "${SUDO_USER}:${SUDO_USER}" "$key_file"  || chown 1000:1000 "$key_file"  || true
     elif [ "$(id -u)" -eq 0 ]; then
-        chown 1000:1000 "$key_file" 2>/dev/null || true
+        chown 1000:1000 "$key_file"  || true
     fi
     echo -e "${GREEN}  ✓ Self-signed cert generated for $public_ip${NC}"
 }
@@ -309,7 +309,7 @@ reload_container_caddy() {
     # Reload the Docker container Caddy (the one that handles actual traffic).
     # This is needed because the host Caddy (systemd) may not be running.
     local compose_f="${COMPOSE_FILE:-docker-compose.prod.yml}"
-    if command -v docker &>/dev/null && docker compose -f "$compose_f" ps -q caddy 2>/dev/null | grep -q .; then
+    if command -v docker  && docker compose -f "$compose_f" ps -q caddy  | grep -q .; then
         timeout -k 5 20 docker compose -f "$compose_f" exec -T caddy caddy reload --config /etc/caddy/Caddyfile || \
             timeout -k 5 20 docker compose -f "$compose_f" restart caddy || \
             echo -e "${YELLOW}    ⚠ Caddy reload failed${NC}"
@@ -335,7 +335,7 @@ install_caddyfile_atomically() {
     cp "$candidate" "$dest"
     chmod 664 "$dest"
 
-    reload_container_caddy 2>/dev/null || true
+    reload_container_caddy  || true
     return 0
 }
 
@@ -344,7 +344,7 @@ recreate_traefik_preserving_certs() {
     local acme_src="/var/lib/docker/volumes/smsly-hosting_letsencrypt_data/_data/acme.json"
     local acme_backup=""
 
-    if ! docker compose -f "$compose_f" ps -q traefik 2>/dev/null | grep -q .; then
+    if ! docker compose -f "$compose_f" ps -q traefik  | grep -q .; then
         echo -e "${YELLOW}  WARN traefik not running; skipping one-time recreate.${NC}"
         return 1
     fi
@@ -352,7 +352,7 @@ recreate_traefik_preserving_certs() {
     echo -e "${BLUE}  → Verifying socket-proxy is healthy (traefik Docker provider depends on it)...${NC}"
     local i=0
     while [ $i -lt 30 ]; do
-        if docker inspect --format='{{.State.Health.Status}}' smsly-hosting-socket-proxy-1 2>/dev/null | grep -q healthy; then
+        if docker inspect --format='{{.State.Health.Status}}' smsly-hosting-socket-proxy-1  | grep -q healthy; then
             break
         fi
         sleep 2
@@ -376,10 +376,10 @@ recreate_traefik_preserving_certs() {
     echo -e "${BLUE}  → Recording pre-recreate router count from Traefik API...${NC}"
     sleep 2
     local pre_routers=0
-    if timeout 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget >/dev/null 2>&1' 2>/dev/null; then
-        pre_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers 2>/dev/null | grep -o '"name"' | wc -l)
+    if timeout 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
+        pre_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
     else
-        pre_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers 2>/dev/null | grep -o '"name"' | wc -l)
+        pre_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
     fi
     echo -e "${BLUE}    pre-recreate routers: $pre_routers${NC}"
     if [ "$pre_routers" -le 1 ]; then
@@ -405,7 +405,7 @@ recreate_traefik_preserving_certs() {
     echo -e "${BLUE}  → Waiting for traefik healthcheck...${NC}"
     i=0
     while [ $i -lt 30 ]; do
-        if docker inspect --format='{{.State.Health.Status}}' smsly-hosting-traefik-1 2>/dev/null | grep -q healthy; then
+        if docker inspect --format='{{.State.Health.Status}}' smsly-hosting-traefik-1  | grep -q healthy; then
             break
         fi
         sleep 2
@@ -419,19 +419,19 @@ recreate_traefik_preserving_certs() {
     i=0
     local post_routers=0
     while [ $i -lt 60 ]; do
-        if timeout 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget >/dev/null 2>&1' 2>/dev/null; then
-            post_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers 2>/dev/null | grep -o '"name"' | wc -l)
+        if timeout 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
+            post_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
         else
-            post_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers 2>/dev/null | grep -o '"name"' | wc -l)
+            post_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers  | grep -o '"name"' | wc -l)
         fi
         if [ "$post_routers" -ge "$pre_routers" ] && [ "$post_routers" -gt 0 ]; then
             echo -e "${GREEN}    OK post-recreate routers: $post_routers (matches or exceeds pre-recreate)${NC}"
 
             local eps
-            if timeout 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget >/dev/null 2>&1' 2>/dev/null; then
-                eps=$(timeout 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/entrypoints 2>/dev/null)
+            if timeout 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget ' ; then
+                eps=$(timeout 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/entrypoints )
             else
-                eps=$(timeout 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/entrypoints 2>/dev/null)
+                eps=$(timeout 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/entrypoints )
             fi
             if echo "$eps" | grep -q '"name":"websecure"'; then
                 echo -e "${GREEN}    OK websecure entrypoint is active${NC}"
@@ -456,14 +456,14 @@ recreate_traefik_preserving_certs() {
 }
 ensure_update_networks() {
     # Never delete data networks/volumes in update mode. Only (re)create if missing.
-    docker network inspect smsly-net >/dev/null 2>&1 || docker network create smsly-net || echo -e "${YELLOW}    ⚠ smsly-net create failed (may already exist)${NC}"
-    docker network inspect smsly-proxy >/dev/null 2>&1 || docker network create smsly-proxy || echo -e "${YELLOW}    ⚠ smsly-proxy create failed (may already exist)${NC}"
-    docker network inspect socket-proxy >/dev/null 2>&1 || docker network create --driver bridge --internal socket-proxy || echo -e "${YELLOW}    ⚠ socket-proxy create failed (may already exist)${NC}"
+    docker network inspect smsly-net  || docker network create smsly-net || echo -e "${YELLOW}    ⚠ smsly-net create failed (may already exist)${NC}"
+    docker network inspect smsly-proxy  || docker network create smsly-proxy || echo -e "${YELLOW}    ⚠ smsly-proxy create failed (may already exist)${NC}"
+    docker network inspect socket-proxy  || docker network create --driver bridge --internal socket-proxy || echo -e "${YELLOW}    ⚠ socket-proxy create failed (may already exist)${NC}"
 }
 
 get_pgcat_if_exists() {
     local compose_target="${COMPOSE_FILE:-docker-compose.prod.yml}"
-    if [ -f "$compose_target" ] && grep -q "^  *pgcat:" "$compose_target" 2>/dev/null; then
+    if [ -f "$compose_target" ] && grep -q "^  *pgcat:" "$compose_target" ; then
         echo "pgcat"
     fi
 }
@@ -474,7 +474,7 @@ get_db_service() {
     #   "postgres-primary" for HA/prod compose (has pgcat)
     #   "db"                 for legacy dev compose
     local ct="${COMPOSE_FILE:-docker-compose.prod.yml}"
-    if [ -f "$ct" ] && grep -q "^  *pgcat:" "$ct" 2>/dev/null; then
+    if [ -f "$ct" ] && grep -q "^  *pgcat:" "$ct" ; then
         echo "postgres-primary"
     else
         echo "db"
@@ -487,7 +487,7 @@ get_redis_service() {
     #   "redis-primary" for HA/prod compose
     #   "redis"           for legacy dev compose
     local ct="${COMPOSE_FILE:-docker-compose.prod.yml}"
-    if [ -f "$ct" ] && grep -q "^  *redis-replica:" "$ct" 2>/dev/null; then
+    if [ -f "$ct" ] && grep -q "^  *redis-replica:" "$ct" ; then
         echo "redis-primary"
     else
         echo "redis"
@@ -515,7 +515,7 @@ compose_stack_build_service_args() {
         candidates="pgcat backend celery celery-beat celery-fast celery-deploy"
     fi
     for svc in $candidates; do
-        if docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null | grep -qx "$svc"; then
+        if docker compose -f "$COMPOSE_FILE" config --services  | grep -qx "$svc"; then
             printf '%s\n' "$svc"
         fi
     done | tr '\n' ' '
@@ -532,10 +532,10 @@ prune_stopped_conflicting() {
     local c_id=""
     local c_name=""
     local removed=0
-    for c_id in $(docker ps -a -q --filter "name=${pattern}" --filter "status=exited" --filter "status=created" 2>/dev/null || true); do
-        c_name=$(docker inspect "$c_id" --format='{{.Name}}' 2>/dev/null | sed 's/^\///')
+    for c_id in $(docker ps -a -q --filter "name=${pattern}" --filter "status=exited" --filter "status=created"  || true); do
+        c_name=$(docker inspect "$c_id" --format='{{.Name}}'  | sed 's/^\///')
         if [ -n "$c_name" ]; then
-            docker rm "$c_id" >/dev/null 2>&1 && removed=$((removed + 1))
+            docker rm "$c_id"  && removed=$((removed + 1))
         fi
     done
     [ "$removed" -gt 0 ] && echo -e "  \033[0;32m✓\033[0m Removed $removed stopped container(s)" || true
@@ -543,7 +543,7 @@ prune_stopped_conflicting() {
 
 cleanup_stale_containers() {
     local compose_f="${COMPOSE_FILE:-docker-compose.prod.yml}"
-    timeout -k 5 30 docker compose -f "$compose_f" down --remove-orphans 2>/dev/null || true
+    timeout -k 5 30 docker compose -f "$compose_f" down --remove-orphans  || true
     prune_stopped_conflicting "smsly-hosting"
     prune_stopped_conflicting "smsly-"
 }
@@ -602,31 +602,31 @@ ensure_infrastructure_permissions() {
     _chown_owner="1000:1000"
     for _dir in "$caddy_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir"; do
         if [ -d "$_dir" ]; then
-            if ! chown -R "$_chown_owner" "$_dir" 2>/dev/null; then
-                echo -e "${YELLOW}     ⚠ Could not chown $_dir to $_chown_owner${NC}"
+            if ! chown -R "$_chown_owner" "$_dir"; then
+                echo -e "${YELLOW}     ⚠ Could not chown $_dir to $_chown_owner (see error above)${NC}"
             fi
         fi
     done
 
-    chmod -R u+rwX,g+rwX "$caddy_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir" 2>/dev/null || true
-    find "$caddy_config_dir" -type d -exec chmod 2775 {} + 2>/dev/null || true
-    find "$staticfiles_dir" -type d -exec chmod 2775 {} + 2>/dev/null || true
-    find "$builds_dir" -type d -exec chmod 2775 {} + 2>/dev/null || true
-    find "$prometheus_targets_dir" -type d -exec chmod 2777 {} + 2>/dev/null || true
+    chmod -R u+rwX,g+rwX "$caddy_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir" || echo -e "${YELLOW}     ⚠ chmod failed on bind-mount dirs${NC}"
+    find "$caddy_config_dir" -type d -exec chmod 2775 {} + || true
+    find "$staticfiles_dir" -type d -exec chmod 2775 {} + || true
+    find "$builds_dir" -type d -exec chmod 2775 {} + || true
+    find "$prometheus_targets_dir" -type d -exec chmod 2777 {} + || echo -e "${YELLOW}     ⚠ chmod failed on $prometheus_targets_dir${NC}"
     # Ensure the directory itself has the right permissions (not just children)
-    chmod 2777 "$prometheus_targets_dir" 2>/dev/null || true
+    chmod 2777 "$prometheus_targets_dir" || echo -e "${YELLOW}     ⚠ chmod failed on $prometheus_targets_dir${NC}"
 
     # Caddy-specific file permissions
-    [ -f "$caddy_config_dir/Caddyfile" ] && chmod 664 "$caddy_config_dir/Caddyfile" 2>/dev/null || true
-    [ -f "$caddy_config_dir/.reload" ] && chmod 664 "$caddy_config_dir/.reload" 2>/dev/null || true
+    [ -f "$caddy_config_dir/Caddyfile" ] && chmod 664 "$caddy_config_dir/Caddyfile" || true
+    [ -f "$caddy_config_dir/.reload" ] && chmod 664 "$caddy_config_dir/.reload" || true
 
     # 2. Handle Named Volumes (backups_data)
     # We use a one-off container to safely chown existing named volumes.
-    if command -v docker >/dev/null 2>&1; then
+    if command -v docker ; then
         for vol in backups_data; do
-            if docker volume inspect "$vol" >/dev/null 2>&1; then
+            if docker volume inspect "$vol" ; then
                 echo -e "${BLUE}     ↳ Setting permissions for volume: $vol...${NC}"
-                docker run --rm -v "${vol}:/data" alpine chown -R 1000:1000 /data 2>/dev/null || true
+                docker run --rm -v "${vol}:/data" alpine chown -R 1000:1000 /data || echo -e "${YELLOW}     ⚠ Could not chown volume $vol${NC}"
             fi
         done
     fi
@@ -634,24 +634,24 @@ ensure_infrastructure_permissions() {
     # Write probe for all bind-mount directories
     local probe_failed=0
     for probe_dir in "$caddy_config_dir" "$staticfiles_dir" "$builds_dir" "$prometheus_targets_dir"; do
-        if ! echo "perm-ok" > "$probe_dir/.perm_probe" 2>/dev/null; then
+        if ! echo "perm-ok" > "$probe_dir/.perm_probe"; then
             echo -e "${YELLOW}  ⚠ Write probe failed for $probe_dir — retrying with chown...${NC}"
-            chown -R 1000:1000 "$probe_dir" 2>/dev/null || true
-            chmod -R u+rwX,g+rwX "$probe_dir" 2>/dev/null || true
-            if echo "perm-ok" > "$probe_dir/.perm_probe" 2>/dev/null; then
+            chown -R 1000:1000 "$probe_dir" || true
+            chmod -R u+rwX,g+rwX "$probe_dir" || true
+            if echo "perm-ok" > "$probe_dir/.perm_probe"; then
                 echo -e "${GREEN}    ✓ Fixed${NC}"
             else
                 echo -e "${RED}    ✗ Still cannot write to $probe_dir — check host permissions${NC}"
                 probe_failed=1
             fi
         fi
-        rm -f "$probe_dir/.perm_probe" 2>/dev/null || true
+        rm -f "$probe_dir/.perm_probe" || true
     done
     # Probe the .env file (mounted as a file, not a dir)
-    if [ -f "/opt/smsly-hosting/.env" ] && ! touch "/opt/smsly-hosting/.env" 2>/dev/null; then
+    if [ -f "/opt/smsly-hosting/.env" ] && ! touch "/opt/smsly-hosting/.env"; then
         echo -e "${YELLOW}  ⚠ .env not writable — fixing...${NC}"
-        chown 1000:1000 "/opt/smsly-hosting/.env" 2>/dev/null || true
-        chmod 640 "/opt/smsly-hosting/.env" 2>/dev/null || true
+        chown 1000:1000 "/opt/smsly-hosting/.env" || true
+        chmod 640 "/opt/smsly-hosting/.env" || true
     fi
     if [ "$probe_failed" -ne 0 ]; then
         echo -e "${RED}  ✗ Some bind-mount directories are not writable — containers may fail${NC}"
@@ -664,7 +664,7 @@ resolve_container_target() {
     [ -z "$target" ] && return 0
 
     # 1. If target is already a valid container ID or name inspectable by docker, return it
-    if timeout -k 5 10 docker container inspect "$target" >/dev/null 2>&1; then
+    if timeout -k 5 10 docker container inspect "$target" ; then
         echo "$target"
         return 0
     fi
@@ -673,12 +673,12 @@ resolve_container_target() {
     local compose_f="${COMPOSE_FILE:-docker-compose.prod.yml}"
     if [ -f "$compose_f" ]; then
         local services
-        services="$(timeout -k 5 10 docker compose -f "$compose_f" config --services 2>/dev/null)"
+        services="$(timeout -k 5 10 docker compose -f "$compose_f" config --services )"
         if [ -n "$services" ]; then
             for svc in $services; do
                 if [[ "$target" == *"-${svc}-"* || "$target" == *"_${svc}_"* || "$target" == *"-${svc}" || "$target" == *"_${svc}" || "$target" == "$svc" ]]; then
                     local cid
-                    cid="$(timeout -k 5 10 docker compose -f "$compose_f" ps -q "$svc" 2>/dev/null | head -n 1 || true)"
+                    cid="$(timeout -k 5 10 docker compose -f "$compose_f" ps -q "$svc"  | head -n 1 || true)"
                     if [ -n "$cid" ]; then
                         echo "$cid"
                         return 0
@@ -690,7 +690,7 @@ resolve_container_target() {
 
     # 3. Fallback: maybe target is a service name itself?
     local cid_svc
-    cid_svc="$(docker compose -f "$compose_f" ps -q "$target" 2>/dev/null | head -n 1 || true)"
+    cid_svc="$(docker compose -f "$compose_f" ps -q "$target"  | head -n 1 || true)"
     if [ -n "$cid_svc" ]; then
         echo "$cid_svc"
         return 0
@@ -701,7 +701,7 @@ resolve_container_target() {
     local fuzzy_pattern
     fuzzy_pattern="${target//-/*}"
     fuzzy_pattern="${fuzzy_pattern//_/*}"
-    cid_fuzzy="$(docker ps -a --filter "name=${fuzzy_pattern}" -q 2>/dev/null | head -n 1 || true)"
+    cid_fuzzy="$(docker ps -a --filter "name=${fuzzy_pattern}" -q  | head -n 1 || true)"
     if [ -n "$cid_fuzzy" ]; then
         echo "$cid_fuzzy"
         return 0
@@ -721,8 +721,15 @@ ensure_container_on_network() {
     local container_name
     container_name="$(resolve_container_target "$raw_target")"
 
-    docker container inspect "$container_name" >/dev/null 2>&1 || return 0
-    docker network inspect "$network_name" >/dev/null 2>&1 || return 0
+    docker container inspect "$container_name"  || return 0
+    docker network inspect "$network_name"  || return 0
+
+    # Idempotent: skip if the container is already connected to the network.
+    # `docker network connect` errors with "endpoint already exists" otherwise.
+    if docker network inspect "$network_name" --format '{{range $k, $v := .Containers}}{{$k}}{{end}}'  | grep -q "$container_name"; then
+        return 0
+    fi
+
     docker network connect "$network_name" "$container_name" || echo -e "${YELLOW}    ⚠ Network connect $container_name to $network_name failed${NC}"
 }
 
@@ -746,9 +753,9 @@ c = PlatformConfig.load()
 d = (c.domain or '').strip()
 if d and d != 'localhost':
     print(d)
-" 2>/dev/null | tr -d '[:space:]' || true)"
+"  | tr -d '[:space:]' || true)"
     if [ -z "$domain" ]; then
-        domain="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
+        domain="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env"  | cut -d= -f2- || true)"
     fi
 
     # 2. Discover ALL deployed service domains from DB (public + custom)
@@ -765,7 +772,7 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
         cd = cd.strip()
         if cd:
             print(f'{cd} {{\n    reverse_proxy {upstream}\n    encode gzip\n}}\n')
-" 2>/dev/null | tr -d '\r' || true)"
+"  | tr -d '\r' || true)"
 
     # 3. Check if domain is a real hostname (not an IP address)
     local is_real_domain=false
@@ -839,13 +846,13 @@ SAFECADDY
 caddy_needs_fix() {
     should_manage_caddy || return 1
     local dest="${INSTALL_DIR:-/opt/smsly-hosting}/caddy-config/Caddyfile"
-    if ! timeout -k 5 15 docker compose -f "$COMPOSE_FILE" exec -T caddy caddy validate --config /etc/caddy/Caddyfile 2>/dev/null; then
+    if ! timeout -k 5 15 docker compose -f "$COMPOSE_FILE" exec -T caddy caddy validate --config /etc/caddy/Caddyfile ; then
         return 0  # Syntax error
     fi
-    if grep -q 'dns cloudflare' "$dest" 2>/dev/null; then
+    if grep -q 'dns cloudflare' "$dest" ; then
         local _env_token="${CLOUDFLARE_API_TOKEN:-}"
         if [ -z "$_env_token" ] && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ]; then
-            _env_token="$(grep -m1 '^CLOUDFLARE_API_TOKEN=' "${INSTALL_DIR:-/opt/smsly-hosting}/.env" 2>/dev/null | cut -d= -f2- || true)"
+            _env_token="$(grep -m1 '^CLOUDFLARE_API_TOKEN=' "${INSTALL_DIR:-/opt/smsly-hosting}/.env"  | cut -d= -f2- || true)"
         fi
         if [ -z "$_env_token" ] || [ "$_env_token" = "fake" ]; then
             return 0  # dns cloudflare without token = runtime crash
@@ -862,10 +869,10 @@ is_real_domain_name() {
 }
 
 https_listener_active() {
-    if command -v ss >/dev/null 2>&1; then
-        ss -H -tln 2>/dev/null | awk '{print $4}' | grep -Eq ':443$'
+    if command -v ss ; then
+        ss -H -tln  | awk '{print $4}' | grep -Eq ':443$'
     else
-        lsof -iTCP:443 -sTCP:LISTEN >/dev/null 2>&1
+        lsof -iTCP:443 -sTCP:LISTEN 
     fi
 }
 
@@ -895,7 +902,7 @@ bust_core_build_cache() {
     # Remove old app image layers for deterministic rebuilds (no DB/data touched).
     for svc in $core_svcs; do
         local image_ids=""
-        image_ids="$(docker compose -f "$COMPOSE_FILE" images -q "$svc" 2>/dev/null | awk 'NF' | sort -u || true)"
+        image_ids="$(docker compose -f "$COMPOSE_FILE" images -q "$svc"  | awk 'NF' | sort -u || true)"
         if [ -n "$image_ids" ]; then
             while read -r image_id; do
                 [ -n "$image_id" ] && docker rmi -f "$image_id" || echo -e "${YELLOW}    ⚠ docker rmi $image_id failed${NC}"
@@ -922,7 +929,7 @@ restart_edge_stack() {
     echo -e "${BLUE}  -> Checking edge proxy stack (traefik/socket-proxy/route-fallback)...${NC}"
     local down_services=""
     for svc in $all_edge_services; do
-        if docker compose -f "$COMPOSE_FILE" ps "$svc" 2>/dev/null | grep -q "Up"; then
+        if docker compose -f "$COMPOSE_FILE" ps "$svc"  | grep -q "Up"; then
             echo -e "${GREEN}    ✓ $svc already running${NC}"
         else
             echo -e "${YELLOW}    ⚠ $svc is down — starting...${NC}"
@@ -943,12 +950,12 @@ restart_edge_stack() {
     ensure_container_on_network "smsly-proxy" "smsly-hosting-traefik-1"
     ensure_container_on_network "smsly-proxy" "smsly-hosting-socket-proxy-1"
 
-    if should_manage_caddy && docker compose -f "$COMPOSE_FILE" ps caddy 2>/dev/null | grep -q "Up"; then
+    if should_manage_caddy && docker compose -f "$COMPOSE_FILE" ps caddy  | grep -q "Up"; then
         if caddy_needs_fix; then
             generate_safe_caddyfile "restart_edge_stack validation"
         fi
         echo -e "${BLUE}  -> Reloading Caddy...${NC}"
-        reload_container_caddy 2>/dev/null || true
+        reload_container_caddy  || true
     fi
     echo -e "${GREEN}  OK Edge stack healthy${NC}"
 }
@@ -959,7 +966,7 @@ wait_for_traefik_api() {
     local interval=2
     echo -e "${BLUE}  → Waiting for Traefik API to be ready...${NC}"
     while [ "$waited" -lt "$max_wait" ]; do
-        if curl -sf --max-time 3 http://127.0.0.1:8082/api/version >/dev/null 2>&1; then
+        if curl -sf --max-time 3 http://127.0.0.1:8082/api/version ; then
             echo -e "${GREEN}  ✓ Traefik API ready (${waited}s)${NC}"
             return 0
         fi
@@ -1006,13 +1013,13 @@ refresh_runtime_services() {
         if is_node_mode && [ "$svc" = "frontend" ]; then
             continue
         fi
-        if docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null | grep -qx "$svc"; then
+        if docker compose -f "$COMPOSE_FILE" config --services  | grep -qx "$svc"; then
             app_services+=("$svc")
         fi
     done
 
     for svc in "${edge_services_requested[@]}"; do
-        if docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null | grep -qx "$svc"; then
+        if docker compose -f "$COMPOSE_FILE" config --services  | grep -qx "$svc"; then
             edge_services+=("$svc")
         fi
     done
@@ -1063,7 +1070,7 @@ refresh_runtime_services() {
         local down_edge=()
         for svc in "${edge_services[@]}"; do
             container_name="smsly-hosting-${svc}-1"
-            if docker compose -f "$COMPOSE_FILE" ps "$svc" 2>/dev/null | grep -q "Up"; then
+            if docker compose -f "$COMPOSE_FILE" ps "$svc"  | grep -q "Up"; then
                 echo -e "${GREEN}  ✓ $svc already running${NC}"
             else
                 echo -e "${YELLOW}  ⚠ $svc is down — starting...${NC}"
@@ -1090,14 +1097,14 @@ refresh_runtime_services() {
 
     if [ "${#failed_services[@]}" -gt 0 ]; then
         echo -e "${YELLOW}  WARN Runtime refresh left services unready: ${failed_services[*]}${NC}"
-        docker compose -f "$COMPOSE_FILE" ps "${failed_services[@]}" 2>/dev/null || true
-        docker compose -f "$COMPOSE_FILE" logs --tail=80 "${failed_services[@]}" 2>/dev/null || true
+        docker compose -f "$COMPOSE_FILE" ps "${failed_services[@]}"  || true
+        docker compose -f "$COMPOSE_FILE" logs --tail=80 "${failed_services[@]}"  || true
         return 1
     fi
 
     if should_manage_caddy; then
         install_caddy_health_guard "${DOMAIN:-}"
-        reload_container_caddy 2>/dev/null || true
+        reload_container_caddy  || true
     fi
 
     if [ "$MODE_AGENT_LITE" != "true" ]; then
@@ -1108,7 +1115,7 @@ refresh_runtime_services() {
             for obs_ctr in smsly-loki smsly-promtail smsly-prometheus smsly-cadvisor smsly-node-exporter smsly-grafana; do
                 i=0
                 while [ $i -lt 30 ]; do
-                    if docker inspect --format='{{.State.Health.Status}}' "$obs_ctr" 2>/dev/null | grep -qE 'healthy|^$'; then
+                    if docker inspect --format='{{.State.Health.Status}}' "$obs_ctr"  | grep -qE 'healthy|^$'; then
                         break
                     fi
                     sleep 2
@@ -1136,7 +1143,7 @@ ensure_celery_workers_running() {
     local celery_services=()
     local down_services=()
     for svc in celery celery-deploy celery-fast celery-beat; do
-        if docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null | grep -qx "$svc"; then
+        if docker compose -f "$COMPOSE_FILE" config --services  | grep -qx "$svc"; then
             celery_services+=("$svc")
         fi
     done
@@ -1145,7 +1152,7 @@ ensure_celery_workers_running() {
         return 0
     fi
     for svc in "${celery_services[@]}"; do
-        if ! docker compose -f "$COMPOSE_FILE" ps "$svc" 2>/dev/null | grep -q "Up"; then
+        if ! docker compose -f "$COMPOSE_FILE" ps "$svc"  | grep -q "Up"; then
             down_services+=("$svc")
         fi
     done
@@ -1182,7 +1189,7 @@ wait_for_container_ready() {
     container_name="$(resolve_container_target "$raw_target")"
 
     while [ "$elapsed" -lt "$timeout_seconds" ]; do
-        state="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container_name" 2>/dev/null || echo "missing")"
+        state="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container_name"  || echo "missing")"
         if [ "$state" = "healthy" ] || [ "$state" = "running" ]; then
             echo -e "${GREEN}  OK $raw_target is $state${NC}"
             return 0
@@ -1201,10 +1208,10 @@ sync_agent_lite_rabbitmq_password() {
     local env_file="$INSTALL_DIR/.env"
     local rabbitmq_user rabbitmq_password
 
-    rabbitmq_user="$(env_get_value "$env_file" "RABBITMQ_DEFAULT_USER" 2>/dev/null || true)"
+    rabbitmq_user="$(env_get_value "$env_file" "RABBITMQ_DEFAULT_USER"  || true)"
     rabbitmq_user="${rabbitmq_user:-smsly_user}"
-    rabbitmq_password="$(env_get_value "$env_file" "RABBITMQ_PASSWORD" 2>/dev/null || true)"
-    rabbitmq_password="${rabbitmq_password:-$(env_get_value "$env_file" "RABBITMQ_DEFAULT_PASS" 2>/dev/null || true)}"
+    rabbitmq_password="$(env_get_value "$env_file" "RABBITMQ_PASSWORD"  || true)"
+    rabbitmq_password="${rabbitmq_password:-$(env_get_value "$env_file" "RABBITMQ_DEFAULT_PASS"  || true)}"
 
     if [ -z "$rabbitmq_password" ]; then
         echo -e "${RED}  ERROR RABBITMQ_PASSWORD is empty after agent-lite env generation${NC}"
@@ -1213,22 +1220,22 @@ sync_agent_lite_rabbitmq_password() {
 
     docker compose -f "$COMPOSE_FILE" up -d rabbitmq || echo -e "${YELLOW}    ⚠ RabbitMQ start failed${NC}"
     wait_for_container_ready "smsly-hosting-rabbitmq-1" 120 || {
-        docker compose -f "$COMPOSE_FILE" logs --tail=80 rabbitmq 2>/dev/null || true
+        docker compose -f "$COMPOSE_FILE" logs --tail=80 rabbitmq  || true
         exit 1
     }
 
-    if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" >/dev/null 2>&1; then
+    if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" ; then
         echo -e "${GREEN}  OK Lite Agent RabbitMQ password already matches .env${NC}"
         return 0
     fi
 
     echo -e "${BLUE}  -> Syncing Lite Agent RabbitMQ password for ${rabbitmq_user}...${NC}"
     timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl add_user "$rabbitmq_user" "$rabbitmq_password" || echo -e "${YELLOW}    ⚠ RabbitMQ add_user failed${NC}"
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl change_password "$rabbitmq_user" "$rabbitmq_password" >/dev/null
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_user_tags "$rabbitmq_user" administrator >/dev/null
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_permissions -p / "$rabbitmq_user" ".*" ".*" ".*" >/dev/null
+    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl change_password "$rabbitmq_user" "$rabbitmq_password" 
+    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_user_tags "$rabbitmq_user" administrator 
+    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_permissions -p / "$rabbitmq_user" ".*" ".*" ".*" 
 
-    if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" >/dev/null 2>&1; then
+    if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" ; then
         echo -e "${GREEN}  OK Lite Agent RabbitMQ password synced${NC}"
         return 0
     fi
@@ -1239,15 +1246,15 @@ sync_agent_lite_rabbitmq_password() {
 
 ensure_security_tools() {
     export PATH="/usr/local/bin:$PATH"
-    if ! command -v trivy >/dev/null 2>&1 && [ ! -x "/usr/local/bin/trivy" ]; then
+    if ! command -v trivy  && [ ! -x "/usr/local/bin/trivy" ]; then
         echo -e "${BLUE}  → Installing Trivy vulnerability scanner...${NC}"
-        curl -sfL --connect-timeout 15 --max-time 120 https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin 2>/dev/null || true
+        curl -sfL --connect-timeout 15 --max-time 120 https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin  || true
     fi
-    if ! command -v cosign >/dev/null 2>&1 && [ ! -x "/usr/local/bin/cosign" ]; then
+    if ! command -v cosign  && [ ! -x "/usr/local/bin/cosign" ]; then
         echo -e "${BLUE}  → Installing Cosign image attestation utility...${NC}"
         local cosign_arch
         cosign_arch="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
-        curl -sfL --connect-timeout 15 --max-time 120 -o /usr/local/bin/cosign "https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-${cosign_arch}" 2>/dev/null && chmod +x /usr/local/bin/cosign || true
+        curl -sfL --connect-timeout 15 --max-time 120 -o /usr/local/bin/cosign "https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-${cosign_arch}"  && chmod +x /usr/local/bin/cosign || true
     fi
     return 0
 }

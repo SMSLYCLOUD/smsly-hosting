@@ -9,7 +9,7 @@ dump_diagnostic_logs() {
     df -h /
 
     echo -e "\n${YELLOW}  → Container Status:${NC}"
-    if command -v docker >/dev/null 2>&1 && [ -f "$env_file" ] && grep -q '^POSTGRES_PASSWORD=' "$env_file" 2>/dev/null; then
+    if command -v docker  && [ -f "$env_file" ] && grep -q '^POSTGRES_PASSWORD=' "$env_file" ; then
         docker compose -f "$COMPOSE_FILE" ps || true
 
         echo -e "\n${YELLOW}  -> Compose Logs (Last 50 lines):${NC}"
@@ -294,11 +294,11 @@ PY
         return 0
     fi
 
-    DOMAIN_SYNC_UPDATED_COUNT="$(printf '%s' "$sync_json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('updated_service_domains', 0))" 2>/dev/null || echo 0)"
-    DOMAIN_SYNC_REDEPLOY_REQUIRED="$(printf '%s' "$sync_json" | python3 -c "import json,sys; print(1 if json.load(sys.stdin).get('redeploy_required') else 0)" 2>/dev/null || echo 0)"
-    DOMAIN_SYNC_SERVICE_IDS="$(printf '%s' "$sync_json" | python3 -c "import json,sys; print(','.join(json.load(sys.stdin).get('service_ids', [])))" 2>/dev/null || true)"
+    DOMAIN_SYNC_UPDATED_COUNT="$(printf '%s' "$sync_json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('updated_service_domains', 0))"  || echo 0)"
+    DOMAIN_SYNC_REDEPLOY_REQUIRED="$(printf '%s' "$sync_json" | python3 -c "import json,sys; print(1 if json.load(sys.stdin).get('redeploy_required') else 0)"  || echo 0)"
+    DOMAIN_SYNC_SERVICE_IDS="$(printf '%s' "$sync_json" | python3 -c "import json,sys; print(','.join(json.load(sys.stdin).get('service_ids', [])))"  || true)"
 
-    echo -e "${GREEN}  ✓ PlatformConfig synced: domain=$(printf '%s' "$sync_json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('domain', ''))" 2>/dev/null)${NC}"
+    echo -e "${GREEN}  ✓ PlatformConfig synced: domain=$(printf '%s' "$sync_json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('domain', ''))" )${NC}"
     if [ "${DOMAIN_SYNC_UPDATED_COUNT:-0}" -gt 0 ]; then
         echo -e "${GREEN}  ✓ Rewrote ${DOMAIN_SYNC_UPDATED_COUNT} existing service public domain(s)${NC}"
     fi
@@ -309,12 +309,12 @@ PY
 import json,sys
 d = json.load(sys.stdin)
 print(d.get('domain', '') or '')
-" 2>/dev/null || true)"
+"  || true)"
     _env_domain="$(env_get_value "$env_file" "DOMAIN")"
     _env_use_ssl="$(env_get_value "$env_file" "USE_SSL")"
     _env_wildcard="$(env_get_value "$env_file" "WILDCARD_SUBDOMAINS")"
-    _db_use_ssl="$(printf '%s' "$sync_json" | python3 -c "import json,sys; print('true' if json.load(sys.stdin).get('use_ssl') else 'false')" 2>/dev/null)"
-    _db_wildcard="$(printf '%s' "$sync_json" | python3 -c "import json,sys; print('true' if json.load(sys.stdin).get('wildcard_subdomains') else 'false')" 2>/dev/null)"
+    _db_use_ssl="$(printf '%s' "$sync_json" | python3 -c "import json,sys; print('true' if json.load(sys.stdin).get('use_ssl') else 'false')" )"
+    _db_wildcard="$(printf '%s' "$sync_json" | python3 -c "import json,sys; print('true' if json.load(sys.stdin).get('wildcard_subdomains') else 'false')" )"
     if [ -n "$_effective_domain" ]; then
         _needs_sync=false
         if [ "$_effective_domain" != "$_env_domain" ]; then
@@ -343,11 +343,11 @@ queue_active_service_redeploys() {
     local backend_container
     backend_container="$(resolve_container_target "smsly-hosting-backend-1")"
     local backend_state
-    backend_state="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$backend_container" 2>/dev/null || echo 'missing')"
+    backend_state="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$backend_container"  || echo 'missing')"
     if [ "$backend_state" != "healthy" ] && [ "$backend_state" != "running" ]; then
         echo -e "${YELLOW}  ⚠ Backend container ($backend_container) not ready (state=$backend_state). Waiting 15s...${NC}" >&2
         sleep 15
-        backend_state="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$backend_container" 2>/dev/null || echo 'missing')"
+        backend_state="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$backend_container"  || echo 'missing')"
         if [ "$backend_state" != "healthy" ] && [ "$backend_state" != "running" ]; then
             echo -e "${RED}  ✗ Backend container still not ready after wait. Skipping redeploy.${NC}" >&2
             return 1
@@ -430,7 +430,7 @@ ensure_env_runtime_defaults() {
     # Self-healing and mode detection for Lite Agent
     if [ -f "$env_file" ]; then
         local env_node_type
-        env_node_type="$(env_get_value "$env_file" "NODE_TYPE" 2>/dev/null || true)"
+        env_node_type="$(env_get_value "$env_file" "NODE_TYPE"  || true)"
         if [ "$env_node_type" = "agent-lite" ] || [ "$env_node_type" = "agent" ]; then
             MODE_AGENT_LITE="true"
         fi
@@ -439,41 +439,41 @@ ensure_env_runtime_defaults() {
     if [ "${MODE_AGENT_LITE:-false}" = "true" ]; then
         if [ -z "${MASTER_IP:-}" ]; then
             if [ -f "$env_file" ]; then
-                MASTER_IP="$(env_get_value "$env_file" "MASTER_IP" 2>/dev/null || true)"
+                MASTER_IP="$(env_get_value "$env_file" "MASTER_IP"  || true)"
             fi
             if [ -z "${MASTER_IP:-}" ] && [ -f "/opt/smsly-hosting/.agent_lite_seed" ]; then
-                MASTER_IP="$(env_get_value "/opt/smsly-hosting/.agent_lite_seed" "MASTER_IP" 2>/dev/null || true)"
+                MASTER_IP="$(env_get_value "/opt/smsly-hosting/.agent_lite_seed" "MASTER_IP"  || true)"
             fi
         fi
 
         if [ -z "${MASTER_MESH_IP:-}" ]; then
             if [ -f "$env_file" ]; then
-                MASTER_MESH_IP="$(env_get_value "$env_file" "MASTER_MESH_IP" 2>/dev/null || true)"
+                MASTER_MESH_IP="$(env_get_value "$env_file" "MASTER_MESH_IP"  || true)"
             fi
             if [ -z "${MASTER_MESH_IP:-}" ] && [ -f "/opt/smsly-hosting/.agent_lite_seed" ]; then
-                MASTER_MESH_IP="$(env_get_value "/opt/smsly-hosting/.agent_lite_seed" "MASTER_MESH_IP" 2>/dev/null || true)"
+                MASTER_MESH_IP="$(env_get_value "/opt/smsly-hosting/.agent_lite_seed" "MASTER_MESH_IP"  || true)"
             fi
         fi
 
         if [ -z "${MASTER_DB_USER:-}" ]; then
             if [ -f "$env_file" ]; then
-                MASTER_DB_USER="$(env_get_value "$env_file" "MASTER_DB_USER" 2>/dev/null || true)"
+                MASTER_DB_USER="$(env_get_value "$env_file" "MASTER_DB_USER"  || true)"
             fi
             if [ -z "${MASTER_DB_USER:-}" ] && [ -f "/opt/smsly-hosting/.agent_lite_seed" ]; then
-                MASTER_DB_USER="$(env_get_value "/opt/smsly-hosting/.agent_lite_seed" "MASTER_DB_USER" 2>/dev/null || true)"
+                MASTER_DB_USER="$(env_get_value "/opt/smsly-hosting/.agent_lite_seed" "MASTER_DB_USER"  || true)"
             fi
         fi
 
         if [ -z "${MASTER_DB_PASSWORD:-}" ]; then
             if [ -f "$env_file" ]; then
-                MASTER_DB_PASSWORD="$(env_get_value "$env_file" "MASTER_DB_PASSWORD" 2>/dev/null || true)"
+                MASTER_DB_PASSWORD="$(env_get_value "$env_file" "MASTER_DB_PASSWORD"  || true)"
             fi
             if [ -z "${MASTER_DB_PASSWORD:-}" ] && [ -f "/opt/smsly-hosting/.agent_lite_seed" ]; then
-                MASTER_DB_PASSWORD="$(env_get_value "/opt/smsly-hosting/.agent_lite_seed" "MASTER_DB_PASSWORD" 2>/dev/null || true)"
+                MASTER_DB_PASSWORD="$(env_get_value "/opt/smsly-hosting/.agent_lite_seed" "MASTER_DB_PASSWORD"  || true)"
             fi
             if [ -z "${MASTER_DB_PASSWORD:-}" ] && [ -f "$env_file" ]; then
                 local db_url
-                db_url="$(env_get_value "$env_file" "DATABASE_URL" 2>/dev/null || true)"
+                db_url="$(env_get_value "$env_file" "DATABASE_URL"  || true)"
                 if [[ "$db_url" =~ ://[^:]+:([^@]+)@ ]]; then
                     MASTER_DB_PASSWORD="${BASH_REMATCH[1]}"
                 fi
@@ -482,10 +482,10 @@ ensure_env_runtime_defaults() {
 
         if [ -z "${MASTER_MQ_PASSWORD:-}" ]; then
             if [ -f "$env_file" ]; then
-                MASTER_MQ_PASSWORD="$(env_get_value "$env_file" "MASTER_MQ_PASSWORD" 2>/dev/null || true)"
+                MASTER_MQ_PASSWORD="$(env_get_value "$env_file" "MASTER_MQ_PASSWORD"  || true)"
             fi
             if [ -z "${MASTER_MQ_PASSWORD:-}" ] && [ -f "/opt/smsly-hosting/.agent_lite_seed" ]; then
-                MASTER_MQ_PASSWORD="$(env_get_value "/opt/smsly-hosting/.agent_lite_seed" "MASTER_MQ_PASSWORD" 2>/dev/null || true)"
+                MASTER_MQ_PASSWORD="$(env_get_value "/opt/smsly-hosting/.agent_lite_seed" "MASTER_MQ_PASSWORD"  || true)"
             fi
         fi
     fi
@@ -497,12 +497,12 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "AUTOSCALER_API_TOKEN" "$(gen_hex_secret 64)" "Autoscaler API bearer token (shared between autoscaler service and Django backend)"
     env_ensure_var "$env_file" "FRP_AUTH_TOKEN" "$(gen_hex_secret 64)" "FRP tunnel relay authentication token"
     env_ensure_var "$env_file" "CADDY_ASK_SECRET" "$(gen_hex_secret 64)" "Shared secret for the Caddy on_demand_tls 'ask' endpoint (X-Caddy-Secret header). Without this the backend logs a warning and generates an ephemeral random secret on every restart."
-    env_ensure_var "$env_file" "BACKUP_ENCRYPTION_KEY" "$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())' 2>/dev/null || openssl rand -base64 32)" "Fernet key used to encrypt on-disk backups (required when BACKUP_REQUIRE_ENCRYPTION=True)"
+    env_ensure_var "$env_file" "BACKUP_ENCRYPTION_KEY" "$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'  || openssl rand -base64 32)" "Fernet key used to encrypt on-disk backups (required when BACKUP_REQUIRE_ENCRYPTION=True)"
     env_ensure_var "$env_file" "BACKUP_REQUIRE_ENCRYPTION" "true" "Refuse to write unencrypted backups"
     env_ensure_var "$env_file" "SMSLY_DISABLE_TIER_GATES" "true" "Disable owner-tier paywall gates in this edition"
     env_ensure_var "$env_file" "SMSLY_ENABLE_STARTUP_CADDY_SYNC" "false" "Keep AppConfig.ready side-effect free; installer/watchers sync edge config"
     env_ensure_var "$env_file" "PGCAT_ADMIN_PASSWORD" "$(gen_hex_secret 48)" "PgCat administration password (mandatory for 1.2+)"
-    env_ensure_var "$env_file" "GRAFANA_PASSWORD" "$(python3 -c "import secrets,string; print(''.join(secrets.choice(string.ascii_letters+string.digits+'-_') for _ in range(40)))" 2>/dev/null || openssl rand -base64 30 | tr -d '+/=')" "Grafana admin password (used by the standalone observability stack)"
+    env_ensure_var "$env_file" "GRAFANA_PASSWORD" "$(python3 -c "import secrets,string; print(''.join(secrets.choice(string.ascii_letters+string.digits+'-_') for _ in range(40)))"  || openssl rand -base64 30 | tr -d '+/=')" "Grafana admin password (used by the standalone observability stack)"
     # SECURITY: default to true (was false pre-2026-06). Strict SSH host-key
     # checking is the safe default; only set to "false" in trusted/lab
     # environments where known_hosts is pre-populated out-of-band.
@@ -572,7 +572,7 @@ ensure_env_runtime_defaults() {
     if [ -n "$postgres_password" ]; then
         # Route through PgCat for connection pooling (if pgcat service exists in COMPOSE_FILE)
         local compose_target="${COMPOSE_FILE:-docker-compose.prod.yml}"
-        if [ -f "$compose_target" ] && grep -q "^  *pgcat:" "$compose_target" 2>/dev/null; then
+        if [ -f "$compose_target" ] && grep -q "^  *pgcat:" "$compose_target" ; then
             expected_database_url="postgresql://smsly_admin:${postgres_password}@pgcat:5432/smsly_hosting"
         else
             expected_database_url="postgresql://smsly_admin:${postgres_password}@db:5432/smsly_hosting"
@@ -635,7 +635,7 @@ ensure_env_runtime_defaults() {
         fi
 
         # Migrate legacy @db:5432 URLs to @pgcat:5432 (only if pgcat is in COMPOSE_FILE)
-        if [[ "$current_database_url" =~ @db:5432 ]] && [ "$MODE_AGENT_LITE" != "true" ] && [ -f "$compose_target" ] && grep -q "^  *pgcat:" "$compose_target" 2>/dev/null; then
+        if [[ "$current_database_url" =~ @db:5432 ]] && [ "$MODE_AGENT_LITE" != "true" ] && [ -f "$compose_target" ] && grep -q "^  *pgcat:" "$compose_target" ; then
             echo -e "${BLUE}  -> Migrating DATABASE_URL from db to pgcat${NC}"
             local migrated_url="${current_database_url/@db:5432/@pgcat:5432}"
             env_set_value "$env_file" "DATABASE_URL" "$migrated_url"
@@ -646,7 +646,7 @@ ensure_env_runtime_defaults() {
         # Migrate legacy @pgbouncer:5432 URLs to @pgcat:5432 (or @db:5432 if no pgcat)
         if [[ "$current_database_url" =~ @pgbouncer:5432 ]]; then
             local migrated_url
-            if [ -f "$compose_target" ] && grep -q "^  *pgcat:" "$compose_target" 2>/dev/null; then
+            if [ -f "$compose_target" ] && grep -q "^  *pgcat:" "$compose_target" ; then
                 echo -e "${BLUE}  -> Migrating DATABASE_URL from pgbouncer to pgcat${NC}"
                 migrated_url="${current_database_url/@pgbouncer:5432/@pgcat:5432}"
             else

@@ -66,11 +66,11 @@ fi
 # Check new container exists — if not, start the HA stack and wait for it
 if ! docker ps --format '{{.Names}}' | grep -qx "$NEW_DB_CONTAINER"; then
     echo -e "${YELLOW}⚠ $NEW_DB_CONTAINER is not running — starting HA stack...${NC}"
-    docker compose -f "$COMPOSE_FILE" up -d postgres-primary postgres-replica 2>/dev/null
+    docker compose -f "$COMPOSE_FILE" up -d postgres-primary postgres-replica 
     echo -e "  → Waiting for postgres-primary to become healthy..."
     for _i in $(seq 1 30); do
         if docker ps --format '{{.Names}}' | grep -qx "$NEW_DB_CONTAINER" && \
-           docker exec "$NEW_DB_CONTAINER" pg_isready -U "$DB_USER" >/dev/null 2>&1; then
+           docker exec "$NEW_DB_CONTAINER" pg_isready -U "$DB_USER" ; then
             echo -e "${GREEN}  ✓ postgres-primary is ready${NC}"
             break
         fi
@@ -86,7 +86,7 @@ fi
 TABLE_COUNT=$(docker exec "$NEW_DB_CONTAINER" \
     psql -U "$DB_USER" -d "$DB_NAME" -t -A \
     -c "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';" \
-    2>/dev/null || echo "0")
+     || echo "0")
 
 if [ "$TABLE_COUNT" -gt 0 ]; then
     echo -e "${YELLOW}⚠ postgres-primary already has $TABLE_COUNT tables — checking if migration needed...${NC}"
@@ -95,16 +95,16 @@ if [ "$TABLE_COUNT" -gt 0 ]; then
     OLD_ROWS=$(docker exec "$OLD_DB_CONTAINER" \
         psql -U "$DB_USER" -d "$DB_NAME" -t -A \
         -c "SELECT sum(n_live_tup) FROM pg_stat_user_tables;" \
-        2>/dev/null || echo "0")
+         || echo "0")
     NEW_ROWS=$(docker exec "$NEW_DB_CONTAINER" \
         psql -U "$DB_USER" -d "$DB_NAME" -t -A \
         -c "SELECT sum(n_live_tup) FROM pg_stat_user_tables;" \
-        2>/dev/null || echo "0")
+         || echo "0")
 
     echo -e "  Old db rows:      ${OLD_ROWS:-0}"
     echo -e "  postgres-primary: ${NEW_ROWS:-0}"
 
-    if [ "${NEW_ROWS:-0}" -ge "${OLD_ROWS:-0}" ] 2>/dev/null; then
+    if [ "${NEW_ROWS:-0}" -ge "${OLD_ROWS:-0}" ] ; then
         echo -e "${GREEN}✓ postgres-primary already has equal or more data — skipping migration${NC}"
         if [ "$DO_CLEANUP" = true ]; then
             echo ""
@@ -126,7 +126,7 @@ echo -e "${BLUE}→ Step 1: Dumping database from $OLD_DB_CONTAINER...${NC}"
 docker exec "$OLD_DB_CONTAINER" \
     pg_dump -U "$DB_USER" -d "$DB_NAME" \
     --no-owner --no-acl --clean --if-exists \
-    -F p 2>/dev/null > "$DUMP_FILE"
+    -F p  > "$DUMP_FILE"
 
 DUMP_SIZE=$(wc -c < "$DUMP_FILE")
 echo -e "${GREEN}  ✓ Dump created: $DUMP_FILE ($(( DUMP_SIZE / 1024 )) KB)${NC}"
@@ -156,7 +156,7 @@ echo -e "${BLUE}→ Step 3: Restoring to $NEW_DB_CONTAINER...${NC}"
 # so fall back to $DB_USER (which is typically smsly_admin, a superuser).
 # Connect to template1 so we're not blocking the target database.
 for _try_user in "postgres" "$DB_USER"; do
-    if docker exec "$NEW_DB_CONTAINER" psql -U "$_try_user" -d template1 -c "SELECT 1;" >/dev/null 2>&1; then
+    if docker exec "$NEW_DB_CONTAINER" psql -U "$_try_user" -d template1 -c "SELECT 1;" ; then
         _admin_user="$_try_user"
         break
     fi
@@ -166,7 +166,7 @@ echo "  → Using admin role: $_admin_user"
 
 echo "  → Killing active connections to $DB_NAME..."
 set +e
-docker exec -i "$NEW_DB_CONTAINER" psql -U "$_admin_user" -d template1 <<EOSQL 2>&1
+docker exec -i "$NEW_DB_CONTAINER" psql -U "$_admin_user" -d template1 <<EOSQL 
 SELECT pg_terminate_backend(pid)
 FROM pg_stat_activity
 WHERE datname = '$DB_NAME'
@@ -176,13 +176,13 @@ set -e
 
 echo "  → Dropping $DB_NAME if it exists..."
 set +e
-_drop_output=$(docker exec -i "$NEW_DB_CONTAINER" psql -U "$_admin_user" -d template1 -c "DROP DATABASE IF EXISTS $DB_NAME;" 2>&1)
+_drop_output=$(docker exec -i "$NEW_DB_CONTAINER" psql -U "$_admin_user" -d template1 -c "DROP DATABASE IF EXISTS $DB_NAME;" )
 _drop_rc=$?
 set -e
 echo "    $_drop_output" | tail -1
 
 echo "  → Creating $DB_NAME..."
-docker exec -i "$NEW_DB_CONTAINER" psql -U "$_admin_user" -d template1 -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;" 2>&1 || {
+docker exec -i "$NEW_DB_CONTAINER" psql -U "$_admin_user" -d template1 -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"  || {
     echo -e "${RED}  ✗ Failed to create database${NC}"
     rm -f "$DUMP_FILE"
     exit 1
@@ -191,7 +191,7 @@ docker exec -i "$NEW_DB_CONTAINER" psql -U "$_admin_user" -d template1 -c "CREAT
 # Pipe the dump into the new container
 echo "  → Restoring SQL dump (117 MB)..."
 set +e
-_restore_output=$(cat "$DUMP_FILE" | docker exec -i "$NEW_DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" 2>&1)
+_restore_output=$(cat "$DUMP_FILE" | docker exec -i "$NEW_DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" )
 _restore_rc=$?
 set -e
 if [ $_restore_rc -ne 0 ]; then
@@ -223,7 +223,7 @@ echo -e "  Total rows:                ${NEW_ROWS_VERIFY:-0}"
 for tbl in auth_user accounts_organization deployments_project deployments_service; do
     EXISTS=$(docker exec "$NEW_DB_CONTAINER" \
         psql -U "$DB_USER" -d "$DB_NAME" -t -A \
-        -c "SELECT 1 FROM information_schema.tables WHERE table_name='$tbl' LIMIT 1;" 2>/dev/null || echo "")
+        -c "SELECT 1 FROM information_schema.tables WHERE table_name='$tbl' LIMIT 1;"  || echo "")
     if [ "$EXISTS" = "1" ]; then
         echo -e "  ${GREEN}✓ $tbl exists${NC}"
     else
@@ -234,7 +234,7 @@ done
 # Check user count
 USER_COUNT=$(docker exec "$NEW_DB_CONTAINER" \
     psql -U "$DB_USER" -d "$DB_NAME" -t -A \
-    -c "SELECT count(*) FROM auth_user;" 2>/dev/null || echo "0")
+    -c "SELECT count(*) FROM auth_user;"  || echo "0")
 echo -e "  Users in database: $USER_COUNT"
 
 if [ "${USER_COUNT:-0}" -eq 0 ]; then
@@ -261,11 +261,11 @@ echo -e "${GREEN}  ✓ Backend services restarted${NC}"
 if [ "$DO_CLEANUP" = true ]; then
     echo ""
     echo -e "${BLUE}→ Step 6: Cleaning up old containers...${NC}"
-    docker stop "$OLD_DB_CONTAINER" 2>/dev/null && docker rm "$OLD_DB_CONTAINER" 2>/dev/null && \
+    docker stop "$OLD_DB_CONTAINER"  && docker rm "$OLD_DB_CONTAINER"  && \
         echo -e "${GREEN}  ✓ Removed $OLD_DB_CONTAINER${NC}" || \
         echo -e "${YELLOW}  ⚠ Could not remove $OLD_DB_CONTAINER${NC}"
 
-    docker stop "$OLD_REDIS_CONTAINER" 2>/dev/null && docker rm "$OLD_REDIS_CONTAINER" 2>/dev/null && \
+    docker stop "$OLD_REDIS_CONTAINER"  && docker rm "$OLD_REDIS_CONTAINER"  && \
         echo -e "${GREEN}  ✓ Removed $OLD_REDIS_CONTAINER${NC}" || \
         echo -e "${YELLOW}  ⚠ Could not remove $OLD_REDIS_CONTAINER${NC}"
 else

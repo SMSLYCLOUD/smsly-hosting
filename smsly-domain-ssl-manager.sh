@@ -70,7 +70,7 @@ check_smsly_installed() {
 
 # Check Docker is running
 check_docker() {
-    if ! docker info >/dev/null 2>&1; then
+    if ! docker info; then
         echo -e "${RED}ERROR: Docker is not running.${NC}"
         echo "Please start Docker first: systemctl start docker"
         exit 1
@@ -81,7 +81,7 @@ check_docker() {
 check_service_status() {
     local service_name="$1"
     if docker compose -f "$INSTALL_DIR/$COMPOSE_FILE" ps -q "$service_name" | grep -q .; then
-        if docker inspect -f '{{.State.Status}}' "$(docker compose -f "$INSTALL_DIR/$COMPOSE_FILE" ps -q "$service_name")" 2>/dev/null | grep -q "running"; then
+        if docker inspect -f '{{.State.Status}}' "$(docker compose -f "$INSTALL_DIR/$COMPOSE_FILE" ps -q "$service_name")" | grep -q "running"; then
             return 0
         fi
     fi
@@ -108,7 +108,7 @@ log() {
 log "Starting domain verification process"
 
 # Check if backend is running and healthy via HTTP (fast, no Python import overhead)
-BACKEND_CID=$(docker compose ps -q backend 2>/dev/null || true)
+BACKEND_CID=$(docker compose ps -q backend || true)
 if [ -z "$BACKEND_CID" ]; then
     log "ERROR: backend container is not running"
     exit 1
@@ -117,7 +117,7 @@ fi
 # Wait for the backend to be truly ready (gunicorn workers started).
 # Curl may succeed on /health/live before Django is fully bootstrapped.
 for i in $(seq 1 12); do
-    if curl -sS --max-time 5 http://localhost:8000/health/live >/dev/null 2>&1; then
+    if curl -sS --max-time 5 http://localhost:8000/health/live; then
         break
     fi
     log "Backend not ready yet (attempt $i/12)..."
@@ -265,7 +265,7 @@ if pending_domains.count() > 0:
     print('Pending domains:')
     for domain in pending_domains:
         print(f'  - {domain.domain_name} ({domain.status})')
-" 2>/dev/null; then
+"; then
         echo -e "${GREEN}✓ Domain database accessible${NC}"
     else
         echo -e "${RED}✗ Domain database not accessible${NC}"
@@ -328,11 +328,11 @@ EOF
 disable_auto_start() {
     log_info "Disabling auto-start on boot"
     
-    systemctl stop smsly-domain-ssl.timer 2>/dev/null || true
-    systemctl disable smsly-domain-ssl.timer 2>/dev/null || true
+    systemctl stop smsly-domain-ssl.timer || true
+    systemctl disable smsly-domain-ssl.timer || true
     
-    systemctl stop smsly-domain-ssl.service 2>/dev/null || true
-    systemctl disable smsly-domain-ssl.service 2>/dev/null || true
+    systemctl stop smsly-domain-ssl.service || true
+    systemctl disable smsly-domain-ssl.service || true
     
     rm -f /etc/systemd/system/smsly-domain-ssl.service
     rm -f /etc/systemd/system/smsly-domain-ssl.timer

@@ -17,7 +17,7 @@ sync_install_state_flavor() {
     mkdir -p "$(dirname "$STATE_FILE")"
 
     if [ "$RESUME_MODE" = "true" ] && [ -f "$STATE_FILE" ]; then
-        previous_flavor="$(cat "$STATE_MODE_FILE" 2>/dev/null || echo "legacy")"
+        previous_flavor="$(cat "$STATE_MODE_FILE"  || echo "legacy")"
         if [ "$previous_flavor" != "$current_flavor" ]; then
             echo -e "${YELLOW}  -> Existing install checkpoints are for '$previous_flavor'; resetting state for '$current_flavor'.${NC}"
             rm -f "$STATE_FILE"
@@ -32,7 +32,7 @@ set_checkpoint() {
     mkdir -p "$(dirname "$STATE_FILE")"
     printf '%s\n' "$(install_flavor)" > "$STATE_MODE_FILE"
     # Ensure name is unique in the file to avoid duplicates on resume
-    if ! grep -q "^$name$" "$STATE_FILE" 2>/dev/null; then
+    if ! grep -q "^$name$" "$STATE_FILE" ; then
         echo "$name" >> "$STATE_FILE"
     fi
     echo -e "${GREEN}  ✓ Checkpoint reached: $name${NC}"
@@ -53,7 +53,7 @@ is_checkpoint_done() {
 clear_checkpoint() {
     local name="$1"
     if [ -f "$STATE_FILE" ]; then
-        grep -v "^$name$" "$STATE_FILE" > "${STATE_FILE}.tmp" 2>/dev/null || true
-        mv "${STATE_FILE}.tmp" "$STATE_FILE" 2>/dev/null || true
+        grep -v "^$name$" "$STATE_FILE" > "${STATE_FILE}.tmp"  || true
+        mv "${STATE_FILE}.tmp" "$STATE_FILE"  || true
     fi
 }

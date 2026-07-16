@@ -40,9 +40,9 @@ fi
 cd "$INSTALL_DIR"
 
 # ─── Step 1: Detect current domain ───────────────────────────────────────
-CURRENT_ENV_DOMAIN="$(grep -m1 '^DOMAIN=' .env 2>/dev/null | cut -d= -f2- || true)"
-CURRENT_PUBLIC_IP="$(grep -m1 '^PUBLIC_IP=' .env 2>/dev/null | cut -d= -f2- || true)"
-CURRENT_USE_SSL="$(grep -m1 '^USE_SSL=' .env 2>/dev/null | cut -d= -f2- || true)"
+CURRENT_ENV_DOMAIN="$(grep -m1 '^DOMAIN=' .env  | cut -d= -f2- || true)"
+CURRENT_PUBLIC_IP="$(grep -m1 '^PUBLIC_IP=' .env  | cut -d= -f2- || true)"
+CURRENT_USE_SSL="$(grep -m1 '^USE_SSL=' .env  | cut -d= -f2- || true)"
 
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
 echo -e "${BLUE}  SMSLY Domain Fix Script${NC}"
@@ -55,7 +55,7 @@ echo ""
 
 # Detect public IP if not in .env
 if [ -z "${CURRENT_PUBLIC_IP:-}" ]; then
-    CURRENT_PUBLIC_IP="$(curl -4 -fsS -m 5 https://api.ipify.org 2>/dev/null || echo "127.0.0.1")"
+    CURRENT_PUBLIC_IP="$(curl -4 -fsS -m 5 https://api.ipify.org  || echo "127.0.0.1")"
 fi
 
 # ─── Step 2: Determine target domain ─────────────────────────────────────
@@ -77,31 +77,31 @@ echo ""
 
 # ─── Step 3: Pull latest code ──────────────────────────────────────────
 echo -e "${BLUE}[1/5] Pulling latest installer code...${NC}"
-git config --global --add safe.directory "$INSTALL_DIR" 2>/dev/null || true
-git stash 2>/dev/null || true
-git fetch origin main 2>/dev/null || { echo -e "${YELLOW}  ⚠ Git fetch failed; continuing with current code.${NC}"; }
-git checkout -B main origin/main 2>/dev/null || { echo -e "${YELLOW}  ⚠ Git checkout failed; continuing with current code.${NC}"; }
+git config --global --add safe.directory "$INSTALL_DIR"  || true
+git stash  || true
+git fetch origin main  || { echo -e "${YELLOW}  ⚠ Git fetch failed; continuing with current code.${NC}"; }
+git checkout -B main origin/main  || { echo -e "${YELLOW}  ⚠ Git checkout failed; continuing with current code.${NC}"; }
 echo -e "${GREEN}  ✓ Code updated${NC}"
 
 # ─── Step 4: Fix .env ──────────────────────────────────────────────────
 echo -e "${BLUE}[2/5] Fixing .env with domain: $DOMAIN...${NC}"
 
 # Set DOMAIN
-if grep -q '^DOMAIN=' .env 2>/dev/null; then
+if grep -q '^DOMAIN=' .env ; then
     sed -i "s|^DOMAIN=.*|DOMAIN=$DOMAIN|" .env
 else
     echo "DOMAIN=$DOMAIN" >> .env
 fi
 
 # Set USE_SSL=true (since this is a real domain)
-if grep -q '^USE_SSL=' .env 2>/dev/null; then
+if grep -q '^USE_SSL=' .env ; then
     sed -i 's/^USE_SSL=.*/USE_SSL=true/' .env
 else
     echo "USE_SSL=true" >> .env
 fi
 
 # Ensure ALLOWED_HOSTS includes the domain
-if ! grep -q "$DOMAIN" .env 2>/dev/null; then
+if ! grep -q "$DOMAIN" .env ; then
     ALLOWED_HOSTS="$(grep -m1 '^ALLOWED_HOSTS=' .env | cut -d= -f2- || true)"
     if [ -n "$ALLOWED_HOSTS" ]; then
         sed -i "s/^ALLOWED_HOSTS=.*/ALLOWED_HOSTS=$ALLOWED_HOSTS,$DOMAIN/" .env
@@ -109,7 +109,7 @@ if ! grep -q "$DOMAIN" .env 2>/dev/null; then
 fi
 
 # Ensure CSRF_TRUSTED_ORIGINS includes https://DOMAIN
-if ! grep -q "https://$DOMAIN" .env 2>/dev/null; then
+if ! grep -q "https://$DOMAIN" .env ; then
     CSRF_ORIGINS="$(grep -m1 '^CSRF_TRUSTED_ORIGINS=' .env | cut -d= -f2- || true)"
     if [ -n "$CSRF_ORIGINS" ]; then
         sed -i "s|^CSRF_TRUSTED_ORIGINS=.*|CSRF_TRUSTED_ORIGINS=$CSRF_ORIGINS,https://$DOMAIN|" .env
@@ -117,7 +117,7 @@ if ! grep -q "https://$DOMAIN" .env 2>/dev/null; then
 fi
 
 # Ensure CORS_ALLOWED_ORIGINS includes https://DOMAIN
-if ! grep -q "https://$DOMAIN" .env 2>/dev/null; then
+if ! grep -q "https://$DOMAIN" .env ; then
     CORS_ORIGINS="$(grep -m1 '^CORS_ALLOWED_ORIGINS=' .env | cut -d= -f2- || true)"
     if [ -n "$CORS_ORIGINS" ]; then
         sed -i "s|^CORS_ALLOWED_ORIGINS=.*|CORS_ALLOWED_ORIGINS=$CORS_ORIGINS,https://$DOMAIN|" .env
@@ -130,17 +130,17 @@ echo -e "${GREEN}  ✓ .env updated${NC}"
 echo -e "${BLUE}[3/5] Syncing PlatformConfig in database...${NC}"
 
 # Find the backend container
-BACKEND_CONTAINER=$(docker compose -f "$COMPOSE_FILE" ps -q backend 2>/dev/null || true)
+BACKEND_CONTAINER=$(docker compose -f "$COMPOSE_FILE" ps -q backend  || true)
 if [ -z "$BACKEND_CONTAINER" ]; then
     echo -e "${YELLOW}  ⚠ Backend container not running. Starting stack...${NC}"
-    docker compose -f "$COMPOSE_FILE" up -d db $(grep -q "^  *pgcat:" "${COMPOSE_FILE:-docker-compose.prod.yml}" 2>/dev/null && echo "pgcat") redis rabbitmq socket-proxy || echo -e "${YELLOW}    ⚠ Stack start failed (backend may not be ready)${NC}"
+    docker compose -f "$COMPOSE_FILE" up -d db $(grep -q "^  *pgcat:" "${COMPOSE_FILE:-docker-compose.prod.yml}"  && echo "pgcat") redis rabbitmq socket-proxy || echo -e "${YELLOW}    ⚠ Stack start failed (backend may not be ready)${NC}"
     sleep 10
     docker compose -f "$COMPOSE_FILE" up -d backend || echo -e "${YELLOW}    ⚠ Backend start failed${NC}"
     sleep 15
 fi
 
 # Update PlatformConfig in the database
-docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell <<PY 2>/dev/null || echo -e "${YELLOW}  ⚠ DB sync skipped (backend not ready)${NC}"
+docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell <<PY  || echo -e "${YELLOW}  ⚠ DB sync skipped (backend not ready)${NC}"
 from apps.deployments.models import PlatformConfig
 cfg = PlatformConfig.load()
 old = cfg.domain
@@ -156,9 +156,9 @@ echo -e "${GREEN}  ✓ PlatformConfig synced${NC}"
 echo -e "${BLUE}[4/5] Regenerating Caddyfile...${NC}"
 
 # Write a proper Caddyfile for this domain
-if command -v caddy &>/dev/null; then
+if command -v caddy ; then
     # Use the install script's safe Caddyfile generator
-    bash install.sh --verify 2>/dev/null || true
+    bash install.sh --verify  || true
 fi
 
 # Direct fallback: write Caddyfile
@@ -240,16 +240,16 @@ fi
 echo -e "${BLUE}[5/5] Restarting Caddy...${NC}"
 
 # Host Caddy
-    if docker compose ps -q caddy 2>/dev/null | grep -q .; then
-    if command -v caddy &>/dev/null && caddy validate --config /opt/smsly-hosting/caddy-config/Caddyfile 2>/dev/null; then
+    if docker compose ps -q caddy  | grep -q .; then
+    if command -v caddy  && caddy validate --config /opt/smsly-hosting/caddy-config/Caddyfile ; then
     true
         echo -e "${GREEN}  ✓ Host Caddy reloaded${NC}"
     fi
 fi
 
 # Container Caddy
-if docker compose -f "$COMPOSE_FILE" ps -q caddy 2>/dev/null | grep -q .; then
-    docker compose -f "$COMPOSE_FILE" exec caddy caddy reload --config /etc/caddy/Caddyfile 2>/dev/null || \
+if docker compose -f "$COMPOSE_FILE" ps -q caddy  | grep -q .; then
+    docker compose -f "$COMPOSE_FILE" exec caddy caddy reload --config /etc/caddy/Caddyfile  || \
         docker compose -f "$COMPOSE_FILE" restart caddy || echo -e "${YELLOW}    ⚠ Caddy restart failed${NC}"
     echo -e "${GREEN}  ✓ Container Caddy reloaded${NC}"
 fi
@@ -268,18 +268,18 @@ echo -e "  .env DOMAIN:  ${GREEN}$ENV_DOMAIN${NC}"
 echo -e "  .env USE_SSL: ${GREEN}$ENV_SSL${NC}"
 
 # Check Caddy
-if command -v caddy &>/dev/null; then
-    CADDY_ACTIVE=$(true 2>/dev/null || echo "inactive")
+if command -v caddy ; then
+    CADDY_ACTIVE=$(true  || echo "inactive")
     echo -e "  Caddy (host): ${GREEN}$CADDY_ACTIVE${NC}"
 fi
-if docker compose -f "$COMPOSE_FILE" ps -q caddy 2>/dev/null | grep -q .; then
-    CADDY_STATUS=$(docker compose -f "$COMPOSE_FILE" ps caddy --format "{{.Status}}" 2>/dev/null || echo "unknown")
+if docker compose -f "$COMPOSE_FILE" ps -q caddy  | grep -q .; then
+    CADDY_STATUS=$(docker compose -f "$COMPOSE_FILE" ps caddy --format "{{.Status}}"  || echo "unknown")
     echo -e "  Caddy (container): ${GREEN}$CADDY_STATUS${NC}"
 fi
 
 # Check HTTPS listener
-if command -v ss &>/dev/null; then
-    if ss -tlnp 2>/dev/null | grep -q ':443'; then
+if command -v ss ; then
+    if ss -tlnp  | grep -q ':443'; then
         echo -e "  HTTPS (443): ${GREEN}listening${NC}"
     else
         echo -e "  HTTPS (443): ${YELLOW}not listening (may take a moment)${NC}"

@@ -44,7 +44,7 @@ if grep -rn \
     --exclude='*.min.css' \
     --exclude='*.egg-info' \
     -E 'from archive|import archive' \
-    backend/ frontend/ cli/ charts/ docker-compose.yml docker-compose.prod.yml install.sh 2>/dev/null; then
+    backend/ frontend/ cli/ charts/ docker-compose.yml docker-compose.prod.yml install.sh ; then
     echo "ERROR: production code imports from archive/" >&2
     fail=1
 fi

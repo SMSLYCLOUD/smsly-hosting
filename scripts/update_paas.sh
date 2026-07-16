@@ -16,7 +16,7 @@ echo "========================================"
 
 # Lock file check (mkdir is atomic and immune to symlink attacks)
 LOCK_FILE="/tmp/paas_update.lock"
-if ! mkdir "$LOCK_FILE" 2>/dev/null; then
+if ! mkdir "$LOCK_FILE" ; then
     echo "[ERROR] Update already in progress (lock exists: $LOCK_FILE)."
     exit 1
 fi
@@ -29,7 +29,7 @@ fi
 COMPOSE_CMD=(docker compose -f "$COMPOSE_FILE")
 
 echo "--> Preflight Checks..."
-if ! command -v docker &> /dev/null; then
+if ! command -v docker ; then
     echo "[ERROR] Docker not found."
     exit 1
 fi
@@ -48,7 +48,7 @@ fi
 
 echo "--> Running post-update health check..."
 sleep 10
-if ! curl -fsS --retry 3 --max-time 10 http://localhost/api/v1/system/ready/ > /dev/null 2>&1; then
+if ! curl -fsS --retry 3 --max-time 10 http://localhost/api/v1/system/ready/ ; then
     echo "[ERROR] Health check failed after update."
     exit 1
 fi

@@ -38,14 +38,14 @@ detect_public_ip() {
     )
 
     for endpoint in "${endpoints[@]}"; do
-        candidate="$(curl -4 -fsS -m 5 "$endpoint" 2>/dev/null | tr -d '\r\n' || true)"
+        candidate="$(curl -4 -fsS -m 5 "$endpoint"  | tr -d '\r\n' || true)"
         if is_valid_ipv4 "$candidate"; then
             echo "$candidate"
             return 0
         fi
     done
 
-    candidate="$(hostname -I 2>/dev/null | awk '{print $1}' | tr -d '\r\n' || true)"
+    candidate="$(hostname -I  | awk '{print $1}' | tr -d '\r\n' || true)"
     if is_valid_ipv4 "$candidate"; then
         echo "$candidate"
         return 0

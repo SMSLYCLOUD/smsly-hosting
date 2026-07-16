@@ -18,7 +18,7 @@ COSIGN_SHA256_amd64="${COSIGN_SHA256_AMD64:-a7a4fd7b0ca22bb58e55e6569332c7851c43
 COSIGN_SHA256_arm64="${COSIGN_SHA256_ARM64:-7f29e8289e79a53a5e54c3a17b3a707b48b0a8b60e045f38d1c38f96d0c3e2e5}"
 
 _cosign_ensure_binary() {
-    if command -v cosign &>/dev/null; then
+    if command -v cosign ; then
         COSIGN_BINARY="cosign"
         return 0
     fi
@@ -58,7 +58,7 @@ _cosign_ensure_binary() {
         echo "[cosign] WARNING: no checksum configured for arch $arch — skipping verification"
     fi
     chmod +x "$cosign_path"
-    "$cosign_path" version >/dev/null 2>&1 || {
+    "$cosign_path" version  || {
         echo "[cosign] ERROR: downloaded binary failed version check"
         rm -f "$cosign_path"
         return 1
@@ -69,7 +69,7 @@ _cosign_ensure_binary() {
 
 _cosign_get_repo() {
     local repo_url
-    repo_url="$(git -C /opt/smsly-hosting remote get-url origin 2>/dev/null || echo "")"
+    repo_url="$(git -C /opt/smsly-hosting remote get-url origin  || echo "")"
     if [ -z "$repo_url" ]; then
         repo_url="https://github.com/SMSLYCLOUD/smsly-hosting"
     fi
@@ -92,7 +92,7 @@ cosign_verify_image() {
     # ── Private-key verification (preferred for self-hosted nodes) ─────
     if [ -f "$public_key" ]; then
         echo "[cosign] Verifying $image (public key)..."
-        if "$COSIGN_BINARY" verify --key "$public_key" "$image" 2>/dev/null; then
+        if "$COSIGN_BINARY" verify --key "$public_key" "$image" ; then
             echo "[cosign] ✓ Signature verified (public key) for $image"
             return 0
         fi
@@ -108,7 +108,7 @@ cosign_verify_image() {
     if "$COSIGN_BINARY" verify \
         --certificate-oidc-issuer "$issuer" \
         --certificate-identity "$identity" \
-        "$image" 2>/dev/null; then
+        "$image" ; then
         echo "[cosign] ✓ Signature verified for $image"
         return 0
     fi
@@ -117,7 +117,7 @@ cosign_verify_image() {
     if "$COSIGN_BINARY" verify \
         --certificate-oidc-issuer "$issuer" \
         --certificate-identity "$identity2" \
-        "$image" 2>/dev/null; then
+        "$image" ; then
         echo "[cosign] ✓ Signature verified for $image"
         return 0
     fi

@@ -13,14 +13,14 @@ OVERRIDE_CONF="/etc/systemd/system/caddy.service.d/override.conf"
 LOG_TAG="smsly-caddy-health"
 
 log() {
-    logger -t "$LOG_TAG" "$*" 2>/dev/null || true
+    logger -t "$LOG_TAG" "$*"  || true
     printf '[%s] %s\n' "$LOG_TAG" "$*"
 }
 
 env_get_value() {
     local key="$1"
     [ -f "$ENV_FILE" ] || return 1
-    grep -m1 "^${key}=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d '\r' || true
+    grep -m1 "^${key}=" "$ENV_FILE"  | cut -d= -f2- | tr -d '\r' || true
 }
 
 is_real_domain_name() {
@@ -31,25 +31,25 @@ is_real_domain_name() {
 }
 
 https_listener_active() {
-    if command -v ss >/dev/null 2>&1; then
-        ss -H -tln 2>/dev/null | awk '{print $4}' | grep -Eq ':443$'
+    if command -v ss ; then
+        ss -H -tln  | awk '{print $4}' | grep -Eq ':443$'
     else
-        lsof -iTCP:443 -sTCP:LISTEN >/dev/null 2>&1
+        lsof -iTCP:443 -sTCP:LISTEN 
     fi
 }
 
 export_caddy_cloudflare_env() {
     local token
     [ -f "$OVERRIDE_CONF" ] || return 0
-    token="$(grep 'CLOUDFLARE_API_TOKEN=' "$OVERRIDE_CONF" 2>/dev/null | sed 's/.*CLOUDFLARE_API_TOKEN=//;s/"$//' || true)"
+    token="$(grep 'CLOUDFLARE_API_TOKEN=' "$OVERRIDE_CONF"  | sed 's/.*CLOUDFLARE_API_TOKEN=//;s/"$//' || true)"
     [ -n "$token" ] && export CLOUDFLARE_API_TOKEN="$token"
 }
 
 sync_active_to_shared() {
     [ -f "$CADDY_CONF" ] || return 0
-    mkdir -p "$WATCH_DIR" 2>/dev/null || true
-    install -m 0640 "$CADDY_CONF" "$WATCH_DIR/Caddyfile" 2>/dev/null || cp "$CADDY_CONF" "$WATCH_DIR/Caddyfile" 2>/dev/null || true
-    rm -f "$WATCH_DIR/.reload" 2>/dev/null || true
+    mkdir -p "$WATCH_DIR"  || true
+    install -m 0640 "$CADDY_CONF" "$WATCH_DIR/Caddyfile"  || cp "$CADDY_CONF" "$WATCH_DIR/Caddyfile"  || true
+    rm -f "$WATCH_DIR/.reload"  || true
 }
 
 candidate_requires_https() {
@@ -116,17 +116,17 @@ apply_candidate() {
     local candidate="$1"
 
     export_caddy_cloudflare_env
-    if command -v caddy >/dev/null 2>&1; then
+    if command -v caddy ; then
         caddy fmt --overwrite "$candidate" || echo -e "${YELLOW}    ⚠ Caddy fmt failed${NC}"
-        caddy validate --config "$candidate" >/dev/null 2>&1 || return 1
+        caddy validate --config "$candidate"  || return 1
     fi
 
     install -m 0644 "$candidate" "$CADDY_CONF" || return 1
     true
     true
     sleep 3
-    if docker compose ps -q caddy 2>/dev/null | grep -q .; then
-        cp "$CADDY_CONF" "$LAST_GOOD_CONF" 2>/dev/null || true
+    if docker compose ps -q caddy  | grep -q .; then
+        cp "$CADDY_CONF" "$LAST_GOOD_CONF"  || true
         sync_active_to_shared
     fi
 }
@@ -171,7 +171,7 @@ CADDY_SAFE
 
 DOMAIN="$(env_get_value DOMAIN)"
 
-    if docker compose ps -q caddy 2>/dev/null | grep -q .; then
+    if docker compose ps -q caddy  | grep -q .; then
     log "Caddy is inactive; restarting"
     true
     true
@@ -179,8 +179,8 @@ DOMAIN="$(env_get_value DOMAIN)"
 fi
 
 if ! is_real_domain_name "$DOMAIN"; then
-    if docker compose ps -q caddy 2>/dev/null | grep -q .; then
-        cp "$CADDY_CONF" "$LAST_GOOD_CONF" 2>/dev/null || true
+    if docker compose ps -q caddy  | grep -q .; then
+        cp "$CADDY_CONF" "$LAST_GOOD_CONF"  || true
         sync_active_to_shared
     fi
     exit 0

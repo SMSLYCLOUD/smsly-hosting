@@ -49,8 +49,8 @@ apply_agent_lite_env_overrides() {
     fi
 
     MASTER_MQ_PASSWORD="${MASTER_MQ_PASSWORD:-$MASTER_DB_PASSWORD}"
-    SMSLY_NODE_HOST="${SMSLY_NODE_HOST:-$(detect_public_ip 2>/dev/null || true)}"
-    [ -n "$SMSLY_NODE_HOST" ] || SMSLY_NODE_HOST="$(hostname -f 2>/dev/null || hostname 2>/dev/null || echo agent)"
+    SMSLY_NODE_HOST="${SMSLY_NODE_HOST:-$(detect_public_ip  || true)}"
+    [ -n "$SMSLY_NODE_HOST" ] || SMSLY_NODE_HOST="$(hostname -f  || hostname  || echo agent)"
     SMSLY_NODE_ID="${SMSLY_NODE_ID:-$SMSLY_NODE_HOST}"
     local node_slug
     node_slug="$(sanitize_node_identifier "$SMSLY_NODE_ID")"
@@ -59,9 +59,9 @@ apply_agent_lite_env_overrides() {
     # Use MASTER_MESH_IP for database only (shared DB).
     # Redis and RabbitMQ run locally on each node — no cross-node dependency.
     local node_redis_password
-    node_redis_password="$(env_get_value "$env_file" "REDIS_PASSWORD" 2>/dev/null || true)"
+    node_redis_password="$(env_get_value "$env_file" "REDIS_PASSWORD"  || true)"
     if [ -z "$node_redis_password" ]; then
-        node_redis_password="$(python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || openssl rand -hex 16 2>/dev/null || echo "")"
+        node_redis_password="$(python3 -c "import secrets; print(secrets.token_hex(16))"  || openssl rand -hex 16  || echo "")"
     fi
     local redis_url="redis://redis:6379/0"
     if [ -n "$node_redis_password" ]; then
@@ -69,9 +69,9 @@ apply_agent_lite_env_overrides() {
     fi
 
     local node_rabbitmq_password
-    node_rabbitmq_password="$(env_get_value "$env_file" "RABBITMQ_PASSWORD" 2>/dev/null || true)"
+    node_rabbitmq_password="$(env_get_value "$env_file" "RABBITMQ_PASSWORD"  || true)"
     if [ -z "$node_rabbitmq_password" ]; then
-        node_rabbitmq_password="$(python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || openssl rand -hex 16 2>/dev/null || echo "")"
+        node_rabbitmq_password="$(python3 -c "import secrets; print(secrets.token_hex(16))"  || openssl rand -hex 16  || echo "")"
     fi
     local celery_broker_url="amqp://smsly_user:${node_rabbitmq_password}@rabbitmq:5672//"
 
@@ -153,7 +153,7 @@ EOF
         # secrets are written to a temporary file and read via env_get_value.
         local _master_val=""
         if [ -f "$MASTER_ENV_FILE" ]; then
-            _master_val="$(env_get_value "$MASTER_ENV_FILE" "$_key" 2>/dev/null || true)"
+            _master_val="$(env_get_value "$MASTER_ENV_FILE" "$_key"  || true)"
         fi
         if [ -n "$_master_val" ]; then
             env_set_value "$env_file" "$_key" "$_master_val"
@@ -170,13 +170,13 @@ verify_agent_lite_connectivity() {
     echo -e "${BLUE}  → Verifying connectivity to Master node (${MASTER_IP})...${NC}"
     
     # 1. Ping Master (public IP)
-    if ! ping -c 1 -W 2 "$MASTER_IP" >/dev/null 2>&1; then
+    if ! ping -c 1 -W 2 "$MASTER_IP" ; then
         echo -e "${YELLOW}  ⚠ Warning: Master node ${MASTER_IP} is not responding to ICMP. Proceeding anyway...${NC}"
     fi
 
     # 2. Check Database port via mesh IP (internal services use WireGuard)
     local db_check_ip="${MASTER_MESH_IP}"
-    if ! timeout -k 5 2 bash -c "</dev/tcp/${db_check_ip}/5432" 2>/dev/null; then
+    if ! timeout -k 5 2 bash -c "</dev/tcp/${db_check_ip}/5432" ; then
         echo -e "${RED}  ✗ ERROR: Master Database (port 5432) is unreachable on ${db_check_ip}.${NC}"
         echo -e "${YELLOW}    Ensure the Master allows port 5432 from this node's IP via WireGuard mesh.${NC}"
         return 1
@@ -187,17 +187,17 @@ verify_agent_lite_connectivity() {
 
     # 4. The deploy path pulls master-built images from the master's registry.
     local registry_check_ip="${MASTER_MESH_IP}"
-    if ! timeout -k 5 2 bash -c "</dev/tcp/${registry_check_ip}/5000" 2>/dev/null; then
+    if ! timeout -k 5 2 bash -c "</dev/tcp/${registry_check_ip}/5000" ; then
         echo -e "${RED}  ✗ ERROR: Master container registry (port 5000) is unreachable on ${registry_check_ip}.${NC}"
         echo -e "${YELLOW}    Ensure the Master registry is running and the mesh/firewall allows port 5000 from this node.${NC}"
         return 1
     fi
-    if command -v curl >/dev/null 2>&1; then
+    if command -v curl ; then
         local registry_code
-        registry_code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "http://${registry_check_ip}:5000/v2/" 2>/dev/null || true)"
+        registry_code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "http://${registry_check_ip}:5000/v2/"  || true)"
         # Retry with HTTPS if HTTP returned 000 (connection refused / TLS redirect)
         if [ "$registry_code" = "000" ] || [ "$registry_code" = "400" ]; then
-            registry_code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "https://${registry_check_ip}:5000/v2/" 2>/dev/null || true)"
+            registry_code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "https://${registry_check_ip}:5000/v2/"  || true)"
         fi
         case "$registry_code" in
             2*|401) ;;

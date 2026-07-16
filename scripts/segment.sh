@@ -3,8 +3,8 @@ ensure_container_on_network() {
     local network_name="$2"
     [ -z "$container_name" ] && return 0
 
-    docker container inspect "$container_name" >/dev/null 2>&1 || return 0
-    docker network inspect "$network_name" >/dev/null 2>&1 || return 0
+    docker container inspect "$container_name"  || return 0
+    docker network inspect "$network_name"  || return 0
     docker network connect "$network_name" "$container_name" || echo -e "${YELLOW}    ⚠ Network connect failed for $container_name on $network_name${NC}"
 }
 
@@ -21,7 +21,7 @@ generate_safe_caddyfile() {
 
     # 1. Discover domain: DB first, .env fallback
     local domain=""
-    domain=$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null <<'PY'
+    domain=$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell  <<'PY'
 from apps.deployments.models import PlatformConfig
 c = PlatformConfig.load()
 d = (c.domain or '').strip()
@@ -31,12 +31,12 @@ PY
     )
     domain="$(echo "$domain" | tr -d '[:space:]')"
     if [ -z "$domain" ]; then
-        domain="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
+        domain="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env"  | cut -d= -f2- || true)"
     fi
 
     # 2. Discover ALL deployed service domains from DB (public + custom)
     local svc_blocks=""
-    svc_blocks=$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null <<'PY'
+    svc_blocks=$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell  <<'PY'
 import os
 upstream = os.environ.get('SMSLY_SERVICE_PROXY_UPSTREAM', 'traefik:80')
 from apps.deployments.models import Service
@@ -109,16 +109,16 @@ caddy_needs_fix() {
     # Export CF token from systemd override so caddy validate can resolve {env.CLOUDFLARE_API_TOKEN}
     if [ -f /etc/systemd/system/caddy.service.d/override.conf ]; then
         local cf_val
-        cf_val=$(grep 'CLOUDFLARE_API_TOKEN=' /etc/systemd/system/caddy.service.d/override.conf 2>/dev/null | sed 's/.*CLOUDFLARE_API_TOKEN=//;s/\\x22//g' || true)
+        cf_val=$(grep 'CLOUDFLARE_API_TOKEN=' /etc/systemd/system/caddy.service.d/override.conf  | sed 's/.*CLOUDFLARE_API_TOKEN=//;s/\\x22//g' || true)
         if [ -n "$cf_val" ]; then
             export CLOUDFLARE_API_TOKEN="$cf_val"
         fi
     fi
 
-    if ! caddy validate --config /opt/smsly-hosting/caddy-config/Caddyfile 2>/dev/null; then
+    if ! caddy validate --config /opt/smsly-hosting/caddy-config/Caddyfile ; then
         return 0  # Syntax error
     fi
-    if grep -q 'dns cloudflare' /opt/smsly-hosting/caddy-config/Caddyfile 2>/dev/null \
+    if grep -q 'dns cloudflare' /opt/smsly-hosting/caddy-config/Caddyfile  \
        && [ ! -f /etc/systemd/system/caddy.service.d/override.conf ]; then
         return 0  # dns cloudflare without token override = runtime crash
     fi
@@ -131,7 +131,7 @@ bust_core_build_cache() {
     # Remove old app image layers for deterministic rebuilds (no DB/data touched).
     for svc in frontend backend celery celery-beat; do
         local image_ids=""
-        image_ids="$(docker compose -f "$COMPOSE_FILE" images -q "$svc" 2>/dev/null | awk 'NF' | sort -u || true)"
+        image_ids="$(docker compose -f "$COMPOSE_FILE" images -q "$svc"  | awk 'NF' | sort -u || true)"
         if [ -n "$image_ids" ]; then
             while read -r image_id; do
                 [ -n "$image_id" ] && docker rmi -f "$image_id" || echo -e "${YELLOW}    ⚠ Failed to remove image $image_id${NC}"
@@ -144,7 +144,7 @@ bust_core_build_cache() {
     
     # NEW: Prune old unused images older than 7 days to prevent disk space exhaustion.
     # echo -e "${BLUE}  -> Pruning deeply stale images (>7 days old)...${NC}"
-    # docker image prune -a -f --filter "until=168h" >/dev/null 2>&1 || true
+    # docker image prune -a -f --filter "until=168h"  || true
     
     echo -e "${GREEN}  OK Cache bust complete (targeted images + build cache + deep prune)${NC}"
 }
@@ -156,7 +156,7 @@ restart_edge_stack() {
     echo -e "${BLUE}    [1/5] Bringing up edge services...${NC}"
     local all_running=true
     for svc in $edge_services; do
-        if ! docker compose -f "$COMPOSE_FILE" ps "$svc" 2>/dev/null | grep -q "Up"; then
+        if ! docker compose -f "$COMPOSE_FILE" ps "$svc"  | grep -q "Up"; then
             all_running=false
             break
         fi
@@ -185,7 +185,7 @@ restart_edge_stack() {
 
     # Validate Caddy config before restart (H1 fix)
     echo -e "${BLUE}    [5/5] Validating Caddy config...${NC}"
-    if command -v caddy >/dev/null 2>&1; then
+    if command -v caddy ; then
         if caddy_needs_fix; then
             generate_safe_caddyfile "restart_edge_stack validation"
         fi

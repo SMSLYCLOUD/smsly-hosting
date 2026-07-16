@@ -51,7 +51,7 @@ echo ""
 echo -e "${BLUE}→ Step 1: Checking primary status...${NC}"
 
 PRIMARY_UP=false
-if timeout 10 docker exec "$PRIMARY_CONTAINER" pg_isready -U smsly_admin >/dev/null 2>&1; then
+if timeout 10 docker exec "$PRIMARY_CONTAINER" pg_isready -U smsly_admin ; then
     PRIMARY_UP=true
 fi
 
@@ -84,7 +84,7 @@ fi
 
 IN_RECOVERY=$(timeout 10 docker exec "$REPLICA_CONTAINER" \
     psql -U smsly_admin -d smsly_hosting -t -A \
-    -c "SELECT pg_is_in_recovery();" 2>/dev/null || echo "")
+    -c "SELECT pg_is_in_recovery();"  || echo "")
 
 if [ "$IN_RECOVERY" != "t" ]; then
     echo -e "${YELLOW}⚠ Replica is NOT in recovery mode — it might already be primary${NC}"
@@ -100,7 +100,7 @@ echo -e "${BLUE}→ Step 3: Checking replication lag...${NC}"
 LAG=$(timeout 10 docker exec "$REPLICA_CONTAINER" \
     psql -U smsly_admin -d smsly_hosting -t -A \
     -c "SELECT CASE WHEN pg_last_wal_receive_lsn() = pg_last_wal_replay_lsn() THEN 0 ELSE EXTRACT(EPOCH FROM now() - pg_last_xact_replay_timestamp())::int END;" \
-    2>/dev/null || echo "unknown")
+     || echo "unknown")
 
 echo -e "  Replication lag: ${LAG}s"
 
@@ -149,7 +149,7 @@ else
         sleep 1
         IS_PRIMARY=$(timeout 10 docker exec "$REPLICA_CONTAINER" \
             psql -U smsly_admin -d smsly_hosting -t -A \
-            -c "SELECT pg_is_in_recovery();" 2>/dev/null || echo "")
+            -c "SELECT pg_is_in_recovery();"  || echo "")
         if [ "$IS_PRIMARY" = "f" ]; then
             echo ""
             echo -e "${GREEN}  ✓ Replica promoted to primary!${NC}"

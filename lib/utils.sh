@@ -105,18 +105,18 @@ compose_stack_drift() {
 
     if ! services="$(compose_stack_services 2>/tmp/smsly-compose-config.err)"; then
         echo "__compose_config__:invalid"
-        sed 's/^/__compose_config_error__:/' /tmp/smsly-compose-config.err 2>/dev/null | head -5 || true
+        sed 's/^/__compose_config_error__:/' /tmp/smsly-compose-config.err  | head -5 || true
         return 0
     fi
 
     printf '%s\n' "$services" | while IFS= read -r service; do
         [ -n "$service" ] || continue
-        container_id="$(docker compose -f "$COMPOSE_FILE" ps -q "$service" 2>/dev/null || true)"
+        container_id="$(docker compose -f "$COMPOSE_FILE" ps -q "$service"  || true)"
         if [ -z "$container_id" ]; then
             echo "$service:missing"
             continue
         fi
-        container_state="$(docker inspect -f '{{.State.Status}}' "$container_id" 2>/dev/null || true)"
+        container_state="$(docker inspect -f '{{.State.Status}}' "$container_id"  || true)"
         if [ "$container_state" != "running" ]; then
             echo "$service:${container_state:-unknown}"
         fi
@@ -147,8 +147,8 @@ reconcile_compose_stack_after_resume() {
 
     if [ "$reconcile_rc" -ne 0 ]; then
         echo -e "${RED}  x Compose reconciliation failed (exit $reconcile_rc).${NC}"
-        docker compose -f "$COMPOSE_FILE" ps 2>/dev/null || true
-        docker compose -f "$COMPOSE_FILE" logs --tail=120 2>/dev/null || true
+        docker compose -f "$COMPOSE_FILE" ps  || true
+        docker compose -f "$COMPOSE_FILE" logs --tail=120  || true
         exit "$reconcile_rc"
     fi
 

@@ -1,12 +1,12 @@
 check_internet() {
     echo -e "${BLUE}  → Checking internet connectivity...${NC}"
-    if ! curl -Is --connect-timeout 5 https://google.com >/dev/null; then
+    if ! curl -Is --connect-timeout 5 https://google.com ; then
         echo -e "${RED}  ✗ No internet access. Check your firewall/network settings.${NC}"
         exit 1
     fi
-    if ! host github.com >/dev/null 2>&1; then
+    if ! host github.com ; then
          # Fallback to ping if host is missing
-         if ! ping -c 1 github.com >/dev/null 2>&1; then
+         if ! ping -c 1 github.com ; then
              echo -e "${RED}  ✗ DNS resolution failed for github.com.${NC}"
              exit 1
          fi
@@ -37,7 +37,7 @@ check_hardware() {
 
 check_caddy_conflict() {
     echo -e "${BLUE}  → Checking for host-level Caddy/Traefik port conflicts...${NC}"
-    if systemctl is-active --quiet caddy 2>/dev/null; then
+    if systemctl is-active --quiet caddy ; then
         echo -e "${RED}ERROR: Host Caddy service detected (systemd)${NC}"
         echo -e "${YELLOW}Grid uses Docker-managed routing. Master uses Docker Caddy, and node mode uses Traefik on public port 80.${NC}"
         echo -e ""
@@ -68,12 +68,12 @@ wait_for_apt_lock() {
         active_locks=()
         pids=""
 
-        if command -v fuser >/dev/null 2>&1; then
+        if command -v fuser ; then
             for lock_file in "${lock_files[@]}"; do
                 [ -e "$lock_file" ] || continue
-                if fuser "$lock_file" >/dev/null 2>&1; then
+                if fuser "$lock_file" ; then
                     active_locks+=("$lock_file")
-                    pids="$pids $(fuser "$lock_file" 2>/dev/null || true)"
+                    pids="$pids $(fuser "$lock_file"  || true)"
                 fi
             done
         fi
@@ -95,7 +95,7 @@ wait_for_apt_lock() {
             echo -e "${RED}  x APT lock is still held after ${max_wait}s.${NC}"
             echo -e "${YELLOW}  Holding process(es):${NC}"
             for pid in $(printf "%s\n" $pids | sort -u); do
-                ps -p "$pid" -o pid=,comm=,etime=,args= 2>/dev/null || true
+                ps -p "$pid" -o pid=,comm=,etime=,args=  || true
             done
             echo -e "${YELLOW}  Wait for those processes to finish, then rerun the installer.${NC}"
             echo -e "${YELLOW}  If no apt/dpkg processes are running, repair with: sudo dpkg --configure -a${NC}"
@@ -106,7 +106,7 @@ wait_for_apt_lock() {
             echo
             echo -e "${YELLOW}  Waiting for APT lock (${elapsed}s/${max_wait}s). Active lock(s): ${active_locks[*]}${NC}"
             for pid in $(printf "%s\n" $pids | sort -u); do
-                ps -p "$pid" -o pid=,comm=,etime=,args= 2>/dev/null || true
+                ps -p "$pid" -o pid=,comm=,etime=,args=  || true
             done
         else
             printf "."
@@ -127,7 +127,7 @@ apt_run() {
         wait_for_apt_lock || return 1
         # SECURITY/HARDENING: avoid set +e / set -e toggling. Capture rc via
         # explicit conditional so set -e stays in effect the whole time.
-        if output="$("$@" 2>&1)"; then
+        if output="$("$@" )"; then
             rc=0
         else
             rc=$?
@@ -181,18 +181,18 @@ ensure_system_swap() {
 
         # If the file already exists but is too small, we need to recreate it
         if [ -f "$swapfile" ]; then
-            swapoff "$swapfile" 2>/dev/null || true
+            swapoff "$swapfile"  || true
             rm -f "$swapfile"
             # Since we removed the old file, we need to create the full target amount
             needed_mb=$target_swap_mb
         fi
 
-        fallocate -l ${needed_mb}M "$swapfile" 2>/dev/null || dd if=/dev/zero of="$swapfile" bs=1M count=$needed_mb status=none
+        fallocate -l ${needed_mb}M "$swapfile"  || dd if=/dev/zero of="$swapfile" bs=1M count=$needed_mb status=none
         chmod 600 "$swapfile"
-        mkswap "$swapfile" >/dev/null 2>&1
-        swapon "$swapfile" 2>/dev/null || true
+        mkswap "$swapfile" 
+        swapon "$swapfile"  || true
         # Make permanent (idempotent)
-        if ! grep -q "$swapfile" /etc/fstab 2>/dev/null; then
+        if ! grep -q "$swapfile" /etc/fstab ; then
             echo "$swapfile none swap sw 0 0" >> /etc/fstab
         fi
         echo -e "${GREEN}  ✓ Swap file created and activated (${needed_mb}MB)${NC}"

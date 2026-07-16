@@ -26,7 +26,7 @@ load_cloudflare_env() {
     fi
 
     local token_line token
-    token_line="$(grep '^Environment="CLOUDFLARE_API_TOKEN=' "$OVERRIDE_CONF" 2>/dev/null || true)"
+    token_line="$(grep '^Environment="CLOUDFLARE_API_TOKEN=' "$OVERRIDE_CONF"  || true)"
     token="${token_line#Environment=\"CLOUDFLARE_API_TOKEN=}"
     token="${token%\"}"
 
@@ -50,7 +50,7 @@ clear_cloudflare_override() {
     unset CLOUDFLARE_API_TOKEN || true
 
     if [ "$had_token" -eq 1 ]; then
-        systemctl daemon-reload 2>&1 || true
+        systemctl daemon-reload  || true
         echo "$LOG_PREFIX Cleared Cloudflare token override"
     fi
 }
@@ -70,7 +70,7 @@ sync_cloudflare_token() {
             # Check if override needs updating
             CURRENT_TOKEN=""
             if [ -f "$OVERRIDE_CONF" ]; then
-                CURRENT_TOKEN=$(grep 'CLOUDFLARE_API_TOKEN=' "$OVERRIDE_CONF" 2>/dev/null | sed 's/.*CLOUDFLARE_API_TOKEN=//;s/"$//' || true)
+                CURRENT_TOKEN=$(grep 'CLOUDFLARE_API_TOKEN=' "$OVERRIDE_CONF"  | sed 's/.*CLOUDFLARE_API_TOKEN=//;s/"$//' || true)
             fi
 
             if [ "$NEW_TOKEN" != "$CURRENT_TOKEN" ]; then
@@ -81,7 +81,7 @@ sync_cloudflare_token() {
 Environment="CLOUDFLARE_API_TOKEN=$NEW_TOKEN"
 ENVEOF
                 chmod 600 "$OVERRIDE_CONF"
-        systemctl daemon-reload 2>&1 || echo -e "${YELLOW}    ⚠ systemctl daemon-reload failed${NC}"
+        systemctl daemon-reload  || echo -e "${YELLOW}    ⚠ systemctl daemon-reload failed${NC}"
                 # Export for caddy validate to use
                 export CLOUDFLARE_API_TOKEN="$NEW_TOKEN"
                 echo "$LOG_PREFIX Cloudflare token synced"
@@ -105,10 +105,10 @@ load_cloudflare_env
 mkdir -p "$WATCH_DIR"
 
 https_listener_active() {
-    if command -v ss >/dev/null 2>&1; then
-        ss -H -tln 2>/dev/null | awk '{print $4}' | grep -Eq ':443$'
+    if command -v ss ; then
+        ss -H -tln  | awk '{print $4}' | grep -Eq ':443$'
     else
-        lsof -iTCP:443 -sTCP:LISTEN >/dev/null 2>&1
+        lsof -iTCP:443 -sTCP:LISTEN 
     fi
 }
 
@@ -187,7 +187,7 @@ apply_validated_caddyfile() {
     local candidate="$1"
     local previous="${CADDY_CONF}.prev.$$"
 
-    [ -f "$CADDY_CONF" ] && cp "$CADDY_CONF" "$previous" 2>/dev/null || true
+    [ -f "$CADDY_CONF" ] && cp "$CADDY_CONF" "$previous"  || true
     cp "$candidate" "$CADDY_CONF"
 
     sleep 2
@@ -197,7 +197,7 @@ apply_validated_caddyfile() {
         rm -f "$previous"
         return 1
     fi
-    cp "$CADDY_CONF" "$LAST_GOOD_CONF" 2>/dev/null || true
+    cp "$CADDY_CONF" "$LAST_GOOD_CONF"  || true
     rm -f "$previous"
     return 0
 }
@@ -222,7 +222,7 @@ while true; do
                 attempts=0
                 delay=2
                 while [ $attempts -lt 4 ]; do
-                    if caddy validate --config "$CANDIDATE_CADDY" 2>&1; then
+                    if caddy validate --config "$CANDIDATE_CADDY" ; then
                         echo "$LOG_PREFIX Validation passed — applying"
                         if ! apply_validated_caddyfile "$CANDIDATE_CADDY"; then
                             break
@@ -231,8 +231,8 @@ while true; do
                         # Post-reload smoke (non-blocking)
                         host_line=$(grep -m1 -E '^[^#].*{?$' "$CANDIDATE_CADDY" | head -n1 | awk '{print $1}')
                         wildcard_line=$(grep -m1 -E '^\\*\\.' "$CANDIDATE_CADDY" | head -n1 | awk '{print $1}')
-                        if command -v bash >/dev/null 2>&1 && [ -x "/opt/smsly-hosting/scripts/smoke_routes.sh" ]; then
-                            /opt/smsly-hosting/scripts/smoke_routes.sh "$host_line" "$wildcard_line" >/var/log/caddy/smoke.log 2>&1 || true
+                        if command -v bash  && [ -x "/opt/smsly-hosting/scripts/smoke_routes.sh" ]; then
+                            /opt/smsly-hosting/scripts/smoke_routes.sh "$host_line" "$wildcard_line" >/var/log/caddy/smoke.log  || true
                         fi
                         break
                     fi

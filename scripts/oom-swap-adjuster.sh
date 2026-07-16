@@ -55,13 +55,13 @@ NEW_SWAPFILE="${SWAPFILE_PREFIX}-$(date '+%s')"
 log "Increasing swap by ${ADD_SWAP_MB}MB. Creating ${NEW_SWAPFILE}..."
 
 # Create the new swap file
-if fallocate -l ${ADD_SWAP_MB}M "$NEW_SWAPFILE" 2>/dev/null; then
+if fallocate -l ${ADD_SWAP_MB}M "$NEW_SWAPFILE" ; then
     chmod 600 "$NEW_SWAPFILE"
-    mkswap "$NEW_SWAPFILE" >/dev/null 2>&1
-    swapon "$NEW_SWAPFILE" 2>/dev/null || true
+    mkswap "$NEW_SWAPFILE" 
+    swapon "$NEW_SWAPFILE"  || true
 
     # Make it permanent
-    if ! grep -q "$NEW_SWAPFILE" /etc/fstab 2>/dev/null; then
+    if ! grep -q "$NEW_SWAPFILE" /etc/fstab ; then
         echo "$NEW_SWAPFILE none swap sw 0 0" >> /etc/fstab
     fi
 
@@ -71,10 +71,10 @@ else
     log "fallocate failed, trying dd..."
     if dd if=/dev/zero of="$NEW_SWAPFILE" bs=1M count=$ADD_SWAP_MB status=none; then
         chmod 600 "$NEW_SWAPFILE"
-        mkswap "$NEW_SWAPFILE" >/dev/null 2>&1
-        swapon "$NEW_SWAPFILE" 2>/dev/null || true
+        mkswap "$NEW_SWAPFILE" 
+        swapon "$NEW_SWAPFILE"  || true
 
-        if ! grep -q "$NEW_SWAPFILE" /etc/fstab 2>/dev/null; then
+        if ! grep -q "$NEW_SWAPFILE" /etc/fstab ; then
             echo "$NEW_SWAPFILE none swap sw 0 0" >> /etc/fstab
         fi
 

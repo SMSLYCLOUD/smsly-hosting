@@ -30,7 +30,7 @@ echo "========================================"
 # Ensure repo cache directory exists for user service builds
 mkdir -p /opt/smsly-cache/repos
 chmod 775 /opt/smsly-cache
-chown -R 1000:1000 /opt/smsly-cache 2>/dev/null || true
+chown -R 1000:1000 /opt/smsly-cache  || true
 
 if [ "$NO_PULL" = false ]; then
   echo ""
@@ -54,12 +54,12 @@ wait_for_healthy() {
   local service="$1" timeout="${2:-60}" elapsed=0
   echo "  Waiting for $service to become healthy (timeout ${timeout}s)..."
   while [ $elapsed -lt $timeout ]; do
-    health=$("${COMPOSE_CMD[@]}" ps "$service" --format '{{.Health}}' 2>/dev/null || echo "")
+    health=$("${COMPOSE_CMD[@]}" ps "$service" --format '{{.Health}}'  || echo "")
     if [ "$health" = "healthy" ]; then
       echo "  ✓ $service is healthy"
       return 0
     fi
-    status=$("${COMPOSE_CMD[@]}" ps "$service" --format '{{.Status}}' 2>/dev/null || echo "")
+    status=$("${COMPOSE_CMD[@]}" ps "$service" --format '{{.Status}}'  || echo "")
     if echo "$status" | grep -qi "exit"; then
       echo "  ✗ $service exited unexpectedly"
       return 1
@@ -75,7 +75,7 @@ wait_for_endpoint() {
   local url="$1" timeout="${2:-60}" elapsed=0
   echo "  Waiting for $url (timeout ${timeout}s)..."
   while [ $elapsed -lt $timeout ]; do
-    if curl -sf "$url" > /dev/null 2>&1; then
+    if curl -sf "$url" ; then
       echo "  ✓ $url responding"
       return 0
     fi

@@ -27,19 +27,19 @@ PY
 
 configure_docker_mirror() {
     if [ "${MODE_AGENT_LITE:-false}" = "true" ] && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ]; then
-        [ -n "${MASTER_IP:-}" ] || MASTER_IP="$(env_get_value "${INSTALL_DIR:-/opt/smsly-hosting}/.env" "MASTER_IP" 2>/dev/null || true)"
-        [ -n "${MASTER_MESH_IP:-}" ] || MASTER_MESH_IP="$(env_get_value "${INSTALL_DIR:-/opt/smsly-hosting}/.env" "MASTER_MESH_IP" 2>/dev/null || true)"
+        [ -n "${MASTER_IP:-}" ] || MASTER_IP="$(env_get_value "${INSTALL_DIR:-/opt/smsly-hosting}/.env" "MASTER_IP"  || true)"
+        [ -n "${MASTER_MESH_IP:-}" ] || MASTER_MESH_IP="$(env_get_value "${INSTALL_DIR:-/opt/smsly-hosting}/.env" "MASTER_MESH_IP"  || true)"
     fi
 
     # Detect if we need custom DNS fallback (test resolution inside Docker)
     local use_dns_fallback=false
-    if command -v docker >/dev/null 2>&1 && systemctl is-active --quiet docker; then
+    if command -v docker  && systemctl is-active --quiet docker; then
         echo -e "${BLUE}  → Checking Docker DNS resolution for npm registry...${NC}"
         local test_img="node:20-alpine"
-        if ! docker image inspect "$test_img" >/dev/null 2>&1; then
+        if ! docker image inspect "$test_img" ; then
             test_img="alpine"
         fi
-        if ! timeout -k 5 15 docker run --rm "$test_img" nslookup registry.npmjs.org >/dev/null 2>&1; then
+        if ! timeout -k 5 15 docker run --rm "$test_img" nslookup registry.npmjs.org ; then
             echo -e "${YELLOW}  ⚠ Docker container DNS test failed. Enabling public DNS fallback (8.8.8.8, 1.1.1.1)...${NC}"
             use_dns_fallback=true
         else
@@ -89,10 +89,10 @@ configure_docker_mirror() {
 
     if [ "$changed" = "true" ]; then
         local prev
-        prev="$(cat /etc/docker/daemon.json 2>/dev/null || echo '')"
+        prev="$(cat /etc/docker/daemon.json  || echo '')"
         _merge_daemon_json "$daemon_json"
         local new
-        new="$(cat /etc/docker/daemon.json 2>/dev/null || echo '')"
+        new="$(cat /etc/docker/daemon.json  || echo '')"
         if [ "$prev" != "$new" ]; then
             systemctl restart docker || true
         fi

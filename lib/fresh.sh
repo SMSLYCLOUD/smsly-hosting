@@ -76,13 +76,13 @@ if [ "$NON_INTERACTIVE" != "true" ] && [ -e /dev/tty ]; then
             echo -e "${BLUE}  → Verifying DNS for $DOMAIN...${NC}"
             DETECTED_IP=""
             # Try 'host' first (dnsutils), fall back to API-based DNS lookup
-            if command -v host &> /dev/null; then
-                DETECTED_IP=$(host -t A "$DOMAIN" 2>/dev/null | awk '{print $NF}' | tail -n 1)
+            if command -v host ; then
+                DETECTED_IP=$(host -t A "$DOMAIN"  | awk '{print $NF}' | tail -n 1)
             fi
             if [ -z "$DETECTED_IP" ] || [ "$DETECTED_IP" = "found:" ] || [ "$DETECTED_IP" = "not" ]; then
                 DETECTED_IP=""
                 # Fallback to DNS over HTTPS (Google)
-                DETECTED_IP="$(curl -fsS "https://dns.google/resolve?name=${DOMAIN}&type=A" -m 5 2>/dev/null | python3 -c "import json,sys; data=json.load(sys.stdin); ans=data.get('Answer',[]); print(ans[0]['data']) if ans and 'data' in ans[0] else print('')" 2>/dev/null || echo "")"
+                DETECTED_IP="$(curl -fsS "https://dns.google/resolve?name=${DOMAIN}&type=A" -m 5  | python3 -c "import json,sys; data=json.load(sys.stdin); ans=data.get('Answer',[]); print(ans[0]['data']) if ans and 'data' in ans[0] else print('')"  || echo "")"
             fi
             if [ -n "$DETECTED_IP" ]; then
                 if [ "$DETECTED_IP" != "$PUBLIC_IP" ] && [ "$DETECTED_IP" != "127.0.0.1" ]; then
@@ -178,8 +178,8 @@ echo -e "${BLUE}  Disk space available: ${DISK_AVAIL_MB}MB${NC}"
 if [ "$DISK_AVAIL_MB" -lt 3000 ]; then
     echo -e "${YELLOW}  ⚠ Low disk space (${DISK_AVAIL_MB}MB). Recommended: 3GB+${NC}"
     echo -e "${YELLOW}    Attempting Docker cache cleanup...${NC}"
-    docker system prune -f 2>/dev/null || true
-    docker builder prune -f 2>/dev/null || true
+    docker system prune -f  || true
+    docker builder prune -f  || true
     DISK_AVAIL_MB=$(df -BM / | tail -1 | awk '{print $4}' | tr -d 'M')
     if [ "$DISK_AVAIL_MB" -lt 1500 ]; then
         echo -e "${RED}  ✗ Insufficient disk space (${DISK_AVAIL_MB}MB). Need at least 1.5GB for fresh install.${NC}"
@@ -196,11 +196,11 @@ if [ -d "$INSTALL_DIR/.git" ]; then
     echo -e "${BLUE}  → Updating existing repository ($SMSLY_BRANCH)...${NC}"
     cd "$INSTALL_DIR"
     ensure_local_ignores
-    if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+    if [ -n "$(git status --porcelain )" ]; then
         echo -e "${YELLOW}  ! Local changes detected - stashing before repository sync${NC}"
-        git stash push --include-untracked -m "install-sync-$(date +%s)" >/dev/null 2>&1 || true
+        git stash push --include-untracked -m "install-sync-$(date +%s)"  || true
     fi
-    if ! git fetch origin "$SMSLY_BRANCH" >/dev/null 2>&1 || ! git reset --hard "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
+    if ! git fetch origin "$SMSLY_BRANCH"  || ! git reset --hard "origin/$SMSLY_BRANCH" ; then
         echo -e "${RED}  ✗ Git update failed for $SMSLY_BRANCH. SSL verification is always enforced — check network or CA certificates.${NC}"
     fi
 else
@@ -208,7 +208,7 @@ else
     CLONE_SUCCESS=false
     if [ -f "$INSTALL_DIR/.env" ]; then
         echo -e "${YELLOW}  → Existing .env found — preserving configuration${NC}"
-        cp "$INSTALL_DIR/.env" /tmp/smsly-env-backup 2>/dev/null || true
+        cp "$INSTALL_DIR/.env" /tmp/smsly-env-backup  || true
     fi
     rm -rf "$INSTALL_DIR"
     if git clone -b "$SMSLY_BRANCH" "$SMSLY_GIT_REMOTE" "$INSTALL_DIR"; then
@@ -227,7 +227,7 @@ else
         if [ -n "${SMSLY_INSTALL_WORKDIR:-}" ] && [ -d "${SMSLY_INSTALL_WORKDIR}" ]; then
             echo -e "${BLUE}  → Fallback: Initializing from pre-uploaded source bundle...${NC}"
             mkdir -p "$INSTALL_DIR"
-            cp -rv "${SMSLY_INSTALL_WORKDIR}/"* "$INSTALL_DIR/" 2>/dev/null || true
+            cp -rv "${SMSLY_INSTALL_WORKDIR}/"* "$INSTALL_DIR/"  || true
             cd "$INSTALL_DIR"
             if [ ! -d ".git" ]; then
                 git init -q
@@ -252,7 +252,7 @@ if ! is_checkpoint_done "dependencies_installed"; then
 # LEGACY: nginx is only used for the bare-metal install path.
 # Docker Compose uses Caddy. See docs/REVERSE_PROXY_DECISION.md.
 for svc in nginx apache2; do
-    if systemctl is-active --quiet "$svc" 2>/dev/null; then
+    if systemctl is-active --quiet "$svc" ; then
         echo -e "${YELLOW}  ⚠ Stopping conflicting service: $svc${NC}"
         systemctl stop "$svc" || true
         systemctl disable "$svc" || true
@@ -264,20 +264,20 @@ done
 echo -e "${BLUE}  → Cleaning up previous SMSLY installation artifacts...${NC}"
 
 # Stop and remove stale smsly-hosting platform containers (NOT user-deployed services)
-SMSLY_CONTAINERS=$(docker ps -a --filter "name=smsly-hosting-" -q 2>/dev/null || true)
+SMSLY_CONTAINERS=$(docker ps -a --filter "name=smsly-hosting-" -q  || true)
 if [ -n "$SMSLY_CONTAINERS" ]; then
     echo -e "${YELLOW}  → Stopping smsly-hosting platform container(s)...${NC}"
-    docker stop $SMSLY_CONTAINERS 2>/dev/null || true
-    docker rm -f $SMSLY_CONTAINERS 2>/dev/null || true
+    docker stop $SMSLY_CONTAINERS  || true
+    docker rm -f $SMSLY_CONTAINERS  || true
 fi
 
 # Remove stale Docker volumes (postgres data with old passwords, etc.)
-SMSLY_VOLUMES=$(docker volume ls --filter "name=smsly" -q 2>/dev/null || true)
+SMSLY_VOLUMES=$(docker volume ls --filter "name=smsly" -q  || true)
 if [ -n "$SMSLY_VOLUMES" ]; then
     if [ "${SMSLY_ALLOW_DESTRUCTIVE_FRESH:-0}" = "1" ]; then
         echo -e "${YELLOW}  → Removing stale SMSLY volumes (SMSLY_ALLOW_DESTRUCTIVE_FRESH=1)...${NC}"
         for vol in $SMSLY_VOLUMES; do
-            docker volume rm "$vol" 2>/dev/null || true
+            docker volume rm "$vol"  || true
         done
     else
         echo -e "${YELLOW}  ⚠ Existing SMSLY volumes detected; preserving data by default.${NC}"
@@ -286,10 +286,10 @@ if [ -n "$SMSLY_VOLUMES" ]; then
 fi
 
 # Remove stale Docker networks
-SMSLY_NETWORKS=$(docker network ls --filter "name=smsly" -q 2>/dev/null || true)
+SMSLY_NETWORKS=$(docker network ls --filter "name=smsly" -q  || true)
 if [ -n "$SMSLY_NETWORKS" ]; then
     for net in $SMSLY_NETWORKS; do
-        docker network rm "$net" 2>/dev/null || true
+        docker network rm "$net"  || true
     done
 fi
 
@@ -317,24 +317,24 @@ filter = sshd
 logpath = /var/log/auth.log
 maxretry = 3
 EOF
-    systemctl enable fail2ban >/dev/null 2>&1 || true
-    systemctl restart fail2ban >/dev/null 2>&1 &
+    systemctl enable fail2ban  || true
+    systemctl restart fail2ban  &
     echo -e "${GREEN}  ✓ Fail2ban configured and started${NC}"
 fi
 
 # Install Docker if missing
-if ! command -v docker &> /dev/null; then
+if ! command -v docker ; then
     echo -e "${BLUE}  → Installing Docker...${NC}"
     mkdir -m 0755 -p /etc/apt/keyrings
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg --yes
     echo \
       "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-      $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+      $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list 
     apt_run apt-get update -qq
     apt_run apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
     systemctl enable docker || echo -e "${YELLOW}    ⚠ docker.service enable failed${NC}"
     systemctl start docker || echo -e "${YELLOW}    ⚠ docker.service start failed${NC}"
-    if ! docker info >/dev/null 2>&1; then
+    if ! docker info ; then
         echo -e "${RED}  ✗ Docker daemon failed to start. Check 'systemctl status docker' and kernel modules.${NC}"
         exit 1
     fi
@@ -344,16 +344,16 @@ else
 fi
 
 # Create smsly system user for container file ownership
-id smsly >/dev/null 2>&1 || useradd -r -s /usr/sbin/nologin -u 1000 smsly 2>/dev/null || true
+id smsly  || useradd -r -s /usr/sbin/nologin -u 1000 smsly  || true
 
 # Ensure docker compose is available
-if ! docker compose version >/dev/null 2>&1; then
+if ! docker compose version ; then
     echo -e "${BLUE}  → Installing Docker Compose plugin...${NC}"
     apt_run apt-get install -y docker-compose-plugin || true
 fi
 # Fallback to docker-compose v1 if plugin still not available
-if ! docker compose version >/dev/null 2>&1; then
-    if command -v docker-compose >/dev/null 2>&1; then
+if ! docker compose version ; then
+    if command -v docker-compose ; then
         echo -e "${YELLOW}  ⚠ docker compose plugin not available; falling back to docker-compose v1${NC}"
         docker_compose() { docker-compose "$@"; }
     else
@@ -363,7 +363,7 @@ if ! docker compose version >/dev/null 2>&1; then
 fi
 
 # Apply mirror config if applicable (Only if docker is now present)
-if command -v docker &> /dev/null; then
+if command -v docker ; then
     configure_docker_mirror
 fi
 
@@ -384,7 +384,7 @@ ensure_wireguard_mesh() {
     if is_node_mode; then
         mesh_ip="${NODE_MESH_IP:-10.100.0.2}"
         echo -e "${BLUE}  → Configuring WireGuard mesh on node ($wg_iface: $mesh_ip)...${NC}"
-        if ! command -v wg >/dev/null 2>&1; then
+        if ! command -v wg ; then
             apt_run apt-get install -y wireguard
         fi
         mkdir -p /etc/wireguard
@@ -401,8 +401,8 @@ Address = ${mesh_ip}/24
 ListenPort = 51820
 WGCONF
         fi
-        systemctl enable --now "wg-quick@${wg_iface}" 2>/dev/null || true
-        if ip link show "$wg_iface" >/dev/null 2>&1; then
+        systemctl enable --now "wg-quick@${wg_iface}"  || true
+        if ip link show "$wg_iface" ; then
             echo -e "${GREEN}  ✓ WireGuard mesh ($wg_iface: $mesh_ip) is up on node${NC}"
         else
             echo -e "${YELLOW}  ⚠ WireGuard ($wg_iface) failed to start on node — mesh will be configured post-provision${NC}"
@@ -414,12 +414,12 @@ WGCONF
     if is_agent_lite_mode; then
         return 0
     fi
-    if ip link show "$wg_iface" >/dev/null 2>&1; then
+    if ip link show "$wg_iface" ; then
         echo -e "${GREEN}  ✓ WireGuard mesh ($wg_iface) already configured${NC}"
         return 0
     fi
     echo -e "${BLUE}  → Configuring WireGuard mesh interface ($wg_iface: $mesh_ip)...${NC}"
-    if ! command -v wg >/dev/null 2>&1; then
+    if ! command -v wg ; then
         apt_run apt-get install -y wireguard
     fi
     mkdir -p /etc/wireguard
@@ -436,8 +436,8 @@ Address = ${mesh_ip}/24
 ListenPort = 51820
 WGCONF
     fi
-    systemctl enable --now "wg-quick@${wg_iface}" 2>/dev/null || true
-    if ip link show "$wg_iface" >/dev/null 2>&1; then
+    systemctl enable --now "wg-quick@${wg_iface}"  || true
+    if ip link show "$wg_iface" ; then
         echo -e "${GREEN}  ✓ WireGuard mesh ($wg_iface: $mesh_ip) is up${NC}"
     else
         echo -e "${YELLOW}  ⚠ WireGuard ($wg_iface) failed to start — PgCat mesh binding may fail${NC}"
@@ -464,19 +464,19 @@ if [ "$(pwd)" != "$INSTALL_DIR" ]; then
         if [ "${SMSLY_FORCE_SOURCE_SYNC:-0}" = "1" ]; then
             cp -rf . "$INSTALL_DIR/"
         else
-            cp -rn . "$INSTALL_DIR/" 2>/dev/null || cp -r . "$INSTALL_DIR/"
+            cp -rn . "$INSTALL_DIR/"  || cp -r . "$INSTALL_DIR/"
         fi
     else
         if [ -d "$INSTALL_DIR/.git" ]; then
              echo -e "${BLUE}  → Updating existing repository...${NC}"
              cd "$INSTALL_DIR"
-             if ! git pull origin "$SMSLY_BRANCH" >/dev/null 2>&1; then
+             if ! git pull origin "$SMSLY_BRANCH" ; then
                  echo -e "${RED}  ✗ Git pull failed for $SMSLY_BRANCH. SSL verification is always enforced.${NC}"
              fi
         else
              echo -e "${BLUE}  → Cloning repository...${NC}"
              if [ -f "$INSTALL_DIR/.env" ]; then
-                 cp "$INSTALL_DIR/.env" /tmp/smsly-env-backup 2>/dev/null || true
+                 cp "$INSTALL_DIR/.env" /tmp/smsly-env-backup  || true
              fi
              rm -rf "$INSTALL_DIR"
              if ! git clone -b "$SMSLY_BRANCH" "${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}" "$INSTALL_DIR"; then
@@ -497,12 +497,12 @@ cd "$INSTALL_DIR"
 if [ ! -d ".git" ] && [ -n "${SMSLY_GIT_REMOTE:-}" ]; then
     echo -e "${BLUE}  -> Initializing Git repository...${NC}"
     git init -q
-    git checkout -b "$SMSLY_BRANCH" >/dev/null 2>&1 || true
+    git checkout -b "$SMSLY_BRANCH"  || true
     git remote add origin "$SMSLY_GIT_REMOTE"
     if ! git fetch origin "$SMSLY_BRANCH" -q --depth=1; then
         echo -e "${YELLOW}  ⚠ Git fetch failed — repository will be unlinked from remote (SSL verification enforced)${NC}"
     fi
-    git branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
+    git branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH"  || true
     # We don't reset --hard here to avoid losing the bundled files we just copied,
     # but the repo is now linked for future updates.
     echo -e "${GREEN}  ✓ Git origin set to ${SMSLY_GIT_REMOTE}${NC}"
@@ -536,8 +536,8 @@ echo -e "${GREEN}  ✓ All required deployment files present${NC}"
 # ─── BLINDSPOT FIX: Ensure correct compose file is used ─────────────────────
 # Check if any containers are running with the wrong compose file (dev instead of prod)
 wrong_project=false
-for c_id in $(docker ps --filter "name=smsly-hosting" -q 2>/dev/null || true); do
-    config_file=$(docker inspect "$c_id" --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' 2>/dev/null || true)
+for c_id in $(docker ps --filter "name=smsly-hosting" -q  || true); do
+    config_file=$(docker inspect "$c_id" --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}'  || true)
     compose_base=$(basename "$COMPOSE_FILE")
     if [ -n "$config_file" ] && [[ "$config_file" != *"$compose_base"* ]]; then
         wrong_project=true
@@ -547,12 +547,12 @@ done
 
 if [ "$wrong_project" = "true" ]; then
     echo -e "${YELLOW}  ⚠ Found containers running from a different compose project configuration. Stopping...${NC}"
-    for c_id in $(docker ps --filter "name=smsly-hosting" -q 2>/dev/null || true); do
-        config_file=$(docker inspect "$c_id" --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}' 2>/dev/null || true)
+    for c_id in $(docker ps --filter "name=smsly-hosting" -q  || true); do
+        config_file=$(docker inspect "$c_id" --format='{{index .Config.Labels "com.docker.compose.project.config_files"}}'  || true)
         compose_base=$(basename "$COMPOSE_FILE")
         if [ -n "$config_file" ] && [[ "$config_file" != *"$compose_base"* ]]; then
-            docker stop "$c_id" >/dev/null 2>&1 || true
-            docker rm "$c_id" >/dev/null 2>&1 || true
+            docker stop "$c_id"  || true
+            docker rm "$c_id"  || true
         fi
     done
 fi
@@ -573,7 +573,7 @@ if [ -f "$INSTALL_DIR/.env" ]; then
 
     # Source existing values for summary output.
     set -a
-    source "$INSTALL_DIR/.env" 2>/dev/null || true
+    source "$INSTALL_DIR/.env"  || true
     set +a
     DOMAIN="${DOMAIN:-localhost}"
     USE_SSL="${USE_SSL:-false}"
@@ -605,13 +605,13 @@ else
 
     # Ensure cryptography is installed (required for Fernet key generation).
     # Retry with and without --break-system-packages for different Ubuntu versions.
-    pip3 install cryptography -q --break-system-packages 2>/dev/null || \
-        pip3 install cryptography -q 2>/dev/null || \
+    pip3 install cryptography -q --break-system-packages  || \
+        pip3 install cryptography -q  || \
         (echo -e "${YELLOW}  → Retrying cryptography install...${NC}" && \
          pip3 install cryptography 2>&1 | tail -3) || true
 
     # Verify cryptography is importable before proceeding
-    if ! python3 -c "from cryptography.fernet import Fernet; print('ok')" 2>/dev/null; then
+    if ! python3 -c "from cryptography.fernet import Fernet; print('ok')" ; then
         echo -e "${RED}  ✗ CRITICAL: cryptography package is not installable.${NC}"
         echo -e "${RED}    The 'cryptography' package is required to generate a Fernet encryption key.${NC}"
         echo -e "${RED}    Install it manually: pip3 install cryptography${NC}"
@@ -630,7 +630,7 @@ else
                 printf -v "$_smsly_secrets_key" '%s' "$_smsly_secrets_val"
                 ;;
         esac
-    done < <(python3 "$INSTALL_DIR/scripts/generate_env_secrets.py" --shell 2>/dev/null | grep -E '^[A-Z_]+=' || true)
+    done < <(python3 "$INSTALL_DIR/scripts/generate_env_secrets.py" --shell  | grep -E '^[A-Z_]+=' || true)
     unset _smsly_secrets_key _smsly_secrets_val
     if [ -n "${SECRET_KEY:-}" ] && [ -n "${FIELD_ENCRYPTION_KEY:-}" ]; then
         SECRETS_GENERATED=true
@@ -642,22 +642,22 @@ else
     # Fallback: if the script didn't produce a valid Fernet key, generate it inline
     # (cryptography is guaranteed importable at this point from the check above).
     if [ -z "${FIELD_ENCRYPTION_KEY:-}" ]; then
-        FIELD_ENCRYPTION_KEY="${MASTER_FIELD_ENCRYPTION_KEY:-$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null || true)}"
+        FIELD_ENCRYPTION_KEY="${MASTER_FIELD_ENCRYPTION_KEY:-$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"  || true)}"
     fi
     # Ensure all other secrets have fallback values just in case
-    [ -n "${SECRET_KEY:-}" ] || SECRET_KEY="$(python3 -c "import secrets,string; chars=string.ascii_letters+string.digits; print(''.join(secrets.choice(chars) for _ in range(50)))" 2>/dev/null || true)"
-    [ -n "${POSTGRES_PASSWORD:-}" ] || POSTGRES_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
-    [ -n "${REDIS_PASSWORD:-}" ] || REDIS_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
-    [ -n "${RABBITMQ_PASSWORD:-}" ] || RABBITMQ_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
-    [ -n "${GATEWAY_SECRET:-}" ] || GATEWAY_SECRET="$(python3 -c "import secrets; print(secrets.token_hex(64))" 2>/dev/null || true)"
-    [ -n "${GITHUB_WEBHOOK_SECRET:-}" ] || GITHUB_WEBHOOK_SECRET="$(python3 -c "import secrets; print(secrets.token_hex(64))" 2>/dev/null || true)"
-    [ -n "${AUTOSCALER_API_TOKEN:-}" ] || AUTOSCALER_API_TOKEN="$(python3 -c "import secrets; print(secrets.token_hex(64))" 2>/dev/null || true)"
-    [ -n "${FRP_AUTH_TOKEN:-}" ] || FRP_AUTH_TOKEN="$(python3 -c "import secrets; print(secrets.token_hex(64))" 2>/dev/null || true)"
-    [ -n "${PGCAT_ADMIN_PASSWORD:-}" ] || PGCAT_ADMIN_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(48))" 2>/dev/null || true)"
-    [ -n "${GRAFANA_PASSWORD:-}" ] || GRAFANA_PASSWORD="$(python3 -c "import secrets,string; print(''.join(secrets.choice(string.ascii_letters+string.digits+'-_') for _ in range(40)))" 2>/dev/null || openssl rand -base64 30 | tr -d '+/=' )"
-    [ -n "${BACKUP_ENCRYPTION_KEY:-}" ] || BACKUP_ENCRYPTION_KEY="$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null || openssl rand -base64 32)"
-    [ -n "${CROWDSEC_BOUNCER_KEY:-}" ] || CROWDSEC_BOUNCER_KEY="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
-    [ -n "${REGISTRY_HTTP_SECRET:-}" ] || REGISTRY_HTTP_SECRET="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
+    [ -n "${SECRET_KEY:-}" ] || SECRET_KEY="$(python3 -c "import secrets,string; chars=string.ascii_letters+string.digits; print(''.join(secrets.choice(chars) for _ in range(50)))"  || true)"
+    [ -n "${POSTGRES_PASSWORD:-}" ] || POSTGRES_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
+    [ -n "${REDIS_PASSWORD:-}" ] || REDIS_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
+    [ -n "${RABBITMQ_PASSWORD:-}" ] || RABBITMQ_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
+    [ -n "${GATEWAY_SECRET:-}" ] || GATEWAY_SECRET="$(python3 -c "import secrets; print(secrets.token_hex(64))"  || true)"
+    [ -n "${GITHUB_WEBHOOK_SECRET:-}" ] || GITHUB_WEBHOOK_SECRET="$(python3 -c "import secrets; print(secrets.token_hex(64))"  || true)"
+    [ -n "${AUTOSCALER_API_TOKEN:-}" ] || AUTOSCALER_API_TOKEN="$(python3 -c "import secrets; print(secrets.token_hex(64))"  || true)"
+    [ -n "${FRP_AUTH_TOKEN:-}" ] || FRP_AUTH_TOKEN="$(python3 -c "import secrets; print(secrets.token_hex(64))"  || true)"
+    [ -n "${PGCAT_ADMIN_PASSWORD:-}" ] || PGCAT_ADMIN_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(48))"  || true)"
+    [ -n "${GRAFANA_PASSWORD:-}" ] || GRAFANA_PASSWORD="$(python3 -c "import secrets,string; print(''.join(secrets.choice(string.ascii_letters+string.digits+'-_') for _ in range(40)))"  || openssl rand -base64 30 | tr -d '+/=' )"
+    [ -n "${BACKUP_ENCRYPTION_KEY:-}" ] || BACKUP_ENCRYPTION_KEY="$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"  || openssl rand -base64 32)"
+    [ -n "${CROWDSEC_BOUNCER_KEY:-}" ] || CROWDSEC_BOUNCER_KEY="$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
+    [ -n "${REGISTRY_HTTP_SECRET:-}" ] || REGISTRY_HTTP_SECRET="$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
     [ -n "${BACKUP_REQUIRE_ENCRYPTION:-}" ] || BACKUP_REQUIRE_ENCRYPTION="true"
     # SECURITY: SSH strict host-key checking. Defaults to false (accept-first)
     # for convenience during initial provisioning. Operators managing trusted
@@ -665,8 +665,8 @@ else
     [ -n "${SMSLY_STRICT_SSH_HOST_KEY_CHECK:-}" ] || SMSLY_STRICT_SSH_HOST_KEY_CHECK="false"
     # Read-replica plumbing (used by pgcat for replica routing).
     # Initialize empty defaults so set -u doesn't trip on them later.
-    [ -n "${REPLICATION_PASSWORD:-}" ] || REPLICATION_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
-    [ -n "${SENTINEL_PASSWORD:-}" ] || SENTINEL_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
+    [ -n "${REPLICATION_PASSWORD:-}" ] || REPLICATION_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
+    [ -n "${SENTINEL_PASSWORD:-}" ] || SENTINEL_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
     [ -n "${DB_REPLICA_HOSTS:-}" ] || DB_REPLICA_HOSTS=""
 
     # Validate Fernet key format
@@ -678,7 +678,7 @@ try:
     print('valid')
 except Exception:
     print('invalid')
-" 2>/dev/null | grep -q valid; then
+"  | grep -q valid; then
         echo -e "${RED}  ✗ CRITICAL: Failed to generate a valid Fernet encryption key.${NC}"
         echo -e "${RED}    Ensure the 'cryptography' package is installed and retry.${NC}"
         echo -e "${RED}    pip3 install cryptography${NC}"
@@ -695,12 +695,12 @@ except Exception:
     # self-hosted / air-gapped nodes.
     echo -e "${BLUE}  → Bootstrapping Cosign signing keypair...${NC}"
     mkdir -p "$INSTALL_DIR/cosign-keys"
-    COSIGN_PASSWORD="${COSIGN_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || openssl rand -hex 32 2>/dev/null || echo 'cosign-placeholder')}"
+    COSIGN_PASSWORD="${COSIGN_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_hex(32))"  || openssl rand -hex 32  || echo 'cosign-placeholder')}"
     COSIGN_PRIVATE_KEY_PATH="$INSTALL_DIR/cosign-keys/cosign.key"
     COSIGN_PUBLIC_KEY_PATH="$INSTALL_DIR/cosign-keys/cosign.pub"
     if [ ! -f "$COSIGN_PRIVATE_KEY_PATH" ] || [ ! -f "$COSIGN_PUBLIC_KEY_PATH" ]; then
-        if command -v cosign >/dev/null 2>&1; then
-            COSIGN_PASSWORD="$COSIGN_PASSWORD" cosign generate-key-pair 2>/dev/null || true
+        if command -v cosign ; then
+            COSIGN_PASSWORD="$COSIGN_PASSWORD" cosign generate-key-pair  || true
             # cosign writes to cosign.key / cosign.pub in cwd
             if [ -f cosign.key ]; then
                 mv cosign.key "$COSIGN_PRIVATE_KEY_PATH"
@@ -727,7 +727,7 @@ except Exception:
     if is_agent_lite_mode && [ -n "${MASTER_IP:-}" ] && [ "$MASTER_IP" != "127.0.0.1" ]; then
         echo -e "${BLUE}  → Fetching master DB password via SSH (master: ${MASTER_IP})...${NC}"
         _master_db_pw="$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes root@${MASTER_IP} \
-            "grep '^POSTGRES_PASSWORD=' /opt/smsly-hosting/.env 2>/dev/null | head -1 | cut -d= -f2" 2>/dev/null || true)"
+            "grep '^POSTGRES_PASSWORD=' /opt/smsly-hosting/.env  | head -1 | cut -d= -f2"  || true)"
         if [ -n "${_master_db_pw:-}" ]; then
             POSTGRES_PASSWORD="$_master_db_pw"
             echo -e "${GREEN}  ✓ Retrieved master DB password${NC}"
@@ -923,8 +923,8 @@ EOF
         # Docker Compose v2+ resolves .env from the compose file's parent directory,
         # not the CWD. Create a symlink so all compose files can find it.
         _compose_env_link="$INSTALL_DIR/infrastructure/docker/.env"
-        rm -f "$_compose_env_link" 2>/dev/null || true
-        ln -sf ../../.env "$_compose_env_link" 2>/dev/null || true
+        rm -f "$_compose_env_link"  || true
+        ln -sf ../../.env "$_compose_env_link"  || true
         echo -e "${GREEN}  ✓ Configuration saved to .env${NC}"
     else
         echo -e "${RED}  x Generated .env failed validation. Aborting install.${NC}"
@@ -939,8 +939,8 @@ if [ -f "$INSTALL_DIR/.env" ]; then
     apply_agent_lite_env_overrides "$INSTALL_DIR/.env"
     # Ensure .env symlink exists for Docker Compose v2+ .env resolution
     _compose_env_link="$INSTALL_DIR/infrastructure/docker/.env"
-    rm -f "$_compose_env_link" 2>/dev/null || true
-    ln -sf ../../.env "$_compose_env_link" 2>/dev/null || true
+    rm -f "$_compose_env_link"  || true
+    ln -sf ../../.env "$_compose_env_link"  || true
     if ! validate_env_file "$INSTALL_DIR/.env"; then
         echo -e "${RED}x Existing .env is invalid after runtime-default reconciliation.${NC}"
         exit 1
@@ -965,8 +965,8 @@ else
     echo -e "\n${YELLOW}[4/9] Deploying Container Stack...${NC}"
 
 # Ensure networks exist
-docker network create smsly-net 2>/dev/null || true
-docker network create smsly-proxy 2>/dev/null || true
+docker network create smsly-net  || true
+docker network create smsly-proxy  || true
 
 # Ensure external volumes exist.
 # docker-compose.yml marks `caddy_data` as `external: true` with fixed name
@@ -979,14 +979,14 @@ docker network create smsly-proxy 2>/dev/null || true
 # container now reads /config from the same ./caddy-config bind mount
 # the backend writes the IP self-signed cert to, fixing the
 # "open /config/certs/ip.crt: no such file or directory" crash loop.
-if command -v docker >/dev/null 2>&1; then
-    docker volume create --name smsly-hosting_caddy_data 2>/dev/null || true
+if command -v docker ; then
+    docker volume create --name smsly-hosting_caddy_data  || true
 
     # Caddy container runs as uid 1000 (nextjs user); chown the volume
     # root so the container can read/write its ACME state. Same pattern
     # already used for backups_data in ensure_infrastructure_permissions.
-    if docker volume inspect smsly-hosting_caddy_data >/dev/null 2>&1; then
-        docker run --rm -v smsly-hosting_caddy_data:/data alpine chown -R 1000:1000 /data 2>/dev/null || true
+    if docker volume inspect smsly-hosting_caddy_data ; then
+        docker run --rm -v smsly-hosting_caddy_data:/data alpine chown -R 1000:1000 /data  || true
     fi
 fi
 
@@ -1020,7 +1020,7 @@ _regen_registry_tls() {
         -keyout "${_tmp_dir}/registry.key" \
         -out    "${_tmp_dir}/registry.crt" \
         -subj "/CN=registry" \
-        -addext "subjectAltName=DNS:registry,DNS:localhost,IP:127.0.0.1,IP:10.100.0.1" 2>/dev/null
+        -addext "subjectAltName=DNS:registry,DNS:localhost,IP:127.0.0.1,IP:10.100.0.1" 
     local _rc=$?
     if [ "$_rc" -ne 0 ]; then
         rm -rf "$_tmp_dir"
@@ -1040,8 +1040,8 @@ _registry_tls_ok() {
     # openssl rsa  -noout -modulus matches the key's modulus. They must
     # be equal for the TLS handshake to succeed.
     local _cmod _kmod
-    _cmod="$(openssl x509 -in "$INSTALL_DIR/certs/registry.crt" -noout -modulus 2>/dev/null | openssl sha256)" || return 1
-    _kmod="$(openssl rsa  -in "$INSTALL_DIR/certs/registry.key" -noout -modulus 2>/dev/null | openssl sha256)" || return 1
+    _cmod="$(openssl x509 -in "$INSTALL_DIR/certs/registry.crt" -noout -modulus  | openssl sha256)" || return 1
+    _kmod="$(openssl rsa  -in "$INSTALL_DIR/certs/registry.key" -noout -modulus  | openssl sha256)" || return 1
     [ "$_cmod" = "$_kmod" ]
 }
 
@@ -1059,8 +1059,8 @@ if ! _registry_tls_ok; then
     fi
 fi
 if [ ! -f "$INSTALL_DIR/auth/htpasswd" ] || [ -z "${REGISTRY_PASSWORD:-}" ] || [ -z "${REGISTRY_USER:-}" ]; then
-    REGISTRY_PASS="${REGISTRY_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_urlsafe(18))" 2>/dev/null || openssl rand -hex 12 2>/dev/null || echo 'auto-generated-change-me')}"
-    if command -v htpasswd >/dev/null 2>&1; then
+    REGISTRY_PASS="${REGISTRY_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_urlsafe(18))"  || openssl rand -hex 12  || echo 'auto-generated-change-me')}"
+    if command -v htpasswd ; then
         htpasswd -Bbn "${REGISTRY_USER:-smsly-registry}" "$REGISTRY_PASS" > "$INSTALL_DIR/auth/htpasswd"
     else
         # Python-based bcrypt fallback
@@ -1068,7 +1068,7 @@ if [ ! -f "$INSTALL_DIR/auth/htpasswd" ] || [ -z "${REGISTRY_PASSWORD:-}" ] || [
 import bcrypt, sys
 pw = sys.argv[1] if len(sys.argv) > 1 else '$REGISTRY_PASS'
 print(f'${REGISTRY_USER:-smsly-registry}:' + bcrypt.hashpw(pw.encode(), bcrypt.gensalt(10)).decode())
-" "$REGISTRY_PASS" > "$INSTALL_DIR/auth/htpasswd" 2>/dev/null || \
+" "$REGISTRY_PASS" > "$INSTALL_DIR/auth/htpasswd"  || \
         echo -e "${YELLOW}    ⚠ Failed to generate htpasswd (neither htpasswd nor python bcrypt available)${NC}"
     fi
     env_set_value "$INSTALL_DIR/.env" "REGISTRY_USER" "${REGISTRY_USER:-smsly-registry}"
@@ -1102,13 +1102,13 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
     DEPLOY_RC=$?
     if [ "$DEPLOY_RC" -eq 0 ]; then
         # Scan freshly built images for vulnerabilities
-        if command -v trivy >/dev/null 2>&1; then
+        if command -v trivy ; then
             echo -e "${BLUE}  → Scanning built images for vulnerabilities...${NC}"
             for _trivy_img in backend frontend; do
                 _trivy_tag="smsly/${_trivy_img}:latest"
-                if docker image inspect "$_trivy_tag" >/dev/null 2>&1; then
+                if docker image inspect "$_trivy_tag" ; then
                     echo -e "${BLUE}    ↳ Scanning $_trivy_tag...${NC}"
-                    trivy image --insecure --scanners vuln --severity CRITICAL,HIGH --exit-code 0 --no-progress "$_trivy_tag" 2>/dev/null || echo -e "${YELLOW}    ⚠ $_trivy_tag scan reported warnings — review output above${NC}"
+                    trivy image --insecure --scanners vuln --severity CRITICAL,HIGH --exit-code 0 --no-progress "$_trivy_tag"  || echo -e "${YELLOW}    ⚠ $_trivy_tag scan reported warnings — review output above${NC}"
                 fi
             done
             unset _trivy_img _trivy_tag
@@ -1117,13 +1117,13 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
         DEPLOY_RC=$?
     fi
     set -e
-    kill $HEARTBEAT_PID 2>/dev/null || true
-    wait $HEARTBEAT_PID 2>/dev/null || true
+    kill $HEARTBEAT_PID  || true
+    wait $HEARTBEAT_PID  || true
     if [ "$DEPLOY_RC" -ne 0 ]; then
         echo -e "${RED}  ✗ Docker Compose failed during stack deployment (exit $DEPLOY_RC).${NC}"
         echo -e "${YELLOW}  ↳ Re-run with --resume to skip completed steps: sudo bash install.sh --resume${NC}"
-        docker compose -f "$COMPOSE_FILE" ps 2>/dev/null || true
-        docker compose -f "$COMPOSE_FILE" logs --tail=120 2>/dev/null || true
+        docker compose -f "$COMPOSE_FILE" ps  || true
+        docker compose -f "$COMPOSE_FILE" logs --tail=120  || true
         exit "$DEPLOY_RC"
     fi
     if [ "$MODE_AGENT_LITE" = "true" ]; then
@@ -1131,8 +1131,8 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
     else
         echo -e "${BLUE}  → Deploying Observability Stack...${NC}"
         # Ensure scripts mounted into containers are executable (git may not preserve +x)
-        chmod +x "$INSTALL_DIR"/scripts/alertmanager-entrypoint.sh 2>/dev/null || true
-        chmod +x "$INSTALL_DIR"/infrastructure/docker/infisical-gen-env.sh 2>/dev/null || true
+        chmod +x "$INSTALL_DIR"/scripts/alertmanager-entrypoint.sh  || true
+        chmod +x "$INSTALL_DIR"/infrastructure/docker/infisical-gen-env.sh  || true
         if [ -f "infrastructure/docker/docker-compose.observability.yml" ]; then
             docker compose -f infrastructure/docker/docker-compose.observability.yml pull --ignore-pull-failures || \
                 echo -e "${YELLOW}  ⚠ Observability stack pull failed (non-fatal)${NC}"
@@ -1151,12 +1151,12 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
     # ─── Infisical auto-provision (master mode only) ─────────────────────
     _INFISICAL_COMPOSE="$INSTALL_DIR/infrastructure/docker/docker-compose.infisical.yml"
     if [ "$MODE_AGENT_LITE" != "true" ] && [ -f "$_INFISICAL_COMPOSE" ]; then
-        _infisical_running=$(docker ps --filter "name=infisical" --format '{{.Names}}' 2>/dev/null | head -1)
+        _infisical_running=$(docker ps --filter "name=infisical" --format '{{.Names}}'  | head -1)
         if [ -n "$_infisical_running" ]; then
             echo -e "${GREEN}  ✓ Infisical already running (${_infisical_running})${NC}"
         else
             echo -e "${BLUE}  → Provisioning Infisical secret manager...${NC}"
-            docker volume create infisical_data 2>/dev/null || true
+            docker volume create infisical_data  || true
 
             # Create the infisical database in Postgres if it doesn't exist
             _db_container=""
@@ -1171,10 +1171,10 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
             fi
             if [ -n "$_db_container" ]; then
                 _db_exists=$(timeout 30 docker exec "$_db_container" psql -U "${_db_user}" -d "${POSTGRES_DB:-smsly_hosting}" -tc \
-                    "SELECT 1 FROM pg_database WHERE datname='infisical'" 2>/dev/null | tr -d '[:space:]' || true)
+                    "SELECT 1 FROM pg_database WHERE datname='infisical'"  | tr -d '[:space:]' || true)
                 if [ "$_db_exists" != "1" ]; then
                     timeout 30 docker exec "$_db_container" psql -U "${_db_user}" -d "${POSTGRES_DB:-smsly_hosting}" -c \
-                        "CREATE DATABASE infisical;" 2>/dev/null && \
+                        "CREATE DATABASE infisical;"  && \
                         echo -e "${GREEN}  ✓ Created infisical database${NC}" || \
                         echo -e "${YELLOW}  ⚠ Could not create infisical database (may already exist)${NC}"
                 fi
@@ -1189,12 +1189,12 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
                     -v infisical_data:/data \
                     -v "$_gen_script":/tmp/infisical-gen-env.sh:ro \
                     alpine:3.19 \
-                    sh /tmp/infisical-gen-env.sh /data/infisical.env 2>/dev/null || \
+                    sh /tmp/infisical-gen-env.sh /data/infisical.env  || \
                     echo -e "${YELLOW}  ⚠ Could not generate Infisical env${NC}"
             fi
 
             docker compose --env-file "$INSTALL_DIR/.env" \
-                -f "$_INFISICAL_COMPOSE" up -d --remove-orphans 2>/dev/null && \
+                -f "$_INFISICAL_COMPOSE" up -d --remove-orphans  && \
                 echo -e "${GREEN}  ✓ Infisical is running${NC}" || \
                 echo -e "${YELLOW}  ⚠ Infisical startup failed (non-fatal — secrets remain in .env)${NC}"
         fi
@@ -1222,7 +1222,7 @@ else
 echo -e "${BLUE}  → Waiting for Database...${NC}"
 DB_READY=false
 for i in $(seq 1 24); do
-    if timeout 10 docker compose -f "$COMPOSE_FILE" exec -T db pg_isready -U smsly_admin >/dev/null 2>&1; then
+    if timeout 10 docker compose -f "$COMPOSE_FILE" exec -T db pg_isready -U smsly_admin ; then
         echo -e "${GREEN}  ✓ Database is ready (attempt $i).${NC}"
         DB_READY=true
         break
@@ -1242,28 +1242,28 @@ fi
 # The DB volume persists with the password from FIRST init.
 # Always reset the password inside PostgreSQL to match the current .env.
 set -a
-source "$INSTALL_DIR/.env" 2>/dev/null || true
+source "$INSTALL_DIR/.env"  || true
 set +a
 echo -e "${BLUE}  → Syncing database password...${NC}"
 
 # Try local trust auth first (Docker default), then try with PGPASSWORD
 if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T db \
     psql -U postgres -c "ALTER USER smsly_admin WITH PASSWORD '${POSTGRES_PASSWORD}';" \
-    >/dev/null 2>&1; then
+    ; then
     echo -e "${GREEN}  ✓ Database password synced${NC}"
 elif timeout 30 docker compose -f "$COMPOSE_FILE" exec -T -e PGPASSWORD="${POSTGRES_PASSWORD}" db \
-    psql -U smsly_admin -d smsly_hosting -c "SELECT 1;" >/dev/null 2>&1; then
+    psql -U smsly_admin -d smsly_hosting -c "SELECT 1;" ; then
     echo -e "${GREEN}  ✓ Database password already matches${NC}"
 else
     echo -e "${YELLOW}  ⚠ Password mismatch — resetting via postgres superuser...${NC}"
     # Last resort: the Docker postgres container always accepts local postgres user
     timeout 30 docker compose -f "$COMPOSE_FILE" exec -T db \
         psql -U postgres -c "ALTER USER smsly_admin WITH PASSWORD '${POSTGRES_PASSWORD}';" \
-        2>&1 || echo -e "${RED}  ✗ Could not sync password. Check pg_hba.conf${NC}"
+         || echo -e "${RED}  ✗ Could not sync password. Check pg_hba.conf${NC}"
 fi
 
 # ─── Ensure PgCat is fresh and connected ──────────────────────────────────────
-if [ -f "${COMPOSE_FILE:-docker-compose.prod.yml}" ] && grep -q "^  *pgcat:" "${COMPOSE_FILE:-docker-compose.prod.yml}" 2>/dev/null && docker compose -f "$COMPOSE_FILE" ps pgcat >/dev/null 2>&1; then
+if [ -f "${COMPOSE_FILE:-docker-compose.prod.yml}" ] && grep -q "^  *pgcat:" "${COMPOSE_FILE:-docker-compose.prod.yml}"  && docker compose -f "$COMPOSE_FILE" ps pgcat ; then
     echo -e "${BLUE}  → Restarting PgCat balancer...${NC}"
     timeout -k 5 30 docker compose -f "$COMPOSE_FILE" restart pgcat || echo -e "${YELLOW}    ⚠ PgCat restart failed${NC}"
 fi
@@ -1279,7 +1279,7 @@ sleep 5
     # a SELECT — holds a shared lock that blocks the ACCESS EXCLUSIVE
     # lock an ALTER TABLE needs.  Celery, backend health checks, and
     # PgCat connection pools all compete with the migration.
-    MIGRATION_STOPPED_SVCS="backend celery celery-deploy celery-fast celery-beat $(grep -q "^  *pgcat:" "${COMPOSE_FILE:-docker-compose.prod.yml}" 2>/dev/null && echo "pgcat")"
+    MIGRATION_STOPPED_SVCS="backend celery celery-deploy celery-fast celery-beat $(grep -q "^  *pgcat:" "${COMPOSE_FILE:-docker-compose.prod.yml}"  && echo "pgcat")"
     echo -e "${BLUE}    Stopping ${MIGRATION_STOPPED_SVCS} to prevent lock contention...${NC}"
     docker compose -f "$COMPOSE_FILE" stop --timeout 15 ${MIGRATION_STOPPED_SVCS} || echo -e "${YELLOW}    ⚠ Stop failed for some services${NC}"
     sleep 3
@@ -1288,7 +1288,7 @@ sleep 5
     timeout 30 docker compose -f "$COMPOSE_FILE" exec -T db \
         psql -U smsly_admin -d smsly_hosting \
         -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND backend_type = 'client backend'" \
-        2>&1 || echo -e "${YELLOW}    ⚠ Failed to terminate stale connections${NC}"
+         || echo -e "${YELLOW}    ⚠ Failed to terminate stale connections${NC}"
     sleep 2
 
     echo -e "${BLUE}    Running migrations (database: direct)...${NC}"
@@ -1296,16 +1296,16 @@ sleep 5
     MIGRATE_OK=false
     # Migration runs via DIRECT_DATABASE_URL which goes straight to the
     # postgres backend, not through PgCat, so PgCat being stopped is safe.
-    if run_backend_migrations 2>&1; then
+    if run_backend_migrations ; then
         MIGRATE_OK=true
     else
         echo -e "${YELLOW}  ⚠ Migration attempt 1 failed — killing stale connections and retrying...${NC}"
         timeout 30 docker compose -f "$COMPOSE_FILE" exec -T db \
             psql -U smsly_admin -d smsly_hosting \
             -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND backend_type = 'client backend'" \
-            2>&1 || echo -e "${YELLOW}    ⚠ Failed to terminate stale connections${NC}"
+             || echo -e "${YELLOW}    ⚠ Failed to terminate stale connections${NC}"
         sleep 5
-        if run_backend_migrations 2>&1; then
+        if run_backend_migrations ; then
             MIGRATE_OK=true
         fi
     fi
@@ -1326,8 +1326,6 @@ echo -e "${BLUE}  → Collecting Static Files...${NC}"
     # Fix volume ownership — Docker creates named volumes as root
     echo -e "${BLUE}    ↳ Fixing volume ownership...${NC}"
     timeout 30 docker compose -f "$COMPOSE_FILE" exec -T --user root backend chown -R 1000:1000 /app/staticfiles /app/media /app/backups || echo -e "${YELLOW}    ⚠ Volume ownership fix failed${NC}"
-    echo -e "${BLUE}    ↳ Running fix_sequences...${NC}"
-    timeout 120 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py fix_sequences || echo -e "${YELLOW}    ⚠ fix_sequences failed or timed out${NC}"
     echo -e "${BLUE}    ↳ Running collectstatic...${NC}"
     timeout 120 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic --noinput || echo -e "${YELLOW}    ⚠ collectstatic failed or timed out${NC}"
 
@@ -1346,7 +1344,7 @@ if [ "$MODE_AGENT_LITE" = "true" ]; then
     echo -e "${BLUE}  → Lite Agent mode: skipping master admin and Local Docker provider setup.${NC}"
     set_checkpoint "admin_created"
 else
-ADMIN_EXISTS=$(echo "from django.contrib.auth import get_user_model; User = get_user_model(); print('1' if User.objects.filter(username='admin').exists() else '0')" | timeout 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null | tail -1)
+ADMIN_EXISTS=$(echo "from django.contrib.auth import get_user_model; User = get_user_model(); print('1' if User.objects.filter(username='admin').exists() else '0')" | timeout 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell  | tail -1)
 
 if [ "${ADMIN_EXISTS:-0}" = "1" ]; then
     echo -e "${GREEN}  ✓ Admin user check bypassed or already exists — skipping${NC}"
@@ -1375,7 +1373,7 @@ User = get_user_model()
 admin = User.objects.create_superuser('admin', 'admin@smsly.cloud', '$ADMIN_PASS')
 token = Token.objects.create(user=admin)
 print(token.key)
-" | timeout 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null | tail -1 > "$INSTALL_DIR/.token"
+" | timeout 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell  | tail -1 > "$INSTALL_DIR/.token"
         echo -e "${GREEN}  ✓ Admin user created with API Token${NC}"
         chmod 600 "$INSTALL_DIR/.token"
 
@@ -1403,7 +1401,7 @@ if not created and not cp.is_active:
     cp.is_active = True
     cp.save()
 print('CREATED' if created else 'EXISTS')
-" | timeout 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null | tail -1 >/dev/null
+" | timeout 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell  | tail -1 
         echo -e "${GREEN}  ✓ Local Docker cloud provider ready${NC}"
     fi
 fi
@@ -1429,9 +1427,9 @@ from django.middleware.csrf import CsrfViewMiddleware
 response = recovery_phrase_generate(request)
 import json
 print(json.dumps(response.data))
-" 2>/dev/null | tail -1 || true)"
+"  | tail -1 || true)"
     if [ -n "$RECOVERY_PHRASE" ]; then
-        RECOVERY_PHRASE_TEXT="$(printf '%s' "$RECOVERY_PHRASE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('phrase',''))" 2>/dev/null || true)"
+        RECOVERY_PHRASE_TEXT="$(printf '%s' "$RECOVERY_PHRASE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('phrase',''))"  || true)"
         if [ -n "$RECOVERY_PHRASE_TEXT" ]; then
             echo -e "${GREEN}  ✓ Recovery phrase generated${NC}"
             echo -e "$RECOVERY_PHRASE_TEXT" > "$INSTALL_DIR/.recovery_phrase"
@@ -1509,7 +1507,7 @@ EOF
             # Use Let's Encrypt staging endpoint to dry-run the HTTP-01 challenge
             ACME_CHECK=$(curl -fsS -m 10 \
                 "http://${DOMAIN}/.well-known/acme-challenge/000000000000000000000000000000000000" \
-                2>/dev/null || true)
+                 || true)
             # If Caddy returns "challenge not found" (404), that means it IS
             # reachable but doesn't have this challenge registered — which is
             # the expected behavior for a staging check.
@@ -1519,7 +1517,7 @@ EOF
                 break
             fi
             # Also try: just checking port 80 responds
-            if curl -fsSo /dev/null --max-time 5 "http://${DOMAIN}/" 2>/dev/null; then
+            if curl -fsSo /dev/null --max-time 5 "http://${DOMAIN}/" ; then
                 echo -e "${GREEN}  ✓ Port 80 reachable for $DOMAIN${NC}"
                 ACME_OK=true
                 break
@@ -1544,8 +1542,8 @@ EOF
 
     # Cleanup legacy host-side bare-metal Caddy server if it exists
     echo -e "${BLUE}  → Cleaning up legacy host-side Caddy service (if any)...${NC}"
-    systemctl stop caddy 2>/dev/null || true
-    systemctl disable caddy 2>/dev/null || true
+    systemctl stop caddy  || true
+    systemctl disable caddy  || true
     rm -f /etc/systemd/system/caddy.service
     systemctl daemon-reload
 
@@ -1624,13 +1622,13 @@ NEW_SWAPFILE="${SWAPFILE_PREFIX}-$(date '+%s')"
 log "Increasing swap by ${ADD_SWAP_MB}MB. Creating ${NEW_SWAPFILE}..."
 
 # Create the new swap file
-if fallocate -l ${ADD_SWAP_MB}M "$NEW_SWAPFILE" 2>/dev/null; then
+if fallocate -l ${ADD_SWAP_MB}M "$NEW_SWAPFILE" ; then
     chmod 600 "$NEW_SWAPFILE"
-    mkswap "$NEW_SWAPFILE" >/dev/null 2>&1
-    swapon "$NEW_SWAPFILE" 2>/dev/null || true
+    mkswap "$NEW_SWAPFILE" 
+    swapon "$NEW_SWAPFILE"  || true
 
     # Make it permanent
-    if ! grep -q "$NEW_SWAPFILE" /etc/fstab 2>/dev/null; then
+    if ! grep -q "$NEW_SWAPFILE" /etc/fstab ; then
         echo "$NEW_SWAPFILE none swap sw 0 0" >> /etc/fstab
     fi
 
@@ -1640,10 +1638,10 @@ else
     log "fallocate failed, trying dd..."
     if dd if=/dev/zero of="$NEW_SWAPFILE" bs=1M count=$ADD_SWAP_MB status=none; then
         chmod 600 "$NEW_SWAPFILE"
-        mkswap "$NEW_SWAPFILE" >/dev/null 2>&1
-        swapon "$NEW_SWAPFILE" 2>/dev/null || true
+        mkswap "$NEW_SWAPFILE" 
+        swapon "$NEW_SWAPFILE"  || true
 
-        if ! grep -q "$NEW_SWAPFILE" /etc/fstab 2>/dev/null; then
+        if ! grep -q "$NEW_SWAPFILE" /etc/fstab ; then
             echo "$NEW_SWAPFILE none swap sw 0 0" >> /etc/fstab
         fi
 
@@ -1659,7 +1657,7 @@ chmod +x "$OOM_SCRIPT"
 
 # Add cron job to run the script every 5 minutes
 CRON_JOB="*/5 * * * * root $OOM_SCRIPT"
-if ! grep -q "$OOM_SCRIPT" /etc/crontab 2>/dev/null; then
+if ! grep -q "$OOM_SCRIPT" /etc/crontab ; then
     echo "$CRON_JOB" >> /etc/crontab
     echo -e "${GREEN}  ✓ OOM Auto-Adjuster installed and scheduled via cron${NC}"
 else
@@ -1671,11 +1669,11 @@ SYSCTL_UPDATED=false
 
 ensure_sysctl() {
     local key="$1" value="$2" desc="$3"
-    CURRENT=$(sysctl -n "$key" 2>/dev/null || echo "")
+    CURRENT=$(sysctl -n "$key"  || echo "")
     if [ "$CURRENT" != "$value" ]; then
-        sysctl -w "$key=$value" >/dev/null 2>&1 || true
+        sysctl -w "$key=$value"  || true
         # Make permanent (idempotent)
-        if grep -q "^$key" /etc/sysctl.conf 2>/dev/null; then
+        if grep -q "^$key" /etc/sysctl.conf ; then
             sed -i "s|^$key.*|$key = $value|" /etc/sysctl.conf
         else
             echo "# $desc" >> /etc/sysctl.conf
@@ -1709,63 +1707,63 @@ else
 fi
 for CONTAINER in "${CRITICAL_CONTAINERS[@]}"; do
     resolved_container="$(resolve_container_target "$CONTAINER")"
-    CPID=$(docker inspect --format '{{.State.Pid}}' "$resolved_container" 2>/dev/null || echo "")
+    CPID=$(docker inspect --format '{{.State.Pid}}' "$resolved_container"  || echo "")
     if [ -n "$CPID" ] && [ "$CPID" != "0" ] && [ -f "/proc/$CPID/oom_score_adj" ]; then
-        echo -500 > "/proc/$CPID/oom_score_adj" 2>/dev/null || true
+        echo -500 > "/proc/$CPID/oom_score_adj"  || true
     fi
 done
 echo -e "${GREEN}  ✓ OOM protection set (${CRITICAL_CONTAINERS[*]})${NC}"
 
 # ─── Firewall Hardening (UFW) ────────────────────────────────────────────────
-if command -v ufw >/dev/null 2>&1; then
+if command -v ufw ; then
     echo -e "${BLUE}  → Configuring UFW firewall...${NC}"
-    ufw default deny incoming >/dev/null 2>&1 || true
-    ufw default allow outgoing >/dev/null 2>&1 || true
+    ufw default deny incoming  || true
+    ufw default allow outgoing  || true
     # Allow SSH from master IP specifically (provisioning/updates)
     _master_ip="${MASTER_IP:-}"
     if [ -n "$_master_ip" ] && [ "$_master_ip" != "127.0.0.1" ] && ! echo "$_master_ip" | grep -qE '^(0\.0\.0\.0|localhost)$'; then
         echo -e "${BLUE}  → Allowing master ($_master_ip) SSH access...${NC}"
-        ufw allow from "$_master_ip" to any port 22 >/dev/null 2>&1 || true
+        ufw allow from "$_master_ip" to any port 22  || true
     fi
     # Fallback: allow SSH from any (in case MASTER_IP is empty)
-    ufw allow ssh >/dev/null 2>&1 || true
+    ufw allow ssh  || true
     
     if [ "${INSTALL_MODE:-}" = "agent-lite" ]; then
         if [ -n "$_master_ip" ] && [ "$_master_ip" != "127.0.0.1" ] && ! echo "$_master_ip" | grep -qE '^(0\.0\.0\.0|localhost)$'; then
-            ufw allow from "$_master_ip" to any port 80 >/dev/null 2>&1 || true
+            ufw allow from "$_master_ip" to any port 80  || true
         else
             echo -e "${YELLOW}  ⚠ Warning: Agent-Lite missing Master IP. Port 80 not exposed.${NC}"
         fi
     else
-        ufw allow 80/tcp >/dev/null 2>&1 || true
-        ufw allow 443/tcp >/dev/null 2>&1 || true
+        ufw allow 80/tcp  || true
+        ufw allow 443/tcp  || true
     fi
     # Allow FRP if active
     if [ -f "$INSTALL_DIR/.env" ] && grep -q "FRP_AUTH_TOKEN" "$INSTALL_DIR/.env"; then
-        ufw allow 7000/tcp >/dev/null 2>&1 || true
+        ufw allow 7000/tcp  || true
     fi
     # Allow Docker Mirror (Option B) if this is the Master/Leader
     if [ -z "${MASTER_IP:-}" ] || [ "$MASTER_IP" = "127.0.0.1" ] || [ "$MASTER_IP" = "$(detect_public_ip)" ]; then
-        ufw allow 5001/tcp >/dev/null 2>&1 || true
+        ufw allow 5001/tcp  || true
         # Allow Lite Agents to reach core services — RESTRICTED to WireGuard mesh only.
         # These ports carry database/cache/message-queue traffic and must never be
         # exposed to the public internet. Lite Agents connect via the WireGuard VPN
         # mesh (10.100.0.0/24), so we whitelist that subnet plus the master's own
         # mesh IP. Password auth is the second layer of defense.
         echo -e "${BLUE}  → Master node: Restricting DB/Redis/MQ ports to WireGuard mesh (10.100.0.0/24)${NC}"
-        ufw allow from 10.100.0.0/24 to any port 5432 proto tcp >/dev/null 2>&1 || true
-        ufw allow from 10.100.0.0/24 to any port 6379 proto tcp >/dev/null 2>&1 || true
-        ufw allow from 10.100.0.0/24 to any port 5672 proto tcp >/dev/null 2>&1 || true
+        ufw allow from 10.100.0.0/24 to any port 5432 proto tcp  || true
+        ufw allow from 10.100.0.0/24 to any port 6379 proto tcp  || true
+        ufw allow from 10.100.0.0/24 to any port 5672 proto tcp  || true
         # Also allow localhost (container-to-container on the same host)
-        ufw allow from 127.0.0.1 to any port 5432 proto tcp >/dev/null 2>&1 || true
-        ufw allow from 127.0.0.1 to any port 6379 proto tcp >/dev/null 2>&1 || true
-        ufw allow from 127.0.0.1 to any port 5672 proto tcp >/dev/null 2>&1 || true
+        ufw allow from 127.0.0.1 to any port 5432 proto tcp  || true
+        ufw allow from 127.0.0.1 to any port 6379 proto tcp  || true
+        ufw allow from 127.0.0.1 to any port 5672 proto tcp  || true
         # Allow Docker bridge networks (172.16.0.0/12) for container-to-host communication
-        ufw allow from 172.16.0.0/12 to any port 5432 proto tcp >/dev/null 2>&1 || true
-        ufw allow from 172.16.0.0/12 to any port 6379 proto tcp >/dev/null 2>&1 || true
-        ufw allow from 172.16.0.0/12 to any port 5672 proto tcp >/dev/null 2>&1 || true
+        ufw allow from 172.16.0.0/12 to any port 5432 proto tcp  || true
+        ufw allow from 172.16.0.0/12 to any port 6379 proto tcp  || true
+        ufw allow from 172.16.0.0/12 to any port 5672 proto tcp  || true
     fi
-    echo "y" | ufw enable >/dev/null 2>&1 || true
+    echo "y" | ufw enable  || true
     echo -e "${GREEN}  ✓ Firewall hardened (Inbound blocked, SSH/Web permitted)${NC}"
 fi
 
@@ -1774,11 +1772,11 @@ fi
 # chain. The DOCKER-USER chain is the official way to add custom rules.
 # We lock down all infrastructure ports (registry, DB, Redis, RabbitMQ)
 # to trusted sources only: localhost, Docker bridges, and WireGuard mesh.
-if command -v iptables >/dev/null 2>&1; then
+if command -v iptables ; then
     echo -e "${BLUE}  → Securing infrastructure ports via iptables (DOCKER-USER chain)...${NC}"
 
     # Ensure DOCKER-USER chain exists (Docker creates it, but be safe)
-    iptables -N DOCKER-USER 2>/dev/null || true
+    iptables -N DOCKER-USER  || true
 
     # Ports to whitelist: registry (5000), PostgreSQL (5432), Redis (6379), RabbitMQ (5672)
     _infra_ports="5000 5432 6379 5672"
@@ -1786,45 +1784,45 @@ if command -v iptables >/dev/null 2>&1; then
     # Flush any previous infrastructure port rules (idempotent re-runs)
     for _port in $_infra_ports; do
         (
-            iptables -L DOCKER-USER --line-numbers -n 2>/dev/null | \
+            iptables -L DOCKER-USER --line-numbers -n  | \
                 grep "dpt:${_port}" | awk '{print $1}' | sort -rn | \
-                while read -r num; do iptables -D DOCKER-USER "$num" 2>/dev/null || true
+                while read -r num; do iptables -D DOCKER-USER "$num"  || true
             done
         ) || true
     done
 
     for _port in $_infra_ports; do
         # Allow localhost (container-to-container on the same host)
-        iptables -I DOCKER-USER -i lo -p tcp --dport "$_port" -j ACCEPT 2>/dev/null || true
+        iptables -I DOCKER-USER -i lo -p tcp --dport "$_port" -j ACCEPT  || true
 
         # Allow Docker bridge networks (172.16.0.0/12 covers docker0 + compose nets)
-        iptables -I DOCKER-USER -s 172.16.0.0/12 -p tcp --dport "$_port" -j ACCEPT 2>/dev/null || true
+        iptables -I DOCKER-USER -s 172.16.0.0/12 -p tcp --dport "$_port" -j ACCEPT  || true
 
         # Allow WireGuard mesh (10.100.0.0/24 is the assigned mesh range)
-        iptables -I DOCKER-USER -s 10.100.0.0/24 -p tcp --dport "$_port" -j ACCEPT 2>/dev/null || true
+        iptables -I DOCKER-USER -s 10.100.0.0/24 -p tcp --dport "$_port" -j ACCEPT  || true
 
         # Allow known node IPs
         if [ -n "${MASTER_MESH_IP:-}" ]; then
-            iptables -I DOCKER-USER -s "${MASTER_MESH_IP}" -p tcp --dport "$_port" -j ACCEPT 2>/dev/null || true
+            iptables -I DOCKER-USER -s "${MASTER_MESH_IP}" -p tcp --dport "$_port" -j ACCEPT  || true
         fi
 
         # Drop everything else to this port
-        iptables -A DOCKER-USER -p tcp --dport "$_port" -j DROP 2>/dev/null || true
+        iptables -A DOCKER-USER -p tcp --dport "$_port" -j DROP  || true
     done
 
     # Return to the DOCKER chain for all other traffic
-    iptables -C DOCKER-USER -j RETURN 2>/dev/null || \
-        iptables -A DOCKER-USER -j RETURN 2>/dev/null || true
+    iptables -C DOCKER-USER -j RETURN  || \
+        iptables -A DOCKER-USER -j RETURN  || true
 
     echo -e "${GREEN}  ✓ Infrastructure ports hardened (5000, 5432, 6379, 5672) — locked to localhost + mesh + docker networks${NC}"
 
     # Allow remote Promtail → Loki on WireGuard interface (VPN mesh)
-    iptables -A INPUT -i wg+ -p tcp --dport 3100 -j ACCEPT 2>/dev/null || true
+    iptables -A INPUT -i wg+ -p tcp --dport 3100 -j ACCEPT  || true
 
     # Persist iptables rules across reboots
-    if command -v iptables-save >/dev/null 2>&1; then
+    if command -v iptables-save ; then
         mkdir -p /etc/iptables
-        iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+        iptables-save > /etc/iptables/rules.v4  || true
         # Create a systemd service to restore rules on boot (before Docker starts)
         if [ ! -f /etc/systemd/system/iptables-restore.service ]; then
             cat > /etc/systemd/system/iptables-restore.service <<'RESTORE_EOF'
@@ -1841,8 +1839,8 @@ RemainAfterExit=yes
 [Install]
 WantedBy=multi-user.target
 RESTORE_EOF
-            systemctl daemon-reload 2>/dev/null || true
-            systemctl enable iptables-restore 2>/dev/null || true
+            systemctl daemon-reload  || true
+            systemctl enable iptables-restore  || true
         fi
         echo -e "${GREEN}  ✓ iptables rules saved to /etc/iptables/rules.v4 for persistence${NC}"
     fi
@@ -1864,7 +1862,7 @@ if [ "$MODE_AGENT_LITE" = "true" ]; then
 VERIFY_TOTAL=4
 
 echo -e "${BLUE}  → [1/4] Verifying Lite Agent compose profile...${NC}"
-AGENT_SERVICES="$(docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null || true)"
+AGENT_SERVICES="$(docker compose -f "$COMPOSE_FILE" config --services  || true)"
 if printf '%s\n' "$AGENT_SERVICES" | grep -qx "backend" \
    && printf '%s\n' "$AGENT_SERVICES" | grep -qx "celery-worker" \
    && printf '%s\n' "$AGENT_SERVICES" | grep -qx "traefik" \
@@ -1879,8 +1877,8 @@ else
 fi
 
 echo -e "${BLUE}  → [2/4] Checking Lite Agent containers...${NC}"
-RUNNING_COUNT=$(docker compose -f "$COMPOSE_FILE" ps --status running -q 2>/dev/null | wc -l)
-TOTAL_COUNT=$(docker compose -f "$COMPOSE_FILE" ps -q 2>/dev/null | wc -l)
+RUNNING_COUNT=$(docker compose -f "$COMPOSE_FILE" ps --status running -q  | wc -l)
+TOTAL_COUNT=$(docker compose -f "$COMPOSE_FILE" ps -q  | wc -l)
 if [ "$RUNNING_COUNT" -eq "$TOTAL_COUNT" ] && [ "$TOTAL_COUNT" -gt 0 ]; then
     echo -e "${GREEN}  ✓ All $TOTAL_COUNT Lite Agent containers running${NC}"
     VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
@@ -1892,8 +1890,8 @@ echo -e "${BLUE}  → [3/4] Checking Lite Agent backend...${NC}"
 BACKEND_OK=false
 BACKEND_STATUS=""
 for attempt in $(seq 1 24); do
-    BACKEND_STATUS="$(docker compose -f "$COMPOSE_FILE" ps backend --format "{{.Status}}" 2>/dev/null || true)"
-    if timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS http://127.0.0.1:8000/health/live >/dev/null 2>&1; then
+    BACKEND_STATUS="$(docker compose -f "$COMPOSE_FILE" ps backend --format "{{.Status}}"  || true)"
+    if timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS http://127.0.0.1:8000/health/live ; then
         BACKEND_OK=true
         break
     fi
@@ -1909,7 +1907,7 @@ if [ "$BACKEND_OK" = "true" ]; then
     VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
 else
     echo -e "${RED}  ✗ Lite Agent backend is not live (status: ${BACKEND_STATUS:-unknown})${NC}"
-    docker compose -f "$COMPOSE_FILE" logs --tail=80 backend 2>/dev/null || true
+    docker compose -f "$COMPOSE_FILE" logs --tail=80 backend  || true
 fi
 
 echo -e "${BLUE}  → [4/4] Checking swap...${NC}"
@@ -1926,10 +1924,10 @@ echo -e "${BLUE}  → [1/4] Running health check...${NC}"
 HEALTH_OK=false
 MAX_ATTEMPTS=36
 for attempt in $(seq 1 $MAX_ATTEMPTS); do
-    if timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health/live >/dev/null 2>&1; then
+    if timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health/live ; then
         HEALTH_OK=true
         break
-    elif curl -sfL --max-time 5 http://127.0.0.1:8000/health/live >/dev/null 2>&1; then
+    elif curl -sfL --max-time 5 http://127.0.0.1:8000/health/live ; then
         HEALTH_OK=true
         break
     fi
@@ -1941,8 +1939,8 @@ echo ""
 if [ "$HEALTH_OK" = "true" ]; then
     echo -e "${GREEN}  ✓ Health Check Passed!${NC}"
     READY_OK=false
-    timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health/ready >/dev/null 2>&1 && READY_OK=true
-    if ! $READY_OK && ! curl -sfL --max-time 5 http://127.0.0.1:8000/health/ready >/dev/null 2>&1; then
+    timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health/ready  && READY_OK=true
+    if ! $READY_OK && ! curl -sfL --max-time 5 http://127.0.0.1:8000/health/ready ; then
         echo -e "${YELLOW}  ⚠ Readiness endpoint is still warming; continuing because liveness passed.${NC}"
     fi
     VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
@@ -1953,32 +1951,32 @@ fi
 
 # ─── Check 3: All containers running ──────────────────────────────────────
 echo -e "${BLUE}  → [2/4] Checking container status...${NC}"
-RUNNING_COUNT=$(docker compose -f "$COMPOSE_FILE" ps --status running -q 2>/dev/null | wc -l)
-TOTAL_COUNT=$(docker compose -f "$COMPOSE_FILE" ps -q 2>/dev/null | wc -l)
-UNHEALTHY_STATUS="$(docker compose -f "$COMPOSE_FILE" ps --format "{{.Service}}\t{{.Status}}" 2>/dev/null | awk 'tolower($0) ~ /unhealthy/ {print}' || true)"
+RUNNING_COUNT=$(docker compose -f "$COMPOSE_FILE" ps --status running -q  | wc -l)
+TOTAL_COUNT=$(docker compose -f "$COMPOSE_FILE" ps -q  | wc -l)
+UNHEALTHY_STATUS="$(docker compose -f "$COMPOSE_FILE" ps --format "{{.Service}}\t{{.Status}}"  | awk 'tolower($0) ~ /unhealthy/ {print}' || true)"
 # Also surface containers stuck in Docker's restart loop. These are not
 # "unhealthy" (healthcheck hasn't run yet) but they're crash-looping,
 # which is the more dangerous failure mode — print them first so the
 # tail of their crash log is visible.
-RESTARTING_STATUS="$(docker compose -f "$COMPOSE_FILE" ps --format "{{.Service}}\t{{.Status}}" 2>/dev/null | awk 'tolower($0) ~ /restarting/ {print}' || true)"
+RESTARTING_STATUS="$(docker compose -f "$COMPOSE_FILE" ps --format "{{.Service}}\t{{.Status}}"  | awk 'tolower($0) ~ /restarting/ {print}' || true)"
 if [ -n "$RESTARTING_STATUS" ]; then
     echo -e "${RED}  ✗ One or more containers are crash-looping:${NC}"
     printf '%s\n' "$RESTARTING_STATUS" | sed 's/^/     - /'
-    RESTARTING_SERVICES="$(printf '%s\n' "$RESTARTING_STATUS" | awk '{print $1}' | xargs 2>/dev/null || true)"
+    RESTARTING_SERVICES="$(printf '%s\n' "$RESTARTING_STATUS" | awk '{print $1}' | xargs  || true)"
     if [ -n "$RESTARTING_SERVICES" ]; then
         echo -e "${YELLOW}  ↳ Crash tail of each restarting service (last 40 lines):${NC}"
         for _svc in $RESTARTING_SERVICES; do
             echo -e "${YELLOW}      --- $_svc ---${NC}"
-            docker compose -f "$COMPOSE_FILE" logs --tail=40 "$_svc" 2>/dev/null | sed 's/^/        /' || true
+            docker compose -f "$COMPOSE_FILE" logs --tail=40 "$_svc"  | sed 's/^/        /' || true
         done
     fi
 fi
 if [ -n "$UNHEALTHY_STATUS" ]; then
     echo -e "${RED}  ✗ One or more containers are unhealthy:${NC}"
     printf '%s\n' "$UNHEALTHY_STATUS" | sed 's/^/     - /'
-    UNHEALTHY_SERVICES="$(printf '%s\n' "$UNHEALTHY_STATUS" | awk '{print $1}' | xargs 2>/dev/null || true)"
+    UNHEALTHY_SERVICES="$(printf '%s\n' "$UNHEALTHY_STATUS" | awk '{print $1}' | xargs  || true)"
     if [ -n "$UNHEALTHY_SERVICES" ]; then
-        docker compose -f "$COMPOSE_FILE" logs --tail=80 $UNHEALTHY_SERVICES 2>/dev/null || true
+        docker compose -f "$COMPOSE_FILE" logs --tail=80 $UNHEALTHY_SERVICES  || true
     fi
 elif [ -z "$RESTARTING_STATUS" ] && [ "$RUNNING_COUNT" -eq "$TOTAL_COUNT" ] && [ "$TOTAL_COUNT" -gt 0 ]; then
     echo -e "${GREEN}  ✓ All $TOTAL_COUNT containers running and none are unhealthy${NC}"
@@ -2005,7 +2003,7 @@ fi
 if should_manage_caddy; then
     echo -e "${BLUE}  → [4/4] Checking Caddy...${NC}"
     caddy_container="$(resolve_container_target "smsly-hosting-caddy-1")"
-    if docker inspect -f '{{.State.Running}}' "$caddy_container" 2>/dev/null | grep -q "true"; then
+    if docker inspect -f '{{.State.Running}}' "$caddy_container"  | grep -q "true"; then
         echo -e "${GREEN}  ✓ Caddy reverse proxy container active${NC}"
         VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
     else
@@ -2018,8 +2016,8 @@ else
         TRAEFIK_CHECK_URL="http://127.0.0.1/health/live"
     fi
     traefik_container="$(resolve_container_target "smsly-hosting-traefik-1")"
-    if docker inspect -f '{{.State.Running}}' "$traefik_container" 2>/dev/null | grep -q "true" \
-       && curl -fsS --max-time 5 "$TRAEFIK_CHECK_URL" >/dev/null 2>&1; then
+    if docker inspect -f '{{.State.Running}}' "$traefik_container"  | grep -q "true" \
+       && curl -fsS --max-time 5 "$TRAEFIK_CHECK_URL" ; then
         echo -e "${GREEN}  ✓ Traefik edge proxy active (${TRAEFIK_CHECK_URL})${NC}"
         VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
     else
@@ -2030,14 +2028,14 @@ fi
 
 # Show container status
 echo -e "\n${BLUE}Container Status:${NC}"
-docker compose -f "$COMPOSE_FILE" ps --format "table {{.Name}}\t{{.Status}}" 2>/dev/null || \
-    docker compose -f "$COMPOSE_FILE" ps 2>/dev/null || true
+docker compose -f "$COMPOSE_FILE" ps --format "table {{.Name}}\t{{.Status}}"  || \
+    docker compose -f "$COMPOSE_FILE" ps  || true
 
 echo -e "\n${BLUE}Verification Score: $VERIFY_PASS_COUNT/$VERIFY_TOTAL${NC}"
 
 # ─── Install Autoscaler as systemd service ──────────────────────────────────
 echo -e "${BLUE}  → Installing smsly-autoscaler systemd service...${NC}"
-cp "$INSTALL_DIR/scripts/smsly-autoscaler.py" /opt/smsly/autoscaler.py 2>/dev/null || {
+cp "$INSTALL_DIR/scripts/smsly-autoscaler.py" /opt/smsly/autoscaler.py  || {
     mkdir -p /opt/smsly
     cp "$INSTALL_DIR/scripts/smsly-autoscaler.py" /opt/smsly/autoscaler.py
 }
@@ -2076,8 +2074,8 @@ echo -e "${GREEN}  ✓ smsly-autoscaler service installed and started${NC}"
 if [ -f "$INSTALL_DIR/scripts/monitor_infra.sh" ]; then
     echo -e "${BLUE}  → Installing critical infrastructure monitoring timer...${NC}"
     chmod +x "$INSTALL_DIR/scripts/monitor_infra.sh"
-    cp "$INSTALL_DIR/scripts/smsly-infra-monitor.service" /etc/systemd/system/smsly-infra-monitor.service 2>/dev/null || true
-    cp "$INSTALL_DIR/scripts/smsly-infra-monitor.timer" /etc/systemd/system/smsly-infra-monitor.timer 2>/dev/null || true
+    cp "$INSTALL_DIR/scripts/smsly-infra-monitor.service" /etc/systemd/system/smsly-infra-monitor.service  || true
+    cp "$INSTALL_DIR/scripts/smsly-infra-monitor.timer" /etc/systemd/system/smsly-infra-monitor.timer  || true
     systemctl daemon-reload
     systemctl enable smsly-infra-monitor.timer || echo -e "${YELLOW}    ⚠ smsly-infra-monitor timer enable failed${NC}"
     systemctl restart smsly-infra-monitor.timer || echo -e "${YELLOW}    ⚠ smsly-infra-monitor timer restart failed${NC}"
@@ -2087,9 +2085,9 @@ fi
 # Install platform update watcher and caddy watcher services
 if [ -f "$INSTALL_DIR/scripts/smsly-update-watcher.service" ]; then
     echo -e "${BLUE}  → Installing platform update and Caddy config watcher services...${NC}"
-    chmod +x "$INSTALL_DIR/scripts/platform-update.sh" "$INSTALL_DIR/scripts/caddy-reload.sh" 2>/dev/null || true
-    cp "$INSTALL_DIR/scripts/smsly-update-watcher.service" /etc/systemd/system/smsly-update-watcher.service 2>/dev/null || true
-    cp "$INSTALL_DIR/scripts/caddy-watcher.service" /etc/systemd/system/caddy-watcher.service 2>/dev/null || true
+    chmod +x "$INSTALL_DIR/scripts/platform-update.sh" "$INSTALL_DIR/scripts/caddy-reload.sh"  || true
+    cp "$INSTALL_DIR/scripts/smsly-update-watcher.service" /etc/systemd/system/smsly-update-watcher.service  || true
+    cp "$INSTALL_DIR/scripts/caddy-watcher.service" /etc/systemd/system/caddy-watcher.service  || true
     systemctl daemon-reload
     systemctl enable smsly-update-watcher caddy-watcher || echo -e "${YELLOW}    ⚠ Watcher services enable failed${NC}"
     systemctl restart smsly-update-watcher caddy-watcher || echo -e "${YELLOW}    ⚠ Watcher services restart failed${NC}"
@@ -2107,11 +2105,11 @@ echo -e "\n${YELLOW}[10/10] Integrating SMSLY CLI...${NC}"
 if [ -d "$INSTALL_DIR/cli" ]; then
     echo -e "${BLUE}  → Installing 'smsly' CLI command globally...${NC}"
     # Use --break-system-packages for modern Python (Ubuntu 24.04+)
-    pip3 install -q --break-system-packages "$INSTALL_DIR/cli" 2>/dev/null || \
-        pip3 install -q "$INSTALL_DIR/cli" 2>/dev/null || true
+    pip3 install -q --break-system-packages "$INSTALL_DIR/cli"  || \
+        pip3 install -q "$INSTALL_DIR/cli"  || true
 
     # Ensure binary is in path (pip usually puts it in /usr/local/bin)
-    if command -v smsly &> /dev/null; then
+    if command -v smsly ; then
         echo -e "${GREEN}  ✓ CLI installed: run 'smsly login' or 'smsly --help'${NC}"
 
         # Auto-configuration for local host
@@ -2143,7 +2141,7 @@ fi
 echo -e "\n${YELLOW}[11/11] Finalizing Inter-Node Connectivity...${NC}"
 echo -e "${BLUE}  → Registering this node and creating authentication tokens...${NC}"
 # Use -T to avoid TTY issues in non-interactive mode
-if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py help diagnose_nodes >/dev/null 2>&1; then
+if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py help diagnose_nodes ; then
     timeout 120 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py diagnose_nodes --fix || true
     echo -e "${GREEN}  ✓ Node registered as Primary (if Master) and API tokens verified${NC}"
 else
@@ -2153,7 +2151,7 @@ fi
 # ─── Final Verification Sync ──────────────────────────────────────────────────
 fi
 
-if [ "$MODE_AGENT_LITE" != "true" ] && command -v smsly &> /dev/null; then
+if [ "$MODE_AGENT_LITE" != "true" ] && command -v smsly ; then
     VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
     VERIFY_TOTAL=$((VERIFY_TOTAL + 1))
 fi
@@ -2168,7 +2166,7 @@ release_install_lock
 echo -e "\n${GREEN}════════════════════════════════════════════════════════════${NC}"
 # Infrastructure Handshake & Health Stabilization
 echo -e "\n${BLUE}  🔄 Running infrastructure handshake and stabilization...${NC}"
-chmod +x scripts/grid-handshake.sh 2>/dev/null || true
+chmod +x scripts/grid-handshake.sh  || true
 SMSLY_MIGRATIONS_DONE=1 bash scripts/grid-handshake.sh || \
     echo -e "${YELLOW}  ⚠️ Handshake stabilization failed (non-fatal). You can run it manually later.${NC}"
 
@@ -2293,7 +2291,7 @@ if [ "${REPLICA_MODE:-false}" = "true" ] && is_master_mode; then
     echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
     _replica_script="$INSTALL_DIR/scripts/enable-replica.sh"
     if [ -f "$_replica_script" ]; then
-        chmod +x "$_replica_script" 2>/dev/null || true
+        chmod +x "$_replica_script"  || true
         if bash "$_replica_script"; then
             echo -e "${GREEN}  ✓ Read replica enabled and streaming${NC}"
         else
@@ -2309,7 +2307,7 @@ if [ "${REPLICA_MODE:-false}" = "true" ] && is_master_mode; then
 fi
 
 # ─── Security verify ─────────────────────────────────────────────────────
-if command -v harden_security_verify >/dev/null 2>&1; then
+if command -v harden_security_verify ; then
     harden_security_verify
 fi
 

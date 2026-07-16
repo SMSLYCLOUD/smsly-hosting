@@ -69,14 +69,14 @@ cd "$INSTALL_DIR"
 # ──────────────────────────────────────────────────────────────────────
 log "Recovering secrets from .env..."
 
-FIELD_ENCRYPTION_KEY=$(grep -m1 '^FIELD_ENCRYPTION_KEY=' .env 2>/dev/null | cut -d= -f2- || echo "")
-GATEWAY_SECRET=$(grep -m1 '^GATEWAY_SECRET=' .env 2>/dev/null | cut -d= -f2- || echo "")
-SECRET_KEY=$(grep -m1 '^SECRET_KEY=' .env 2>/dev/null | cut -d= -f2- || echo "")
-DOMAIN=$(grep -m1 '^DOMAIN=' .env 2>/dev/null | cut -d= -f2- || echo "")
+FIELD_ENCRYPTION_KEY=$(grep -m1 '^FIELD_ENCRYPTION_KEY=' .env  | cut -d= -f2- || echo "")
+GATEWAY_SECRET=$(grep -m1 '^GATEWAY_SECRET=' .env  | cut -d= -f2- || echo "")
+SECRET_KEY=$(grep -m1 '^SECRET_KEY=' .env  | cut -d= -f2- || echo "")
+DOMAIN=$(grep -m1 '^DOMAIN=' .env  | cut -d= -f2- || echo "")
 
 # Fallback: master passes these as MASTER_* vars to agents
-[ -z "$FIELD_ENCRYPTION_KEY" ] && FIELD_ENCRYPTION_KEY=$(grep -m1 '^MASTER_FIELD_ENCRYPTION_KEY=' .env 2>/dev/null | cut -d= -f2- || echo "")
-[ -z "$GATEWAY_SECRET" ] && GATEWAY_SECRET=$(grep -m1 '^MASTER_GATEWAY_SECRET=' .env 2>/dev/null | cut -d= -f2- || echo "")
+[ -z "$FIELD_ENCRYPTION_KEY" ] && FIELD_ENCRYPTION_KEY=$(grep -m1 '^MASTER_FIELD_ENCRYPTION_KEY=' .env  | cut -d= -f2- || echo "")
+[ -z "$GATEWAY_SECRET" ] && GATEWAY_SECRET=$(grep -m1 '^MASTER_GATEWAY_SECRET=' .env  | cut -d= -f2- || echo "")
 
 [ -z "$FIELD_ENCRYPTION_KEY" ] && fail "FIELD_ENCRYPTION_KEY not found in .env"
 [ -z "$SECRET_KEY" ] && fail "SECRET_KEY not found in .env"
@@ -86,9 +86,9 @@ if [ -z "$GATEWAY_SECRET" ]; then
     GATEWAY_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
 fi
 
-DB_USER=$(grep -m1 '^MASTER_DB_USER=' .env 2>/dev/null | cut -d= -f2- || echo "smsly_admin")
-DB_PASSWORD=$(grep -m1 '^MASTER_DB_PASSWORD=' .env 2>/dev/null | cut -d= -f2- || echo "")
-DB_NAME=$(grep -m1 '^POSTGRES_DB=' .env 2>/dev/null || grep -m1 '^POSTGRES_DB=' "$INSTALL_DIR/.env" 2>/dev/null || echo "smsly_hosting")
+DB_USER=$(grep -m1 '^MASTER_DB_USER=' .env  | cut -d= -f2- || echo "smsly_admin")
+DB_PASSWORD=$(grep -m1 '^MASTER_DB_PASSWORD=' .env  | cut -d= -f2- || echo "")
+DB_NAME=$(grep -m1 '^POSTGRES_DB=' .env  || grep -m1 '^POSTGRES_DB=' "$INSTALL_DIR/.env"  || echo "smsly_hosting")
 ok "Secrets recovered"
 
 # ──────────────────────────────────────────────────────────────────────
@@ -110,7 +110,7 @@ resolve_db() {
     tmpfile=$(mktemp)
     # Write a small test query to a temp file and run via psql
     echo "SELECT 1 AS ok;" > "$tmpfile"
-    if psql "$url" -f "$tmpfile" -t -A 2>/dev/null | grep -q "1"; then
+    if psql "$url" -f "$tmpfile" -t -A  | grep -q "1"; then
         rm -f "$tmpfile"
         return 0
     fi
@@ -134,17 +134,17 @@ promote_replica() {
     local url="$1"
     log "Checking if replica is in recovery mode..."
     local in_recovery
-    in_recovery=$(psql "$url" -t -A -c "SELECT pg_is_in_recovery();" 2>/dev/null || echo "unknown")
+    in_recovery=$(psql "$url" -t -A -c "SELECT pg_is_in_recovery();"  || echo "unknown")
     if [ "$in_recovery" = "t" ]; then
         log "Replica is in recovery — promoting to primary..."
         local promoted
-        promoted=$(psql "$url" -t -A -c "SELECT pg_promote();" 2>/dev/null || echo "f")
+        promoted=$(psql "$url" -t -A -c "SELECT pg_promote();"  || echo "f")
         if [ "$promoted" = "t" ]; then
             log "Promotion initiated — waiting for replica to become writable..."
             for i in $(seq 1 30); do
                 sleep 2
                 local check
-                check=$(psql "$url" -t -A -c "SELECT pg_is_in_recovery();" 2>/dev/null || echo "t")
+                check=$(psql "$url" -t -A -c "SELECT pg_is_in_recovery();"  || echo "t")
                 if [ "$check" = "f" ]; then
                     ok "Replica promoted to primary successfully"
                     return 0
@@ -182,7 +182,7 @@ fi
 
 # Priority 3: DATABASE_URL from agent's .env (original master DB if still reachable)
 if [ -z "$RESOLVED_DB_URL" ]; then
-    AGENT_DB_URL=$(grep -m1 '^DATABASE_URL=' .env 2>/dev/null | cut -d= -f2- || echo "")
+    AGENT_DB_URL=$(grep -m1 '^DATABASE_URL=' .env  | cut -d= -f2- || echo "")
     if [ -n "$AGENT_DB_URL" ]; then
         log "Trying master's DATABASE_URL from .env..."
         if resolve_db "$AGENT_DB_URL"; then
@@ -196,7 +196,7 @@ fi
 
 # Priority 3: Local Postgres + restore from agent-stored backup
 if [ -z "$RESOLVED_DB_URL" ]; then
-    BACKUP_PATH=$(ls -t "$BACKUP_DIR"/master_db_*.sql.gz 2>/dev/null | head -1)
+    BACKUP_PATH=$(ls -t "$BACKUP_DIR"/master_db_*.sql.gz  | head -1)
     if [ -z "$BACKUP_PATH" ]; then
         fail "No database reachable and no backup found in $BACKUP_DIR"
     fi
@@ -208,7 +208,7 @@ if [ -z "$RESOLVED_DB_URL" ]; then
 
     log "Waiting for PostgreSQL..."
     for i in $(seq 1 30); do
-        if docker compose -f "$COMPOSE_FILE" exec -T db pg_isready -U "$DB_USER" 2>/dev/null; then
+        if docker compose -f "$COMPOSE_FILE" exec -T db pg_isready -U "$DB_USER" ; then
             ok "PostgreSQL ready"
             break
         fi
@@ -228,7 +228,7 @@ fi
 # ──────────────────────────────────────────────────────────────────────
 log "Preparing master .env..."
 
-NEW_MASTER_IP=$(curl -sS --max-time 5 http://ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
+NEW_MASTER_IP=$(curl -sS --max-time 5 http://ifconfig.me  || hostname -I | awk '{print $1}')
 
 # Extract host from resolved DB URL for the docker compose service name
 # If the DB URL points to 'db' (local container), keep it as-is
@@ -241,7 +241,7 @@ fi
 
 env_set() {
     local key="$1" val="$2"
-    if grep -q "^${key}=" .env 2>/dev/null; then
+    if grep -q "^${key}=" .env ; then
         sed -i "s|^${key}=.*|${key}=${val}|" .env
     else
         echo "${key}=${val}" >> .env
@@ -292,7 +292,7 @@ ok "Migrations complete"
 # ──────────────────────────────────────────────────────────────────────
 log "Verifying new master..."
 sleep 5
-HEALTH=$(curl -sS --max-time 10 http://localhost:8000/health/live 2>/dev/null || echo "unreachable")
+HEALTH=$(curl -sS --max-time 10 http://localhost:8000/health/live  || echo "unreachable")
 if [ "$HEALTH" = "unreachable" ]; then
     warn "Health check failed — check: docker compose logs backend"
 else

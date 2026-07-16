@@ -49,7 +49,7 @@ for DB_USER in smsly_admin smsly postgres; do
 done
 
 # Check if backup was successful (size > 1KB to ensure it contains real schema/data not just gzip header)
-if [ "$DUMP_OK" = "true" ] && [ -s "$BACKUP_FILE" ] && [ "$(stat -c%s "$BACKUP_FILE" 2>/dev/null || stat -f%z "$BACKUP_FILE" 2>/dev/null || echo 0)" -gt 500 ]; then
+if [ "$DUMP_OK" = "true" ] && [ -s "$BACKUP_FILE" ] && [ "$(stat -c%s "$BACKUP_FILE"  || stat -f%z "$BACKUP_FILE"  || echo 0)" -gt 500 ]; then
     BACKUP_SIZE=$(du -h "$BACKUP_FILE" | cut -f1)
     echo -e "${GREEN}✓ Backup created: $BACKUP_FILE ($BACKUP_SIZE)${NC}"
     BACKUP_SUCCESS=1
@@ -61,7 +61,7 @@ fi
 # Cleanup old backups
 echo -e "${YELLOW}Cleaning up backups older than ${RETENTION_DAYS} days...${NC}"
 find "$BACKUP_DIR" \( -name "smsly_hosting_*.sql.gz" -o -name "smsly_hosting_*.sql.gz.enc" \) -mtime +${RETENTION_DAYS} -delete
-REMAINING=$(find "$BACKUP_DIR" \( -name "smsly_hosting_*.sql.gz" -o -name "smsly_hosting_*.sql.gz.enc" \) 2>/dev/null | wc -l)
+REMAINING=$(find "$BACKUP_DIR" \( -name "smsly_hosting_*.sql.gz" -o -name "smsly_hosting_*.sql.gz.enc" \)  | wc -l)
 echo -e "${GREEN}✓ Cleanup complete. ${REMAINING} backups retained.${NC}"
 
 # Log backup info
@@ -72,7 +72,7 @@ echo -e "File: $BACKUP_FILE"
 echo -e "Size: $BACKUP_SIZE"
 
 # Optional: Upload to remote storage (uncomment and configure)
-if command -v aws &> /dev/null; then
+if command -v aws ; then
     aws s3 cp "$BACKUP_FILE" s3://your-bucket/smsly-backups/ || echo -e "${RED}✗ S3 upload failed${NC}"
 fi
 # rclone copy "$BACKUP_FILE" remote:smsly-backups/
@@ -80,9 +80,9 @@ fi
 # ── Healthcheck ping ─────────────────────────────────────────────────
 if [ -n "${BACKUP_HEALTHCHECK_URL:-}" ]; then
     if [ "$BACKUP_SUCCESS" -eq 1 ]; then
-        curl -fsS --retry 3 --max-time 10 "${BACKUP_HEALTHCHECK_URL}" > /dev/null 2>&1 || true
+        curl -fsS --retry 3 --max-time 10 "${BACKUP_HEALTHCHECK_URL}"  || true
     else
-        curl -fsS --retry 3 --max-time 10 "${BACKUP_HEALTHCHECK_URL}/fail" > /dev/null 2>&1 || true
+        curl -fsS --retry 3 --max-time 10 "${BACKUP_HEALTHCHECK_URL}/fail"  || true
     fi
 fi
 

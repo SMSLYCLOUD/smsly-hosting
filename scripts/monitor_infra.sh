@@ -16,7 +16,7 @@ OBS_COMPOSE_FILE="$INSTALL_DIR/infrastructure/docker/docker-compose.observabilit
 LOG_TAG="smsly-infra-monitor"
 
 log() {
-    logger -t "$LOG_TAG" "$*" 2>/dev/null || true
+    logger -t "$LOG_TAG" "$*"  || true
     printf '[%s] %s\n' "$LOG_TAG" "$*"
 }
 
@@ -53,18 +53,18 @@ OBS_SERVICES=(
 # ══════════════════════════════════════════════════════════════════════════
 # 1. Zombie Process Cleanup
 # ══════════════════════════════════════════════════════════════════════════
-zombies=$(ps -eo pid=,ppid=,stat=,comm= 2>/dev/null | awk '$3 ~ /^Z/ {print $1":"$2":"$4}' || true)
+zombies=$(ps -eo pid=,ppid=,stat=,comm=  | awk '$3 ~ /^Z/ {print $1":"$2":"$4}' || true)
 if [ -n "$zombies" ]; then
     zombie_count=$(echo "$zombies" | wc -l)
     log "Zombie processes: $zombie_count. Sending SIGCHLD to parents..."
     echo "$zombies" | while IFS=: read -r pid ppid comm; do
-        kill -s SIGCHLD "$ppid" 2>/dev/null || true
+        kill -s SIGCHLD "$ppid"  || true
     done
     sleep 1
-    remaining=$(ps -eo pid=,stat= 2>/dev/null | awk '$2 ~ /^Z/' | wc -l)
+    remaining=$(ps -eo pid=,stat=  | awk '$2 ~ /^Z/' | wc -l)
     if [ "$remaining" -gt 0 ]; then
         log "Warning: $remaining zombie(s) remain. Unreapable zombies:"
-        ps -eo pid=,ppid=,stat=,comm= 2>/dev/null | awk '$3 ~ /^Z/ {print "  PID="$1" PPID="$2" CMD="$4}' | while read -r line; do
+        ps -eo pid=,ppid=,stat=,comm=  | awk '$3 ~ /^Z/ {print "  PID="$1" PPID="$2" CMD="$4}' | while read -r line; do
             log "$line"
         done
     else
@@ -76,13 +76,13 @@ fi
 # 2. Docker Daemon Health (MUST run before container checks)
 # ══════════════════════════════════════════════════════════════════════════
 DOCKER_OK=false
-if docker info >/dev/null 2>&1; then
+if docker info ; then
     DOCKER_OK=true
 else
     log "Alert: Docker daemon is not responding. Attempting restart..."
     systemctl restart docker || log "Warning: Docker restart attempted — check result above"
     sleep 5
-    if docker info >/dev/null 2>&1; then
+    if docker info ; then
         log "Docker daemon recovered after restart"
         DOCKER_OK=true
     else
@@ -94,8 +94,8 @@ fi
 # 3. Systemd Service Health
 # ══════════════════════════════════════════════════════════════════════════
 for svc in "${SYSTEMD_SERVICES[@]}"; do
-    if systemctl is-enabled "$svc" >/dev/null 2>&1; then
-        state=$(systemctl is-active "$svc" 2>/dev/null || echo "unknown")
+    if systemctl is-enabled "$svc" ; then
+        state=$(systemctl is-active "$svc"  || echo "unknown")
         if [ "$state" != "active" ]; then
             log "Alert: systemd service $svc is $state. Restarting..."
             systemctl restart "$svc" || log "Warning: Service $svc restart attempted — check result above"
@@ -105,8 +105,8 @@ done
 
 # Systemd timers — must stay active even if the triggered service is oneshot
 for tmr in "${SYSTEMD_TIMERS[@]}"; do
-    if systemctl is-enabled "$tmr" >/dev/null 2>&1; then
-        tmr_state=$(systemctl is-active "$tmr" 2>/dev/null || echo "unknown")
+    if systemctl is-enabled "$tmr" ; then
+        tmr_state=$(systemctl is-active "$tmr"  || echo "unknown")
         if [ "$tmr_state" != "active" ]; then
             log "Alert: systemd timer $tmr is $tmr_state. Restarting..."
             systemctl restart "$tmr" || log "Warning: Timer $tmr restart attempted — check result above"
@@ -115,11 +115,11 @@ for tmr in "${SYSTEMD_TIMERS[@]}"; do
 done
 
 # WireGuard interfaces — check if any are configured and running
-if command -v wg >/dev/null 2>&1; then
-    wg_ifaces=$(wg show interfaces 2>/dev/null || true)
+if command -v wg ; then
+    wg_ifaces=$(wg show interfaces  || true)
     if [ -n "$wg_ifaces" ]; then
         for iface in $wg_ifaces; do
-            wg_state=$(systemctl is-active "wg-quick@${iface}.service" 2>/dev/null || echo "unknown")
+            wg_state=$(systemctl is-active "wg-quick@${iface}.service"  || echo "unknown")
             if [ "$wg_state" != "active" ] && [ "$wg_state" != "unknown" ]; then
                 log "Alert: WireGuard interface $iface service is $wg_state. Restarting..."
                 systemctl restart "wg-quick@${iface}.service" || log "Warning: WireGuard $iface restart attempted — check result above"
@@ -131,17 +131,17 @@ fi
 # ══════════════════════════════════════════════════════════════════════════
 # 4. iptables Firewall Rule Verification
 # ══════════════════════════════════════════════════════════════════════════
-if command -v iptables >/dev/null 2>&1; then
+if command -v iptables ; then
     # Ensure remote Promtail → Loki is allowed on WireGuard interfaces
-    if command -v wg >/dev/null 2>&1 && wg show interfaces 2>/dev/null | grep -q .; then
-        iptables -C INPUT -i wg+ -p tcp --dport 3100 -j ACCEPT 2>/dev/null || \
-            iptables -A INPUT -i wg+ -p tcp --dport 3100 -j ACCEPT 2>/dev/null || true
+    if command -v wg  && wg show interfaces  | grep -q .; then
+        iptables -C INPUT -i wg+ -p tcp --dport 3100 -j ACCEPT  || \
+            iptables -A INPUT -i wg+ -p tcp --dport 3100 -j ACCEPT  || true
     fi
-    rule_count=$(iptables -L INPUT -n 2>/dev/null | grep -cE '^ACCEPT|^DROP|^REJECT' || echo "0")
-    if [ "$rule_count" -eq 0 ] 2>/dev/null; then
+    rule_count=$(iptables -L INPUT -n  | grep -cE '^ACCEPT|^DROP|^REJECT' || echo "0")
+    if [ "$rule_count" -eq 0 ] ; then
         if [ -f /etc/iptables/rules.v4 ]; then
             log "Alert: iptables INPUT chain has 0 rules. Restoring from /etc/iptables/rules.v4..."
-            iptables-restore < /etc/iptables/rules.v4 2>/dev/null || \
+            iptables-restore < /etc/iptables/rules.v4  || \
                 log "Warning: Failed to restore iptables rules"
         else
             log "Warning: iptables INPUT chain empty and /etc/iptables/rules.v4 not found"
@@ -161,7 +161,7 @@ check_and_heal() {
     local compose_file=$1
     local service=$2
 
-    container_id=$(docker compose -f "$compose_file" ps -q "$service" 2>/dev/null || true)
+    container_id=$(docker compose -f "$compose_file" ps -q "$service"  || true)
 
     if [ -z "$container_id" ]; then
         log "Warning: Container for service '$service' is missing. Attempting to start..."
@@ -169,7 +169,7 @@ check_and_heal() {
         return
     fi
 
-    inspect_data=$(docker inspect --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id" 2>/dev/null || true)
+    inspect_data=$(docker inspect --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id"  || true)
 
     if [ -z "$inspect_data" ]; then
         log "Warning: Failed to inspect container '$container_id' for service '$service'. Attempting restart..."

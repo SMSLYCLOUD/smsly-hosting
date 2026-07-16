@@ -13,12 +13,12 @@ detect_media_hardware() {
     echo -e "${BLUE}  → Detecting media hardware...${NC}"
 
     local cores
-    cores=$(nproc 2>/dev/null || echo 0)
+    cores=$(nproc  || echo 0)
     local ram_kb
-    ram_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}' 2>/dev/null || echo 0)
+    ram_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}'  || echo 0)
     local ram_mb=$((ram_kb / 1024))
     local disk_gb
-    disk_gb=$(df -BG / | awk 'NR==2 {print $2}' | tr -d 'G' 2>/dev/null || echo 0)
+    disk_gb=$(df -BG / | awk 'NR==2 {print $2}' | tr -d 'G'  || echo 0)
 
     echo -e "${BLUE}    CPU: ${cores} cores | RAM: ${ram_mb}MB | Disk: ${disk_gb}GB${NC}"
 
@@ -52,11 +52,11 @@ check_media_ports() {
         fi
 
         if [ "$proto" = "udp" ]; then
-            if ss -ulnp 2>/dev/null | grep -q ":${port} " 2>/dev/null; then
+            if ss -ulnp  | grep -q ":${port} " ; then
                 blocked+=("$port_spec")
             fi
         else
-            if ss -tlnp 2>/dev/null | grep -q ":${port} " 2>/dev/null; then
+            if ss -tlnp  | grep -q ":${port} " ; then
                 blocked+=("$port_spec")
             fi
         fi
@@ -72,7 +72,7 @@ check_media_ports() {
 
 # ─── Detect TPM ─────────────────────────────────────────────────────────────
 detect_tpm() {
-    if [ -c /dev/tpm0 ] && command -v tpm2_pcrread >/dev/null 2>&1; then
+    if [ -c /dev/tpm0 ] && command -v tpm2_pcrread ; then
         echo -e "${GREEN}  ✓ TPM 2.0 detected${NC}"
         echo "tpm2"
     else
@@ -87,24 +87,24 @@ generate_media_secrets() {
     echo -e "${BLUE}  → Generating media node secrets...${NC}"
 
     local gateway_secret
-    gateway_secret="$(openssl rand -hex 32 2>/dev/null || python3 -c 'import secrets; print(secrets.token_hex(32))')"
+    gateway_secret="$(openssl rand -hex 32  || python3 -c 'import secrets; print(secrets.token_hex(32))')"
     local livekit_api_key
-    livekit_api_key="$(openssl rand -hex 16 2>/dev/null || python3 -c 'import secrets; print(secrets.token_hex(16))')"
+    livekit_api_key="$(openssl rand -hex 16  || python3 -c 'import secrets; print(secrets.token_hex(16))')"
     local livekit_api_secret
-    livekit_api_secret="$(openssl rand -hex 32 2>/dev/null || python3 -c 'import secrets; print(secrets.token_hex(32))')"
+    livekit_api_secret="$(openssl rand -hex 32  || python3 -c 'import secrets; print(secrets.token_hex(32))')"
     local turn_secret
-    turn_secret="$(openssl rand -hex 32 2>/dev/null || python3 -c 'import secrets; print(secrets.token_hex(32))')"
+    turn_secret="$(openssl rand -hex 32  || python3 -c 'import secrets; print(secrets.token_hex(32))')"
     local postgres_password
-    postgres_password="$(openssl rand -hex 16 2>/dev/null || python3 -c 'import secrets; print(secrets.token_hex(16))')"
+    postgres_password="$(openssl rand -hex 16  || python3 -c 'import secrets; print(secrets.token_hex(16))')"
     local redis_password
-    redis_password="$(openssl rand -hex 16 2>/dev/null || python3 -c 'import secrets; print(secrets.token_hex(16))')"
+    redis_password="$(openssl rand -hex 16  || python3 -c 'import secrets; print(secrets.token_hex(16))')"
 
     cat > "$env_file" <<EOF
 # SMSLY Media Node — Auto-generated secrets
 # Generated: $(date -Iseconds)
 
 NODE_TYPE=media
-NODE_ID=${NODE_ID:-$(hostname -f 2>/dev/null || hostname)}
+NODE_ID=${NODE_ID:-$(hostname -f  || hostname)}
 
 # Master connection
 MASTER_IP=${MASTER_IP:-}
@@ -124,8 +124,8 @@ LIVEKIT_API_SECRET=${livekit_api_secret}
 TURN_SECRET=${turn_secret}
 
 # Node identity
-PUBLIC_IP=${PUBLIC_IP:-$(detect_public_ip 2>/dev/null || echo "")}
-DOMAIN=${DOMAIN:-$(hostname -f 2>/dev/null || hostname)}
+PUBLIC_IP=${PUBLIC_IP:-$(detect_public_ip  || echo "")}
+DOMAIN=${DOMAIN:-$(hostname -f  || hostname)}
 
 # Management daemon
 CONFIG_PATH=/etc/smsly/media-mgmt.json
@@ -141,8 +141,8 @@ install_media_packages() {
     echo -e "${BLUE}  → Installing media infrastructure packages...${NC}"
 
     # Ensure smsly system user exists (all systemd units run as this user)
-    if ! id smsly >/dev/null 2>&1; then
-        useradd -r -s /usr/sbin/nologin -u 1000 smsly 2>/dev/null || true
+    if ! id smsly ; then
+        useradd -r -s /usr/sbin/nologin -u 1000 smsly  || true
         echo -e "${GREEN}  ✓ Created smsly system user${NC}"
     fi
 
@@ -162,29 +162,29 @@ install_media_packages() {
         jq \
         netcat-openbsd \
         fs_cli \
-        >/dev/null 2>&1
+        
 
     # Install RTPEngine (not in default Ubuntu repos — build from source or use PPA)
-    if ! command -v rtpengine >/dev/null 2>&1; then
+    if ! command -v rtpengine ; then
         echo -e "${BLUE}  → Installing RTPEngine...${NC}"
-        apt-get install -y -qq rtpengine 2>/dev/null || {
+        apt-get install -y -qq rtpengine  || {
             echo -e "${YELLOW}  ⚠ RTPEngine not in apt repos — installing from Sipwise PPA...${NC}"
-            apt-get install -y -qq software-properties-common 2>/dev/null || true
-            add-apt-repository -y ppa:sipwise/rtpengine 2>/dev/null || true
-            apt-get update -qq 2>/dev/null && apt-get install -y -qq rtpengine 2>/dev/null || {
+            apt-get install -y -qq software-properties-common  || true
+            add-apt-repository -y ppa:sipwise/rtpengine  || true
+            apt-get update -qq  && apt-get install -y -qq rtpengine  || {
                 echo -e "${YELLOW}  ⚠ RTPEngine auto-install failed — install manually${NC}"
             }
         }
     fi
 
     # Install LiveKit server (binary from GitHub releases)
-    if ! command -v livekit-server >/dev/null 2>&1; then
+    if ! command -v livekit-server ; then
         echo -e "${BLUE}  → Installing LiveKit server...${NC}"
         local lk_arch
         lk_arch="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
         local lk_version="1.8.4"
         curl -fsSL "https://github.com/livekit/livekit/releases/download/v${lk_version}/livekit_${lk_version}_linux_${lk_arch}.tar.gz" \
-            | tar xz -C /usr/local/bin livekit-server 2>/dev/null || {
+            | tar xz -C /usr/local/bin livekit-server  || {
             echo -e "${YELLOW}  ⚠ LiveKit auto-install failed — install manually${NC}"
         }
     fi
@@ -205,31 +205,31 @@ deploy_media_configs() {
 
     # Kamailio
     [ -d /etc/kamailio ] || mkdir -p /etc/kamailio
-    cp -f "$infra_dir/kamailio/kamailio.cfg" /etc/kamailio/ 2>/dev/null || true
-    cp -f "$infra_dir/kamailio/tls.cfg" /etc/kamailio/ 2>/dev/null || true
+    cp -f "$infra_dir/kamailio/kamailio.cfg" /etc/kamailio/  || true
+    cp -f "$infra_dir/kamailio/tls.cfg" /etc/kamailio/  || true
 
     # FreeSWITCH
-    [ -d /etc/freeswitch ] && cp -f "$infra_dir/freeswitch/freeswitch.xml" /etc/freeswitch/ 2>/dev/null || true
+    [ -d /etc/freeswitch ] && cp -f "$infra_dir/freeswitch/freeswitch.xml" /etc/freeswitch/  || true
 
     # RTPEngine
     [ -d /etc/rtpengine ] || mkdir -p /etc/rtpengine
-    cp -f "$infra_dir/rtpengine/rtpengine.conf" /etc/rtpengine/ 2>/dev/null || true
+    cp -f "$infra_dir/rtpengine/rtpengine.conf" /etc/rtpengine/  || true
 
     # LiveKit
     [ -d /etc/livekit ] || mkdir -p /etc/livekit
-    cp -f "$infra_dir/livekit/livekit.yaml" /etc/livekit/ 2>/dev/null || true
+    cp -f "$infra_dir/livekit/livekit.yaml" /etc/livekit/  || true
 
     # coturn
     [ -d /etc/coturn ] || mkdir -p /etc/coturn
-    cp -f "$infra_dir/coturn/turnserver.conf" /etc/coturn/ 2>/dev/null || true
+    cp -f "$infra_dir/coturn/turnserver.conf" /etc/coturn/  || true
 
     # OpenResty
     [ -d /usr/local/openresty/nginx/conf ] || mkdir -p /usr/local/openresty/nginx/conf
-    cp -f "$infra_dir/openresty/nginx.conf" /usr/local/openresty/nginx/conf/ 2>/dev/null || true
+    cp -f "$infra_dir/openresty/nginx.conf" /usr/local/openresty/nginx/conf/  || true
 
     # Attestation + media-mgmt config
     [ -d /etc/smsly ] || mkdir -p /etc/smsly
-    cp -f "$infra_dir/attestation/attestation.json" /etc/smsly/media-mgmt.json 2>/dev/null || true
+    cp -f "$infra_dir/attestation/attestation.json" /etc/smsly/media-mgmt.json  || true
 
     echo -e "${GREEN}  ✓ Configs deployed${NC}"
 }
@@ -357,7 +357,7 @@ verify_media_services() {
     for entry in "${services[@]}"; do
         local name="${entry%%:*}"
         local check="${entry##*:}"
-        if eval "$check" >/dev/null 2>&1; then
+        if eval "$check" ; then
             echo -e "  ${GREEN}✓${NC} ${name}"
         else
             echo -e "  ${RED}✗${NC} ${name}"
@@ -427,7 +427,7 @@ update_media_node() {
 
     # Pull latest code
     echo -e "${BLUE}  → Pulling latest code...${NC}"
-    cd "$script_dir" && git pull --ff-only 2>/dev/null || {
+    cd "$script_dir" && git pull --ff-only  || {
         echo -e "${YELLOW}  ⚠ git pull failed — using local copy${NC}"
     }
 

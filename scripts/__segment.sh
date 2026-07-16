@@ -17,9 +17,9 @@ c = PlatformConfig.load()
 d = (c.domain or '').strip()
 if d and d != 'localhost':
     print(d)
-" 2>/dev/null | tr -d '[:space:]' || true)"
+"  | tr -d '[:space:]' || true)"
     if [ -z "$domain" ]; then
-        domain="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
+        domain="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env"  | cut -d= -f2- || true)"
     fi
 
     # 2. Discover ALL deployed service domains from DB (public + custom)
@@ -40,7 +40,7 @@ for svc in queryset.exclude(public_domain__isnull=True).exclude(public_domain=''
         cd = cd.strip()
         if cd:
             print(f'{cd} {{\n    reverse_proxy {upstream}\n    encode gzip\n}}\n')
-" 2>/dev/null | tr -d '\r' || true)"
+"  | tr -d '\r' || true)"
 
     # 3. Check if domain is a real hostname (not an IP address)
     local is_real_domain=false
@@ -87,7 +87,7 @@ SAFECADDY
 ${svc_blocks}
 SAFECADDY
     fi
-    caddy fmt --overwrite /opt/smsly-hosting/caddy-config/Caddyfile 2>/dev/null || true
+    caddy fmt --overwrite /opt/smsly-hosting/caddy-config/Caddyfile  || true
     echo -e "${YELLOW}  [WARN] Wildcard HTTPS disabled. Individual service domains have HTTP-01 SSL.${NC}"
 }
 

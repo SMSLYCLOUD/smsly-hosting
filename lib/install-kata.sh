@@ -11,7 +11,7 @@ set -euo pipefail
 
 main() {
     [ "$EUID" -eq 0 ] || { echo "ERROR: Must run as root"; return 1; }
-    command -v kata-runtime &>/dev/null && echo "  kata-runtime already installed — skipping" && return 0
+    command -v kata-runtime  && echo "  kata-runtime already installed — skipping" && return 0
     [ -e /dev/kvm ] || {
         echo "  KVM not available (/dev/kvm missing) — skipping Kata Containers."
         echo "  gVisor (runsc) will be used for container sandboxing instead."
@@ -33,7 +33,7 @@ main() {
     local KATA_VERSION="${KATA_VERSION:-latest}"
     if [ "$KATA_VERSION" = "latest" ]; then
         KATA_VERSION="$(curl -fsSL -o /dev/null -w '%{url_effective}' \
-            "https://github.com/kata-containers/kata-containers/releases/latest" 2>/dev/null \
+            "https://github.com/kata-containers/kata-containers/releases/latest"  \
             | sed 's|.*/||' || true)"
         KATA_VERSION="${KATA_VERSION:-3.14.0}"
     fi
@@ -65,7 +65,7 @@ main() {
         echo '{}' > "$DAEMON_JSON"
     fi
 
-    if command -v kata-runtime &>/dev/null; then
+    if command -v kata-runtime ; then
         local KATA_PATH
         KATA_PATH="$(command -v kata-runtime)"
         python3 -c "
@@ -84,7 +84,7 @@ with open('$DAEMON_JSON', 'w') as f:
         return 1
     fi
 
-    if command -v systemctl &>/dev/null; then
+    if command -v systemctl ; then
         systemctl daemon-reload
         # Only restart Docker if daemon.json actually changed (avoids killing containers on re-run)
         if python3 -c "
@@ -96,7 +96,7 @@ if 'kata-runtime' in runtimes and runtimes['kata-runtime'].get('path', '').strip
     exit(0)
 else:
     exit(1)
-" 2>/dev/null; then
+" ; then
             echo "  Docker already has kata-runtime registered — skipping restart"
         else
             systemctl restart docker
@@ -106,7 +106,7 @@ else:
 
     sleep 3
 
-    if kata-runtime kata-check --verbose 2>/dev/null; then
+    if kata-runtime kata-check --verbose ; then
         echo "=== Kata Containers ${KATA_VERSION} installed successfully ==="
     else
         echo "WARNING: kata-check reported issues. KVM and hardware nesting required."

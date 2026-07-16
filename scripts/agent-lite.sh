@@ -43,9 +43,9 @@ done
 # ─── Screen session guard ────────────────────────────────────────────────────
 SCREEN_NAME="smsly-agent-lite"
 if [ "${SMSLY_SKIP_SCREEN:-false}" != "true" ] && [ -z "${STY:-}" ] && [ -z "${TMUX:-}" ]; then
-    if command -v screen &>/dev/null; then
+    if command -v screen ; then
         echo -e "${BLUE}  → Not in a screen session. Launching inside screen '${SCREEN_NAME}'...${NC}"
-        if screen -dmS "$SCREEN_NAME" bash "$0" "$@" 2>/dev/null; then
+        if screen -dmS "$SCREEN_NAME" bash "$0" "$@" ; then
             exec screen -r "$SCREEN_NAME"
         else
             echo -e "${YELLOW}  ⚠ Could not launch screen, continuing without it${NC}"
@@ -61,20 +61,20 @@ fi
 
 # ─── Lock file (prevent concurrent runs) ─────────────────────────────────────
 cleanup_lock() {
-    rm -rf "$LOCK_FILE" 2>/dev/null || true
+    rm -rf "$LOCK_FILE"  || true
 }
 trap cleanup_lock EXIT
-if ! mkdir "$LOCK_FILE" 2>/dev/null; then
+if ! mkdir "$LOCK_FILE" ; then
     if [ "${SMSLY_AGENT_LITE_REEXECED:-false}" = "true" ] && [ -d "$LOCK_FILE" ]; then
         echo -e "${YELLOW}  ⚠ Re-executed script reusing existing lock${NC}"
-    elif [ -d "$LOCK_FILE" ] && [ -z "$(find "$LOCK_FILE" -maxdepth 0 -mmin +30 2>/dev/null)" ]; then
+    elif [ -d "$LOCK_FILE" ] && [ -z "$(find "$LOCK_FILE" -maxdepth 0 -mmin +30 )" ]; then
         echo -e "${RED}✗ Another instance is already running (lock: $LOCK_FILE).${NC}"
         echo -e "${YELLOW}  If no other instance is running, remove it: rm -rf $LOCK_FILE${NC}"
         exit 1
     else
         echo -e "${YELLOW}  ⚠ Stale lock found (older than 30m). Removing and re-acquiring...${NC}"
-        rm -rf "$LOCK_FILE" 2>/dev/null || true
-        mkdir "$LOCK_FILE" 2>/dev/null || {
+        rm -rf "$LOCK_FILE"  || true
+        mkdir "$LOCK_FILE"  || {
             echo -e "${RED}✗ Still cannot acquire lock after clearing stale one.${NC}"
             exit 1
         }
@@ -82,7 +82,7 @@ if ! mkdir "$LOCK_FILE" 2>/dev/null; then
 fi
 
 # ─── Log setup ───────────────────────────────────────────────────────────────
-exec > >(tee -a "$LOG_FILE") 2>&1
+exec > >(tee -a "$LOG_FILE") 
 
 # ─── Directory guard ─────────────────────────────────────────────────────────
 if [ ! -d "$INSTALL_DIR" ]; then
@@ -97,7 +97,7 @@ if [ ! -f "$INSTALL_DIR/.env" ]; then
     exit 1
 fi
 for _var in DATABASE_URL CELERY_BROKER_URL REDIS_URL; do
-    if ! grep -q "^${_var}=" "$INSTALL_DIR/.env" 2>/dev/null; then
+    if ! grep -q "^${_var}=" "$INSTALL_DIR/.env" ; then
         echo -e "${RED}✗ Missing $_var in .env — run the master provisioning flow first.${NC}"
         exit 1
     fi
@@ -118,11 +118,11 @@ echo -e "${BLUE}═════════════════════�
 # HELPERS
 # =============================================================================
 ensure_networks() {
-    docker network inspect smsly-net >/dev/null 2>&1 || {
+    docker network inspect smsly-net  || {
         echo -e "${BLUE}  → Creating smsly-net...${NC}"
         docker network create smsly-net || echo -e "${YELLOW}    ⚠ smsly-net creation failed (may already exist)${NC}"
     }
-    docker network inspect socket-proxy >/dev/null 2>&1 || {
+    docker network inspect socket-proxy  || {
         echo -e "${BLUE}  → Creating socket-proxy...${NC}"
         docker network create --driver bridge --internal socket-proxy || echo -e "${YELLOW}    ⚠ socket-proxy network creation failed (may already exist)${NC}"
     }
@@ -136,7 +136,7 @@ ensure_backups_volume() {
     #   2. The /api/v1/servers/{id}/download-key/ endpoint's
     #      key file persists across reinstalls (otherwise the user
     #      has to re-prompt every time the agent rebuilds).
-    if ! docker volume inspect smsly-hosting_backups_data >/dev/null 2>&1; then
+    if ! docker volume inspect smsly-hosting_backups_data ; then
         echo -e "${BLUE}  → Creating backups_data volume...${NC}"
         docker volume create --name smsly-hosting_backups_data || echo -e "${YELLOW}    ⚠ backups_data volume creation failed${NC}"
     fi
@@ -149,14 +149,14 @@ detect_public_ip() {
     # from this so a missing public IP is not fatal.
     local ip=""
     # Try ifconfig.me first (most reliable on consumer VPSes)
-    ip="$(curl -s --max-time 3 -4 https://ifconfig.me 2>/dev/null | tr -dc '0-9.')"
+    ip="$(curl -s --max-time 3 -4 https://ifconfig.me  | tr -dc '0-9.')"
     if [ -z "$ip" ]; then
         # Fall back to icanhazip
-        ip="$(curl -s --max-time 3 -4 https://icanhazip.com 2>/dev/null | tr -dc '0-9.')"
+        ip="$(curl -s --max-time 3 -4 https://icanhazip.com  | tr -dc '0-9.')"
     fi
     if [ -z "$ip" ]; then
         # Last resort: ask the kernel
-        ip="$(hostname -I 2>/dev/null | awk '{print $1}' | tr -dc '0-9.')"
+        ip="$(hostname -I  | awk '{print $1}' | tr -dc '0-9.')"
     fi
     # Validate the format. An empty / malformed value causes
     # problems later (e.g. trusted-host / iptables rules).
@@ -179,7 +179,7 @@ probe_master_health() {
         "http://${mesh_ip}/health/live" \
         "http://${ip}:8000/health/live" \
         "http://${ip}/health/live"; do
-        if [ -n "$url" ] && [ -n "${url#http://}" ] && curl -fsS --max-time "$timeout" "$url" >/dev/null 2>&1; then
+        if [ -n "$url" ] && [ -n "${url#http://}" ] && curl -fsS --max-time "$timeout" "$url" ; then
             echo "$url"
             return 0
         fi
@@ -189,14 +189,14 @@ probe_master_health() {
 
 gen_hex_secret() {
     local bytes="${1:-16}"
-    python3 -c "import secrets; print(secrets.token_hex(${bytes}))" 2>/dev/null || openssl rand -hex "$bytes"
+    python3 -c "import secrets; print(secrets.token_hex(${bytes}))"  || openssl rand -hex "$bytes"
 }
 
 env_get_value() {
     local env_file="$1"
     local var_name="$2"
     [ -f "$env_file" ] || return 0
-    grep -m1 "^${var_name}=" "$env_file" 2>/dev/null | cut -d= -f2- | sed "s/^\"//;s/\"$//;s/^'//;s/'$//" || true
+    grep -m1 "^${var_name}=" "$env_file"  | cut -d= -f2- | sed "s/^\"//;s/\"$//;s/^'//;s/'$//" || true
 }
 
 env_set_value() {
@@ -304,7 +304,7 @@ ensure_agent_env_defaults() {
     # Automatically set and update ALLOWED_HOSTS
     local allowed_hosts current_ips public_ip new_hosts
     allowed_hosts="$(env_get_value "$env_file" "ALLOWED_HOSTS")"
-    current_ips="$(hostname -I 2>/dev/null | tr -s ' ' ',' | sed 's/,$//')"
+    current_ips="$(hostname -I  | tr -s ' ' ',' | sed 's/,$//')"
     public_ip="$(detect_public_ip)"
 
     new_hosts="localhost,127.0.0.1,backend,smsly-hosting-backend-1,redis,rabbitmq,traefik,socket-proxy,agent-registrar"
@@ -316,7 +316,7 @@ ensure_agent_env_defaults() {
         echo -e "${BLUE}  -> Set default ALLOWED_HOSTS for agent${NC}"
     else
         local merged_hosts="${allowed_hosts},${new_hosts}"
-        merged_hosts="$(python3 -c 'import sys; print(",".join(dict.fromkeys([x.strip() for x in sys.argv[1].split(",") if x.strip()])))' "$merged_hosts" 2>/dev/null || echo "$merged_hosts")"
+        merged_hosts="$(python3 -c 'import sys; print(",".join(dict.fromkeys([x.strip() for x in sys.argv[1].split(",") if x.strip()])))' "$merged_hosts"  || echo "$merged_hosts")"
         env_set_value "$env_file" "ALLOWED_HOSTS" "$merged_hosts"
         echo -e "${BLUE}  -> Updated ALLOWED_HOSTS with current node IPs${NC}"
     fi
@@ -339,7 +339,7 @@ configure_docker_registry_trust() {
     local registries=()
     local mirrors=()
 
-    command -v docker >/dev/null 2>&1 || return 0
+    command -v docker  || return 0
 
     master_ip="$(env_get_value "$env_file" "MASTER_IP")"
     master_mesh_ip="$(env_get_value "$env_file" "MASTER_MESH_IP")"
@@ -424,13 +424,13 @@ PY
 
     if [ "$status" -eq 10 ]; then
         echo -e "${BLUE}  -> Docker registry trust changed; restarting Docker...${NC}"
-        if command -v systemctl >/dev/null 2>&1; then
+        if command -v systemctl ; then
             systemctl restart docker
         else
             service docker restart
         fi
         for _ in $(seq 1 30); do
-            docker info >/dev/null 2>&1 && {
+            docker info  && {
                 echo -e "${GREEN}  OK Docker restarted with registry trust${NC}"
                 return 0
             }
@@ -450,9 +450,9 @@ PY
 
 docker_login() {
     local env_file="$INSTALL_DIR/.env"
-    local registry="${CONTAINER_REGISTRY_URL:-$(env_get_value "$env_file" "CONTAINER_REGISTRY_URL" 2>/dev/null || echo "")}"
-    local user="${REGISTRY_USER:-$(env_get_value "$env_file" "REGISTRY_USER" 2>/dev/null || echo "smsly-registry")}"
-    local pass="${REGISTRY_PASSWORD:-$(env_get_value "$env_file" "REGISTRY_PASSWORD" 2>/dev/null || echo "")}"
+    local registry="${CONTAINER_REGISTRY_URL:-$(env_get_value "$env_file" "CONTAINER_REGISTRY_URL"  || echo "")}"
+    local user="${REGISTRY_USER:-$(env_get_value "$env_file" "REGISTRY_USER"  || echo "smsly-registry")}"
+    local pass="${REGISTRY_PASSWORD:-$(env_get_value "$env_file" "REGISTRY_PASSWORD"  || echo "")}"
     [ -z "$registry" ] && registry="127.0.0.1:5000"
     [ -z "$pass" ] && return 0
     echo "$pass" | docker login "$registry" -u "$user" --password-stdin || echo -e "${YELLOW}    ⚠ Docker registry login failed (non-fatal)${NC}"
@@ -463,7 +463,7 @@ wait_for_local_rabbitmq() {
     local elapsed=0
 
     while [ "$elapsed" -lt "$timeout" ]; do
-        if docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmq-diagnostics -q check_running >/dev/null 2>&1; then
+        if docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmq-diagnostics -q check_running ; then
             echo -e "${GREEN}  OK Local RabbitMQ is ready${NC}"
             return 0
         fi
@@ -472,7 +472,7 @@ wait_for_local_rabbitmq() {
     done
 
     echo -e "${RED}ERROR: Local RabbitMQ did not become ready after ${timeout}s${NC}"
-    docker compose -f "$COMPOSE_PATH" logs --tail=80 rabbitmq 2>/dev/null || true
+    docker compose -f "$COMPOSE_PATH" logs --tail=80 rabbitmq  || true
     return 1
 }
 
@@ -492,18 +492,18 @@ sync_local_rabbitmq_password() {
 
     wait_for_local_rabbitmq 120 || exit 1
 
-    if docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" >/dev/null 2>&1; then
+    if docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" ; then
         echo -e "${GREEN}  OK Local RabbitMQ password already matches .env${NC}"
         return 0
     fi
 
     echo -e "${BLUE}  -> Syncing local RabbitMQ password for ${rabbitmq_user}...${NC}"
     docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl add_user "$rabbitmq_user" "$rabbitmq_password" || echo -e "${YELLOW}    ⚠ RabbitMQ add_user failed (user may already exist)${NC}"
-    docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl change_password "$rabbitmq_user" "$rabbitmq_password" >/dev/null
-    docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl set_user_tags "$rabbitmq_user" administrator >/dev/null
-    docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl set_permissions -p / "$rabbitmq_user" ".*" ".*" ".*" >/dev/null
+    docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl change_password "$rabbitmq_user" "$rabbitmq_password" 
+    docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl set_user_tags "$rabbitmq_user" administrator 
+    docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl set_permissions -p / "$rabbitmq_user" ".*" ".*" ".*" 
 
-    if docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" >/dev/null 2>&1; then
+    if docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" ; then
         echo -e "${GREEN}  OK Local RabbitMQ password synced${NC}"
         return 0
     fi
@@ -515,37 +515,37 @@ sync_local_rabbitmq_password() {
 fix_permissions() {
     local env_file="$INSTALL_DIR/.env"
     [ ! -f "$env_file" ] && return 0
-    chown root:1000 "$env_file" 2>/dev/null || true
-    chmod 664 "$env_file" 2>/dev/null || true
+    chown root:1000 "$env_file"  || true
+    chmod 664 "$env_file"  || true
     # Also fix caddy-config if it exists (for shared volumes with master)
-    [ -d "$INSTALL_DIR/caddy-config" ] && chown -R 1000:1000 "$INSTALL_DIR/caddy-config" 2>/dev/null || true
+    [ -d "$INSTALL_DIR/caddy-config" ] && chown -R 1000:1000 "$INSTALL_DIR/caddy-config"  || true
 }
 
 pull_latest_code() {
     [ "${SKIP_GIT:-false}" = "true" ] && { echo -e "${BLUE}  → Skipping git pull (--skip-git)${NC}"; return 0; }
     echo -e "${BLUE}  → Pulling latest code...${NC}"
     cd "$INSTALL_DIR"
-    git config --global --add safe.directory "$INSTALL_DIR" 2>/dev/null || true
+    git config --global --add safe.directory "$INSTALL_DIR"  || true
     local script_checksum_before=""
     local script_checksum_after=""
-    [ -f "$AGENT_SCRIPT_PATH" ] && script_checksum_before="$(sha256sum "$AGENT_SCRIPT_PATH" 2>/dev/null | awk '{print $1}' || true)"
+    [ -f "$AGENT_SCRIPT_PATH" ] && script_checksum_before="$(sha256sum "$AGENT_SCRIPT_PATH"  | awk '{print $1}' || true)"
     # Stash any local changes to avoid pull conflicts
     local stash_before stash_after stash_created
     stash_created="false"
-    stash_before="$(git stash list 2>/dev/null | wc -l | tr -d ' ')"
-    git stash push -m "smsly-agent-lite-update" >/dev/null 2>&1 || true
-    stash_after="$(git stash list 2>/dev/null | wc -l | tr -d ' ')"
+    stash_before="$(git stash list  | wc -l | tr -d ' ')"
+    git stash push -m "smsly-agent-lite-update"  || true
+    stash_after="$(git stash list  | wc -l | tr -d ' ')"
     [ "$stash_after" != "$stash_before" ] && stash_created="true"
-    if git pull --force origin main 2>/dev/null; then
+    if git pull --force origin main ; then
         echo -e "${GREEN}  ✓ Code updated${NC}"
     else
         echo -e "${YELLOW}  ⚠ Git pull failed, continuing with local code${NC}"
     fi
     if [ "$stash_created" = "true" ]; then
         # Pop stash — if it fails (conflicts), leave stashed and warn
-        git stash pop 2>/dev/null || echo -e "${YELLOW}  ⚠ Local changes stashed (git stash list)${NC}"
+        git stash pop  || echo -e "${YELLOW}  ⚠ Local changes stashed (git stash list)${NC}"
     fi
-    [ -f "$AGENT_SCRIPT_PATH" ] && script_checksum_after="$(sha256sum "$AGENT_SCRIPT_PATH" 2>/dev/null | awk '{print $1}' || true)"
+    [ -f "$AGENT_SCRIPT_PATH" ] && script_checksum_after="$(sha256sum "$AGENT_SCRIPT_PATH"  | awk '{print $1}' || true)"
     if [ -n "$UPDATE_MODE" ] && [ "${SMSLY_AGENT_LITE_REEXECED:-false}" != "true" ] \
        && [ -n "$script_checksum_before" ] && [ -n "$script_checksum_after" ] \
        && [ "$script_checksum_before" != "$script_checksum_after" ]; then
@@ -558,17 +558,17 @@ pull_latest_code() {
 
 run_migrations() {
     # Check if backend is running before attempting migrations
-    if ! docker compose -f "$COMPOSE_PATH" ps --status running backend 2>/dev/null | grep -q "Up"; then
+    if ! docker compose -f "$COMPOSE_PATH" ps --status running backend  | grep -q "Up"; then
         echo -e "${YELLOW}  ⚠ Backend not running, skipping migrations${NC}"
         return 0
     fi
     echo -e "${BLUE}  → Running migrations...${NC}"
-    if docker compose -f "$COMPOSE_PATH" exec -T backend python manage.py migrate --noinput 2>/dev/null; then
+    if docker compose -f "$COMPOSE_PATH" exec -T backend python manage.py migrate --noinput ; then
         echo -e "${GREEN}  ✓ Migrations complete${NC}"
     else
         echo -e "${YELLOW}  ⚠ Migration failed, retrying in 10s...${NC}"
         sleep 10
-        docker compose -f "$COMPOSE_PATH" exec -T backend python manage.py migrate --noinput 2>/dev/null && \
+        docker compose -f "$COMPOSE_PATH" exec -T backend python manage.py migrate --noinput  && \
             echo -e "${GREEN}  ✓ Migrations complete on retry${NC}" || \
             echo -e "${YELLOW}  ⚠ Migrations still failing (non-fatal, will retry on next update)${NC}"
     fi
@@ -581,7 +581,7 @@ wait_for_backend() {
     echo -e "${BLUE}  → Waiting for backend health (up to ${timeout}s)...${NC}"
     local elapsed=0
     while [ "$elapsed" -lt "$timeout" ]; do
-        if docker compose -f "$COMPOSE_PATH" exec -T backend curl -sf http://localhost:8000/health/live &>/dev/null; then
+        if docker compose -f "$COMPOSE_PATH" exec -T backend curl -sf http://localhost:8000/health/live ; then
             echo -e "${GREEN}  ✓ Backend healthy${NC}"
             return 0
         fi
@@ -600,10 +600,10 @@ wait_for_registrar() {
     local elapsed=0
     local interval=3
     while [ "$elapsed" -lt "$timeout" ]; do
-        if docker compose -f "$COMPOSE_PATH" ps --status running agent-registrar 2>/dev/null | grep -q "Up"; then
+        if docker compose -f "$COMPOSE_PATH" ps --status running agent-registrar  | grep -q "Up"; then
             # Verify the Python process is actually running inside
             # the container (it might be in start_period limbo)
-            if docker compose -f "$COMPOSE_PATH" exec -T agent-registrar pgrep -f agent_registrar.py >/dev/null 2>&1; then
+            if docker compose -f "$COMPOSE_PATH" exec -T agent-registrar pgrep -f agent_registrar.py ; then
                 echo -e "${GREEN}  ✓ Agent registrar is running${NC}"
                 return 0
             fi
@@ -630,7 +630,7 @@ final_health_check() {
     local wg_ok=0
 
     # 1. Backend healthy?
-    if docker compose -f "$COMPOSE_PATH" exec -T backend curl -fsS http://localhost:8000/health/live >/dev/null 2>&1; then
+    if docker compose -f "$COMPOSE_PATH" exec -T backend curl -fsS http://localhost:8000/health/live ; then
         backend_ok=1
         echo -e "${GREEN}    ✓ Backend /health/live${NC}"
     else
@@ -638,13 +638,13 @@ final_health_check() {
     fi
 
     # 2. Celery worker subscribed to its queue?
-    if docker compose -f "$COMPOSE_PATH" exec -T celery-worker celery -A config inspect ping -d celery@$(hostname)@%h 2>/dev/null | grep -q "pong"; then
+    if docker compose -f "$COMPOSE_PATH" exec -T celery-worker celery -A config inspect ping -d celery@$(hostname)@%h  | grep -q "pong"; then
         celery_ok=1
         echo -e "${GREEN}    ✓ Celery worker (ping pong)${NC}"
     else
         # Fall back to a queue-depth check — the worker's queue
         # list is queryable without the ping pong dance.
-        if docker compose -f "$COMPOSE_PATH" exec -T celery-worker celery -A config inspect active 2>/dev/null | head -1 | grep -q ":"; then
+        if docker compose -f "$COMPOSE_PATH" exec -T celery-worker celery -A config inspect active  | head -1 | grep -q ":"; then
             celery_ok=1
             echo -e "${GREEN}    ✓ Celery worker (active)${NC}"
         else
@@ -653,7 +653,7 @@ final_health_check() {
     fi
 
     # 3. Agent registrar running?
-    if docker compose -f "$COMPOSE_PATH" exec -T agent-registrar pgrep -f agent_registrar.py >/dev/null 2>&1; then
+    if docker compose -f "$COMPOSE_PATH" exec -T agent-registrar pgrep -f agent_registrar.py ; then
         registrar_ok=1
         echo -e "${GREEN}    ✓ Agent registrar process is alive${NC}"
     else
@@ -661,7 +661,7 @@ final_health_check() {
     fi
 
     # 4. Master reachable (any of the candidate URLs)?
-    if probe_master_health 5 >/dev/null 2>&1; then
+    if probe_master_health 5 ; then
         master_ok=1
         echo -e "${GREEN}    ✓ Master is reachable${NC}"
     else
@@ -669,8 +669,8 @@ final_health_check() {
     fi
 
     # 5. WireGuard interface up? (Only if wg is installed)
-    if command -v wg >/dev/null 2>&1; then
-        if wg show wg0 >/dev/null 2>&1; then
+    if command -v wg ; then
+        if wg show wg0 ; then
             wg_ok=1
             echo -e "${GREEN}    ✓ WireGuard wg0 is up${NC}"
         else
@@ -697,8 +697,8 @@ do_install() {
     # ── Step 1: Prerequisites ──
     step=$((step + 1))
     echo -e "\n${YELLOW}[$step/5] Checking prerequisites...${NC}"
-    check_internet() { ping -c1 -W3 8.8.8.8 &>/dev/null || ping -c1 -W3 1.1.1.1 &>/dev/null; }
-    check_docker() { command -v docker &>/dev/null && docker info &>/dev/null; }
+    check_internet() { ping -c1 -W3 8.8.8.8  || ping -c1 -W3 1.1.1.1 ; }
+    check_docker() { command -v docker  && docker info ; }
     check_internet && echo -e "${GREEN}  ✓ Internet OK${NC}" || { echo -e "${RED}✗ No internet${NC}"; exit 1; }
     check_docker && echo -e "${GREEN}  ✓ Docker OK${NC}" || { echo -e "${RED}✗ Docker not running${NC}"; exit 1; }
     local ram disk_free
@@ -718,9 +718,9 @@ do_install() {
     ensure_networks
     ensure_backups_volume
     for _img in tecnativa/docker-socket-proxy:latest traefik:v3.6; do
-        if docker image inspect "$_img" &>/dev/null; then
+        if docker image inspect "$_img" ; then
             echo -e "${GREEN}  ✓ $_img cached${NC}"
-        elif docker pull "$_img" 2>/dev/null; then
+        elif docker pull "$_img" ; then
             echo -e "${GREEN}  ✓ $_img pulled${NC}"
         else
             echo -e "${YELLOW}  ⚠ Could not pull $_img (build may fail if uncached)${NC}"
@@ -740,7 +740,7 @@ do_install() {
     # ── Step 4: Start services ──
     step=$((step + 1))
     echo -e "\n${YELLOW}[$step/5] Starting services...${NC}"
-    docker compose -f "$COMPOSE_FILE" up -d socket-proxy redis rabbitmq traefik 2>/dev/null || \
+    docker compose -f "$COMPOSE_FILE" up -d socket-proxy redis rabbitmq traefik  || \
         echo -e "${YELLOW}  ⚠ Some infra services may have failed (check: docker compose ps)${NC}"
     sync_local_rabbitmq_password
     docker compose -f "$COMPOSE_FILE" up -d backend
@@ -749,7 +749,7 @@ do_install() {
 
     # Verify all expected services
     echo -e "${BLUE}  → Verifying services...${NC}"
-    docker compose -f "$COMPOSE_FILE" ps --format "table {{.Name}}\t{{.Status}}" 2>/dev/null || true
+    docker compose -f "$COMPOSE_FILE" ps --format "table {{.Name}}\t{{.Status}}"  || true
 
     # ── Step 5: Finish ──
     step=$((step + 1))
@@ -762,7 +762,7 @@ do_install() {
     echo -e "\n${GREEN}═══════════════════════════════════════${NC}"
     echo -e "${GREEN}  ✅ Agent Install Complete${NC}"
     echo -e "${GREEN}  Traefik:  http://${ip:-<this-host>}:80${NC}"
-    if probe_master_health 5 >/dev/null 2>&1; then
+    if probe_master_health 5 ; then
         echo -e "${GREEN}  Master:   reachable ✓${NC}"
     else
         echo -e "${YELLOW}  Master:   not yet reachable (will keep retrying from agent-registrar)${NC}"

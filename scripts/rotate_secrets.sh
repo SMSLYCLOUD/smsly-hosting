@@ -114,7 +114,7 @@ chmod 600 "$OUT"
 
 # Verify the new file parses (source it in a subshell to check for syntax errors).
 # `set -n` makes bash parse but not execute, which catches any malformed lines.
-if ! (set -n; source "$OUT") 2>/dev/null; then
+if ! (set -n; source "$OUT") ; then
     echo "ERROR: rotated file failed parse check: $OUT" >&2
     exit 1
 fi

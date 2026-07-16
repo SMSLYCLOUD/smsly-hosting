@@ -25,10 +25,10 @@ _harden_log() {
 # ─── PHASE 1: Bootstrap — install + start; return immediately ─────────────────
 
 _harden_fail2ban_bootstrap() {
-    if ! command -v fail2ban-client >/dev/null 2>&1; then
-        apt_run apt-get install -y fail2ban 2>/dev/null || true
+    if ! command -v fail2ban-client ; then
+        apt_run apt-get install -y fail2ban  || true
     fi
-    command -v fail2ban-client >/dev/null 2>&1 || return 1
+    command -v fail2ban-client  || return 1
 
     [ -f /etc/fail2ban/jail.local ] || cat <<'JAIL_EOF' > /etc/fail2ban/jail.local
 [DEFAULT]
@@ -57,7 +57,7 @@ findtime = 1d
 maxretry = 3
 JAIL_EOF
     # Enable Caddy jails when Caddy logs are available
-    if [ -d /var/log/caddy ] || docker volume ls --format '{{.Name}}' 2>/dev/null | grep -q caddy_logs; then
+    if [ -d /var/log/caddy ] || docker volume ls --format '{{.Name}}'  | grep -q caddy_logs; then
         cat <<'CADDY_JAIL_EOF' >> /etc/fail2ban/jail.local
 
 [caddy-auth]
@@ -95,23 +95,23 @@ FILTER_EOF
     # Blocking start — wait for service to be ready
     systemctl restart fail2ban || echo -e "${YELLOW}    ⚠ fail2ban restart failed${NC}"
     for _i in $(seq 1 10); do
-        fail2ban-client ping >/dev/null 2>&1 && break
+        fail2ban-client ping  && break
         sleep 1
     done
 }
 
 _harden_ufw_bootstrap() {
-    command -v ufw >/dev/null 2>&1 || apt_run apt-get install -y ufw 2>/dev/null || true
-    command -v ufw >/dev/null 2>&1 || return 1
+    command -v ufw  || apt_run apt-get install -y ufw  || true
+    command -v ufw  || return 1
 
     # Already active — just verify ports are open, then bail
-    if ufw status 2>/dev/null | grep -qi "active"; then
+    if ufw status  | grep -qi "active"; then
         for port in 22 80 443 51820; do
-            ufw status verbose 2>/dev/null | grep -qE "${port}(/tcp|/udp)?.*ALLOW" || ufw allow "$port" || echo -e "${YELLOW}    ⚠ ufw allow port $port failed${NC}"
+            ufw status verbose  | grep -qE "${port}(/tcp|/udp)?.*ALLOW" || ufw allow "$port" || echo -e "${YELLOW}    ⚠ ufw allow port $port failed${NC}"
         done
         # Whitelist Docker bridges
         for iface in docker0 br-+; do
-            ip link show "$iface" >/dev/null 2>&1 || continue
+            ip link show "$iface"  || continue
             ufw allow in on "$iface" || echo -e "${YELLOW}    ⚠ ufw allow in on $iface failed${NC}"
         done
         return 0
@@ -125,26 +125,26 @@ _harden_ufw_bootstrap() {
     ufw allow 443/tcp || echo -e "${YELLOW}    ⚠ ufw allow 443/tcp failed${NC}"
     ufw allow 51820/udp || echo -e "${YELLOW}    ⚠ ufw allow 51820/udp failed${NC}"
     for iface in docker0 br-+; do
-        ip link show "$iface" >/dev/null 2>&1 || continue
+        ip link show "$iface"  || continue
         ufw allow in on "$iface" || echo -e "${YELLOW}    ⚠ ufw allow in on $iface failed${NC}"
     done
     ufw --force enable || echo -e "${YELLOW}    ⚠ ufw enable failed${NC}"
     # Verify it actually came up
     for _i in $(seq 1 5); do
-        ufw status 2>/dev/null | grep -qi "active" && break
+        ufw status  | grep -qi "active" && break
         sleep 2
     done
 }
 
 _harden_apparmor_bootstrap() {
-    command -v aa-status >/dev/null 2>&1 || apt_run apt-get install -y apparmor apparmor-utils 2>/dev/null || true
-    command -v aa-status >/dev/null 2>&1 || return 1
+    command -v aa-status  || apt_run apt-get install -y apparmor apparmor-utils  || true
+    command -v aa-status  || return 1
     systemctl enable apparmor || echo -e "${YELLOW}    ⚠ apparmor enable failed${NC}"
     systemctl start apparmor || echo -e "${YELLOW}    ⚠ apparmor start failed${NC}"
 }
 
 _harden_auditd_bootstrap() {
-    command -v auditd >/dev/null 2>&1 || apt_run apt-get install -y auditd audispd-plugins 2>/dev/null || true
+    command -v auditd  || apt_run apt-get install -y auditd audispd-plugins  || true
 
     if [ ! -f /etc/audit/rules.d/smsly.rules ]; then
         mkdir -p /etc/audit/rules.d
@@ -200,7 +200,7 @@ _harden_docker_daemon_bootstrap() {
     local changed=false
 
     # log rotation
-    python3 -c "import json; d=json.load(open('$daemon_cfg')); exit(0 if d.get('log-driver')=='json-file' and d.get('log-opts',{}).get('max-size')=='10m' else 1)" 2>/dev/null || {
+    python3 -c "import json; d=json.load(open('$daemon_cfg')); exit(0 if d.get('log-driver')=='json-file' and d.get('log-opts',{}).get('max-size')=='10m' else 1)"  || {
         python3 -c "
 import json
 with open('$daemon_cfg') as f: cfg = json.load(f)
@@ -212,7 +212,7 @@ with open('$daemon_cfg','w') as f: json.dump(cfg, f, indent=2)
     }
 
     # live-restore
-    python3 -c "import json; d=json.load(open('$daemon_cfg')); exit(0 if d.get('live-restore') else 1)" 2>/dev/null || {
+    python3 -c "import json; d=json.load(open('$daemon_cfg')); exit(0 if d.get('live-restore') else 1)"  || {
         python3 -c "
 import json
 with open('$daemon_cfg') as f: cfg = json.load(f)
@@ -223,7 +223,7 @@ with open('$daemon_cfg','w') as f: json.dump(cfg, f, indent=2)
     }
 
     # seccomp
-    python3 -c "import json; d=json.load(open('$daemon_cfg')); exit(0 if d.get('features',{}).get('seccomp') else 1)" 2>/dev/null || {
+    python3 -c "import json; d=json.load(open('$daemon_cfg')); exit(0 if d.get('features',{}).get('seccomp') else 1)"  || {
         python3 -c "
 import json
 with open('$daemon_cfg') as f: cfg = json.load(f)
@@ -234,8 +234,8 @@ with open('$daemon_cfg','w') as f: json.dump(cfg, f, indent=2)
     }
 
     # userns-remap — only when no containers are running (would orphan them)
-    python3 -c "import json; d=json.load(open('$daemon_cfg')); exit(0 if d.get('userns-remap') else 1)" 2>/dev/null || {
-        if [ -z "$(docker ps -q 2>/dev/null | head -1)" ]; then
+    python3 -c "import json; d=json.load(open('$daemon_cfg')); exit(0 if d.get('userns-remap') else 1)"  || {
+        if [ -z "$(docker ps -q  | head -1)" ]; then
             python3 -c "
 import json
 with open('$daemon_cfg') as f: cfg = json.load(f)
@@ -250,12 +250,12 @@ with open('$daemon_cfg','w') as f: json.dump(cfg, f, indent=2)
     # (doing so live would kill production).
     if [ "$changed" = "true" ]; then
         local _smsly_ctrs
-        _smsly_ctrs="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -c smsly || true)"
+        _smsly_ctrs="$(docker ps --format '{{.Names}}'  | grep -c smsly || true)"
         if [ "$_smsly_ctrs" -eq 0 ]; then
             _harden_log info "Docker daemon config changed — restarting Docker..."
             systemctl restart docker || { _harden_log error "Docker restart failed"; }
             for _i in $(seq 1 30); do
-                docker info >/dev/null 2>&1 && break
+                docker info  && break
                 sleep 2
             done
             _harden_log ok "Docker daemon restarted with security config"
@@ -268,7 +268,7 @@ with open('$daemon_cfg','w') as f: json.dump(cfg, f, indent=2)
 _harden_crowdsec_bootstrap() {
     # CrowdSec comes from the main docker-compose stack — if the container
     # isn't running, try docker compose up -d for just that service.
-    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "smsly-crowdsec"; then
+    if docker ps --format '{{.Names}}'  | grep -q "smsly-crowdsec"; then
         return 0  # already up
     fi
     # Blocking start — wait for container to be healthy
@@ -277,7 +277,7 @@ _harden_crowdsec_bootstrap() {
         -f "$COMPOSE_FILE" \
         up -d crowdsec || echo -e "${YELLOW}    ⚠ crowdsec docker compose up failed${NC}"
     for _i in $(seq 1 15); do
-        docker ps --format '{{.Names}}' 2>/dev/null | grep -q "smsly-crowdsec" && break
+        docker ps --format '{{.Names}}'  | grep -q "smsly-crowdsec" && break
         sleep 2
     done
 }
@@ -292,7 +292,7 @@ _harden_falco_bootstrap() {
         -f "$compose_file" \
         up -d --force-recreate --pull always || echo -e "${YELLOW}    ⚠ falco docker compose up failed${NC}"
     for _i in $(seq 1 15); do
-        docker ps --format '{{.Names}}' 2>/dev/null | grep -q "smsly-falco" && break
+        docker ps --format '{{.Names}}'  | grep -q "smsly-falco" && break
         sleep 2
     done
 }
@@ -301,12 +301,12 @@ _harden_falco_bootstrap() {
 
 _harden_fail2ban_verify() {
     local ok=true
-    command -v fail2ban-client >/dev/null 2>&1 || { _harden_log warn "fail2ban — not installed"; return 1; }
+    command -v fail2ban-client  || { _harden_log warn "fail2ban — not installed"; return 1; }
 
     # Quick check — if not responding, wait a few seconds for async start
-    fail2ban-client ping >/dev/null 2>&1 || { sleep 5; fail2ban-client ping >/dev/null 2>&1; } || ok=false
+    fail2ban-client ping  || { sleep 5; fail2ban-client ping ; } || ok=false
 
-    if $ok && fail2ban-client status sshd >/dev/null 2>&1; then
+    if $ok && fail2ban-client status sshd ; then
         _harden_log ok "fail2ban active (sshd + recidive + http)"
         return 0
     fi
@@ -315,8 +315,8 @@ _harden_fail2ban_verify() {
 }
 
 _harden_ufw_verify() {
-    command -v ufw >/dev/null 2>&1 || { _harden_log warn "ufw — not installed"; return 1; }
-    if ufw status 2>/dev/null | grep -qi "active"; then
+    command -v ufw  || { _harden_log warn "ufw — not installed"; return 1; }
+    if ufw status  | grep -qi "active"; then
         _harden_log ok "ufw active (host INPUT hardened)"
         return 0
     fi
@@ -325,12 +325,12 @@ _harden_ufw_verify() {
 }
 
 _harden_apparmor_verify() {
-    command -v aa-status >/dev/null 2>&1 || { _harden_log warn "apparmor — not installed"; return 1; }
+    command -v aa-status  || { _harden_log warn "apparmor — not installed"; return 1; }
     local count
-    count=$(aa-status --json 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('processes',{})))" 2>/dev/null || echo "0")
+    count=$(aa-status --json  | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('processes',{})))"  || echo "0")
     count="${count//[^0-9]/}"
     : "${count:=0}"
-    if [ "$count" -gt 0 ] 2>/dev/null; then
+    if [ "$count" -gt 0 ] ; then
         _harden_log ok "apparmor enforcing ($count profiles)"
         return 0
     fi
@@ -339,8 +339,8 @@ _harden_apparmor_verify() {
 }
 
 _harden_auditd_verify() {
-    command -v auditd >/dev/null 2>&1 || { _harden_log warn "auditd — not installed"; return 1; }
-    if systemctl is-active --quiet auditd 2>/dev/null; then
+    command -v auditd  || { _harden_log warn "auditd — not installed"; return 1; }
+    if systemctl is-active --quiet auditd ; then
         _harden_log ok "auditd active (file + syscall monitoring)"
         return 0
     fi
@@ -359,7 +359,7 @@ _harden_kernel_verify() {
 
 _harden_docker_daemon_verify() {
     local daemon_cfg="/etc/docker/daemon.json"
-    if [ -f "$daemon_cfg" ] && python3 -c "import json; json.load(open('$daemon_cfg'))" 2>/dev/null; then
+    if [ -f "$daemon_cfg" ] && python3 -c "import json; json.load(open('$daemon_cfg'))" ; then
         _harden_log ok "docker daemon security config present"
         return 0
     fi
@@ -368,16 +368,16 @@ _harden_docker_daemon_verify() {
 }
 
 _harden_crowdsec_verify() {
-    if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "smsly-crowdsec"; then
+    if ! docker ps --format '{{.Names}}'  | grep -q "smsly-crowdsec"; then
         _harden_log warn "crowdsec — container not running"
         return 1
     fi
     # Refresh hub scenarios — only upgrade when explicitly allowed.
     # Auto-upgrading on every harden.sh run can silently break
     # production WAF if CrowdSec ships a breaking parser change.
-    docker exec smsly-crowdsec cscli hub update 2>/dev/null || _harden_log warn "crowdsec hub update failed"
+    docker exec smsly-crowdsec cscli hub update  || _harden_log warn "crowdsec hub update failed"
     if [ "${CROWDSEC_AUTO_UPGRADE_HUB:-0}" = "1" ]; then
-        docker exec smsly-crowdsec cscli hub upgrade 2>/dev/null || _harden_log warn "crowdsec hub upgrade failed"
+        docker exec smsly-crowdsec cscli hub upgrade  || _harden_log warn "crowdsec hub upgrade failed"
     else
         _harden_log info "crowdsec hub upgrade skipped (set CROWDSEC_AUTO_UPGRADE_HUB=1 to enable)"
     fi
@@ -386,7 +386,7 @@ _harden_crowdsec_verify() {
 }
 
 _harden_falco_verify() {
-    if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "smsly-falco"; then
+    if ! docker ps --format '{{.Names}}'  | grep -q "smsly-falco"; then
         _harden_log warn "falco — container not running"
         return 1
     fi
@@ -402,33 +402,33 @@ _harden_container_runtime_bootstrap() {
 
     # If CONTAINER_RUNTIME is already persisted in .env, skip detection.
     # The user can clear it to re-detect.
-    if [ -f "$env_file" ] && grep -q '^CONTAINER_RUNTIME=' "$env_file" 2>/dev/null; then
+    if [ -f "$env_file" ] && grep -q '^CONTAINER_RUNTIME=' "$env_file" ; then
         return 0
     fi
 
     # Try Kata first (stronger isolation, requires KVM)
-    if [ -e /dev/kvm ] && ! command -v kata-runtime &>/dev/null; then
+    if [ -e /dev/kvm ] && ! command -v kata-runtime ; then
         if [ -f "$install_dir/lib/install-kata.sh" ]; then
             echo -e "${BLUE}  → [harden] Kata Containers (KVM available) — installing...${NC}"
             bash "$install_dir/lib/install-kata.sh" || true
         fi
     fi
 
-    if command -v kata-runtime &>/dev/null; then
+    if command -v kata-runtime ; then
         env_set_value "$env_file" "CONTAINER_RUNTIME" "kata"
         echo -e "${BLUE}  → [harden] Persisted CONTAINER_RUNTIME=kata in .env${NC}"
         return 0
     fi
 
     # Fall back to gVisor (lighter, no KVM required)
-    if ! command -v runsc &>/dev/null; then
+    if ! command -v runsc ; then
         if [ -f "$install_dir/lib/install-gvisor.sh" ]; then
             echo -e "${BLUE}  → [harden] gVisor (runsc) — installing...${NC}"
             bash "$install_dir/lib/install-gvisor.sh" || true
         fi
     fi
 
-    if command -v runsc &>/dev/null; then
+    if command -v runsc ; then
         env_set_value "$env_file" "CONTAINER_RUNTIME" "runsc"
         echo -e "${BLUE}  → [harden] Persisted CONTAINER_RUNTIME=runsc in .env${NC}"
         return 0
@@ -438,12 +438,12 @@ _harden_container_runtime_bootstrap() {
 _harden_container_runtime_verify() {
     local found=0
 
-    if command -v runsc &>/dev/null; then
+    if command -v runsc ; then
         _harden_log ok "gVisor (runsc) installed"
         found=1
     fi
 
-    if command -v kata-runtime &>/dev/null; then
+    if command -v kata-runtime ; then
         _harden_log ok "Kata Containers installed"
         found=1
     fi
@@ -455,9 +455,9 @@ _harden_container_runtime_verify() {
 
     # Check Docker runtime registration
     if [ -f /etc/docker/daemon.json ]; then
-        if python3 -c "import json; import sys; cfg=json.load(open('/etc/docker/daemon.json')); sys.exit(0 if 'runsc' in cfg.get('runtimes',{}) else 1)" 2>/dev/null; then
+        if python3 -c "import json; import sys; cfg=json.load(open('/etc/docker/daemon.json')); sys.exit(0 if 'runsc' in cfg.get('runtimes',{}) else 1)" ; then
             _harden_log ok "gVisor registered with Docker"
-        elif python3 -c "import json; import sys; cfg=json.load(open('/etc/docker/daemon.json')); sys.exit(0 if 'kata-runtime' in cfg.get('runtimes',{}) else 1)" 2>/dev/null; then
+        elif python3 -c "import json; import sys; cfg=json.load(open('/etc/docker/daemon.json')); sys.exit(0 if 'kata-runtime' in cfg.get('runtimes',{}) else 1)" ; then
             _harden_log ok "Kata registered with Docker"
         fi
     fi
@@ -468,7 +468,7 @@ _harden_container_runtime_verify() {
 # ─── Trivy Vulnerability Scanner ──────────────────────────────────────────────
 
 _harden_trivy_bootstrap() {
-    if command -v trivy >/dev/null 2>&1; then
+    if command -v trivy ; then
         return 0  # already installed
     fi
 
@@ -487,10 +487,10 @@ _harden_trivy_bootstrap() {
     tmp_deb="$(mktemp /tmp/trivy.XXXXXX.deb)"
 
     # Attempt 1: Direct DEB download with retries and timeouts
-    if curl --retry 3 --retry-delay 2 --connect-timeout 15 -fsSL "$deb_url" -o "$tmp_deb" 2>/dev/null; then
-        if ! dpkg -i "$tmp_deb" 2>/dev/null; then
-            apt-get install -f -y 2>/dev/null || true
-            dpkg -i "$tmp_deb" 2>/dev/null || true
+    if curl --retry 3 --retry-delay 2 --connect-timeout 15 -fsSL "$deb_url" -o "$tmp_deb" ; then
+        if ! dpkg -i "$tmp_deb" ; then
+            apt-get install -f -y  || true
+            dpkg -i "$tmp_deb"  || true
         fi
         rm -f "$tmp_deb"
     else
@@ -499,24 +499,24 @@ _harden_trivy_bootstrap() {
     fi
 
     # Attempt 2: Official APT Repository fallback
-    if ! command -v trivy >/dev/null 2>&1; then
-        apt-get update -qq 2>/dev/null || true
-        if ! apt-get install -y trivy 2>/dev/null; then
-            if command -v gpg >/dev/null 2>&1; then
-                curl --retry 2 --connect-timeout 10 -fsSL https://aquasecurity.github.io/trivy-repo/deb/public.key 2>/dev/null | gpg --dearmor -o /usr/share/keyrings/trivy.gpg 2>/dev/null || true
-                echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc 2>/dev/null || echo stable) main" > /etc/apt/sources.list.d/trivy.list 2>/dev/null || true
-                apt-get update -qq 2>/dev/null || true
-                apt-get install -y trivy 2>/dev/null || true
+    if ! command -v trivy ; then
+        apt-get update -qq  || true
+        if ! apt-get install -y trivy ; then
+            if command -v gpg ; then
+                curl --retry 2 --connect-timeout 10 -fsSL https://aquasecurity.github.io/trivy-repo/deb/public.key  | gpg --dearmor -o /usr/share/keyrings/trivy.gpg  || true
+                echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc  || echo stable) main" > /etc/apt/sources.list.d/trivy.list  || true
+                apt-get update -qq  || true
+                apt-get install -y trivy  || true
             fi
         fi
     fi
 
     # Attempt 3: Official Contrib script fallback
-    if ! command -v trivy >/dev/null 2>&1; then
-        curl --retry 2 --connect-timeout 10 -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin 2>/dev/null || true
+    if ! command -v trivy ; then
+        curl --retry 2 --connect-timeout 10 -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin  || true
     fi
 
-    if command -v trivy >/dev/null 2>&1; then
+    if command -v trivy ; then
         _harden_log ok "Trivy installed successfully"
         return 0
     fi
@@ -525,9 +525,9 @@ _harden_trivy_bootstrap() {
 }
 
 _harden_trivy_verify() {
-    if command -v trivy >/dev/null 2>&1; then
+    if command -v trivy ; then
         local ver
-        ver="$(trivy --version 2>/dev/null | head -1 || true)"
+        ver="$(trivy --version  | head -1 || true)"
         _harden_log ok "Trivy available: ${ver}"
         return 0
     fi
@@ -545,15 +545,15 @@ _harden_infisical_bootstrap() {
     fi
     # Source Infisical functions and bootstrap
     # shellcheck disable=SC1090
-    source "$infisical_script" 2>/dev/null || {
+    source "$infisical_script"  || {
         _harden_log warn "Failed to source infisical.sh"
         return 1
     }
-    if ! command -v infisical_bootstrap >/dev/null 2>&1; then
+    if ! command -v infisical_bootstrap ; then
         _harden_log warn "infisical_bootstrap function not found"
         return 1
     fi
-    infisical_bootstrap 2>/dev/null || {
+    infisical_bootstrap  || {
         _harden_log warn "Infisical bootstrap had issues"
         return 1
     }
@@ -561,7 +561,7 @@ _harden_infisical_bootstrap() {
 }
 
 _harden_infisical_verify() {
-    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "smsly-infisical"; then
+    if docker ps --format '{{.Names}}'  | grep -q "smsly-infisical"; then
         _harden_log ok "Infisical running"
         return 0
     fi

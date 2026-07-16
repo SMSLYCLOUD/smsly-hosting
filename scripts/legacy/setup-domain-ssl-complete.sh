@@ -62,7 +62,7 @@ check_smsly_installed() {
 
 # Check Docker is running
 check_docker() {
-    if ! docker info >/dev/null 2>&1; then
+    if ! docker info ; then
         log_error "Docker is not running."
         echo "Please start Docker first:"
         echo "  systemctl start docker"

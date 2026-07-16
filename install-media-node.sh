@@ -22,7 +22,7 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # ─── Resolve script path ─────────────────────────────────────────────────────
-SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+SCRIPT_PATH="$(readlink -f "$0" || echo "$0")"
 SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 
 # ─── Bootstrap lib/ if running from curl (co-locate lib/media-node.sh) ────────
@@ -84,14 +84,14 @@ LOCK_FILE="/tmp/smsly-media-install.lock"
 # ─── Acquire lock ────────────────────────────────────────────────────────────
 if [ -f "$LOCK_FILE" ]; then
     local pid
-    pid="$(cat "$LOCK_FILE" 2>/dev/null || true)"
-    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    pid="$(cat "$LOCK_FILE" || true)"
+    if [ -n "$pid" ] && kill -0 "$pid"; then
         echo -e "${RED}ERROR: Another instance (PID $pid) is already running.${NC}"
         exit 1
     fi
 fi
 echo "$$" > "$LOCK_FILE"
-trap 'rm -f "$LOCK_FILE" 2>/dev/null' EXIT
+trap 'rm -f "$LOCK_FILE"' EXIT
 
 # ─── Log setup ────────────────────────────────────────────────────────────────
 exec > >(tee -a "$LOG_FILE") 2>&1
@@ -109,18 +109,18 @@ if [ "$DEBUG_MODE" = "true" ]; then
     echo -e "${BLUE}═══════════════════════════════════════════════════════════${NC}"
 
     echo -e "${BLUE}  → System info:${NC}"
-    echo "    Host:     $(hostname -f 2>/dev/null || hostname)"
+    echo "    Host:     $(hostname -f || hostname)"
     echo "    Kernel:   $(uname -r)"
     echo "    CPU:      $(nproc) cores"
     echo "    RAM:      $(awk '/MemTotal/{printf "%.0f MB", $2/1024}' /proc/meminfo)"
     echo "    Disk:     $(df -h / | awk 'NR==2{print $2 " total, " $4 " free"}')"
-    echo "    Public IP: $(detect_public_ip 2>/dev/null || echo 'unknown')"
+    echo "    Public IP: $(detect_public_ip || echo 'unknown')"
 
     echo -e "\n${BLUE}  → Service status:${NC}"
     for svc in postgresql redis-server wireguard kamailio freeswitch rtpengine coturn livekit-server smsly-voice-api smsly-video smsly-media-mgmt openresty; do
-        if systemctl is-active "$svc" >/dev/null 2>&1; then
+        if systemctl is-active "$svc"; then
             echo -e "    ${GREEN}✓${NC} $svc"
-        elif systemctl is-enabled "$svc" >/dev/null 2>&1; then
+        elif systemctl is-enabled "$svc"; then
             echo -e "    ${YELLOW}○${NC} $svc (enabled, not running)"
         else
             echo -e "    ${RED}✗${NC} $svc"
@@ -138,7 +138,7 @@ if [ "$DEBUG_MODE" = "true" ]; then
     fi
 
     echo -e "\n${BLUE}  → Listening ports:${NC}"
-    ss -tlnp 2>/dev/null | head -30 || netstat -tlnp 2>/dev/null | head -30 || echo "    (ss/netstat unavailable)"
+    ss -tlnp | head -30 || netstat -tlnp | head -30 || echo "    (ss/netstat unavailable)"
 
     echo -e "\n${BLUE}  → Log: ${LOG_FILE}${NC}"
     exit 0
@@ -157,7 +157,7 @@ if [ "$UPDATE_MODE" = "true" ]; then
 
     # Pull latest code
     echo -e "${BLUE}  → Pulling latest code...${NC}"
-    cd "$SCRIPT_DIR" && git pull --ff-only 2>/dev/null || {
+    cd "$SCRIPT_DIR" && git pull --ff-only || {
         echo -e "${YELLOW}  ⚠ git pull failed — using local copy${NC}"
     }
 
@@ -183,7 +183,7 @@ if [ "$UPDATE_MODE" = "true" ]; then
     # Restart services
     echo -e "${BLUE}  → Restarting media services...${NC}"
     for svc in smsly-media-mgmt smsly-voice-api smsly-video livekit-server freeswitch kamailio rtpengine; do
-        systemctl restart "$svc" 2>/dev/null || true
+        systemctl restart "$svc" || true
     done
 
     echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
@@ -194,9 +194,9 @@ fi
 
 # ─── Resume Support ───────────────────────────────────────────────────────────
 STATE_FILE="$INSTALL_DIR/.media-install-state"
-[ "$RESUME_MODE" = "true" ] || rm -f "$STATE_FILE" 2>/dev/null
-state_get() { grep -m1 "^${1}=" "$STATE_FILE" 2>/dev/null | cut -d= -f2- || echo ""; }
-state_set() { mkdir -p "$(dirname "$STATE_FILE")"; echo "${1}=${2}" >> "$STATE_FILE" 2>/dev/null || true; }
+[ "$RESUME_MODE" = "true" ] || rm -f "$STATE_FILE"
+state_get() { grep -m1 "^${1}=" "$STATE_FILE" | cut -d= -f2- || echo ""; }
+state_set() { mkdir -p "$(dirname "$STATE_FILE")"; echo "${1}=${2}" >> "$STATE_FILE" || true; }
 
 # ─── Fresh Install ────────────────────────────────────────────────────────────
 echo -e "${BLUE}═══════════════════════════════════════════════════════════${NC}"

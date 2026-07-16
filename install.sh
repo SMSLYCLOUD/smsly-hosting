@@ -140,7 +140,7 @@ export INSTALL_MODE MODE NODE_TYPE
 # This prevents deploy failures when the .env has a stale or unreachable URL.
 # Inline env helpers (lib/env.sh is not sourced yet at this point)
 _env_get_value() {
-    grep -m1 "^${2}=" "$1" 2>/dev/null | cut -d= -f2- | sed 's/^"//;s/"$//;s/^'\''//;s/'\''$//' || true
+    grep -m1 "^${2}=" "$1" | cut -d= -f2- | sed 's/^"//;s/"$//;s/^'\''//;s/'\''$//' || true
 }
 _env_set_value() {
     python3 - "$1" "$2" "$3" <<'PY'
@@ -160,11 +160,11 @@ PY
 
 _registry_self_heal() {
     # Ensure 'registry' hostname resolves to localhost on the host OS for local pulls/pushes
-    if [ -f "/etc/hosts" ] && ! grep -q -w "registry" /etc/hosts 2>/dev/null; then
-        if [ "$EUID" -eq 0 ] 2>/dev/null || [ "$(id -u 2>/dev/null)" -eq 0 ]; then
-            echo "127.0.0.1 registry" >> /etc/hosts 2>/dev/null || true
-        elif command -v sudo >/dev/null 2>&1; then
-            echo "127.0.0.1 registry" | sudo tee -a /etc/hosts >/dev/null 2>&1 || true
+    if [ -f "/etc/hosts" ] && ! grep -q -w "registry" /etc/hosts; then
+        if [ "$EUID" -eq 0 ] || [ "$(id -u)" -eq 0 ]; then
+            echo "127.0.0.1 registry" >> /etc/hosts || true
+        elif command -v sudo; then
+            echo "127.0.0.1 registry" | sudo tee -a /etc/hosts || true
         fi
     fi
 
@@ -176,7 +176,7 @@ _registry_self_heal() {
     [ -n "$configured_url" ] || configured_url="127.0.0.1:5000"
 
     # If docker isn't available, skip
-    command -v docker >/dev/null 2>&1 || return 0
+    command -v docker || return 0
 
     _test_registry() {
         local url="$1"
@@ -185,12 +185,12 @@ _registry_self_heal() {
         local code
 
         # Try HEAD /v2/ — if it returns anything (even 401/403), the registry is reachable
-        code=$(timeout -k 5 5 curl -sfk -o /dev/null -w "%{http_code}" "https://${url}/v2/" 2>/dev/null)
+        code=$(timeout -k 5 5 curl -sfk -o /dev/null -w "%{http_code}" "https://${url}/v2/")
         if echo "$code" | grep -qE '^(200|401|403)$'; then
             echo -e "  \033[0;32m→ $url OK (HTTPS $code)\033[0m"
             return 0
         fi
-        code=$(timeout -k 5 5 curl -sfk -o /dev/null -w "%{http_code}" "http://${url}/v2/" 2>/dev/null)
+        code=$(timeout -k 5 5 curl -sfk -o /dev/null -w "%{http_code}" "http://${url}/v2/")
         if echo "$code" | grep -qE '^(200|401|403)$'; then
             echo -e "  \033[0;32m→ $url OK (HTTP $code)\033[0m"
             return 0
@@ -203,7 +203,7 @@ _registry_self_heal() {
 
         # Fallback: try docker pull
         local pull_out pull_short
-        pull_out=$(timeout -k 5 10 docker pull "${url}/alpine:latest" 2>&1 || true)
+        pull_out=$(timeout -k 5 10 docker pull "${url}/alpine:latest" || true)
         if echo "$pull_out" | grep -qE "Pulled|up to date|Image is up to date"; then
             echo -e "  \033[0;32m→ $url OK (docker pull)\033[0m"
             return 0
@@ -250,7 +250,7 @@ fi
 unset -f _registry_self_heal _test_registry _env_get_value _env_set_value
 
 # ─── Resolve script path ─────────────────────────────────────────────────────
-SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+SCRIPT_PATH="$(readlink -f "$0" || echo "$0")"
 SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 
 # ─── Bootstrap lib/ when running from a standalone install.sh ──────────────────
@@ -264,27 +264,27 @@ if [ ! -d "$SCRIPT_DIR/lib" ] && [ -n "${SMSLY_GIT_REMOTE:-}" ]; then
     # Try tarball download first (cheap and deterministic)
     _lib_branch="${SMSLY_BRANCH:-main}"
     _lib_tar_url="${SMSLY_GIT_REMOTE%.git}/archive/refs/heads/${_lib_branch}.tar.gz"
-    if command -v curl >/dev/null 2>&1; then
-        if curl -fsSL "$SMSLY_GIT_REMOTE/archive/refs/heads/${_lib_branch}.tar.gz" -o "/tmp/smsly-repo-${$}.tar.gz" 2>/dev/null \
-            && tar -xzf "/tmp/smsly-repo-${$}.tar.gz" -C /tmp 2>/dev/null; then
-            _extracted_dir=$(tar -tzf "/tmp/smsly-repo-${$}.tar.gz" 2>/dev/null | head -1 | cut -d/ -f1)
+    if command -v curl; then
+        if curl -fsSL "$SMSLY_GIT_REMOTE/archive/refs/heads/${_lib_branch}.tar.gz" -o "/tmp/smsly-repo-${$}.tar.gz" \
+            && tar -xzf "/tmp/smsly-repo-${$}.tar.gz" -C /tmp; then
+            _extracted_dir=$(tar -tzf "/tmp/smsly-repo-${$}.tar.gz" | head -1 | cut -d/ -f1)
             if [ -d "/tmp/$_extracted_dir/lib" ]; then
-                cp -r "/tmp/$_extracted_dir/lib/"* "$BOOTSTRAP_LIB_DIR/" 2>/dev/null && \
+                cp -r "/tmp/$_extracted_dir/lib/"* "$BOOTSTRAP_LIB_DIR/" && \
                     echo -e "\033[0;32m  ✓ lib/ bootstrapped to $BOOTSTRAP_LIB_DIR\033[0m"
             fi
-            rm -rf "/tmp/smsly-repo-${$}.tar.gz" "/tmp/$_extracted_dir" 2>/dev/null
+            rm -rf "/tmp/smsly-repo-${$}.tar.gz" "/tmp/$_extracted_dir"
         fi
     fi
     # Fallback: try git clone if tarball failed
-    if [ ! -d "$BOOTSTRAP_LIB_DIR/common.sh" ] && command -v git >/dev/null 2>&1; then
+    if [ ! -d "$BOOTSTRAP_LIB_DIR/common.sh" ] && command -v git; then
         _tmp_clone=$(mktemp -d)
-        if git clone --depth 1 --branch "${SMSLY_BRANCH:-main}" "$SMSLY_GIT_REMOTE" "$_tmp_clone" 2>/dev/null; then
+        if git clone --depth 1 --branch "${SMSLY_BRANCH:-main}" "$SMSLY_GIT_REMOTE" "$_tmp_clone"; then
             if [ -d "$_tmp_clone/lib" ]; then
-                cp -r "$_tmp_clone/lib/"* "$BOOTSTRAP_LIB_DIR/" 2>/dev/null && \
+                cp -r "$_tmp_clone/lib/"* "$BOOTSTRAP_LIB_DIR/" && \
                     echo -e "\033[0;32m  ✓ lib/ bootstrapped via git clone\033[0m"
             fi
         fi
-        rm -rf "$_tmp_clone" 2>/dev/null
+        rm -rf "$_tmp_clone"
     fi
     if [ -d "$BOOTSTRAP_LIB_DIR" ] && [ -f "$BOOTSTRAP_LIB_DIR/common.sh" ]; then
         SCRIPT_DIR="$BOOTSTRAP_LIB_DIR/.."
@@ -297,7 +297,7 @@ fi
 
 # ─── Screen Guard ────────────────────────────────────────────────────────────
 if [ "${NO_SCREEN:-false}" != "true" ] && [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ] && [ -z "${STY:-}" ] && [[ "${TERM:-}" != screen* ]] && [ -z "${TMUX:-}" ]; then
-    if command -v screen >/dev/null 2>&1; then
+    if command -v screen; then
         echo -e "\033[0;34m  → Protecting session with 'screen' (safety against disconnects)...\033[0m"
         SCREEN_SESSION="${SMSLY_SCREEN_SESSION:-smsly-install-$$}"
         if screen -help 2>&1 | grep -q -- '-Logfile'; then
@@ -316,9 +316,9 @@ fi
 
 # ─── Workdir ──────────────────────────────────────────────────────────────────
 if [ -n "${SMSLY_INSTALL_WORKDIR:-}" ] && [ -d "${SMSLY_INSTALL_WORKDIR}" ]; then
-    cd "${SMSLY_INSTALL_WORKDIR}" 2>/dev/null || cd /root 2>/dev/null || cd /
+    cd "${SMSLY_INSTALL_WORKDIR}" || cd /root || cd /
 else
-    cd /root 2>/dev/null || cd /
+    cd /root || cd /
 fi
 
 # ─── Colors ───────────────────────────────────────────────────────────────────
@@ -437,32 +437,32 @@ echo "════════════════════════�
 cleanup_on_failure() {
     local exit_code=$?
     if [ -n "${HEARTBEAT_PID:-}" ]; then
-        kill "$HEARTBEAT_PID" 2>/dev/null || true
-        wait "$HEARTBEAT_PID" 2>/dev/null || true
+        kill "$HEARTBEAT_PID" || true
+        wait "$HEARTBEAT_PID" || true
     fi
     if [ $exit_code -ne 0 ]; then
         echo -e "\n${RED}════════════════════════════════════════════════════════════${NC}"
         echo -e "${RED}  INSTALLATION FAILED (exit code: $exit_code)${NC}"
         echo -e "${RED}════════════════════════════════════════════════════════════${NC}"
         if [ -f "$INSTALL_DIR/$COMPOSE_FILE" ]; then
-            cd "$INSTALL_DIR" 2>/dev/null || true
+            cd "$INSTALL_DIR" || true
             dump_diagnostic_logs "$INSTALL_DIR/.env" || true
         fi
         echo -e "${YELLOW}  → Rolling back...${NC}"
-        restore_last_good_caddy >/dev/null 2>&1 || true
+        restore_last_good_caddy || true
         if [ "${SMSLY_ROLLBACK_DOWN:-false}" = "true" ] && [ -f "$INSTALL_DIR/$COMPOSE_FILE" ]; then
-            cd "$INSTALL_DIR" 2>/dev/null || true
-            docker compose -f "$COMPOSE_FILE" down 2>/dev/null || true
+            cd "$INSTALL_DIR" || true
+            docker compose -f "$COMPOSE_FILE" down || true
         else
             echo -e "${YELLOW}  Runtime containers left running to avoid avoidable downtime.${NC}"
         fi
         if [ -f "$INSTALL_DIR/.env.backup" ]; then
             echo -e "${YELLOW}  → Restoring previous .env from backup${NC}"
-            mv "$INSTALL_DIR/.env.backup" "$INSTALL_DIR/.env" 2>/dev/null || true
+            mv "$INSTALL_DIR/.env.backup" "$INSTALL_DIR/.env" || true
         fi
         if [ -f "$INSTALL_DIR/.git-stash-marker" ]; then
             echo -e "${YELLOW}  → Restoring git stash (rolling back code changes)${NC}"
-            cd "$INSTALL_DIR" && git stash pop 2>/dev/null || true
+            cd "$INSTALL_DIR" && git stash pop || true
             rm -f "$INSTALL_DIR/.git-stash-marker"
         fi
         echo -e "${YELLOW}  Full log: $LOG_FILE${NC}"
@@ -524,7 +524,7 @@ if [ "$REFRESH_MODE" = "true" ]; then
         harden_security_bootstrap
     fi
     safe_refresh_runtime_services
-    if command -v harden_security_verify >/dev/null 2>&1; then
+    if command -v harden_security_verify; then
         harden_security_verify
     fi
     exit 0
@@ -536,10 +536,10 @@ deploy_observability_stack() {
     if [ -f "$INSTALL_DIR/infrastructure/docker/docker-compose.observability.yml" ]; then
         # Ensure Grafana has a non-empty admin password (Grafana >=11 requires it).
         if [ -z "${GRAFANA_PASSWORD:-}" ]; then
-            GRAFANA_PASSWORD="$(python3 -c "import secrets,string; print(''.join(secrets.choice(string.ascii_letters+string.digits+'-_') for _ in range(40)))" 2>/dev/null || openssl rand -base64 30 | tr -d '+/=' )"
+            GRAFANA_PASSWORD="$(python3 -c "import secrets,string; print(''.join(secrets.choice(string.ascii_letters+string.digits+'-_') for _ in range(40)))" || openssl rand -base64 30 | tr -d '+/=' )"
             export GRAFANA_PASSWORD
             if [ -f "$INSTALL_DIR/.env" ]; then
-                if grep -q '^GRAFANA_PASSWORD=' "$INSTALL_DIR/.env" 2>/dev/null; then
+                if grep -q '^GRAFANA_PASSWORD=' "$INSTALL_DIR/.env"; then
                     sed -i "s|^GRAFANA_PASSWORD=.*|GRAFANA_PASSWORD=$GRAFANA_PASSWORD|" "$INSTALL_DIR/.env"
                 else
                     echo "GRAFANA_PASSWORD=$GRAFANA_PASSWORD" >> "$INSTALL_DIR/.env"
@@ -551,14 +551,14 @@ deploy_observability_stack() {
         # Ensure prometheus-targets dir exists with correct ownership for
         # non-root container uid 1000.
         mkdir -p "$INSTALL_DIR/prometheus-targets"
-        if ! chown -R 1000:1000 "$INSTALL_DIR/prometheus-targets" 2>/dev/null; then
+        if ! chown -R 1000:1000 "$INSTALL_DIR/prometheus-targets"; then
             echo -e "${YELLOW}  ⚠ Could not chown prometheus-targets to uid 1000 — target files may fail${NC}"
         fi
-        chmod 2777 "$INSTALL_DIR/prometheus-targets" 2>/dev/null || true
+        chmod 2777 "$INSTALL_DIR/prometheus-targets" || true
 
         # Ensure scripts mounted into containers are executable (git may not preserve +x).
-        chmod +x "$INSTALL_DIR"/scripts/alertmanager-entrypoint.sh 2>/dev/null || true
-        chmod +x "$INSTALL_DIR"/scripts/enable-replica.sh 2>/dev/null || true
+        chmod +x "$INSTALL_DIR"/scripts/alertmanager-entrypoint.sh || true
+        chmod +x "$INSTALL_DIR"/scripts/enable-replica.sh || true
 
         docker compose \
             --env-file "$INSTALL_DIR/.env" \
@@ -589,7 +589,7 @@ deploy_replica_stack() {
         echo -e "${RED}  ✗ $script not found. Pull the latest code and re-run.${NC}"
         return 1
     fi
-    chmod +x "$script" 2>/dev/null || true
+    chmod +x "$script" || true
     # Non-interactive: enable-replica.sh does not prompt.
     if bash "$script"; then
         echo -e "${GREEN}  ✓ Read replica enabled${NC}"

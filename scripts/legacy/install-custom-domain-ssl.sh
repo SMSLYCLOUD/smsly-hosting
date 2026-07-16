@@ -120,7 +120,7 @@ update_existing_installation() {
     # Stop existing Celery services
     log "Stopping existing Celery services"
     cd "$INSTALL_DIR"
-    docker compose -f "$COMPOSE_FILE" stop celery celery-beat 2>/dev/null || true
+    docker compose -f "$COMPOSE_FILE" stop celery celery-beat  || true
     
     # Create enhanced docker-compose with domain SSL services
     if [ -f "update-custom-domain-celery.yml" ]; then

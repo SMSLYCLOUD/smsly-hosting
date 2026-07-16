@@ -1,12 +1,12 @@
 gen_hex_secret() {
     local bytes="${1:-16}"
-    python3 -c "import secrets; print(secrets.token_hex(${bytes}))" 2>/dev/null || openssl rand -hex "$bytes"
+    python3 -c "import secrets; print(secrets.token_hex(${bytes}))"  || openssl rand -hex "$bytes"
 }
 
 env_get_value() {
     local env_file="$1"
     local var_name="$2"
-    grep -m1 "^${var_name}=" "$env_file" 2>/dev/null | cut -d= -f2- | sed 's/^"//;s/"$//;s/^'\''//;s/'\''$//' || true
+    grep -m1 "^${var_name}=" "$env_file"  | cut -d= -f2- | sed 's/^"//;s/"$//;s/^'\''//;s/'\''$//' || true
 }
 
 env_set_value() {
@@ -50,7 +50,7 @@ sanitize_node_identifier() {
     local value="${1:-}"
     value="$(printf '%s' "$value" | tr -c 'A-Za-z0-9_.-' '-' | sed -E 's/^-+//; s/-+$//; s/-+/-/g' | cut -c1-96)"
     if [ -z "$value" ]; then
-        value="$(hostname 2>/dev/null | tr -c 'A-Za-z0-9_.-' '-' | sed -E 's/^-+//; s/-+$//; s/-+/-/g' | cut -c1-96)"
+        value="$(hostname  | tr -c 'A-Za-z0-9_.-' '-' | sed -E 's/^-+//; s/-+$//; s/-+/-/g' | cut -c1-96)"
     fi
     [ -n "$value" ] || value="agent"
     printf '%s' "$value"
@@ -132,7 +132,7 @@ sync_env_domain_allowlists() {
 
     # Automatically add all node IPs (including WireGuard VPN mesh IPs like 10.100.x.x)
     local current_ips
-    current_ips="$(hostname -I 2>/dev/null | tr -s ' ' '\n' | grep -v '^$' || true)"
+    current_ips="$(hostname -I  | tr -s ' ' '\n' | grep -v '^$' || true)"
     if [ -n "$current_ips" ]; then
         for ip in $current_ips; do
             allowed_hosts+=("$ip")
@@ -163,7 +163,7 @@ env_ensure_var() {
 
     if [ -z "$current_val" ]; then
         echo -e "${BLUE}  -> Setting $var_name in .env${NC}"
-        [ -n "$var_comment" ] && ! grep -q "# $var_comment" "$env_file" 2>/dev/null && echo "# $var_comment" >> "$env_file"
+        [ -n "$var_comment" ] && ! grep -q "# $var_comment" "$env_file"  && echo "# $var_comment" >> "$env_file"
         env_set_value "$env_file" "$var_name" "$var_value"
         echo -e "${GREEN}  OK $var_name set${NC}"
     fi

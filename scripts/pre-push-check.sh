@@ -10,7 +10,7 @@ BASE="$(cd "$(dirname "$0")/.." && pwd)"
 echo "=== 1. Shell syntax check (bash -n) ==="
 for f in install.sh lib/*.sh scripts/*.sh; do
     [ -f "$BASE/$f" ] || continue
-    if bash -n "$BASE/$f" 2>/dev/null; then
+    if bash -n "$BASE/$f" ; then
         echo "  OK   $f"
     else
         echo "  FAIL $f"
@@ -21,7 +21,7 @@ done
 echo ""
 echo "=== 2. Django system check ==="
 cd "$BASE/backend"
-CHECK_OUT=$(timeout -k 5 60 python manage.py check 2>&1 || true)
+CHECK_OUT=$(timeout -k 5 60 python manage.py check  || true)
 if echo "$CHECK_OUT" | grep -q "no issues"; then
     echo "  OK   Django check passed (0 issues)"
 elif echo "$CHECK_OUT" | grep -qiE "Error|Traceback|ImportError|NameError|IndentationError|SyntaxError"; then
@@ -49,7 +49,7 @@ try:
 except Exception as e:
     print(f'FAIL: {e}')
     sys.exit(1)
-" 2>/dev/null; then
+" ; then
     echo "  OK   URL resolver loads cleanly"
 else
     echo "  FAIL URL resolver chain broken"
@@ -63,9 +63,9 @@ TYPING_FAILS=0
 KNOWN_TYPES="Any|Dict|List|Optional|Tuple|Union|Callable|Set|DefaultDict|Generator|Iterator|Mapping|Type|Pattern|Match"
 for pyfile in apps/deployments/tasks_*.py apps/deployments/views_*.py; do
     [ -f "$pyfile" ] || continue
-    used=$(grep -oP ":\s*\b($KNOWN_TYPES)\b|\->\s*\b($KNOWN_TYPES)\b" "$pyfile" 2>/dev/null | sed 's/.*\b//' | sort -u)
-    imported=$(grep -oP 'from typing import (.+)' "$pyfile" 2>/dev/null | sed 's/from typing import //; s/,/\n/g' | tr -d ' ' | sort -u)
-    missing=$(comm -23 <(echo "$used") <(echo "$imported") 2>/dev/null)
+    used=$(grep -oP ":\s*\b($KNOWN_TYPES)\b|\->\s*\b($KNOWN_TYPES)\b" "$pyfile"  | sed 's/.*\b//' | sort -u)
+    imported=$(grep -oP 'from typing import (.+)' "$pyfile"  | sed 's/from typing import //; s/,/\n/g' | tr -d ' ' | sort -u)
+    missing=$(comm -23 <(echo "$used") <(echo "$imported") )
     if [ -n "$missing" ]; then
         echo "  FAIL $pyfile: missing typing imports: $(echo $missing | tr '\n' ' ')"
         TYPING_FAILS=$((TYPING_FAILS + 1))

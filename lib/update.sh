@@ -9,10 +9,10 @@ if [ -n "$UPDATE_MODE" ]; then
     # Ensure repo cache directory exists for user service builds
     mkdir -p /opt/smsly-cache/repos
     chmod 775 /opt/smsly-cache
-    chown -R 1000:1000 /opt/smsly-cache 2>/dev/null || true
+    chown -R 1000:1000 /opt/smsly-cache  || true
     mkdir -p /opt/smsly-hosting/builds
     chmod 775 /opt/smsly-hosting/builds
-    chown -R 1000:1000 /opt/smsly-hosting/builds 2>/dev/null || true
+    chown -R 1000:1000 /opt/smsly-hosting/builds  || true
 
     # ─── Fix .env permissions BEFORE any containers start ────────────────────
     # The docker-compose.prod.yml mounts .env into the backend container.
@@ -21,8 +21,8 @@ if [ -n "$UPDATE_MODE" ]; then
     # The backend container runs as UID 1000 (smsly user), so the file must be
     # writable by that user to allow the domain-config signal to sync back to .env.
     if [ -f "$INSTALL_DIR/.env" ]; then
-        chown root:1000 "$INSTALL_DIR/.env" 2>/dev/null || true
-        chmod 640 "$INSTALL_DIR/.env" 2>/dev/null || true
+        chown root:1000 "$INSTALL_DIR/.env"  || true
+        chmod 640 "$INSTALL_DIR/.env"  || true
         echo -e "${BLUE}  → Fixed .env permissions to 640 (readable by container UID 1000)${NC}"
     fi
 
@@ -54,8 +54,8 @@ if [ -n "$UPDATE_MODE" ]; then
         [ -f "$INSTALL_DIR/certs/registry.key" ] || return 1
         [ -f "$INSTALL_DIR/certs/registry.crt" ] || return 1
         local _cmod _kmod
-        _cmod="$(openssl x509 -in "$INSTALL_DIR/certs/registry.crt" -noout -modulus 2>/dev/null | openssl sha256)" || return 1
-        _kmod="$(openssl rsa  -in "$INSTALL_DIR/certs/registry.key" -noout -modulus 2>/dev/null | openssl sha256)" || return 1
+        _cmod="$(openssl x509 -in "$INSTALL_DIR/certs/registry.crt" -noout -modulus  | openssl sha256)" || return 1
+        _kmod="$(openssl rsa  -in "$INSTALL_DIR/certs/registry.key" -noout -modulus  | openssl sha256)" || return 1
         [ "$_cmod" = "$_kmod" ]
     }
     if ! _registry_cert_ok; then
@@ -66,7 +66,7 @@ if [ -n "$UPDATE_MODE" ]; then
             -keyout "${_tmp}/registry.key" \
             -out    "${_tmp}/registry.crt" \
             -subj "/CN=registry" \
-            -addext "subjectAltName=DNS:registry,DNS:localhost,IP:127.0.0.1,IP:10.100.0.1" 2>/dev/null && {
+            -addext "subjectAltName=DNS:registry,DNS:localhost,IP:127.0.0.1,IP:10.100.0.1"  && {
             mv "${_tmp}/registry.key" "$INSTALL_DIR/certs/registry.key"
             mv "${_tmp}/registry.crt" "$INSTALL_DIR/certs/registry.crt"
             chmod 644 "$INSTALL_DIR/certs/registry.crt"
@@ -74,24 +74,24 @@ if [ -n "$UPDATE_MODE" ]; then
             echo -e "${BLUE}  → Restarting registry container...${NC}"
             docker restart smsly-hosting-registry-1 || echo -e "${YELLOW}    ⚠ Registry restart failed${NC}"
         } || true
-        rm -rf "$_tmp" 2>/dev/null || true
+        rm -rf "$_tmp"  || true
     fi
     mkdir -p "$INSTALL_DIR/auth"
     if [ ! -f "$INSTALL_DIR/auth/htpasswd" ] || [ -z "${REGISTRY_PASSWORD:-}" ] || [ -z "${REGISTRY_USER:-}" ]; then
         echo -e "${BLUE}  → Ensuring registry htpasswd authentication exists...${NC}"
-        REGISTRY_PASS="${REGISTRY_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_urlsafe(18))" 2>/dev/null || openssl rand -hex 12 2>/dev/null || { echo "ERROR: Cannot generate registry password" >&2; exit 1; })}"
-        if command -v htpasswd >/dev/null 2>&1; then
+        REGISTRY_PASS="${REGISTRY_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_urlsafe(18))"  || openssl rand -hex 12  || { echo "ERROR: Cannot generate registry password" >&2; exit 1; })}"
+        if command -v htpasswd ; then
             htpasswd -Bbn "${REGISTRY_USER:-smsly-registry}" "$REGISTRY_PASS" > "$INSTALL_DIR/auth/htpasswd"
         else
             python3 -c "
 import bcrypt, sys
 pw = sys.argv[1] if len(sys.argv) > 1 else '$REGISTRY_PASS'
 print('${REGISTRY_USER:-smsly-registry}:' + bcrypt.hashpw(pw.encode(), bcrypt.gensalt(10)).decode())
-" "$REGISTRY_PASS" > "$INSTALL_DIR/auth/htpasswd" 2>/dev/null || true
+" "$REGISTRY_PASS" > "$INSTALL_DIR/auth/htpasswd"  || true
         fi
-        env_set_value "$INSTALL_DIR/.env" "REGISTRY_USER" "${REGISTRY_USER:-smsly-registry}" 2>/dev/null || true
-        env_set_value "$INSTALL_DIR/.env" "REGISTRY_PASSWORD" "$REGISTRY_PASS" 2>/dev/null || true
-        chmod 600 "$INSTALL_DIR/auth/htpasswd" 2>/dev/null || true
+        env_set_value "$INSTALL_DIR/.env" "REGISTRY_USER" "${REGISTRY_USER:-smsly-registry}"  || true
+        env_set_value "$INSTALL_DIR/.env" "REGISTRY_PASSWORD" "$REGISTRY_PASS"  || true
+        chmod 600 "$INSTALL_DIR/auth/htpasswd"  || true
     fi
 
     # ─── Self-heal: missing secrets (update paths can miss secret generation) ─
@@ -99,10 +99,10 @@ print('${REGISTRY_USER:-smsly-registry}:' + bcrypt.hashpw(pw.encode(), bcrypt.ge
     _ensure_secret() {
         local _name="$1" _bytes="$2"
         if [ -z "${!_name:-}" ]; then
-            local _val="$(python3 -c "import secrets; print(secrets.token_hex($_bytes))" 2>/dev/null || openssl rand -hex "$_bytes" 2>/dev/null || true)"
+            local _val="$(python3 -c "import secrets; print(secrets.token_hex($_bytes))"  || openssl rand -hex "$_bytes"  || true)"
             if [ -n "$_val" ]; then
                 printf -v "$_name" '%s' "$_val"
-                env_set_value "$INSTALL_DIR/.env" "$_name" "$_val" 2>/dev/null || true
+                env_set_value "$INSTALL_DIR/.env" "$_name" "$_val"  || true
                 echo -e "${BLUE}    → Generated $_name${NC}"
             fi
         fi
@@ -114,21 +114,21 @@ print('${REGISTRY_USER:-smsly-registry}:' + bcrypt.hashpw(pw.encode(), bcrypt.ge
     _ensure_secret COSIGN_PASSWORD 32
 
     # ─── Self-heal: Cosign keypair ──────────────────────────────────────────
-    if command -v cosign >/dev/null 2>&1; then
+    if command -v cosign ; then
         mkdir -p "$INSTALL_DIR/cosign-keys"
         COSIGN_PRIVATE_KEY_PATH="$INSTALL_DIR/cosign-keys/cosign.key"
         COSIGN_PUBLIC_KEY_PATH="$INSTALL_DIR/cosign-keys/cosign.pub"
         if [ ! -f "$COSIGN_PRIVATE_KEY_PATH" ] || [ ! -f "$COSIGN_PUBLIC_KEY_PATH" ]; then
             echo -e "${BLUE}  → Cosign keypair missing — generating...${NC}"
-            COSIGN_PASSWORD="${COSIGN_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || openssl rand -hex 32 2>/dev/null || true)}"
-            COSIGN_PASSWORD="$COSIGN_PASSWORD" cosign generate-key-pair 2>/dev/null || true
+            COSIGN_PASSWORD="${COSIGN_PASSWORD:-$(python3 -c "import secrets; print(secrets.token_hex(32))"  || openssl rand -hex 32  || true)}"
+            COSIGN_PASSWORD="$COSIGN_PASSWORD" cosign generate-key-pair  || true
             if [ -f cosign.key ]; then
                 mv cosign.key "$COSIGN_PRIVATE_KEY_PATH"
                 mv cosign.pub "$COSIGN_PUBLIC_KEY_PATH"
                 chmod 600 "$COSIGN_PRIVATE_KEY_PATH"
                 chmod 644 "$COSIGN_PUBLIC_KEY_PATH"
-                env_set_value "$INSTALL_DIR/.env" "COSIGN_PASSWORD" "$COSIGN_PASSWORD" 2>/dev/null || true
-                env_set_value "$INSTALL_DIR/.env" "COSIGN_PRIVATE_KEY_PATH" "$COSIGN_PRIVATE_KEY_PATH" 2>/dev/null || true
+                env_set_value "$INSTALL_DIR/.env" "COSIGN_PASSWORD" "$COSIGN_PASSWORD"  || true
+                env_set_value "$INSTALL_DIR/.env" "COSIGN_PRIVATE_KEY_PATH" "$COSIGN_PRIVATE_KEY_PATH"  || true
                 echo -e "${GREEN}    ✓ Cosign keypair created${NC}"
             else
                 echo -e "${YELLOW}    ⚠ cosign generate-key-pair ran but no output — skipping${NC}"
@@ -136,15 +136,15 @@ print('${REGISTRY_USER:-smsly-registry}:' + bcrypt.hashpw(pw.encode(), bcrypt.ge
         else
             # Key exists but password might be missing
             if [ -z "${COSIGN_PASSWORD:-}" ]; then
-                COSIGN_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || openssl rand -hex 32 2>/dev/null || true)"
-                env_set_value "$INSTALL_DIR/.env" "COSIGN_PASSWORD" "$COSIGN_PASSWORD" 2>/dev/null || true
+                COSIGN_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(32))"  || openssl rand -hex 32  || true)"
+                env_set_value "$INSTALL_DIR/.env" "COSIGN_PASSWORD" "$COSIGN_PASSWORD"  || true
             fi
         fi
     fi
 
     # ─── Git Safety ──────────────────────────────────────────────────────────
     # Prevents "dubious ownership" errors on production VPS
-    git config --global --add safe.directory "$INSTALL_DIR" 2>/dev/null || true
+    git config --global --add safe.directory "$INSTALL_DIR"  || true
 
     ensure_infrastructure_permissions
 
@@ -188,14 +188,14 @@ if ! is_checkpoint_done "update_git_synced"; then
     if [ -n "${SMSLY_PRE_UPDATE_HEAD:-}" ]; then
         PRE_UPDATE_HEAD="$SMSLY_PRE_UPDATE_HEAD"
     elif [ -f "$INSTALL_DIR/.pre-update-head" ] && [ -s "$INSTALL_DIR/.pre-update-head" ]; then
-        PRE_UPDATE_HEAD="$(cat "$INSTALL_DIR/.pre-update-head" 2>/dev/null || true)"
+        PRE_UPDATE_HEAD="$(cat "$INSTALL_DIR/.pre-update-head"  || true)"
         echo -e "${YELLOW}  ⚠ Recovering pre-update baseline from prior incomplete run (${PRE_UPDATE_HEAD:0:7})${NC}"
     else
-        PRE_UPDATE_HEAD="$(git rev-parse HEAD 2>/dev/null || true)"
+        PRE_UPDATE_HEAD="$(git rev-parse HEAD  || true)"
     fi
-    echo "$PRE_UPDATE_HEAD" > "$INSTALL_DIR/.pre-update-head" 2>/dev/null || true
+    echo "$PRE_UPDATE_HEAD" > "$INSTALL_DIR/.pre-update-head"  || true
     ensure_local_ignores
-    if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+    if [ -n "$(git status --porcelain )" ]; then
         echo -e "${YELLOW}  ⚠ Local changes detected — stashing before pull${NC}"
         git stash push --include-untracked -m "install-update-$(date +%s)"
         touch "$INSTALL_DIR/.git-stash-marker"
@@ -206,17 +206,17 @@ if ! is_checkpoint_done "update_git_synced"; then
     # Track if git update succeeded
     GIT_UPDATE_OK=true
 
-    if ! git fetch origin "$SMSLY_BRANCH" >/dev/null 2>&1; then
+    if ! git fetch origin "$SMSLY_BRANCH" ; then
         echo -e "${RED}  ✗ Git fetch failed for $SMSLY_BRANCH. SSL verification is always enforced — check network or CA certificates.${NC}"
         GIT_UPDATE_OK=false
     fi
 
     if [ "$GIT_UPDATE_OK" = "true" ]; then
-        if ! git checkout -B "$SMSLY_BRANCH" "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
+        if ! git checkout -B "$SMSLY_BRANCH" "origin/$SMSLY_BRANCH" ; then
             echo -e "${RED}  ✗ Git checkout failed for $SMSLY_BRANCH.${NC}"
             GIT_UPDATE_OK=false
         else
-            git branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
+            git branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH"  || true
         fi
     fi
 
@@ -225,10 +225,10 @@ if ! is_checkpoint_done "update_git_synced"; then
         if [ -n "${SMSLY_INSTALL_WORKDIR:-}" ] && [ -d "${SMSLY_INSTALL_WORKDIR}" ]; then
             echo -e "${BLUE}  → Fallback: Synchronizing from pre-uploaded source bundle...${NC}"
             # Use rsync if available, otherwise cp. Exclude .git to preserve local repo state if any.
-            if command -v rsync >/dev/null 2>&1; then
+            if command -v rsync ; then
                 rsync -rtv --exclude='.git' "${SMSLY_INSTALL_WORKDIR}/" "$INSTALL_DIR/"
             else
-                cp -rv "${SMSLY_INSTALL_WORKDIR}/"* "$INSTALL_DIR/" 2>/dev/null || true
+                cp -rv "${SMSLY_INSTALL_WORKDIR}/"* "$INSTALL_DIR/"  || true
             fi
             echo -e "${GREEN}  ✓ Fallback synchronization complete.${NC}"
         else
@@ -252,7 +252,7 @@ fi
         export SMSLY_PRE_UPDATE_HEAD="$PRE_UPDATE_HEAD"
         # Release the lock before re-exec so the new process can acquire it.
         # Closing FD 9 releases the flock.
-        exec 9>&- 2>/dev/null || true
+        exec 9>&-  || true
         exec env SMSLY_REEXEC=1 NO_SCREEN=true SKIP_SCREEN=1 SMSLY_PRE_UPDATE_HEAD="$PRE_UPDATE_HEAD" PATH="/usr/local/bin:$PATH" bash "$SCRIPT_PATH" --no-screen "$@"
     fi
 
@@ -361,23 +361,23 @@ fi
          _missing_count=0
          # Each line: <VAR_NAME>=<generator>
            _env_generators=(
-               "REDIS_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
-               "RABBITMQ_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
-               "GATEWAY_SECRET|$(python3 -c "import secrets; print(secrets.token_hex(64))" 2>/dev/null || true)"
-               "GITHUB_WEBHOOK_SECRET|$(python3 -c "import secrets; print(secrets.token_hex(64))" 2>/dev/null || true)"
-               "AUTOSCALER_API_TOKEN|$(python3 -c "import secrets; print(secrets.token_hex(64))" 2>/dev/null || true)"
-               "FRP_AUTH_TOKEN|$(python3 -c "import secrets; print(secrets.token_hex(64))" 2>/dev/null || true)"
-               "PGCAT_ADMIN_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(48))" 2>/dev/null || true)"
-               "REGISTRY_HTTP_SECRET|$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
-               "BACKUP_ENCRYPTION_KEY|$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null || openssl rand -base64 32)"
-               "REPLICATION_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
-               "SENTINEL_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
-               "CROWDSEC_BOUNCER_KEY|$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
+               "REDIS_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
+               "RABBITMQ_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
+               "GATEWAY_SECRET|$(python3 -c "import secrets; print(secrets.token_hex(64))"  || true)"
+               "GITHUB_WEBHOOK_SECRET|$(python3 -c "import secrets; print(secrets.token_hex(64))"  || true)"
+               "AUTOSCALER_API_TOKEN|$(python3 -c "import secrets; print(secrets.token_hex(64))"  || true)"
+               "FRP_AUTH_TOKEN|$(python3 -c "import secrets; print(secrets.token_hex(64))"  || true)"
+               "PGCAT_ADMIN_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(48))"  || true)"
+               "REGISTRY_HTTP_SECRET|$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
+               "BACKUP_ENCRYPTION_KEY|$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"  || openssl rand -base64 32)"
+               "REPLICATION_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
+               "SENTINEL_PASSWORD|$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
+               "CROWDSEC_BOUNCER_KEY|$(python3 -c "import secrets; print(secrets.token_hex(32))"  || true)"
            )
          for _entry in "${_env_generators[@]}"; do
              _key="${_entry%%|*}"
              _generator="${_entry#*|}"
-             if ! grep -q "^${_key}=" "$_env_file" 2>/dev/null; then
+             if ! grep -q "^${_key}=" "$_env_file" ; then
                  if [ -n "$_generator" ]; then
                      echo -e "${YELLOW}  → Auto-generating missing $_key${NC}"
                      env_set_value "$_env_file" "$_key" "$_generator"
@@ -391,7 +391,7 @@ fi
              # in the current shell session.
              set -a
              # shellcheck disable=SC1090
-             source "$_env_file" 2>/dev/null || true
+             source "$_env_file"  || true
              set +a
          fi
      fi
@@ -405,16 +405,16 @@ fi
 
      # Switch from dev compose (docker-compose.yml) to prod (HA) if
      # the operator hasn't explicitly picked a different one.
-     _current_compose="$(env_get_value "$INSTALL_DIR/.env" "COMPOSE_FILE" 2>/dev/null || true)"
+     _current_compose="$(env_get_value "$INSTALL_DIR/.env" "COMPOSE_FILE"  || true)"
      if [ "$_current_compose" = "docker-compose.yml" ] && [ -f "$INSTALL_DIR/docker-compose.prod.yml" ]; then
          # Check if postgres-primary already has migrated data (e.g. from a
          # previous manual migration run).  If so, skip re-migration and
          # switch COMPOSE_FILE immediately so the update pipeline can
          # reach the correct DB hostname.
          _already_migrated=false
-         if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx 'smsly-postgres-primary'; then
+         if docker ps --format '{{.Names}}'  | grep -qx 'smsly-postgres-primary'; then
              _tables=$(timeout 30 docker exec smsly-postgres-primary psql -U smsly_admin -d smsly_hosting -t -A \
-                 -c "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';" 2>/dev/null || echo 0)
+                 -c "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';"  || echo 0)
              if [ "${_tables:-0}" -gt 50 ]; then
                  _already_migrated=true
                  echo -e "${GREEN}  → postgres-primary already has $_tables tables — migration already done${NC}"
@@ -428,7 +428,7 @@ fi
              docker compose -f "$INSTALL_DIR/docker-compose.prod.yml" \
                  up -d --wait --wait-timeout 120 \
                  postgres-primary postgres-replica pgcat redis-primary redis-replica \
-                 2>/dev/null || echo -e "${YELLOW}  ⚠ Some HA services may not be healthy yet${NC}"
+                  || echo -e "${YELLOW}  ⚠ Some HA services may not be healthy yet${NC}"
              echo -e "${YELLOW}  → Switching COMPOSE_FILE: docker-compose.yml → docker-compose.prod.yml${NC}"
              env_set_value "$INSTALL_DIR/.env" "COMPOSE_FILE" "docker-compose.prod.yml"
          else
@@ -436,7 +436,7 @@ fi
              # switching COMPOSE_FILE.  If migration fails, we keep the old
              # compose so the platform continues working with the old db.
              _has_old_db=false
-             if [ "$(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -cx 'smsly-hosting-db-1' || echo 0)" -gt 0 ]; then
+             if [ "$(docker ps -a --format '{{.Names}}'  | grep -cx 'smsly-hosting-db-1' || echo 0)" -gt 0 ]; then
                  _has_old_db=true
              fi
 
@@ -449,7 +449,7 @@ fi
                      docker compose -f "$INSTALL_DIR/docker-compose.prod.yml" \
                          up -d --wait --wait-timeout 120 \
                          postgres-primary postgres-replica pgcat redis-primary redis-replica \
-                         2>/dev/null || echo -e "${YELLOW}  ⚠ Some HA services may not be healthy yet${NC}"
+                          || echo -e "${YELLOW}  ⚠ Some HA services may not be healthy yet${NC}"
 
                      echo -e "${BLUE}  → Running data migration from old @db to postgres-primary...${NC}"
                      if bash "$_mig_script"; then
@@ -473,7 +473,7 @@ fi
                  docker compose -f "$INSTALL_DIR/docker-compose.prod.yml" \
                      up -d --wait --wait-timeout 120 \
                      postgres-primary postgres-replica pgcat redis-primary redis-replica \
-                     2>/dev/null || echo -e "${YELLOW}  ⚠ Some HA services may not be healthy yet${NC}"
+                      || echo -e "${YELLOW}  ⚠ Some HA services may not be healthy yet${NC}"
                  echo -e "${YELLOW}  → Switching COMPOSE_FILE: docker-compose.yml → docker-compose.prod.yml${NC}"
                  env_set_value "$INSTALL_DIR/.env" "COMPOSE_FILE" "docker-compose.prod.yml"
              fi
@@ -485,17 +485,17 @@ fi
          _env_fix_file="$INSTALL_DIR/.env"
          # Read the current COMPOSE_FILE once — used by multiple blocks below
          # to decide whether to apply HA-specific migrations.
-         _current_compose_final="$(env_get_value "$_env_fix_file" "COMPOSE_FILE" 2>/dev/null || true)"
+         _current_compose_final="$(env_get_value "$_env_fix_file" "COMPOSE_FILE"  || true)"
 
          # REDIS_HOST: pre-HA used "redis", now "redis-primary"
-         _current_redis_host="$(env_get_value "$_env_fix_file" "REDIS_HOST" 2>/dev/null || true)"
+         _current_redis_host="$(env_get_value "$_env_fix_file" "REDIS_HOST"  || true)"
          if [ "$_current_redis_host" = "redis" ] || [ -z "$_current_redis_host" ]; then
              echo -e "${YELLOW}  → Updating REDIS_HOST: ${_current_redis_host:-<unset>} → redis-primary${NC}"
              env_set_value "$_env_fix_file" "REDIS_HOST" "redis-primary"
          fi
 
          # REDIS_URL: replace stale @redis: with @redis-primary:
-         _redis_url="$(env_get_value "$_env_fix_file" "REDIS_URL" 2>/dev/null || true)"
+         _redis_url="$(env_get_value "$_env_fix_file" "REDIS_URL"  || true)"
          if echo "$_redis_url" | grep -q '@redis:'; then
              _fixed_redis_url="$(echo "$_redis_url" | sed 's|@redis:|@redis-primary:|g')"
              echo -e "${YELLOW}  → Fixing REDIS_URL hostname: redis → redis-primary${NC}"
@@ -503,14 +503,14 @@ fi
          fi
 
          # CONTAINER_REGISTRY_URL: 127.0.0.1:5000 → registry:5000
-         _registry="$(env_get_value "$_env_fix_file" "CONTAINER_REGISTRY_URL" 2>/dev/null || true)"
+         _registry="$(env_get_value "$_env_fix_file" "CONTAINER_REGISTRY_URL"  || true)"
          if [ "$_registry" = "127.0.0.1:5000" ] || [ "$_registry" = "localhost:5000" ]; then
              echo -e "${YELLOW}  → Fixing CONTAINER_REGISTRY_URL: $_registry → registry:5000${NC}"
              env_set_value "$_env_fix_file" "CONTAINER_REGISTRY_URL" "registry:5000"
          fi
 
          # DATABASE_URL: auto-migrate from pre-HA single-node @db to pgcat
-         _db_url="$(env_get_value "$_env_fix_file" "DATABASE_URL" 2>/dev/null || true)"
+         _db_url="$(env_get_value "$_env_fix_file" "DATABASE_URL"  || true)"
          if echo "$_db_url" | grep -q '@db:'; then
              if [ -n "$(get_pgcat_if_exists)" ]; then
                  _migrated_url="$(echo "$_db_url" | sed 's|@db:5432|@pgcat:5432|;s|@db/|@pgcat/|')"
@@ -526,7 +526,7 @@ fi
          # points to prod (HA).  If data migration failed and we kept the
          # dev compose, leaving DIRECT_DATABASE_URL pointed at postgres-primary
          # would crash Django management commands against an empty DB.
-         _direct_url="$(env_get_value "$_env_fix_file" "DIRECT_DATABASE_URL" 2>/dev/null || true)"
+         _direct_url="$(env_get_value "$_env_fix_file" "DIRECT_DATABASE_URL"  || true)"
          if echo "$_direct_url" | grep -q '@db:' && echo "$_current_compose_final" | grep -q 'prod'; then
              _migrated_direct="$(echo "$_direct_url" | sed 's|@db:5432|@postgres-primary:5432|')"
              echo -e "${YELLOW}  → Migrating DIRECT_DATABASE_URL: @db → @postgres-primary${NC}"
@@ -537,14 +537,14 @@ fi
          # prod compose is active (has a replica).  Setting it on the
          # dev compose will cause NOREPLICAS errors on every write.
          if echo "$_current_compose_final" | grep -q 'prod'; then
-             if ! grep -q '^REDIS_MIN_REPLICAS_TO_WRITE=' "$_env_fix_file" 2>/dev/null; then
+             if ! grep -q '^REDIS_MIN_REPLICAS_TO_WRITE=' "$_env_fix_file" ; then
                  echo -e "${YELLOW}  → Adding REDIS_MIN_REPLICAS_TO_WRITE=1 (Redis HA durability)${NC}"
                  echo 'REDIS_MIN_REPLICAS_TO_WRITE=1' >> "$_env_fix_file"
              fi
          else
              # Dev/single-node compose — ensure replica requirement is off
              # so writes don't get rejected.
-             _min_rep="$(grep '^REDIS_MIN_REPLICAS_TO_WRITE=' "$_env_fix_file" 2>/dev/null | cut -d= -f2 || true)"
+             _min_rep="$(grep '^REDIS_MIN_REPLICAS_TO_WRITE=' "$_env_fix_file"  | cut -d= -f2 || true)"
              if [ "$_min_rep" != "0" ]; then
                  echo -e "${YELLOW}  → Setting REDIS_MIN_REPLICAS_TO_WRITE=0 (single-node, no replica)${NC}"
                  env_set_value "$_env_fix_file" "REDIS_MIN_REPLICAS_TO_WRITE" "0"
@@ -552,11 +552,11 @@ fi
          fi
 
          # Ensure PG_SYNCHRONOUS_COMMIT is present (default: on)
-         if ! grep -q '^PG_SYNCHRONOUS_COMMIT=' "$_env_fix_file" 2>/dev/null; then
+         if ! grep -q '^PG_SYNCHRONOUS_COMMIT=' "$_env_fix_file" ; then
              echo -e "${YELLOW}  → Adding PG_SYNCHRONOUS_COMMIT=on (PostgreSQL durability)${NC}"
              echo 'PG_SYNCHRONOUS_COMMIT=on' >> "$_env_fix_file"
          else
-             _pg_commit="$(env_get_value "$_env_fix_file" "PG_SYNCHRONOUS_COMMIT" 2>/dev/null || true)"
+             _pg_commit="$(env_get_value "$_env_fix_file" "PG_SYNCHRONOUS_COMMIT"  || true)"
              if [ "$_pg_commit" = "off" ]; then
                  echo -e "${YELLOW}  ⚠ PG_SYNCHRONOUS_COMMIT=off — recent commits may be lost on crash.${NC}"
                  echo -e "${YELLOW}     Consider setting PG_SYNCHRONOUS_COMMIT=on for durability.${NC}"
@@ -649,8 +649,6 @@ fi
             wait_for_container_ready "smsly-hosting-backend-1" 120 || true
 
             echo -e "${BLUE}  • Running post-migration tasks...${NC}"
-            echo -e "${BLUE}    ↳ Running fix_sequences...${NC}"
-            timeout 120 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py fix_sequences || echo -e "${YELLOW}    ⚠ fix_sequences failed or timed out${NC}"
             echo -e "${BLUE}    ↳ Running collectstatic...${NC}"
             timeout 120 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput || echo -e "${YELLOW}    ⚠ collectstatic failed or timed out${NC}"
 
@@ -700,7 +698,7 @@ fi
             # 1. Rebuild frontend from cached layers (no --pull, no new base images)
             if [ "$MODE_NODE" != "true" ]; then
                 echo -e "${BLUE}  → Rebuilding frontend (cached)...${NC}"
-                timeout -k 5 600 docker compose -f "$COMPOSE_FILE" build frontend 2>/dev/null || {
+                timeout -k 5 600 docker compose -f "$COMPOSE_FILE" build frontend  || {
                     echo -e "${YELLOW}  ⚠ Frontend build failed (cached layers missing). Skipping frontend.${NC}"
                     echo -e "${YELLOW}    Run --update when Docker Hub is reachable for a full rebuild.${NC}"
                 }
@@ -735,8 +733,6 @@ fi
             wait_for_container_ready "smsly-hosting-backend-1" 120 || true
 
             echo -e "${BLUE}  • Running post-migration tasks...${NC}"
-            echo -e "${BLUE}    ↳ Running fix_sequences...${NC}"
-            timeout 120 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py fix_sequences || echo -e "${YELLOW}    ⚠ fix_sequences failed or timed out${NC}"
             echo -e "${BLUE}    ↳ Running collectstatic...${NC}"
             timeout 120 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput || echo -e "${YELLOW}    ⚠ collectstatic failed or timed out${NC}"
 
@@ -794,7 +790,7 @@ fi
 
             # 3. Prune dangling build cache
             echo -e "${BLUE}    ↳ Pruning build cache...${NC}"
-            docker builder prune -af 2>/dev/null || true
+            docker builder prune -af  || true
 
             # 4. Ensure shared networks exist (create if missing, don't destroy)
             echo -e "${BLUE}    ↳ Ensuring networks exist...${NC}"
@@ -865,8 +861,6 @@ fi
             wait_for_container_ready "smsly-hosting-backend-1" 120 || true
 
             echo -e "${BLUE}  • Running post-migration tasks...${NC}"
-            echo -e "${BLUE}    ↳ Running fix_sequences...${NC}"
-            timeout 120 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py fix_sequences || echo -e "${YELLOW}    ⚠ fix_sequences failed or timed out${NC}"
             echo -e "${BLUE}    ↳ Running collectstatic...${NC}"
             timeout 120 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput || echo -e "${YELLOW}    ⚠ collectstatic failed or timed out${NC}"
 
@@ -905,12 +899,12 @@ fi
     # ─── Infisical auto-provision + secret sync ───────────────────────────
     _INFISICAL_COMPOSE="$INSTALL_DIR/infrastructure/docker/docker-compose.infisical.yml"
     if [ -f "$_INFISICAL_COMPOSE" ]; then
-        _infisical_running=$(docker ps --filter "name=infisical" --format '{{.Names}}' 2>/dev/null | head -1)
+        _infisical_running=$(docker ps --filter "name=infisical" --format '{{.Names}}'  | head -1)
         if [ -n "$_infisical_running" ]; then
             echo -e "${GREEN}  ✓ Infisical already running (${_infisical_running})${NC}"
         else
             # Ensure the infisical data volume exists
-            docker volume create infisical_data 2>/dev/null || true
+            docker volume create infisical_data  || true
 
             # Create the infisical database in Postgres if it doesn't exist
             _db_container=""
@@ -925,10 +919,10 @@ fi
             fi
             if [ -n "$_db_container" ]; then
                 _db_exists=$(timeout 30 docker exec "$_db_container" psql -U "${_db_user}" -d "${POSTGRES_DB:-smsly_hosting}" -tc \
-                    "SELECT 1 FROM pg_database WHERE datname='infisical'" 2>/dev/null | tr -d '[:space:]' || true)
+                    "SELECT 1 FROM pg_database WHERE datname='infisical'"  | tr -d '[:space:]' || true)
                 if [ "$_db_exists" != "1" ]; then
                     timeout 30 docker exec "$_db_container" psql -U "${_db_user}" -d "${POSTGRES_DB:-smsly_hosting}" -c \
-                        "CREATE DATABASE infisical;" 2>/dev/null && \
+                        "CREATE DATABASE infisical;"  && \
                         echo -e "${GREEN}  ✓ Created infisical database${NC}" || \
                         echo -e "${YELLOW}  ⚠ Could not create infisical database (may already exist)${NC}"
                 fi
@@ -943,25 +937,25 @@ fi
                     -v infisical_data:/data \
                     -v "$_gen_script":/tmp/infisical-gen-env.sh:ro \
                     alpine:3.19 \
-                    sh /tmp/infisical-gen-env.sh /data/infisical.env 2>/dev/null || \
+                    sh /tmp/infisical-gen-env.sh /data/infisical.env  || \
                     echo -e "${YELLOW}  ⚠ Could not generate Infisical env (may already exist)${NC}"
             fi
 
             # Bring up Infisical (env_file loaded from volume)
             echo -e "${BLUE}  → Provisioning Infisical secret manager...${NC}"
             docker compose --env-file "$INSTALL_DIR/.env" \
-                -f "$_INFISICAL_COMPOSE" up -d --remove-orphans 2>/dev/null && \
+                -f "$_INFISICAL_COMPOSE" up -d --remove-orphans  && \
                 echo -e "${GREEN}  ✓ Infisical is running${NC}" || \
                 echo -e "${YELLOW}  ⚠ Infisical startup failed (non-fatal — secrets remain in .env)${NC}"
         fi
 
         # Sync platform secrets to Infisical if it's running
-        _infisical_running=$(docker ps --filter "name=infisical" --format '{{.Names}}' 2>/dev/null | head -1)
+        _infisical_running=$(docker ps --filter "name=infisical" --format '{{.Names}}'  | head -1)
         if [ -n "$_infisical_running" ]; then
             echo -e "${BLUE}  → Syncing platform secrets to Infisical...${NC}"
             backend_container="$(resolve_container_target "smsly-hosting-backend-1")"
             if [ -n "$backend_container" ]; then
-                timeout 60 docker exec "$backend_container" python manage.py sync_infisical_secrets --push 2>/dev/null || \
+                timeout 60 docker exec "$backend_container" python manage.py sync_infisical_secrets --push  || \
                     echo -e "${YELLOW}  ⚠ Infisical sync failed (non-fatal — secrets remain in .env)${NC}"
             fi
         fi
@@ -971,13 +965,13 @@ fi
     if [ "$MODE_AGENT_LITE" != "true" ] && [ "$MODE_NODE" != "true" ]; then
         echo -e "${BLUE}  → Updating observability stack...${NC}"
         # Ensure scripts mounted into containers are executable (git may not preserve +x)
-        chmod +x "$INSTALL_DIR"/scripts/alertmanager-entrypoint.sh 2>/dev/null || true
-        chmod +x "$INSTALL_DIR"/infrastructure/docker/infisical-gen-env.sh 2>/dev/null || true
+        chmod +x "$INSTALL_DIR"/scripts/alertmanager-entrypoint.sh  || true
+        chmod +x "$INSTALL_DIR"/infrastructure/docker/infisical-gen-env.sh  || true
         mkdir -p /opt/smsly-hosting/prometheus-targets
-        if ! chown -R 1000:1000 /opt/smsly-hosting/prometheus-targets 2>/dev/null; then
+        if ! chown -R 1000:1000 /opt/smsly-hosting/prometheus-targets ; then
             echo -e "${YELLOW}  ⚠ Could not chown prometheus-targets to uid 1000${NC}"
         fi
-        chmod 2777 /opt/smsly-hosting/prometheus-targets 2>/dev/null || true
+        chmod 2777 /opt/smsly-hosting/prometheus-targets  || true
         docker compose \
             --env-file /opt/smsly-hosting/.env \
             -f infrastructure/docker/docker-compose.observability.yml \
@@ -1009,13 +1003,13 @@ fi
 fi
 
 # ─── Vulnerability scan of freshly built images ────────────────────────
-if command -v trivy >/dev/null 2>&1; then
+if command -v trivy ; then
     echo -e "${BLUE}  → Scanning rebuilt images for vulnerabilities...${NC}"
     for _trivy_img in backend frontend; do
         _trivy_tag="smsly/${_trivy_img}:latest"
-        if docker image inspect "$_trivy_tag" >/dev/null 2>&1; then
+        if docker image inspect "$_trivy_tag" ; then
             echo -e "${BLUE}    ↳ Scanning $_trivy_tag...${NC}"
-            trivy image --scanners vuln --severity CRITICAL,HIGH --exit-code 0 --no-progress "$_trivy_tag" 2>/dev/null || \
+            trivy image --scanners vuln --severity CRITICAL,HIGH --exit-code 0 --no-progress "$_trivy_tag"  || \
                 echo -e "${YELLOW}    ⚠ $_trivy_tag scan reported warnings — review output above${NC}"
         fi
     done
@@ -1023,16 +1017,16 @@ if command -v trivy >/dev/null 2>&1; then
 fi
 
 # ─── Safe Update: Post-Deploy Verification ─────────────────────────────
-if command -v safe_update_post_verify >/dev/null 2>&1; then
+if command -v safe_update_post_verify ; then
     echo -e "${BLUE}  → Running post-deploy health checks...${NC}"
     sleep 30  # wait for containers to warm up
     if safe_update_post_verify; then
         echo -e "${GREEN}  ✓ All health checks passed — update successful${NC}"
         trap - ERR  # clear rollback trap on success
-        if command -v safe_update_cleanup >/dev/null 2>&1; then
+        if command -v safe_update_cleanup ; then
             safe_update_cleanup
         fi
-        rm -f "$SNAPSHOT_FILE" 2>/dev/null || true
+        rm -f "$SNAPSHOT_FILE"  || true
     else
         echo -e "${RED}  ✗ Post-deploy health checks failed — initiating rollback${NC}"
         safe_update_rollback
@@ -1056,26 +1050,26 @@ if not created and not cp.is_active:
     echo -e "${BLUE}  → Hardening Docker socket permissions...${NC}"
     # NOTE: Removed chmod 666 — world-writable docker.sock is a security risk.
     # Group membership (docker group) is the correct access control mechanism.
-    if ! groups smsly 2>/dev/null | grep -q "docker"; then
+    if ! groups smsly  | grep -q "docker"; then
         usermod -aG docker smsly || echo -e "${YELLOW}    ⚠ usermod docker group failed (non-fatal)${NC}"
     fi
 
     # ─── Self-Healing: Cleanup Stale Resources ──────────────────────────────
     echo -e "${BLUE}  → Pruning stale deployment containers and BuildKit caches...${NC}"
     # Prune orphaned containers created by the deployment system (labeled)
-    docker container prune -f --filter "label=com.smsly.managed=true" --filter "status=created" 2>/dev/null || true
-    docker container prune -f --filter "label=com.docker.compose.project" --filter "status=exited" 2>/dev/null || true
+    docker container prune -f --filter "label=com.smsly.managed=true" --filter "status=created"  || true
+    docker container prune -f --filter "label=com.docker.compose.project" --filter "status=exited"  || true
     # Prune BuildKit build cache (saves significant disk space)
-    docker builder prune -f --filter "until=24h" 2>/dev/null || true
+    docker builder prune -f --filter "until=24h"  || true
     # Prune stale rollback backup containers left from failed blue-green promotions
-    docker container prune -f --filter "status=exited" 2>/dev/null || true
+    docker container prune -f --filter "status=exited"  || true
     # Prune dangling images left over after the new images were tagged
-    docker image prune -f 2>/dev/null || true
-    for ctr in $(docker ps -a --filter "status=exited" --filter "name=-rollback-" --format '{{.Names}}' 2>/dev/null || true); do
-        docker rm -f "$ctr" 2>/dev/null || true
+    docker image prune -f  || true
+    for ctr in $(docker ps -a --filter "status=exited" --filter "name=-rollback-" --format '{{.Names}}'  || true); do
+        docker rm -f "$ctr"  || true
     done
-    for ctr in $(docker ps -a --filter "status=created" --filter "name=-rollback-" --format '{{.Names}}' 2>/dev/null || true); do
-        docker rm -f "$ctr" 2>/dev/null || true
+    for ctr in $(docker ps -a --filter "status=created" --filter "name=-rollback-" --format '{{.Names}}'  || true); do
+        docker rm -f "$ctr"  || true
     done
 
     # ─── Self-Healing: Automatic Queue Restoration ──────────────────────────
@@ -1111,7 +1105,7 @@ if d_count > 0:
     from apps.deployments.tasks import delete_service_task
     for s in Service.objects.filter(status='DELETION_PENDING'):
         delete_service_task.delay(str(s.id))
-" 2>/dev/null || true
+"  || true
 
     # ─── Verification: Celery Worker Health ─────────────────────────────────
     echo -e "${BLUE}  → Verifying worker connectivity and queue bindings...${NC}"
@@ -1122,8 +1116,8 @@ if d_count > 0:
         raw_worker="smsly-hosting-celery-worker-1"
     fi
     worker_container="$(resolve_container_target "$raw_worker")"
-    DEPLOY_WORKER_HEALTH="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$worker_container" 2>/dev/null || echo "")"
-    if timeout 20 docker exec -i "$worker_container" celery -A config inspect active_queues --timeout=10 2>/dev/null | grep -q "deploy"; then
+    DEPLOY_WORKER_HEALTH="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$worker_container"  || echo "")"
+    if timeout 20 docker exec -i "$worker_container" celery -A config inspect active_queues --timeout=10  | grep -q "deploy"; then
         echo -e "${GREEN}  ✓ Deployment worker successfully bound to 'deploy' queue${NC}"
     elif [ "$DEPLOY_WORKER_HEALTH" = "healthy" ] || [ "$DEPLOY_WORKER_HEALTH" = "running" ]; then
         echo -e "${GREEN}  ✓ Deployment worker container is healthy/running (queue inspect timed out)${NC}"
@@ -1150,14 +1144,14 @@ sync_platform_domain_state '$INSTALL_DIR/.env'
 
     # ─── Fix .env permissions (must be writable by Docker container UID 1000) ──
     if [ -f "$INSTALL_DIR/.env" ]; then
-        chown root:1000 "$INSTALL_DIR/.env" 2>/dev/null || true
-        chmod 640 "$INSTALL_DIR/.env" 2>/dev/null || true
+        chown root:1000 "$INSTALL_DIR/.env"  || true
+        chmod 640 "$INSTALL_DIR/.env"  || true
     fi
 
     # ─── Caddy: Generate self-signed cert + regenerate Caddyfile ──
     if should_manage_caddy; then
     ensure_selfsigned_cert
-    if command -v caddy &> /dev/null; then
+    if command -v caddy ; then
         echo -e "${BLUE}  → Regenerating Caddyfile with current service domains...${NC}"
 
         # ── Step 1: Find the Cloudflare token FIRST (before generating Caddyfile) ──
@@ -1165,7 +1159,7 @@ sync_platform_domain_state '$INSTALL_DIR/.env'
 
         # Priority: .env file > PlatformConfig DB
         if [ -z "$CF_TOKEN" ] && [ -f "$INSTALL_DIR/.env" ]; then
-            CF_TOKEN="$(grep -m1 '^CLOUDFLARE_API_TOKEN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
+            CF_TOKEN="$(grep -m1 '^CLOUDFLARE_API_TOKEN=' "$INSTALL_DIR/.env"  | cut -d= -f2- || true)"
         fi
         # Fallback: read from PlatformConfig in the database (set via Settings UI)
         if [ -z "$CF_TOKEN" ] || [ "$CF_TOKEN" = "fake" ]; then
@@ -1175,13 +1169,13 @@ config = PlatformConfig.load()
 token = (getattr(config, 'cloudflare_api_token', '') or '').strip()
 if token and token.lower() not in ('fake', 'changeme', 'test', ''):
     print(token)
-" 2>/dev/null || true)"
+"  || true)"
             DB_TOKEN="$(echo "$DB_TOKEN" | tr -d '[:space:]')"
             if [ -n "$DB_TOKEN" ]; then
                 CF_TOKEN="$DB_TOKEN"
                 echo -e "${GREEN}  ✓ Cloudflare token found in Settings DB${NC}"
                 # Sync back to .env so it persists
-                if grep -q 'CLOUDFLARE_API_TOKEN' "$INSTALL_DIR/.env" 2>/dev/null; then
+                if grep -q 'CLOUDFLARE_API_TOKEN' "$INSTALL_DIR/.env" ; then
                     sed -i "s/CLOUDFLARE_API_TOKEN=.*/CLOUDFLARE_API_TOKEN=$CF_TOKEN/" "$INSTALL_DIR/.env"
                 else
                     echo "CLOUDFLARE_API_TOKEN=$CF_TOKEN" >> "$INSTALL_DIR/.env"
@@ -1202,9 +1196,9 @@ c = PlatformConfig.load()
 d = (c.domain or '').strip()
 if d and d != 'localhost':
     print(d)
-" 2>/dev/null | tr -d '[:space:]' || true)"
+"  | tr -d '[:space:]' || true)"
             if [ -z "$cf_domain" ]; then
-                cf_domain="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
+                cf_domain="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env"  | cut -d= -f2- || true)"
             fi
 
             cf_server_ip="$(detect_public_ip)"
@@ -1231,7 +1225,7 @@ for domain in Domain.objects.filter(
     if cd and suffix and cd.endswith(suffix):
         hosts.add(cd)
 print(' '.join(sorted(hosts)))
-" 2>/dev/null | tr -d '\r' | tr -d '\n' || true)"
+"  | tr -d '\r' | tr -d '\n' || true)"
 
             cf_svc_blocks=""
             cf_svc_blocks="$(timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
@@ -1266,7 +1260,7 @@ for domain in Domain.objects.select_related('service').filter(
         print(f'{custom_domain} {{\n    tls {{\n        on_demand\n    }}\n    reverse_proxy {upstream} {{\n        header_up Host {public_domain}\n    }}\n    encode gzip\n}}\n')
     else:
         print(f'{custom_domain} {{\n    tls {{\n        on_demand\n    }}\n    reverse_proxy {upstream}\n    encode gzip\n}}\n')
-" 2>/dev/null | tr -d '\r' || true)"
+"  | tr -d '\r' || true)"
 
             # Only generate wildcard Caddyfile for real domains
             cf_is_real_domain=false
@@ -1343,7 +1337,7 @@ CFCADDY
             generate_safe_caddyfile "post-update validation"
         fi
 
-        reload_container_caddy 2>/dev/null || true
+        reload_container_caddy  || true
 
         # ─── Python-based Caddyfile overlay (preview-aware routing) ─────────────
         # The bash heredoc above generates a static template without preview
@@ -1358,14 +1352,14 @@ content = generate_caddyfile(config)
 token = (getattr(config, 'cloudflare_api_token', '') or '').strip()
 result = apply_caddyfile(content, cloudflare_token=token, preserve_existing_token=True)
 print(result.get('message', 'ok'))
-" 2>/dev/null && echo -e "${GREEN}  ✓ Preview-aware Caddyfile applied${NC}" || \
+"  && echo -e "${GREEN}  ✓ Preview-aware Caddyfile applied${NC}" || \
             echo -e "${YELLOW}  ⚠ Python Caddyfile overlay failed (non-fatal, static template still active)${NC}"
 
-        reload_container_caddy 2>/dev/null || true
+        reload_container_caddy  || true
 
         # Verify Caddy is running
         sleep 2
-        if docker compose -f "$COMPOSE_FILE" ps -q caddy 2>/dev/null | grep -q .; then
+        if docker compose -f "$COMPOSE_FILE" ps -q caddy  | grep -q .; then
             echo -e "${GREEN}  ✓ Caddy config regenerated and running${NC}"
         else
             echo -e "${YELLOW}  ⚠ Caddy failed to start. Run: journalctl -u caddy --no-pager -n 20${NC}"
@@ -1377,9 +1371,9 @@ c = PlatformConfig.load()
 d = (c.domain or '').strip()
 if d and d != 'localhost':
     print(d)
-" 2>/dev/null | tr -d '[:space:]' || true)"
+"  | tr -d '[:space:]' || true)"
         if [ -z "$POST_CADDY_DOMAIN" ]; then
-            POST_CADDY_DOMAIN="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
+            POST_CADDY_DOMAIN="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env"  | cut -d= -f2- || true)"
         fi
 
         install_caddy_health_guard "$POST_CADDY_DOMAIN"
@@ -1388,18 +1382,18 @@ if d and d != 'localhost':
 
     timeout -k 5 600 bash -c "
 export COMPOSE_FILE='$COMPOSE_FILE'
-source '$INSTALL_DIR/lib/common.sh' 2>/dev/null
+source '$INSTALL_DIR/lib/common.sh' 
 safe_refresh_runtime_services
 " || true
     timeout -k 5 300 bash -c "
 export COMPOSE_FILE='$COMPOSE_FILE'
-source '$INSTALL_DIR/lib/common.sh' 2>/dev/null
+source '$INSTALL_DIR/lib/common.sh' 
 ensure_celery_workers_running
 " || true
 
     # ─── Auto-redeploy active services when platform code or domain state changes ──
-    PRE_HEAD="$(cat "$INSTALL_DIR/.pre-update-head" 2>/dev/null || true)"
-    CURRENT_HEAD="$(cd "$INSTALL_DIR" && git rev-parse HEAD 2>/dev/null || true)"
+    PRE_HEAD="$(cat "$INSTALL_DIR/.pre-update-head"  || true)"
+    CURRENT_HEAD="$(cd "$INSTALL_DIR" && git rev-parse HEAD  || true)"
     CODE_CHANGED=false
     if [ -n "$PRE_HEAD" ] && [ "$PRE_HEAD" != "$CURRENT_HEAD" ]; then
         CODE_CHANGED=true
@@ -1419,7 +1413,7 @@ ensure_celery_workers_running
         echo -e "${GREEN}  ✓ No platform code or domain-driven redeploys required${NC}"
     fi
     # Clean up marker
-    rm -f "$INSTALL_DIR/.pre-update-head" 2>/dev/null || true
+    rm -f "$INSTALL_DIR/.pre-update-head"  || true
 
     # ─── Endpoint Verification (3 checks) ──────────────────────────────────
     echo -e "\n${BLUE}  → Running endpoint verification (3 checks)...${NC}"
@@ -1431,7 +1425,7 @@ ensure_celery_workers_running
     EP1_FALLBACK_URL="http://127.0.0.1:8000/health"
     _LITE_HOST_HEADER=""
     if [ "$MODE_AGENT_LITE" = "true" ]; then
-        _ep1_domain="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]' || true)"
+        _ep1_domain="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env"  | cut -d= -f2- | tr -d '[:space:]' || true)"
         if [ -n "$_ep1_domain" ] && [ "$_ep1_domain" != "localhost" ]; then
             _LITE_HOST_HEADER="$_ep1_domain"
         fi
@@ -1444,18 +1438,18 @@ ensure_celery_workers_running
         if [ "$MODE_AGENT_LITE" = "true" ]; then
             if [ -n "${_LITE_HOST_HEADER:-}" ]; then
                 # Route through Traefik with the correct Host header
-                EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 -H "Host: ${_LITE_HOST_HEADER}" "http://127.0.0.1/health" 2>/dev/null) || EP1_CODE="000"
+                EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 -H "Host: ${_LITE_HOST_HEADER}" "http://127.0.0.1/health" ) || EP1_CODE="000"
             else
                 # No domain — route through Traefik on port 80
-                EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1/health" 2>/dev/null) || EP1_CODE="000"
+                EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1/health" ) || EP1_CODE="000"
             fi
         else
-            if timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health >/dev/null 2>&1; then
+            if timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health ; then
                 EP1_CODE="200"
-            elif curl -fsS --max-time 5 "$EP1_FALLBACK_URL" >/dev/null 2>&1; then
+            elif curl -fsS --max-time 5 "$EP1_FALLBACK_URL" ; then
                 EP1_CODE="200"
             else
-                EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP1_FALLBACK_URL" 2>/dev/null) || EP1_CODE="000"
+                EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP1_FALLBACK_URL" ) || EP1_CODE="000"
             fi
         fi
         case "$EP1_CODE" in
@@ -1486,10 +1480,10 @@ config = PlatformConfig.load()
 d = (config.domain or '').strip()
 if d and d != 'localhost':
     print(d)
-" 2>/dev/null | tr -d '[:space:]' || true)"
+"  | tr -d '[:space:]' || true)"
     # Fallback to .env if DB query failed
     if [ -z "$EP_DOMAIN" ]; then
-        EP_DOMAIN="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
+        EP_DOMAIN="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env"  | cut -d= -f2- || true)"
     fi
     HTTPS_OK=false
     EP2_CODE="---"
@@ -1501,7 +1495,7 @@ if d and d != 'localhost':
         EP2_URL="https://${EP_DOMAIN}/health"
         echo -e "${BLUE}        Endpoint: $EP2_URL${NC}"
         for attempt in 1 2 3; do
-            EP2_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 8 "$EP2_URL" 2>/dev/null) || EP2_CODE="000"
+            EP2_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 8 "$EP2_URL" ) || EP2_CODE="000"
             case "$EP2_CODE" in
                 2*|3*)
                     HTTPS_OK=true
@@ -1541,7 +1535,7 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
         cd = cd.strip()
         if cd:
             print(f'{svc.name} (custom)|{cd}')
-" 2>/dev/null | tr -d '\r' || true)"
+"  | tr -d '\r' || true)"
 
     # Also check Traefik port directly
     if [ "$MODE_AGENT_LITE" = "true" ]; then
@@ -1549,7 +1543,7 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
     else
         EP3_URL="http://127.0.0.1:8081/"
     fi
-    EP3_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP3_URL" 2>/dev/null) || EP3_CODE="000"
+    EP3_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP3_URL" ) || EP3_CODE="000"
     if [ "$EP3_CODE" != "000" ] && [ "$EP3_CODE" != "502" ]; then
         EP3_RESULT="${GREEN}PASS${NC}"
         echo -e "${GREEN}  ✓ Traefik proxy ($EP3_URL) — HTTP $EP3_CODE${NC}"
@@ -1577,7 +1571,7 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
             svc_code="000"
             svc_ok=false
             for attempt in 1 2 3; do
-                svc_code=$(curl -so /dev/null -w '%{http_code}' --max-time 8 "$svc_url" 2>/dev/null) || svc_code="000"
+                svc_code=$(curl -so /dev/null -w '%{http_code}' --max-time 8 "$svc_url" ) || svc_code="000"
                 if [ "$svc_code" != "000" ] && [ "$svc_code" != "502" ] && [ "$svc_code" != "503" ]; then
                     svc_ok=true
                     break
@@ -1634,8 +1628,8 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
 
     # Show container status
     echo -e "\n${BLUE}Container Status:${NC}"
-    docker compose -f "$COMPOSE_FILE" ps --format "table {{.Name}}\t{{.Status}}" 2>/dev/null || \
-        docker compose -f "$COMPOSE_FILE" ps 2>/dev/null || true
+    docker compose -f "$COMPOSE_FILE" ps --format "table {{.Name}}\t{{.Status}}"  || \
+        docker compose -f "$COMPOSE_FILE" ps  || true
 
     # ─── Update autoscaler service (picks up code changes + new token) ────────
     if [ -f "$INSTALL_DIR/scripts/smsly-autoscaler.py" ]; then
@@ -1663,17 +1657,17 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
     fi
     for CONTAINER in $oom_containers; do
         resolved_container="$(resolve_container_target "$CONTAINER")"
-        CPID=$(docker inspect --format '{{.State.Pid}}' "$resolved_container" 2>/dev/null || echo "")
+        CPID=$(docker inspect --format '{{.State.Pid}}' "$resolved_container"  || echo "")
         if [ -n "$CPID" ] && [ "$CPID" != "0" ] && [ -f "/proc/$CPID/oom_score_adj" ]; then
-            echo -500 > "/proc/$CPID/oom_score_adj" 2>/dev/null || true
+            echo -500 > "/proc/$CPID/oom_score_adj"  || true
         fi
     done
     echo -e "${GREEN}  ✓ OOM protection set (core, database, celery, proxy)${NC}"
 
     # ─── Ensure iptables-restore systemd service exists ─────────────────────
-    if command -v iptables-save >/dev/null 2>&1; then
+    if command -v iptables-save ; then
         mkdir -p /etc/iptables
-        iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+        iptables-save > /etc/iptables/rules.v4  || true
         if [ ! -f /etc/systemd/system/iptables-restore.service ]; then
             echo -e "${BLUE}  → Installing iptables-restore systemd service...${NC}"
             cat > /etc/systemd/system/iptables-restore.service <<'RESTORE_EOF'
@@ -1699,9 +1693,9 @@ RESTORE_EOF
     # ─── Ensure platform update watcher and caddy watcher services exist ───
     if [ -f "$INSTALL_DIR/scripts/smsly-update-watcher.service" ]; then
         echo -e "${BLUE}  → Ensuring platform update and Caddy config watcher services...${NC}"
-        chmod +x "$INSTALL_DIR/scripts/platform-update.sh" "$INSTALL_DIR/scripts/caddy-reload.sh" 2>/dev/null || true
-        cp "$INSTALL_DIR/scripts/smsly-update-watcher.service" /etc/systemd/system/smsly-update-watcher.service 2>/dev/null || true
-        cp "$INSTALL_DIR/scripts/caddy-watcher.service" /etc/systemd/system/caddy-watcher.service 2>/dev/null || true
+        chmod +x "$INSTALL_DIR/scripts/platform-update.sh" "$INSTALL_DIR/scripts/caddy-reload.sh"  || true
+        cp "$INSTALL_DIR/scripts/smsly-update-watcher.service" /etc/systemd/system/smsly-update-watcher.service  || true
+        cp "$INSTALL_DIR/scripts/caddy-watcher.service" /etc/systemd/system/caddy-watcher.service  || true
         systemctl daemon-reload || echo -e "${YELLOW}    ⚠ systemctl daemon-reload failed (non-fatal)${NC}"
         systemctl enable smsly-update-watcher caddy-watcher || echo -e "${YELLOW}    ⚠ systemctl enable watchers failed (non-fatal)${NC}"
         systemctl restart smsly-update-watcher caddy-watcher || echo -e "${YELLOW}    ⚠ systemctl restart watchers failed (non-fatal)${NC}"
@@ -1713,12 +1707,12 @@ RESTORE_EOF
         for wg_conf in /etc/wireguard/*.conf; do
             [ -f "$wg_conf" ] || continue
             wg_iface=$(basename "$wg_conf" .conf)
-            if ! systemctl is-enabled "wg-quick@${wg_iface}" >/dev/null 2>&1; then
+            if ! systemctl is-enabled "wg-quick@${wg_iface}" ; then
                 echo -e "${BLUE}  → Re-enabling WireGuard mesh ($wg_iface)...${NC}"
                 systemctl enable --now "wg-quick@${wg_iface}" || echo -e "${YELLOW}    ⚠ systemctl enable wg-quick failed (non-fatal)${NC}"
                 echo -e "${GREEN}  ✓ WireGuard $wg_iface re-enabled${NC}"
             fi
-            if ! systemctl is-active "wg-quick@${wg_iface}" >/dev/null 2>&1; then
+            if ! systemctl is-active "wg-quick@${wg_iface}" ; then
                 echo -e "${YELLOW}  ⚠ WireGuard $wg_iface is not running, attempting restart...${NC}"
                 systemctl start "wg-quick@${wg_iface}" || echo -e "${YELLOW}    ⚠ systemctl start wg-quick failed (non-fatal)${NC}"
             fi
@@ -1731,7 +1725,7 @@ RESTORE_EOF
     # Infrastructure Diagnostic & Auto-Fix
     # Infrastructure Handshake & Health Stabilization
     echo -e "\n${BLUE}  🔄 Running infrastructure handshake and stabilization...${NC}"
-    chmod +x scripts/grid-handshake.sh 2>/dev/null || true
+    chmod +x scripts/grid-handshake.sh  || true
     SMSLY_MIGRATIONS_DONE=1 bash scripts/grid-handshake.sh || \
         echo -e "${YELLOW}  ⚠️ Handshake stabilization failed (non-fatal). You can run it manually later.${NC}"
 
@@ -1742,8 +1736,8 @@ RESTORE_EOF
     if [ -f "$INSTALL_DIR/scripts/monitor_infra.sh" ]; then
         echo -e "${BLUE}  → Installing critical infrastructure monitoring timer...${NC}"
         chmod +x "$INSTALL_DIR/scripts/monitor_infra.sh"
-        cp "$INSTALL_DIR/scripts/smsly-infra-monitor.service" /etc/systemd/system/smsly-infra-monitor.service 2>/dev/null || true
-        cp "$INSTALL_DIR/scripts/smsly-infra-monitor.timer" /etc/systemd/system/smsly-infra-monitor.timer 2>/dev/null || true
+        cp "$INSTALL_DIR/scripts/smsly-infra-monitor.service" /etc/systemd/system/smsly-infra-monitor.service  || true
+        cp "$INSTALL_DIR/scripts/smsly-infra-monitor.timer" /etc/systemd/system/smsly-infra-monitor.timer  || true
         systemctl daemon-reload
         systemctl enable smsly-infra-monitor.timer || echo -e "${YELLOW}    ⚠ systemctl enable infra timer failed (non-fatal)${NC}"
         systemctl restart smsly-infra-monitor.timer || echo -e "${YELLOW}    ⚠ systemctl restart infra timer failed (non-fatal)${NC}"
@@ -1758,7 +1752,7 @@ RESTORE_EOF
     fi
 
     # ─── Image signature verification ────────────────────────────────────
-    if command -v cosign >/dev/null 2>&1 && [ -f "$INSTALL_DIR/scripts/cosign-verify.sh" ]; then
+    if command -v cosign  && [ -f "$INSTALL_DIR/scripts/cosign-verify.sh" ]; then
         echo -e "${BLUE}  → Verifying production image signatures...${NC}"
         source "$INSTALL_DIR/scripts/cosign-verify.sh"
         cosign_verify_image "smsly/backend:latest" || \

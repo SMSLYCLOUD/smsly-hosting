@@ -172,7 +172,7 @@ wait_for_streaming() {
     local i
     for i in $(seq 1 60); do
         local state
-        state="$(docker exec "$db_container" psql -U "$PG_USER" -d "$PG_DB" -tAc "SELECT state FROM pg_stat_replication LIMIT 1" 2>/dev/null || true)"
+        state="$(docker exec "$db_container" psql -U "$PG_USER" -d "$PG_DB" -tAc "SELECT state FROM pg_stat_replication LIMIT 1"  || true)"
         if [ "$state" = "streaming" ]; then
             green "  OK replica is streaming (state=streaming) after ${i}0-second polls"
             return 0

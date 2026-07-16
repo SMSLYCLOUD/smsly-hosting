@@ -38,11 +38,11 @@ safe_update_preflight() {
     [ "$free_mb" -ge "$MIN_DISK_MB" ] || { _fail "Disk: ${free_mb}MB free (need ${MIN_DISK_MB}MB)"; return 1; }
     _ok "Disk: ${free_mb}MB free"
 
-    docker info >/dev/null 2>&1 || { _fail "Docker not responding"; return 1; }
+    docker info  || { _fail "Docker not responding"; return 1; }
     _ok "Docker: responsive"
 
     # Clean up stopped service containers to prevent name conflicts (without stopping running production containers)
-    if ! docker compose -f "$COMPOSE_FILE" rm -f 2>/dev/null; then
+    if ! docker compose -f "$COMPOSE_FILE" rm -f ; then
         _warn "docker compose rm failed (project may not exist yet)"
     fi
     
@@ -52,13 +52,13 @@ safe_update_preflight() {
         local c_id=""
         local c_name=""
         local removed=0
-        for c_id in $(docker ps -a -q --filter "name=${pattern}" --filter "status=exited" --filter "status=created" 2>/dev/null || true); do
-            c_name=$(docker inspect "$c_id" --format='{{.Name}}' 2>/dev/null | sed 's/^\///')
+        for c_id in $(docker ps -a -q --filter "name=${pattern}" --filter "status=exited" --filter "status=created"  || true); do
+            c_name=$(docker inspect "$c_id" --format='{{.Name}}'  | sed 's/^\///')
             if [ -n "$c_name" ]; then
                 if [[ "$c_name" == *"-backup-containers"* ]]; then
-                    docker rm "$c_id" >/dev/null 2>&1 && removed=$((removed + 1))
+                    docker rm "$c_id"  && removed=$((removed + 1))
                 else
-                    docker rm "$c_id" >/dev/null 2>&1 && removed=$((removed + 1))
+                    docker rm "$c_id"  && removed=$((removed + 1))
                 fi
             fi
         done
@@ -74,7 +74,7 @@ safe_update_preflight() {
     _ok "Compose files: present"
 
     cd "$INSTALL_DIR"
-    git rev-parse --git-dir >/dev/null 2>&1 || { _fail "Not a git repo"; return 1; }
+    git rev-parse --git-dir  || { _fail "Not a git repo"; return 1; }
     _ok "Pre-flight passed"
     return 0
 }
@@ -89,15 +89,15 @@ safe_update_snapshot() {
     if [ -n "${SMSLY_PRE_UPDATE_HEAD:-}" ]; then
         prev_hash="$SMSLY_PRE_UPDATE_HEAD"
     else
-        prev_hash=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+        prev_hash=$(git rev-parse HEAD  || echo "unknown")
     fi
-    local prev_branch; prev_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
+    local prev_branch; prev_branch=$(git rev-parse --abbrev-ref HEAD  || echo "main")
     local backup_file="$BACKUP_DIR/pre-update-$(date +%Y%m%d-%H%M%S).sql"
 
     _progress "Backing up database (timeout: 120s)..."
-    if timeout 120 docker exec smsly-postgres-primary pg_dump -U smsly_admin smsly_hosting > "$backup_file" 2>&1; then
+    if timeout 120 docker exec smsly-postgres-primary pg_dump -U smsly_admin smsly_hosting > "$backup_file" ; then
         _ok "DB backup: $(du -h "$backup_file" | cut -f1)"
-    elif timeout 120 docker exec smsly-postgres-primary pg_dump -U "$POSTGRES_USER" smsly_hosting > "$backup_file" 2>&1; then
+    elif timeout 120 docker exec smsly-postgres-primary pg_dump -U "$POSTGRES_USER" smsly_hosting > "$backup_file" ; then
         _ok "DB backup: $(du -h "$backup_file" | cut -f1)"
     else
         _warn "DB backup failed — continuing without safety net"
@@ -106,11 +106,11 @@ safe_update_snapshot() {
 
     # Backup .env (restored on rollback)
     if [ -f "$INSTALL_DIR/.env" ]; then
-        cp "$INSTALL_DIR/.env" "$BACKUP_DIR/pre-update.env" 2>/dev/null && _ok ".env backed up" || _warn ".env backup failed"
+        cp "$INSTALL_DIR/.env" "$BACKUP_DIR/pre-update.env"  && _ok ".env backed up" || _warn ".env backup failed"
     fi
 
     # Redis RDB snapshot (non-fatal — container may not be running)
-    if timeout 10 docker exec smsly-hosting-redis-1 redis-cli SAVE 2>/dev/null; then
+    if timeout 10 docker exec smsly-hosting-redis-1 redis-cli SAVE ; then
         _ok "Redis RDB saved"
         timeout 10 docker cp smsly-hosting-redis-1:/data/dump.rdb "$BACKUP_DIR/pre-update-redis.rdb" || echo -e "${YELLOW}    ⚠ Redis dump copy failed${NC}"
     else
@@ -118,7 +118,7 @@ safe_update_snapshot() {
     fi
 
     # RabbitMQ definitions export (non-fatal — container or rabbitmqadmin may not be available)
-    if timeout 15 docker exec smsly-hosting-rabbitmq-1 rabbitmqadmin export "$BACKUP_DIR/pre-update-rabbitmq-defs.json" 2>/dev/null; then
+    if timeout 15 docker exec smsly-hosting-rabbitmq-1 rabbitmqadmin export "$BACKUP_DIR/pre-update-rabbitmq-defs.json" ; then
         _ok "RabbitMQ definitions exported"
     else
         _warn "RabbitMQ export skipped (container or rabbitmqadmin not available)"
@@ -127,8 +127,8 @@ safe_update_snapshot() {
     # Snapshot current images to prevent pruning and enable instant rollback
     _step "Snapshotting Docker Images"
     for img in smsly-hosting_backend smsly-hosting_frontend smsly-hosting_celery; do
-        if docker image inspect "$img:latest" >/dev/null 2>&1; then
-            docker tag "$img:latest" "$img:rollback-safe" 2>/dev/null && _ok "Tagged $img:rollback-safe" || _warn "Failed to tag $img:rollback-safe"
+        if docker image inspect "$img:latest" ; then
+            docker tag "$img:latest" "$img:rollback-safe"  && _ok "Tagged $img:rollback-safe" || _warn "Failed to tag $img:rollback-safe"
         fi
     done
 
@@ -155,30 +155,30 @@ safe_update_post_verify() {
                          smsly-docker-labels)
 
     for ctr in "${core[@]}"; do
-        docker inspect "$ctr" --format='{{.State.Running}}' 2>/dev/null | grep -q true && \
+        docker inspect "$ctr" --format='{{.State.Running}}'  | grep -q true && \
             _ok "$ctr" || { _fail "$ctr NOT running"; failed=$((failed + 1)); }
     done
 
     local obs_file="$INSTALL_DIR/infrastructure/docker/docker-compose.observability.yml"
     if [ -f "$obs_file" ]; then
         for ctr in "${observability[@]}"; do
-            docker inspect "$ctr" --format='{{.State.Running}}' 2>/dev/null | grep -q true && \
+            docker inspect "$ctr" --format='{{.State.Running}}'  | grep -q true && \
                 _ok "$ctr" || { _warn "$ctr not running (observability stack may not be deployed)"; }
         done
-        curl -sf http://localhost:3100/ready >/dev/null 2>&1 && _ok "Loki: ready" || { _warn "Loki: not ready"; }
-        curl -sf http://127.0.0.1:9090/api/v1/targets >/dev/null 2>&1 && _ok "Prometheus: responding" || { _warn "Prometheus: not responding"; }
+        curl -sf http://localhost:3100/ready  && _ok "Loki: ready" || { _warn "Loki: not ready"; }
+        curl -sf http://127.0.0.1:9090/api/v1/targets  && _ok "Prometheus: responding" || { _warn "Prometheus: not responding"; }
     fi
 
     local traefik_ok=false
     for i in 1 2 3 4 5; do
         local traefik_status
-        traefik_status=$(docker inspect smsly-hosting-traefik-1 --format='{{.State.Health.Status}}' 2>/dev/null || echo "unknown")
+        traefik_status=$(docker inspect smsly-hosting-traefik-1 --format='{{.State.Health.Status}}'  || echo "unknown")
         if [ "$traefik_status" = "healthy" ]; then
             _ok "Traefik: healthy (Docker)"
             traefik_ok=true
             break
         fi
-        curl -sf http://127.0.0.1:8082/ping >/dev/null 2>&1 && { _ok "Traefik: responding"; traefik_ok=true; break; }
+        curl -sf http://127.0.0.1:8082/ping  && { _ok "Traefik: responding"; traefik_ok=true; break; }
         [ "$i" -lt 5 ] && sleep 10
     done
     [ "$traefik_ok" = "true" ] || { _warn "Traefik: not responding"; failed=$((failed + 1)); }
@@ -215,8 +215,8 @@ safe_update_rollback() {
     cd "$INSTALL_DIR"
 
     if [ -n "${PREV_HASH:-}" ] && [ "$PREV_HASH" != "unknown" ]; then
-        git fetch origin "${PREV_BRANCH:-main}" 2>/dev/null || true
-        if git reset --hard "$PREV_HASH" 2>/dev/null; then
+        git fetch origin "${PREV_BRANCH:-main}"  || true
+        if git reset --hard "$PREV_HASH" ; then
             _ok "Git: reverted to $PREV_HASH"
         else
             _fail "Git reset failed"; return 1
@@ -225,34 +225,34 @@ safe_update_rollback() {
 
     # Restore .env from pre-update backup
     if [ -f "$BACKUP_DIR/pre-update.env" ]; then
-        cp "$BACKUP_DIR/pre-update.env" "$INSTALL_DIR/.env" 2>/dev/null && _ok ".env restored" || _warn ".env restore failed"
+        cp "$BACKUP_DIR/pre-update.env" "$INSTALL_DIR/.env"  && _ok ".env restored" || _warn ".env restore failed"
     fi
 
     # Clear stale lock from the failed original install.sh
-    rm -f /tmp/smsly-install.lock 2>/dev/null || true
+    rm -f /tmp/smsly-install.lock  || true
     
     # Instant rollback: restore images from snapshot instead of rebuilding
     _step "Restoring Docker Images"
     for img in smsly-hosting_backend smsly-hosting_frontend smsly-hosting_celery; do
-        if docker image inspect "$img:rollback-safe" >/dev/null 2>&1; then
-            docker tag "$img:rollback-safe" "$img:latest" 2>/dev/null && _ok "Restored $img:latest" || _warn "Failed to restore $img:latest"
+        if docker image inspect "$img:rollback-safe" ; then
+            docker tag "$img:rollback-safe" "$img:latest"  && _ok "Restored $img:latest" || _warn "Failed to restore $img:latest"
         fi
     done
     
     # Restart core services with the restored images
-    docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps backend frontend celery celery-deploy celery-fast celery-beat $(grep -q "^  *pgcat:" "${COMPOSE_FILE:-docker-compose.prod.yml}" 2>/dev/null && echo "pgcat") 2>/dev/null || _warn "Docker compose up had issues during rollback"
+    docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps backend frontend celery celery-deploy celery-fast celery-beat $(grep -q "^  *pgcat:" "${COMPOSE_FILE:-docker-compose.prod.yml}"  && echo "pgcat")  || _warn "Docker compose up had issues during rollback"
 
     # Restore DB if backed up
     if [ -n "${BACKUP_FILE:-}" ] && [ -f "$BACKUP_FILE" ]; then
         _warn "Restoring database from backup..."
-        docker exec -i smsly-postgres-primary psql -U smsly_admin smsly_hosting < "$BACKUP_FILE" >/dev/null 2>&1 && \
+        docker exec -i smsly-postgres-primary psql -U smsly_admin smsly_hosting < "$BACKUP_FILE"  && \
             _ok "DB restored" || _warn "DB restore failed"
     fi
 
     # Fix perms
     [ -d /opt/smsly-hosting/prometheus-targets ] && {
-        chown -R 1000:1000 /opt/smsly-hosting/prometheus-targets 2>/dev/null || true
-        chmod 2777 /opt/smsly-hosting/prometheus-targets 2>/dev/null || true
+        chown -R 1000:1000 /opt/smsly-hosting/prometheus-targets  || true
+        chmod 2777 /opt/smsly-hosting/prometheus-targets  || true
     }
 
     sleep 30
@@ -264,13 +264,13 @@ safe_update_rollback() {
 safe_update_cleanup() {
     _step "Cleaning Up Backup Containers"
     local count=0
-    for c_id in $(docker ps -a -q --filter "name=-backup-containers-" 2>/dev/null || true); do
+    for c_id in $(docker ps -a -q --filter "name=-backup-containers-"  || true); do
         docker stop "$c_id" || echo -e "${YELLOW}    ⚠ Failed to stop backup container $c_id${NC}"
-        docker rm "$c_id" >/dev/null 2>&1 && count=$((count + 1))
+        docker rm "$c_id"  && count=$((count + 1))
     done
     # Also cleanup any leftover stopped smsly- containers that compose may try to revive
-    for c_id in $(docker ps -a -q --filter "name=smsly-" --filter "status=exited" 2>/dev/null || true); do
-        docker rm "$c_id" >/dev/null 2>&1 && count=$((count + 1))
+    for c_id in $(docker ps -a -q --filter "name=smsly-" --filter "status=exited"  || true); do
+        docker rm "$c_id"  && count=$((count + 1))
     done
     if [ "$count" -gt 0 ]; then
         _ok "Removed $count stale container(s)"
@@ -281,8 +281,8 @@ safe_update_cleanup() {
     # Clean up the rollback tags so old images can be pruned
     _step "Cleaning Up Image Snapshots"
     for img in smsly-hosting_backend smsly-hosting_frontend smsly-hosting_celery; do
-        if docker image inspect "$img:rollback-safe" >/dev/null 2>&1; then
-            docker rmi "$img:rollback-safe" >/dev/null 2>&1 && _ok "Removed tag $img:rollback-safe" || true
+        if docker image inspect "$img:rollback-safe" ; then
+            docker rmi "$img:rollback-safe"  && _ok "Removed tag $img:rollback-safe" || true
         fi
     done
     
@@ -295,7 +295,7 @@ safe_update_cleanup() {
 if [ "$SAFE_UPDATE_SOURCED" = "false" ]; then
     safe_update_snapshot
     safe_update_preflight || exit 1
-    bash "$INSTALL_DIR/install.sh" --update >> "$CLEAN_LOG" 2>&1 || { _warn "Update failed — rolling back"; safe_update_rollback; exit 1; }
+    bash "$INSTALL_DIR/install.sh" --update >> "$CLEAN_LOG"  || { _warn "Update failed — rolling back"; safe_update_rollback; exit 1; }
     sleep 30
     safe_update_post_verify || { _warn "Post-verify failed — rolling back"; safe_update_rollback; exit 1; }
     safe_update_cleanup

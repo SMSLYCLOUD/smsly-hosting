@@ -34,7 +34,7 @@ else
 fi
 
 echo -n "Checking Disk Space (/opt)... "
-DISK_AVAIL=$(df -m /opt 2>/dev/null | tail -1 | awk '{print $4}')
+DISK_AVAIL=$(df -m /opt  | tail -1 | awk '{print $4}')
 if [ -z "$DISK_AVAIL" ]; then DISK_AVAIL=$(df -m / | tail -1 | awk '{print $4}'); fi
 
 if [ "$DISK_AVAIL" -ge 1500 ]; then
@@ -45,14 +45,14 @@ fi
 
 # 3. Connectivity
 echo -n "Checking Internet... "
-if curl -Is --connect-timeout 5 https://google.com >/dev/null 2>&1; then
+if curl -Is --connect-timeout 5 https://google.com ; then
     echo -e "${GREEN}OK${NC}"
 else
     echo -e "${RED}FAILED (google.com)${NC}"
 fi
 
 echo -n "Checking GitHub Access... "
-if curl -Is --connect-timeout 5 https://github.com >/dev/null 2>&1; then
+if curl -Is --connect-timeout 5 https://github.com ; then
     echo -e "${GREEN}OK${NC}"
 else
     echo -e "${RED}FAILED (github.com)${NC}"
@@ -62,8 +62,8 @@ fi
 echo -e "\n${BLUE}Dependency Check:${NC}"
 for CMD in docker git python3 curl host; do
     echo -n "  $CMD: "
-    if command -v "$CMD" >/dev/null 2>&1; then
-        VER=$($CMD --version 2>/dev/null | head -n 1 || $CMD -v 2>/dev/null)
+    if command -v "$CMD" ; then
+        VER=$($CMD --version  | head -n 1 || $CMD -v )
         echo -e "${GREEN}OK ($VER)${NC}"
     else
         echo -e "${RED}MISSING${NC}"

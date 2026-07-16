@@ -12,7 +12,7 @@ set -euo pipefail
 main() {
     local rc=0
 
-    command -v runsc &>/dev/null && echo "  runsc already installed — skipping" && return 0
+    command -v runsc  && echo "  runsc already installed — skipping" && return 0
 
     local ARCH
     ARCH="$(uname -m)"
@@ -27,13 +27,13 @@ main() {
     # ---- Prefer apt (reliable) over the legacy download bucket (often dead) ----
     _install_via_apt() {
         apt-get update -qq
-        apt-get install -y -qq apt-transport-https ca-certificates curl gnupg 2>/dev/null
-        curl -fsSL https://gvisor.dev/archive.key | gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg 2>/dev/null
+        apt-get install -y -qq apt-transport-https ca-certificates curl gnupg 
+        curl -fsSL https://gvisor.dev/archive.key | gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg 
         echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" \
             > /etc/apt/sources.list.d/gvisor.list
         apt-get update -qq
         apt-get install -y -qq runsc
-        command -v runsc &>/dev/null
+        command -v runsc 
     }
 
     if _install_via_apt; then
@@ -79,7 +79,7 @@ main() {
         done
     fi
 
-    command -v runsc &>/dev/null || { echo "ERROR: gVisor installation failed"; return 1; }
+    command -v runsc  || { echo "ERROR: gVisor installation failed"; return 1; }
 
     # ---- Docker runtime registration ----
     DAEMON_JSON="/etc/docker/daemon.json"
@@ -87,7 +87,7 @@ main() {
         echo '{}' > "$DAEMON_JSON"
     fi
 
-    if ! grep -q '"runsc"' "$DAEMON_JSON" 2>/dev/null; then
+    if ! grep -q '"runsc"' "$DAEMON_JSON" ; then
         python3 -c "
 import json
 with open('$DAEMON_JSON') as f:
@@ -102,9 +102,9 @@ with open('$DAEMON_JSON', 'w') as f:
     fi
 
     # Restart Docker (only if runsc runtime not already registered)
-    if command -v systemctl &>/dev/null; then
+    if command -v systemctl ; then
         systemctl daemon-reload
-        if grep -q '"runsc"' /etc/docker/daemon.json 2>/dev/null; then
+        if grep -q '"runsc"' /etc/docker/daemon.json ; then
             echo "  runsc already registered in daemon.json — skipping Docker restart"
         else
             systemctl restart docker
@@ -114,7 +114,7 @@ with open('$DAEMON_JSON', 'w') as f:
 
     # Verify
     sleep 3
-    if runsc --version &>/dev/null; then
+    if runsc --version ; then
         echo "=== gVisor (runsc) installed successfully ==="
     else
         echo "ERROR: runsc verification failed"

@@ -60,8 +60,8 @@ echo -e "${BLUE}Current permissions:${NC}"
 ls -la "$ENV_FILE"
 echo ""
 
-CURRENT_OWNER=$(stat -c "%u:%g" "$ENV_FILE" 2>/dev/null || stat -f "%u:%g" "$ENV_FILE" 2>/dev/null || echo "unknown")
-CURRENT_MODE=$(stat -c "%a" "$ENV_FILE" 2>/dev/null || stat -f "%OLp" "$ENV_FILE" 2>/dev/null || echo "unknown")
+CURRENT_OWNER=$(stat -c "%u:%g" "$ENV_FILE"  || stat -f "%u:%g" "$ENV_FILE"  || echo "unknown")
+CURRENT_MODE=$(stat -c "%a" "$ENV_FILE"  || stat -f "%OLp" "$ENV_FILE"  || echo "unknown")
 
 # ──────────────────────────────────────────
 # Step 2: Fix ownership — root:1000
@@ -70,7 +70,7 @@ CURRENT_MODE=$(stat -c "%a" "$ENV_FILE" 2>/dev/null || stat -f "%OLp" "$ENV_FILE
 #   others have no access
 # ──────────────────────────────────────────
 echo -e "${BLUE}Fixing ownership:${NC}"
-chown root:1000 "$ENV_FILE" 2>/dev/null || {
+chown root:1000 "$ENV_FILE"  || {
     echo -e "${YELLOW}  ⚠ chown failed. Trying with sudo...${NC}"
     sudo chown root:1000 "$ENV_FILE"
 }
@@ -84,7 +84,7 @@ echo ""
 #   0 = others none
 # ──────────────────────────────────────────
 echo -e "${BLUE}Fixing permissions:${NC}"
-chmod 640 "$ENV_FILE" 2>/dev/null || {
+chmod 640 "$ENV_FILE"  || {
     echo -e "${YELLOW}  ⚠ chmod failed. Trying with sudo...${NC}"
     sudo chmod 640 "$ENV_FILE"
 }
@@ -96,8 +96,8 @@ echo ""
 # ──────────────────────────────────────────
 if [ -d "$INSTALL_DIR/caddy-config" ]; then
     echo -e "${BLUE}Fixing caddy-config directory:${NC}"
-    chown -R 1000:1000 "$INSTALL_DIR/caddy-config" 2>/dev/null || sudo chown -R 1000:1000 "$INSTALL_DIR/caddy-config"
-    chmod -R u+rwX,g+rwX "$INSTALL_DIR/caddy-config" 2>/dev/null || true
+    chown -R 1000:1000 "$INSTALL_DIR/caddy-config"  || sudo chown -R 1000:1000 "$INSTALL_DIR/caddy-config"
+    chmod -R u+rwX,g+rwX "$INSTALL_DIR/caddy-config"  || true
     echo -e "  ${GREEN}✓${NC} caddy-config permissions fixed"
     echo ""
 fi
@@ -109,8 +109,8 @@ echo -e "${BLUE}New permissions:${NC}"
 ls -la "$ENV_FILE"
 echo ""
 
-NEW_OWNER=$(stat -c "%u:%g" "$ENV_FILE" 2>/dev/null || stat -f "%u:%g" "$ENV_FILE" 2>/dev/null || echo "unknown")
-NEW_MODE=$(stat -c "%a" "$ENV_FILE" 2>/dev/null || stat -f "%OLp" "$ENV_FILE" 2>/dev/null || echo "unknown")
+NEW_OWNER=$(stat -c "%u:%g" "$ENV_FILE"  || stat -f "%u:%g" "$ENV_FILE"  || echo "unknown")
+NEW_MODE=$(stat -c "%a" "$ENV_FILE"  || stat -f "%OLp" "$ENV_FILE"  || echo "unknown")
 
 echo ""
 if [ "$NEW_OWNER" = "0:1000" ] && [ "$NEW_MODE" = "640" ]; then

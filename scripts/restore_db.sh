@@ -77,7 +77,7 @@ log "Force: $FORCE"
 # ── 1. Validate the dump file ──────────────────────────────────────────
 log "Validating dump file..."
 
-DUMP_SIZE=$(stat -c%s "$DUMP_FILE" 2>/dev/null || stat -f%z "$DUMP_FILE" 2>/dev/null || echo 0)
+DUMP_SIZE=$(stat -c%s "$DUMP_FILE"  || stat -f%z "$DUMP_FILE"  || echo 0)
 if [[ "$DUMP_SIZE" -eq 0 ]]; then
     log "${RED}Error: Dump file is empty.${NC}"
     exit 1
@@ -86,7 +86,7 @@ fi
 log "File size: ${DUMP_SIZE} bytes"
 
 # Check if it's a valid SQL dump or custom-format dump
-HEAD=$(head -c 200 "$DUMP_FILE" 2>/dev/null || true)
+HEAD=$(head -c 200 "$DUMP_FILE"  || true)
 if echo "$HEAD" | grep -q '^-- PostgreSQL database dump'; then
     log "Detected: plain SQL dump"
     DUMP_TYPE="sql"
@@ -125,7 +125,7 @@ log "Using container: $DB_CONTAINER"
 
 # ── 3. Check if target DB has tables ──────────────────────────────────
 EXISTING_TABLES=$(timeout 10 docker exec "$DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" -tAc \
-    "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public';" 2>/dev/null || echo 0)
+    "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public';"  || echo 0)
 
 if [[ "$EXISTING_TABLES" -gt 0 ]]; then
     if ! $FORCE; then
@@ -138,7 +138,7 @@ fi
 # ── 4. Safety backup before destructive operation ────────────────────
 SAFETY_BACKUP="/tmp/smsly_pre_restore_${DB_NAME}_$(date +%Y%m%d%H%M%S).sql.gz"
 log "Creating safety backup of current database..."
-if timeout 300 docker exec "$DB_CONTAINER" pg_dump -U "$DB_USER" "$DB_NAME" 2>/dev/null | gzip > "$SAFETY_BACKUP"; then
+if timeout 300 docker exec "$DB_CONTAINER" pg_dump -U "$DB_USER" "$DB_NAME"  | gzip > "$SAFETY_BACKUP"; then
     log "${GREEN}Safety backup saved to $SAFETY_BACKUP${NC}"
 else
     log "${YELLOW}WARNING: Could not create safety backup (database may not exist)${NC}"
@@ -147,8 +147,8 @@ fi
 # ── 5. Drop and recreate the database ─────────────────────────────────
 log "Dropping existing database..."
 docker exec "$DB_CONTAINER" psql -U "$DB_USER" -c \
-    "SELECT pg_terminate_backend(pg_stat_activity.pid) FROM pg_stat_activity WHERE pg_stat_activity.datname = '$DB_NAME' AND pid <> pg_backend_pid();" 2>/dev/null || true
-docker exec "$DB_CONTAINER" dropdb -U "$DB_USER" --if-exists "$DB_NAME" 2>/dev/null || true
+    "SELECT pg_terminate_backend(pg_stat_activity.pid) FROM pg_stat_activity WHERE pg_stat_activity.datname = '$DB_NAME' AND pid <> pg_backend_pid();"  || true
+docker exec "$DB_CONTAINER" dropdb -U "$DB_USER" --if-exists "$DB_NAME"  || true
 
 log "Creating fresh database '$DB_NAME'..."
 docker exec "$DB_CONTAINER" createdb -U "$DB_USER" "$DB_NAME"
@@ -196,7 +196,7 @@ BEGIN
         END IF;
     END LOOP;
 END \$\$;
-" 2>/dev/null || log "${YELLOW}Warning: Could not resynchronize sequences automatically${NC}"
+"  || log "${YELLOW}Warning: Could not resynchronize sequences automatically${NC}"
 
 RESTORE_END=$(date +%s)
 RESTORE_DURATION=$((RESTORE_END - RESTORE_START))
@@ -207,9 +207,9 @@ docker exec "$DB_CONTAINER" rm -f "$DEST"
 # ── 7. Verify row counts ──────────────────────────────────────────────
 log "Verifying restore..."
 TOTAL_ROWS=$(docker exec "$DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" -tAc \
-    "SELECT sum(n_live_tup) FROM pg_stat_user_tables;" 2>/dev/null || echo 0)
+    "SELECT sum(n_live_tup) FROM pg_stat_user_tables;"  || echo 0)
 TABLE_COUNT=$(docker exec "$DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" -tAc \
-    "SELECT count(*) FROM pg_stat_user_tables;" 2>/dev/null || echo 0)
+    "SELECT count(*) FROM pg_stat_user_tables;"  || echo 0)
 
 log "${GREEN}Restore complete!${NC}"
 log "Duration: ${RESTORE_DURATION}s"

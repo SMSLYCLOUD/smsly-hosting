@@ -16,7 +16,7 @@ NC='\033[0m'
 echo -e "${BLUE}=== Starting Grid Handshake ===${NC}"
 
 # ─── Check Environment ───────────────────────────────────────────────────────
-if ! command -v docker >/dev/null 2>&1; then
+if ! command -v docker ; then
     echo -e "${RED}ERROR: Docker not found. Handshake aborted.${NC}"
     exit 1
 fi
@@ -76,7 +76,7 @@ EOF
 echo -e "${BLUE}  → Ensuring Inter-Node API Token...${NC}"
 HAS_API_TOKEN=$(timeout -k 5 120 docker exec "$BACKEND_CONTAINER" python manage.py shell -c "
 from apps.deployments.api_token_auth import APIToken; print('yes' if APIToken.objects.filter(is_active=True).exists() else 'no')
-" 2>/dev/null | tr -d '\r' | tail -1)
+"  | tr -d '\r' | tail -1)
 if [ "$HAS_API_TOKEN" = "yes" ]; then
     echo -e "${GREEN}  ✅ Inter-Node API Token exists.${NC}"
 else
@@ -90,7 +90,7 @@ if admin:
     print(f'TOKEN: {raw}')
 else:
     print('ERROR: No superuser found')
-" 2>/dev/null)
+" )
     if echo "$TOKEN_OUTPUT" | grep -q "TOKEN:"; then
         echo -e "${GREEN}  ✅ Inter-Node API Token created!${NC}"
         echo "$TOKEN_OUTPUT" | grep "TOKEN:" | sed 's/^/    /'

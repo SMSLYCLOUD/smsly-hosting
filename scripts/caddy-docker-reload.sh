@@ -38,11 +38,11 @@ candidate_requires_https() {
 }
 
 https_listener_active() {
-    ss -H -tln 2>/dev/null | awk '{print $4}' | grep -Eq ':443$'
+    ss -H -tln  | awk '{print $4}' | grep -Eq ':443$'
 }
 
 container_is_running() {
-    docker inspect --format='{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null | grep -q true
+    docker inspect --format='{{.State.Running}}' "$CONTAINER_NAME"  | grep -q true
 }
 
 reload_caddy() {
@@ -60,7 +60,7 @@ reload_caddy() {
         fi
 
         # Try caddy reload inside the container
-        if docker exec "$CONTAINER_NAME" caddy reload --config /etc/caddy/Caddyfile 2>&1; then
+        if docker exec "$CONTAINER_NAME" caddy reload --config /etc/caddy/Caddyfile ; then
             echo "$LOG_PREFIX Caddy reloaded successfully via docker exec"
             sleep 2
             if candidate_requires_https "$CADDY_CONF" && ! https_listener_active; then
@@ -71,18 +71,18 @@ reload_caddy() {
                     echo "$LOG_PREFIX ERROR: TCP 443 still not active, falling back to restart"
                 fi
             fi
-            cp "$CADDY_CONF" "$LAST_GOOD_CONF" 2>/dev/null || true
+            cp "$CADDY_CONF" "$LAST_GOOD_CONF"  || true
             return 0
         fi
 
         echo "$LOG_PREFIX Docker exec failed, trying docker restart..."
-        if docker restart "$CONTAINER_NAME" 2>&1; then
+        if docker restart "$CONTAINER_NAME" ; then
             echo "$LOG_PREFIX Container restarted"
             sleep 5
             if candidate_requires_https "$CADDY_CONF" && ! https_listener_active; then
                 echo "$LOG_PREFIX ERROR: TCP 443 not listening after restart"
             else
-                cp "$CADDY_CONF" "$LAST_GOOD_CONF" 2>/dev/null || true
+                cp "$CADDY_CONF" "$LAST_GOOD_CONF"  || true
                 return 0
             fi
         fi
@@ -106,10 +106,10 @@ while true; do
             CANDIDATE="$(mktemp /tmp/smsly-caddy-dwatch.XXXXXX)"
             cp "$CADDY_CONF" "$CANDIDATE"
 
-            if caddy validate --config "$CANDIDATE" 2>&1; then
+            if caddy validate --config "$CANDIDATE" ; then
                 echo "$LOG_PREFIX Config validated OK"
                 # Copy validated config into the container's volume
-                docker cp "$CADDY_CONF" "$CONTAINER_NAME:/etc/caddy/Caddyfile" 2>/dev/null || true
+                docker cp "$CADDY_CONF" "$CONTAINER_NAME:/etc/caddy/Caddyfile"  || true
                 reload_caddy
             else
                 echo "$LOG_PREFIX ERROR: Config validation failed — NOT applying"

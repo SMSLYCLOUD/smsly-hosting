@@ -24,7 +24,7 @@ mkdir -p "$WATCH_DIR"
 install_lock_active() {
     [ -f "$INSTALL_LOCK_FILE" ] || return 1
 
-    if command -v flock >/dev/null 2>&1; then
+    if command -v flock ; then
         if (flock -n 9) 9<"$INSTALL_LOCK_FILE"; then
             return 1
         fi
@@ -32,8 +32,8 @@ install_lock_active() {
     fi
 
     local pid
-    pid="$(cat "$INSTALL_LOCK_FILE" 2>/dev/null || true)"
-    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+    pid="$(cat "$INSTALL_LOCK_FILE"  || true)"
+    [ -n "$pid" ] && kill -0 "$pid" 
 }
 
 write_status() {
@@ -62,7 +62,7 @@ while true; do
             continue
         fi
 
-        PAYLOAD=$(tr -d ' \n\r' < "$UPDATE_FLAG" 2>/dev/null || echo "update")
+        PAYLOAD=$(tr -d ' \n\r' < "$UPDATE_FLAG"  || echo "update")
         [ -z "$PAYLOAD" ] && PAYLOAD="update"
         MODE="${PAYLOAD%%:*}"
         REQUEST_ID=""
@@ -91,15 +91,15 @@ while true; do
             write_status "running" "$REQUEST_ID" "$MODE" "" "Running bash install.sh $FLAGS --non-interactive on the host."
             echo "$LOG_PREFIX Executing in screen: sudo bash install.sh $FLAGS --non-interactive"
             # Kill any stale install screens before starting a new one
-            sudo screen -ls | grep "Grid-install" | cut -d. -f1 | awk '{print $1}' | xargs sudo kill -9 2>/dev/null || true
-            sudo screen -wipe > /dev/null 2>&1 || true
+            sudo screen -ls | grep "Grid-install" | cut -d. -f1 | awk '{print $1}' | xargs sudo kill -9  || true
+            sudo screen -wipe  || true
 
-            rm -f "$WATCH_DIR/install.log" 2>/dev/null || true
-            touch "$WATCH_DIR/install.log" 2>/dev/null || true
-            chmod 666 "$WATCH_DIR/install.log" 2>/dev/null || true
+            rm -f "$WATCH_DIR/install.log"  || true
+            touch "$WATCH_DIR/install.log"  || true
+            chmod 666 "$WATCH_DIR/install.log"  || true
 
             set +e
-            if command -v screen >/dev/null 2>&1; then
+            if command -v screen ; then
                 # -D -m keeps this watcher process attached to the command lifetime while
                 # still providing a named screen session for host-side inspection.
                 sudo screen -S Grid-install -D -m bash -c "export PATH=\"/usr/local/bin:\$PATH\"; bash install.sh $FLAGS --non-interactive 2>&1 | tee -a /var/log/smsly-install.log \"$WATCH_DIR/install.log\""
