@@ -332,8 +332,8 @@ if ! command -v docker &> /dev/null; then
       $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
     apt_run apt-get update -qq
     apt_run apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-    systemctl enable docker 2>/dev/null || true
-    systemctl start docker 2>/dev/null || true
+    systemctl enable docker || echo -e "${YELLOW}    ⚠ docker.service enable failed${NC}"
+    systemctl start docker || echo -e "${YELLOW}    ⚠ docker.service start failed${NC}"
     if ! docker info >/dev/null 2>&1; then
         echo -e "${RED}  ✗ Docker daemon failed to start. Check 'systemctl status docker' and kernel modules.${NC}"
         exit 1
@@ -1055,7 +1055,7 @@ if ! _registry_tls_ok; then
         echo -e "${YELLOW}        -subj '/CN=registry'${NC}"
     else
         echo -e "${BLUE}    Restarting registry container to pick up new TLS certs...${NC}"
-        docker restart smsly-hosting-registry-1 2>/dev/null || true
+        docker restart smsly-hosting-registry-1 || echo -e "${YELLOW}    ⚠ Registry restart failed${NC}"
     fi
 fi
 if [ ! -f "$INSTALL_DIR/auth/htpasswd" ] || [ -z "${REGISTRY_PASSWORD:-}" ] || [ -z "${REGISTRY_USER:-}" ]; then
@@ -1144,7 +1144,7 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
     if [ "$MODE_AGENT_LITE" != "true" ]; then
         backend_container=$(docker ps --format '{{.Names}}' | grep -E '^smsly-hosting-backend(-1)?$' | head -1)
         if [ -n "$backend_container" ]; then
-            timeout 60 docker exec "$backend_container" python manage.py deploy_docker_labels_exporters 2>/dev/null || true
+            timeout 60 docker exec "$backend_container" python manage.py deploy_docker_labels_exporters || echo -e "${YELLOW}    ⚠ deploy_docker_labels_exporters failed${NC}"
         fi
     fi
 
@@ -1265,12 +1265,12 @@ fi
 # ─── Ensure PgCat is fresh and connected ──────────────────────────────────────
 if [ -f "${COMPOSE_FILE:-docker-compose.prod.yml}" ] && grep -q "^  *pgcat:" "${COMPOSE_FILE:-docker-compose.prod.yml}" 2>/dev/null && docker compose -f "$COMPOSE_FILE" ps pgcat >/dev/null 2>&1; then
     echo -e "${BLUE}  → Restarting PgCat balancer...${NC}"
-    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" restart pgcat >/dev/null 2>&1 || true
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" restart pgcat || echo -e "${YELLOW}    ⚠ PgCat restart failed${NC}"
 fi
 
 # ─── Restart backend so it picks up the correct DB credentials ──────────────
 echo -e "${BLUE}  → Restarting backend with synced credentials...${NC}"
-timeout -k 5 30 docker compose -f "$COMPOSE_FILE" restart backend >/dev/null 2>&1 || true
+timeout -k 5 30 docker compose -f "$COMPOSE_FILE" restart backend || echo -e "${YELLOW}    ⚠ Backend restart failed${NC}"
 sleep 5
 
     echo -e "${BLUE}  → Running Migrations...${NC}"
@@ -1281,14 +1281,14 @@ sleep 5
     # PgCat connection pools all compete with the migration.
     MIGRATION_STOPPED_SVCS="backend celery celery-deploy celery-fast celery-beat $(grep -q "^  *pgcat:" "${COMPOSE_FILE:-docker-compose.prod.yml}" 2>/dev/null && echo "pgcat")"
     echo -e "${BLUE}    Stopping ${MIGRATION_STOPPED_SVCS} to prevent lock contention...${NC}"
-    docker compose -f "$COMPOSE_FILE" stop --timeout 15 ${MIGRATION_STOPPED_SVCS} >/dev/null 2>&1 || true
+    docker compose -f "$COMPOSE_FILE" stop --timeout 15 ${MIGRATION_STOPPED_SVCS} || echo -e "${YELLOW}    ⚠ Stop failed for some services${NC}"
     sleep 3
 
     # Kill every backend on the database so the migration owns it exclusively
     timeout 30 docker compose -f "$COMPOSE_FILE" exec -T db \
         psql -U smsly_admin -d smsly_hosting \
         -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND backend_type = 'client backend'" \
-        >/dev/null 2>&1 || true
+        2>&1 || echo -e "${YELLOW}    ⚠ Failed to terminate stale connections${NC}"
     sleep 2
 
     echo -e "${BLUE}    Running migrations (database: direct)...${NC}"
@@ -1303,7 +1303,7 @@ sleep 5
         timeout 30 docker compose -f "$COMPOSE_FILE" exec -T db \
             psql -U smsly_admin -d smsly_hosting \
             -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND backend_type = 'client backend'" \
-            >/dev/null 2>&1 || true
+            2>&1 || echo -e "${YELLOW}    ⚠ Failed to terminate stale connections${NC}"
         sleep 5
         if run_backend_migrations 2>&1; then
             MIGRATE_OK=true
@@ -1312,7 +1312,7 @@ sleep 5
 
     # Restart everything that was paused
     echo -e "${BLUE}    Restarting ${MIGRATION_STOPPED_SVCS}...${NC}"
-    docker compose -f "$COMPOSE_FILE" start ${MIGRATION_STOPPED_SVCS} >/dev/null 2>&1 || true
+    docker compose -f "$COMPOSE_FILE" start ${MIGRATION_STOPPED_SVCS} || echo -e "${YELLOW}    ⚠ Some services failed to restart${NC}"
     sleep 5
 
     if [ "$MIGRATE_OK" != "true" ]; then
@@ -1324,9 +1324,12 @@ sleep 5
 
 echo -e "${BLUE}  → Collecting Static Files...${NC}"
     # Fix volume ownership — Docker creates named volumes as root
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T --user root backend chown -R 1000:1000 /app/staticfiles /app/media /app/backups 2>/dev/null || true
-    timeout 120 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py fix_sequences 2>/dev/null || true
-    timeout 120 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic --noinput 2>/dev/null || true
+    echo -e "${BLUE}    ↳ Fixing volume ownership...${NC}"
+    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T --user root backend chown -R 1000:1000 /app/staticfiles /app/media /app/backups || echo -e "${YELLOW}    ⚠ Volume ownership fix failed${NC}"
+    echo -e "${BLUE}    ↳ Running fix_sequences...${NC}"
+    timeout 120 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py fix_sequences || echo -e "${YELLOW}    ⚠ fix_sequences failed or timed out${NC}"
+    echo -e "${BLUE}    ↳ Running collectstatic...${NC}"
+    timeout 120 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic --noinput || echo -e "${YELLOW}    ⚠ collectstatic failed or timed out${NC}"
 
     sync_platform_domain_state "$INSTALL_DIR/.env"
     set_checkpoint "database_initialized"
@@ -2065,8 +2068,8 @@ WantedBy=multi-user.target
 SVCEOF
 
 systemctl daemon-reload
-systemctl enable smsly-autoscaler 2>/dev/null || true
-systemctl restart smsly-autoscaler 2>/dev/null || true
+systemctl enable smsly-autoscaler || echo -e "${YELLOW}    ⚠ smsly-autoscaler enable failed${NC}"
+systemctl restart smsly-autoscaler || echo -e "${YELLOW}    ⚠ smsly-autoscaler restart failed${NC}"
 echo -e "${GREEN}  ✓ smsly-autoscaler service installed and started${NC}"
 
 # Install infrastructure monitor
@@ -2076,8 +2079,8 @@ if [ -f "$INSTALL_DIR/scripts/monitor_infra.sh" ]; then
     cp "$INSTALL_DIR/scripts/smsly-infra-monitor.service" /etc/systemd/system/smsly-infra-monitor.service 2>/dev/null || true
     cp "$INSTALL_DIR/scripts/smsly-infra-monitor.timer" /etc/systemd/system/smsly-infra-monitor.timer 2>/dev/null || true
     systemctl daemon-reload
-    systemctl enable smsly-infra-monitor.timer 2>/dev/null || true
-    systemctl restart smsly-infra-monitor.timer 2>/dev/null || true
+    systemctl enable smsly-infra-monitor.timer || echo -e "${YELLOW}    ⚠ smsly-infra-monitor timer enable failed${NC}"
+    systemctl restart smsly-infra-monitor.timer || echo -e "${YELLOW}    ⚠ smsly-infra-monitor timer restart failed${NC}"
     echo -e "${GREEN}  ✓ smsly-infra-monitor timer installed and started${NC}"
 fi
 
@@ -2088,8 +2091,8 @@ if [ -f "$INSTALL_DIR/scripts/smsly-update-watcher.service" ]; then
     cp "$INSTALL_DIR/scripts/smsly-update-watcher.service" /etc/systemd/system/smsly-update-watcher.service 2>/dev/null || true
     cp "$INSTALL_DIR/scripts/caddy-watcher.service" /etc/systemd/system/caddy-watcher.service 2>/dev/null || true
     systemctl daemon-reload
-    systemctl enable smsly-update-watcher caddy-watcher 2>/dev/null || true
-    systemctl restart smsly-update-watcher caddy-watcher 2>/dev/null || true
+    systemctl enable smsly-update-watcher caddy-watcher || echo -e "${YELLOW}    ⚠ Watcher services enable failed${NC}"
+    systemctl restart smsly-update-watcher caddy-watcher || echo -e "${YELLOW}    ⚠ Watcher services restart failed${NC}"
     echo -e "${GREEN}  ✓ smsly-update-watcher and caddy-watcher services installed and started${NC}"
 fi
 

@@ -572,7 +572,7 @@ run_migrations() {
             echo -e "${GREEN}  ✓ Migrations complete on retry${NC}" || \
             echo -e "${YELLOW}  ⚠ Migrations still failing (non-fatal, will retry on next update)${NC}"
     fi
-    docker compose -f "$COMPOSE_PATH" exec -T --user root backend python manage.py collectstatic --noinput 2>/dev/null || true
+    docker compose -f "$COMPOSE_PATH" exec -T --user root backend python manage.py collectstatic --noinput || echo -e "${YELLOW}    ⚠ collectstatic failed${NC}"
 }
 
 wait_for_backend() {
@@ -783,7 +783,7 @@ do_update_full() {
     ensure_backups_volume
 
     echo -e "${BLUE}  -> Updating Docker images...${NC}"
-    docker compose -f "$COMPOSE_PATH" pull 2>/dev/null || true
+    docker compose -f "$COMPOSE_PATH" pull || echo -e "${YELLOW}    ⚠ Image pull failed${NC}"
 
     echo -e "${BLUE}  → Rebuilding agent images (no cache)...${NC}"
     docker compose -f "$COMPOSE_PATH" build --no-cache || {
@@ -823,7 +823,7 @@ do_update_half() {
     ensure_backups_volume
 
     echo -e "${BLUE}  -> Updating Docker images...${NC}"
-    docker compose -f "$COMPOSE_PATH" pull 2>/dev/null || true
+    docker compose -f "$COMPOSE_PATH" pull || echo -e "${YELLOW}    ⚠ Image pull failed${NC}"
 
     echo -e "${BLUE}  → Restarting all services...${NC}"
     docker compose -f "$COMPOSE_PATH" up -d --force-recreate

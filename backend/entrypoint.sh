@@ -153,6 +153,15 @@ ensure_prometheus_targets_writable() {
     mkdir -p /opt/smsly-hosting/prometheus-targets 2>/dev/null || true
     chown 1000:1000 /opt/smsly-hosting/prometheus-targets 2>/dev/null || true
     chmod 2777 /opt/smsly-hosting/prometheus-targets 2>/dev/null || true
+    # Remove stale root-owned files from previous runs
+    find /opt/smsly-hosting/prometheus-targets -type f -exec chmod 666 {} + 2>/dev/null || true
+    # Verify write access with a probe file
+    if ! touch /opt/smsly-hosting/prometheus-targets/.perm_probe 2>/dev/null; then
+        echo "[entrypoint] WARNING: /opt/smsly-hosting/prometheus-targets is not writable by uid $(id -u)." >&2
+        echo "[entrypoint] Run on host: sudo chown -R 1000:1000 /opt/smsly-hosting/prometheus-targets" >&2
+    else
+        rm -f /opt/smsly-hosting/prometheus-targets/.perm_probe
+    fi
 }
 ensure_prometheus_targets_writable
 

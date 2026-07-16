@@ -42,6 +42,20 @@ def _ensure_target_dir_writable() -> bool:
     except OSError:
         pass
 
+    # Attempt to remove stale files owned by root that block writing
+    try:
+        for f in os.listdir(TARGETS_DIR):
+            fpath = os.path.join(TARGETS_DIR, f)
+            if os.path.isfile(fpath):
+                os.chmod(fpath, 0o666)
+                os.remove(fpath)
+    except OSError:
+        pass
+
+    # Retry after cleanup
+    if os.access(TARGETS_DIR, os.W_OK):
+        return True
+
     # Fall back to a writable temp directory
     TARGETS_DIR = _FALLBACK_TARGETS_DIR
     with contextlib.suppress(OSError):

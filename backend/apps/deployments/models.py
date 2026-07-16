@@ -31,6 +31,8 @@ from .models_core import (  # noqa: F401
     TrustedDevice,
 )
 from .models_cron import CronJob  # noqa: F401
+from .models_network_scope import ScopedNetwork  # noqa: F401
+from .models_project import ProjectMember  # noqa: F401
 from .models_database_replica import DatabaseReplica  # noqa: F401
 from .models_ecosystem import EcosystemPlan  # noqa: F401
 from .models_github_app import GitHubAppInstallation  # noqa: F401
@@ -58,5 +60,6 @@ from .models_traffic import ServiceTrafficLog  # noqa: F401
 from .models_transfer import ServerTransfer  # noqa: F401
 from .models_tunnels import ReservedSubdomain, Tunnel, TunnelRequest  # noqa: F401
 from .models_updates import PlatformUpdate  # noqa: F401
+from .api_token_auth import APIToken  # noqa: F401
 
 # pylint: enable=unused-import, wrong-import-position

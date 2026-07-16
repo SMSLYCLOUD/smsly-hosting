@@ -1101,6 +1101,9 @@ REST_FRAMEWORK = {
         # ImproperlyConfigured crash on any AI chat/analysis call.
         'ai_chat': '30/minute',
         'ai_analysis': '10/minute',
+        # SECURITY: ecosystem bulk-env is a high-risk write that sets 50+ env
+        # vars at once across all services in the ecosystem. Cap at 10/hour.
+        'ecosystem_bulk_env': '10/hour',
     },
 }
 # SECURITY (Batch H): API_RATE_LIMIT was 1000 (per-IP per-minute)

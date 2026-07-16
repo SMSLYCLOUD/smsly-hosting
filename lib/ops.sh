@@ -197,9 +197,9 @@ CADDYFIX
 
     # 4. Reload Caddy
     if docker compose -f "$COMPOSE_FILE" ps -q caddy 2>/dev/null | grep -q .; then
-        timeout -k 5 20 docker compose -f "$COMPOSE_FILE" exec caddy caddy reload --config /etc/caddy/Caddyfile 2>/dev/null || \
-            timeout -k 5 20 docker compose -f "$COMPOSE_FILE" restart caddy 2>/dev/null || true
-        echo -e "${GREEN}  ✓ Caddy reloaded${NC}"
+        timeout -k 5 20 docker compose -f "$COMPOSE_FILE" exec caddy caddy reload --config /etc/caddy/Caddyfile || \
+            timeout -k 5 20 docker compose -f "$COMPOSE_FILE" restart caddy || \
+            echo -e "${YELLOW}    ⚠ Caddy reload failed${NC}"
     fi
 
     echo -e "${GREEN}  ✓ Domain fix complete for: $target_domain${NC}"
@@ -261,7 +261,7 @@ recover_runtime_stack() {
             echo -e "${YELLOW}        -subj '/CN=registry'${NC}"
         else
             echo -e "${BLUE}    Restarting registry container to pick up new TLS certs...${NC}"
-            docker restart smsly-hosting-registry-1 2>/dev/null || true
+            docker restart smsly-hosting-registry-1 || echo -e "${YELLOW}    ⚠ Registry restart failed${NC}"
         fi
     fi
     if [ ! -f "$INSTALL_DIR/auth/htpasswd" ] || [ -z "${REGISTRY_PASSWORD:-}" ] || [ -z "${REGISTRY_USER:-}" ]; then

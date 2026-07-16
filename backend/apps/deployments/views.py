@@ -4649,6 +4649,31 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=['post'])
+    def retry(self, request, pk=None):
+        """
+        Re-queue a failed deployment.
+        POST /api/v1/deployments/{id}/retry/
+        POST /api/v1/cloud/deployments/{id}/retry/  (alias)
+        """
+        deployment = self.get_object()
+        if deployment.status not in (Deployment.Status.FAILED, Deployment.Status.CANCELLED):
+            return Response(
+                {'error': f'Cannot retry deployment in {deployment.status} status.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+        deployment.status = Deployment.Status.QUEUED
+        deployment.build_logs = (
+            f"{deployment.build_logs or ''}"
+            f"\n[Ecosystem] Re-queued by user retry at {timezone.now().isoformat()}.\n"
+        )
+        deployment.save(update_fields=['status', 'build_logs', 'updated_at'])
+        from apps.deployments.tasks_deploy import smart_deploy_task
+        provider = _resolve_provider_for_service(deployment.service)
+        if provider:
+            smart_deploy_task.delay(deployment_id=str(deployment.id), provider_id=str(provider.id))
+        return Response(DeploymentSerializer(deployment).data)
+
+    @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
         """
         Cancel a queued or building deployment.

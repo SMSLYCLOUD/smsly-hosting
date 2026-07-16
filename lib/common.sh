@@ -310,8 +310,9 @@ reload_container_caddy() {
     # This is needed because the host Caddy (systemd) may not be running.
     local compose_f="${COMPOSE_FILE:-docker-compose.prod.yml}"
     if command -v docker &>/dev/null && docker compose -f "$compose_f" ps -q caddy 2>/dev/null | grep -q .; then
-        timeout -k 5 20 docker compose -f "$compose_f" exec -T caddy caddy reload --config /etc/caddy/Caddyfile 2>/dev/null || \
-            timeout -k 5 20 docker compose -f "$compose_f" restart caddy 2>/dev/null || true
+        timeout -k 5 20 docker compose -f "$compose_f" exec -T caddy caddy reload --config /etc/caddy/Caddyfile || \
+            timeout -k 5 20 docker compose -f "$compose_f" restart caddy || \
+            echo -e "${YELLOW}    ⚠ Caddy reload failed${NC}"
     fi
 }
 

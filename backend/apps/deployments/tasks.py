@@ -3601,11 +3601,22 @@ from .tasks_maintenance import (
     registry_garbage_collection_task,
 )
 from .tasks_templates import one_click_deploy_template_task  # noqa: F401
-from .tasks_deploy import (
-    smart_deploy_task,
-    resume_deploy_task,
-    _post_deploy_monitor,
-)
+
+# Lazy re-exports to break circular import with tasks_deploy.
+# tasks_deploy.py imports from tasks.py at module level, so we cannot
+# import from tasks_deploy here without causing a circular import.
+# PEP 562 __getattr__ defers the import until first attribute access.
+def __getattr__(name):
+    if name in ('smart_deploy_task', 'resume_deploy_task', '_post_deploy_monitor'):
+        from .tasks_deploy import smart_deploy_task, resume_deploy_task, _post_deploy_monitor
+        import sys
+        module = sys.modules[__name__]
+        module.smart_deploy_task = smart_deploy_task
+        module.resume_deploy_task = resume_deploy_task
+        module._post_deploy_monitor = _post_deploy_monitor
+        return module.__dict__[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 # The tasks_health version has the explicit name= override matching the beat schedule.
 from .tasks_health import (
     node_watchdog_task,  # noqa: E402

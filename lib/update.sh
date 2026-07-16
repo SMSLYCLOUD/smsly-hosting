@@ -72,7 +72,7 @@ if [ -n "$UPDATE_MODE" ]; then
             chmod 644 "$INSTALL_DIR/certs/registry.crt"
             chmod 600 "$INSTALL_DIR/certs/registry.key"
             echo -e "${BLUE}  → Restarting registry container...${NC}"
-            docker restart smsly-hosting-registry-1 2>/dev/null || true
+            docker restart smsly-hosting-registry-1 || echo -e "${YELLOW}    ⚠ Registry restart failed${NC}"
         } || true
         rm -rf "$_tmp" 2>/dev/null || true
     fi
@@ -649,14 +649,16 @@ fi
             wait_for_container_ready "smsly-hosting-backend-1" 120 || true
 
             echo -e "${BLUE}  • Running post-migration tasks...${NC}"
-            timeout 120 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py fix_sequences 2>/dev/null || true
-            timeout 120 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput 2>/dev/null || true
+            echo -e "${BLUE}    ↳ Running fix_sequences...${NC}"
+            timeout 120 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py fix_sequences || echo -e "${YELLOW}    ⚠ fix_sequences failed or timed out${NC}"
+            echo -e "${BLUE}    ↳ Running collectstatic...${NC}"
+            timeout 120 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput || echo -e "${YELLOW}    ⚠ collectstatic failed or timed out${NC}"
 
             set_checkpoint "update_db_migrated"
 
             # Clean stale celerybeat-schedule (prevents Permission denied crash loop)
             echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"
-            timeout 30 docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule 2>/dev/null || true
+            timeout 30 docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule || echo -e "${YELLOW}    ⚠ celerybeat-schedule cleanup failed${NC}"
 
             echo -e "${BLUE}  → Restarting celery workers...${NC}"
             celery_svcs="celery celery-deploy celery-fast celery-beat"
@@ -732,8 +734,11 @@ fi
             fi
             wait_for_container_ready "smsly-hosting-backend-1" 120 || true
 
-            timeout 120 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py fix_sequences 2>/dev/null || true
-            timeout 120 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput 2>/dev/null || true
+            echo -e "${BLUE}  • Running post-migration tasks...${NC}"
+            echo -e "${BLUE}    ↳ Running fix_sequences...${NC}"
+            timeout 120 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py fix_sequences || echo -e "${YELLOW}    ⚠ fix_sequences failed or timed out${NC}"
+            echo -e "${BLUE}    ↳ Running collectstatic...${NC}"
+            timeout 120 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput || echo -e "${YELLOW}    ⚠ collectstatic failed or timed out${NC}"
 
             # 5. Clean celerybeat-schedule and restart celery workers
             echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"
@@ -860,8 +865,10 @@ fi
             wait_for_container_ready "smsly-hosting-backend-1" 120 || true
 
             echo -e "${BLUE}  • Running post-migration tasks...${NC}"
-            timeout 120 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py fix_sequences 2>/dev/null || true
-            timeout 120 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput 2>/dev/null || true
+            echo -e "${BLUE}    ↳ Running fix_sequences...${NC}"
+            timeout 120 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py fix_sequences || echo -e "${YELLOW}    ⚠ fix_sequences failed or timed out${NC}"
+            echo -e "${BLUE}    ↳ Running collectstatic...${NC}"
+            timeout 120 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput || echo -e "${YELLOW}    ⚠ collectstatic failed or timed out${NC}"
 
             # 11. Clean celerybeat-schedule and restart beat
             echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"
@@ -989,7 +996,7 @@ fi
         # cAdvisor, Node Exporter).
         backend_container=$(docker ps --format '{{.Names}}' | grep -E '^smsly-hosting-backend(-1)?$' | head -1)
         if [ -n "$backend_container" ]; then
-            timeout 60 docker exec "$backend_container" python manage.py deploy_docker_labels_exporters --force 2>/dev/null || true
+            timeout 60 docker exec "$backend_container" python manage.py deploy_docker_labels_exporters --force || echo -e "${YELLOW}    ⚠ deploy_docker_labels_exporters failed${NC}"
         fi
         echo -e "${GREEN}  ✓ Observability stack updated${NC}"
     fi
@@ -1644,7 +1651,7 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
                 /etc/systemd/system/smsly-autoscaler.service
             systemctl daemon-reload
         fi
-        systemctl restart smsly-autoscaler 2>/dev/null || true
+        systemctl restart smsly-autoscaler || echo -e "${YELLOW}    ⚠ Autoscaler restart failed${NC}"
         echo -e "${GREEN}  ✓ Autoscaler updated${NC}"
     fi
 

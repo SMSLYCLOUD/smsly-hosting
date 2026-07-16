@@ -17,6 +17,8 @@ class Command(BaseCommand):
             seq_record RECORD;
             max_val BIGINT;
         BEGIN
+            -- Prevent blocking indefinitely if a table is locked
+            SET LOCAL statement_timeout = '30s';
             FOR seq_record IN 
                 SELECT
                     c.relname AS seq_name,
@@ -28,12 +30,17 @@ class Command(BaseCommand):
                 JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = d.refobjsubid
                 WHERE c.relkind = 'S'
             LOOP
-                EXECUTE format('SELECT max(%I) FROM %I', seq_record.col_name, seq_record.table_name) INTO max_val;
-                IF max_val IS NOT NULL THEN
-                    EXECUTE format('SELECT setval(%L, %s)', seq_record.seq_name, max_val);
-                ELSE
-                    EXECUTE format('SELECT setval(%L, 1, false)', seq_record.seq_name);
-                END IF;
+                BEGIN
+                    EXECUTE format('SELECT max(%I) FROM %I', seq_record.col_name, seq_record.table_name) INTO max_val;
+                    IF max_val IS NOT NULL THEN
+                        EXECUTE format('SELECT setval(%L, %s)', seq_record.seq_name, max_val);
+                    ELSE
+                        EXECUTE format('SELECT setval(%L, 1, false)', seq_record.seq_name);
+                    END IF;
+                EXCEPTION WHEN OTHERS THEN
+                    -- Skip sequences on locked/unavailable tables
+                    RAISE WARNING 'Skipped sequence % on table %: %', seq_record.seq_name, seq_record.table_name, SQLERRM;
+                END;
             END LOOP;
         END $$;
         """
