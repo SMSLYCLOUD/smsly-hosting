@@ -59,7 +59,7 @@ echo -e "${YELLOW}Starting Podman installation...${NC}"
 
 # 1. Cleanup Old Docker/Podman
 echo -e "\n${YELLOW}[1/6] Cleaning up conflicting container engines...${NC}"
-systemctl stop docker podman || true
+systemctl stop docker podman || echo -e "${YELLOW}    ⚠ Failed to stop docker/podman (may not be installed)${NC}"
 apt-get remove -y docker docker-engine docker.io containerd runc podman || true
 rm -rf /var/lib/docker
 rm -rf /var/run/docker.sock

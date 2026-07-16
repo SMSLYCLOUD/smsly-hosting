@@ -110,8 +110,8 @@ if [ "$TABLE_COUNT" -gt 0 ]; then
             echo ""
             echo -e "${YELLOW}── Cleanup mode ──${NC}"
             echo -e "${YELLOW}  → Would stop: $OLD_DB_CONTAINER, $OLD_REDIS_CONTAINER${NC}"
-            docker stop "$OLD_DB_CONTAINER" "$OLD_REDIS_CONTAINER" 2>/dev/null || true
-            docker rm "$OLD_DB_CONTAINER" "$OLD_REDIS_CONTAINER" 2>/dev/null || true
+            docker stop "$OLD_DB_CONTAINER" "$OLD_REDIS_CONTAINER" || echo -e "${YELLOW}    ⚠ Could not stop old containers${NC}"
+            docker rm "$OLD_DB_CONTAINER" "$OLD_REDIS_CONTAINER" || echo -e "${YELLOW}    ⚠ Could not remove old containers${NC}"
             echo -e "${GREEN}  ✓ Old containers removed${NC}"
         fi
         exit 0
@@ -143,7 +143,7 @@ echo -e "${BLUE}→ Step 2: Pausing backend services to prevent writes...${NC}"
 
 SVCS_TO_STOP="backend celery celery-deploy celery-fast celery-beat"
 for svc in $SVCS_TO_STOP; do
-    docker compose -f "$COMPOSE_FILE" stop "$svc" >/dev/null 2>&1 || true
+    docker compose -f "$COMPOSE_FILE" stop "$svc" || echo -e "${YELLOW}    ⚠ Failed to stop $svc${NC}"
 done
 echo -e "${GREEN}  ✓ Backend services paused${NC}"
 
@@ -241,7 +241,7 @@ if [ "${USER_COUNT:-0}" -eq 0 ]; then
     echo -e "${RED}✗ No users found — migration may have failed${NC}"
     echo -e "${YELLOW}  → Restarting backend services and aborting${NC}"
     for svc in $SVCS_TO_STOP; do
-        docker compose -f "$COMPOSE_FILE" start "$svc" >/dev/null 2>&1 || true
+        docker compose -f "$COMPOSE_FILE" start "$svc" || echo -e "${YELLOW}    ⚠ Failed to start $svc${NC}"
     done
     exit 1
 fi
@@ -253,7 +253,7 @@ echo ""
 echo -e "${BLUE}→ Step 5: Restarting backend services...${NC}"
 
 for svc in $SVCS_TO_STOP; do
-    docker compose -f "$COMPOSE_FILE" start "$svc" >/dev/null 2>&1 || true
+    docker compose -f "$COMPOSE_FILE" start "$svc" || echo -e "${YELLOW}    ⚠ Failed to start $svc${NC}"
 done
 echo -e "${GREEN}  ✓ Backend services restarted${NC}"
 

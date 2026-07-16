@@ -22,12 +22,12 @@ wipe_existing_install() {
 
     if [ -f "$INSTALL_DIR/$COMPOSE_FILE" ]; then
         cd "$INSTALL_DIR"
-        docker compose -f "$COMPOSE_FILE" down -v --remove-orphans 2>/dev/null || true
+        docker compose -f "$COMPOSE_FILE" down -v --remove-orphans || echo -e "${YELLOW}    ⚠ docker compose down failed${NC}"
     fi
 
     SMSLY_CONTAINERS=$(docker ps -a --filter "name=smsly-hosting" -q 2>/dev/null || true)
     if [ -n "$SMSLY_CONTAINERS" ]; then
-        docker rm -f $SMSLY_CONTAINERS 2>/dev/null || true
+        docker rm -f $SMSLY_CONTAINERS || echo -e "${YELLOW}    ⚠ docker rm containers failed${NC}"
     fi
 
     SMSLY_VOLUMES=$(docker volume ls --filter "name=smsly-hosting" -q 2>/dev/null || true)
@@ -45,8 +45,8 @@ wipe_existing_install() {
     fi
 
     # Clean up Caddy watcher service (prevents stale config on reinstall)
-    systemctl stop caddy-watcher 2>/dev/null || true
-    systemctl disable caddy-watcher 2>/dev/null || true
+    systemctl stop caddy-watcher || echo -e "${YELLOW}    ⚠ systemctl stop caddy-watcher failed${NC}"
+    systemctl disable caddy-watcher || echo -e "${YELLOW}    ⚠ systemctl disable caddy-watcher failed${NC}"
     rm -f /etc/systemd/system/caddy-watcher.service
 
     # Reset Caddyfile to default (prevents stale routing)
@@ -56,7 +56,7 @@ wipe_existing_install() {
 
     # Remove Cloudflare token override
     rm -rf /etc/systemd/system/caddy.service.d
-    systemctl daemon-reload 2>/dev/null || true
+    systemctl daemon-reload || echo -e "${YELLOW}    ⚠ systemctl daemon-reload failed${NC}"
 
     rm -rf "$INSTALL_DIR"
     rm -f "$LOG_FILE"
@@ -460,14 +460,14 @@ if [ "${CLEAR_MODE:-false}" = "true" ]; then
 
     # Prune unused docker resources
     echo -e "  → Pruning unused Docker containers and images..."
-    docker container prune -f >/dev/null 2>&1
-    docker image prune -af >/dev/null 2>&1
+    docker container prune -f || echo -e "${YELLOW}    ⚠ docker container prune failed${NC}"
+    docker image prune -af || echo -e "${YELLOW}    ⚠ docker image prune failed${NC}"
 
     # Stop and remove all stale smsly-addon-* containers (only those NOT running)
     echo -e "  → Removing stale/orphaned service addons (protecting active databases)..."
     ADDON_IDS=$(docker ps -a -q --filter "name=smsly-addon" --filter "status=exited" --filter "status=created" --filter "status=dead")
     if [ -n "$ADDON_IDS" ]; then
-        docker rm -f $ADDON_IDS >/dev/null 2>&1 || true
+        docker rm -f $ADDON_IDS || echo -e "${YELLOW}    ⚠ docker rm addons failed${NC}"
         echo -e "${GREEN}  ✓ Removed inactive orphaned addon containers.${NC}"
     else
         echo -e "${YELLOW}  - No inactive orphaned addons found.${NC}"
@@ -479,11 +479,11 @@ if [ "${CLEAR_MODE:-false}" = "true" ]; then
     ROUTER_IDS=$(docker ps -a -q --filter "name=ai-router" --filter "status=exited" --filter "status=created" --filter "status=dead")
 
     if [ -n "$GREEN_IDS" ]; then
-        docker rm -f $GREEN_IDS >/dev/null 2>&1 || true
+        docker rm -f $GREEN_IDS || echo -e "${YELLOW}    ⚠ docker rm green containers failed${NC}"
         echo -e "${GREEN}  ✓ Removed inactive deployment containers.${NC}"
     fi
     if [ -n "$ROUTER_IDS" ]; then
-        docker rm -f $ROUTER_IDS >/dev/null 2>&1 || true
+        docker rm -f $ROUTER_IDS || echo -e "${YELLOW}    ⚠ docker rm routers failed${NC}"
         echo -e "${GREEN}  ✓ Removed inactive AI routers.${NC}"
     fi
 

@@ -55,7 +55,7 @@ reload_caddy() {
 
         if ! container_is_running; then
             echo "$LOG_PREFIX WARNING: Container $CONTAINER_NAME is not running, attempting start..."
-            docker start "$CONTAINER_NAME" 2>/dev/null || true
+            docker start "$CONTAINER_NAME" || echo -e "${YELLOW}    ⚠ Failed to start $CONTAINER_NAME${NC}"
             sleep 3
         fi
 
@@ -65,7 +65,7 @@ reload_caddy() {
             sleep 2
             if candidate_requires_https "$CADDY_CONF" && ! https_listener_active; then
                 echo "$LOG_PREFIX ERROR: TCP 443 not listening after reload, retrying..."
-                docker restart "$CONTAINER_NAME" 2>/dev/null || true
+                docker restart "$CONTAINER_NAME" || echo -e "${YELLOW}    ⚠ Failed to restart $CONTAINER_NAME${NC}"
                 sleep 5
                 if ! https_listener_active; then
                     echo "$LOG_PREFIX ERROR: TCP 443 still not active, falling back to restart"

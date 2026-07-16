@@ -91,9 +91,9 @@ failregex = ^.*"remote_ip":"<HOST>".*"method":"(GET|POST|HEAD|PUT|DELETE|PATCH)"
 ignoreregex =
 FILTER_EOF
 
-    systemctl enable fail2ban >/dev/null 2>&1 || true
+    systemctl enable fail2ban || echo -e "${YELLOW}    ⚠ fail2ban enable failed${NC}"
     # Blocking start — wait for service to be ready
-    systemctl restart fail2ban >/dev/null 2>&1 || true
+    systemctl restart fail2ban || echo -e "${YELLOW}    ⚠ fail2ban restart failed${NC}"
     for _i in $(seq 1 10); do
         fail2ban-client ping >/dev/null 2>&1 && break
         sleep 1
@@ -107,28 +107,28 @@ _harden_ufw_bootstrap() {
     # Already active — just verify ports are open, then bail
     if ufw status 2>/dev/null | grep -qi "active"; then
         for port in 22 80 443 51820; do
-            ufw status verbose 2>/dev/null | grep -qE "${port}(/tcp|/udp)?.*ALLOW" || ufw allow "$port" >/dev/null 2>&1 || true
+            ufw status verbose 2>/dev/null | grep -qE "${port}(/tcp|/udp)?.*ALLOW" || ufw allow "$port" || echo -e "${YELLOW}    ⚠ ufw allow port $port failed${NC}"
         done
         # Whitelist Docker bridges
         for iface in docker0 br-+; do
             ip link show "$iface" >/dev/null 2>&1 || continue
-            ufw allow in on "$iface" >/dev/null 2>&1 || true
+            ufw allow in on "$iface" || echo -e "${YELLOW}    ⚠ ufw allow in on $iface failed${NC}"
         done
         return 0
     fi
 
     # Inactive — configure and enable (INPUT default deny, FORWARD stays open for Docker)
-    ufw --force default deny incoming >/dev/null 2>&1 || true
-    ufw --force default allow outgoing >/dev/null 2>&1 || true
-    ufw allow ssh >/dev/null 2>&1 || true
-    ufw allow 80/tcp >/dev/null 2>&1 || true
-    ufw allow 443/tcp >/dev/null 2>&1 || true
-    ufw allow 51820/udp >/dev/null 2>&1 || true
+    ufw --force default deny incoming || echo -e "${YELLOW}    ⚠ ufw default deny incoming failed${NC}"
+    ufw --force default allow outgoing || echo -e "${YELLOW}    ⚠ ufw default allow outgoing failed${NC}"
+    ufw allow ssh || echo -e "${YELLOW}    ⚠ ufw allow ssh failed${NC}"
+    ufw allow 80/tcp || echo -e "${YELLOW}    ⚠ ufw allow 80/tcp failed${NC}"
+    ufw allow 443/tcp || echo -e "${YELLOW}    ⚠ ufw allow 443/tcp failed${NC}"
+    ufw allow 51820/udp || echo -e "${YELLOW}    ⚠ ufw allow 51820/udp failed${NC}"
     for iface in docker0 br-+; do
         ip link show "$iface" >/dev/null 2>&1 || continue
-        ufw allow in on "$iface" >/dev/null 2>&1 || true
+        ufw allow in on "$iface" || echo -e "${YELLOW}    ⚠ ufw allow in on $iface failed${NC}"
     done
-    ufw --force enable >/dev/null 2>&1 || true
+    ufw --force enable || echo -e "${YELLOW}    ⚠ ufw enable failed${NC}"
     # Verify it actually came up
     for _i in $(seq 1 5); do
         ufw status 2>/dev/null | grep -qi "active" && break
@@ -139,8 +139,8 @@ _harden_ufw_bootstrap() {
 _harden_apparmor_bootstrap() {
     command -v aa-status >/dev/null 2>&1 || apt_run apt-get install -y apparmor apparmor-utils 2>/dev/null || true
     command -v aa-status >/dev/null 2>&1 || return 1
-    systemctl enable apparmor >/dev/null 2>&1 || true
-    systemctl start apparmor >/dev/null 2>&1 || true
+    systemctl enable apparmor || echo -e "${YELLOW}    ⚠ apparmor enable failed${NC}"
+    systemctl start apparmor || echo -e "${YELLOW}    ⚠ apparmor start failed${NC}"
 }
 
 _harden_auditd_bootstrap() {
@@ -160,8 +160,8 @@ _harden_auditd_bootstrap() {
 -a exit,always -F arch=b64 -S execve -F euid=0 -F auid>=1000 -k priv-esc
 AUDIT_EOF
     fi
-    systemctl enable auditd >/dev/null 2>&1 || true
-    systemctl restart auditd >/dev/null 2>&1 || true
+    systemctl enable auditd || echo -e "${YELLOW}    ⚠ auditd enable failed${NC}"
+    systemctl restart auditd || echo -e "${YELLOW}    ⚠ auditd restart failed${NC}"
 }
 
 _harden_kernel_bootstrap() {
@@ -190,7 +190,7 @@ fs.protected_hardlinks = 1
 fs.protected_symlinks = 1
 fs.suid_dumpable = 0
 SYSCTL_EOF
-    sysctl -p "$sysctl_file" >/dev/null 2>&1 || true
+    sysctl -p "$sysctl_file" || echo -e "${YELLOW}    ⚠ sysctl -p failed${NC}"
 }
 
 _harden_docker_daemon_bootstrap() {
@@ -275,7 +275,7 @@ _harden_crowdsec_bootstrap() {
     docker compose \
         --env-file "$INSTALL_DIR/.env" \
         -f "$COMPOSE_FILE" \
-        up -d crowdsec 2>/dev/null || true
+        up -d crowdsec || echo -e "${YELLOW}    ⚠ crowdsec docker compose up failed${NC}"
     for _i in $(seq 1 15); do
         docker ps --format '{{.Names}}' 2>/dev/null | grep -q "smsly-crowdsec" && break
         sleep 2
@@ -290,7 +290,7 @@ _harden_falco_bootstrap() {
     docker compose \
         --env-file "$INSTALL_DIR/.env" \
         -f "$compose_file" \
-        up -d --force-recreate --pull always 2>/dev/null || true
+        up -d --force-recreate --pull always || echo -e "${YELLOW}    ⚠ falco docker compose up failed${NC}"
     for _i in $(seq 1 15); do
         docker ps --format '{{.Names}}' 2>/dev/null | grep -q "smsly-falco" && break
         sleep 2

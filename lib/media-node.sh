@@ -322,21 +322,21 @@ start_media_services() {
     local mgmt_services=(smsly-media-mgmt openresty)
 
     for svc in "${infra_services[@]}"; do
-        systemctl enable --now "$svc" 2>/dev/null || true
+        systemctl enable --now "$svc" || echo -e "${YELLOW}    ⚠ systemctl enable --now $svc failed${NC}"
     done
     sleep 2
 
     for svc in "${media_services[@]}"; do
-        systemctl enable --now "$svc" 2>/dev/null || true
+        systemctl enable --now "$svc" || echo -e "${YELLOW}    ⚠ systemctl enable --now $svc failed${NC}"
     done
     sleep 1
 
     for svc in "${app_services[@]}"; do
-        systemctl enable --now "$svc" 2>/dev/null || true
+        systemctl enable --now "$svc" || echo -e "${YELLOW}    ⚠ systemctl enable --now $svc failed${NC}"
     done
 
     for svc in "${mgmt_services[@]}"; do
-        systemctl enable --now "$svc" 2>/dev/null || true
+        systemctl enable --now "$svc" || echo -e "${YELLOW}    ⚠ systemctl enable --now $svc failed${NC}"
     done
 
     echo -e "${GREEN}  ✓ All media services started${NC}"
@@ -454,7 +454,7 @@ update_media_node() {
     # Restart all media services
     echo -e "${BLUE}  → Restarting media services...${NC}"
     for svc in smsly-media-mgmt smsly-voice-api smsly-video livekit-server rtpengine freeswitch kamailio coturn openresty; do
-        systemctl restart "$svc" 2>/dev/null || true
+        systemctl restart "$svc" || echo -e "${YELLOW}    ⚠ systemctl restart $svc failed${NC}"
     done
 
     sleep 3

@@ -66,7 +66,7 @@ if [ "$PRIMARY_UP" = true ]; then
     fi
     echo -e "${YELLOW}  → Force-stopping primary...${NC}"
     if [ "$DRY_RUN" = false ]; then
-        docker stop "$PRIMARY_CONTAINER" 2>/dev/null || true
+        docker stop "$PRIMARY_CONTAINER" || echo -e "${YELLOW}    ⚠ Failed to stop primary container${NC}"
         sleep 2
     fi
 fi
@@ -125,7 +125,7 @@ else
         timeout 30 docker exec "$PRIMARY_CONTAINER" \
             psql -U smsly_admin -d smsly_hosting \
             -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND state = 'active';" \
-            2>/dev/null || true
+            || echo -e "${YELLOW}    ⚠ Failed to drain connections from primary${NC}"
         sleep 2
         echo -e "${GREEN}  ✓ Connections drained from old primary${NC}"
     else
@@ -141,7 +141,7 @@ if [ "$DRY_RUN" = true ]; then
     echo -e "${YELLOW}  [DRY RUN] Would run: SELECT pg_promote();${NC}"
 else
     timeout 10 docker exec "$REPLICA_CONTAINER" \
-        psql -U smsly_admin -d smsly_hosting -c "SELECT pg_promote();" 2>/dev/null || true
+        psql -U smsly_admin -d smsly_hosting -c "SELECT pg_promote();" || echo -e "${YELLOW}    ⚠ pg_promote() failed${NC}"
 
     # Wait for promotion to complete
     echo -n "  Waiting for promotion"
@@ -183,16 +183,16 @@ else
     # Build new DB_REPLICA_HOSTS (empty — no replicas after failover)
     # The old primary is down, so we remove it from the replica list
     timeout 30 docker exec "$PGCAT_CONTAINER" \
-        python3 /scripts/render_pgcat_config.py /etc/pgcat/pgcat.toml 2>/dev/null || true
+        python3 /scripts/render_pgcat_config.py /etc/pgcat/pgcat.toml || echo -e "${YELLOW}    ⚠ pgcat config render (no DB_HOST) failed${NC}"
 
     # The render script reads DB_HOST from env, which is postgres-primary
     # We need to override it to point to the new primary
     timeout 30 docker exec -e "DB_HOST=${NEW_PRIMARY_HOST}" "$PGCAT_CONTAINER" \
-        python3 /scripts/render_pgcat_config.py /etc/pgcat/pgcat.toml 2>/dev/null || true
+        python3 /scripts/render_pgcat_config.py /etc/pgcat/pgcat.toml || echo -e "${YELLOW}    ⚠ pgcat config render with new primary failed${NC}"
 
     # Reload pgcat
-    docker kill -s SIGHUP "$PGCAT_CONTAINER" 2>/dev/null || \
-        docker restart "$PGCAT_CONTAINER" 2>/dev/null || true
+    docker kill -s SIGHUP "$PGCAT_CONTAINER" || \
+        docker restart "$PGCAT_CONTAINER" || echo -e "${YELLOW}    ⚠ pgcat reload failed${NC}"
 
     echo -e "${GREEN}  ✓ PgCat config updated and reloaded${NC}"
 fi

@@ -120,11 +120,11 @@ echo -e "${BLUE}═════════════════════�
 ensure_networks() {
     docker network inspect smsly-net >/dev/null 2>&1 || {
         echo -e "${BLUE}  → Creating smsly-net...${NC}"
-        docker network create smsly-net >/dev/null 2>&1 || true
+        docker network create smsly-net || echo -e "${YELLOW}    ⚠ smsly-net creation failed (may already exist)${NC}"
     }
     docker network inspect socket-proxy >/dev/null 2>&1 || {
         echo -e "${BLUE}  → Creating socket-proxy...${NC}"
-        docker network create --driver bridge --internal socket-proxy >/dev/null 2>&1 || true
+        docker network create --driver bridge --internal socket-proxy || echo -e "${YELLOW}    ⚠ socket-proxy network creation failed (may already exist)${NC}"
     }
 }
 
@@ -138,7 +138,7 @@ ensure_backups_volume() {
     #      has to re-prompt every time the agent rebuilds).
     if ! docker volume inspect smsly-hosting_backups_data >/dev/null 2>&1; then
         echo -e "${BLUE}  → Creating backups_data volume...${NC}"
-        docker volume create --name smsly-hosting_backups_data >/dev/null 2>&1 || true
+        docker volume create --name smsly-hosting_backups_data || echo -e "${YELLOW}    ⚠ backups_data volume creation failed${NC}"
     fi
 }
 
@@ -455,7 +455,7 @@ docker_login() {
     local pass="${REGISTRY_PASSWORD:-$(env_get_value "$env_file" "REGISTRY_PASSWORD" 2>/dev/null || echo "")}"
     [ -z "$registry" ] && registry="127.0.0.1:5000"
     [ -z "$pass" ] && return 0
-    echo "$pass" | docker login "$registry" -u "$user" --password-stdin >/dev/null 2>&1 || true
+    echo "$pass" | docker login "$registry" -u "$user" --password-stdin || echo -e "${YELLOW}    ⚠ Docker registry login failed (non-fatal)${NC}"
 }
 
 wait_for_local_rabbitmq() {
@@ -498,7 +498,7 @@ sync_local_rabbitmq_password() {
     fi
 
     echo -e "${BLUE}  -> Syncing local RabbitMQ password for ${rabbitmq_user}...${NC}"
-    docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl add_user "$rabbitmq_user" "$rabbitmq_password" >/dev/null 2>&1 || true
+    docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl add_user "$rabbitmq_user" "$rabbitmq_password" || echo -e "${YELLOW}    ⚠ RabbitMQ add_user failed (user may already exist)${NC}"
     docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl change_password "$rabbitmq_user" "$rabbitmq_password" >/dev/null
     docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl set_user_tags "$rabbitmq_user" administrator >/dev/null
     docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl set_permissions -p / "$rabbitmq_user" ".*" ".*" ".*" >/dev/null

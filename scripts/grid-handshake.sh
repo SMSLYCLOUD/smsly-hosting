@@ -43,13 +43,13 @@ echo -e "${BLUE}  → Reconciling Database Schema...${NC}"
 if [ "${SMSLY_MIGRATIONS_DONE:-0}" = "1" ]; then
     echo -e "${YELLOW}  ⚠ Skipping migrations (already run by update pipeline)${NC}"
 else
-    timeout -k 5 120 docker exec "$BACKEND_CONTAINER" python manage.py migrate --noinput || true
+    timeout -k 5 120 docker exec "$BACKEND_CONTAINER" python manage.py migrate --noinput || echo -e "${YELLOW}    ⚠ Migration failed${NC}"
 fi
 
 # ─── 2. Ensure Superuser ─────────────────────────────────────────────────────
 echo -e "${BLUE}  → Reconciling Administrative Identity...${NC}"
 # Use heredoc to create superuser if missing
-timeout -k 5 120 docker exec -i "$BACKEND_CONTAINER" python manage.py shell <<EOF || true
+timeout -k 5 120 docker exec -i "$BACKEND_CONTAINER" python manage.py shell <<EOF || echo -e "${YELLOW}    ⚠ Superuser setup failed${NC}"
 from django.contrib.auth import get_user_model
 User = get_user_model()
 username = 'admin'

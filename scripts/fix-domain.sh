@@ -133,9 +133,9 @@ echo -e "${BLUE}[3/5] Syncing PlatformConfig in database...${NC}"
 BACKEND_CONTAINER=$(docker compose -f "$COMPOSE_FILE" ps -q backend 2>/dev/null || true)
 if [ -z "$BACKEND_CONTAINER" ]; then
     echo -e "${YELLOW}  ⚠ Backend container not running. Starting stack...${NC}"
-    docker compose -f "$COMPOSE_FILE" up -d db $(grep -q "^  *pgcat:" "${COMPOSE_FILE:-docker-compose.prod.yml}" 2>/dev/null && echo "pgcat") redis rabbitmq socket-proxy 2>/dev/null || true
+    docker compose -f "$COMPOSE_FILE" up -d db $(grep -q "^  *pgcat:" "${COMPOSE_FILE:-docker-compose.prod.yml}" 2>/dev/null && echo "pgcat") redis rabbitmq socket-proxy || echo -e "${YELLOW}    ⚠ Stack start failed (backend may not be ready)${NC}"
     sleep 10
-    docker compose -f "$COMPOSE_FILE" up -d backend 2>/dev/null || true
+    docker compose -f "$COMPOSE_FILE" up -d backend || echo -e "${YELLOW}    ⚠ Backend start failed${NC}"
     sleep 15
 fi
 
@@ -250,7 +250,7 @@ fi
 # Container Caddy
 if docker compose -f "$COMPOSE_FILE" ps -q caddy 2>/dev/null | grep -q .; then
     docker compose -f "$COMPOSE_FILE" exec caddy caddy reload --config /etc/caddy/Caddyfile 2>/dev/null || \
-        docker compose -f "$COMPOSE_FILE" restart caddy 2>/dev/null || true
+        docker compose -f "$COMPOSE_FILE" restart caddy || echo -e "${YELLOW}    ⚠ Caddy restart failed${NC}"
     echo -e "${GREEN}  ✓ Container Caddy reloaded${NC}"
 fi
 

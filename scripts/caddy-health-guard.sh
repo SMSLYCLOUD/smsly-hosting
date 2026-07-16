@@ -117,7 +117,7 @@ apply_candidate() {
 
     export_caddy_cloudflare_env
     if command -v caddy >/dev/null 2>&1; then
-        caddy fmt --overwrite "$candidate" >/dev/null 2>&1 || true
+        caddy fmt --overwrite "$candidate" || echo -e "${YELLOW}    ⚠ Caddy fmt failed${NC}"
         caddy validate --config "$candidate" >/dev/null 2>&1 || return 1
     fi
 

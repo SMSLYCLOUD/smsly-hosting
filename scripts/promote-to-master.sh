@@ -95,7 +95,7 @@ ok "Secrets recovered"
 # STEP 2: Stop the lite agent stack
 # ──────────────────────────────────────────────────────────────────────
 log "Stopping lite agent stack..."
-docker compose -f "$AGENT_COMPOSE" down --remove-orphans 2>/dev/null || true
+docker compose -f "$AGENT_COMPOSE" down --remove-orphans || echo -e "${YELLOW}    ⚠ Agent stack stop failed${NC}"
 ok "Agent stack stopped"
 
 # ──────────────────────────────────────────────────────────────────────
@@ -202,8 +202,8 @@ if [ -z "$RESOLVED_DB_URL" ]; then
     fi
 
     log "Starting local PostgreSQL for backup restore..."
-    docker rm -f smsly-db 2>/dev/null || true
-    docker volume rm -f postgres_data 2>/dev/null || true
+    docker rm -f smsly-db || echo -e "${YELLOW}    ⚠ Failed to remove old smsly-db${NC}"
+    docker volume rm -f postgres_data || echo -e "${YELLOW}    ⚠ Failed to remove postgres_data volume${NC}"
     docker compose -f "$COMPOSE_FILE" up -d db
 
     log "Waiting for PostgreSQL..."

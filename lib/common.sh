@@ -209,14 +209,14 @@ run_backend_migrations() {
         --env-file "${INSTALL_DIR:-/opt/smsly-hosting}/.env" \
         -e SMSLY_DISABLE_STARTUP_TASKS=true \
         smsly-hosting-backend:latest \
-        python manage.py fix_node_db_permissions 2>&1 || true
+        python manage.py fix_node_db_permissions 2>&1 || echo -e "${YELLOW}    ⚠ fix_node_db_permissions failed${NC}"
 
     # Reload PgCat so newly created/fixed node agent users are picked up
     # into the pool config. Critical for agent-lite nodes that connect
     # through PgCat and would otherwise get "No pool configured".
     if [ "$MODE_AGENT_LITE" != "true" ] && [ -n "$(get_pgcat_if_exists)" ] && docker compose -f "$COMPOSE_FILE" ps pgcat 2>/dev/null | grep -q "Up"; then
         echo -e "${BLUE}  -> Reloading PgCat to pick up node agent pools...${NC}"
-        timeout -k 5 20 docker compose -f "$COMPOSE_FILE" restart pgcat >/dev/null 2>&1
+        timeout -k 5 20 docker compose -f "$COMPOSE_FILE" restart pgcat || echo -e "${YELLOW}    ⚠ PgCat restart failed${NC}"
         sleep 5
         echo -e "${GREEN}  ✓ PgCat reloaded${NC}"
     fi
@@ -456,9 +456,9 @@ recreate_traefik_preserving_certs() {
 }
 ensure_update_networks() {
     # Never delete data networks/volumes in update mode. Only (re)create if missing.
-    docker network inspect smsly-net >/dev/null 2>&1 || docker network create smsly-net >/dev/null 2>&1 || true
-    docker network inspect smsly-proxy >/dev/null 2>&1 || docker network create smsly-proxy >/dev/null 2>&1 || true
-    docker network inspect socket-proxy >/dev/null 2>&1 || docker network create --driver bridge --internal socket-proxy >/dev/null 2>&1 || true
+    docker network inspect smsly-net >/dev/null 2>&1 || docker network create smsly-net || echo -e "${YELLOW}    ⚠ smsly-net create failed (may already exist)${NC}"
+    docker network inspect smsly-proxy >/dev/null 2>&1 || docker network create smsly-proxy || echo -e "${YELLOW}    ⚠ smsly-proxy create failed (may already exist)${NC}"
+    docker network inspect socket-proxy >/dev/null 2>&1 || docker network create --driver bridge --internal socket-proxy || echo -e "${YELLOW}    ⚠ socket-proxy create failed (may already exist)${NC}"
 }
 
 get_pgcat_if_exists() {
@@ -523,8 +523,8 @@ compose_stack_build_service_args() {
 
 stop_node_excluded_services() {
     is_node_mode || return 0
-    docker compose -f "$COMPOSE_FILE" stop --timeout 15 frontend caddy >/dev/null 2>&1 || true
-    docker compose -f "$COMPOSE_FILE" rm -f frontend caddy >/dev/null 2>&1 || true
+    docker compose -f "$COMPOSE_FILE" stop --timeout 15 frontend caddy || echo -e "${YELLOW}    ⚠ frontend/caddy stop failed${NC}"
+    docker compose -f "$COMPOSE_FILE" rm -f frontend caddy || echo -e "${YELLOW}    ⚠ frontend/caddy rm failed${NC}"
 }
 
 prune_stopped_conflicting() {
@@ -555,7 +555,7 @@ docker_login() {
     if [ -z "$pass" ]; then
         return 0
     fi
-    echo "$pass" | docker login "$registry" -u "$user" --password-stdin >/dev/null 2>&1 || true
+    echo "$pass" | docker login "$registry" -u "$user" --password-stdin || echo -e "${YELLOW}    ⚠ Docker login failed for $registry${NC}"
 }
 
 compose_stack_build() {
@@ -723,7 +723,7 @@ ensure_container_on_network() {
 
     docker container inspect "$container_name" >/dev/null 2>&1 || return 0
     docker network inspect "$network_name" >/dev/null 2>&1 || return 0
-    docker network connect "$network_name" "$container_name" >/dev/null 2>&1 || true
+    docker network connect "$network_name" "$container_name" || echo -e "${YELLOW}    ⚠ Network connect $container_name to $network_name failed${NC}"
 }
 
 # ─── Shared Caddy Safety Function ────────────────────────────────────────────
@@ -898,17 +898,17 @@ bust_core_build_cache() {
         image_ids="$(docker compose -f "$COMPOSE_FILE" images -q "$svc" 2>/dev/null | awk 'NF' | sort -u || true)"
         if [ -n "$image_ids" ]; then
             while read -r image_id; do
-                [ -n "$image_id" ] && docker rmi -f "$image_id" >/dev/null 2>&1 || true
+                [ -n "$image_id" ] && docker rmi -f "$image_id" || echo -e "${YELLOW}    ⚠ docker rmi $image_id failed${NC}"
             done <<< "$image_ids"
         fi
     done
 
     # Build cache only (no global container/image prune).
-    docker builder prune -af >/dev/null 2>&1 || true
+    docker builder prune -af || echo -e "${YELLOW}    ⚠ docker builder prune failed${NC}"
 
     # NEW: Prune old unused images older than 7 days to prevent disk space exhaustion.
     echo -e "${BLUE}  -> Pruning deeply stale images (>7 days old)...${NC}"
-    docker image prune -a -f --filter "until=168h" >/dev/null 2>&1 || true
+    docker image prune -a -f --filter "until=168h" || echo -e "${YELLOW}    ⚠ docker image prune failed${NC}"
 
     echo -e "${GREEN}  OK Cache bust complete (targeted images + build cache + deep prune)${NC}"
 }
@@ -931,8 +931,8 @@ restart_edge_stack() {
     done
 
     if [ -n "$down_services" ]; then
-        timeout -k 5 30 docker compose -f "$COMPOSE_FILE" up -d --no-deps $down_services >/dev/null 2>&1 || \
-            timeout -k 5 30 docker compose -f "$COMPOSE_FILE" up -d $down_services >/dev/null 2>&1 || true
+        timeout -k 5 30 docker compose -f "$COMPOSE_FILE" up -d --no-deps $down_services || \
+            timeout -k 5 30 docker compose -f "$COMPOSE_FILE" up -d $down_services || echo -e "${YELLOW}    ⚠ Service restart failed${NC}"
     fi
 
     echo -e "${BLUE}  -> Re-attaching external networks...${NC}"
@@ -1025,8 +1025,8 @@ refresh_runtime_services() {
     fi
 
     if [ "${#app_services[@]}" -gt 0 ]; then
-        timeout -k 5 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "${app_services[@]}" >/dev/null 2>&1 || \
-            timeout -k 5 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate "${app_services[@]}" >/dev/null 2>&1 || true
+        timeout -k 5 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "${app_services[@]}" || \
+            timeout -k 5 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate "${app_services[@]}" || echo -e "${YELLOW}    ⚠ App services restart failed${NC}"
     fi
 
     ensure_container_on_network "smsly-net" "smsly-hosting-pgcat-1"
@@ -1071,8 +1071,8 @@ refresh_runtime_services() {
             fi
         done
         if [ "${#down_edge[@]}" -gt 0 ]; then
-            timeout -k 5 30 docker compose -f "$COMPOSE_FILE" up -d --no-deps "${down_edge[@]}" >/dev/null 2>&1 || \
-                timeout -k 5 30 docker compose -f "$COMPOSE_FILE" up -d "${down_edge[@]}" >/dev/null 2>&1 || true
+            timeout -k 5 30 docker compose -f "$COMPOSE_FILE" up -d --no-deps "${down_edge[@]}" || \
+                timeout -k 5 30 docker compose -f "$COMPOSE_FILE" up -d "${down_edge[@]}" || echo -e "${YELLOW}    ⚠ Edge services restart failed${NC}"
         fi
 
         ensure_container_on_network "smsly-net" "smsly-hosting-route-fallback-1"
@@ -1103,8 +1103,8 @@ refresh_runtime_services() {
     if [ "$MODE_AGENT_LITE" != "true" ]; then
         echo -e "${BLUE}  → Refreshing Observability Stack...${NC}"
         if [ -f "infrastructure/docker/docker-compose.observability.yml" ]; then
-            docker compose -f infrastructure/docker/docker-compose.observability.yml pull >/dev/null 2>&1 || true
-            docker compose -f infrastructure/docker/docker-compose.observability.yml up -d >/dev/null 2>&1 || true
+            docker compose -f infrastructure/docker/docker-compose.observability.yml pull || echo -e "${YELLOW}    ⚠ Observability pull failed${NC}"
+            docker compose -f infrastructure/docker/docker-compose.observability.yml up -d || echo -e "${YELLOW}    ⚠ Observability up failed${NC}"
             for obs_ctr in smsly-loki smsly-promtail smsly-prometheus smsly-cadvisor smsly-node-exporter smsly-grafana; do
                 i=0
                 while [ $i -lt 30 ]; do
@@ -1118,7 +1118,7 @@ refresh_runtime_services() {
         fi
     fi
 
-    systemctl restart smsly-autoscaler >/dev/null 2>&1 || true
+    systemctl restart smsly-autoscaler || echo -e "${YELLOW}    ⚠ smsly-autoscaler restart failed${NC}"
     echo -e "${GREEN}  OK Clean runtime refresh complete${NC}"
 }
 
@@ -1154,8 +1154,8 @@ ensure_celery_workers_running() {
         return 0
     fi
     echo -e "${YELLOW}  ⚠ Celery workers down: ${down_services[*]}. Restarting...${NC}"
-    timeout -k 5 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "${down_services[@]}" >/dev/null 2>&1 || \
-        timeout -k 5 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate "${down_services[@]}" >/dev/null 2>&1 || true
+    timeout -k 5 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "${down_services[@]}" || \
+        timeout -k 5 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate "${down_services[@]}" || echo -e "${YELLOW}    ⚠ Celery workers restart failed${NC}"
     local all_ok=true
     for svc in "${down_services[@]}"; do
         if wait_for_container_ready "smsly-hosting-${svc}-1" 120; then
@@ -1211,7 +1211,7 @@ sync_agent_lite_rabbitmq_password() {
         exit 1
     fi
 
-    docker compose -f "$COMPOSE_FILE" up -d rabbitmq >/dev/null 2>&1 || true
+    docker compose -f "$COMPOSE_FILE" up -d rabbitmq || echo -e "${YELLOW}    ⚠ RabbitMQ start failed${NC}"
     wait_for_container_ready "smsly-hosting-rabbitmq-1" 120 || {
         docker compose -f "$COMPOSE_FILE" logs --tail=80 rabbitmq 2>/dev/null || true
         exit 1
@@ -1223,7 +1223,7 @@ sync_agent_lite_rabbitmq_password() {
     fi
 
     echo -e "${BLUE}  -> Syncing Lite Agent RabbitMQ password for ${rabbitmq_user}...${NC}"
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl add_user "$rabbitmq_user" "$rabbitmq_password" >/dev/null 2>&1 || true
+    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl add_user "$rabbitmq_user" "$rabbitmq_password" || echo -e "${YELLOW}    ⚠ RabbitMQ add_user failed${NC}"
     timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl change_password "$rabbitmq_user" "$rabbitmq_password" >/dev/null
     timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_user_tags "$rabbitmq_user" administrator >/dev/null
     timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_permissions -p / "$rabbitmq_user" ".*" ".*" ".*" >/dev/null

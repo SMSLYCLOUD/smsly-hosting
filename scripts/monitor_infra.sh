@@ -80,7 +80,7 @@ if docker info >/dev/null 2>&1; then
     DOCKER_OK=true
 else
     log "Alert: Docker daemon is not responding. Attempting restart..."
-    systemctl restart docker 2>/dev/null || true
+    systemctl restart docker || log "Warning: Docker restart attempted — check result above"
     sleep 5
     if docker info >/dev/null 2>&1; then
         log "Docker daemon recovered after restart"
@@ -98,7 +98,7 @@ for svc in "${SYSTEMD_SERVICES[@]}"; do
         state=$(systemctl is-active "$svc" 2>/dev/null || echo "unknown")
         if [ "$state" != "active" ]; then
             log "Alert: systemd service $svc is $state. Restarting..."
-            systemctl restart "$svc" 2>/dev/null || true
+            systemctl restart "$svc" || log "Warning: Service $svc restart attempted — check result above"
         fi
     fi
 done
@@ -109,7 +109,7 @@ for tmr in "${SYSTEMD_TIMERS[@]}"; do
         tmr_state=$(systemctl is-active "$tmr" 2>/dev/null || echo "unknown")
         if [ "$tmr_state" != "active" ]; then
             log "Alert: systemd timer $tmr is $tmr_state. Restarting..."
-            systemctl restart "$tmr" 2>/dev/null || true
+            systemctl restart "$tmr" || log "Warning: Timer $tmr restart attempted — check result above"
         fi
     fi
 done
@@ -122,7 +122,7 @@ if command -v wg >/dev/null 2>&1; then
             wg_state=$(systemctl is-active "wg-quick@${iface}.service" 2>/dev/null || echo "unknown")
             if [ "$wg_state" != "active" ] && [ "$wg_state" != "unknown" ]; then
                 log "Alert: WireGuard interface $iface service is $wg_state. Restarting..."
-                systemctl restart "wg-quick@${iface}.service" 2>/dev/null || true
+                systemctl restart "wg-quick@${iface}.service" || log "Warning: WireGuard $iface restart attempted — check result above"
             fi
         done
     fi
@@ -165,7 +165,7 @@ check_and_heal() {
 
     if [ -z "$container_id" ]; then
         log "Warning: Container for service '$service' is missing. Attempting to start..."
-        docker compose -f "$compose_file" up -d "$service" 2>/dev/null || true
+        docker compose -f "$compose_file" up -d "$service" || log "Warning: Failed to start service $service"
         return
     fi
 
@@ -173,7 +173,7 @@ check_and_heal() {
 
     if [ -z "$inspect_data" ]; then
         log "Warning: Failed to inspect container '$container_id' for service '$service'. Attempting restart..."
-        docker compose -f "$compose_file" restart "$service" 2>/dev/null || true
+        docker compose -f "$compose_file" restart "$service" || log "Warning: Failed to restart service $service"
         return
     fi
 
@@ -182,10 +182,10 @@ check_and_heal() {
 
     if [ "$status" != "running" ]; then
         log "Alert: Container for service '$service' is not running (status: $status). Restarting..."
-        docker compose -f "$compose_file" restart "$service" 2>/dev/null || true
+        docker compose -f "$compose_file" restart "$service" || log "Warning: Failed to restart service $service (not running)"
     elif [ "$health" = "unhealthy" ]; then
         log "Alert: Container for service '$service' is running but UNHEALTHY. Restarting..."
-        docker compose -f "$compose_file" restart "$service" 2>/dev/null || true
+        docker compose -f "$compose_file" restart "$service" || log "Warning: Failed to restart service $service (unhealthy)"
     fi
 }
 

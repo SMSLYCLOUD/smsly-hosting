@@ -119,11 +119,11 @@ if [ "$COMPOSE_FILE" = "docker-compose.prod.yml" ] && [ -f docker-compose.prod.y
   # Ensure socket-proxy is reachable from smsly-net so traefik can query Docker.
   if docker network ls --format '{{.Name}}' | grep -q '^smsly-net$'; then
     if ! docker network inspect smsly-net --format '{{json .Containers}}' | grep -q 'smsly-hosting-socket-proxy-1'; then
-      docker network connect --alias socket-proxy smsly-net smsly-hosting-socket-proxy-1 || true
+      docker network connect --alias socket-proxy smsly-net smsly-hosting-socket-proxy-1 || echo -e "${YELLOW}    ⚠ Socket-proxy network connect failed${NC}"
     fi
   fi
 
-  docker compose -f docker-compose.prod.yml up -d --no-deps traefik route-fallback || true
+  docker compose -f docker-compose.prod.yml up -d --no-deps traefik route-fallback || echo -e "${YELLOW}    ⚠ App routing layer start failed${NC}"
 fi
 
 # Caddy is often managed by systemd, not docker compose.

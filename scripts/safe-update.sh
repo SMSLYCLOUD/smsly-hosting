@@ -112,7 +112,7 @@ safe_update_snapshot() {
     # Redis RDB snapshot (non-fatal — container may not be running)
     if timeout 10 docker exec smsly-hosting-redis-1 redis-cli SAVE 2>/dev/null; then
         _ok "Redis RDB saved"
-        timeout 10 docker cp smsly-hosting-redis-1:/data/dump.rdb "$BACKUP_DIR/pre-update-redis.rdb" 2>/dev/null || true
+        timeout 10 docker cp smsly-hosting-redis-1:/data/dump.rdb "$BACKUP_DIR/pre-update-redis.rdb" || echo -e "${YELLOW}    ⚠ Redis dump copy failed${NC}"
     else
         _warn "Redis backup skipped (container may not be running)"
     fi
@@ -265,7 +265,7 @@ safe_update_cleanup() {
     _step "Cleaning Up Backup Containers"
     local count=0
     for c_id in $(docker ps -a -q --filter "name=-backup-containers-" 2>/dev/null || true); do
-        docker stop "$c_id" >/dev/null 2>&1 || true
+        docker stop "$c_id" || echo -e "${YELLOW}    ⚠ Failed to stop backup container $c_id${NC}"
         docker rm "$c_id" >/dev/null 2>&1 && count=$((count + 1))
     done
     # Also cleanup any leftover stopped smsly- containers that compose may try to revive

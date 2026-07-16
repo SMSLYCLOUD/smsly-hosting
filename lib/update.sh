@@ -577,8 +577,8 @@ fi
                   echo -e "${YELLOW}  → Node mode: no frontend to update. Skipping.${NC}"
               else
                   echo -e "${BLUE}  → Rebuilding frontend container (cached)...${NC}"
-                docker compose -f "$COMPOSE_FILE" stop --timeout 15 frontend >/dev/null 2>&1 || true
-                  docker compose -f "$COMPOSE_FILE" rm -f frontend >/dev/null 2>&1 || true
+                docker compose -f "$COMPOSE_FILE" stop --timeout 15 frontend || echo -e "${YELLOW}    ⚠ docker compose stop frontend failed (non-fatal)${NC}"
+                  docker compose -f "$COMPOSE_FILE" rm -f frontend || echo -e "${YELLOW}    ⚠ docker compose rm frontend failed (non-fatal)${NC}"
                   timeout -k 5 600 docker compose -f "$COMPOSE_FILE" build frontend
                   docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps frontend
 
@@ -630,7 +630,7 @@ fi
             # Stop backend, celery & pgcat so their DB connections don't block
             # migrations (ALTER TABLE requires exclusive locks).
             echo -e "${BLUE}  → Stopping backend, celery & pgcat for migrations...${NC}"
-            docker compose -f "$COMPOSE_FILE" stop --timeout 15 backend celery celery-deploy celery-fast celery-beat $(get_pgcat_if_exists) 2>/dev/null || true
+            docker compose -f "$COMPOSE_FILE" stop --timeout 15 backend celery celery-deploy celery-fast celery-beat $(get_pgcat_if_exists) || echo -e "${YELLOW}    ⚠ docker compose stop backend/celery failed (non-fatal)${NC}"
 
             echo -e "${BLUE}  → Running migrations...${NC}"
             run_backend_migrations --root || {
@@ -640,7 +640,7 @@ fi
             }
 
             echo -e "${BLUE}  → Starting backend & pgcat...${NC}"
-            if [ -n "$(get_pgcat_if_exists)" ]; then docker compose -f "$COMPOSE_FILE" up -d --no-deps pgcat 2>/dev/null || true; fi
+            if [ -n "$(get_pgcat_if_exists)" ]; then docker compose -f "$COMPOSE_FILE" up -d --no-deps pgcat || echo -e "${YELLOW}    ⚠ docker compose up pgcat failed (non-fatal)${NC}"; fi
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate backend
             else
@@ -704,15 +704,15 @@ fi
                     echo -e "${YELLOW}  ⚠ Frontend build failed (cached layers missing). Skipping frontend.${NC}"
                     echo -e "${YELLOW}    Run --update when Docker Hub is reachable for a full rebuild.${NC}"
                 }
-                docker compose -f "$COMPOSE_FILE" stop --timeout 15 frontend >/dev/null 2>&1 || true
-                docker compose -f "$COMPOSE_FILE" rm -f frontend >/dev/null 2>&1 || true
-                docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps frontend 2>/dev/null || true
+                docker compose -f "$COMPOSE_FILE" stop --timeout 15 frontend || echo -e "${YELLOW}    ⚠ docker compose stop frontend failed (non-fatal)${NC}"
+                docker compose -f "$COMPOSE_FILE" rm -f frontend || echo -e "${YELLOW}    ⚠ docker compose rm frontend failed (non-fatal)${NC}"
+                docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps frontend || echo -e "${YELLOW}    ⚠ docker compose up frontend failed (non-fatal)${NC}"
             fi
 
             # 2. Stop backend, celery & pgcat so their DB connections don't block
             #    migrations (ALTER TABLE requires exclusive locks).
             echo -e "${BLUE}  → Stopping backend, celery & pgcat for migrations...${NC}"
-            docker compose -f "$COMPOSE_FILE" stop --timeout 15 backend celery celery-deploy celery-fast celery-beat $(get_pgcat_if_exists) 2>/dev/null || true
+            docker compose -f "$COMPOSE_FILE" stop --timeout 15 backend celery celery-deploy celery-fast celery-beat $(get_pgcat_if_exists) || echo -e "${YELLOW}    ⚠ docker compose stop backend/celery failed (non-fatal)${NC}"
 
             # 3. Run migrations
             echo -e "${BLUE}  → Running migrations...${NC}"
@@ -724,7 +724,7 @@ fi
 
             # 4. Start pgcat & backend (picks up Python code changes from mounted volume)
             echo -e "${BLUE}  → Starting pgcat & backend...${NC}"
-            if [ -n "$(get_pgcat_if_exists)" ]; then docker compose -f "$COMPOSE_FILE" up -d --no-deps pgcat 2>/dev/null || true; fi
+            if [ -n "$(get_pgcat_if_exists)" ]; then docker compose -f "$COMPOSE_FILE" up -d --no-deps pgcat || echo -e "${YELLOW}    ⚠ docker compose up pgcat failed (non-fatal)${NC}"; fi
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 docker compose -f "$COMPOSE_FILE" up -d --remove-orphans $(get_redis_service) rabbitmq socket-proxy
                 sync_agent_lite_rabbitmq_password
@@ -742,16 +742,16 @@ fi
 
             # 5. Clean celerybeat-schedule and restart celery workers
             echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"
-            timeout 30 docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule 2>/dev/null || true
+            timeout 30 docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule || echo -e "${YELLOW}    ⚠ celerybeat-schedule cleanup failed (non-fatal)${NC}"
 
             restart_svcs="celery celery-deploy celery-fast celery-beat"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 restart_svcs="celery-worker"
             fi
             if [ "$MODE_AGENT_LITE" = "true" ]; then
-                docker compose -f "$COMPOSE_FILE" up -d --force-recreate $restart_svcs 2>/dev/null || true
+                docker compose -f "$COMPOSE_FILE" up -d --force-recreate $restart_svcs || echo -e "${YELLOW}    ⚠ docker compose up celery failed (non-fatal)${NC}"
             else
-                docker compose -f "$COMPOSE_FILE" restart $restart_svcs 2>/dev/null || true
+                docker compose -f "$COMPOSE_FILE" restart $restart_svcs || echo -e "${YELLOW}    ⚠ docker compose restart celery failed (non-fatal)${NC}"
              fi
              set_checkpoint "update_db_migrated"
              
@@ -833,7 +833,7 @@ fi
             # 8. Stop backend, celery & pgcat so their DB connections don't block
             #    migrations (ALTER TABLE requires exclusive locks).
             echo -e "${BLUE}  → Stopping backend, celery & pgcat for migrations...${NC}"
-            docker compose -f "$COMPOSE_FILE" stop --timeout 15 backend celery celery-deploy celery-fast celery-beat $(get_pgcat_if_exists) 2>/dev/null || true
+            docker compose -f "$COMPOSE_FILE" stop --timeout 15 backend celery celery-deploy celery-fast celery-beat $(get_pgcat_if_exists) || echo -e "${YELLOW}    ⚠ docker compose stop backend/celery failed (non-fatal)${NC}"
 
             # 9. Run migrations
             echo -e "${BLUE}  → Running migrations...${NC}"
@@ -856,7 +856,7 @@ fi
 
             # 10. Start pgcat & backend
             echo -e "${BLUE}  → Starting pgcat & backend...${NC}"
-            if [ -n "$(get_pgcat_if_exists)" ]; then docker compose -f "$COMPOSE_FILE" up -d --no-deps pgcat 2>/dev/null || true; fi
+            if [ -n "$(get_pgcat_if_exists)" ]; then docker compose -f "$COMPOSE_FILE" up -d --no-deps pgcat || echo -e "${YELLOW}    ⚠ docker compose up pgcat failed (non-fatal)${NC}"; fi
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate backend
             else
@@ -872,16 +872,16 @@ fi
 
             # 11. Clean celerybeat-schedule and restart beat
             echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"
-            timeout 30 docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule 2>/dev/null || true
+            timeout 30 docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule || echo -e "${YELLOW}    ⚠ celerybeat-schedule cleanup failed (non-fatal)${NC}"
             
             restart_svcs="celery celery-beat celery-deploy celery-fast"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 restart_svcs="celery-worker"
             fi
             if [ "$MODE_AGENT_LITE" = "true" ]; then
-                docker compose -f "$COMPOSE_FILE" up -d --force-recreate $restart_svcs 2>/dev/null || true
+                docker compose -f "$COMPOSE_FILE" up -d --force-recreate $restart_svcs || echo -e "${YELLOW}    ⚠ docker compose up celery failed (non-fatal)${NC}"
             else
-                docker compose -f "$COMPOSE_FILE" restart $restart_svcs 2>/dev/null || true
+                docker compose -f "$COMPOSE_FILE" restart $restart_svcs || echo -e "${YELLOW}    ⚠ docker compose restart celery failed (non-fatal)${NC}"
             fi
             set_checkpoint "update_db_migrated"
 
@@ -986,11 +986,11 @@ fi
         # Restart containers whose bind-mounted config or environment may have
         # changed.  docker compose up -d only recreates on IMAGE changes, so
         # config-file updates require an explicit restart.
-        docker restart smsly-grafana 2>/dev/null || true
-        docker restart smsly-alertmanager 2>/dev/null || true
-        docker restart smsly-prometheus 2>/dev/null || true
-        docker restart smsly-docker-labels 2>/dev/null || true
-        docker restart smsly-promtail 2>/dev/null || true
+        docker restart smsly-grafana || echo -e "${YELLOW}    ⚠ docker restart smsly-grafana failed (non-fatal)${NC}"
+        docker restart smsly-alertmanager || echo -e "${YELLOW}    ⚠ docker restart smsly-alertmanager failed (non-fatal)${NC}"
+        docker restart smsly-prometheus || echo -e "${YELLOW}    ⚠ docker restart smsly-prometheus failed (non-fatal)${NC}"
+        docker restart smsly-docker-labels || echo -e "${YELLOW}    ⚠ docker restart smsly-docker-labels failed (non-fatal)${NC}"
+        docker restart smsly-promtail || echo -e "${YELLOW}    ⚠ docker restart smsly-promtail failed (non-fatal)${NC}"
         # Deploy/update docker-labels exporter to all remote nodes and
         # regenerate Prometheus file_sd target files (docker-labels,
         # cAdvisor, Node Exporter).
@@ -1002,7 +1002,7 @@ fi
     fi
     if [ -n "${CROWDSEC_BOUNCER_KEY:-}" ]; then
         echo -e "${BLUE}  → Registering CrowdSec Bouncer...${NC}"
-        timeout 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "${CROWDSEC_BOUNCER_KEY:-}" >/dev/null 2>&1 || true
+        timeout 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "${CROWDSEC_BOUNCER_KEY:-}" || echo -e "${YELLOW}    ⚠ CrowdSec bouncer registration failed (already exists, non-fatal)${NC}"
     fi
 
     set_checkpoint "update_containers_rebuilt"
@@ -1051,13 +1051,13 @@ cp, created = CloudProvider.objects.get_or_create(
 if not created and not cp.is_active:
     cp.is_active = True
     cp.save()
-" | timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null || true
+" | timeout -k 5 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell || echo -e "${YELLOW}    ⚠ Local Docker provider setup failed (non-fatal)${NC}"
     # ─── Self-Healing: Docker Socket Permissions ──────────────────────────────
     echo -e "${BLUE}  → Hardening Docker socket permissions...${NC}"
     # NOTE: Removed chmod 666 — world-writable docker.sock is a security risk.
     # Group membership (docker group) is the correct access control mechanism.
     if ! groups smsly 2>/dev/null | grep -q "docker"; then
-        usermod -aG docker smsly 2>/dev/null || true
+        usermod -aG docker smsly || echo -e "${YELLOW}    ⚠ usermod docker group failed (non-fatal)${NC}"
     fi
 
     # ─── Self-Healing: Cleanup Stale Resources ──────────────────────────────
@@ -1690,8 +1690,8 @@ RemainAfterExit=yes
 [Install]
 WantedBy=multi-user.target
 RESTORE_EOF
-            systemctl daemon-reload 2>/dev/null || true
-            systemctl enable iptables-restore 2>/dev/null || true
+            systemctl daemon-reload || echo -e "${YELLOW}    ⚠ systemctl daemon-reload failed (non-fatal)${NC}"
+            systemctl enable iptables-restore || echo -e "${YELLOW}    ⚠ systemctl enable iptables-restore failed (non-fatal)${NC}"
             echo -e "${GREEN}  ✓ iptables-restore service installed and enabled${NC}"
         fi
     fi
@@ -1702,9 +1702,9 @@ RESTORE_EOF
         chmod +x "$INSTALL_DIR/scripts/platform-update.sh" "$INSTALL_DIR/scripts/caddy-reload.sh" 2>/dev/null || true
         cp "$INSTALL_DIR/scripts/smsly-update-watcher.service" /etc/systemd/system/smsly-update-watcher.service 2>/dev/null || true
         cp "$INSTALL_DIR/scripts/caddy-watcher.service" /etc/systemd/system/caddy-watcher.service 2>/dev/null || true
-        systemctl daemon-reload 2>/dev/null || true
-        systemctl enable smsly-update-watcher caddy-watcher 2>/dev/null || true
-        systemctl restart smsly-update-watcher caddy-watcher 2>/dev/null || true
+        systemctl daemon-reload || echo -e "${YELLOW}    ⚠ systemctl daemon-reload failed (non-fatal)${NC}"
+        systemctl enable smsly-update-watcher caddy-watcher || echo -e "${YELLOW}    ⚠ systemctl enable watchers failed (non-fatal)${NC}"
+        systemctl restart smsly-update-watcher caddy-watcher || echo -e "${YELLOW}    ⚠ systemctl restart watchers failed (non-fatal)${NC}"
         echo -e "${GREEN}  ✓ smsly-update-watcher and caddy-watcher services updated and started${NC}"
     fi
 
@@ -1715,12 +1715,12 @@ RESTORE_EOF
             wg_iface=$(basename "$wg_conf" .conf)
             if ! systemctl is-enabled "wg-quick@${wg_iface}" >/dev/null 2>&1; then
                 echo -e "${BLUE}  → Re-enabling WireGuard mesh ($wg_iface)...${NC}"
-                systemctl enable --now "wg-quick@${wg_iface}" 2>/dev/null || true
+                systemctl enable --now "wg-quick@${wg_iface}" || echo -e "${YELLOW}    ⚠ systemctl enable wg-quick failed (non-fatal)${NC}"
                 echo -e "${GREEN}  ✓ WireGuard $wg_iface re-enabled${NC}"
             fi
             if ! systemctl is-active "wg-quick@${wg_iface}" >/dev/null 2>&1; then
                 echo -e "${YELLOW}  ⚠ WireGuard $wg_iface is not running, attempting restart...${NC}"
-                systemctl start "wg-quick@${wg_iface}" 2>/dev/null || true
+                systemctl start "wg-quick@${wg_iface}" || echo -e "${YELLOW}    ⚠ systemctl start wg-quick failed (non-fatal)${NC}"
             fi
         done
     fi
@@ -1745,8 +1745,8 @@ RESTORE_EOF
         cp "$INSTALL_DIR/scripts/smsly-infra-monitor.service" /etc/systemd/system/smsly-infra-monitor.service 2>/dev/null || true
         cp "$INSTALL_DIR/scripts/smsly-infra-monitor.timer" /etc/systemd/system/smsly-infra-monitor.timer 2>/dev/null || true
         systemctl daemon-reload
-        systemctl enable smsly-infra-monitor.timer 2>/dev/null || true
-        systemctl restart smsly-infra-monitor.timer 2>/dev/null || true
+        systemctl enable smsly-infra-monitor.timer || echo -e "${YELLOW}    ⚠ systemctl enable infra timer failed (non-fatal)${NC}"
+        systemctl restart smsly-infra-monitor.timer || echo -e "${YELLOW}    ⚠ systemctl restart infra timer failed (non-fatal)${NC}"
         echo -e "${GREEN}  ✓ smsly-infra-monitor timer installed and started${NC}"
     fi
 

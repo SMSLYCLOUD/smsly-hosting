@@ -5,7 +5,7 @@ ensure_container_on_network() {
 
     docker container inspect "$container_name" >/dev/null 2>&1 || return 0
     docker network inspect "$network_name" >/dev/null 2>&1 || return 0
-    docker network connect "$network_name" "$container_name" >/dev/null 2>&1 || true
+    docker network connect "$network_name" "$container_name" || echo -e "${YELLOW}    ⚠ Network connect failed for $container_name on $network_name${NC}"
 }
 
 # --- Shared Caddy Safety Function --------------------------------------------
@@ -100,7 +100,7 @@ SAFECADDY
 ${svc_blocks}
 SAFECADDY
     fi
-    caddy fmt --overwrite /opt/smsly-hosting/caddy-config/Caddyfile 2>/dev/null || true
+    caddy fmt --overwrite /opt/smsly-hosting/caddy-config/Caddyfile || echo -e "${YELLOW}    ⚠ Caddyfile fmt failed (syntax may be broken)${NC}"
     echo -e "${YELLOW}  [WARN] Wildcard HTTPS disabled. Individual service domains have HTTP-01 SSL.${NC}"
 }
 
@@ -134,13 +134,13 @@ bust_core_build_cache() {
         image_ids="$(docker compose -f "$COMPOSE_FILE" images -q "$svc" 2>/dev/null | awk 'NF' | sort -u || true)"
         if [ -n "$image_ids" ]; then
             while read -r image_id; do
-                [ -n "$image_id" ] && docker rmi -f "$image_id" >/dev/null 2>&1 || true
+                [ -n "$image_id" ] && docker rmi -f "$image_id" || echo -e "${YELLOW}    ⚠ Failed to remove image $image_id${NC}"
             done <<< "$image_ids"
         fi
     done
 
     # Build cache only (no global container/image prune).
-    docker builder prune -af >/dev/null 2>&1 || true
+    docker builder prune -af || echo -e "${YELLOW}    ⚠ Build cache prune failed${NC}"
     
     # NEW: Prune old unused images older than 7 days to prevent disk space exhaustion.
     # echo -e "${BLUE}  -> Pruning deeply stale images (>7 days old)...${NC}"
@@ -165,15 +165,15 @@ restart_edge_stack() {
         echo -e "${GREEN}      edge services already running, skipping restart${NC}"
     else
         # NOTE(Zero-Downtime): Removed --force-recreate to eliminate downtime for deployed services.
-        timeout -k 5 30 docker compose -f "$COMPOSE_FILE" up -d --no-deps $edge_services >/dev/null 2>&1 || \
-            timeout -k 5 30 docker compose -f "$COMPOSE_FILE" up -d $edge_services >/dev/null 2>&1 || true
+        timeout -k 5 30 docker compose -f "$COMPOSE_FILE" up -d --no-deps $edge_services || \
+            timeout -k 5 30 docker compose -f "$COMPOSE_FILE" up -d $edge_services || echo -e "${YELLOW}    ⚠ Edge services failed to start${NC}"
     fi
 
     # Restart core app entrypoints so new upstream bindings are live.
     echo -e "${BLUE}    [2/5] Restarting frontend + backend...${NC}"
-    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" restart frontend backend >/dev/null 2>&1 || true
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" restart frontend backend || echo -e "${YELLOW}    ⚠ Frontend/backend restart failed${NC}"
     echo -e "${BLUE}    [3/5] Restarting edge services...${NC}"
-    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" restart $edge_services >/dev/null 2>&1 || true
+    timeout -k 5 30 docker compose -f "$COMPOSE_FILE" restart $edge_services || echo -e "${YELLOW}    ⚠ Edge services restart failed${NC}"
 
     # Re-attach expected external networks (idempotent).
     echo -e "${BLUE}    [4/5] Re-attaching external networks...${NC}"

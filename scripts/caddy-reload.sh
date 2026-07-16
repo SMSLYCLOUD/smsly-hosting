@@ -81,7 +81,7 @@ sync_cloudflare_token() {
 Environment="CLOUDFLARE_API_TOKEN=$NEW_TOKEN"
 ENVEOF
                 chmod 600 "$OVERRIDE_CONF"
-                systemctl daemon-reload 2>&1 || true
+        systemctl daemon-reload 2>&1 || echo -e "${YELLOW}    ⚠ systemctl daemon-reload failed${NC}"
                 # Export for caddy validate to use
                 export CLOUDFLARE_API_TOKEN="$NEW_TOKEN"
                 echo "$LOG_PREFIX Cloudflare token synced"
