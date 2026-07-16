@@ -11198,26 +11198,16 @@ ensure_infrastructure_permissions() {
 
 
 
-        for vol in backups_data; do
-
-
-
-            if docker volume inspect "$vol" ; then
-
-
-
-                echo -e "${BLUE}     ↳ Setting permissions for volume: $vol...${NC}"
-
-
-
-                docker run --rm -v "${vol}:/data" alpine chown -R 1000:1000 /data  || true
-
-
-
+                # backups_data is a compose named volume, prefixed with the project name
+        # (e.g. smsly-hosting_backups_data). Resolve the real name before chown.
+        _vol_match="$(docker volume ls -q 2>/dev/null | grep -E '(^|_)backups_data$' | head -n1)"
+        for vol in ${_vol_match:-backups_data}; do
+            if docker volume inspect "$vol" >/dev/null 2>&1; then
+                echo -e "${BLUE}     -> Setting permissions for volume: $vol...${NC}"
+                docker run --rm -v "${vol}:/data" alpine chown -R 1000:1000 /data || true
+            else
+                echo -e "${YELLOW}     [warn] backups_data volume not found - skipping chown${NC}"
             fi
-
-
-
         done
 
 

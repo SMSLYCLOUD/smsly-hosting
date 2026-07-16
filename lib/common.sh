@@ -555,7 +555,26 @@ docker_login() {
     if [ -z "$pass" ]; then
         return 0
     fi
-    echo "$pass" | docker login "$registry" -u "$user" --password-stdin || echo -e "${YELLOW}    ⚠ Docker login failed for $registry${NC}"
+    # Probe whether the registry actually requires authentication. A 200 means
+    # anonymous pull is allowed and login is unnecessary; a 401 means auth is
+    # required and we should log in; anything else (e.g. 400) means the registry
+    # is misconfigured and we surface the real error instead of a silent failure.
+    local _code=""
+    _code="$(timeout 10 curl -s -o /dev/null -w '%{http_code}' "http://${registry}/v2/" 2>/dev/null)"
+    if [ -n "$_code" ] && [ "$_code" != "401" ]; then
+        if [ "$_code" = "200" ]; then
+            echo -e "${BLUE}     -> Registry $registry allows anonymous access - skipping login${NC}"
+        else
+            echo -e "${YELLOW}    [warn] Registry $registry returned HTTP $_code on /v2/ probe - check registry config${NC}"
+        fi
+        return 0
+    fi
+    # 401 (or probe unavailable) - auth required; attempt login and show errors.
+    if echo "$pass" | docker login "$registry" -u "$user" --password-stdin 2>&1; then
+        return 0
+    fi
+    echo -e "${YELLOW}    [warn] Docker login failed for $registry (see error above)${NC}"
+    return 0
 }
 
 compose_stack_build() {
@@ -623,10 +642,15 @@ ensure_infrastructure_permissions() {
     # 2. Handle Named Volumes (backups_data)
     # We use a one-off container to safely chown existing named volumes.
     if command -v docker ; then
-        for vol in backups_data; do
-            if docker volume inspect "$vol" ; then
+        # backups_data is a compose named volume, prefixed with the project name
+        # (e.g. smsly-hosting_backups_data). Resolve the real name before chown.
+        _vol_match="$(docker volume ls -q 2>/dev/null | grep -E '(^|_)backups_data$' | head -n1)"
+        for vol in ${_vol_match:-backups_data}; do
+            if docker volume inspect "$vol" >/dev/null 2>&1; then
                 echo -e "${BLUE}     ↳ Setting permissions for volume: $vol...${NC}"
                 docker run --rm -v "${vol}:/data" alpine chown -R 1000:1000 /data || echo -e "${YELLOW}     ⚠ Could not chown volume $vol${NC}"
+            else
+                echo -e "${YELLOW}     ⚠ backups_data volume not found — skipping chown${NC}"
             fi
         done
     fi

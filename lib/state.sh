@@ -32,7 +32,7 @@ set_checkpoint() {
     mkdir -p "$(dirname "$STATE_FILE")"
     printf '%s\n' "$(install_flavor)" > "$STATE_MODE_FILE"
     # Ensure name is unique in the file to avoid duplicates on resume
-    if ! grep -q "^$name$" "$STATE_FILE" ; then
+    if [ ! -f "$STATE_FILE" ] || ! grep -q "^$name$" "$STATE_FILE" ; then
         echo "$name" >> "$STATE_FILE"
     fi
     echo -e "${GREEN}  ✓ Checkpoint reached: $name${NC}"

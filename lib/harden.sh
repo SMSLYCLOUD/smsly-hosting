@@ -91,13 +91,28 @@ failregex = ^.*"remote_ip":"<HOST>".*"method":"(GET|POST|HEAD|PUT|DELETE|PATCH)"
 ignoreregex =
 FILTER_EOF
 
-    systemctl enable fail2ban || echo -e "${YELLOW}    ⚠ fail2ban enable failed${NC}"
-    # Blocking start — wait for service to be ready
-    systemctl restart fail2ban || echo -e "${YELLOW}    ⚠ fail2ban restart failed${NC}"
-    for _i in $(seq 1 10); do
-        fail2ban-client ping  && break
+    systemctl enable fail2ban || _harden_log warn "fail2ban enable failed"
+    # Blocking start — wait for the service to actually be ACTIVE (not just for
+    # `systemctl restart` to return). If it never comes up we surface the real
+    # failure via journalctl instead of spamming socket errors.
+    systemctl restart fail2ban || _harden_log warn "fail2ban restart returned non-zero"
+    local _up=0
+    for _i in $(seq 1 30); do
+        if systemctl is-active --quiet fail2ban; then
+            _up=1
+            break
+        fi
         sleep 1
     done
+    if [ "$_up" -ne 1 ]; then
+        _harden_log err "fail2ban failed to become active — last journalctl output:"
+        journalctl -u fail2ban -n 40 --no-pager 2>&1 | sed 's/^/      /' || true
+        return 1
+    fi
+    # Service is active — confirm the client can reach the server socket.
+    if ! fail2ban-client ping; then
+        _harden_log warn "fail2ban active but client cannot reach socket"
+    fi
 }
 
 _harden_ufw_bootstrap() {
@@ -110,8 +125,8 @@ _harden_ufw_bootstrap() {
             ufw status verbose  | grep -qE "${port}(/tcp|/udp)?.*ALLOW" || ufw allow "$port" || echo -e "${YELLOW}    ⚠ ufw allow port $port failed${NC}"
         done
         # Whitelist Docker bridges
-        for iface in docker0 br-+; do
-            ip link show "$iface"  || continue
+        for iface in docker0 $(ls /sys/class/net 2>/dev/null | grep '^br-'); do
+            ip link show "$iface" >/dev/null 2>&1 || continue
             ufw allow in on "$iface" || echo -e "${YELLOW}    ⚠ ufw allow in on $iface failed${NC}"
         done
         return 0
@@ -124,8 +139,8 @@ _harden_ufw_bootstrap() {
     ufw allow 80/tcp || echo -e "${YELLOW}    ⚠ ufw allow 80/tcp failed${NC}"
     ufw allow 443/tcp || echo -e "${YELLOW}    ⚠ ufw allow 443/tcp failed${NC}"
     ufw allow 51820/udp || echo -e "${YELLOW}    ⚠ ufw allow 51820/udp failed${NC}"
-    for iface in docker0 br-+; do
-        ip link show "$iface"  || continue
+    for iface in docker0 $(ls /sys/class/net 2>/dev/null | grep '^br-'); do
+        ip link show "$iface" >/dev/null 2>&1 || continue
         ufw allow in on "$iface" || echo -e "${YELLOW}    ⚠ ufw allow in on $iface failed${NC}"
     done
     ufw --force enable || echo -e "${YELLOW}    ⚠ ufw enable failed${NC}"
@@ -300,17 +315,17 @@ _harden_falco_bootstrap() {
 # ─── PHASE 2: Verify — check everything came up, report status ────────────────
 
 _harden_fail2ban_verify() {
-    local ok=true
     command -v fail2ban-client  || { _harden_log warn "fail2ban — not installed"; return 1; }
-
-    # Quick check — if not responding, wait a few seconds for async start
-    fail2ban-client ping  || { sleep 5; fail2ban-client ping ; } || ok=false
-
-    if $ok && fail2ban-client status sshd ; then
+    if ! systemctl is-active --quiet fail2ban; then
+        _harden_log warn "fail2ban not running — last journalctl output:"
+        journalctl -u fail2ban -n 30 --no-pager 2>&1 | sed 's/^/      /' || true
+        return 1
+    fi
+    if fail2ban-client ping && fail2ban-client status sshd ; then
         _harden_log ok "fail2ban active (sshd + recidive + http)"
         return 0
     fi
-    _harden_log warn "fail2ban not responding — check systemctl status fail2ban"
+    _harden_log warn "fail2ban running but not responding to client"
     return 1
 }
 
