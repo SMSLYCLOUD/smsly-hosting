@@ -148,7 +148,7 @@ diagnose_migration_locks() {
     [ -f "$env_file" ] && source "$env_file" 2>/dev/null || true
 
     echo -e "${YELLOW}  -> PostgreSQL activity snapshot (lock diagnosis):${NC}"
-    docker compose -f "$COMPOSE_FILE" exec -T \
+    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T \
         -e PGPASSWORD="${POSTGRES_PASSWORD:-}" \
         db psql \
             -U "${POSTGRES_USER:-smsly_admin}" \
@@ -375,10 +375,10 @@ recreate_traefik_preserving_certs() {
     echo -e "${BLUE}  → Recording pre-recreate router count from Traefik API...${NC}"
     sleep 2
     local pre_routers=0
-    if docker exec smsly-hosting-traefik-1 sh -c 'command -v wget >/dev/null 2>&1' 2>/dev/null; then
-        pre_routers=$(docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers 2>/dev/null | grep -o '"name"' | wc -l)
+    if timeout 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget >/dev/null 2>&1' 2>/dev/null; then
+        pre_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers 2>/dev/null | grep -o '"name"' | wc -l)
     else
-        pre_routers=$(docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers 2>/dev/null | grep -o '"name"' | wc -l)
+        pre_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers 2>/dev/null | grep -o '"name"' | wc -l)
     fi
     echo -e "${BLUE}    pre-recreate routers: $pre_routers${NC}"
     if [ "$pre_routers" -le 1 ]; then
@@ -418,19 +418,19 @@ recreate_traefik_preserving_certs() {
     i=0
     local post_routers=0
     while [ $i -lt 60 ]; do
-        if docker exec smsly-hosting-traefik-1 sh -c 'command -v wget >/dev/null 2>&1' 2>/dev/null; then
-            post_routers=$(docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers 2>/dev/null | grep -o '"name"' | wc -l)
+        if timeout 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget >/dev/null 2>&1' 2>/dev/null; then
+            post_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/http/routers 2>/dev/null | grep -o '"name"' | wc -l)
         else
-            post_routers=$(docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers 2>/dev/null | grep -o '"name"' | wc -l)
+            post_routers=$(timeout 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/http/routers 2>/dev/null | grep -o '"name"' | wc -l)
         fi
         if [ "$post_routers" -ge "$pre_routers" ] && [ "$post_routers" -gt 0 ]; then
             echo -e "${GREEN}    OK post-recreate routers: $post_routers (matches or exceeds pre-recreate)${NC}"
 
             local eps
-            if docker exec smsly-hosting-traefik-1 sh -c 'command -v wget >/dev/null 2>&1' 2>/dev/null; then
-                eps=$(docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/entrypoints 2>/dev/null)
+            if timeout 10 docker exec smsly-hosting-traefik-1 sh -c 'command -v wget >/dev/null 2>&1' 2>/dev/null; then
+                eps=$(timeout 10 docker exec smsly-hosting-traefik-1 wget -qO- http://127.0.0.1:8080/api/entrypoints 2>/dev/null)
             else
-                eps=$(docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/entrypoints 2>/dev/null)
+                eps=$(timeout 10 docker exec smsly-hosting-traefik-1 curl -s http://127.0.0.1:8080/api/entrypoints 2>/dev/null)
             fi
             if echo "$eps" | grep -q '"name":"websecure"'; then
                 echo -e "${GREEN}    OK websecure entrypoint is active${NC}"
@@ -576,9 +576,9 @@ compose_stack_up() {
         stop_node_excluded_services
         services="$(compose_stack_service_args)"
         [ -n "$services" ] || return 1
-        timeout -k 5 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate "$@" $services
+        timeout -k 5 60 docker compose -f "$COMPOSE_FILE" up -d "$@" $services
     else
-        timeout -k 5 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate "$@"
+        timeout -k 5 60 docker compose -f "$COMPOSE_FILE" up -d "$@"
     fi
 }
 
@@ -1216,18 +1216,18 @@ sync_agent_lite_rabbitmq_password() {
         exit 1
     }
 
-    if docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" >/dev/null 2>&1; then
+    if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" >/dev/null 2>&1; then
         echo -e "${GREEN}  OK Lite Agent RabbitMQ password already matches .env${NC}"
         return 0
     fi
 
     echo -e "${BLUE}  -> Syncing Lite Agent RabbitMQ password for ${rabbitmq_user}...${NC}"
-    docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl add_user "$rabbitmq_user" "$rabbitmq_password" >/dev/null 2>&1 || true
-    docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl change_password "$rabbitmq_user" "$rabbitmq_password" >/dev/null
-    docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_user_tags "$rabbitmq_user" administrator >/dev/null
-    docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_permissions -p / "$rabbitmq_user" ".*" ".*" ".*" >/dev/null
+    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl add_user "$rabbitmq_user" "$rabbitmq_password" >/dev/null 2>&1 || true
+    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl change_password "$rabbitmq_user" "$rabbitmq_password" >/dev/null
+    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_user_tags "$rabbitmq_user" administrator >/dev/null
+    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_permissions -p / "$rabbitmq_user" ".*" ".*" ".*" >/dev/null
 
-    if docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" >/dev/null 2>&1; then
+    if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" >/dev/null 2>&1; then
         echo -e "${GREEN}  OK Lite Agent RabbitMQ password synced${NC}"
         return 0
     fi

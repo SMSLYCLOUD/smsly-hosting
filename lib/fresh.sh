@@ -1144,7 +1144,7 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
     if [ "$MODE_AGENT_LITE" != "true" ]; then
         backend_container=$(docker ps --format '{{.Names}}' | grep -E '^smsly-hosting-backend(-1)?$' | head -1)
         if [ -n "$backend_container" ]; then
-            docker exec "$backend_container" python manage.py deploy_docker_labels_exporters 2>/dev/null || true
+            timeout 60 docker exec "$backend_container" python manage.py deploy_docker_labels_exporters 2>/dev/null || true
         fi
     fi
 
@@ -1170,10 +1170,10 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
                 _db_user="${POSTGRES_USER:-postgres}"
             fi
             if [ -n "$_db_container" ]; then
-                _db_exists=$(docker exec "$_db_container" psql -U "${_db_user}" -d "${POSTGRES_DB:-smsly_hosting}" -tc \
+                _db_exists=$(timeout 30 docker exec "$_db_container" psql -U "${_db_user}" -d "${POSTGRES_DB:-smsly_hosting}" -tc \
                     "SELECT 1 FROM pg_database WHERE datname='infisical'" 2>/dev/null | tr -d '[:space:]' || true)
                 if [ "$_db_exists" != "1" ]; then
-                    docker exec "$_db_container" psql -U "${_db_user}" -d "${POSTGRES_DB:-smsly_hosting}" -c \
+                    timeout 30 docker exec "$_db_container" psql -U "${_db_user}" -d "${POSTGRES_DB:-smsly_hosting}" -c \
                         "CREATE DATABASE infisical;" 2>/dev/null && \
                         echo -e "${GREEN}  ✓ Created infisical database${NC}" || \
                         echo -e "${YELLOW}  ⚠ Could not create infisical database (may already exist)${NC}"
@@ -1222,7 +1222,7 @@ else
 echo -e "${BLUE}  → Waiting for Database...${NC}"
 DB_READY=false
 for i in $(seq 1 24); do
-    if docker compose -f "$COMPOSE_FILE" exec -T db pg_isready -U smsly_admin >/dev/null 2>&1; then
+    if timeout 10 docker compose -f "$COMPOSE_FILE" exec -T db pg_isready -U smsly_admin >/dev/null 2>&1; then
         echo -e "${GREEN}  ✓ Database is ready (attempt $i).${NC}"
         DB_READY=true
         break
@@ -1247,17 +1247,17 @@ set +a
 echo -e "${BLUE}  → Syncing database password...${NC}"
 
 # Try local trust auth first (Docker default), then try with PGPASSWORD
-if docker compose -f "$COMPOSE_FILE" exec -T db \
+if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T db \
     psql -U postgres -c "ALTER USER smsly_admin WITH PASSWORD '${POSTGRES_PASSWORD}';" \
     >/dev/null 2>&1; then
     echo -e "${GREEN}  ✓ Database password synced${NC}"
-elif docker compose -f "$COMPOSE_FILE" exec -T -e PGPASSWORD="${POSTGRES_PASSWORD}" db \
+elif timeout 30 docker compose -f "$COMPOSE_FILE" exec -T -e PGPASSWORD="${POSTGRES_PASSWORD}" db \
     psql -U smsly_admin -d smsly_hosting -c "SELECT 1;" >/dev/null 2>&1; then
     echo -e "${GREEN}  ✓ Database password already matches${NC}"
 else
     echo -e "${YELLOW}  ⚠ Password mismatch — resetting via postgres superuser...${NC}"
     # Last resort: the Docker postgres container always accepts local postgres user
-    docker compose -f "$COMPOSE_FILE" exec -T db \
+    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T db \
         psql -U postgres -c "ALTER USER smsly_admin WITH PASSWORD '${POSTGRES_PASSWORD}';" \
         2>&1 || echo -e "${RED}  ✗ Could not sync password. Check pg_hba.conf${NC}"
 fi
@@ -1285,7 +1285,7 @@ sleep 5
     sleep 3
 
     # Kill every backend on the database so the migration owns it exclusively
-    docker compose -f "$COMPOSE_FILE" exec -T db \
+    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T db \
         psql -U smsly_admin -d smsly_hosting \
         -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND backend_type = 'client backend'" \
         >/dev/null 2>&1 || true
@@ -1300,7 +1300,7 @@ sleep 5
         MIGRATE_OK=true
     else
         echo -e "${YELLOW}  ⚠ Migration attempt 1 failed — killing stale connections and retrying...${NC}"
-        docker compose -f "$COMPOSE_FILE" exec -T db \
+        timeout 30 docker compose -f "$COMPOSE_FILE" exec -T db \
             psql -U smsly_admin -d smsly_hosting \
             -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND backend_type = 'client backend'" \
             >/dev/null 2>&1 || true
@@ -1324,10 +1324,9 @@ sleep 5
 
 echo -e "${BLUE}  → Collecting Static Files...${NC}"
     # Fix volume ownership — Docker creates named volumes as root
-    docker compose -f "$COMPOSE_FILE" exec -T --user root backend chown -R 1000:1000 /app/staticfiles /app/media /app/backups 2>/dev/null || true
-    docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py fix_sequences 2>/dev/null || true
-    timeout -k 5 300 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py migrate --noinput
-    docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic --noinput 2>/dev/null || true
+    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T --user root backend chown -R 1000:1000 /app/staticfiles /app/media /app/backups 2>/dev/null || true
+    timeout 120 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py fix_sequences 2>/dev/null || true
+    timeout 120 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic --noinput 2>/dev/null || true
 
     sync_platform_domain_state "$INSTALL_DIR/.env"
     set_checkpoint "database_initialized"
@@ -1344,7 +1343,7 @@ if [ "$MODE_AGENT_LITE" = "true" ]; then
     echo -e "${BLUE}  → Lite Agent mode: skipping master admin and Local Docker provider setup.${NC}"
     set_checkpoint "admin_created"
 else
-ADMIN_EXISTS=$(echo "from django.contrib.auth import get_user_model; User = get_user_model(); print('1' if User.objects.filter(username='admin').exists() else '0')" | docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null | tail -1)
+ADMIN_EXISTS=$(echo "from django.contrib.auth import get_user_model; User = get_user_model(); print('1' if User.objects.filter(username='admin').exists() else '0')" | timeout 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null | tail -1)
 
 if [ "${ADMIN_EXISTS:-0}" = "1" ]; then
     echo -e "${GREEN}  ✓ Admin user check bypassed or already exists — skipping${NC}"
@@ -1373,7 +1372,7 @@ User = get_user_model()
 admin = User.objects.create_superuser('admin', 'admin@smsly.cloud', '$ADMIN_PASS')
 token = Token.objects.create(user=admin)
 print(token.key)
-" | docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null | tail -1 > "$INSTALL_DIR/.token"
+" | timeout 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null | tail -1 > "$INSTALL_DIR/.token"
         echo -e "${GREEN}  ✓ Admin user created with API Token${NC}"
         chmod 600 "$INSTALL_DIR/.token"
 
@@ -1401,7 +1400,7 @@ if not created and not cp.is_active:
     cp.is_active = True
     cp.save()
 print('CREATED' if created else 'EXISTS')
-" | docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null | tail -1 >/dev/null
+" | timeout 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null | tail -1 >/dev/null
         echo -e "${GREEN}  ✓ Local Docker cloud provider ready${NC}"
     fi
 fi
@@ -1415,7 +1414,7 @@ fi
 
     # ─── Generate Recovery Phrase ─────────────────────────────────────────
     echo -e "${BLUE}  → Generating 12-word recovery phrase...${NC}"
-    RECOVERY_PHRASE="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+    RECOVERY_PHRASE="$(timeout 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.views_recovery import recovery_phrase_generate
 from django.test.client import RequestFactory
 factory = RequestFactory()
@@ -1891,7 +1890,7 @@ BACKEND_OK=false
 BACKEND_STATUS=""
 for attempt in $(seq 1 24); do
     BACKEND_STATUS="$(docker compose -f "$COMPOSE_FILE" ps backend --format "{{.Status}}" 2>/dev/null || true)"
-    if docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS http://127.0.0.1:8000/health/live >/dev/null 2>&1; then
+    if timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS http://127.0.0.1:8000/health/live >/dev/null 2>&1; then
         BACKEND_OK=true
         break
     fi
@@ -1924,7 +1923,7 @@ echo -e "${BLUE}  → [1/4] Running health check...${NC}"
 HEALTH_OK=false
 MAX_ATTEMPTS=36
 for attempt in $(seq 1 $MAX_ATTEMPTS); do
-    if docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health/live >/dev/null 2>&1; then
+    if timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health/live >/dev/null 2>&1; then
         HEALTH_OK=true
         break
     elif curl -sfL --max-time 5 http://127.0.0.1:8000/health/live >/dev/null 2>&1; then
@@ -1939,7 +1938,7 @@ echo ""
 if [ "$HEALTH_OK" = "true" ]; then
     echo -e "${GREEN}  ✓ Health Check Passed!${NC}"
     READY_OK=false
-    docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health/ready >/dev/null 2>&1 && READY_OK=true
+    timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health/ready >/dev/null 2>&1 && READY_OK=true
     if ! $READY_OK && ! curl -sfL --max-time 5 http://127.0.0.1:8000/health/ready >/dev/null 2>&1; then
         echo -e "${YELLOW}  ⚠ Readiness endpoint is still warming; continuing because liveness passed.${NC}"
     fi
@@ -2141,8 +2140,8 @@ fi
 echo -e "\n${YELLOW}[11/11] Finalizing Inter-Node Connectivity...${NC}"
 echo -e "${BLUE}  → Registering this node and creating authentication tokens...${NC}"
 # Use -T to avoid TTY issues in non-interactive mode
-if docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py help diagnose_nodes >/dev/null 2>&1; then
-    docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py diagnose_nodes --fix || true
+if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py help diagnose_nodes >/dev/null 2>&1; then
+    timeout 120 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py diagnose_nodes --fix || true
     echo -e "${GREEN}  ✓ Node registered as Primary (if Master) and API tokens verified${NC}"
 else
     echo -e "${YELLOW}  ⚠ diagnose_nodes command not available in this version; skipping.${NC}"
@@ -2167,7 +2166,7 @@ echo -e "\n${GREEN}════════════════════�
 # Infrastructure Handshake & Health Stabilization
 echo -e "\n${BLUE}  🔄 Running infrastructure handshake and stabilization...${NC}"
 chmod +x scripts/grid-handshake.sh 2>/dev/null || true
-bash scripts/grid-handshake.sh || \
+SMSLY_MIGRATIONS_DONE=1 bash scripts/grid-handshake.sh || \
     echo -e "${YELLOW}  ⚠️ Handshake stabilization failed (non-fatal). You can run it manually later.${NC}"
 
 echo -e "${GREEN}   ✓ INSTALLATION SUCCESSFUL!${NC}"

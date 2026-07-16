@@ -33,7 +33,9 @@ def analyze_all_services_task(self):
             'service_id', flat=True
         )
         qs = Service.objects.filter(
-            status='ACTIVE', autoscale_enabled=True,
+            status='ACTIVE',
+        ).filter(
+            db_models.Q(autoscale_enabled=True) | db_models.Q(autoscale_enabled__isnull=True),
         ).distinct()
         qs = qs.filter(
             db_models.Q(id__in=base) | db_models.Q(compose_file='', deploy_mode='SINGLE')

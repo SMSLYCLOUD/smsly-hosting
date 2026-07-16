@@ -86,8 +86,22 @@ with open('$DAEMON_JSON', 'w') as f:
 
     if command -v systemctl &>/dev/null; then
         systemctl daemon-reload
-        systemctl restart docker
-        echo "  Docker restarted with kata-runtime support"
+        # Only restart Docker if daemon.json actually changed (avoids killing containers on re-run)
+        if python3 -c "
+import json
+with open('/etc/docker/daemon.json') as f:
+    cfg = json.load(f)
+runtimes = cfg.get('runtimes', {})
+if 'kata-runtime' in runtimes and runtimes['kata-runtime'].get('path', '').strip():
+    exit(0)
+else:
+    exit(1)
+" 2>/dev/null; then
+            echo "  Docker already has kata-runtime registered — skipping restart"
+        else
+            systemctl restart docker
+            echo "  Docker restarted with kata-runtime support"
+        fi
     fi
 
     sleep 3

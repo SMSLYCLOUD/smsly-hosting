@@ -85,6 +85,38 @@ def _update_record(token: str, zone_id: str, record_id: str, name: str, content:
         return False, str(exc)
 
 
+def delete_dns_record(domain: str, token: str) -> bool:
+    """Delete an A record for the given domain from Cloudflare.
+
+    Returns True if the record was deleted or didn't exist.
+    """
+    if not domain or not token:
+        return False
+    zone_name = _guess_zone_name(domain)
+    zone_id = _get_zone_id(token, zone_name)
+    if not zone_id:
+        return False
+    records = _get_records(token, zone_id, domain, "A")
+    if not records:
+        return True
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    ok = True
+    for record in records:
+        record_id = record.get("id")
+        if not record_id:
+            continue
+        url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records/{record_id}"
+        try:
+            resp = requests.delete(url, headers=headers, timeout=10)
+            if resp.status_code not in (200, 404):
+                logger.warning("Failed to delete DNS record %s (%s): %s", domain, record_id, resp.text)
+                ok = False
+        except Exception as exc:
+            logger.warning("Failed to delete DNS record %s (%s): %s", domain, record_id, exc)
+            ok = False
+    return ok
+
+
 def ensure_dns_records(domains: Iterable[str], server_ip: str, token: str) -> dict:
     """
     Ensure A records exist for each domain pointing to server_ip in Cloudflare.

@@ -101,11 +101,15 @@ with open('$DAEMON_JSON', 'w') as f:
         echo "  Added runsc runtime to Docker daemon.json"
     fi
 
-    # Restart Docker
+    # Restart Docker (only if runsc runtime not already registered)
     if command -v systemctl &>/dev/null; then
         systemctl daemon-reload
-        systemctl restart docker
-        echo "  Docker restarted with runsc support"
+        if grep -q '"runsc"' /etc/docker/daemon.json 2>/dev/null; then
+            echo "  runsc already registered in daemon.json — skipping Docker restart"
+        else
+            systemctl restart docker
+            echo "  Docker restarted with runsc support"
+        fi
     fi
 
     # Verify

@@ -13,6 +13,6 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='service',
             name='autoscale_enabled',
-            field=models.BooleanField(default=True, help_text='Master toggle for horizontal autoscaling. When disabled, the service will not be auto-scaled regardless of other settings.'),
+            field=models.BooleanField(null=True, help_text='Master toggle for horizontal autoscaling. When disabled, the service will not be auto-scaled regardless of other settings.'),
         ),
     ]

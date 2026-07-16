@@ -26,11 +26,14 @@ def check_autoscale_task():
     cannot double-spawn replicas for the same service — the engine
     uses a per-service lock inside ``Reconciler``.
     """
+    from django.db.models import Q
+
     from apps.autoscaler.engine.pipeline import analyze_and_apply
     from apps.deployments.models import Service
 
     services = Service.objects.filter(
-        autoscale_enabled=True, max_replicas__gt=1,
+        Q(autoscale_enabled=True) | Q(autoscale_enabled__isnull=True),
+        max_replicas__gt=1,
     )
 
     for service in services:

@@ -12,6 +12,7 @@ import shlex
 import subprocess
 import textwrap
 
+from django.db import transaction
 from django.utils import timezone
 
 from apps.deployments.utils import log_event
@@ -338,7 +339,6 @@ class WireGuardService:
 
         # Generate keys and assign IP
         private_key, public_key = cls.generate_keypair()
-        wg_address = mesh.next_available_ip()
 
         # For remote peers, try to use the node's existing WireGuard keypair
         # instead of generating a new one.  When the node was installed via
@@ -385,17 +385,25 @@ class WireGuardService:
             # For local server, try to detect public IP
             endpoint = cls._detect_local_endpoint(mesh.listen_port)
 
-        peer = WireGuardPeer.objects.create(
-            mesh=mesh,
-            server=server,
-            private_key=private_key,
-            public_key=public_key,
-            wg_address=wg_address,
-            endpoint=cls.validate_endpoint(endpoint),
-            allowed_ips=f"{wg_address}/32",
-            is_active=True,
-            is_local=is_local,
-        )
+        # Critical section: lock the mesh row so concurrent provision calls
+        # cannot race on next_available_ip() and get the same address.
+        # SSH operations are kept outside the atomic block to avoid holding
+        # a DB row lock during network I/O.
+        from apps.deployments.models_mesh import MeshNetwork
+        with transaction.atomic():
+            mesh = MeshNetwork.objects.select_for_update().get(id=mesh.id)
+            wg_address = mesh.next_available_ip()
+            peer = WireGuardPeer.objects.create(
+                mesh=mesh,
+                server=server,
+                private_key=private_key,
+                public_key=public_key,
+                wg_address=wg_address,
+                endpoint=cls.validate_endpoint(endpoint),
+                allowed_ips=f"{wg_address}/32",
+                is_active=True,
+                is_local=is_local,
+            )
 
         logger.info(
             f"Added peer {peer.wg_address} to mesh {mesh.name} "

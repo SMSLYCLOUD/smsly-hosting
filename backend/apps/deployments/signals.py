@@ -1,3 +1,4 @@
+import contextlib
 import ipaddress
 import logging
 import os
@@ -932,4 +933,114 @@ def deprovision_bundle_on_delete(sender, instance, **kwargs):
             "Failed to dispatch deprovision_bundle_task for bundle %s: %s",
             instance.id, exc,
         )
+
+
+# ---------------------------------------------------------------------------
+# ManagedServer cleanup on delete
+# ---------------------------------------------------------------------------
+
+@receiver(pre_delete, sender=ManagedServer)
+def cleanup_managed_server_artifacts(sender, instance, **kwargs):
+    """Best-effort cleanup of provision resources when a server is deleted.
+
+    Runs synchronously inside ``pre_delete`` so the WireGuard peer, firewall
+    rules, DB user, and DNS record are released before the DB record is
+    removed.  All operations are best-effort — failures are logged but never
+    block the deletion.
+    """
+    log = logging.getLogger(__name__)
+    log.info("Cleaning up provision artifacts for server %s (%s)", instance.name, instance.host)
+
+    # 1. Remove WireGuard peer (SSH best-effort, always deletes the DB record)
+    try:
+        from .services.wireguard_service import WireGuardService
+        for peer in list(instance.wg_peers.all()):
+            WireGuardService.remove_peer_from_mesh(peer)
+    except Exception as exc:
+        log.warning("WG peer cleanup failed for server %s: %s", instance.id, exc)
+
+    # 2. Remove master firewall rules
+    if instance.host:
+        _cleanup_server_firewall_rules(instance)
+
+    # 3. Drop dedicated DB user on the master (lite agents only)
+    if getattr(instance, "is_lite_agent", False):
+        _drop_server_db_user(instance)
+
+    # 4. Remove Cloudflare DNS record (node mode only)
+    if not getattr(instance, "is_lite_agent", False) and not getattr(instance, "is_primary", False):
+        _cleanup_server_dns_record(instance)
+
+    log.info("Cleanup finished for server %s", instance.id)
+
+
+def _cleanup_server_firewall_rules(server):
+    """Remove UFW and iptables DOCKER-USER rules added during provision."""
+    import subprocess
+    try:
+        import ipaddress
+        validated_ip = str(ipaddress.ip_address(server.host))
+    except ValueError:
+        return
+    if getattr(server, "is_lite_agent", False):
+        for port in ("5432", "6379", "5672"):
+            with contextlib.suppress(Exception):
+                subprocess.run(
+                    ["ufw", "delete", "allow", "from", validated_ip,
+                     "to", "any", "port", port, "proto", "tcp"],
+                    capture_output=True, timeout=5,
+                )
+    with contextlib.suppress(Exception):
+        subprocess.run(
+            ["iptables", "-D", "DOCKER-USER",
+             "-s", validated_ip, "-p", "tcp", "--dport", "5000",
+             "-j", "ACCEPT"],
+            capture_output=True, timeout=5,
+        )
+
+
+def _drop_server_db_user(server):
+    """Drop the dedicated PostgreSQL user created for a lite-agent node."""
+    node_db_user = (server.provider_metadata or {}).get("node_db_user")
+    if not node_db_user:
+        return
+    master_db_url = os.environ.get("DATABASE_URL")
+    if not master_db_url:
+        return
+    try:
+        import psycopg2
+        from psycopg2 import sql
+        from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+        conn = psycopg2.connect(master_db_url)
+        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+        with conn.cursor() as cur:
+            cur.execute(sql.SQL("DROP OWNED BY {} CASCADE").format(sql.Identifier(node_db_user)))
+            cur.execute(sql.SQL("DROP USER IF EXISTS {}").format(sql.Identifier(node_db_user)))
+        conn.close()
+        log = logging.getLogger(__name__)
+        log.info("Dropped DB user %s for server %s", node_db_user, server.id)
+    except Exception as exc:
+        log = logging.getLogger(__name__)
+        log.warning("Failed to drop DB user %s: %s", node_db_user, exc)
+
+
+def _cleanup_server_dns_record(server):
+    """Remove the Cloudflare DNS A record created during node provisioning."""
+    from .models_core import PlatformConfig
+    from .services.dns import delete_dns_record
+    log = logging.getLogger(__name__)
+    config = PlatformConfig.get_config()
+    cf_token = config.cloudflare_api_token
+    root_domain = config.root_domain
+    if not cf_token or not root_domain:
+        return
+    node_slug = str(server.id).split("-")[0]
+    node_domain = f"node-{node_slug}.{root_domain}"
+    try:
+        if delete_dns_record(node_domain, cf_token):
+            log.info("Deleted DNS record %s for server %s", node_domain, server.id)
+        else:
+            log.warning("Failed to delete DNS record %s for server %s", node_domain, server.id)
+    except Exception as exc:
+        log.warning("DNS cleanup error for %s: %s", node_domain, exc)
 

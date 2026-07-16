@@ -162,7 +162,7 @@ sync_platform_domain_state() {
 
     echo -e "${BLUE}  → Syncing PlatformConfig + public domains from installer state...${NC}"
     sync_json="$(
-        docker compose -f "$COMPOSE_FILE" exec -T \
+        timeout -k 5 300 docker compose -f "$COMPOSE_FILE" exec -T \
             -e SMSLY_DISABLE_STARTUP_TASKS=true \
             -e SMSLY_SYNC_DOMAIN="$sync_domain" \
             -e SMSLY_SYNC_USE_SSL="$sync_use_ssl" \
@@ -354,7 +354,7 @@ queue_active_service_redeploys() {
         fi
     fi
 
-    docker compose -f "$COMPOSE_FILE" exec -T \
+    timeout -k 5 300 docker compose -f "$COMPOSE_FILE" exec -T \
         -e SMSLY_DISABLE_STARTUP_TASKS=true \
         -e SMSLY_REDEPLOY_REASON="$reason" \
         -e SMSLY_SERVICE_IDS="$service_ids" \

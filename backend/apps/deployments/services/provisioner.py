@@ -2057,7 +2057,10 @@ def cleanup_stale_server_provisioning():
     """
     Auto-heal stale provisioning rows left behind by interrupted workers.
 
-    This prevents ManagedServer entries from staying in PROVISIONING forever.
+    Prevents ManagedServer entries from staying in PROVISIONING or PENDING
+    forever.  Servers stuck in PENDING for over 24 hours (media nodes that
+    were never provisioned via SSH, etc.) are marked as FAILED so they are
+    visible as broken rather than silently stuck.
     """
     stale_after_seconds = max(3600, PROVISION_TIMEOUT_SECONDS * 2)
     cutoff = timezone.now() - timedelta(seconds=stale_after_seconds)
@@ -2075,6 +2078,25 @@ def cleanup_stale_server_provisioning():
             (
                 "Provisioning was auto-marked as failed because no updates were "
                 f"received for over {stale_after_seconds} seconds."
+            ),
+        )
+        cleaned += 1
+
+    # Also mark servers stuck in PENDING for over 24h — these are typically
+    # media nodes or servers created via admin that were never provisioned.
+    pending_cutoff = timezone.now() - timedelta(hours=24)
+    stale_pending = ManagedServer.objects.filter(
+        provision_status=ManagedServer.ProvisionStatus.PENDING,
+        updated_at__lt=pending_cutoff,
+    )
+    for server in stale_pending:
+        server.provision_status = ManagedServer.ProvisionStatus.FAILED
+        server.save(update_fields=["provision_status", "updated_at"])
+        _append_log(
+            server,
+            (
+                "Provisioning was auto-marked as failed because the server was "
+                "never provisioned (stuck in PENDING for over 24 hours)."
             ),
         )
         cleaned += 1

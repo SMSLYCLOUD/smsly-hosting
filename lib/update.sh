@@ -413,7 +413,7 @@ fi
          # reach the correct DB hostname.
          _already_migrated=false
          if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx 'smsly-postgres-primary'; then
-             _tables=$(docker exec smsly-postgres-primary psql -U smsly_admin -d smsly_hosting -t -A \
+             _tables=$(timeout 30 docker exec smsly-postgres-primary psql -U smsly_admin -d smsly_hosting -t -A \
                  -c "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';" 2>/dev/null || echo 0)
              if [ "${_tables:-0}" -gt 50 ]; then
                  _already_migrated=true
@@ -649,14 +649,14 @@ fi
             wait_for_container_ready "smsly-hosting-backend-1" 120 || true
 
             echo -e "${BLUE}  • Running post-migration tasks...${NC}"
-            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py fix_sequences 2>/dev/null || true
-            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput 2>/dev/null || true
+            timeout 120 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py fix_sequences 2>/dev/null || true
+            timeout 120 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput 2>/dev/null || true
 
             set_checkpoint "update_db_migrated"
 
             # Clean stale celerybeat-schedule (prevents Permission denied crash loop)
             echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"
-            docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule 2>/dev/null || true
+            timeout 30 docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule 2>/dev/null || true
 
             echo -e "${BLUE}  → Restarting celery workers...${NC}"
             celery_svcs="celery celery-deploy celery-fast celery-beat"
@@ -732,12 +732,12 @@ fi
             fi
             wait_for_container_ready "smsly-hosting-backend-1" 120 || true
 
-            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py fix_sequences 2>/dev/null || true
-            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput 2>/dev/null || true
+            timeout 120 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py fix_sequences 2>/dev/null || true
+            timeout 120 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput 2>/dev/null || true
 
             # 5. Clean celerybeat-schedule and restart celery workers
             echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"
-            docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule 2>/dev/null || true
+            timeout 30 docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule 2>/dev/null || true
 
             restart_svcs="celery celery-deploy celery-fast celery-beat"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
@@ -860,12 +860,12 @@ fi
             wait_for_container_ready "smsly-hosting-backend-1" 120 || true
 
             echo -e "${BLUE}  • Running post-migration tasks...${NC}"
-            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py fix_sequences 2>/dev/null || true
-            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput 2>/dev/null || true
+            timeout 120 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py fix_sequences 2>/dev/null || true
+            timeout 120 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput 2>/dev/null || true
 
             # 11. Clean celerybeat-schedule and restart beat
             echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"
-            docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule 2>/dev/null || true
+            timeout 30 docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule 2>/dev/null || true
             
             restart_svcs="celery celery-beat celery-deploy celery-fast"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
@@ -917,10 +917,10 @@ fi
                 _db_user="${POSTGRES_USER:-postgres}"
             fi
             if [ -n "$_db_container" ]; then
-                _db_exists=$(docker exec "$_db_container" psql -U "${_db_user}" -d "${POSTGRES_DB:-smsly_hosting}" -tc \
+                _db_exists=$(timeout 30 docker exec "$_db_container" psql -U "${_db_user}" -d "${POSTGRES_DB:-smsly_hosting}" -tc \
                     "SELECT 1 FROM pg_database WHERE datname='infisical'" 2>/dev/null | tr -d '[:space:]' || true)
                 if [ "$_db_exists" != "1" ]; then
-                    docker exec "$_db_container" psql -U "${_db_user}" -d "${POSTGRES_DB:-smsly_hosting}" -c \
+                    timeout 30 docker exec "$_db_container" psql -U "${_db_user}" -d "${POSTGRES_DB:-smsly_hosting}" -c \
                         "CREATE DATABASE infisical;" 2>/dev/null && \
                         echo -e "${GREEN}  ✓ Created infisical database${NC}" || \
                         echo -e "${YELLOW}  ⚠ Could not create infisical database (may already exist)${NC}"
@@ -954,7 +954,7 @@ fi
             echo -e "${BLUE}  → Syncing platform secrets to Infisical...${NC}"
             backend_container="$(resolve_container_target "smsly-hosting-backend-1")"
             if [ -n "$backend_container" ]; then
-                docker exec "$backend_container" python manage.py sync_infisical_secrets --push 2>/dev/null || \
+                timeout 60 docker exec "$backend_container" python manage.py sync_infisical_secrets --push 2>/dev/null || \
                     echo -e "${YELLOW}  ⚠ Infisical sync failed (non-fatal — secrets remain in .env)${NC}"
             fi
         fi
@@ -989,13 +989,13 @@ fi
         # cAdvisor, Node Exporter).
         backend_container=$(docker ps --format '{{.Names}}' | grep -E '^smsly-hosting-backend(-1)?$' | head -1)
         if [ -n "$backend_container" ]; then
-            docker exec "$backend_container" python manage.py deploy_docker_labels_exporters --force 2>/dev/null || true
+            timeout 60 docker exec "$backend_container" python manage.py deploy_docker_labels_exporters --force 2>/dev/null || true
         fi
         echo -e "${GREEN}  ✓ Observability stack updated${NC}"
     fi
     if [ -n "${CROWDSEC_BOUNCER_KEY:-}" ]; then
         echo -e "${BLUE}  → Registering CrowdSec Bouncer...${NC}"
-        docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "${CROWDSEC_BOUNCER_KEY:-}" >/dev/null 2>&1 || true
+        timeout 30 docker exec smsly-crowdsec cscli bouncers add traefik-bouncer -k "${CROWDSEC_BOUNCER_KEY:-}" >/dev/null 2>&1 || true
     fi
 
     set_checkpoint "update_containers_rebuilt"
@@ -1116,7 +1116,7 @@ if d_count > 0:
     fi
     worker_container="$(resolve_container_target "$raw_worker")"
     DEPLOY_WORKER_HEALTH="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$worker_container" 2>/dev/null || echo "")"
-    if docker exec -i "$worker_container" celery -A config inspect active_queues --timeout=10 2>/dev/null | grep -q "deploy"; then
+    if timeout 20 docker exec -i "$worker_container" celery -A config inspect active_queues --timeout=10 2>/dev/null | grep -q "deploy"; then
         echo -e "${GREEN}  ✓ Deployment worker successfully bound to 'deploy' queue${NC}"
     elif [ "$DEPLOY_WORKER_HEALTH" = "healthy" ] || [ "$DEPLOY_WORKER_HEALTH" = "running" ]; then
         echo -e "${GREEN}  ✓ Deployment worker container is healthy/running (queue inspect timed out)${NC}"
@@ -1443,7 +1443,7 @@ ensure_celery_workers_running
                 EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1/health" 2>/dev/null) || EP1_CODE="000"
             fi
         else
-            if docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health >/dev/null 2>&1; then
+            if timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health >/dev/null 2>&1; then
                 EP1_CODE="200"
             elif curl -fsS --max-time 5 "$EP1_FALLBACK_URL" >/dev/null 2>&1; then
                 EP1_CODE="200"

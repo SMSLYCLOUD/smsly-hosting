@@ -1,4 +1,5 @@
 """Auto-scaling API: analyze services and manage replicas."""
+from django.conf import settings
 from django.shortcuts import get_object_or_404
 from rest_framework import permissions, serializers, viewsets
 from rest_framework.decorators import action
@@ -81,10 +82,13 @@ class ScalingViewSet(viewsets.GenericViewSet):
         else:
             service = Service.objects.get(get_team_q_filter(request.user, request=request), id=pk)
 
+        allow_control_plane = getattr(settings, 'CLOUDNEURON_ALLOW_CONTROL_PLANE_WORKLOADS', False)
         candidates = ManagedServer.objects.filter(
             status=ManagedServer.Status.ONLINE,
             allow_user_workloads=True,
-        ).exclude(is_primary=True)
+        )
+        if not allow_control_plane:
+            candidates = candidates.exclude(is_primary=True)
 
         if not candidates.exists():
             return Response({'error': 'No available nodes'}, status=400)
