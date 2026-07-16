@@ -1011,12 +1011,11 @@ def _drop_server_db_user(server):
         import psycopg2
         from psycopg2 import sql
         from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
-        conn = psycopg2.connect(master_db_url)
-        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-        with conn.cursor() as cur:
-            cur.execute(sql.SQL("DROP OWNED BY {} CASCADE").format(sql.Identifier(node_db_user)))
-            cur.execute(sql.SQL("DROP USER IF EXISTS {}").format(sql.Identifier(node_db_user)))
-        conn.close()
+        with psycopg2.connect(master_db_url) as conn:
+            conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+            with conn.cursor() as cur:
+                cur.execute(sql.SQL("DROP OWNED BY {} CASCADE").format(sql.Identifier(node_db_user)))
+                cur.execute(sql.SQL("DROP USER IF EXISTS {}").format(sql.Identifier(node_db_user)))
         log = logging.getLogger(__name__)
         log.info("Dropped DB user %s for server %s", node_db_user, server.id)
     except Exception as exc:

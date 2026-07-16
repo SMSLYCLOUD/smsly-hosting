@@ -151,6 +151,7 @@ ensure_caddy_config_writable
 
 ensure_prometheus_targets_writable() {
     mkdir -p /opt/smsly-hosting/prometheus-targets 2>/dev/null || true
+    chown 1000:1000 /opt/smsly-hosting/prometheus-targets 2>/dev/null || true
     chmod 2777 /opt/smsly-hosting/prometheus-targets 2>/dev/null || true
 }
 ensure_prometheus_targets_writable

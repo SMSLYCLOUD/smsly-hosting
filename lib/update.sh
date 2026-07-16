@@ -970,7 +970,7 @@ fi
         if ! chown -R 1000:1000 /opt/smsly-hosting/prometheus-targets 2>/dev/null; then
             echo -e "${YELLOW}  ⚠ Could not chown prometheus-targets to uid 1000${NC}"
         fi
-        chmod 0755 /opt/smsly-hosting/prometheus-targets 2>/dev/null || true
+        chmod 2777 /opt/smsly-hosting/prometheus-targets 2>/dev/null || true
         docker compose \
             --env-file /opt/smsly-hosting/.env \
             -f infrastructure/docker/docker-compose.observability.yml \
