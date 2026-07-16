@@ -426,7 +426,7 @@ fi
              # immediately but ensure the HA stack is up first.
              echo -e "${BLUE}  → HA stack already has data — ensuring services are up...${NC}"
              docker compose -f "$INSTALL_DIR/docker-compose.prod.yml" \
-                 up -d --wait --wait-timeout -k 5 120 \
+                 up -d --wait --wait-timeout 120 \
                  postgres-primary postgres-replica pgcat redis-primary redis-replica \
                  2>/dev/null || echo -e "${YELLOW}  ⚠ Some HA services may not be healthy yet${NC}"
              echo -e "${YELLOW}  → Switching COMPOSE_FILE: docker-compose.yml → docker-compose.prod.yml${NC}"
@@ -447,7 +447,7 @@ fi
                      # before the migration script tries to dump into them.
                      echo -e "${BLUE}  → Starting HA stack (postgres-primary, pgcat, redis-primary)...${NC}"
                      docker compose -f "$INSTALL_DIR/docker-compose.prod.yml" \
-                         up -d --wait --wait-timeout -k 5 120 \
+                         up -d --wait --wait-timeout 120 \
                          postgres-primary postgres-replica pgcat redis-primary redis-replica \
                          2>/dev/null || echo -e "${YELLOW}  ⚠ Some HA services may not be healthy yet${NC}"
 
@@ -471,7 +471,7 @@ fi
                  # Otherwise manage.py migrate will fail with DNS errors.
                  echo -e "${BLUE}  → Starting HA stack (fresh install)...${NC}"
                  docker compose -f "$INSTALL_DIR/docker-compose.prod.yml" \
-                     up -d --wait --wait-timeout -k 5 120 \
+                     up -d --wait --wait-timeout 120 \
                      postgres-primary postgres-replica pgcat redis-primary redis-replica \
                      2>/dev/null || echo -e "${YELLOW}  ⚠ Some HA services may not be healthy yet${NC}"
                  echo -e "${YELLOW}  → Switching COMPOSE_FILE: docker-compose.yml → docker-compose.prod.yml${NC}"
@@ -577,7 +577,7 @@ fi
                   echo -e "${YELLOW}  → Node mode: no frontend to update. Skipping.${NC}"
               else
                   echo -e "${BLUE}  → Rebuilding frontend container (cached)...${NC}"
-                docker compose -f "$COMPOSE_FILE" stop --timeout -k 5 15 frontend >/dev/null 2>&1 || true
+                docker compose -f "$COMPOSE_FILE" stop --timeout 15 frontend >/dev/null 2>&1 || true
                   docker compose -f "$COMPOSE_FILE" rm -f frontend >/dev/null 2>&1 || true
                   timeout -k 5 600 docker compose -f "$COMPOSE_FILE" build frontend
                   docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps frontend
@@ -630,7 +630,7 @@ fi
             # Stop backend, celery & pgcat so their DB connections don't block
             # migrations (ALTER TABLE requires exclusive locks).
             echo -e "${BLUE}  → Stopping backend, celery & pgcat for migrations...${NC}"
-            docker compose -f "$COMPOSE_FILE" stop --timeout -k 5 15 backend celery celery-deploy celery-fast celery-beat $(get_pgcat_if_exists) 2>/dev/null || true
+            docker compose -f "$COMPOSE_FILE" stop --timeout 15 backend celery celery-deploy celery-fast celery-beat $(get_pgcat_if_exists) 2>/dev/null || true
 
             echo -e "${BLUE}  → Running migrations...${NC}"
             run_backend_migrations --root || {
@@ -702,7 +702,7 @@ fi
                     echo -e "${YELLOW}  ⚠ Frontend build failed (cached layers missing). Skipping frontend.${NC}"
                     echo -e "${YELLOW}    Run --update when Docker Hub is reachable for a full rebuild.${NC}"
                 }
-                docker compose -f "$COMPOSE_FILE" stop --timeout -k 5 15 frontend >/dev/null 2>&1 || true
+                docker compose -f "$COMPOSE_FILE" stop --timeout 15 frontend >/dev/null 2>&1 || true
                 docker compose -f "$COMPOSE_FILE" rm -f frontend >/dev/null 2>&1 || true
                 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps frontend 2>/dev/null || true
             fi
@@ -710,7 +710,7 @@ fi
             # 2. Stop backend, celery & pgcat so their DB connections don't block
             #    migrations (ALTER TABLE requires exclusive locks).
             echo -e "${BLUE}  → Stopping backend, celery & pgcat for migrations...${NC}"
-            docker compose -f "$COMPOSE_FILE" stop --timeout -k 5 15 backend celery celery-deploy celery-fast celery-beat $(get_pgcat_if_exists) 2>/dev/null || true
+            docker compose -f "$COMPOSE_FILE" stop --timeout 15 backend celery celery-deploy celery-fast celery-beat $(get_pgcat_if_exists) 2>/dev/null || true
 
             # 3. Run migrations
             echo -e "${BLUE}  → Running migrations...${NC}"
@@ -828,7 +828,7 @@ fi
             # 8. Stop backend, celery & pgcat so their DB connections don't block
             #    migrations (ALTER TABLE requires exclusive locks).
             echo -e "${BLUE}  → Stopping backend, celery & pgcat for migrations...${NC}"
-            docker compose -f "$COMPOSE_FILE" stop --timeout -k 5 15 backend celery celery-deploy celery-fast celery-beat $(get_pgcat_if_exists) 2>/dev/null || true
+            docker compose -f "$COMPOSE_FILE" stop --timeout 15 backend celery celery-deploy celery-fast celery-beat $(get_pgcat_if_exists) 2>/dev/null || true
 
             # 9. Run migrations
             echo -e "${BLUE}  → Running migrations...${NC}"

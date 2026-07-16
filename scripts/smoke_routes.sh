@@ -42,7 +42,7 @@ for url in "${urls[@]}"; do
   delay=2
   success=false
   while [ $attempt -lt $max ]; do
-    code=$(curl -sk --connect-timeout -k 5 5 --max-time 10 -o /dev/null -w "%{http_code}" "$url" || true)
+    code=$(curl -sk --connect-timeout 5 --max-time 10 -o /dev/null -w "%{http_code}" "$url" || true)
     if [ "$code" -ge 200 ] && [ "$code" -lt 500 ]; then
       echo "[smoke] OK $url ($code)"
       success=true

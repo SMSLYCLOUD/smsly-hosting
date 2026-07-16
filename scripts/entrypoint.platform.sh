@@ -64,7 +64,7 @@ EOF
 
 if [ "$ROLE" = "all" ] || [ "$ROLE" = "web" ]; then
   add_program "backend" \
-    "/app/entrypoint.sh gunicorn --bind 127.0.0.1:${BACKEND_PORT} config.asgi:application --workers 1 --worker-class uvicorn.workers.UvicornWorker --timeout -k 5 120" \
+    "/app/entrypoint.sh gunicorn --bind 127.0.0.1:${BACKEND_PORT} config.asgi:application --workers 1 --worker-class uvicorn.workers.UvicornWorker --timeout 120" \
     "/app" \
     "smsly"
 

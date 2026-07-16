@@ -1281,7 +1281,7 @@ sleep 5
     # PgCat connection pools all compete with the migration.
     MIGRATION_STOPPED_SVCS="backend celery celery-deploy celery-fast celery-beat $(grep -q "^  *pgcat:" "${COMPOSE_FILE:-docker-compose.prod.yml}" 2>/dev/null && echo "pgcat")"
     echo -e "${BLUE}    Stopping ${MIGRATION_STOPPED_SVCS} to prevent lock contention...${NC}"
-    docker compose -f "$COMPOSE_FILE" stop --timeout -k 5 15 ${MIGRATION_STOPPED_SVCS} >/dev/null 2>&1 || true
+    docker compose -f "$COMPOSE_FILE" stop --timeout 15 ${MIGRATION_STOPPED_SVCS} >/dev/null 2>&1 || true
     sleep 3
 
     # Kill every backend on the database so the migration owns it exclusively
