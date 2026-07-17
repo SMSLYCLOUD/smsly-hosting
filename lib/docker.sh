@@ -97,4 +97,10 @@ configure_docker_mirror() {
             systemctl restart docker || true
         fi
     fi
+
+    # Install registry self-signed cert into Docker's cert trust store so
+    # the daemon connects via HTTPS (not HTTP fallback) to registry:5000
+    # and 127.0.0.1:5000. This avoids the 400 error that occurs when a
+    # TLS-configured registry rejects plain HTTP.
+    install_registry_docker_certs
 }

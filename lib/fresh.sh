@@ -1076,6 +1076,10 @@ print(f'${REGISTRY_USER:-smsly-registry}:' + bcrypt.hashpw(pw.encode(), bcrypt.g
 fi
 echo -e "${GREEN}  ✓ Registry auth + TLS configured${NC}"
 
+# Install registry cert into Docker's cert trust store so the daemon
+# connects via HTTPS (not HTTP fallback) to the registry.
+install_registry_docker_certs
+
 # Authenticate Docker CLI with the private registry so the daemon can
 # pull base images during builds without 403 errors.
 docker_login

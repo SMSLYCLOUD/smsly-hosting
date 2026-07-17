@@ -279,6 +279,10 @@ print('${REGISTRY_USER:-smsly-registry}:' + bcrypt.hashpw(pw.encode(), bcrypt.ge
         env_set_value "$INSTALL_DIR/.env" "REGISTRY_PASSWORD" "$REGISTRY_PASS"
     fi
 
+    # Install registry cert into Docker's cert trust store so the daemon
+    # connects via HTTPS (not HTTP fallback) to the registry.
+    install_registry_docker_certs
+
     # ─── Self-heal: missing secrets + cosign keypair ───────────────────────
     if [ -f "$INSTALL_DIR/.env" ]; then
         _ensure_secret() {

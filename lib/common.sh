@@ -548,6 +548,31 @@ cleanup_stale_containers() {
     prune_stopped_conflicting "smsly-"
 }
 
+install_registry_docker_certs() {
+    local cert="${INSTALL_DIR:-/opt/smsly-hosting}/certs/registry.crt"
+    if [ ! -f "$cert" ]; then
+        return 0
+    fi
+    local my_ip
+    my_ip="$(detect_public_ip)"
+    local dirs=(
+        "/etc/docker/certs.d/registry:5000"
+        "/etc/docker/certs.d/127.0.0.1:5000"
+    )
+    if [ -n "$my_ip" ] && [ "$my_ip" != "127.0.0.1" ]; then
+        dirs+=("/etc/docker/certs.d/${my_ip}:5000")
+    fi
+    local installed=false
+    for d in "${dirs[@]}"; do
+        mkdir -p "$d"
+        cp "$cert" "$d/ca.crt"
+        installed=true
+    done
+    if [ "$installed" = "true" ]; then
+        echo -e "${BLUE}  → Installed registry TLS cert for Docker trust (${#dirs[@]} endpoints)${NC}"
+    fi
+}
+
 docker_login() {
     local registry="${CONTAINER_REGISTRY_URL:-127.0.0.1:5000}"
     local user="${REGISTRY_USER:-smsly-registry}"
@@ -557,10 +582,17 @@ docker_login() {
     fi
     # Probe whether the registry actually requires authentication. A 200 means
     # anonymous pull is allowed and login is unnecessary; a 401 means auth is
-    # required and we should log in; anything else (e.g. 400) means the registry
+    # required and we should log in; anything else means the registry
     # is misconfigured and we surface the real error instead of a silent failure.
+    # Use HTTPS with the registry's self-signed cert (not HTTP) because the
+    # registry rejects plain HTTP when TLS is configured.
+    local _cacert="${INSTALL_DIR:-/opt/smsly-hosting}/certs/registry.crt"
+    local _curl_args="--insecure"
+    if [ -f "$_cacert" ]; then
+        _curl_args="--cacert $_cacert"
+    fi
     local _code=""
-    _code="$(timeout 10 curl -s -o /dev/null -w '%{http_code}' "http://${registry}/v2/" 2>/dev/null)"
+    _code="$(timeout 10 curl -s -o /dev/null -w '%{http_code}' $_curl_args "https://${registry}/v2/" 2>/dev/null)"
     if [ -n "$_code" ] && [ "$_code" != "401" ]; then
         if [ "$_code" = "200" ]; then
             echo -e "${BLUE}     -> Registry $registry allows anonymous access - skipping login${NC}"

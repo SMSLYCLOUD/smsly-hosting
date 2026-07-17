@@ -94,6 +94,10 @@ print('${REGISTRY_USER:-smsly-registry}:' + bcrypt.hashpw(pw.encode(), bcrypt.ge
         chmod 600 "$INSTALL_DIR/auth/htpasswd"  || true
     fi
 
+    # Install registry cert into Docker's cert trust store so the daemon
+    # connects via HTTPS (not HTTP fallback) to the registry.
+    install_registry_docker_certs
+
     # ─── Self-heal: missing secrets (update paths can miss secret generation) ─
     echo -e "${BLUE}  → Checking for missing secrets and generating if needed...${NC}"
     _ensure_secret() {
