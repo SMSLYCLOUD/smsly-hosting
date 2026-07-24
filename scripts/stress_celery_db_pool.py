@@ -12,7 +12,7 @@ django.setup()
 
 import time
 
-from apps.deployments.tasks_metrics import collect_metrics_task
+from apps.core.tasks.metrics import collect_metrics_task
 
 
 def main():

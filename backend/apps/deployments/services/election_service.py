@@ -61,7 +61,7 @@ class ElectionService:
         """
         import requests
 
-        from apps.deployments.models_election import HeartbeatLog
+        from apps.deployments.models.election import HeartbeatLog
 
         if not cluster.leader:
             logger.warning("No leader set for cluster — skipping heartbeat")
@@ -224,7 +224,7 @@ class ElectionService:
         """
         import requests
 
-        from apps.deployments.models_election import ElectionVote
+        from apps.deployments.models.election import ElectionVote
 
         # Increment term and become candidate
         with transaction.atomic():
@@ -443,7 +443,7 @@ class ElectionService:
         - Only vote once per term
         - Reset election timeout when granting vote
         """
-        from apps.deployments.models_election import ElectionVote
+        from apps.deployments.models.election import ElectionVote
 
         if term < cluster.term:
             return False  # Reject — we're in a newer term
@@ -490,7 +490,7 @@ class ElectionService:
         If the cluster doesn't exist and this is the first server,
         auto-elect self as leader.
         """
-        from apps.deployments.models_election import ClusterState
+        from apps.deployments.models.election import ClusterState
 
         cluster, created = ClusterState.objects.get_or_create(
             mesh=mesh,
@@ -535,7 +535,7 @@ class ElectionService:
     @classmethod
     def cleanup_old_heartbeats(cls, cluster, keep_count=500):
         """Remove old heartbeat logs to prevent table bloat."""
-        from apps.deployments.models_election import HeartbeatLog
+        from apps.deployments.models.election import HeartbeatLog
 
         total = HeartbeatLog.objects.filter(cluster=cluster).count()
         if total > keep_count:
@@ -552,7 +552,7 @@ class ElectionService:
     @classmethod
     def get_cluster_status(cls, cluster):
         """Get a summary of the cluster's current state."""
-        from apps.deployments.models_election import HeartbeatLog
+        from apps.deployments.models.election import HeartbeatLog
 
         recent_heartbeats = HeartbeatLog.objects.filter(
             cluster=cluster,

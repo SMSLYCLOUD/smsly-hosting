@@ -66,7 +66,7 @@ Logs:
     # ── Enrich with monitoring data if service is available ────────────────
     if service:
         try:
-            from apps.deployments.services.scaling_ai import ScalingAnalyzer
+            from apps.autoscaler.services.scaling_ai import ScalingAnalyzer
             analyzer = ScalingAnalyzer(service)
             result = analyzer.analyze()
             metrics = result.get('metrics', {})

@@ -1706,6 +1706,23 @@ RESTORE_EOF
         echo -e "${GREEN}  ✓ smsly-update-watcher and caddy-watcher services updated and started${NC}"
     fi
 
+    # ─── Ensure Celery Worker Autoscaler service exists and is configured ──
+    if [ -f "$INSTALL_DIR/scripts/celery-worker-autoscaler.sh" ]; then
+        echo -e "${BLUE}  → Ensuring Celery Worker Autoscaler service...${NC}"
+        chmod +x "$INSTALL_DIR/scripts/celery-worker-autoscaler.sh"
+        cp "$INSTALL_DIR/infrastructure/docker/celery-autoscaler.service" /etc/systemd/system/celery-autoscaler.service  || true
+        systemctl daemon-reload || true
+        if [ "${CELERY_AUTOSCALE_ENABLED:-true}" = "true" ]; then
+            systemctl enable celery-autoscaler || echo -e "${YELLOW}    ⚠ celery-autoscaler enable failed (non-fatal)${NC}"
+            systemctl restart celery-autoscaler || echo -e "${YELLOW}    ⚠ celery-autoscaler restart failed (non-fatal)${NC}"
+            echo -e "${GREEN}  ✓ celery-autoscaler service updated and running${NC}"
+        else
+            systemctl disable celery-autoscaler 2>/dev/null || true
+            systemctl stop celery-autoscaler 2>/dev/null || true
+            echo -e "${BLUE}  → celery-autoscaler disabled (CELERY_AUTOSCALE_ENABLED=false)${NC}"
+        fi
+    fi
+
     # ─── Ensure WireGuard mesh service is enabled ───────────────────────────
     if [ -d /etc/wireguard ]; then
         for wg_conf in /etc/wireguard/*.conf; do

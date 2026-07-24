@@ -9,14 +9,14 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from apps.deployments.models import PlatformConfig, Service
-from apps.deployments.models_backup import ServiceBackup
-from apps.deployments.models_mesh import MeshNetwork, WireGuardPeer
-from apps.deployments.models_servers import ManagedServer
-from apps.deployments.models_transfer import ServerTransfer
+from apps.deployments.models.backup import ServiceBackup
+from apps.deployments.models.mesh import MeshNetwork, WireGuardPeer
+from apps.deployments.models.servers import ManagedServer
+from apps.deployments.models.transfer import ServerTransfer
 from apps.deployments.services.server_guard import ServerGuard
 from apps.deployments.services.transfer_service import ServerTransferService
-from apps.deployments.tasks_mesh import deploy_mesh_task
-from apps.deployments.tasks_replication import deploy_replication_task
+from apps.deployments.tasks.infra.tasks_mesh import deploy_mesh_task
+from apps.deployments.tasks.data.tasks_replication import deploy_replication_task
 
 
 class MultiServerLocalHarnessTests(TestCase):
@@ -73,7 +73,7 @@ class MultiServerLocalHarnessTests(TestCase):
         self.assertIn(self.worker_a, list(eligible))
         self.assertIn(self.worker_b, list(eligible))
 
-    @patch("apps.deployments.views_transfer.execute_server_transfer_task.delay")
+    @patch("apps.core.views.transfer.execute_server_transfer_task.delay")
     def test_transfer_worker_a_to_worker_b_and_primary_rejection(self, delay_mock):
         response = self.client.post(
             reverse("transfer-list"),

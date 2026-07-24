@@ -23,7 +23,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 
 from apps.deployments.models import Service
-from apps.deployments.models_addons import Addon
+from apps.deployments.models.addons import Addon
 
 User = get_user_model()
 

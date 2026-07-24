@@ -43,8 +43,8 @@ class OrchestratorStatusTransitionTests(TestCase):
             auto_rollback_threshold=3,
         )
 
-    @patch('services.orchestrator.ClusterManager')
-    @patch('services.orchestrator.BuildManager')
+    @patch('apps.deployments.services.orchestrator.ClusterManager')
+    @patch('apps.deployments.services.orchestrator.BuildManager')
     def test_successful_deployment_reaches_active(self, MockBuild, MockCluster):
         """A successful deployment should transition to ACTIVE."""
         MockBuild.return_value.build_image.return_value = 'test-image:latest'
@@ -56,7 +56,7 @@ class OrchestratorStatusTransitionTests(TestCase):
             commit_hash='abc123'
         )
 
-        from services.orchestrator import Orchestrator
+        from apps.deployments.services.orchestrator import Orchestrator
         orch = Orchestrator(str(deployment.id))
         orch.run_deployment()
 
@@ -65,10 +65,10 @@ class OrchestratorStatusTransitionTests(TestCase):
         self.assertEqual(deployment.container_id, 'container-123')
         self.assertIsNotNone(deployment.finished_at)
 
-    @patch('services.orchestrator.analyze_failure_task')
-    @patch('services.orchestrator.alert_user_task')
-    @patch('services.orchestrator.ClusterManager')
-    @patch('services.orchestrator.BuildManager')
+    @patch('apps.deployments.services.orchestrator.analyze_failure_task')
+    @patch('apps.deployments.services.orchestrator.alert_user_task')
+    @patch('apps.deployments.services.orchestrator.ClusterManager')
+    @patch('apps.deployments.services.orchestrator.BuildManager')
     def test_build_failure_sets_failed_status(
         self, MockBuild, MockCluster, mock_alert, mock_analyze
     ):
@@ -83,7 +83,7 @@ class OrchestratorStatusTransitionTests(TestCase):
             commit_hash='bad123'
         )
 
-        from services.orchestrator import Orchestrator
+        from apps.deployments.services.orchestrator import Orchestrator
         orch = Orchestrator(str(deployment.id))
 
         with self.assertRaises(Exception):
@@ -93,10 +93,10 @@ class OrchestratorStatusTransitionTests(TestCase):
         self.assertEqual(deployment.status, Deployment.Status.FAILED)
         self.assertIn('[ERROR]', deployment.build_logs)
 
-    @patch('services.orchestrator.analyze_failure_task')
-    @patch('services.orchestrator.alert_user_task')
-    @patch('services.orchestrator.ClusterManager')
-    @patch('services.orchestrator.BuildManager')
+    @patch('apps.deployments.services.orchestrator.analyze_failure_task')
+    @patch('apps.deployments.services.orchestrator.alert_user_task')
+    @patch('apps.deployments.services.orchestrator.ClusterManager')
+    @patch('apps.deployments.services.orchestrator.BuildManager')
     def test_failure_triggers_alert_and_analysis(
         self, MockBuild, MockCluster, mock_alert, mock_analyze
     ):
@@ -111,7 +111,7 @@ class OrchestratorStatusTransitionTests(TestCase):
             commit_hash='crash123'
         )
 
-        from services.orchestrator import Orchestrator
+        from apps.deployments.services.orchestrator import Orchestrator
         orch = Orchestrator(str(deployment.id))
 
         with self.assertRaises(Exception):
@@ -120,10 +120,10 @@ class OrchestratorStatusTransitionTests(TestCase):
         mock_alert.delay.assert_called_once()
         mock_analyze.delay.assert_called_once()
 
-    @patch('services.orchestrator.analyze_failure_task')
-    @patch('services.orchestrator.alert_user_task')
-    @patch('services.orchestrator.ClusterManager')
-    @patch('services.orchestrator.BuildManager')
+    @patch('apps.deployments.services.orchestrator.analyze_failure_task')
+    @patch('apps.deployments.services.orchestrator.alert_user_task')
+    @patch('apps.deployments.services.orchestrator.ClusterManager')
+    @patch('apps.deployments.services.orchestrator.BuildManager')
     def test_deployment_has_started_at_timestamp(
         self, MockBuild, MockCluster, mock_alert, mock_analyze
     ):
@@ -137,7 +137,7 @@ class OrchestratorStatusTransitionTests(TestCase):
             commit_hash='ts123'
         )
 
-        from services.orchestrator import Orchestrator
+        from apps.deployments.services.orchestrator import Orchestrator
         orch = Orchestrator(str(deployment.id))
         orch.run_deployment()
 
@@ -168,10 +168,10 @@ class AutoRollbackTests(TestCase):
         )
 
     @patch('apps.deployments.tasks.smart_deploy_task.delay')
-    @patch('services.orchestrator.analyze_failure_task')
-    @patch('services.orchestrator.alert_user_task')
-    @patch('services.orchestrator.ClusterManager')
-    @patch('services.orchestrator.BuildManager')
+    @patch('apps.deployments.services.orchestrator.analyze_failure_task')
+    @patch('apps.deployments.services.orchestrator.alert_user_task')
+    @patch('apps.deployments.services.orchestrator.ClusterManager')
+    @patch('apps.deployments.services.orchestrator.BuildManager')
     def test_auto_rollback_after_consecutive_failures(
         self, MockBuild, MockCluster, mock_alert, mock_analyze, mock_deploy
     ):
@@ -203,7 +203,7 @@ class AutoRollbackTests(TestCase):
             commit_hash='fail_3'
         )
 
-        from services.orchestrator import Orchestrator
+        from apps.deployments.services.orchestrator import Orchestrator
         orch = Orchestrator(str(deployment.id))
 
         with self.assertRaises(Exception):
@@ -220,10 +220,10 @@ class AutoRollbackTests(TestCase):
         self.assertEqual(rollback_deploy.status, Deployment.Status.QUEUED)
         self.assertIn('AUTO-ROLLBACK', rollback_deploy.commit_message)
 
-    @patch('services.orchestrator.analyze_failure_task')
-    @patch('services.orchestrator.alert_user_task')
-    @patch('services.orchestrator.ClusterManager')
-    @patch('services.orchestrator.BuildManager')
+    @patch('apps.deployments.services.orchestrator.analyze_failure_task')
+    @patch('apps.deployments.services.orchestrator.alert_user_task')
+    @patch('apps.deployments.services.orchestrator.ClusterManager')
+    @patch('apps.deployments.services.orchestrator.BuildManager')
     def test_no_rollback_with_only_two_failures(
         self, MockBuild, MockCluster, mock_alert, mock_analyze
     ):
@@ -251,7 +251,7 @@ class AutoRollbackTests(TestCase):
             commit_hash='fail_2'
         )
 
-        from services.orchestrator import Orchestrator
+        from apps.deployments.services.orchestrator import Orchestrator
         orch = Orchestrator(str(deployment.id))
 
         with self.assertRaises(Exception):

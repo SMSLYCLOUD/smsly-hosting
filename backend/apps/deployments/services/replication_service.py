@@ -2,7 +2,7 @@
 Database replication service.
 
 Manages Patroni-based PostgreSQL streaming replication across
-CloudNeuron servers connected via WireGuard mesh.
+Grid servers connected via WireGuard mesh.
 
 Handles:
 - Deploying Patroni + etcd containers to remote servers
@@ -353,7 +353,7 @@ class ReplicationService:
     @classmethod
     def validate_mesh_for_replication(cls, mesh):
         """Fail early when mesh/server state cannot support Patroni safely."""
-        from apps.deployments.models_core import ManagedServer
+        from apps.deployments.models.core import ManagedServer
 
         peers = list(mesh.peers.filter(is_active=True).select_related("server"))
         if len(peers) < 2:

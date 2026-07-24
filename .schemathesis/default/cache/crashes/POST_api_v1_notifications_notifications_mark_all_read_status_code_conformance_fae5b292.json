@@ -1,0 +1,91 @@
+{
+  "operation": "POST /api/v1/notifications/notifications/mark_all_read/",
+  "method": "POST",
+  "path_template": "/api/v1/notifications/notifications/mark_all_read/",
+  "fingerprint": "fae5b292",
+  "case_id": "M9ZKE1",
+  "code_sample": "curl -X POST -H 'Content-Type: application/json' -d '{\"read\": false}' http://127.0.0.1:8089/api/v1/notifications/notifications/mark_all_read/",
+  "sequence": [
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:8089/api/v1/notifications/notifications/mark_all_read/",
+      "url_template": "http://127.0.0.1:8089/api/v1/notifications/notifications/mark_all_read/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "X-Schemathesis-TestCaseId": "M9ZKE1",
+        "Content-Type": "application/json",
+        "Content-Length": "15"
+      },
+      "response": {
+        "status_code": 401,
+        "headers": {
+          "date": "Tue, 21 Jul 2026 00:15:45 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "www-authenticate": "[Filtered]",
+          "vary": "Accept, Cookie, origin",
+          "allow": "POST, OPTIONS",
+          "x-frame-options": "DENY",
+          "content-length": "95",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin"
+        },
+        "body": "{\"error\":\"Authentication credentials were not provided.\",\"code\":\"unauthenticated\",\"status\":401}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "status_code_conformance",
+          "status": "failure",
+          "message": "Undocumented HTTP status code\n\nReceived: 401\nDocumented: 200"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 2.920699625974521e-05,
+          "mode": "negative"
+        },
+        "components": {
+          "HEADER": "negative",
+          "BODY": "positive"
+        },
+        "phase": {
+          "name": "coverage",
+          "data": {
+            "type": "CoveragePhaseData",
+            "description": "Missing `Authorization` at header",
+            "location": null,
+            "parameter": "Authorization",
+            "parameter_location": "HEADER",
+            "scenario": "missing_parameter"
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {
+          "HEADER": {}
+        }
+      },
+      "path": "/api/v1/notifications/notifications/mark_all_read/",
+      "path_parameters": {},
+      "query": {},
+      "case_headers": {},
+      "cookies": {},
+      "case_body": {
+        "encoding": "json",
+        "value": {
+          "read": false
+        }
+      },
+      "media_type": "application/json",
+      "parent_index": null
+    }
+  ]
+}

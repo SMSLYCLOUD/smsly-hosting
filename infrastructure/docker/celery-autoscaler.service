@@ -1,0 +1,25 @@
+[Unit]
+Description=SMSLY Celery Worker Autoscaler
+Documentation=https://docs.smsly.cloud
+After=docker.service
+Requires=docker.service
+ConditionPathIsDirectory=/opt/smsly-hosting
+
+[Service]
+Type=simple
+ExecStart=/opt/smsly-hosting/scripts/celery-worker-autoscaler.sh
+Restart=on-failure
+RestartSec=30
+Environment=SMSLY_INSTALL_DIR=/opt/smsly-hosting
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=celery-autoscaler
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/smsly-hosting
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

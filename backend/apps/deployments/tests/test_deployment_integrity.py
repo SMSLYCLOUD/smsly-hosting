@@ -4,7 +4,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
-from apps.deployments.models_core import (
+from apps.deployments.models.core import (
     CloudProvider,
     Deployment,
     ManagedServer,
@@ -84,7 +84,7 @@ class DeploymentIntegrityTests(TestCase):
         provider = CloudProvider.objects.get(id=provider_id)
         self.assertEqual(provider.provider_type, CloudProvider.ProviderType.REMOTE)
 
-    @patch('apps.deployments.views.enqueue_smart_deploy_task')
+    @patch('apps.deployments.views.service.deploy.enqueue_smart_deploy_task')
     @patch('apps.deployments.views.ServiceViewSet._is_remote_sync_request', return_value=True)
     def test_remote_sync_prebuilt_image_refreshes_stale_remote_service_image(
         self,

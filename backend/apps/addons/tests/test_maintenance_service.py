@@ -6,7 +6,7 @@ from django.test import TestCase
 
 from apps.addons.services.maintenance import AddonMaintenanceService
 from apps.deployments.models import Service
-from apps.deployments.models_addons import Addon
+from apps.deployments.models.addons import Addon
 
 User = get_user_model()
 

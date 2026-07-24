@@ -44,7 +44,7 @@ class AsyncMultiDeployTests(APITestCase):
             provider=self.provider,
         )
 
-    @patch("apps.deployments.views.smart_deploy_task.delay")
+    @patch("apps.deployments.views.service.deploy.smart_deploy_task.delay")
     def test_multi_deploy_asynchronous_queuing(self, mock_delay):
         url = reverse("service-multi-deploy", kwargs={"pk": str(self.service.id)})
         data = {

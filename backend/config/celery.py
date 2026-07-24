@@ -47,51 +47,26 @@ app.autodiscover_tasks()
 # These imports MUST be deferred until Django apps are fully loaded,
 # otherwise models.py triggers AppRegistryNotReady.
 @app.on_after_finalize.connect
-def register_extra_tasks(sender, **kwargs):  # pylint: disable=unused-argument
+def register_extra_tasks(_sender, **kwargs):  # pylint: disable=unused-argument
     # Importing the module is enough — the @shared_task decorator
     # registers the task with the worker on import.
     # pylint: disable=import-outside-toplevel
     import apps.deployments.services.auto_rollback
     import apps.deployments.services.autoscaler
-    import apps.deployments.services.health_monitor
+    import apps.core.services.health_monitor
     import apps.deployments.services.provisioner
-    import apps.deployments.tasks_ai_router
-    import apps.deployments.tasks_ai
-    import apps.deployments.tasks_commit_status
-    import apps.deployments.tasks_alerts
-    import apps.deployments.tasks_addons
-    import apps.deployments.tasks_autoscale
-    import apps.deployments.tasks_backup
-    import apps.deployments.tasks_bundles
-    import apps.deployments.tasks_code_intelligence
-    import apps.deployments.tasks_cron
-    import apps.deployments.tasks_ecosystem
-    import apps.deployments.tasks_election
-    import apps.deployments.tasks_health
-    import apps.deployments.tasks_maintenance
-    import apps.deployments.tasks_metrics
-    import apps.deployments.tasks_platform_update
-    import apps.deployments.tasks_replication
-    import apps.deployments.tasks_safedeploy
-    import apps.deployments.tasks_server_update
-    import apps.deployments.tasks_templates
-    import apps.deployments.tasks_traffic
-    import apps.deployments.tasks_transfer
-    import apps.intelligence.jules_fix.jules_fix  # noqa: F401
-    import apps.media.tasks  # noqa: F401
-    import apps.deployments.tasks_mesh  # noqa: F401
+    # -- Tasks defined outside of tasks.py / tasks/__init__.py
+    #    (Celery autodiscover_tasks only finds {app}.tasks modules)
     import apps.deployments.services.heartbeat_bus  # noqa: F401
     import apps.cloud.services.ssl_monitor  # noqa: F401
-    import apps.permissions.tasks  # noqa: F401
-    import apps.intelligence.tasks  # noqa: F401
-    import apps.deployments.tasks_deploy_remote  # noqa: F401
-    import apps.deployments.tasks_deploy  # noqa: F401
-    import apps.addons.tasks  # noqa: F401
-    import apps.autoscaler.tasks  # noqa: F401
-    import apps.billing.tasks  # noqa: F401
-    import apps.notifications.tasks  # noqa: F401
-    import apps.domains.tasks  # noqa: F401
-    import apps.cloud.views_code_analysis  # noqa: F401
+    import apps.intelligence.jules_fix.jules_fix  # noqa: F401
+    import apps.cloud.views.code_analysis  # noqa: F401
+    import apps.autoscaler.services.legacy_autoscaler  # noqa: F401
+    import apps.autoscaler.services.tasks_autoscale  # noqa: F401
+    import apps.deployments.services.redis_failover_recovery  # noqa: F401
+    # -- All other task modules are auto-discovered via autodiscover_tasks()
+    #    which imports {app}.tasks for every INSTALLED_APPS entry. App-level
+    #    tasks.py or tasks/__init__.py re-exports from subpackages.
 
 # =============================================================================
 # Beat Schedule — Periodic tasks for metrics, health, autoscaling, cleanup
@@ -116,62 +91,50 @@ app.conf.task_create_missing_queues = True
 app.conf.task_routes = {
     'apps.deployments.tasks.smart_deploy_task': {'queue': 'deploy'},
     'apps.deployments.tasks.resume_deploy_task': {'queue': 'deploy'},
-    'apps.deployments.tasks_addons.provision_addon_task': {'queue': 'deploy'},
-    'apps.deployments.tasks_addons.deprovision_addon_task': {'queue': 'deploy'},
-    'apps.deployments.tasks_addons.backup_addon_task': {'queue': 'deploy'},
-    'apps.deployments.tasks_addons.restore_addon_task': {'queue': 'deploy'},
     'apps.deployments.tasks_election.heartbeat_task': {'queue': 'fast'},
     'apps.deployments.services.provisioner.cleanup_stale_server_provisioning': {'queue': 'deploy'},
     'apps.deployments.tasks_ecosystem.ecosystem_scan_task': {'queue': 'deploy'},
     'apps.deployments.tasks_ecosystem.ecosystem_deploy_task': {'queue': 'deploy'},
     'apps.deployments.tasks_ecosystem.ecosystem_release_wave_task': {'queue': 'fast'},
     'apps.deployments.tasks_ecosystem.ecosystem_deferred_build_task': {'queue': 'fast'},
-    'apps.deployments.tasks_safedeploy.create_preview_environment_job': {'queue': 'deploy'},
-    'apps.deployments.tasks_safedeploy.create_database_clone_job': {'queue': 'deploy'},
-    'apps.deployments.tasks_safedeploy.run_migration_validation_job': {'queue': 'deploy'},
-    'apps.deployments.tasks_safedeploy.run_preview_tests_job': {'queue': 'deploy'},
-    'apps.deployments.tasks_safedeploy.provision_preview_service_job': {'queue': 'deploy'},
-    'apps.deployments.tasks_safedeploy.run_preview_health_check_job': {'queue': 'deploy'},
-    'apps.deployments.tasks_safedeploy.expire_stale_previews_job': {'queue': 'fast'},
-    'apps.deployments.tasks_safedeploy.destroy_preview_environment_job': {'queue': 'deploy'},
+    'apps.deployments.tasks.deployment.tasks_safedeploy.create_preview_environment_job': {'queue': 'deploy'},
+    'apps.deployments.tasks.deployment.tasks_safedeploy.create_database_clone_job': {'queue': 'deploy'},
+    'apps.deployments.tasks.deployment.tasks_safedeploy.run_migration_validation_job': {'queue': 'deploy'},
+    'apps.deployments.tasks.deployment.tasks_safedeploy.run_preview_tests_job': {'queue': 'deploy'},
+    'apps.deployments.tasks.deployment.tasks_safedeploy.provision_preview_service_job': {'queue': 'deploy'},
+    'apps.deployments.tasks.deployment.tasks_safedeploy.run_preview_health_check_job': {'queue': 'deploy'},
+    'apps.deployments.tasks.deployment.tasks_safedeploy.expire_stale_previews_job': {'queue': 'fast'},
+    'apps.deployments.tasks.deployment.tasks_safedeploy.destroy_preview_environment_job': {'queue': 'deploy'},
     'apps.deployments.tasks.update_remote_server_task': {'queue': 'deploy'},
     'apps.deployments.tasks_deploy_remote.self_heal_remote_deployment': {'queue': 'deploy'},
     'apps.deployments.tasks.delete_service_task': {'queue': 'deploy'},
     'apps.deployments.tasks.recover_stalled_deletions': {'queue': 'deploy'},
-    # -- Duplicate stubs in tasks.py that delegate to specialized modules --
-    # These are re-exports, but their task names resolve to tasks.* so they
-    # need explicit routes to keep Docker operations on the deploy queue.
+    'apps.deployments.tasks.recover_redis_failover': {'queue': 'deploy'},
+    # -- Tasks re-exported from specialized modules (name= resolves to tasks.*) --
     'apps.deployments.tasks.provision_addon_task': {'queue': 'deploy'},
     'apps.deployments.tasks.deprovision_addon_task': {'queue': 'deploy'},
     'apps.deployments.tasks.backup_addon_task': {'queue': 'deploy'},
     'apps.deployments.tasks.restore_addon_task': {'queue': 'deploy'},
     'apps.deployments.tasks.delete_addon_task': {'queue': 'deploy'},
-    'apps.deployments.tasks_addons.delete_addon_task': {'queue': 'deploy'},
     'apps.deployments.tasks.execute_server_transfer_task': {'queue': 'deploy'},
     'apps.deployments.tasks.rollback_transfer_task': {'queue': 'deploy'},
-    'apps.deployments.tasks_transfer.execute_server_transfer_task': {'queue': 'deploy'},
-    'apps.deployments.tasks_transfer.rollback_transfer_task': {'queue': 'deploy'},
     'apps.deployments.tasks.platform_update_task': {'queue': 'deploy'},
     'apps.deployments.tasks.platform_rollback_task': {'queue': 'deploy'},
-    'apps.deployments.tasks_platform_update.platform_update_task': {'queue': 'deploy'},
-    'apps.deployments.tasks_platform_update.platform_rollback_task': {'queue': 'deploy'},
     # -- Docker-dependent tasks previously falling to default 'celery' queue --
     'apps.deployments.tasks.run_maintenance_task': {'queue': 'deploy'},
-    'apps.deployments.tasks_maintenance.run_maintenance_task': {'queue': 'deploy'},
     'apps.deployments.tasks.registry_garbage_collection_task': {'queue': 'deploy'},
-    'apps.deployments.tasks_maintenance.registry_garbage_collection_task': {'queue': 'deploy'},
     'apps.deployments.services.provisioner.provision_server': {'queue': 'deploy'},
-    'apps.deployments.services.health_monitor.monitor_health_task': {'queue': 'deploy'},
-    'apps.deployments.services.autoscaler.check_autoscale_task': {'queue': 'deploy'},
-    'apps.deployments.tasks_autoscale.analyze_all_services_task': {'queue': 'deploy'},
-    'apps.deployments.tasks_mesh.check_mesh_health_task': {'queue': 'deploy'},
-    'apps.deployments.tasks_mesh.deploy_mesh_task': {'queue': 'deploy'},
+    'apps.core.services.health_monitor.monitor_health_task': {'queue': 'deploy'},
+    'apps.autoscaler.services.legacy_autoscaler.check_autoscale_task': {'queue': 'deploy'},
+    'apps.autoscaler.services.tasks_autoscale.analyze_all_services_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.infra.tasks_mesh.check_mesh_health_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.infra.tasks_mesh.deploy_mesh_task': {'queue': 'deploy'},
     'apps.deployments.tasks_replication.deploy_replication_task': {'queue': 'deploy'},
     'apps.deployments.tasks_replication.manual_failover_task': {'queue': 'deploy'},
     'apps.deployments.tasks_cron.trigger_cron_job': {'queue': 'deploy'},
-    'apps.deployments.tasks_metrics.collect_metrics_task': {'queue': 'deploy'},
-    'apps.deployments.tasks_metrics.cleanup_build_cache_task': {'queue': 'deploy'},
-    'apps.deployments.tasks_alerts.scan_running_containers_logs_task': {'queue': 'deploy'},
+    'apps.core.tasks.metrics.collect_metrics_task': {'queue': 'deploy'},
+    'apps.core.tasks.metrics.cleanup_build_cache_task': {'queue': 'deploy'},
+    'apps.core.tasks.alerts.scan_running_containers_logs_task': {'queue': 'deploy'},
     'apps.deployments.tasks_backup.create_service_backup_task': {'queue': 'deploy'},
     'apps.deployments.tasks_backup.create_server_backup_task': {'queue': 'deploy'},
     'apps.deployments.tasks_backup.restore_service_backup_task': {'queue': 'deploy'},
@@ -187,7 +150,6 @@ app.conf.task_routes = {
     'apps.deployments.tasks_bundles.backup_bundle_component_task': {'queue': 'deploy'},
     'apps.deployments.tasks_bundles.restore_bundle_component_task': {'queue': 'deploy'},
     'apps.deployments.tasks.one_click_deploy_template_task': {'queue': 'deploy'},
-    'apps.deployments.tasks_templates.one_click_deploy_template_task': {'queue': 'deploy'},
     'apps.deployments.tasks.node_watchdog_task': {'queue': 'deploy'},
     'apps.addons.tasks.addon_health_check_all': {'queue': 'deploy'},
     'apps.addons.tasks.addon_auto_vacuum': {'queue': 'deploy'},
@@ -205,19 +167,19 @@ app.conf.task_routes = {
 app.conf.beat_schedule = {
     # Collect real Docker stats every 60 seconds
     'collect-metrics-every-60s': {
-        'task': 'apps.deployments.tasks_metrics.collect_metrics_task',
+        'task': 'apps.core.tasks.metrics.collect_metrics_task',
         'schedule': 60.0,
         'options': {'expires': 60.0},
     },
     # Check service health every 30 seconds
     'monitor-health-every-30s': {
-        'task': 'apps.deployments.services.health_monitor.monitor_health_task',
+        'task': 'apps.core.services.health_monitor.monitor_health_task',
         'schedule': 30.0,
         'options': {'expires': 30.0},
     },
     # Check autoscale thresholds every 30 seconds
     'check-autoscale-every-30s': {
-        'task': 'apps.deployments.services.autoscaler.check_autoscale_task',
+        'task': 'apps.autoscaler.services.legacy_autoscaler.check_autoscale_task',
         'schedule': 30.0,
         'options': {'expires': 30.0},
     },
@@ -242,6 +204,12 @@ app.conf.beat_schedule = {
     # Re-queue services stuck in DELETION_PENDING (worker crash, Docker hang, etc.)
     'recover-stalled-deletions-every-5m': {
         'task': 'apps.deployments.tasks.recover_stalled_deletions',
+        'schedule': 300.0,
+        'options': {'expires': 300.0},
+    },
+    # Detect and clean up orphaned Redis primary after Sentinel failover
+    'recover-redis-failover-every-5m': {
+        'task': 'apps.deployments.tasks.recover_redis_failover',
         'schedule': 300.0,
         'options': {'expires': 300.0},
     },
@@ -290,13 +258,13 @@ app.conf.beat_schedule = {
     },
     # Cleanup Docker build cache daily
     'cleanup-build-cache-daily': {
-        'task': 'apps.deployments.tasks_metrics.cleanup_build_cache_task',
+        'task': 'apps.core.tasks.metrics.cleanup_build_cache_task',
         'schedule': 86400.0,  # 24 hours
         'options': {'expires': 86400.0},
     },
     # WireGuard mesh health check every 60 seconds
     'mesh-health-check-every-60s': {
-        'task': 'apps.deployments.tasks_mesh.check_mesh_health_task',
+        'task': 'apps.deployments.tasks.infra.tasks_mesh.check_mesh_health_task',
         'schedule': 60.0,
         'options': {'expires': 60.0},
     },
@@ -326,7 +294,7 @@ app.conf.beat_schedule = {
     },
     # Scan running containers for errors every 5 minutes
     'scan-running-containers-logs-every-5m': {
-        'task': 'apps.deployments.tasks_alerts.scan_running_containers_logs_task',
+        'task': 'apps.core.tasks.alerts.scan_running_containers_logs_task',
         'schedule': 300.0,
         'options': {'expires': 300.0},
     },
@@ -365,7 +333,7 @@ app.conf.beat_schedule = {
     },
     # Auto-scaling analysis — Prometheus + Loki → spawn/destroy replicas
     'auto-scaling-analyze-every-3m': {
-        'task': 'apps.deployments.tasks_autoscale.analyze_all_services_task',
+        'task': 'apps.autoscaler.services.tasks_autoscale.analyze_all_services_task',
         'schedule': 180.0,
         'options': {'expires': 180.0},
     },
@@ -401,7 +369,7 @@ app.conf.beat_schedule = {
     },
     # Expire stale preview environments hourly
     'expire-stale-previews': {
-        'task': 'apps.deployments.tasks_safedeploy.expire_stale_previews_job',
+        'task': 'apps.deployments.tasks.deployment.tasks_safedeploy.expire_stale_previews_job',
         'schedule': 3600.0,
         'options': {'expires': 3600.0},
     },
@@ -433,13 +401,13 @@ app.conf.beat_schedule = {
     },
     # Collect Traefik access log entries every 15 seconds
     'collect-traffic-logs-every-15s': {
-        'task': 'apps.deployments.tasks_traffic.collect_traefik_logs',
+        'task': 'apps.core.tasks.traffic.collect_traefik_logs',
         'schedule': 15.0,
         'options': {'expires': 15.0, 'queue': 'fast'},
     },
     # Resolve IP geolocations every 30 seconds
     'resolve-traffic-geolocations-every-30s': {
-        'task': 'apps.deployments.tasks_traffic.resolve_traffic_geolocations',
+        'task': 'apps.core.tasks.traffic.resolve_traffic_geolocations',
         'schedule': 30.0,
         'options': {'expires': 30.0, 'queue': 'fast'},
     },

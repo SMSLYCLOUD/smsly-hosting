@@ -84,9 +84,42 @@ class RevenueAnalytics:
 
     def get_revenue_chart(self, period='30d', granularity='daily'):
         """Time-series revenue data for charts."""
-        days = 30
+        days = self._period_days(period)
         start_date = timezone.now().date() - timedelta(days=days)
         data = DailyRevenue.objects.filter(date__gte=start_date).order_by('date')
+
+        if granularity == 'weekly':
+            from django.db.models.functions import TruncWeek
+            data = data.annotate(period=TruncWeek('date')).values('period').annotate(
+                total_revenue=Sum('total_revenue'),
+                subscription_revenue=Sum('subscription_revenue'),
+                overage_revenue=Sum('overage_revenue'),
+            ).order_by('period')
+            return [
+                {
+                    'date': d['period'].isoformat(),
+                    'revenue': float(d['total_revenue']),
+                    'subscriptions': float(d['subscription_revenue']),
+                    'overage': float(d['overage_revenue'])
+                } for d in data
+            ]
+        elif granularity == 'monthly':
+            from django.db.models.functions import TruncMonth
+            data = data.annotate(period=TruncMonth('date')).values('period').annotate(
+                total_revenue=Sum('total_revenue'),
+                subscription_revenue=Sum('subscription_revenue'),
+                overage_revenue=Sum('overage_revenue'),
+            ).order_by('period')
+            return [
+                {
+                    'date': d['period'].isoformat(),
+                    'revenue': float(d['total_revenue']),
+                    'subscriptions': float(d['subscription_revenue']),
+                    'overage': float(d['overage_revenue'])
+                } for d in data
+            ]
+
+        # daily (default)
         return [
             {
                 'date': d.date.isoformat(),

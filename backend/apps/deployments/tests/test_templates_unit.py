@@ -3,7 +3,7 @@ import ast
 from pathlib import Path
 
 from django.test import SimpleTestCase
-from services.app_templates import APP_TEMPLATES, get_template, list_templates
+from apps.deployments.services.app_templates import APP_TEMPLATES, get_template, list_templates
 
 
 class TemplateRegistryTest(SimpleTestCase):
@@ -30,7 +30,7 @@ class TemplateRegistryTest(SimpleTestCase):
 
     def test_docker_run_command_generation(self):
         """Verify command generation (importing function inside test to avoid circular imports if any)."""
-        from services.app_templates import get_docker_run_command
+        from apps.deployments.services.app_templates import get_docker_run_command
 
         cmd = get_docker_run_command(
             'smsly-sms', name='my-sms', domain='example.com')
@@ -82,11 +82,11 @@ User = get_user_model()
 
 @pytest.mark.django_db
 @patch('apps.deployments.tasks.smart_deploy_task.delay')
-@patch('apps.deployments.tasks.subprocess.run')
-@patch('apps.deployments.tasks.addon_provisioner.provision_dispatch')
+@patch('apps.deployments.tasks.deployment.tasks_templates.subprocess.run')
+@patch('apps.deployments.tasks.deployment.tasks_templates.addon_provisioner.provision_dispatch')
 def test_all_ai_templates_dry_run(mock_addon_provisioner, mock_subprocess_run, mock_smart_deploy):
     mock_addon_provisioner.return_value = ('test-uuid', 'postgres://...')
-    from apps.deployments.tasks_templates import one_click_deploy_template_task
+    from apps.deployments.tasks.deployment.tasks_templates import one_click_deploy_template_task
 
     # Mock subprocess.run to avoid docker manifest inspect calls
     mock_subprocess_run.return_value = MagicMock(returncode=0)

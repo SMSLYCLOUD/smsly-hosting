@@ -16,8 +16,8 @@ from django.core.cache import cache
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
-from apps.deployments.models_audit import AuditLog
-from apps.deployments.models_core import Service
+from apps.deployments.models.audit import AuditLog
+from apps.deployments.models.core import Service
 
 User = get_user_model()
 

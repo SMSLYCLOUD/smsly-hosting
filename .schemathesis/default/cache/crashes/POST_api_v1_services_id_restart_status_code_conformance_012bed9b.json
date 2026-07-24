@@ -1,0 +1,184 @@
+{
+  "operation": "POST /api/v1/services/{id}/restart/",
+  "method": "POST",
+  "path_template": "/api/v1/services/{id}/restart/",
+  "fingerprint": "012bed9b",
+  "case_id": "iZ5E9j",
+  "code_sample": "curl -X POST -H 'Content-Type: application/json' -d '{\"env_vars\": [], \"regions\": [], \"primary_region\": 0, \"repository_url\": null, \"docker_image\": null, \"registry_credential\": null, \"status\": \"ACTIVE\", \"deletion_error\": \"\", \"name\": \"\", \"slug\": \"0\", \"branch\": \"\", \"deploy_type\": \"GIT\", \"buildpack\": \"DOCKER\", \"function_code\": \"\", \"function_runtime\": \"\", \"build_command\": null, \"start_command\": null, \"root_directory\": \"\", \"internal_port\": 0, \"public_domain\": null, \"public_domain_hidden\": false, \"domain_verified\": false, \"cpu_cores\": \"\", \"memory_mb\": 0, \"autoscale_enabled\": null, \"min_replicas\": 1, \"max_replicas\": 1, \"autoscale_cpu_target\": 0, \"vpa_enabled\": false, \"alert_config\": null, \"disable_crowdsec_waf\": false, \"safe_deploy_enabled\": false, \"safedeploy_enabled\": false, \"preview_environments_enabled\": false, \"auto_create_preview_on_branch_push\": false, \"migration_auto_approval_policy\": \"NEVER\", \"production_requires_backup\": false, \"auto_rollback_enabled\": false, \"auto_rollback_threshold\": null, \"deploy_strategy\": \"CANARY\", \"canary_percentage\": 0, \"use_blue_green\": false, \"is_preview\": false, \"pr_number\": null, \"coolify_uuid\": null, \"health_check_path\": \"\", \"health_check_port\": null, \"health_check_interval\": 0, \"health_check_timeout\": 0, \"health_check_retries\": 0, \"auto_restart\": false, \"health_webhook_token\": \"\", \"health_status\": \"healthy\", \"restart_policy\": \"no\", \"custom_domains\": null, \"deploy_mode\": \"SINGLE\", \"compose_file\": \"\", \"compose_main_service\": \"\", \"is_public\": false, \"active_target_type\": null, \"active_host_ip\": null, \"active_runtime_id\": null, \"last_scale_at\": null, \"locked\": false, \"locked_reason\": \"\", \"restrict_to_creator\": false, \"allowed_actions\": null, \"restricted_environments\": null, \"provider\": null, \"project\": null, \"parent_service\": null}' http://127.0.0.1:8089/api/v1/services/e3e70682-c209-1cac-a29f-6fbed82c07cd/restart/",
+  "sequence": [
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:8089/api/v1/services/e3e70682-c209-1cac-a29f-6fbed82c07cd/restart/",
+      "url_template": "http://127.0.0.1:8089/api/v1/services/{id}/restart/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "X-Schemathesis-TestCaseId": "iZ5E9j",
+        "Content-Type": "application/json",
+        "Content-Length": "1735"
+      },
+      "response": {
+        "status_code": 401,
+        "headers": {
+          "date": "Tue, 21 Jul 2026 00:18:09 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "www-authenticate": "[Filtered]",
+          "vary": "Accept, Cookie, origin",
+          "allow": "POST, OPTIONS",
+          "x-frame-options": "DENY",
+          "content-length": "95",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin"
+        },
+        "body": "{\"error\":\"Authentication credentials were not provided.\",\"code\":\"unauthenticated\",\"status\":401}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "status_code_conformance",
+          "status": "failure",
+          "message": "Undocumented HTTP status code\n\nReceived: 401\nDocumented: 200"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 5.080899427412078e-05,
+          "mode": "negative"
+        },
+        "components": {
+          "PATH": "positive",
+          "HEADER": "negative",
+          "BODY": "positive"
+        },
+        "phase": {
+          "name": "coverage",
+          "data": {
+            "type": "CoveragePhaseData",
+            "description": "Missing `Authorization` at header",
+            "location": null,
+            "parameter": "Authorization",
+            "parameter_location": "HEADER",
+            "scenario": "missing_parameter"
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [
+          [
+            "path",
+            "id"
+          ],
+          [
+            "body",
+            "name"
+          ],
+          [
+            "body",
+            "coolify_uuid"
+          ],
+          [
+            "body",
+            "active_runtime_id"
+          ]
+        ],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {
+          "PATH": {
+            "id": "e3e70682-c209-1cac-a29f-6fbed82c07cd"
+          },
+          "HEADER": {}
+        }
+      },
+      "path": "/api/v1/services/{id}/restart/",
+      "path_parameters": {
+        "id": "e3e70682-c209-1cac-a29f-6fbed82c07cd"
+      },
+      "query": {},
+      "case_headers": {},
+      "cookies": {},
+      "case_body": {
+        "encoding": "json",
+        "value": {
+          "env_vars": [],
+          "regions": [],
+          "primary_region": 0,
+          "repository_url": null,
+          "docker_image": null,
+          "registry_credential": "[Filtered]",
+          "status": "ACTIVE",
+          "deletion_error": "",
+          "name": "",
+          "slug": "0",
+          "branch": "",
+          "deploy_type": "GIT",
+          "buildpack": "DOCKER",
+          "function_code": "",
+          "function_runtime": "",
+          "build_command": null,
+          "start_command": null,
+          "root_directory": "",
+          "internal_port": 0,
+          "public_domain": null,
+          "public_domain_hidden": false,
+          "domain_verified": false,
+          "cpu_cores": "",
+          "memory_mb": 0,
+          "autoscale_enabled": null,
+          "min_replicas": 1,
+          "max_replicas": 1,
+          "autoscale_cpu_target": 0,
+          "vpa_enabled": false,
+          "alert_config": null,
+          "disable_crowdsec_waf": false,
+          "safe_deploy_enabled": false,
+          "safedeploy_enabled": false,
+          "preview_environments_enabled": false,
+          "auto_create_preview_on_branch_push": false,
+          "migration_auto_approval_policy": "NEVER",
+          "production_requires_backup": false,
+          "auto_rollback_enabled": false,
+          "auto_rollback_threshold": null,
+          "deploy_strategy": "CANARY",
+          "canary_percentage": 0,
+          "use_blue_green": false,
+          "is_preview": false,
+          "pr_number": null,
+          "coolify_uuid": null,
+          "health_check_path": "",
+          "health_check_port": null,
+          "health_check_interval": 0,
+          "health_check_timeout": 0,
+          "health_check_retries": 0,
+          "auto_restart": false,
+          "health_webhook_token": "[Filtered]",
+          "health_status": "healthy",
+          "restart_policy": "no",
+          "custom_domains": null,
+          "deploy_mode": "SINGLE",
+          "compose_file": "",
+          "compose_main_service": "",
+          "is_public": false,
+          "active_target_type": null,
+          "active_host_ip": null,
+          "active_runtime_id": null,
+          "last_scale_at": null,
+          "locked": false,
+          "locked_reason": "",
+          "restrict_to_creator": false,
+          "allowed_actions": null,
+          "restricted_environments": null,
+          "provider": null,
+          "project": null,
+          "parent_service": null
+        }
+      },
+      "media_type": "application/json",
+      "parent_index": null
+    }
+  ]
+}

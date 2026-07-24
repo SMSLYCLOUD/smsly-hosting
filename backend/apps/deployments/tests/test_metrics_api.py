@@ -10,7 +10,7 @@ from rest_framework.test import APITestCase
 
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import Service
-from apps.deployments.models_metrics import ServiceMetric
+from apps.deployments.models.metrics import ServiceMetric
 
 
 class MetricsApiTests(APITestCase):
@@ -32,11 +32,11 @@ class MetricsApiTests(APITestCase):
         )
         self.url = f'/api/v1/services/{self.service.id}/metrics/'
 
-    @patch('apps.deployments.views_metrics.metrics_adapter.get_current')
-    @patch('apps.deployments.views_metrics.metrics_adapter.get_disk_history')
-    @patch('apps.deployments.views_metrics.metrics_adapter.get_network_history')
-    @patch('apps.deployments.views_metrics.metrics_adapter.get_memory_history')
-    @patch('apps.deployments.views_metrics.metrics_adapter.get_cpu_history')
+    @patch('apps.deployments.views.metrics.metrics_adapter.get_current')
+    @patch('apps.deployments.views.metrics.metrics_adapter.get_disk_history')
+    @patch('apps.deployments.views.metrics.metrics_adapter.get_network_history')
+    @patch('apps.deployments.views.metrics.metrics_adapter.get_memory_history')
+    @patch('apps.deployments.views.metrics.metrics_adapter.get_cpu_history')
     def test_metrics_endpoint_returns_expected_shape(
         self,
         cpu_mock,
@@ -66,11 +66,11 @@ class MetricsApiTests(APITestCase):
         for key in ('cpu', 'memory', 'network', 'disk', 'current'):
             self.assertIn(key, response.data)
 
-    @patch('apps.deployments.views_metrics.metrics_adapter.get_current')
-    @patch('apps.deployments.views_metrics.metrics_adapter.get_disk_history')
-    @patch('apps.deployments.views_metrics.metrics_adapter.get_network_history')
-    @patch('apps.deployments.views_metrics.metrics_adapter.get_memory_history')
-    @patch('apps.deployments.views_metrics.metrics_adapter.get_cpu_history')
+    @patch('apps.deployments.views.metrics.metrics_adapter.get_current')
+    @patch('apps.deployments.views.metrics.metrics_adapter.get_disk_history')
+    @patch('apps.deployments.views.metrics.metrics_adapter.get_network_history')
+    @patch('apps.deployments.views.metrics.metrics_adapter.get_memory_history')
+    @patch('apps.deployments.views.metrics.metrics_adapter.get_cpu_history')
     def test_metrics_endpoint_uses_db_fallback_when_prometheus_series_are_zero_only(
         self,
         cpu_mock,

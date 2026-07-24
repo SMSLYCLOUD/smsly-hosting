@@ -14,7 +14,7 @@ from apps.deployments.models import (
     ManagedServer,
     Service,
 )
-from apps.deployments.tasks_ecosystem import (
+from apps.deployments.tasks.ecosystem import (
     _apply_service_profile,
     _build_dependency_waves,
     _normalize_buildpack,
@@ -365,8 +365,8 @@ class EcosystemScanTaskTests(TestCase):
             password="password123",
         )
 
-    @patch("services.ecosystem.scan_and_analyze", side_effect=SoftTimeLimitExceeded())
-    @patch("apps.deployments.views_github._get_github_token", return_value="gh-token")
+    @patch("apps.deployments.services.ecosystem.scan_and_analyze", side_effect=SoftTimeLimitExceeded())
+    @patch("apps.deployments.views.github._get_github_token", return_value="gh-token")
     def test_scan_timeout_returns_actionable_error(self, _token_mock, _scan_mock):
         result = ecosystem_scan_task.run(str(self.user.id), 30)
 
@@ -374,10 +374,10 @@ class EcosystemScanTaskTests(TestCase):
         self.assertTrue(result["retryable"])
         self.assertIn("timed out", result["error"])
 
-    @patch("services.ecosystem.fetch_all_repos")
-    @patch("services.ecosystem.fetch_repo_tree")
-    @patch("services.ecosystem.analyze_ecosystem_chunked")
-    @patch("apps.deployments.views_github._get_github_token", return_value="gh-token")
+    @patch("apps.deployments.services.ecosystem.fetch_all_repos")
+    @patch("apps.deployments.services.ecosystem.fetch_repo_tree")
+    @patch("apps.deployments.services.ecosystem.analyze_ecosystem_chunked")
+    @patch("apps.deployments.views.github._get_github_token", return_value="gh-token")
     def test_scan_and_analyze_auto_skips_deployed_services(self, _token_mock, mock_analyze, mock_tree, mock_repos):
         """Verify that scan_and_analyze sets skip=True for already deployed services."""
         mock_repos.return_value = [
@@ -425,7 +425,7 @@ class EcosystemDeployTaskTests(TestCase):
             is_active=True,
         )
 
-    @patch("apps.deployments.tasks_ecosystem._queue_wave", return_value=1)
+    @patch("apps.deployments.tasks.ecosystem._queue_wave", return_value=1)
     def test_local_provider_without_managed_server_queues_local_deployment(self, _queue_wave):
         plan = {
             "services": [
@@ -451,7 +451,7 @@ class EcosystemDeployTaskTests(TestCase):
         self.assertEqual(deployment.branch, service.branch)
         self.assertEqual(service.repository_url, "https://github.com/owner/api")
 
-    @patch("apps.deployments.tasks_ecosystem._queue_wave", return_value=1)
+    @patch("apps.deployments.tasks.ecosystem._queue_wave", return_value=1)
     def test_existing_service_is_reassigned_to_selected_node_and_deployment_targets_it(self, _queue_wave):
         server = ManagedServer.objects.create(
             owner=self.user,
@@ -489,8 +489,8 @@ class EcosystemDeployTaskTests(TestCase):
         self.assertEqual(deployment.target_server, server)
         self.assertFalse(deployment.target_is_local)
 
-    @patch("services.addon_provisioner.addon_provisioner.provision", return_value=("postgres-cid", "postgresql://u:p@db:5432/app"))
-    @patch("apps.deployments.tasks_ecosystem._queue_wave", return_value=1)
+    @patch("apps.addons.services.addon_provisioner.addon_provisioner.provision", return_value=("postgres-cid", "postgresql://u:p@db:5432/app"))
+    @patch("apps.deployments.tasks.ecosystem._queue_wave", return_value=1)
     def test_top_level_addons_and_shared_secret_placeholders_are_resolved(self, _queue_wave, _provision):
         plan = {
             "addons": [{"type": "POSTGRES", "shared_by": ["api"]}],
@@ -520,8 +520,8 @@ class EcosystemDeployTaskTests(TestCase):
         self.assertTrue(env["JWT_SECRET"])
         self.assertNotIn("{{", env["JWT_SECRET"])
 
-    @patch("services.addon_provisioner.addon_provisioner.provision", return_value=("postgres-cid", "postgresql://u:p@db:5432/main"))
-    @patch("apps.deployments.tasks_ecosystem._queue_wave", return_value=1)
+    @patch("apps.addons.services.addon_provisioner.addon_provisioner.provision", return_value=("postgres-cid", "postgresql://u:p@db:5432/main"))
+    @patch("apps.deployments.tasks.ecosystem._queue_wave", return_value=1)
     def test_embedded_postgres_url_with_db_suffix_resolves(self, _queue_wave, _provision):
         """{{POSTGRES_URL}}/identity must become postgres://.../identity."""
         plan = {
@@ -547,8 +547,8 @@ class EcosystemDeployTaskTests(TestCase):
         env = {var.key: var.value for var in EnvironmentVariable.objects.filter(service=service)}
         self.assertEqual(env["DATABASE_URL"], "postgresql://u:p@db:5432/identity")
 
-    @patch("services.addon_provisioner.addon_provisioner.provision", return_value=("postgres-cid", "postgresql://u:p@db:5432/main"))
-    @patch("apps.deployments.tasks_ecosystem._queue_wave", return_value=1)
+    @patch("apps.addons.services.addon_provisioner.addon_provisioner.provision", return_value=("postgres-cid", "postgresql://u:p@db:5432/main"))
+    @patch("apps.deployments.tasks.ecosystem._queue_wave", return_value=1)
     def test_dockerfile_services_choose_docker_build(self, _queue_wave, _provision):
         """Ecosystem services should default to DOCKER buildpack."""
         plan = {
@@ -571,8 +571,8 @@ class EcosystemDeployTaskTests(TestCase):
         service = Service.objects.get(owner=self.user, name="api")
         self.assertEqual(service.buildpack, "DOCKER")
 
-    @patch("services.addon_provisioner.addon_provisioner.provision", return_value=("postgres-cid", "postgresql://u:p@db:5432/main"))
-    @patch("apps.deployments.tasks_ecosystem._queue_wave", return_value=1)
+    @patch("apps.addons.services.addon_provisioner.addon_provisioner.provision", return_value=("postgres-cid", "postgresql://u:p@db:5432/main"))
+    @patch("apps.deployments.tasks.ecosystem._queue_wave", return_value=1)
     def test_unknown_build_defaults_to_docker(self, _queue_wave, _provision):
         """Unknown/empty build type should default to DOCKER for ecosystem."""
         plan = {
@@ -608,11 +608,11 @@ class EcosystemDeployTaskTests(TestCase):
         self.assertEqual(host, "auth-service")
         self.assertEqual(port, 8080)
 
-    @patch("apps.deployments.tasks_ecosystem._queue_wave", return_value=1)
-    @patch("services.addon_provisioner.provision", return_value=("mock-cid", "postgresql://new-user:new-pass@new-db:5432/app"))
+    @patch("apps.deployments.tasks.ecosystem._queue_wave", return_value=1)
+    @patch("apps.addons.services.addon_provisioner.provision", return_value=("mock-cid", "postgresql://new-user:new-pass@new-db:5432/app"))
     def test_addon_no_reuse_user_wide(self, _provision, _queue_wave):
         """Verify that deploying new ecosystem services does NOT reuse unrelated existing user-wide addons."""
-        from apps.deployments.models_addons import Addon
+        from apps.deployments.models.addons import Addon
 
         # Create an existing active addon for an unrelated service of the user
         existing_service = Service.objects.create(
@@ -653,7 +653,7 @@ class EcosystemDeployTaskTests(TestCase):
 
     def test_heuristic_analysis_is_dynamic(self):
         """Heuristic analysis detects Dockerfile if present, otherwise defaults to nixpacks."""
-        from services.ecosystem import heuristic_analysis
+        from apps.deployments.services.ecosystem import heuristic_analysis
 
         # Scenario A: No Dockerfile present -> nixpacks
         res_nix = heuristic_analysis(["index.js", "package.json"])
@@ -665,7 +665,7 @@ class EcosystemDeployTaskTests(TestCase):
 
     def test_simulate_analysis_is_dynamic(self):
         """Simulated DevOps Agent analysis suggests dockerfile for Django, nixpacks for Node."""
-        from services.ai_engine import DevOpsAgent
+        from apps.deployments.services.ai_engine import DevOpsAgent
         agent = DevOpsAgent()
 
         analysis_django = agent._simulate_analysis("https://github.com/owner/django-repo.git")

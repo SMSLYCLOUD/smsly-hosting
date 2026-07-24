@@ -12,7 +12,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from apps.deployments.views_servers import (
+from apps.deployments.views.server import (
     ManagedServerCreateSerializer,
     ManagedServerProvisionSerializer,
 )

@@ -11,7 +11,7 @@ from django.test import TestCase
 
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import Service
-from apps.deployments.models_cron import CronJob
+from apps.deployments.models.cron import CronJob
 
 User = get_user_model()
 

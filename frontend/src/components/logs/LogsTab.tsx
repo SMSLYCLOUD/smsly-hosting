@@ -75,13 +75,6 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
         if (!deployment?.id) return;
         if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
-        // Auth for the build-logs WebSocket is provided by the
-        // HttpOnly auth cookie that the browser attaches to the
-        // WebSocket upgrade request. The server's
-        // QueryStringAuthMiddleware reads the cookie directly from
-        // the Cookie header (no token in the query string) — see
-        // backend/apps/deployments/middleware.py for the matching
-        // server-side change.
         const wsUrl = getWsUrl(`/ws/build-logs/${deployment.id}/`);
 
         try {
@@ -135,6 +128,60 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
         }
     }, [deployment?.id, isBuilding]);
 
+    // WebSocket connection for live runtime logs
+    const connectRuntimeWebSocket = useCallback(() => {
+        if (!deployment?.id) return;
+        if (wsRef.current?.readyState === WebSocket.OPEN) return;
+
+        const wsUrl = getWsUrl(`/ws/runtime-logs/${deployment.id}/`);
+
+        try {
+            const ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                setWsConnected(true);
+                setIsLive(true);
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'initial_state') {
+                        setRuntimeLogs(data.logs || '');
+                        setRuntimeMessage(data.message || '');
+                        if (data.container_status !== 'running') {
+                            setRuntimeMessage(
+                                data.source === 'build_logs'
+                                    ? 'Container is not running. Showing saved crash logs.'
+                                    : `Container status: ${data.container_status}`
+                            );
+                        }
+                    } else if (data.type === 'log') {
+                        setRuntimeLogs(prev => prev + (data.log || ''));
+                    } else if (data.type === 'error') {
+                        setRuntimeMessage(data.error || 'Stream error');
+                    }
+                } catch {
+                    // Non-JSON message
+                }
+            };
+
+            ws.onclose = () => {
+                setWsConnected(false);
+                // Auto-reconnect for runtime logs (container may restart)
+                reconnectTimer.current = setTimeout(connectRuntimeWebSocket, 5000);
+            };
+
+            ws.onerror = () => {
+                ws.close();
+            };
+
+            wsRef.current = ws;
+        } catch {
+            // WebSocket not supported — fall back to REST polling
+        }
+    }, [deployment?.id]);
+
     // Connect WebSocket when viewing build logs during active build
     useEffect(() => {
         if (logType === 'BUILD' && isBuilding && deployment?.id) {
@@ -147,6 +194,19 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
             }
         };
     }, [logType, isBuilding, deployment?.id, connectWebSocket]);
+
+    // Connect WebSocket when viewing runtime logs
+    useEffect(() => {
+        if (logType === 'RUNTIME' && deployment?.id) {
+            connectRuntimeWebSocket();
+        }
+
+        return () => {
+            if (reconnectTimer.current) {
+                clearTimeout(reconnectTimer.current);
+            }
+        };
+    }, [logType, deployment?.id, connectRuntimeWebSocket]);
 
     // Clean up WebSocket on unmount
     useEffect(() => {
@@ -194,9 +254,10 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
         );
     }, [deployment?.build_logs, deployment?.created_at, deployment?.duration_seconds, liveBuildLogs, isBuilding]);
 
-    // Fetch runtime logs when tab is active
+    // Fetch runtime logs when tab is active (REST fallback for when WS isn't available)
     useEffect(() => {
         if (logType !== 'RUNTIME' || !deployment?.id) return;
+        if (wsConnected) return; // Don't poll if WS is connected
 
         const fetchRuntimeLogs = async () => {
             setRuntimeLoading(true);
@@ -221,7 +282,7 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
         fetchRuntimeLogs();
         const interval = setInterval(fetchRuntimeLogs, 3000);
         return () => clearInterval(interval);
-    }, [logType, deployment?.id]);
+    }, [logType, deployment?.id, wsConnected]);
 
     const runtimeLines = runtimeLogs ? runtimeLogs.split('\n') : [];
     const filteredBuildLines = timestampedLogs.filter((line) => matchesFilter(line, logFilter));

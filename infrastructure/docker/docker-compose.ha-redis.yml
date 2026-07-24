@@ -86,10 +86,26 @@ services:
     image: redis:7-alpine
     container_name: smsly-redis-sentinel-1
     restart: unless-stopped
-    command: >
-      sh -c '
-      printf "sentinel monitor mymaster redis-primary 6379 2\nsentinel auth-pass mymaster $${REDIS_PASSWORD}\nsentinel down-after-milliseconds mymaster 5000\nsentinel failover-timeout mymaster 15000\nsentinel parallel-syncs mymaster 1\nsentinel resolve-hostnames yes\nsentinel announce-hostnames yes\n" > /tmp/sentinel.conf
-      && redis-sentinel /tmp/sentinel.conf'
+    environment:
+      SENTINEL_PASSWORD: ${SENTINEL_PASSWORD}
+    command:
+      - sh
+      - -c
+      - |
+        printf '%s\n' \
+          "sentinel monitor mymaster redis-primary 6379 2" \
+          "sentinel auth-pass mymaster $${REDIS_PASSWORD}" \
+          "sentinel down-after-milliseconds mymaster 5000" \
+          "sentinel failover-timeout mymaster 15000" \
+          "sentinel parallel-syncs mymaster 1" \
+          "sentinel resolve-hostnames yes" \
+          "sentinel announce-hostnames yes" \
+          > /tmp/sentinel.conf
+        if [ -n "$$SENTINEL_PASSWORD" ]; then
+          echo "sentinel sentinel-user default" >> /tmp/sentinel.conf
+          echo "sentinel sentinel-password $$SENTINEL_PASSWORD" >> /tmp/sentinel.conf
+        fi
+        exec redis-sentinel /tmp/sentinel.conf
     networks:
       - smsly-net
     depends_on:
@@ -106,10 +122,26 @@ services:
     image: redis:7-alpine
     container_name: smsly-redis-sentinel-2
     restart: unless-stopped
-    command: >
-      sh -c '
-      printf "sentinel monitor mymaster redis-primary 6379 2\nsentinel auth-pass mymaster $${REDIS_PASSWORD}\nsentinel down-after-milliseconds mymaster 5000\nsentinel failover-timeout mymaster 15000\nsentinel parallel-syncs mymaster 1\nsentinel resolve-hostnames yes\nsentinel announce-hostnames yes\n" > /tmp/sentinel.conf
-      && redis-sentinel /tmp/sentinel.conf'
+    environment:
+      SENTINEL_PASSWORD: ${SENTINEL_PASSWORD}
+    command:
+      - sh
+      - -c
+      - |
+        printf '%s\n' \
+          "sentinel monitor mymaster redis-primary 6379 2" \
+          "sentinel auth-pass mymaster $${REDIS_PASSWORD}" \
+          "sentinel down-after-milliseconds mymaster 5000" \
+          "sentinel failover-timeout mymaster 15000" \
+          "sentinel parallel-syncs mymaster 1" \
+          "sentinel resolve-hostnames yes" \
+          "sentinel announce-hostnames yes" \
+          > /tmp/sentinel.conf
+        if [ -n "$$SENTINEL_PASSWORD" ]; then
+          echo "sentinel sentinel-user default" >> /tmp/sentinel.conf
+          echo "sentinel sentinel-password $$SENTINEL_PASSWORD" >> /tmp/sentinel.conf
+        fi
+        exec redis-sentinel /tmp/sentinel.conf
     networks:
       - smsly-net
     depends_on:
@@ -126,10 +158,26 @@ services:
     image: redis:7-alpine
     container_name: smsly-redis-sentinel-3
     restart: unless-stopped
-    command: >
-      sh -c '
-      printf "sentinel monitor mymaster redis-primary 6379 2\nsentinel auth-pass mymaster $${REDIS_PASSWORD}\nsentinel down-after-milliseconds mymaster 5000\nsentinel failover-timeout mymaster 15000\nsentinel parallel-syncs mymaster 1\nsentinel resolve-hostnames yes\nsentinel announce-hostnames yes\n" > /tmp/sentinel.conf
-      && redis-sentinel /tmp/sentinel.conf'
+    environment:
+      SENTINEL_PASSWORD: ${SENTINEL_PASSWORD}
+    command:
+      - sh
+      - -c
+      - |
+        printf '%s\n' \
+          "sentinel monitor mymaster redis-primary 6379 2" \
+          "sentinel auth-pass mymaster $${REDIS_PASSWORD}" \
+          "sentinel down-after-milliseconds mymaster 5000" \
+          "sentinel failover-timeout mymaster 15000" \
+          "sentinel parallel-syncs mymaster 1" \
+          "sentinel resolve-hostnames yes" \
+          "sentinel announce-hostnames yes" \
+          > /tmp/sentinel.conf
+        if [ -n "$$SENTINEL_PASSWORD" ]; then
+          echo "sentinel sentinel-user default" >> /tmp/sentinel.conf
+          echo "sentinel sentinel-password $$SENTINEL_PASSWORD" >> /tmp/sentinel.conf
+        fi
+        exec redis-sentinel /tmp/sentinel.conf
     networks:
       - smsly-net
     depends_on:

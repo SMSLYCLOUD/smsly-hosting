@@ -152,7 +152,7 @@ class ServiceBulkActionIDORTests(TestCase):
 
     def test_attacker_cannot_bulk_action_victim_services(self):
         from unittest.mock import patch
-        with patch("apps.deployments.views.smart_deploy_task") as mock_task:
+        with patch("apps.deployments.views.service.deploy.smart_deploy_task") as mock_task:
             resp = self.client.post(
                 "/api/v1/services/bulk-action/",
                 {"ids": [str(self.victim_service.id)], "action": "deploy"},
@@ -223,7 +223,7 @@ class ToggleBucketPublicIDORTests(TestCase):
         self.victim_service = Service.objects.create(
             name="victim-svc", owner=self.victim, project=self.victim_project,
         )
-        from apps.deployments.models_addons import Addon
+        from apps.deployments.models.addons import Addon
         self.victim_addon = Addon.objects.create(
             service=self.victim_service,
             addon_type="MINIO",
@@ -234,7 +234,7 @@ class ToggleBucketPublicIDORTests(TestCase):
         self.client.force_authenticate(user=self.attacker)
 
     def test_attacker_cannot_toggle_victim_bucket(self):
-        with patch("apps.deployments.views_addons.get_docker_client") as mock_dc:
+        with patch("apps.deployments.views.addons.get_docker_client") as mock_dc:
             mock_dc.return_value = MagicMock()
             resp = self.client.post(
                 f"/api/v1/services/{self.victim_service.id}/addons/{self.victim_addon.id}/toggle-bucket-public-api/",
@@ -442,7 +442,7 @@ class HMACNonceReplayTests(TestCase):
             "content_type": "application/json",
         }
 
-    @patch("apps.deployments.views_node_exchange.APIToken.create_token",
+    @patch("apps.core.views.node_exchange.APIToken.create_token",
            return_value=(MagicMock(prefix="p"), "smsly_xxx"))
     def test_replay_with_same_nonce_is_rejected(self, _mock_create):
         User.objects.create_superuser(username="admin", email="a@x.com", password="x")

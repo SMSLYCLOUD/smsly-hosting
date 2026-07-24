@@ -123,7 +123,7 @@ def validate_image_registry(image: str, service=None) -> str:
     # Per-scope allowlist: append hosts from Project → Team → Organization chain
     if service and getattr(service, "project_id", None):
         try:
-            from apps.deployments.models_registry_scope import ScopedRegistry
+            from apps.deployments.models.registry_scope import ScopedRegistry
 
             scoped_hosts = ScopedRegistry.resolve_allowed_hosts(service.project)
             for h in scoped_hosts:
@@ -134,7 +134,7 @@ def validate_image_registry(image: str, service=None) -> str:
 
     # User's custom RegistryCredential hosts (existing behaviour)
     if service and getattr(service, "owner_id", None):
-        from apps.deployments.models_registry import RegistryCredential
+        from apps.deployments.models.registry import RegistryCredential
 
         custom_creds = RegistryCredential.objects.filter(
             owner_id=service.owner_id, is_active=True

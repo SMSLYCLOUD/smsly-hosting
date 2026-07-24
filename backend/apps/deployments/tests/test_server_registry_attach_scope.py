@@ -23,8 +23,8 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from apps.deployments.models import ScopedRegistry
-from apps.deployments.models_core import Project
-from apps.deployments.models_servers import ManagedServer
+from apps.deployments.models.core import Project
+from apps.deployments.models.servers import ManagedServer
 from apps.organizations.models import Organization, OrganizationMembership
 from apps.teams.models import Team
 

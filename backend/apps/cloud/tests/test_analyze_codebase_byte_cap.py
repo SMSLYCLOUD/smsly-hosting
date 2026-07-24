@@ -2,8 +2,8 @@ import os
 import tempfile
 from unittest.mock import patch
 
-from apps.cloud import views_code_analysis as vca
-from apps.cloud.views_code_analysis import (
+from apps.cloud.views import code_analysis as vca
+from apps.cloud.views.code_analysis import (
     MAX_TOTAL_BYTES,
     analyze_codebase,
 )

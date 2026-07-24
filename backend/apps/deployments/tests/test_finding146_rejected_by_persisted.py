@@ -13,8 +13,8 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from apps.deployments.models_core import Deployment, Service
-from apps.deployments.models_safedeploy import DeploymentApproval
+from apps.deployments.models.core import Deployment, Service
+from apps.deployments.models.safedeploy import DeploymentApproval
 
 User = get_user_model()
 

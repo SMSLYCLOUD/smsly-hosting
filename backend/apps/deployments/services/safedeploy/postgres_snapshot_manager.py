@@ -218,7 +218,7 @@ class PostgresSnapshotManager:
                 "issued against %s to clone to %s", source_db_name, clone_db_name
             )
             try:
-                from apps.deployments.models_audit import AuditLog
+                from apps.deployments.models.audit import AuditLog
                 AuditLog.objects.create(
                     actor='system',
                     action='DB_CLONE_PRODUCTION_DISRUPTION',

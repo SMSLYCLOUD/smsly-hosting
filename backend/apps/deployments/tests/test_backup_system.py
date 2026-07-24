@@ -15,9 +15,9 @@ from django.test import TestCase
 from django.utils import timezone
 
 from apps.deployments.models import EnvironmentVariable, Project, Service
-from apps.deployments.models_backup import BackupSchedule, ServiceBackup
+from apps.deployments.models.backup import BackupSchedule, ServiceBackup
 from apps.deployments.services.backup_service import BackupService
-from apps.deployments.tasks_backup import cleanup_old_backups_task
+from apps.deployments.tasks.data.tasks_backup import cleanup_old_backups_task
 
 User = get_user_model()
 
@@ -183,8 +183,8 @@ class BackupSystemTest(TestCase):
 
     @patch('apps.deployments.services.ssh_client.SSHClient')
     def test_remote_backup_and_restore(self, mock_ssh_class):
-        from apps.deployments.models_core import ManagedServer
-        from apps.deployments.models_storage import Volume
+        from apps.deployments.models.core import ManagedServer
+        from apps.deployments.models.storage import Volume
 
         # Create a ManagedServer
         server = ManagedServer.objects.create(
@@ -243,7 +243,7 @@ class BackupSystemTest(TestCase):
         mock_ssh.connect.assert_called_once()
 
         # Trigger remote restore
-        with patch('apps.deployments.tasks._resolve_provider_for_service') as mock_resolve_provider:
+        with patch('apps.deployments.tasks.deploy.helpers._resolve_provider_for_service') as mock_resolve_provider:
             provider = MagicMock()
             provider.id = uuid.uuid4()
             mock_resolve_provider.return_value = provider

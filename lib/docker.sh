@@ -58,9 +58,9 @@ configure_docker_mirror() {
         if [ -n "${MASTER_MESH_IP:-}" ]; then
             trust_list="${trust_list}, \"${MASTER_MESH_IP}:5000\""
         fi
-        daemon_json="{\"insecure-registries\":[${trust_list}]}"
+        daemon_json="{\"registry-mirrors\":[\"http://${MASTER_IP}:5001\"],\"insecure-registries\":[${trust_list}]}"
         if [ "$use_dns_fallback" = "true" ]; then
-            daemon_json="{\"insecure-registries\":[${trust_list}],\"dns\":[\"8.8.8.8\",\"1.1.1.1\"]}"
+            daemon_json="{\"registry-mirrors\":[\"http://${MASTER_IP}:5001\"],\"insecure-registries\":[${trust_list}],\"dns\":[\"8.8.8.8\",\"1.1.1.1\"]}"
         fi
         changed=true
     else

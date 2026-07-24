@@ -1,0 +1,90 @@
+{
+  "operation": "GET /api/v1/auth/logout/",
+  "method": "GET",
+  "path_template": "/api/v1/auth/logout/",
+  "fingerprint": "9fcb0480",
+  "case_id": "LeEtc1",
+  "code_sample": "curl -X GET -H 'Authorization: [Filtered]' http://127.0.0.1:8089/api/v1/auth/logout/",
+  "sequence": [
+    {
+      "method": "GET",
+      "url": "http://127.0.0.1:8089/api/v1/auth/logout/",
+      "url_template": "http://127.0.0.1:8089/api/v1/auth/logout/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "Authorization": "[Filtered]",
+        "X-Schemathesis-TestCaseId": "LeEtc1"
+      },
+      "response": {
+        "status_code": 405,
+        "headers": {
+          "date": "Tue, 21 Jul 2026 00:17:03 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "vary": "Accept, Cookie, origin",
+          "allow": "GET, POST, HEAD, OPTIONS",
+          "x-frame-options": "DENY",
+          "content-length": "80",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin",
+          "set-cookie": "[Filtered]"
+        },
+        "body": "{\"error\":\"Method \\\"GET\\\" not allowed.\",\"code\":\"method_not_allowed\",\"status\":405}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "positive_data_acceptance",
+          "status": "failure",
+          "message": "API rejected schema-compliant request\n\nValid data should have been accepted\nExpected: 2xx, 401, 403, 404, 409, 5xx"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 0.00039010000182315707,
+          "mode": "positive"
+        },
+        "components": {
+          "HEADER": "positive"
+        },
+        "phase": {
+          "name": "coverage",
+          "data": {
+            "type": "CoveragePhaseData",
+            "description": "Default positive test case",
+            "location": null,
+            "parameter": null,
+            "parameter_location": null,
+            "scenario": "default_positive_test"
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {
+          "HEADER": {
+            "Authorization": ""
+          }
+        }
+      },
+      "path": "/api/v1/auth/logout/",
+      "path_parameters": {},
+      "query": {},
+      "case_headers": {
+        "Authorization": "[Filtered]"
+      },
+      "cookies": {},
+      "case_body": {
+        "encoding": "none"
+      },
+      "media_type": null,
+      "parent_index": null
+    }
+  ]
+}

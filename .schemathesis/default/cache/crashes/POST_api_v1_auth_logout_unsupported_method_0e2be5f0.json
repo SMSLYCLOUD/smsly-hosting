@@ -1,0 +1,92 @@
+{
+  "operation": "POST /api/v1/auth/logout/",
+  "method": "PUT",
+  "path_template": "/api/v1/auth/logout/",
+  "fingerprint": "0e2be5f0",
+  "case_id": "e9kiXJ",
+  "code_sample": "curl -X PUT -H 'Authorization: [Filtered]' http://127.0.0.1:8089/api/v1/auth/logout/",
+  "sequence": [
+    {
+      "method": "PUT",
+      "url": "http://127.0.0.1:8089/api/v1/auth/logout/",
+      "url_template": "http://127.0.0.1:8089/api/v1/auth/logout/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "Authorization": "[Filtered]",
+        "X-Schemathesis-TestCaseId": "e9kiXJ",
+        "Content-Length": "0"
+      },
+      "response": {
+        "status_code": 429,
+        "headers": {
+          "date": "Tue, 21 Jul 2026 00:15:33 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "retry-after": "60",
+          "vary": "Accept, Cookie, origin",
+          "allow": "GET, POST, HEAD, OPTIONS",
+          "x-frame-options": "DENY",
+          "content-length": "118",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin",
+          "set-cookie": "[Filtered]"
+        },
+        "body": "{\"error\":\"Request was throttled. Expected available in 60 seconds.\",\"code\":\"throttled\",\"status\":429,\"wait_seconds\":60}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "unsupported_method",
+          "status": "failure",
+          "message": "Unsupported methods\n\nUnsupported method PUT returned 429, expected 405 Method Not Allowed\n\nReturn 405 for methods not listed in the OpenAPI spec"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 2.61410023085773e-05,
+          "mode": "negative"
+        },
+        "components": {
+          "HEADER": "positive"
+        },
+        "phase": {
+          "name": "coverage",
+          "data": {
+            "type": "CoveragePhaseData",
+            "description": "Unspecified HTTP method: PUT",
+            "location": null,
+            "parameter": null,
+            "parameter_location": null,
+            "scenario": "unspecified_http_method"
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {
+          "HEADER": {
+            "Authorization": ""
+          }
+        }
+      },
+      "path": "/api/v1/auth/logout/",
+      "path_parameters": {},
+      "query": {},
+      "case_headers": {
+        "Authorization": "[Filtered]"
+      },
+      "cookies": {},
+      "case_body": {
+        "encoding": "none"
+      },
+      "media_type": null,
+      "parent_index": null
+    }
+  ]
+}

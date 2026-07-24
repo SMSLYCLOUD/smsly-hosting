@@ -4,8 +4,8 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from apps.deployments.models import Project, Service
-from apps.deployments.models_traffic import ServiceTrafficLog
-from apps.deployments.tasks_traffic import _upsert_traffic_row
+from apps.deployments.models.traffic import ServiceTrafficLog
+from apps.core.tasks.traffic import _upsert_traffic_row
 
 User = get_user_model()
 

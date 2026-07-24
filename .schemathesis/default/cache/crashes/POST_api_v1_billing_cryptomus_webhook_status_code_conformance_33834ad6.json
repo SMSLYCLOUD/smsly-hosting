@@ -1,0 +1,84 @@
+{
+  "operation": "POST /api/v1/billing/cryptomus/webhook/",
+  "method": "POST",
+  "path_template": "/api/v1/billing/cryptomus/webhook/",
+  "fingerprint": "33834ad6",
+  "case_id": "ddjVYq",
+  "code_sample": "curl -X POST http://127.0.0.1:8089/api/v1/billing/cryptomus/webhook/",
+  "sequence": [
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:8089/api/v1/billing/cryptomus/webhook/",
+      "url_template": "http://127.0.0.1:8089/api/v1/billing/cryptomus/webhook/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "X-Schemathesis-TestCaseId": "ddjVYq",
+        "Content-Length": "0"
+      },
+      "response": {
+        "status_code": 429,
+        "headers": {
+          "date": "Tue, 21 Jul 2026 00:19:11 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "retry-after": "31",
+          "vary": "Accept, Cookie, origin",
+          "allow": "POST, OPTIONS",
+          "x-frame-options": "DENY",
+          "content-length": "118",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin"
+        },
+        "body": "{\"error\":\"Request was throttled. Expected available in 31 seconds.\",\"code\":\"throttled\",\"status\":429,\"wait_seconds\":31}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "status_code_conformance",
+          "status": "failure",
+          "message": "Undocumented HTTP status code\n\nReceived: 429\nDocumented: 200"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 0.002478700000210665,
+          "mode": "positive"
+        },
+        "components": {
+          "HEADER": "positive"
+        },
+        "phase": {
+          "name": "fuzzing",
+          "data": {
+            "type": "FuzzingPhaseData",
+            "description": "Positive test case",
+            "location": null,
+            "parameter": null,
+            "parameter_location": null,
+            "mutations": []
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {}
+      },
+      "path": "/api/v1/billing/cryptomus/webhook/",
+      "path_parameters": {},
+      "query": {},
+      "case_headers": {},
+      "cookies": {},
+      "case_body": {
+        "encoding": "none"
+      },
+      "media_type": null,
+      "parent_index": null
+    }
+  ]
+}

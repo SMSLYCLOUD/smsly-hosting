@@ -17,7 +17,7 @@ from typing import Any
 
 from django.utils import timezone
 
-from ..models_database_replica import DatabaseReplica
+from ..models.database_replica import DatabaseReplica
 
 logger = logging.getLogger(__name__)
 

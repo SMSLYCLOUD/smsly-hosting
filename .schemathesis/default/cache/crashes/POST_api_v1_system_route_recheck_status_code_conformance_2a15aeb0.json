@@ -1,0 +1,90 @@
+{
+  "operation": "POST /api/v1/system/route-recheck/",
+  "method": "POST",
+  "path_template": "/api/v1/system/route-recheck/",
+  "fingerprint": "2a15aeb0",
+  "case_id": "R4B99d",
+  "code_sample": "curl -X POST -H 'Authorization: [Filtered]' http://127.0.0.1:8089/api/v1/system/route-recheck/",
+  "sequence": [
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:8089/api/v1/system/route-recheck/",
+      "url_template": "http://127.0.0.1:8089/api/v1/system/route-recheck/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "Authorization": "[Filtered]",
+        "X-Schemathesis-TestCaseId": "R4B99d",
+        "Content-Length": "0"
+      },
+      "response": {
+        "status_code": 400,
+        "headers": {
+          "date": "Tue, 21 Jul 2026 00:16:59 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "vary": "Accept, Cookie, origin",
+          "allow": "GET, POST, HEAD, OPTIONS",
+          "x-frame-options": "DENY",
+          "content-length": "69",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin"
+        },
+        "body": "{\"error\":\"Invalid domain: IP addresses are not valid custom domains\"}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "status_code_conformance",
+          "status": "failure",
+          "message": "Undocumented HTTP status code\n\nReceived: 400\nDocumented: 200"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 0.00027290399884805083,
+          "mode": "positive"
+        },
+        "components": {
+          "HEADER": "positive"
+        },
+        "phase": {
+          "name": "coverage",
+          "data": {
+            "type": "CoveragePhaseData",
+            "description": "Default positive test case",
+            "location": null,
+            "parameter": null,
+            "parameter_location": null,
+            "scenario": "default_positive_test"
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {
+          "HEADER": {
+            "Authorization": ""
+          }
+        }
+      },
+      "path": "/api/v1/system/route-recheck/",
+      "path_parameters": {},
+      "query": {},
+      "case_headers": {
+        "Authorization": "[Filtered]"
+      },
+      "cookies": {},
+      "case_body": {
+        "encoding": "none"
+      },
+      "media_type": null,
+      "parent_index": null
+    }
+  ]
+}

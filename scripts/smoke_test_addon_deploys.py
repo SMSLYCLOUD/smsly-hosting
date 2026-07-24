@@ -5,7 +5,7 @@ from uuid import uuid4
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'backend'))
 try:
-    from services.addon_provisioner import AddonProvisioner
+    from apps.addons.services.addon_provisioner import AddonProvisioner
 except ImportError as e:
     print(f"Error importing backend modules: {e}")
     sys.exit(1)

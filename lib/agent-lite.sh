@@ -14,9 +14,8 @@ apply_agent_lite_env_overrides() {
     if [ -z "${MASTER_FIELD_ENCRYPTION_KEY:-}" ] && [ -f "$env_file" ]; then
         MASTER_FIELD_ENCRYPTION_KEY="$(env_get_value "$env_file" "FIELD_ENCRYPTION_KEY")"
     fi
-    if [ -z "${MASTER_FIELD_ENCRYPTION_KEY:-}" ] && [ -f "$seed_file" ]; then
-        MASTER_FIELD_ENCRYPTION_KEY="$(env_get_value "$seed_file" "MASTER_FIELD_ENCRYPTION_KEY")"
-    fi
+    # NOTE: FIELD_ENCRYPTION_KEY is NOT read from the seed file — it is
+    # stored in .env only to limit exposure in plaintext recovery files.
     if [ -z "${MASTER_DB_PASSWORD:-}" ] && [ -f "$env_file" ]; then
         # If we are updating and MASTER_DB_PASSWORD wasn't passed, try to preserve the existing one
         local db_url
@@ -79,6 +78,8 @@ apply_agent_lite_env_overrides() {
     cat > "$seed_file" <<EOF
 # SMSLY Lite Agent Recovery Seed
 # Generated on $(date)
+# NOTE: FIELD_ENCRYPTION_KEY is stored in .env only (not duplicated here
+# for security — it is the master's database encryption key).
 MASTER_IP="$MASTER_IP"
 MASTER_MESH_IP="$MASTER_MESH_IP"
 MASTER_DB_USER="$MASTER_DB_USER"
@@ -86,7 +87,6 @@ MASTER_DB_PASSWORD="$MASTER_DB_PASSWORD"
 MASTER_MQ_PASSWORD="$MASTER_MQ_PASSWORD"
 MASTER_REDIS_PASSWORD="${MASTER_REDIS_PASSWORD:-}"
 MASTER_GATEWAY_SECRET="${MASTER_GATEWAY_SECRET:-}"
-MASTER_FIELD_ENCRYPTION_KEY="${MASTER_FIELD_ENCRYPTION_KEY:-}"
 MASTER_BACKUP_ENCRYPTION_KEY="${MASTER_BACKUP_ENCRYPTION_KEY:-}"
 MASTER_BACKUP_REQUIRE_ENCRYPTION="${MASTER_BACKUP_REQUIRE_ENCRYPTION:-}"
 MASTER_GITHUB_WEBHOOK_SECRET="${MASTER_GITHUB_WEBHOOK_SECRET:-}"

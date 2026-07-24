@@ -161,7 +161,7 @@ class LocalAdapter(BaseCloudAdapter):
             if _svc is None and hasattr(self, 'service_id'):
                 _svc = self._service if hasattr(self, '_service') else None
             if _svc and hasattr(_svc, 'project') and _svc.project:
-                from apps.deployments.models_network_scope import ScopedNetwork
+                from apps.deployments.models.network_scope import ScopedNetwork
                 network_name = ScopedNetwork.resolve_network_name(_svc.project)
         except Exception:
             pass
@@ -333,7 +333,7 @@ class LocalAdapter(BaseCloudAdapter):
         except docker.errors.NotFound:
             driver = "bridge"
             try:
-                from apps.deployments.models_network_scope import ScopedNetwork
+                from apps.deployments.models.network_scope import ScopedNetwork
                 if hasattr(self, 'service_id'):
                     from apps.deployments.models import Service as _Svc2
                     _svc2 = _Svc2.objects.filter(id=self.service_id).select_related('project').first() if hasattr(self, 'service_id') and hasattr(self, '_service') else None

@@ -225,6 +225,8 @@ services:
     container_name: smsly-redis-sentinel-1
     restart: unless-stopped
     env_file: .env
+    environment:
+      SENTINEL_PASSWORD: ${SENTINEL_PASSWORD}
     command:
       - sh
       - -c
@@ -237,13 +239,17 @@ services:
           "sentinel parallel-syncs mymaster 1" \
           "sentinel resolve-hostnames yes" \
           "sentinel announce-hostnames yes" \
-          > /tmp/sentinel.conf \
-        && redis-sentinel /tmp/sentinel.conf
+          > /tmp/sentinel.conf
+        if [ -n "$$SENTINEL_PASSWORD" ]; then
+          echo "sentinel sentinel-user default" >> /tmp/sentinel.conf
+          echo "sentinel sentinel-password $$SENTINEL_PASSWORD" >> /tmp/sentinel.conf
+        fi
+        exec redis-sentinel /tmp/sentinel.conf
     depends_on:
       redis-primary:
-        condition: service_healthy
+        condition: service_started
       redis-replica:
-        condition: service_healthy
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -p 26379 ping | grep PONG"]
       interval: 10s
@@ -267,6 +273,8 @@ services:
     container_name: smsly-redis-sentinel-2
     restart: unless-stopped
     env_file: .env
+    environment:
+      SENTINEL_PASSWORD: ${SENTINEL_PASSWORD}
     command:
       - sh
       - -c
@@ -279,13 +287,17 @@ services:
           "sentinel parallel-syncs mymaster 1" \
           "sentinel resolve-hostnames yes" \
           "sentinel announce-hostnames yes" \
-          > /tmp/sentinel.conf \
-        && redis-sentinel /tmp/sentinel.conf
+          > /tmp/sentinel.conf
+        if [ -n "$$SENTINEL_PASSWORD" ]; then
+          echo "sentinel sentinel-user default" >> /tmp/sentinel.conf
+          echo "sentinel sentinel-password $$SENTINEL_PASSWORD" >> /tmp/sentinel.conf
+        fi
+        exec redis-sentinel /tmp/sentinel.conf
     depends_on:
       redis-primary:
-        condition: service_healthy
+        condition: service_started
       redis-replica:
-        condition: service_healthy
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -p 26379 ping | grep PONG"]
       interval: 10s
@@ -309,6 +321,8 @@ services:
     container_name: smsly-redis-sentinel-3
     restart: unless-stopped
     env_file: .env
+    environment:
+      SENTINEL_PASSWORD: ${SENTINEL_PASSWORD}
     command:
       - sh
       - -c
@@ -321,13 +335,17 @@ services:
           "sentinel parallel-syncs mymaster 1" \
           "sentinel resolve-hostnames yes" \
           "sentinel announce-hostnames yes" \
-          > /tmp/sentinel.conf \
-        && redis-sentinel /tmp/sentinel.conf
+          > /tmp/sentinel.conf
+        if [ -n "$$SENTINEL_PASSWORD" ]; then
+          echo "sentinel sentinel-user default" >> /tmp/sentinel.conf
+          echo "sentinel sentinel-password $$SENTINEL_PASSWORD" >> /tmp/sentinel.conf
+        fi
+        exec redis-sentinel /tmp/sentinel.conf
     depends_on:
       redis-primary:
-        condition: service_healthy
+        condition: service_started
       redis-replica:
-        condition: service_healthy
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -p 26379 ping | grep PONG"]
       interval: 10s
@@ -387,6 +405,8 @@ services:
         limits:
           memory: ${REGISTRY_MEMORY_LIMIT:-1G}
   docker-mirror:
+    profiles:
+      - build-cache
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
@@ -492,7 +512,7 @@ services:
       # overlay to the registry container.
       CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-registry:5000}
       DOCKER_HOST: tcp://socket-proxy:2375
-      BUILDKIT_HOST: tcp://buildkitd:1234
+
       SMSLY_ENABLE_STARTUP_CADDY_SYNC: ${SMSLY_ENABLE_STARTUP_CADDY_SYNC:-true}
       SMSLY_BUILDS_DIR: /opt/smsly-hosting/builds
       APT_CACHE_HOST: http://apt-cacher:3142
@@ -500,8 +520,8 @@ services:
     depends_on:
       pgcat:
         condition: service_healthy
-      redis-primary:
-        condition: service_healthy
+      redis-sentinel-1:
+        condition: service_started
       socket-proxy:
         condition: service_healthy
       rabbitmq:
@@ -577,7 +597,69 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     image: smsly-hosting-backend:latest
-    command: celery -A config worker -l info --autoscale=${CELERY_AUTOSCALE:-12,4} -Q celery
+    command: celery -A config worker -l info --autoscale=${CELERY_AUTOSCALE:-12,4} -Q ${CELERY_QUEUES:-celery}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      REDIS_HOST: redis-primary
+      MASTER_MESH_IP: ${MASTER_MESH_IP:-}
+      CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-registry:5000}
+      DOCKER_HOST: tcp://socket-proxy:2375
+
+      DOCKER_NETWORK: smsly-net
+      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
+      SMSLY_BUILDS_DIR: /opt/smsly-hosting/builds
+      APT_CACHE_HOST: http://apt-cacher:3142
+      NPM_REGISTRY_URL: http://verdaccio:4873
+    depends_on:
+      pgcat:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+      redis-sentinel-1:
+        condition: service_started
+      socket-proxy:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      registry:
+        condition: service_started
+    volumes:
+    - media_volume:/app/media
+    - caddy_config:/caddy-config
+    - /opt/smsly-cache:/opt/smsly-cache:z
+    - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds:z
+    - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets:z
+    - backups_data:/app/backups
+    - traefik_logs:/var/log/traefik:ro
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - celery -A config inspect ping --timeout 10 2>/dev/null | grep -q pong || exit 1
+      interval: 30s
+      timeout: 20s
+      retries: 5
+      start_period: 300s
+    labels:
+    - managed_by=smsly-hosting
+    networks:
+    - smsly-net
+    - socket-proxy
+    deploy:
+      resources:
+        limits:
+          memory: ${CELERY_MEMORY_LIMIT:-4G}
+  celery-2:
+    profiles:
+      - extra-workers
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: smsly-hosting-backend:latest
+    command: celery -A config worker -l info --autoscale=${CELERY_WORKER2_AUTOSCALE:-8,2} -Q celery
     restart: unless-stopped
     env_file: .env
     environment:
@@ -593,8 +675,8 @@ services:
         condition: service_healthy
       backend:
         condition: service_healthy
-      redis-primary:
-        condition: service_healthy
+      redis-sentinel-1:
+        condition: service_started
       socket-proxy:
         condition: service_healthy
       rabbitmq:
@@ -623,7 +705,62 @@ services:
     deploy:
       resources:
         limits:
-          memory: ${CELERY_MEMORY_LIMIT:-4G}
+          memory: ${CELERY_WORKER2_MEMORY_LIMIT:-4G}
+  celery-3:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: smsly-hosting-backend:latest
+    command: celery -A config worker -l info --autoscale=${CELERY_WORKER3_AUTOSCALE:-8,2} -Q celery
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      REDIS_HOST: redis-primary
+      MASTER_MESH_IP: ${MASTER_MESH_IP:-}
+      CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-registry:5000}
+      DOCKER_HOST: tcp://socket-proxy:2375
+      DOCKER_NETWORK: smsly-net
+      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
+      SMSLY_BUILDS_DIR: /opt/smsly-hosting/builds
+    depends_on:
+      pgcat:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+      redis-sentinel-1:
+        condition: service_started
+      socket-proxy:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      registry:
+        condition: service_started
+    volumes:
+    - media_volume:/app/media
+    - caddy_config:/caddy-config
+    - /opt/smsly-cache:/opt/smsly-cache:z
+    - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds:z
+    - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets:z
+    - backups_data:/app/backups
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - celery -A config inspect ping --timeout 10 2>/dev/null | grep -q pong || exit 1
+      interval: 30s
+      timeout: 20s
+      retries: 5
+      start_period: 300s
+    labels:
+    - managed_by=smsly-hosting
+    networks:
+    - smsly-net
+    deploy:
+      resources:
+        limits:
+          memory: ${CELERY_WORKER3_MEMORY_LIMIT:-4G}
   celery-beat:
     security_opt:
       - no-new-privileges:true
@@ -647,8 +784,8 @@ services:
         condition: service_healthy
       backend:
         condition: service_healthy
-      redis-primary:
-        condition: service_healthy
+      redis-sentinel-1:
+        condition: service_started
       rabbitmq:
         condition: service_healthy
     volumes:
@@ -730,8 +867,8 @@ services:
         condition: service_healthy
       backend:
         condition: service_healthy
-      redis-primary:
-        condition: service_healthy
+      redis-sentinel-1:
+        condition: service_started
       socket-proxy:
         condition: service_healthy
       rabbitmq:
@@ -776,7 +913,7 @@ services:
       MASTER_MESH_IP: ${MASTER_MESH_IP:-}
       CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-registry:5000}
       DOCKER_HOST: tcp://socket-proxy:2375
-      BUILDKIT_HOST: tcp://buildkitd:1234
+
       DOCKER_NETWORK: smsly-net
       BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
       SMSLY_BUILDS_DIR: /opt/smsly-hosting/builds
@@ -787,8 +924,8 @@ services:
         condition: service_healthy
       backend:
         condition: service_healthy
-      redis-primary:
-        condition: service_healthy
+      redis-sentinel-1:
+        condition: service_started
       socket-proxy:
         condition: service_healthy
       rabbitmq:
@@ -1105,31 +1242,6 @@ services:
           memory: ${RABBITMQ_MEMORY_RESERVATION:-256M}
         limits:
           memory: ${RABBITMQ_MEMORY_LIMIT:-1G}
-  buildkitd:
-    image: moby/buildkit:v0.18.2
-    container_name: smsly-buildkitd
-    restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
-    cap_add:
-      - SYS_ADMIN
-    networks:
-      - smsly-net
-    volumes:
-      - buildkit_data:/var/lib/buildkit
-    tmpfs:
-      - /tmp
-    command:
-      - --addr=tcp://127.0.0.1:1234
-    healthcheck:
-      test: ["CMD", "buildctl", "debug", "workers"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    deploy:
-      resources:
-        limits:
-          memory: ${BUILDKIT_MEMORY_LIMIT:-2G}
   caddy:
     security_opt:
       - no-new-privileges:true
@@ -1205,7 +1317,7 @@ volumes:
   apt_cache: null
   apt_log: null
   verdaccio_data: null
-  buildkit_data: null
+
   traefik_logs: null
   caddy_logs:
     driver: local

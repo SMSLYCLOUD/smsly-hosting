@@ -14,19 +14,20 @@ All three are reachable from the same `/api/v1/...` URL space and share the same
 
 ## Volumes
 
-A volume is a directory mount on a running service. The platform surfaces it through the API and the file browser UI. Volumes are scoped to a service and survive container restarts; they are **not** removed when a service is deleted (the operator must explicitly drop the volume).
+A volume is a directory mount on a running service. The platform surfaces it through the API and the file browser UI. Volumes are scoped to a service and survive container restarts; they **are** removed when a service is deleted (`on_delete=models.CASCADE`).
 
 ### Mount Model
 
-Each service has zero or more `ServiceVolume` rows. A row pins a container path to a backing store:
+Each service has zero or more `Volume` rows. A row defines a named volume with a container mount path and size:
 
-| Backing store | Where it lives |
-| --- | --- |
-| `LOCAL` | `/var/lib/docker/volumes/<id>/_data` on the host that runs the service. |
-| `REMOTE` | A directory on a `ManagedServer`; the platform proxies `read` / `write` / `list` calls over the mesh. |
-| `SHARED` | A `nfs` / `cifs` mount declared in `PlatformConfig.shared_volumes`. Used for cross-service file sharing. |
+| Field | Type | Notes |
+| --- | --- | --- |
+| `name` | CharField(255) | Volume name (used as Docker volume name). |
+| `mount_path` | CharField(255) | Container path where the volume is mounted. |
+| `size_gb` | IntegerField | Size in GB (default 1, min 1, max 1000). |
+| `service` | FK(Service) | CASCADE on delete. |
 
-The default for new services is `LOCAL`. Operators who want HA storage set the backing store to `REMOTE` and pin it to a `ManagedServer` that is `ONLINE`.
+Volumes are stored as Docker volumes on the host that runs the service (`/var/lib/docker/volumes/<id>/_data` by default).
 
 ### Operations
 
@@ -57,13 +58,14 @@ A `CloudStorageDestination` is an S3-compatible bucket that the platform can use
 | MinIO (self-hosted) | `http://<host>:9000` (or `https://`) | Path-style addressing. |
 | Backblaze B2 | `https://s3.<region>.backblazeb2.com` | S3-compatible. |
 | DigitalOcean Spaces | `https://<region>.digitaloceanspaces.com` | |
+| Custom Storage VPS | User-provided endpoint | Any S3-compatible endpoint. |
 | Wasabi | `https://s3.<region>.wasabisys.com` | |
 
 The endpoint URL is validated at `clean()` time. The endpoint scheme must be `https` **unless** the host is `localhost`, an RFC 1918 range, or `.internal` — in those cases `http` is permitted (the assumption is that the destination is reachable over a private network and HTTPS is not terminated by a CA-signed cert). Public hosts with `http://` are rejected.
 
 ### Owner Scoping
 
-Destinations are scoped to the user that created them (`owner=request.user`). The `CloudStorageViewSet` enforces owner-scoped reads; admin users see all destinations across the platform. The viewset uses `get_queryset()` to filter by `owner` for non-admins, and the serializer hides the `secret_key` field on the response (it is `EncryptedCharField`).
+Destinations are scoped to the service they are attached to (`service=FK(Service, null=True, blank=True)`). The `CloudStorageViewSet` enforces service-scoped reads; admin users see all destinations across the platform. The viewset uses `get_queryset()` to filter by `service__owner` for non-admins, and the serializer hides the `secret_key` field on the response (it is `EncryptedCharField`).
 
 A bug fix shipped in Batch C tightens the cross-tenant ACL: an unprivileged user can no longer list, read, or write to a destination owned by another user, even by guessing the destination's UUID. The check is in `CloudStorageViewSet.get_object()` and is unit-tested.
 
@@ -77,9 +79,7 @@ Each destination stores:
 | `secret_key` | `EncryptedCharField` | Never returned in API responses. |
 | `bucket` | string | The bucket name. |
 | `region` | string | Optional. Used for AWS Signature v4. |
-| `endpoint_url` | URLField | Validated per the table above. |
-| `path_prefix` | string | Optional. Files are stored under `<path_prefix>/<service_id>/<timestamp>.tar.gz`. |
-
+| `endpoint` | CharField(500) | Validated per the table above. |
 The platform uses the `boto3` library to PUT and GET objects. The bucket must exist; the platform does not auto-create buckets.
 
 ## Backup System
@@ -128,11 +128,16 @@ A `BackupSchedule` row is a CRON-like trigger that creates a `ServiceBackup` (or
 | Field | Type | Notes |
 | --- | --- | --- |
 | `service` | FK | `NULL` for server-wide schedules. |
-| `cron` | string | Standard 5-field cron. |
+| `cron_expression` | string | Standard 5-field cron. |
 | `retention_days` | int | Optional. Per-schedule override. |
-| `retention_count` | int | Optional. Per-schedule override. |
-| `destination` | FK | Optional. Replicate the backup to a `CloudStorageDestination` after local write. |
+| `s3_bucket` | string | Optional. S3 bucket name for cloud replication. |
+| `s3_region` | string | Optional. S3 region. |
+| `s3_endpoint` | string | Optional. S3-compatible endpoint URL. |
+| `s3_access_key` | EncryptedCharField | Optional. S3 access key. |
+| `s3_secret_key` | EncryptedCharField | Optional. S3 secret key. |
 | `enabled` | bool | Default `True`. |
+
+> **Note**: Cloud storage credentials are stored inline on the schedule (not as a FK to `CloudStorageDestination`). The `CloudStorageDestination.apply_to_schedule()` method copies S3 config into these inline fields.
 
 The Celery beat task walks `BackupSchedule.objects.filter(enabled=True)` every minute, computes which schedules are due (`croniter.match(cron, now)`), and enqueues a `run_backup_schedule` task per hit. The task is idempotent — if a schedule fires twice in the same minute, only one backup is created (the second hit is a no-op).
 

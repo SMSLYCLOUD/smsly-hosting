@@ -111,7 +111,7 @@ class SelfHealingOrchestrator:
 
     def __init__(self, server):
         try:
-            from .models_core import ManagedServer
+            from .models.core import ManagedServer
             fresh = ManagedServer.objects.only(
                 "id", "name", "host", "ssh_key", "ssh_password",
                 "ssh_user", "ssh_port", "is_lite_agent", "status",
@@ -1015,7 +1015,7 @@ class SelfHealingOrchestrator:
         """Rollback to previous deployment (requires previous deployment to exist)."""
         self._log("Attempting rollback")
 
-        from .models_core import Deployment as DeploymentModel
+        from .models.core import Deployment as DeploymentModel
 
         service = getattr(deployment, "service", None)
         if not service:
@@ -1042,7 +1042,7 @@ class SelfHealingOrchestrator:
 
         self._log(f"Rolling back to deployment {previous.id}")
         try:
-            from .tasks_deploy import enqueue_smart_deploy_task
+            from apps.deployments.tasks.deploy.helpers import enqueue_smart_deploy_task
             new_deployment = DeploymentModel.objects.create(
                 service=service,
                 commit_hash=previous.commit_hash or "HEAD",

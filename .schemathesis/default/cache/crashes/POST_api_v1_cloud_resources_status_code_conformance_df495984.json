@@ -1,0 +1,100 @@
+{
+  "operation": "POST /api/v1/cloud/resources/",
+  "method": "POST",
+  "path_template": "/api/v1/cloud/resources/",
+  "fingerprint": "df495984",
+  "case_id": "RZ8sB8",
+  "code_sample": "curl -X POST -H 'Content-Type: application/json' -d '{\"resource_id\": \"\", \"resource_type\": \"\", \"name\": \"\", \"region\": \"\", \"status\": \"\", \"metadata\": null, \"provider\": \"e3e70682-c209-1cac-a29f-6fbed82c07cd\"}' http://127.0.0.1:8089/api/v1/cloud/resources/",
+  "sequence": [
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:8089/api/v1/cloud/resources/",
+      "url_template": "http://127.0.0.1:8089/api/v1/cloud/resources/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "X-Schemathesis-TestCaseId": "RZ8sB8",
+        "Content-Type": "application/json",
+        "Content-Length": "150"
+      },
+      "response": {
+        "status_code": 403,
+        "headers": {
+          "date": "Mon, 20 Jul 2026 21:12:11 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "x-frame-options": "DENY",
+          "content-length": "41",
+          "vary": "Cookie, origin",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin"
+        },
+        "body": "{\"error\": \"Invalid or missing signature\"}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "status_code_conformance",
+          "status": "failure",
+          "message": "Undocumented HTTP status code\n\nReceived: 403\nDocumented: 201"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 2.5199002266163006e-05,
+          "mode": "negative"
+        },
+        "components": {
+          "HEADER": "negative",
+          "BODY": "positive"
+        },
+        "phase": {
+          "name": "coverage",
+          "data": {
+            "type": "CoveragePhaseData",
+            "description": "Missing `Authorization` at header",
+            "location": null,
+            "parameter": "Authorization",
+            "parameter_location": "HEADER",
+            "scenario": "missing_parameter"
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [
+          [
+            "body",
+            "resource_id"
+          ]
+        ],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {
+          "HEADER": {}
+        }
+      },
+      "path": "/api/v1/cloud/resources/",
+      "path_parameters": {},
+      "query": {},
+      "case_headers": {},
+      "cookies": {},
+      "case_body": {
+        "encoding": "json",
+        "value": {
+          "resource_id": "",
+          "resource_type": "",
+          "name": "",
+          "region": "",
+          "status": "",
+          "metadata": null,
+          "provider": "e3e70682-c209-1cac-a29f-6fbed82c07cd"
+        }
+      },
+      "media_type": "application/json",
+      "parent_index": null
+    }
+  ]
+}

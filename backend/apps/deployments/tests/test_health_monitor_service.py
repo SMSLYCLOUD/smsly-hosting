@@ -7,7 +7,7 @@ from django.test import TestCase
 
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import Deployment, Service
-from apps.deployments.services import health_monitor as hm
+from apps.core.services import health_monitor as hm
 
 
 class HealthMonitorServiceTests(TestCase):
@@ -84,7 +84,7 @@ class HealthMonitorServiceTests(TestCase):
         self.assertTrue(hm._should_restart(self.service, service_key))
 
     @patch("apps.deployments.tasks.enqueue_smart_deploy_task")
-    @patch("apps.deployments.services.health_monitor.requests.get")
+    @patch("apps.core.services.health_monitor.requests.get")
     def test_unhealthy_service_triggers_single_auto_restart(
         self,
         requests_get_mock,

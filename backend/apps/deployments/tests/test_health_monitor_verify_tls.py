@@ -11,7 +11,7 @@ from django.test import TestCase, override_settings
 
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import Deployment, ManagedServer, Service
-from apps.deployments.services import health_monitor as hm
+from apps.core.services import health_monitor as hm
 
 
 @override_settings(

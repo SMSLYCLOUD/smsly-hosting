@@ -8,7 +8,7 @@
 > - v1.0.1: Linked actual Helm chart directory.
 > - v1.0.0: Initial K8s orchestration guide.
 
-SMSLY (CloudNeuron) can orchestrate deployments onto existing Kubernetes clusters. "Grid" is a legacy code name for the same product.
+SMSLY (Grid) can orchestrate deployments onto existing Kubernetes clusters. "Grid" is a legacy code name for the same product.
 
 ## Prerequisites
 1. A running Kubernetes cluster (K3s, GKE, EKS, AKS).

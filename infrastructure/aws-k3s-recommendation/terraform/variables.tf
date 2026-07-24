@@ -13,7 +13,7 @@ variable "environment" {
 variable "project_name" {
   description = "The name of the project"
   type        = string
-  default     = "cloudneuron-k3s"
+  default     = "grid-k3s"
 }
 
 variable "control_plane_instance_type" {

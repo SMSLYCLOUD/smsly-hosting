@@ -18,7 +18,7 @@ from unittest.mock import MagicMock, patch
 
 from django.test import TestCase
 
-from apps.deployments.models_core import PlatformConfig
+from apps.deployments.models.core import PlatformConfig
 
 
 class Finding68PlatformConfigSingletonTests(TestCase):

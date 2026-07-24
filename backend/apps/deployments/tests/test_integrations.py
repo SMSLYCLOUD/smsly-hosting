@@ -97,7 +97,7 @@ class GitHubOAuthUrlTests(TestCase):
             self.skipTest("allauth not installed/available")
 
         # Create a PlatformConfig in the database with a custom domain
-        from apps.deployments.models_core import PlatformConfig
+        from apps.deployments.models.core import PlatformConfig
         PlatformConfig.objects.create(
             pk=1,
             domain="my-custom-domain.com",

@@ -19,7 +19,7 @@ from django.db import IntegrityError, transaction
 from django.test import TestCase
 
 from apps.deployments.models import Service
-from apps.deployments.models_safedeploy import PreviewEnvironment
+from apps.deployments.models.safedeploy import PreviewEnvironment
 
 User = get_user_model()
 

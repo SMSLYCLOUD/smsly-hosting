@@ -1,0 +1,93 @@
+{
+  "operation": "POST /api/v1/transfers/{id}/incoming/pull-image/",
+  "method": "POST",
+  "path_template": "/api/v1/transfers/{id}/incoming/pull-image/",
+  "fingerprint": "b7ed669c",
+  "case_id": "POHnwb",
+  "code_sample": "curl -X POST -H 'Content-Type: application/json' -d '{\"source_server_ip\": \"\", \"target_server_ip\": \"\", \"transfer_type\": \"FULL\"}' http://127.0.0.1:8089/api/v1/transfers/e3e70682-c209-1cac-a29f-6fbed82c07cd/incoming/pull-image/",
+  "sequence": [
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:8089/api/v1/transfers/e3e70682-c209-1cac-a29f-6fbed82c07cd/incoming/pull-image/",
+      "url_template": "http://127.0.0.1:8089/api/v1/transfers/{id}/incoming/pull-image/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "X-Schemathesis-TestCaseId": "POHnwb",
+        "Content-Type": "application/json",
+        "Content-Length": "73"
+      },
+      "response": {
+        "status_code": 404,
+        "headers": {
+          "date": "Tue, 21 Jul 2026 00:19:44 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "vary": "Accept, Cookie, origin",
+          "allow": "POST, OPTIONS",
+          "x-frame-options": "DENY",
+          "content-length": "86",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin"
+        },
+        "body": "{\"error\":\"No ServerTransfer matches the given query.\",\"code\":\"api_error\",\"status\":404}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "status_code_conformance",
+          "status": "failure",
+          "message": "Undocumented HTTP status code\n\nReceived: 404\nDocumented: 200"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 0.014148540998576209,
+          "mode": "positive"
+        },
+        "components": {
+          "PATH": "positive",
+          "HEADER": "positive",
+          "BODY": "positive"
+        },
+        "phase": {
+          "name": "fuzzing",
+          "data": {
+            "type": "FuzzingPhaseData",
+            "description": "Positive test case",
+            "location": null,
+            "parameter": null,
+            "parameter_location": null,
+            "mutations": []
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {}
+      },
+      "path": "/api/v1/transfers/{id}/incoming/pull-image/",
+      "path_parameters": {
+        "id": "e3e70682-c209-1cac-a29f-6fbed82c07cd"
+      },
+      "query": {},
+      "case_headers": {},
+      "cookies": {},
+      "case_body": {
+        "encoding": "json",
+        "value": {
+          "source_server_ip": "",
+          "target_server_ip": "",
+          "transfer_type": "FULL"
+        }
+      },
+      "media_type": "application/json",
+      "parent_index": null
+    }
+  ]
+}

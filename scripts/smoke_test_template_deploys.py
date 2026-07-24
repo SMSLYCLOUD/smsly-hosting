@@ -3,7 +3,7 @@ import sys
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'backend'))
 try:
-    from services.app_templates import APP_TEMPLATES, get_docker_run_command
+    from apps.deployments.services.app_templates import APP_TEMPLATES, get_docker_run_command
 except ImportError as e:
     print(f"Error importing backend modules: {e}")
     sys.exit(1)

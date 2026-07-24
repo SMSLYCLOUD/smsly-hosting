@@ -10,10 +10,10 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
-from services.addon_provisioner import AddonProvisioner
+from apps.addons.services.addon_provisioner import AddonProvisioner
 
 from apps.deployments.models import Region, Service
-from apps.deployments.models_addons import Addon
+from apps.deployments.models.addons import Addon
 
 User = get_user_model()
 
@@ -42,7 +42,7 @@ class AddonProvisionerIdempotencyTests(TestCase):
         with patch.object(prov, '_ensure_network'), \
             patch.object(prov, '_container_status', return_value=('abc123def456', True)), \
             patch.object(prov, '_wait_for_health'), \
-            patch('services.addon_provisioner.secrets.token_urlsafe', side_effect=AssertionError("rotated")):
+            patch('apps.addons.services.addon_provisioner.secrets.token_urlsafe', side_effect=AssertionError("rotated")):
             cid, url = prov.provision(addon)
 
         self.assertEqual(cid, 'abc123def456')
@@ -62,7 +62,7 @@ class AddonProvisionerIdempotencyTests(TestCase):
         with patch.object(prov, '_ensure_network'), \
             patch.object(prov, '_container_status', return_value=(None, False)), \
             patch.object(prov, '_provision_postgres', return_value=('newcid', 'ignored')) as mock_prov, \
-            patch('services.addon_provisioner.secrets.token_urlsafe', side_effect=AssertionError("rotated")):
+            patch('apps.addons.services.addon_provisioner.secrets.token_urlsafe', side_effect=AssertionError("rotated")):
             cid, url = prov.provision(addon)
 
         self.assertEqual(cid, 'newcid')
@@ -76,7 +76,7 @@ class AddonProvisionerIdempotencyTests(TestCase):
         self.assertEqual(kwargs.get('db_user'), 'postgres_SMSLY_MARKETER')
         self.assertEqual(kwargs.get('db_name'), 'postgres_SMSLY_MARKETER')
 
-    @patch('services.addon_provisioner.subprocess.run')
+    @patch('apps.addons.services.addon_provisioner.subprocess.run')
     def test_kafka_generic_provision_uses_alias_and_extended_health_timeout(self, mock_run):
         mock_run.return_value.stdout = '1234567890abcdef'
         prov = AddonProvisioner()
@@ -125,7 +125,7 @@ class AddonProvisionerIdempotencyTests(TestCase):
             r'-e KAFKA_KRAFT_CLUSTER_ID=[A-Za-z0-9_-]{22}'
         )
 
-    @patch('services.addon_provisioner.subprocess.run')
+    @patch('apps.addons.services.addon_provisioner.subprocess.run')
     def test_all_generic_addons_render_docker_run_commands_and_urls(self, mock_run):
         """Static safety net: every generic addon can render a runnable docker cmd."""
         mock_run.return_value.stdout = 'fedcba0987654321'

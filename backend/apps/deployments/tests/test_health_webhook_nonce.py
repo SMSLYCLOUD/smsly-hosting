@@ -8,8 +8,8 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from apps.deployments.models_audit import AuditLog
-from apps.deployments.models_core import Service
+from apps.deployments.models.audit import AuditLog
+from apps.deployments.models.core import Service
 
 User = get_user_model()
 
@@ -170,5 +170,5 @@ class HealthWebhookCacheTtlTests(TestCase):
         self.client = APIClient()
 
     def test_5_minute_cache_ttl(self):
-        from apps.deployments.views_health_webhook import _NONCE_CACHE_TTL_SECONDS
+        from apps.deployments.views.health_webhook import _NONCE_CACHE_TTL_SECONDS
         self.assertEqual(_NONCE_CACHE_TTL_SECONDS, 300)

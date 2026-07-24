@@ -8,7 +8,7 @@ includes a ``truncated_count`` in the prompt metadata.
 """
 from unittest.mock import patch
 
-from apps.cloud.views_code_analysis import _generate_ai_summary
+from apps.cloud.views.code_analysis import _generate_ai_summary
 from django.test import SimpleTestCase
 
 

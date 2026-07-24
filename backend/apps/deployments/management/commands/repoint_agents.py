@@ -44,7 +44,7 @@ class Command(BaseCommand):
             if not master_mesh_ip or master_mesh_ip == master_ip:
                 master_mesh_ip = meta.get('master_mesh_ip', master_ip)
 
-        from apps.deployments.models_servers import ManagedServer
+        from apps.deployments.models.servers import ManagedServer
 
         agents = ManagedServer.objects.filter(
             is_lite_agent=True,

@@ -1,0 +1,98 @@
+{
+  "operation": "GET /api/v1/services/",
+  "method": "GET",
+  "path_template": "/api/v1/services/",
+  "fingerprint": "b2420652",
+  "case_id": "qH25It",
+  "code_sample": "curl -X GET -H 'Authorization: [Filtered]' 'http://127.0.0.1:8089/api/v1/services/?search=&x-schemathesis-unknown-property=42'",
+  "sequence": [
+    {
+      "method": "GET",
+      "url": "http://127.0.0.1:8089/api/v1/services/?search=&x-schemathesis-unknown-property=42",
+      "url_template": "http://127.0.0.1:8089/api/v1/services/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "Authorization": "[Filtered]",
+        "X-Schemathesis-TestCaseId": "qH25It"
+      },
+      "response": {
+        "status_code": 401,
+        "headers": {
+          "date": "Tue, 21 Jul 2026 00:17:10 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "www-authenticate": "[Filtered]",
+          "vary": "Accept, Cookie, origin",
+          "allow": "GET, POST, HEAD, OPTIONS",
+          "x-frame-options": "DENY",
+          "content-length": "95",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin"
+        },
+        "body": "{\"error\":\"Authentication credentials were not provided.\",\"code\":\"unauthenticated\",\"status\":401}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "status_code_conformance",
+          "status": "failure",
+          "message": "Undocumented HTTP status code\n\nReceived: 401\nDocumented: 200"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 0.010953858996799681,
+          "mode": "negative"
+        },
+        "components": {
+          "HEADER": "positive",
+          "QUERY": "negative"
+        },
+        "phase": {
+          "name": "coverage",
+          "data": {
+            "type": "CoveragePhaseData",
+            "description": "Object with unexpected properties",
+            "location": null,
+            "parameter": null,
+            "parameter_location": "QUERY",
+            "scenario": "object_unexpected_properties"
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {
+          "HEADER": {
+            "Authorization": ""
+          },
+          "QUERY": {
+            "search": "",
+            "x-schemathesis-unknown-property": 42
+          }
+        }
+      },
+      "path": "/api/v1/services/",
+      "path_parameters": {},
+      "query": {
+        "search": "",
+        "x-schemathesis-unknown-property": "42"
+      },
+      "case_headers": {
+        "Authorization": "[Filtered]"
+      },
+      "cookies": {},
+      "case_body": {
+        "encoding": "none"
+      },
+      "media_type": null,
+      "parent_index": null
+    }
+  ]
+}

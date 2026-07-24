@@ -22,7 +22,7 @@ def _scoped_network_for(service) -> str:
     """
     project = getattr(service, "project", None)
     if project:
-        from apps.deployments.models_network_scope import ScopedNetwork
+        from apps.deployments.models.network_scope import ScopedNetwork
         scoped = ScopedNetwork.get_for_object(project)
         if scoped:
             cfg = ScopedNetwork.resolve_network_config(project)
@@ -156,7 +156,7 @@ class SpawningService:
         elif not login_cmd:
             # Fall back to ScopedRegistry chain (Project → Team → Organization → PlatformConfig)
             try:
-                from apps.deployments.models_registry_scope import ScopedRegistry
+                from apps.deployments.models.registry_scope import ScopedRegistry
                 scope_obj = getattr(service, 'project', None)
                 registry_info = ScopedRegistry.resolve_registry_credentials(scope_obj)
                 raw_url = (registry_info.get("url") or "").split("://")[-1].rstrip("/")

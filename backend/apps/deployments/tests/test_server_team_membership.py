@@ -5,7 +5,7 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from apps.deployments.models import Project
-from apps.deployments.models_servers import ManagedServer
+from apps.deployments.models.servers import ManagedServer
 from apps.teams.models import Team, TeamMember
 
 User = get_user_model()

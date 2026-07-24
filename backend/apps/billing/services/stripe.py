@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any
 
 import stripe
 from apps.billing.models import BillingAccount
@@ -116,23 +115,23 @@ class StripeService:
         return session.url
 
     @staticmethod
-    def list_invoices(*, user, limit: int = 10) -> list[dict[str, Any]]:
+    def list_invoices(*, user, limit: int = 10) -> list[StripeInvoice]:
         StripeService._configure_stripe()
         account = StripeService.ensure_customer(user)
 
         invoices = stripe.Invoice.list(customer=account.stripe_customer_id, limit=limit)
-        out: list[dict[str, Any]] = []
+        out: list[StripeInvoice] = []
         for inv in invoices.data or []:
             out.append(
-                {
-                    "id": inv.get("id"),
-                    "status": inv.get("status"),
-                    "amount_paid": inv.get("amount_paid"),
-                    "currency": inv.get("currency"),
-                    "hosted_invoice_url": inv.get("hosted_invoice_url"),
-                    "invoice_pdf": inv.get("invoice_pdf"),
-                    "created": inv.get("created"),
-                }
+                StripeInvoice(
+                    id=inv.get("id"),
+                    status=inv.get("status"),
+                    amount_paid=inv.get("amount_paid"),
+                    currency=inv.get("currency"),
+                    hosted_invoice_url=inv.get("hosted_invoice_url"),
+                    invoice_pdf=inv.get("invoice_pdf"),
+                    created=inv.get("created"),
+                )
             )
         return out
 

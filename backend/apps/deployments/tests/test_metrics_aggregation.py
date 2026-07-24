@@ -18,8 +18,8 @@ from django.utils import timezone
 
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import Service
-from apps.deployments.models_metrics import ServiceMetric
-from apps.deployments.views_metrics import _db_metrics_fallback
+from apps.deployments.models.metrics import ServiceMetric
+from apps.deployments.views.metrics import _db_metrics_fallback
 
 
 class DbMetricsFallbackAggregationTests(TestCase):
@@ -100,7 +100,7 @@ class DbMetricsFallbackAggregationTests(TestCase):
         """The function exposes ``aggregate`` as the integration point
         that test code can patch for hermetic coverage of callers."""
         with patch(
-            'apps.deployments.views_metrics.ServiceMetric.objects'
+            'apps.deployments.views.metrics.ServiceMetric.objects'
         ) as mock_manager:
             mock_qs = mock_manager.filter.return_value
             mock_qs.aggregate.return_value = {

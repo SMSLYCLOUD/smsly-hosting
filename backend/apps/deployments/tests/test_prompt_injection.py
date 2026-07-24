@@ -4,7 +4,7 @@ import pytest
 from django.contrib.auth import get_user_model
 
 from apps.deployments.models import Deployment, Service
-from apps.deployments.tasks_ai import analyze_failure_task
+from apps.deployments.tasks.ai.tasks_ai import analyze_failure_task
 
 User = get_user_model()
 
@@ -23,7 +23,7 @@ def test_prompt_injection_truncation():
         build_logs=long_logs
     )
 
-    with patch('apps.deployments.tasks_ai.DevOpsAgent') as MockAgent:
+    with patch('apps.deployments.tasks.ai.tasks_ai.DevOpsAgent') as MockAgent:
         mock_instance = MockAgent.return_value
         mock_instance.diagnose_logs.return_value = "Mocked AI Response"
 

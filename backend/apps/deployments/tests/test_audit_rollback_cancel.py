@@ -10,7 +10,7 @@ from rest_framework.test import APITestCase
 
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import Deployment, Service
-from apps.deployments.models_audit import AuditLog
+from apps.deployments.models.audit import AuditLog
 
 
 class RollbackAuditLogTests(APITestCase):

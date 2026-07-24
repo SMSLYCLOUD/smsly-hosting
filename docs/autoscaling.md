@@ -8,7 +8,7 @@ There are three distinct autoscaler code paths:
 
 | Path | Module | Trigger | Scope |
 | --- | --- | --- | --- |
-| Classic CPU | `services/autoscaler.py` | Celery beat, every minute | Every service, CPU threshold |
+| Classic CPU | `services/autoscaler.py` | Celery beat, every 30 seconds | Every service, CPU threshold |
 | AI-enhanced | `apps/intelligence/tasks_autoscale.py` + `scaling_ai.py` | Celery beat, every 60s | Every service, Prometheus + Loki + AI |
 | K8s / Docker admin | `apps/autoscaler/views.py` | Manual (HTTP) | One service, per-call |
 
@@ -36,19 +36,19 @@ The three periodic tasks (`check-autoscale-every-30s`, `auto-scaling-analyze-eve
 
 ## Classic Engine (`services/autoscaler.py`)
 
-The classic engine is a CPU-based, two-threshold controller with asymmetric cooldowns. It runs on Celery beat once per minute.
+The classic engine is a CPU-based, two-threshold controller with asymmetric cooldowns. It runs on Celery beat every 30 seconds.
 
 ### How It Works
 
 For each service with `min_replicas > 0` (or `autoscale_cpu_target > 0`):
 
 1. Read the **current** CPU average over the last minute (sourced from `docker stats` on the local node, or from a `ManagedServer` proxy call on a remote node).
-2. Compare to `autoscale_cpu_target` (default 70).
-3. **Scale up** if `cpu > target + 5%` (hysteresis) AND the service is not in cooldown.
-4. **Scale down** if `cpu < target - 20%` (wider hysteresis on the way down, to absorb brief lulls) AND the service is not in cooldown.
+2. Compare to `autoscale_cpu_target` (default 80).
+3. **Scale up** if `cpu > target` AND the service is not in cooldown.
+4. **Scale down** if `cpu < target * 0.5` (wider hysteresis on the way down, to absorb brief lulls) AND the service is not in cooldown.
 5. Update `Service.last_scale_at` and exit.
 
-The asymmetric cooldown is the key invariant: **scale-up cooldown is 1 minute, scale-down cooldown is 5 minutes**. This is hard-coded and not configurable per service.
+The asymmetric cooldown is the key invariant: **scale-up cooldown is 3 minutes, scale-down cooldown is 10 minutes**. This is configurable via `SCALE_COOLDOWN_MIN` and `SCALE_COOLDOWN_DOWN_MIN` environment variables.
 
 ### The `last_scale_at` Field (NOT `updated_at`)
 
@@ -74,13 +74,13 @@ If the platform's Loki is not running, the engine falls back to the classic `doc
 
 ### Paginated Batch via `id__gt` Cursor
 
-The engine walks all services in batches of 100 using a keyset cursor on the primary key:
+The engine walks all services in batches of 20 using a keyset cursor on the primary key:
 
 ```python
-qs = Service.objects.filter(id__gt=cursor).order_by("id")[:100]
+qs = Service.objects.filter(id__gt=cursor).order_by("id")[:20]
 ```
 
-This avoids the `OFFSET` performance cliff on large fleets. The cursor is held in `cache.set("autoscale:cursor", last_id, 600)` so a worker crash resumes from the same point. The walk is incremental: each 60-second tick advances the cursor by 100 services. A fleet of 10 000 services takes 100 ticks (~100 minutes) to complete a full sweep. The cursor is reset to 0 at the end of a sweep.
+This avoids the `OFFSET` performance cliff on large fleets. The cursor is held in `cache.set("autoscale:cursor", last_id, 600)` so a worker crash resumes from the same point. The walk is incremental: each 60-second tick advances the cursor by 20 services. A fleet of 10 000 services takes 500 ticks (~500 minutes) to complete a full sweep. The cursor is reset to 0 at the end of a sweep.
 
 ### AI Recommendations
 
@@ -94,28 +94,31 @@ The admin surface exposes a manual replica controller. It requires `IsAdminUser`
 
 | Endpoint | Method | Purpose |
 | --- | --- | --- |
-| `/api/v1/scaling/analyze/` | `POST` | Run a one-shot analysis on a service. Returns the current CPU, memory, replica count, and a recommended `desired_replicas` (with reasoning). |
-| `/api/v1/scaling/spawn/` | `POST` | Force-spawn a replica. Bypasses cooldowns. Audit-logged. |
-| `/api/v1/scaling/replicas/` | `GET` | List current replica state for a service. |
-| `/api/v1/scaling/destroy_replica/` | `POST` | Force-destroy a specific replica (by container ID). Bypasses cooldowns. |
-| `/api/v1/scaling/alert_config/` | `PUT` | Update `Service.alert_config` (CPU / memory / 5xx thresholds, channels). See [Alert Config](#alert-config). |
+| `/api/v1/scaling/{service_pk}/analyze/` | `POST` | Run a one-shot analysis on a service. Returns the current CPU, memory, replica count, and a recommended `desired_replicas` (with reasoning). |
+| `/api/v1/scaling/{service_pk}/spawn/` | `POST` | Force-spawn a replica. Bypasses cooldowns. Audit-logged. |
+| `/api/v1/scaling/replicas/` | `GET` | List current replica state for a service. Use query param `?service=<UUID>`. |
+| `/api/v1/scaling/destroy_replica/` | `DELETE` | Force-destroy a specific replica. Use query param `?id=<replica_uuid>`. Bypasses cooldowns. |
+| `/api/v1/scaling/{service_pk}/alert_config/` | `GET/PUT` | Update `Service.alert_config` (CPU / memory / disk thresholds, channels). See [Alert Config](#alert-config). |
 
 ### Alert Config
 
-`Service.alert_config` is a JSONField added in Batch C. It holds the per-service alert thresholds and the channel list. The schema is:
+`Service.alert_config` is a JSONField added in Batch C. It holds the per-service alert thresholds and notification settings. The schema is:
 
 ```json
 {
-  "cpu_threshold": 85,
-  "memory_threshold": 90,
-  "error_rate_threshold": 0.05,
-  "channels": ["email", "slack"],
-  "slack_webhook_url": "https://hooks.slack.com/...",
-  "cooldown_minutes": 15
+  "cpu_warning": 70,
+  "cpu_critical": 90,
+  "memory_warning": 75,
+  "memory_critical": 90,
+  "disk_warning": 80,
+  "disk_critical": 95,
+  "notify_email": true,
+  "notify_webhook": false,
+  "webhook_url": ""
 }
 ```
 
-`PUT /api/v1/scaling/alert_config/` accepts a partial body. The `slack_webhook_url` is `EncryptedCharField` on a related row (not in the JSON) and is never echoed back in responses.
+`PUT /api/v1/scaling/{service_pk}/alert_config/` accepts a partial body. The `webhook_url` is `EncryptedCharField` on a related row (not in the JSON) and is never echoed back in responses.
 
 When the engine observes a breach, it writes an `AuditLog` row and emits the configured channels. The `cooldown_minutes` field prevents the same alert from firing more than once per window per channel.
 
@@ -123,7 +126,7 @@ When the engine observes a breach, it writes an `AuditLog` row and emits the con
 
 ### MAX_REPLICAS Guard
 
-A global `MAX_REPLICAS` env var (default 32) caps the replica count on a single service. The classic engine, the AI-enhanced engine, and the admin surface all respect this cap. The check is enforced **before** the spawn — a request to set `desired_replicas=64` is rejected with HTTP 400, not silently capped.
+A global `MAX_REPLICAS` env var (default 5) caps the replica count on a single service. The classic engine, the AI-enhanced engine, and the admin surface all respect this cap. The check is enforced **before** the spawn — a request to set `desired_replicas=64` is rejected with HTTP 400, not silently capped. Configurable via `SCALE_MAX_REPLICAS` environment variable.
 
 ### Race Conditions (Now Fixed)
 
@@ -146,25 +149,17 @@ The audit log is hash-linked — see `models_audit.py`. Manual `spawn/` and `des
 
 ## API Reference
 
-All endpoints are mounted under `/api/v1/scaling/`. Admin endpoints require `IsAdminUser`. Service-level reads (e.g. `replicas/`) require the service owner.
+All endpoints are mounted under `/api/v1/scaling/`. Admin endpoints require `IsAdminUser`. Service-level reads (e.g. `replicas/`) require the service owner. Detail actions use `{service_pk}` in the URL path.
 
-### `POST /api/v1/scaling/analyze/`
+### `POST /api/v1/scaling/{service_pk}/analyze/`
 
 Run a one-shot analysis on a service. Returns the current observed state and a recommendation.
-
-**Request body:**
-
-| Field | Type | Notes |
-| --- | --- | --- |
-| `service_id` | UUID | Required. |
 
 **Example request:**
 
 ```bash
-curl -sS -X POST http://localhost:8000/api/v1/scaling/analyze/ \
-  -H "Authorization: Token $SMSLY_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"service_id": "9c8b4b1a-7d1c-4a2b-9a55-2e8c3d4f9b21"}'
+curl -sS -X POST http://localhost:8000/api/v1/scaling/9c8b4b1a-7d1c-4a2b-9a55-2e8c3d4f9b21/analyze/ \
+  -H "Authorization: Token $SMSLY_TOKEN"
 ```
 
 **Example response:**
@@ -177,7 +172,7 @@ curl -sS -X POST http://localhost:8000/api/v1/scaling/analyze/ \
   "cpu_avg_5m": 71.5,
   "memory_avg_1m": 412.0,
   "desired_replicas": 4,
-  "reasoning": "CPU sustained > target (70) for 3 minutes; recommend +1.",
+  "reasoning": "CPU sustained > target (80) for 3 minutes; recommend +1.",
   "would_scale_at": "2026-06-12T15:25:11Z",
   "blocked_by_cooldown": false
 }
@@ -185,7 +180,7 @@ curl -sS -X POST http://localhost:8000/api/v1/scaling/analyze/ \
 
 The endpoint is **non-mutating** — it does not actually scale the service. Use the `spawn/` endpoint to act on the recommendation.
 
-### `POST /api/v1/scaling/spawn/`
+### `POST /api/v1/scaling/{service_pk}/spawn/`
 
 Force-spawn a replica. Bypasses cooldowns. Admin only.
 
@@ -193,7 +188,6 @@ Force-spawn a replica. Bypasses cooldowns. Admin only.
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `service_id` | UUID | Required. |
 | `count` | int | Optional. Default 1. The resulting `replica_count` is capped at `MAX_REPLICAS` and at `Service.max_replicas`. |
 
 ```bash
@@ -305,7 +299,7 @@ Check `AUTOSCALER_AI_ENABLED=True` in `.env`. Then check `PlatformConfig.prometh
 
 ### "Autoscaler is oscillating"
 
-Check the cooldowns: 1 minute up, 5 minutes down. If your workload has high variance on the order of minutes, the asymmetric cooldown will still produce flapping. Lower `autoscale_cpu_target` so the engine is less aggressive, or set `min_replicas` to the average demand and let the engine only handle spikes.
+Check the cooldowns: 3 minutes up, 10 minutes down. If your workload has high variance on the order of minutes, the asymmetric cooldown will still produce flapping. Lower `autoscale_cpu_target` so the engine is less aggressive, or set `min_replicas` to the average demand and let the engine only handle spikes.
 
 ### "alert_config was reset to defaults after a deploy"
 
@@ -318,7 +312,7 @@ The default values are emitted on every service create, and the engine backfills
 ## Limitations
 
 - **No scale-to-zero by default.** `min_replicas=0` is allowed but cold starts are heavy (full container boot). Pair with a function surface (see [docs/functions.md](functions.md)) if you need zero-idle endpoints.
-- **Cooldowns are platform-wide.** The 1/5-minute values cannot be tuned per service.
+- **Cooldowns are platform-wide.** The 3/10-minute values cannot be tuned per service (only via `SCALE_COOLDOWN_MIN` and `SCALE_COOLDOWN_DOWN_MIN` env vars).
 - **No multi-region awareness.** The engine treats all replicas as a single pool. Geographic routing and per-region targets are not supported.
 - **No predictive scaling.** The AI-enhanced engine uses last-24h metrics for advisory only; it does not pre-warm replicas for known traffic patterns.
 - **No custom metrics out of the box.** CPU and memory are the only signals. To scale on request rate, queue depth, or business KPIs, instrument your service to write to Prometheus and add a custom query in `scaling_ai.py`.

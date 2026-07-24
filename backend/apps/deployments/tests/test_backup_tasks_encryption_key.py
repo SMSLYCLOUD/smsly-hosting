@@ -18,7 +18,7 @@ from django.test import TestCase
 
 from apps.deployments.models import Project, Service
 from apps.deployments.services.backup_service import BackupService
-from apps.deployments.tasks_backup import (
+from apps.deployments.tasks.data.tasks_backup import (
     create_server_backup_task,
     create_service_backup_task,
 )
@@ -83,7 +83,7 @@ class TaskEncryptionKeyParamTest(TestCase):
         from cryptography.fernet import Fernet
         per_backup_key = Fernet.generate_key().decode()
 
-        from apps.deployments.models_backup import ServerBackup
+        from apps.deployments.models.backup import ServerBackup
         sb = ServerBackup.objects.create(status="PENDING")
 
         original_key = os.environ.get("BACKUP_ENCRYPTION_KEY", "")

@@ -53,7 +53,7 @@ class TelemetryService:
 
     def process_audit_event(self, node_id: str, event: dict):
         """Called by webhook when node reports attestation event."""
-        from ..models_attestation import AttestationAuditLog
+        from ..models.attestation import AttestationAuditLog
 
         # 1. Local cache (authoritative copy lives in SMSLYCLOUD Chain)
         AttestationAuditLog.objects.create(

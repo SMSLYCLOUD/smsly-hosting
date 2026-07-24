@@ -5,8 +5,8 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 
 from apps.deployments.models import Project, Service
-from apps.deployments.models_audit import AuditLog
-from apps.deployments.models_backup import ServiceBackup
+from apps.deployments.models.audit import AuditLog
+from apps.deployments.models.backup import ServiceBackup
 
 User = get_user_model()
 
@@ -22,8 +22,8 @@ REST_FRAMEWORK_LOOSE = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 100,
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "apps.deployments.api_token_auth.APITokenAuthentication",
-        "apps.deployments.api_token_auth.RemoteSyncHMACAuthentication",
+        "apps.deployments.models.api_token.APITokenAuthentication",
+        "apps.deployments.models.api_token.RemoteSyncHMACAuthentication",
         "rest_framework.authentication.TokenAuthentication",
         "apps.core.auth.CsrfExemptSessionAuthentication",
     ],
@@ -138,7 +138,7 @@ class AuditLogDomainBackupTest(TestCase):
 
     def test_restore_service_backup_task_writes_audit_log(self):
         from apps.deployments.services.backup_service import BackupService
-        from apps.deployments.tasks_backup import restore_service_backup_task
+        from apps.deployments.tasks.data.tasks_backup import restore_service_backup_task
 
         backup = ServiceBackup.objects.create(
             service=self.service,

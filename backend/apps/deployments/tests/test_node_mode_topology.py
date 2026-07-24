@@ -3,16 +3,16 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import SimpleTestCase, TestCase
-from services.caddy_manager import apply_caddyfile
+from apps.deployments.services.caddy_manager import apply_caddyfile
 
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import EnvironmentVariable, Service
-from apps.deployments.models_addons import Addon
+from apps.deployments.models.addons import Addon
 from apps.deployments.services.provisioner import (
     server_connection_mode,
     server_install_mode,
 )
-from apps.deployments.tasks_addons import provision_addon_task
+from apps.addons.tasks.crud import provision_addon_task
 
 User = get_user_model()
 
@@ -51,10 +51,10 @@ class NodeModeTopologyTests(SimpleTestCase):
 
     @patch.dict("os.environ", {"MODE": "node", "NODE_TYPE": "node"}, clear=False)
     def test_node_mode_skips_startup_caddy_sync(self):
-        from apps.deployments import startup
+        from apps.deployments.services import startup
 
-        with patch("apps.deployments.startup._store_ssh_from_env"), patch(
-            "apps.deployments.startup.threading.Thread"
+        with patch("apps.deployments.services.startup._store_ssh_from_env"), patch(
+            "apps.deployments.services.startup.threading.Thread"
         ) as thread_mock:
             startup._started = False
             startup.schedule_startup_caddy_sync()
@@ -77,7 +77,7 @@ class AddonProvisioningDispatchTests(TestCase):
         )
 
     @patch(
-        "apps.deployments.tasks.addon_provisioner.provision_dispatch",
+        "apps.deployments.tasks.deployment.tasks_templates.addon_provisioner.provision_dispatch",
         return_value=("postgres-cid", "postgresql://u:p@db:5432/app"),
     )
     def test_provision_addon_task_uses_dispatch_and_persists_runtime_fields(self, dispatch_mock):

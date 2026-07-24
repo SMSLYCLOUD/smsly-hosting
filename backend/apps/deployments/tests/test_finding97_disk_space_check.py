@@ -5,8 +5,8 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 
 from apps.deployments.models import Service
-from apps.deployments.models_storage import Volume
-from apps.deployments.views_storage import VolumeViewSet
+from apps.deployments.models.storage import Volume
+from apps.deployments.views.storage import VolumeViewSet
 
 User = get_user_model()
 _UsageTuple = namedtuple('_UsageTuple', ['total', 'used', 'free'])
@@ -34,7 +34,7 @@ class Finding97DiskSpaceCheckTests(TestCase):
     def test_rejects_write_when_content_exceeds_ninety_percent_free(self):
         container = _make_container_with_archive()
         with patch(
-            'apps.deployments.views_storage.shutil.disk_usage',
+            'apps.deployments.views.storage.shutil.disk_usage',
             return_value=_UsageTuple(total=1024, used=24, free=1000),
         ):
             response = self.viewset._local_volume_file_write(
@@ -50,7 +50,7 @@ class Finding97DiskSpaceCheckTests(TestCase):
     def test_accepts_write_when_content_fits_within_threshold(self):
         container = _make_container_with_archive()
         with patch(
-            'apps.deployments.views_storage.shutil.disk_usage',
+            'apps.deployments.views.storage.shutil.disk_usage',
             return_value=_UsageTuple(total=10_000_000, used=0, free=10_000_000),
         ):
             response = self.viewset._local_volume_file_write(
@@ -71,7 +71,7 @@ class Finding97DiskSpaceCheckTests(TestCase):
             return _UsageTuple(total=10_000, used=0, free=10_000)
 
         with patch(
-            'apps.deployments.views_storage.shutil.disk_usage',
+            'apps.deployments.views.storage.shutil.disk_usage',
             side_effect=_fake_disk_usage,
         ):
             self.viewset._local_volume_file_write(
@@ -85,7 +85,7 @@ class Finding97DiskSpaceCheckTests(TestCase):
     def test_skips_check_silently_when_disk_usage_raises(self):
         container = _make_container_with_archive()
         with patch(
-            'apps.deployments.views_storage.shutil.disk_usage',
+            'apps.deployments.views.storage.shutil.disk_usage',
             side_effect=OSError('not supported'),
         ):
             response = self.viewset._local_volume_file_write(

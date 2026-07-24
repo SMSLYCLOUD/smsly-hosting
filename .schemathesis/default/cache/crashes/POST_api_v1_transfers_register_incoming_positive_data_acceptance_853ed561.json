@@ -1,0 +1,90 @@
+{
+  "operation": "POST /api/v1/transfers/register-incoming/",
+  "method": "POST",
+  "path_template": "/api/v1/transfers/register-incoming/",
+  "fingerprint": "853ed561",
+  "case_id": "mQjehY",
+  "code_sample": "curl -X POST -H 'Content-Type: application/json' -d '{\"source_server_ip\": \"\", \"target_server_ip\": \"\", \"transfer_type\": \"FULL\"}' http://127.0.0.1:8089/api/v1/transfers/register-incoming/",
+  "sequence": [
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:8089/api/v1/transfers/register-incoming/",
+      "url_template": "http://127.0.0.1:8089/api/v1/transfers/register-incoming/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "X-Schemathesis-TestCaseId": "mQjehY",
+        "Content-Type": "application/json",
+        "Content-Length": "73"
+      },
+      "response": {
+        "status_code": 400,
+        "headers": {
+          "date": "Tue, 21 Jul 2026 00:19:17 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "vary": "Accept, Cookie, origin",
+          "allow": "POST, OPTIONS",
+          "x-frame-options": "DENY",
+          "content-length": "49",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin"
+        },
+        "body": "{\"error\":\"source_ip and target_ip are required.\"}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "positive_data_acceptance",
+          "status": "failure",
+          "message": "API rejected schema-compliant request\n\nValid data should have been accepted\nExpected: 2xx, 401, 403, 404, 409, 5xx"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 0.015976392998709343,
+          "mode": "positive"
+        },
+        "components": {
+          "HEADER": "positive",
+          "BODY": "positive"
+        },
+        "phase": {
+          "name": "fuzzing",
+          "data": {
+            "type": "FuzzingPhaseData",
+            "description": "Positive test case",
+            "location": null,
+            "parameter": null,
+            "parameter_location": null,
+            "mutations": []
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {}
+      },
+      "path": "/api/v1/transfers/register-incoming/",
+      "path_parameters": {},
+      "query": {},
+      "case_headers": {},
+      "cookies": {},
+      "case_body": {
+        "encoding": "json",
+        "value": {
+          "source_server_ip": "",
+          "target_server_ip": "",
+          "transfer_type": "FULL"
+        }
+      },
+      "media_type": "application/json",
+      "parent_index": null
+    }
+  ]
+}

@@ -163,7 +163,7 @@ def push_platform_config_to_infisical(
     Pushes encrypted platform secrets to Infisical so user-deployed
     containers can reference them via Infisical SDK or env injection.
     """
-    from apps.deployments.models_core import PlatformConfig
+    from apps.deployments.models.core import PlatformConfig
 
     if client is None:
         client = get_infisical_client()
@@ -230,7 +230,7 @@ def pull_platform_config_from_infisical(
     Use when secrets are managed in Infisical and need to be synced
     back to the platform DB.
     """
-    from apps.deployments.models_core import PlatformConfig
+    from apps.deployments.models.core import PlatformConfig
 
     if client is None:
         client = get_infisical_client()

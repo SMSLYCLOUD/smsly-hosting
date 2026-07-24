@@ -1,0 +1,85 @@
+{
+  "operation": "POST /api/v1/auth/session-token/",
+  "method": "POST",
+  "path_template": "/api/v1/auth/session-token/",
+  "fingerprint": "83573fa0",
+  "case_id": "QPP3xc",
+  "code_sample": "curl -X POST http://127.0.0.1:8089/api/v1/auth/session-token/",
+  "sequence": [
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:8089/api/v1/auth/session-token/",
+      "url_template": "http://127.0.0.1:8089/api/v1/auth/session-token/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "X-Schemathesis-TestCaseId": "QPP3xc",
+        "Content-Length": "0"
+      },
+      "response": {
+        "status_code": 403,
+        "headers": {
+          "date": "Tue, 21 Jul 2026 00:15:36 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "vary": "Accept, Cookie, origin",
+          "allow": "POST, OPTIONS",
+          "x-frame-options": "DENY",
+          "content-length": "95",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin"
+        },
+        "body": "{\"error\":\"Authentication credentials were not provided.\",\"code\":\"unauthenticated\",\"status\":403}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "missing_required_header",
+          "status": "failure",
+          "message": "Missing header not rejected\n\nGot 403 when missing required 'Authorization' header, expected 401"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 6.510299863293767e-05,
+          "mode": "negative"
+        },
+        "components": {
+          "HEADER": "negative"
+        },
+        "phase": {
+          "name": "coverage",
+          "data": {
+            "type": "CoveragePhaseData",
+            "description": "Missing `Authorization` at header",
+            "location": null,
+            "parameter": "Authorization",
+            "parameter_location": "HEADER",
+            "scenario": "missing_parameter"
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {
+          "HEADER": {}
+        }
+      },
+      "path": "/api/v1/auth/session-token/",
+      "path_parameters": {},
+      "query": {},
+      "case_headers": {},
+      "cookies": {},
+      "case_body": {
+        "encoding": "none"
+      },
+      "media_type": null,
+      "parent_index": null
+    }
+  ]
+}

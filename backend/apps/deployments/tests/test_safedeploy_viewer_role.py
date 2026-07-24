@@ -17,7 +17,7 @@ from rest_framework.test import APIClient
 
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import Project, Service
-from apps.deployments.models_safedeploy import PreviewEnvironment
+from apps.deployments.models.safedeploy import PreviewEnvironment
 from apps.teams.models import Team, TeamMember
 
 TEST_CACHES = {
@@ -74,7 +74,7 @@ class ViewerCannotCreatePreviewTests(TestCase):
         # ``from apps.deployments.tasks_safedeploy import create_preview_environment_job``
         # so the patch must target the module where the name actually lives.
         with patch(
-            "apps.deployments.tasks_safedeploy.create_preview_environment_job.delay"
+            "apps.deployments.tasks.deployment.tasks_safedeploy.create_preview_environment_job.delay"
         ):
             return client.post(
                 self.url,

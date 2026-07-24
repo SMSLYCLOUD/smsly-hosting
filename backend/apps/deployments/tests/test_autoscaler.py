@@ -5,9 +5,9 @@ from django.test import TestCase
 from django.utils import timezone
 
 from apps.deployments.models import Project, Service
-from apps.deployments.models_metrics import ServiceMetric
-from apps.deployments.models_replica import ServiceReplica
-from apps.deployments.services.autoscaler import _evaluate_scaling
+from apps.deployments.models.metrics import ServiceMetric
+from apps.deployments.models.replica import ServiceReplica
+from apps.autoscaler.services.legacy_autoscaler import _evaluate_scaling
 
 User = get_user_model()
 

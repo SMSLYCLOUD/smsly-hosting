@@ -1,8 +1,8 @@
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
-from apps.deployments.models_servers import ManagedServer
-from apps.deployments.views_servers import _build_remote_headers
+from apps.deployments.models.servers import ManagedServer
+from apps.deployments.views.server.helpers import _build_remote_headers
 
 User = get_user_model()
 

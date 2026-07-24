@@ -26,7 +26,7 @@ export default function CLIPage() {
 
       <div className="max-w-3xl mx-auto px-4 py-12 prose prose-slate dark:prose-invert">
         <h2>Installation</h2>
-        <pre><code>npm install -g cloudneuron-cli</code></pre>
+        <pre><code>npm install -g grid-cli</code></pre>
 
         <h2>Commands</h2>
         <ul>

@@ -8,7 +8,7 @@ import time
 from unittest.mock import patch
 
 from django.test import SimpleTestCase
-from services import caddy_manager
+from apps.deployments.services import caddy_manager
 
 
 class CaddyTokenCacheTtlTests(SimpleTestCase):
@@ -91,7 +91,7 @@ class CaddyTokenCacheTtlTests(SimpleTestCase):
                  "validate_service_routes_do_not_hit_control_plane",
                  return_value=[],
              ), \
-             patch("services.caddy_manager.subprocess.run") as mock_run:
+             patch("apps.deployments.services.caddy_manager.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             mock_run.return_value.stderr = ""
             with patch("time.time", return_value=1_000_000.0):

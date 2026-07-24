@@ -16,8 +16,8 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from apps.deployments.models_mesh import MeshNetwork, WireGuardPeer
-from apps.deployments.models_servers import ManagedServer
+from apps.deployments.models.mesh import MeshNetwork, WireGuardPeer
+from apps.deployments.models.servers import ManagedServer
 
 User = get_user_model()
 
@@ -107,7 +107,7 @@ class MeshAmbiguityTests(TestCase):
     def test_heartbeat_routes_only_to_containing_mesh(self):
         url = "/api/v1/internal/heartbeat/"
         with patch(
-            "apps.deployments.views_election._verify_election_hmac",
+            "apps.core.views.election._verify_election_hmac",
             side_effect=_always_valid_hmac,
         ), patch(
             "apps.deployments.services.election_service."
@@ -148,7 +148,7 @@ class MeshAmbiguityTests(TestCase):
 
         url = "/api/v1/internal/vote/"
         with patch(
-            "apps.deployments.views_election._verify_election_hmac",
+            "apps.core.views.election._verify_election_hmac",
             side_effect=_always_valid_hmac,
         ):
             resp = self._post_signed(
@@ -161,7 +161,7 @@ class MeshAmbiguityTests(TestCase):
     def test_vote_request_routes_to_containing_mesh(self):
         url = "/api/v1/internal/vote/"
         with patch(
-            "apps.deployments.views_election._verify_election_hmac",
+            "apps.core.views.election._verify_election_hmac",
             side_effect=_always_valid_hmac,
         ), patch(
             "apps.deployments.services.election_service."

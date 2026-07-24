@@ -1,4 +1,4 @@
-"""Custom authentication classes for CloudNeuron API.
+"""Custom authentication classes for Grid API.
 
 SECURITY (Batch G): the legacy ``CsrfExemptSessionAuthentication``
 class is no longer registered in ``DEFAULT_AUTHENTICATION_CLASSES``.

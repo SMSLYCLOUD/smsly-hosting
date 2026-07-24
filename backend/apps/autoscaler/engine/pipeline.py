@@ -68,7 +68,7 @@ def analyze_and_apply(service, *, now=None, min_interval_seconds: int = 0) -> Sc
     passes 120 so the slower 3-min sweep always wins for services
     that qualify for both.
     """
-    from apps.deployments.models_core import Service
+    from apps.deployments.models.core import Service
 
     now = now or timezone.now()
 
@@ -110,7 +110,7 @@ def analyze_and_apply(service, *, now=None, min_interval_seconds: int = 0) -> Sc
         _clear_starvation(str(service.id))
 
     # 2. Running replicas + last spawn for cooldown
-    from apps.deployments.models_replica import ServiceReplica
+    from apps.autoscaler.models.replica import ServiceReplica
     running = ServiceReplica.objects.filter(
         service=service, status='RUNNING'
     ).count()
@@ -158,7 +158,7 @@ def analyze_and_apply(service, *, now=None, min_interval_seconds: int = 0) -> Sc
 def analyze_only(service, *, now=None) -> dict:
     """Collect + decide without applying. Used by the /analyze REST endpoint
     and the AI enhancement path in the legacy views_autoscale."""
-    from apps.deployments.models_replica import ServiceReplica
+    from apps.autoscaler.models.replica import ServiceReplica
     now = now or timezone.now()
 
     metrics = MetricsCollector(service).collect()

@@ -14,8 +14,8 @@ from rest_framework.test import APIClient
 
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import Service
-from apps.deployments.models_addons import Addon, Backup
-from apps.deployments.views_addons import _ClosingFileResponse
+from apps.deployments.models.addons import Addon, Backup
+from apps.addons.views_crud import _ClosingFileResponse
 
 User = get_user_model()
 

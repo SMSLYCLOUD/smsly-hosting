@@ -390,9 +390,9 @@ _harden_crowdsec_verify() {
     # Refresh hub scenarios — only upgrade when explicitly allowed.
     # Auto-upgrading on every harden.sh run can silently break
     # production WAF if CrowdSec ships a breaking parser change.
-    docker exec smsly-crowdsec cscli hub update  || _harden_log warn "crowdsec hub update failed"
+    timeout -k 5 60 docker exec smsly-crowdsec cscli hub update  || _harden_log warn "crowdsec hub update failed"
     if [ "${CROWDSEC_AUTO_UPGRADE_HUB:-0}" = "1" ]; then
-        docker exec smsly-crowdsec cscli hub upgrade  || _harden_log warn "crowdsec hub upgrade failed"
+        timeout -k 5 60 docker exec smsly-crowdsec cscli hub upgrade  || _harden_log warn "crowdsec hub upgrade failed"
     else
         _harden_log info "crowdsec hub upgrade skipped (set CROWDSEC_AUTO_UPGRADE_HUB=1 to enable)"
     fi

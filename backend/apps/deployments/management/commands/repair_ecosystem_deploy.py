@@ -51,7 +51,7 @@ class Command(BaseCommand):
                     fixes_planned.append(f"Would assign eligible node to {s.name}")
 
         if is_apply:
-            from services.ecosystem import sync_ecosystem_envs
+            from apps.deployments.services.ecosystem import sync_ecosystem_envs
             result = sync_ecosystem_envs(project_id)
             if result.get("status") == "success":
                 fixes_planned.append(f"Intelligently synced ecosystem env vars via AI Senate: {result.get('message')}")

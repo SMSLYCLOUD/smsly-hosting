@@ -16,8 +16,8 @@ from django.conf import settings
 from django.db import models, transaction
 from django.utils import timezone
 
-from apps.deployments.models_core import Deployment
-from apps.deployments.models_safedeploy import (
+from apps.deployments.models.core import Deployment
+from apps.deployments.models.safedeploy import (
     DeploymentApproval,
     DeploymentArtifact,
     MigrationValidation,
@@ -120,7 +120,7 @@ class ProductionDeploymentPipeline:
 
         # Post success commit status to GitHub (non-blocking)
         try:
-            from apps.deployments.tasks_commit_status import update_commit_status
+            from apps.deployments.tasks.cicd.tasks_commit_status import update_commit_status
             update_commit_status.delay(
                 str(deployment.id), 'success', 'Deployment active'
             )
@@ -462,7 +462,7 @@ class ProductionDeploymentPipeline:
         actual build + container work runs. skip_review=True prevents the
         safedeploy pre-check at the top of smart_deploy_task from re-firing.
         """
-        from apps.deployments.tasks_deploy import enqueue_smart_deploy_task
+        from apps.deployments.tasks.deployment.tasks_deploy import enqueue_smart_deploy_task
         service = deployment.service
         provider_id = str(service.provider.id) if service and service.provider else None
         result = enqueue_smart_deploy_task(

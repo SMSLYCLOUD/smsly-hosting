@@ -8,7 +8,7 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
-from apps.deployments.models_backup import ServerBackup
+from apps.deployments.models.backup import ServerBackup
 from apps.deployments.services.backup_service import BackupService
 
 User = get_user_model()

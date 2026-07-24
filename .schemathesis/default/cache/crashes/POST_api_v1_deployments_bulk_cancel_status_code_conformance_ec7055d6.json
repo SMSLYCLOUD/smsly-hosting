@@ -1,0 +1,136 @@
+{
+  "operation": "POST /api/v1/deployments/bulk-cancel/",
+  "method": "POST",
+  "path_template": "/api/v1/deployments/bulk-cancel/",
+  "fingerprint": "ec7055d6",
+  "case_id": "rQV2sP",
+  "code_sample": "curl -X POST -H 'Content-Type: application/json' -d '{\"commit_hash\": \"\", \"commit_message\": \"\", \"branch\": \"\", \"status\": \"QUEUED\", \"build_logs\": \"\", \"runtime_logs_url\": null, \"pipeline_stages\": null, \"ai_diagnosis\": \"\", \"review_summary\": null, \"vulnerability_report\": null, \"container_id\": null, \"remote_deployment_id\": null, \"green_container_id\": null, \"started_at\": null, \"finished_at\": null, \"is_rollback\": false, \"source_node\": null, \"target_is_local\": false, \"ecosystem_retry_count\": 0, \"queued_min_replicas\": null, \"metadata\": null, \"registry_override\": null, \"verified_target_type\": null, \"verified_host_ip\": null, \"verified_runtime_id\": null, \"verified_at\": null, \"service\": \"e3e70682-c209-1cac-a29f-6fbed82c07cd\", \"rollback_from\": null, \"target_server\": null}' http://127.0.0.1:8089/api/v1/deployments/bulk-cancel/",
+  "sequence": [
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:8089/api/v1/deployments/bulk-cancel/",
+      "url_template": "http://127.0.0.1:8089/api/v1/deployments/bulk-cancel/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "X-Schemathesis-TestCaseId": "rQV2sP",
+        "Content-Type": "application/json",
+        "Content-Length": "713"
+      },
+      "response": {
+        "status_code": 401,
+        "headers": {
+          "date": "Tue, 21 Jul 2026 00:17:23 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "www-authenticate": "[Filtered]",
+          "vary": "Accept, Cookie, origin",
+          "allow": "POST, OPTIONS",
+          "x-frame-options": "DENY",
+          "content-length": "95",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin"
+        },
+        "body": "{\"error\":\"Authentication credentials were not provided.\",\"code\":\"unauthenticated\",\"status\":401}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "status_code_conformance",
+          "status": "failure",
+          "message": "Undocumented HTTP status code\n\nReceived: 401\nDocumented: 200"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 6.309500167844817e-05,
+          "mode": "negative"
+        },
+        "components": {
+          "HEADER": "negative",
+          "BODY": "positive"
+        },
+        "phase": {
+          "name": "coverage",
+          "data": {
+            "type": "CoveragePhaseData",
+            "description": "Missing `Authorization` at header",
+            "location": null,
+            "parameter": "Authorization",
+            "parameter_location": "HEADER",
+            "scenario": "missing_parameter"
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [
+          [
+            "body",
+            "container_id"
+          ],
+          [
+            "body",
+            "remote_deployment_id"
+          ],
+          [
+            "body",
+            "green_container_id"
+          ],
+          [
+            "body",
+            "verified_runtime_id"
+          ]
+        ],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {
+          "HEADER": {}
+        }
+      },
+      "path": "/api/v1/deployments/bulk-cancel/",
+      "path_parameters": {},
+      "query": {},
+      "case_headers": {},
+      "cookies": {},
+      "case_body": {
+        "encoding": "json",
+        "value": {
+          "commit_hash": "",
+          "commit_message": "",
+          "branch": "",
+          "status": "QUEUED",
+          "build_logs": "",
+          "runtime_logs_url": null,
+          "pipeline_stages": null,
+          "ai_diagnosis": "",
+          "review_summary": null,
+          "vulnerability_report": null,
+          "container_id": null,
+          "remote_deployment_id": null,
+          "green_container_id": null,
+          "started_at": null,
+          "finished_at": null,
+          "is_rollback": false,
+          "source_node": null,
+          "target_is_local": false,
+          "ecosystem_retry_count": 0,
+          "queued_min_replicas": null,
+          "metadata": null,
+          "registry_override": null,
+          "verified_target_type": null,
+          "verified_host_ip": null,
+          "verified_runtime_id": null,
+          "verified_at": null,
+          "service": "e3e70682-c209-1cac-a29f-6fbed82c07cd",
+          "rollback_from": null,
+          "target_server": null
+        }
+      },
+      "media_type": "application/json",
+      "parent_index": null
+    }
+  ]
+}

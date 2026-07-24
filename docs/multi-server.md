@@ -36,6 +36,7 @@ A Grid fleet is a leader-elected cluster of `ManagedServer` records, all reading
 | **Master / Controller** | The platform's primary server. Runs the database (PgCat, PostgreSQL, Redis, RabbitMQ), the Caddy reverse proxy, the frontend build, the management API, and the Celery workers. Receives heartbeats from followers, schedules the leader-election term, and stores every `ManagedServer`, `Service`, `Deployment`, and `AuditLog` row. There is exactly one master per cluster. |
 | **Follower (Full-Stack Node)** | A remote `ManagedServer` that runs the entire platform stack locally — its own Traefik, RabbitMQ, and (optionally) PostgreSQL — but no frontend or Caddy. The dashboard proxies reads and writes to it. Transfers to and from a follower move entire service containers. |
 | **Lite Agent** | A compute-only worker that does not run a local database. Connects to the master's PostgreSQL, RabbitMQ, and Redis over the WireGuard mesh, executes builds and deploys locally, and reports results back. Ideal for edge or low-resource nodes. |
+| **Media Node** | A specialized node for telephony (SMSLY-VOICE) and WebRTC SFU (SMSLY-VIDEO) workloads. Provisioned with LiveKit and media-specific tooling. Uses `node_type='media'` on the `ManagedServer` model. |
 
 ### Side-by-side comparison
 

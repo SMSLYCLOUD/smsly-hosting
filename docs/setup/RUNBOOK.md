@@ -1,4 +1,4 @@
-# SMSLY (CloudNeuron) Operations Runbook
+# SMSLY (Grid) Operations Runbook
 
 > "Grid" is a legacy code name for SMSLY; both still appear in older scripts and docs.
 

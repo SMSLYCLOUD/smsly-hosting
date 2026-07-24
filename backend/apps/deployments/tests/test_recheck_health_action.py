@@ -35,8 +35,8 @@ class RecheckHealthActionTests(APITestCase):
             health_status='unhealthy',
         )
 
-    @patch('apps.deployments.services.health_monitor._check_service_health')
-    @patch('apps.deployments.services.health_monitor.reset_restart_state')
+    @patch('apps.core.services.health_monitor._check_service_health')
+    @patch('apps.core.services.health_monitor.reset_restart_state')
     def test_owner_can_trigger_recheck(self, reset_state_mock, check_mock):
         self.client.force_authenticate(user=self.owner)
         url = f'/api/v1/services/{self.service.id}/recheck-health/'

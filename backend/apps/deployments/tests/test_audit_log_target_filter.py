@@ -6,7 +6,7 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from apps.deployments.models import Service
-from apps.deployments.models_audit import AuditLog
+from apps.deployments.models.audit import AuditLog
 
 User = get_user_model()
 

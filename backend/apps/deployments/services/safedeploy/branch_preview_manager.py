@@ -2,8 +2,8 @@ import re
 
 from django.db import transaction
 
-from apps.deployments.models_core import Service
-from apps.deployments.models_safedeploy import (
+from apps.deployments.models.core import Service
+from apps.deployments.models.safedeploy import (
     DatabaseClone,
     MigrationValidation,
     PreviewEnvironment,
@@ -105,7 +105,7 @@ class BranchPreviewManager:
         # Prefer the preview addon's own DATABASE_URL (isolated container)
         # over the clone URL (which shares the parent's DB server).
         try:
-            from apps.deployments.models_addons import Addon
+            from apps.deployments.models.addons import Addon
             preview_pg = Addon.objects.filter(
                 service__name__startswith=f"preview-{preview.id.hex}",
                 addon_type=Addon.Type.POSTGRES,

@@ -3,8 +3,8 @@ import logging
 import docker
 from django.core.management.base import BaseCommand
 
-from apps.deployments.models_addons import Addon
-from apps.deployments.models_core import Service
+from apps.deployments.models.addons import Addon
+from apps.deployments.models.core import Service
 from apps.deployments.services.deletion_orchestrator import DeletionOrchestrator
 
 logger = logging.getLogger(__name__)

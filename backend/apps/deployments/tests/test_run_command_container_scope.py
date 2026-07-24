@@ -7,8 +7,8 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from apps.cloud.models import CloudProvider
-from apps.deployments.models_core import Service
-from apps.deployments.models_servers import ManagedServer
+from apps.deployments.models.core import Service
+from apps.deployments.models.servers import ManagedServer
 
 User = get_user_model()
 

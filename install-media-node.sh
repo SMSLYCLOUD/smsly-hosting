@@ -64,7 +64,13 @@ done
 # ─── Source shared helpers ────────────────────────────────────────────────────
 LIB_DIR="$SCRIPT_DIR/lib"
 for lib in "$LIB_DIR"/*.sh; do
-    [ -f "$lib" ] && source "$lib"
+    [ -f "$lib" ] || continue
+    # Skip modules with interactive side-effects or mode-specific logic
+    # that conflicts with the media-node installer flow.
+    case "$(basename "$lib")" in
+        fresh.sh|update.sh|agent-lite.sh|media-node.sh|media-node-ops.sh) continue ;;
+    esac
+    source "$lib"
 done
 
 # ─── Source media-node functions ──────────────────────────────────────────────
@@ -219,6 +225,19 @@ if [ "$(state_get phase1)" != "done" ]; then
     state_set phase1 done
 fi
 
+# Phase 1.5: Security hardening (fail2ban, UFW, kernel, auditd)
+# Media nodes run bare-metal services exposed to the internet — they need
+# the same security stack as Docker-based nodes.
+if [ "$(state_get phase1h)" != "done" ]; then
+    echo -e "\n${BLUE}Phase 1.5: Security hardening${NC}"
+    if type harden_security_bootstrap &>/dev/null; then
+        harden_security_bootstrap || echo -e "${YELLOW}  ⚠ Some hardening layers had issues (non-fatal)${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ harden_security_bootstrap not found — skipping (ensure lib/harden.sh is sourced)${NC}"
+    fi
+    state_set phase1h done
+fi
+
 # Phase 2: Create install dir + generate secrets
 if [ "$(state_get phase2)" != "done" ]; then
     echo -e "\n${BLUE}Phase 2: Generating secrets and environment${NC}"
@@ -254,6 +273,9 @@ if [ "$(state_get phase6)" != "done" ]; then
     echo -e "\n${BLUE}Phase 6: Verifying services${NC}"
     sleep 3
     verify_media_services
+    if type harden_security_verify &>/dev/null; then
+        harden_security_verify || true
+    fi
     state_set phase6 done
 fi
 

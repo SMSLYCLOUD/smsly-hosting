@@ -2,11 +2,11 @@
 from django.core.exceptions import ValidationError
 from django.test import TestCase
 
-from apps.deployments.models_backup import (
+from apps.deployments.models.backup import (
     BackupSchedule,
     validate_endpoint_url,
 )
-from apps.deployments.models_cloud_storage import CloudStorageDestination
+from apps.deployments.models.cloud_storage import CloudStorageDestination
 
 
 class ValidateEndpointUrlTests(TestCase):

@@ -4,8 +4,8 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from apps.deployments.models_addons import Addon
-from apps.deployments.models_core import Service
+from apps.deployments.models.addons import Addon
+from apps.deployments.models.core import Service
 
 User = get_user_model()
 

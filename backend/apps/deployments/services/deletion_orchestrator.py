@@ -5,8 +5,8 @@ import docker
 from django.utils import timezone
 
 from apps.cloud.docker_client import get_docker_client
-from apps.deployments.models_addons import Addon
-from apps.deployments.models_core import Deployment, Service
+from apps.deployments.models.addons import Addon
+from apps.deployments.models.core import Deployment, Service
 
 logger = logging.getLogger(__name__)
 
@@ -92,8 +92,76 @@ class DeletionOrchestrator:
 
         return success
 
-    def cleanup_orphaned_resources(self, dry_run=True):
-        pass
+    def cleanup_orphaned_resources(self, dry_run: bool = True) -> dict:
+        """
+        Find and clean up Docker containers and volumes that are not associated
+        with any known Service or Addon in the database.
+
+        When ``dry_run`` is True (default), only log what would be removed
+        without actually removing anything. Returns a summary dict.
+        """
+        if not self.docker_client:
+            return {"containers_found": 0, "volumes_found": 0, "containers_removed": 0, "volumes_removed": 0, "dry_run": dry_run}
+
+        known_service_ids = set(Service.objects.values_list("id", flat=True))
+        known_addon_ids = set(Addon.objects.values_list("id", flat=True))
+
+        orphan_containers = []
+        orphan_volumes = []
+
+        try:
+            all_containers = self.docker_client.containers.list(all=True)
+            for c in all_containers:
+                labels = c.labels
+                svc_id = labels.get("smsly.service_id")
+                addon_id = labels.get("smsly.addon_id")
+                if (svc_id and svc_id not in known_service_ids) or (addon_id and addon_id not in known_addon_ids):
+                    orphan_containers.append(c)
+        except Exception as e:
+            logger.error(f"Failed to list containers for orphan cleanup: {e}")
+
+        try:
+            all_vols = self.docker_client.volumes.list()
+            for v in all_vols:
+                labels = v.attrs.get("Labels") or {}
+                svc_id = labels.get("smsly.service_id")
+                addon_id = labels.get("smsly.addon_id")
+                if (svc_id and svc_id not in known_service_ids) or (addon_id and addon_id not in known_addon_ids):
+                    orphan_volumes.append(v)
+        except Exception as e:
+            logger.error(f"Failed to list volumes for orphan cleanup: {e}")
+
+        if dry_run:
+            logger.info(
+                "[DRY RUN] Would remove %d orphan containers and %d orphan volumes",
+                len(orphan_containers), len(orphan_volumes),
+            )
+            for c in orphan_containers:
+                logger.info("  [DRY RUN] container: %s (%s)", c.name, c.id)
+            for v in orphan_volumes:
+                logger.info("  [DRY RUN] volume: %s", v.name)
+            return {"containers_found": len(orphan_containers), "volumes_found": len(orphan_volumes), "dry_run": True}
+
+        removed_containers = 0
+        removed_volumes = 0
+        for c in orphan_containers:
+            if self._safe_remove_container(c):
+                removed_containers += 1
+        for v in orphan_volumes:
+            if self._safe_remove_volume(v):
+                removed_volumes += 1
+
+        logger.info(
+            "Orphan cleanup: removed %d containers and %d volumes",
+            removed_containers, removed_volumes,
+        )
+        return {
+            "containers_found": len(orphan_containers),
+            "volumes_found": len(orphan_volumes),
+            "containers_removed": removed_containers,
+            "volumes_removed": removed_volumes,
+            "dry_run": False,
+        }
 
     def purge_user_backup_artifacts(self, user_id) -> dict:
         """

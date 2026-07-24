@@ -1,4 +1,4 @@
-# SMSLY (CloudNeuron) Production Deployment Guide
+# SMSLY (Grid) Production Deployment Guide
 
 ## Prerequisites
 

@@ -1,7 +1,7 @@
 
 from django.test import TestCase
 
-from apps.deployments.views_servers import _is_command_allowed
+from apps.deployments.views.server.helpers import _is_command_allowed
 
 
 class RunCommandSafetyTests(TestCase):

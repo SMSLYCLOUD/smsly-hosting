@@ -7,7 +7,7 @@ import logging
 
 from django.core.management.base import BaseCommand, CommandError
 
-from apps.deployments.models_core import ManagedServer
+from apps.deployments.models.core import ManagedServer
 
 logger = logging.getLogger(__name__)
 

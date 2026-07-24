@@ -10,7 +10,7 @@ from django.test import TestCase
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
-from services.caddy_manager import (
+from apps.deployments.services.caddy_manager import (
     apply_caddyfile,
     generate_caddyfile,
     validate_service_routes_do_not_hit_control_plane,
@@ -26,7 +26,7 @@ class CaddyCustomDomainRoutingTests(TestCase):
     """Ensure custom domains route immediately through Caddy host rewrite."""
 
     def setUp(self):
-        import services.caddy_manager as caddy_mod
+        import apps.deployments.services.caddy_manager as caddy_mod
         caddy_mod._last_caddy_reload_ts = 0.0  # reset debounce between tests
         caddy_mod._last_caddy_content_hash = ""  # reset content-hash debounce
 
@@ -264,7 +264,7 @@ class InstantCustomDomainApiTests(APITestCase):
         from django.core.cache import cache
         cache.clear()
 
-    @patch('apps.deployments.views.smart_deploy_task.delay')
+    @patch('apps.deployments.views.service.deploy.smart_deploy_task.delay')
     @patch('apps.deployments.views.ServiceViewSet._sync_caddy', return_value={'ok': True, 'message': 'ok'})
     @patch('apps.domains.tasks.verify_dns_and_provision_ssl_task.delay')
     def test_add_domain_does_not_queue_redeploy(self, verify_mock, _sync_mock, delay_mock):
@@ -312,7 +312,7 @@ class InstantCustomDomainApiTests(APITestCase):
         ensure_dns_mock.assert_not_called()
         verify_mock.assert_called_once()
 
-    @patch('apps.deployments.views.smart_deploy_task.delay')
+    @patch('apps.deployments.views.service.deploy.smart_deploy_task.delay')
     @patch('apps.deployments.views.ServiceViewSet._sync_caddy', return_value={'ok': True, 'message': 'ok'})
     @patch('apps.domains.tasks.verify_dns_and_provision_ssl_task.delay')
     def test_delete_domain_does_not_queue_redeploy(self, verify_mock, _sync_mock, delay_mock):

@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 from django.contrib.auth.models import User
 from django.test import TestCase
-from services.builders import is_buildkit_cache_error, prune_buildkit_cache
+from apps.deployments.services.builders import is_buildkit_cache_error, prune_buildkit_cache
 
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import Deployment, Service
@@ -34,7 +34,7 @@ class BuildKitRecoveryTests(TestCase):
         # Test irrelevant error
         self.assertFalse(is_buildkit_cache_error(Exception("Just a normal build failure")))
 
-    @patch('services.builders.subprocess.run')
+    @patch('apps.deployments.services.builders.subprocess.run')
     def test_prune_buildkit_cache(self, mock_run):
         prune_buildkit_cache()
         mock_run.assert_called_with(
@@ -70,7 +70,7 @@ class BuildManagerTests(TestCase):
             commit_hash='build123'
         )
 
-    @patch('services.builders.subprocess.run')
+    @patch('apps.deployments.services.builders.subprocess.run')
     def test_build_image_calls_nixpacks(self, mock_run):
         """Build should invoke Nixpacks with correct arguments."""
         mock_run.return_value = MagicMock(
@@ -78,7 +78,7 @@ class BuildManagerTests(TestCase):
             stdout='Successfully built'
         )
 
-        from services.builders import BuildManager
+        from apps.deployments.services.builders import BuildManager
 
         try:
             bm = BuildManager(self.deployment)
@@ -89,7 +89,7 @@ class BuildManagerTests(TestCase):
             # BuildManager may require repo files; test validates the mock path
             pass
 
-    @patch('services.builders.subprocess.run')
+    @patch('apps.deployments.services.builders.subprocess.run')
     def test_build_failure_returns_error(self, mock_run):
         """A Nixpacks build failure should raise an exception."""
         mock_run.return_value = MagicMock(
@@ -97,7 +97,7 @@ class BuildManagerTests(TestCase):
             stderr='Build failed: missing Procfile'
         )
 
-        from services.builders import BuildManager
+        from apps.deployments.services.builders import BuildManager
 
         try:
             bm = BuildManager(self.deployment)

@@ -1,0 +1,90 @@
+{
+  "operation": "POST /api/v1/core/contact/",
+  "method": "POST",
+  "path_template": "/api/v1/core/contact/",
+  "fingerprint": "1a3141f1",
+  "case_id": "G6wVVV",
+  "code_sample": "curl -X POST -H 'Content-Type: application/json' -d '{\"email\": \"0@a.com\", \"message\": \"\", \"name\": \"\"}' http://127.0.0.1:8089/api/v1/core/contact/",
+  "sequence": [
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:8089/api/v1/core/contact/",
+      "url_template": "http://127.0.0.1:8089/api/v1/core/contact/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "X-Schemathesis-TestCaseId": "G6wVVV",
+        "Content-Type": "application/json",
+        "Content-Length": "47"
+      },
+      "response": {
+        "status_code": 400,
+        "headers": {
+          "date": "Tue, 21 Jul 2026 00:19:13 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "vary": "Accept, Cookie, origin",
+          "allow": "POST, OPTIONS",
+          "x-frame-options": "DENY",
+          "content-length": "84",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin"
+        },
+        "body": "{\"name\":[\"This field may not be blank.\"],\"message\":[\"This field may not be blank.\"]}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "positive_data_acceptance",
+          "status": "failure",
+          "message": "API rejected schema-compliant request\n\nValid data should have been accepted\nExpected: 2xx, 401, 403, 404, 409, 5xx"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 0.013378513998759445,
+          "mode": "positive"
+        },
+        "components": {
+          "HEADER": "positive",
+          "BODY": "positive"
+        },
+        "phase": {
+          "name": "fuzzing",
+          "data": {
+            "type": "FuzzingPhaseData",
+            "description": "Positive test case",
+            "location": null,
+            "parameter": null,
+            "parameter_location": null,
+            "mutations": []
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {}
+      },
+      "path": "/api/v1/core/contact/",
+      "path_parameters": {},
+      "query": {},
+      "case_headers": {},
+      "cookies": {},
+      "case_body": {
+        "encoding": "json",
+        "value": {
+          "email": "0@a.com",
+          "message": "",
+          "name": ""
+        }
+      },
+      "media_type": "application/json",
+      "parent_index": null
+    }
+  ]
+}

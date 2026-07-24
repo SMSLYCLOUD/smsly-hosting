@@ -20,7 +20,7 @@ class EmergencyDeploymentFixTests(APITestCase):
         # 400 because deployment_ids is empty, but NOT 405 Method Not Allowed
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
-    @patch('apps.deployments.views.resume_deploy_task.delay')
+    @patch('apps.deployments.views.deployment.review.resume_deploy_task.delay')
     def test_approve_valid_deployment_succeeds(self, mock_task):
         dep = Deployment.objects.create(service=self.service, commit_hash='abc', status=Deployment.Status.REVIEW)
         url = f'/api/v1/deployments/{dep.id}/approve/'

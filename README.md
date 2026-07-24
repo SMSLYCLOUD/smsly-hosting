@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="docs/cloudneuron-logo.png" alt="CloudNeuron" width="400" />
+  <img src="docs/grid-logo.png" alt="Grid" width="400" />
 </p>
 
-<h1 align="center">CloudNeuron</h1>
+<h1 align="center">Grid</h1>
 <p align="center"><strong>by SMSLY</strong></p>
 
 <p align="center">
@@ -15,7 +15,7 @@
 
 ---
 
-**CloudNeuron** is an open-source alternative to Vercel, Railway, and Heroku that runs on **your own infrastructure** — AWS, Azure, GCP, or bare metal. Enterprise-grade security, zero-downtime deployments, AI-powered observability, and automated disaster recovery, all out of the box.
+**Grid** is an open-source alternative to Vercel, Railway, and Heroku that runs on **your own infrastructure** — AWS, Azure, GCP, or bare metal. Enterprise-grade security, zero-downtime deployments, AI-powered observability, and automated disaster recovery, all out of the box.
 
 ---
 
@@ -34,7 +34,7 @@
 | Caddy HTTPS redirect excludes localhost/internal/.local hostnames | ✅ |
 | GitHub webhook HMAC-SHA256 signature validation | ✅ |
 | Fernet encryption for secrets at rest | ✅ |
-| OAuth social login (GitHub, Google) | ✅ |
+| OAuth social login (GitHub, GitLab, Bitbucket, Google) | ✅ |
 | Inter-service HMAC V2 authentication | ✅ |
 | App-layer rate limiting | ✅ |
 | Unified secret generation (`scripts/generate_env_secrets.py`) | ✅ |
@@ -60,7 +60,7 @@ All identified gaps from the zero-trust audit have been addressed:
 ## 🚀 Features
 
 ### ⚡ Serverless Functions ("Hot Functions")
-Deploy code, not containers. CloudNeuron wraps your Python/Node.js handlers in high-performance micro-containers that scale to zero.
+Deploy code, not containers. Grid wraps your Python/Node.js handlers in high-performance micro-containers that scale to zero.
 
 ### 👁️ AI-Driven Observability & Live Topology
 - **3D City Topology**: Visualize your infrastructure as a living, breathing digital city with animated traffic and real-time connectivity states.
@@ -101,7 +101,9 @@ python scripts/generate_env_secrets.py           # print to stdout
 python scripts/generate_env_secrets.py --env .env # append to .env
 ```
 
-Generates all required secrets: `SECRET_KEY`, `FIELD_ENCRYPTION_KEY`, `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `RABBITMQ_PASSWORD`, `GATEWAY_SECRET`, `GITHUB_WEBHOOK_SECRET`, `AUTOSCALER_API_TOKEN`, `FRP_AUTH_TOKEN`, `PGCAT_ADMIN_PASSWORD`.
+Generates all required secrets: `SECRET_KEY`, `FIELD_ENCRYPTION_KEY`, `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `RABBITMQ_PASSWORD`, `GATEWAY_SECRET`, `GITHUB_WEBHOOK_SECRET`, `AUTOSCALER_API_TOKEN`, `FRP_AUTH_TOKEN`, `PGCAT_ADMIN_PASSWORD`, `REPLICATION_PASSWORD`, `SENTINEL_PASSWORD`, `REGISTRY_HTTP_SECRET`, `CROWDSEC_BOUNCER_KEY`, `COSIGN_PASSWORD`.
+
+Additional flags: `--shell` (output as `KEY=VALUE` lines), `--dry-run` (show without writing).
 
 ### Update an Existing Installation
 
@@ -134,7 +136,7 @@ For non-interactive automation, use: `FORCE_WIPE=1 sudo bash install.sh --wipe`
 | Layer | Technology |
 |-------|------------|
 | **Backend** | Django 5.x, Python 3.11, Celery, Redis |
-| **Frontend** | Next.js 15 (TypeScript), Tailwind CSS v4 |
+| **Frontend** | Next.js 15 (TypeScript), Tailwind CSS v3 |
 | **Database** | PostgreSQL 16 |
 | **Orchestration** | Docker Compose |
 | **SSL/Proxy** | Caddy (Compose master, automatic Let's Encrypt, routes directly to backend/frontend); Traefik (Compose node / lite-agent, label-driven); nginx (bare-metal, **legacy**) |
@@ -151,20 +153,36 @@ For non-interactive automation, use: `FORCE_WIPE=1 sudo bash install.sh --wipe`
                      │  /api/* /ws/* /health /admin       │
                      │  /static/ /media/ → backend:8000    │
                      │  /* (catch-all) → frontend:3000     │
+                     │  *.domain → Traefik (wildcard SSL)  │
                      └──────────┬─────────────────────────┘
                                 │
                ┌────────────────┼────────────────┐
                │                │                │
       ┌────────▼───────┐ ┌─────▼──────┐ ┌───────▼───────┐
       │   Backend      │ │  Frontend  │ │  Celery       │
-      │   Django /     │ │  Next.js   │ │  Workers +    │
-      │   Gunicorn     │ │  SSR       │ │  Beat         │
-     └────────┬───────┘ └────────────┘ └───────┬───────┘
-              │                                │
-     ┌────────▼───────┐                ┌───────▼───────┐
-     │  PostgreSQL    │                │  Redis        │
-     │  (persistent)  │                │  (auth'd)     │
-     └────────────────┘                └───────────────┘
+      │   Django /     │ │  Next.js   │ │  Workers (3   │
+      │   Gunicorn     │ │  SSR       │ │  queues) +    │
+      └────────┬───────┘ └────────────┘ │  Beat         │
+               │                        └───────┬───────┘
+               │                                │
+     ┌─────────┼────────────────────────────────┘
+     │         │
+     │  ┌──────▼───────┐  ┌──────────────┐  ┌───────────────┐
+     │  │  PostgreSQL  │  │  Redis       │  │  RabbitMQ     │
+     │  │  16 (primary │  │  7 (primary  │  │  3 (Celery    │
+     │  │  + replica)  │  │  + replica + │  │  broker)      │
+     │  │  + PgCat     │  │  3 sentinels)│  └───────────────┘
+     │  └──────────────┘  └──────────────┘
+     │
+     │  ┌──────────────┐  ┌──────────────┐  ┌───────────────┐
+     │  │  CrowdSec    │  │  Docker      │  │  Observability│
+     │  │  WAF/IPS     │  │  Registry    │  │  Prometheus + │
+     │  │              │  │  2.8.3       │  │  Grafana +    │
+     │  └──────────────┘  └──────────────┘  │  Loki +       │
+     │                                       │  Promtail     │
+     │                                       └───────────────┘
+     └── Docker Socket Proxy (read-only)
+```
 
 ### Multi-Server Topology
 
@@ -220,11 +238,23 @@ smsly-hosting/
 │   ├── caddy-health-guard.sh    # Caddy health guard
 │   ├── smsly-autoscaler.py      # VPS autoscaler
 │   └── ...
+├── lib/                      # Shell library modules (sourced by install.sh)
 ├── infrastructure/           # Docker, Caddy, Traefik, Monitoring configs
-│   ├── caddy/                # Caddy configuration
+│   ├── caddy/                # Caddy configuration (built with Cloudflare DNS plugin)
 │   ├── docker/               # Docker compose fragments
-│   └── monitoring/           # Prometheus, Grafana configs
-├── docker-compose.prod.yml   # Production stack
+│   ├── monitoring/           # Prometheus, Grafana, Loki, Promtail configs
+│   ├── crowdsec/             # CrowdSec WAF/IPS configuration
+│   ├── frps/                 # FRP tunneling server config
+│   └── pgcat/                # PgCat connection pooler
+├── charts/                   # Helm chart for Kubernetes deployment
+├── cli/                      # Node.js CLI tool
+├── archive/                  # Dead code quarantine (rust_twin, custom-addons, console)
+├── tests/                    # Integration/E2E tests
+├── caddy-config/             # Runtime Caddy configuration (auto-generated)
+├── certs/                    # Registry TLS certificates
+├── postgres/                 # PostgreSQL HA configs
+├── docker-compose.yml        # Development stack
+├── docker-compose.prod.yml   # Production stack (30+ services)
 ├── install.sh                # Universal installer (SEC-002: IP-mode SSL guard)
 ```
 
@@ -288,6 +318,6 @@ smsly-hosting/
 ---
 
 <p align="center">
-  <strong>CloudNeuron</strong> by <a href="https://github.com/SMSLYCLOUD">SMSLY</a><br />
+  <strong>Grid</strong> by <a href="https://github.com/SMSLYCLOUD">SMSLY</a><br />
   <em>Deploy anything. Own everything.</em>
 </p>

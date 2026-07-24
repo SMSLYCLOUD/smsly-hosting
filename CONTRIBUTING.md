@@ -1,8 +1,8 @@
-# Contributing to SMSLY (CloudNeuron)
+# Contributing to SMSLY (Grid)
 
 We are building the **Universal PaaS** for the world. Whether you are in San Francisco, Lagos, Berlin, or Tokyo, we want your code.
 
-> **Brands:** The project is currently branded as **SMSLY**; the public-facing product name is **CloudNeuron**. **"Grid"** is a legacy code name. All three names still appear in older docs, scripts, and code; please prefer the current names in new material.
+> **Brands:** The project is currently branded as **SMSLY**; the public-facing product name is **Grid**. **"Grid"** is a legacy code name. All three names still appear in older docs, scripts, and code; please prefer the current names in new material.
 
 ## 🌟 Bounty Program
 We incentivize critical features. Check our [Issues](https://github.com/SMSLYCLOUD/smsly-hosting/issues) for "Bounty" labels.

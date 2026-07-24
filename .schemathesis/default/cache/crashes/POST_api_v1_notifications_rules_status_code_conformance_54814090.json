@@ -1,0 +1,97 @@
+{
+  "operation": "POST /api/v1/notifications/rules/",
+  "method": "POST",
+  "path_template": "/api/v1/notifications/rules/",
+  "fingerprint": "54814090",
+  "case_id": "VuOdy8",
+  "code_sample": "curl -X POST -H 'Content-Type: application/json' -d '{\"name\": \"\", \"enabled\": false, \"metric\": \"cpu\", \"operator\": \">\", \"threshold\": 0, \"severity\": \"info\", \"channels\": [], \"cooldown_minutes\": 0, \"message_template\": \"\"}' http://127.0.0.1:8089/api/v1/notifications/rules/",
+  "sequence": [
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:8089/api/v1/notifications/rules/",
+      "url_template": "http://127.0.0.1:8089/api/v1/notifications/rules/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "X-Schemathesis-TestCaseId": "VuOdy8",
+        "Content-Type": "application/json",
+        "Content-Length": "163"
+      },
+      "response": {
+        "status_code": 403,
+        "headers": {
+          "date": "Mon, 20 Jul 2026 21:12:53 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "x-frame-options": "DENY",
+          "content-length": "41",
+          "vary": "Cookie, origin",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin"
+        },
+        "body": "{\"error\": \"Invalid or missing signature\"}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "status_code_conformance",
+          "status": "failure",
+          "message": "Undocumented HTTP status code\n\nReceived: 403\nDocumented: 201"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 1.8868999177357182e-05,
+          "mode": "negative"
+        },
+        "components": {
+          "HEADER": "negative",
+          "BODY": "positive"
+        },
+        "phase": {
+          "name": "coverage",
+          "data": {
+            "type": "CoveragePhaseData",
+            "description": "Missing `Authorization` at header",
+            "location": null,
+            "parameter": "Authorization",
+            "parameter_location": "HEADER",
+            "scenario": "missing_parameter"
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {
+          "HEADER": {}
+        }
+      },
+      "path": "/api/v1/notifications/rules/",
+      "path_parameters": {},
+      "query": {},
+      "case_headers": {},
+      "cookies": {},
+      "case_body": {
+        "encoding": "json",
+        "value": {
+          "name": "",
+          "enabled": false,
+          "metric": "cpu",
+          "operator": ">",
+          "threshold": 0,
+          "severity": "info",
+          "channels": [],
+          "cooldown_minutes": 0,
+          "message_template": ""
+        }
+      },
+      "media_type": "application/json",
+      "parent_index": null
+    }
+  ]
+}

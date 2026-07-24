@@ -18,9 +18,9 @@ from django.test import TestCase, override_settings
 from rest_framework.test import APIClient, APIRequestFactory, force_authenticate
 from rest_framework.throttling import BaseThrottle
 
-from apps.deployments.models_mesh import MeshNetwork, WireGuardPeer
-from apps.deployments.models_servers import ManagedServer
-from apps.deployments.views_attestation import (
+from apps.deployments.models.mesh import MeshNetwork, WireGuardPeer
+from apps.deployments.models.servers import ManagedServer
+from apps.deployments.views.attestation import (
     CHALLENGE_CACHE_MAX_ENTRIES,
     CHALLENGE_CACHE_PREFIX,
     attestation_verify,
@@ -177,7 +177,7 @@ class AttestationChallengeCapTests(TestCase):
         self.client.force_authenticate(user=self.user)
 
     def test_challenge_cap_returns_503_when_full(self):
-        from apps.deployments import views_attestation
+        from apps.deployments.views import attestation as views_attestation
 
         # Pre-fill the counter past the cap.
         cache.set(

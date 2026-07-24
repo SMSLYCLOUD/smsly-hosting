@@ -6,7 +6,7 @@ from django.test import TestCase
 
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import EnvironmentVariable, Service
-from apps.deployments.tasks_deploy_local import _build_runtime_env
+from apps.deployments.tasks.deployment.tasks_deploy_local import _build_runtime_env
 
 
 class RuntimeEnvDomainAssemblyTests(TestCase):
@@ -83,7 +83,7 @@ class RuntimeEnvDomainAssemblyTests(TestCase):
     def test_detected_port_persists_to_service(self):
         from unittest.mock import patch
         self.assertEqual(self.service.internal_port, 8000)
-        with patch('apps.deployments.tasks._detect_exposed_port', return_value=4000):
+        with patch('apps.deployments.tasks.deploy.build._detect_exposed_port', return_value=4000):
             env = _build_runtime_env(self.service)
         self.service.refresh_from_db()
         self.assertEqual(env['PORT'], '4000')

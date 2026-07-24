@@ -67,7 +67,7 @@ class UploadSourceZipSlipPrefixTests(APITestCase):
 
     def _post(self, file_bytes):
         upload = SimpleUploadedFile("bundle.zip", file_bytes, content_type="application/zip")
-        with patch("apps.deployments.views.smart_deploy_task.delay"), \
+        with patch("apps.deployments.views.service.deploy.smart_deploy_task.delay"), \
                 patch("apps.deployments.views._resolve_provider_for_service",
                       return_value=self.provider):
             return self.client.post(

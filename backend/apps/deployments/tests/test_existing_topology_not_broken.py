@@ -105,11 +105,11 @@ class TopologyViewImportsTests(TestCase):
     """Verify topology view imports are intact after changes."""
 
     def test_ecosystem_action_exists(self):
-        from apps.deployments.views_topology import TopologyViewSet
+        from apps.deployments.views.topology import TopologyViewSet
         self.assertTrue(hasattr(TopologyViewSet, 'ecosystem'))
 
     def test_list_action_exists(self):
-        from apps.deployments.views_topology import TopologyViewSet
+        from apps.deployments.views.topology import TopologyViewSet
         self.assertTrue(hasattr(TopologyViewSet, 'list'))
 
     def test_ecosystem_graph_builder_importable(self):

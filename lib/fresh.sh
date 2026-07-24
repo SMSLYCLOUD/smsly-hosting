@@ -2098,6 +2098,23 @@ if [ -f "$INSTALL_DIR/scripts/smsly-update-watcher.service" ]; then
     echo -e "${GREEN}  ✓ smsly-update-watcher and caddy-watcher services installed and started${NC}"
 fi
 
+# Install Celery Worker Autoscaler (scales celery-2/celery-3 based on queue depth)
+if [ -f "$INSTALL_DIR/scripts/celery-worker-autoscaler.sh" ]; then
+    echo -e "${BLUE}  → Installing Celery Worker Autoscaler service...${NC}"
+    chmod +x "$INSTALL_DIR/scripts/celery-worker-autoscaler.sh"
+    cp "$INSTALL_DIR/infrastructure/docker/celery-autoscaler.service" /etc/systemd/system/celery-autoscaler.service  || true
+    systemctl daemon-reload
+    if [ "${CELERY_AUTOSCALE_ENABLED:-true}" = "true" ]; then
+        systemctl enable celery-autoscaler || echo -e "${YELLOW}    ⚠ celery-autoscaler enable failed${NC}"
+        systemctl restart celery-autoscaler || echo -e "${YELLOW}    ⚠ celery-autoscaler restart failed${NC}"
+        echo -e "${GREEN}  ✓ celery-autoscaler service installed and started (scaling celery-2/3 on demand)${NC}"
+    else
+        systemctl disable celery-autoscaler 2>/dev/null || true
+        systemctl stop celery-autoscaler 2>/dev/null || true
+        echo -e "${BLUE}  → celery-autoscaler installed but disabled (CELERY_AUTOSCALE_ENABLED=false)${NC}"
+    fi
+fi
+
 # -----------------------------------------------------------------------------
 # 10. CLI Integration
 # -----------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 import logging
 
-from apps.deployments.models_audit import AuditLog
+from apps.core.models.audit import AuditLog
 
 logger = logging.getLogger(__name__)
 

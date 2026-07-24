@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 import dns.exception
 import dns.resolver
-from apps.deployments.domain_utils import normalize_domain
+from .utils import normalize_domain
 
 DEFAULT_RESOLVER_TIMEOUT = 2.0
 MAX_CNAME_HOPS = 10

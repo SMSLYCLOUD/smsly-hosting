@@ -2,7 +2,7 @@
 from django.contrib import admin
 
 from .models import MediaNodeProfile, MediaParticipant, MediaRoom
-from .models_attestation import AttestationAuditLog, AttestationProfile
+from .models.attestation import AttestationAuditLog, AttestationProfile
 
 
 @admin.register(MediaNodeProfile)

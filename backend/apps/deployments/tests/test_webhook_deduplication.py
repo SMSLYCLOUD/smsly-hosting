@@ -17,7 +17,7 @@ from django.test import Client, TestCase
 
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import Service
-from apps.deployments.models_audit import WebhookDelivery
+from apps.deployments.models.audit import WebhookDelivery
 
 
 class WebhookDeliveryDeduplicationTests(TestCase):

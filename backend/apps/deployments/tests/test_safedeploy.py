@@ -4,7 +4,7 @@ from unittest.mock import patch
 from django.contrib.auth.models import User
 from django.test import TestCase
 
-from apps.deployments.models_safedeploy import MigrationValidation
+from apps.deployments.models.safedeploy import MigrationValidation
 from apps.deployments.services.safedeploy.branch_preview_manager import (
     BranchPreviewManager,
 )
@@ -55,12 +55,12 @@ class RedactionTestCase(unittest.TestCase):
         self.assertNotIn("sk-test-12345", redacted2)
 
 from apps.cloud.models import CloudProvider  # noqa: E402
-from apps.deployments.models_core import Deployment, EnvironmentVariable, Service  # noqa: E402
-from apps.deployments.models_safedeploy import PreviewEnvironment  # noqa: E402
+from apps.deployments.models.core import Deployment, EnvironmentVariable, Service  # noqa: E402
+from apps.deployments.models.safedeploy import PreviewEnvironment  # noqa: E402
 from apps.deployments.services.safedeploy.postgres_snapshot_manager import (  # noqa: E402
     PostgresSnapshotManager,
 )
-from apps.deployments.tasks_safedeploy import (  # noqa: E402
+from apps.deployments.tasks.deployment.tasks_safedeploy import (  # noqa: E402
     _make_clone_database_name,
     provision_preview_service_job,
 )
@@ -162,8 +162,8 @@ class PreviewProvisionJobTestCase(TestCase):
             status=PreviewEnvironment.Status.HEALTH_CHECK_RUNNING,
         )
 
-    @patch("apps.deployments.tasks_safedeploy._dispatch_preview_deployment")
-    @patch("apps.deployments.tasks_safedeploy._sync_preview_addons")
+    @patch("apps.deployments.tasks.deployment.tasks_safedeploy._dispatch_preview_deployment")
+    @patch("apps.deployments.tasks.deployment.tasks_safedeploy._sync_preview_addons")
     def test_provision_job_syncs_preview_service_and_dispatches_each_run(self, mock_sync_addons, mock_dispatch):
         provision_preview_service_job(str(self.preview.id))
 

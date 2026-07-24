@@ -126,7 +126,7 @@ class MetricsCollector:
     def _from_service_metrics(self) -> MetricsSnapshot:
         from datetime import timedelta
 
-        from apps.deployments.models_metrics import ServiceMetric
+        from apps.autoscaler.models.metrics import ServiceMetric
         now = timezone.now()
         recent = ServiceMetric.objects.filter(
             service=self.service,

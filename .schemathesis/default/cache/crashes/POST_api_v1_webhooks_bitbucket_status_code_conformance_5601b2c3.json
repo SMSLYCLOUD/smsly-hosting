@@ -1,0 +1,81 @@
+{
+  "operation": "POST /api/v1/webhooks/bitbucket/",
+  "method": "POST",
+  "path_template": "/api/v1/webhooks/bitbucket/",
+  "fingerprint": "5601b2c3",
+  "case_id": "0kfy7l",
+  "code_sample": "curl -X POST http://127.0.0.1:8089/api/v1/webhooks/bitbucket/",
+  "sequence": [
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:8089/api/v1/webhooks/bitbucket/",
+      "url_template": "http://127.0.0.1:8089/api/v1/webhooks/bitbucket/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "X-Schemathesis-TestCaseId": "0kfy7l",
+        "Content-Length": "0"
+      },
+      "response": {
+        "status_code": 503,
+        "headers": {
+          "date": "Tue, 21 Jul 2026 00:17:01 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "vary": "Accept, Cookie, origin",
+          "allow": "POST, OPTIONS",
+          "x-frame-options": "DENY",
+          "content-length": "42",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin"
+        },
+        "body": "{\"error\":\"Webhook processing unavailable\"}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "status_code_conformance",
+          "status": "failure",
+          "message": "Undocumented HTTP status code\n\nReceived: 503\nDocumented: 200"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 6.926000060047954e-05,
+          "mode": "positive"
+        },
+        "components": {},
+        "phase": {
+          "name": "coverage",
+          "data": {
+            "type": "CoveragePhaseData",
+            "description": "Default positive test case",
+            "location": null,
+            "parameter": null,
+            "parameter_location": null,
+            "scenario": "default_positive_test"
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {}
+      },
+      "path": "/api/v1/webhooks/bitbucket/",
+      "path_parameters": {},
+      "query": {},
+      "case_headers": {},
+      "cookies": {},
+      "case_body": {
+        "encoding": "none"
+      },
+      "media_type": null,
+      "parent_index": null
+    }
+  ]
+}

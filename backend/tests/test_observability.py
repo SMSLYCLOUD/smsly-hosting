@@ -31,7 +31,7 @@ class LokiQueryResolutionTests(TestCase):
 
         self.client.force_login(self.user)
 
-    @patch('apps.core.views_observability.requests.get')
+    @patch('apps.core.views.observability.requests.get')
     def test_loki_query_resolves_uuid_with_operators(self, mock_get):
         # Mock responses from Loki
         mock_get.return_value.status_code = 200

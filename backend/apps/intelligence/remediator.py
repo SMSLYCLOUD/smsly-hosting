@@ -9,8 +9,8 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.deployments.models import Deployment, Service
-from apps.deployments.models_audit import AuditLog
-from apps.deployments.tasks_deploy import (
+from apps.core.models.audit import AuditLog
+from apps.deployments.tasks.deployment.tasks_deploy import (
     _resolve_provider_for_service,
     enqueue_smart_deploy_task,
 )

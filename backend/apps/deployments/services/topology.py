@@ -2,7 +2,7 @@
 import re
 
 from ..models import Service  # type: ignore[attr-defined]
-from ..models_addons import Addon
+from ..models.addons import Addon
 
 
 class TopologyService:

@@ -1,5 +1,5 @@
 # ═══════════════════════════════════════════════════════════════════════════════
-# PgCat — Production Connection Pooler for CloudNeuron
+# PgCat — Production Connection Pooler for Grid
 # ═══════════════════════════════════════════════════════════════════════════════
 # Multi-threaded Rust-based PostgreSQL proxy with:
 #   • Transaction-mode pooling (Django-compatible)

@@ -1,7 +1,7 @@
 """Tests for ecosystem planning helpers."""
 
 from django.test import SimpleTestCase
-from services.ecosystem import (
+from apps.deployments.services.ecosystem import (
     _apply_generic_ecosystem_intelligence,
     _apply_plan_repo_defaults,
     _build_heuristic_plan,

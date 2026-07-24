@@ -224,7 +224,7 @@ class WireGuardService:
         If the peer has a server-managed key (private_key is empty), the
         [Interface] section omits PrivateKey so the node keeps its own key.
         """
-        from apps.deployments.models_mesh import WireGuardPeer
+        from apps.deployments.models.mesh import WireGuardPeer
 
         if not peer.private_key:
             raise ValueError(
@@ -301,8 +301,8 @@ class WireGuardService:
         Returns:
             WireGuardPeer instance
         """
-        from apps.deployments.models_core import ManagedServer
-        from apps.deployments.models_mesh import WireGuardPeer
+        from apps.deployments.models.core import ManagedServer
+        from apps.deployments.models.mesh import WireGuardPeer
 
         # Check if peer already exists
         existing = WireGuardPeer.objects.filter(
@@ -389,7 +389,7 @@ class WireGuardService:
         # cannot race on next_available_ip() and get the same address.
         # SSH operations are kept outside the atomic block to avoid holding
         # a DB row lock during network I/O.
-        from apps.deployments.models_mesh import MeshNetwork
+        from apps.deployments.models.mesh import MeshNetwork
         with transaction.atomic():
             mesh = MeshNetwork.objects.select_for_update().get(id=mesh.id)
             wg_address = mesh.next_available_ip()
@@ -435,8 +435,8 @@ class WireGuardService:
 
         This is idempotent and intended for server provisioning/connect flows.
         """
-        from apps.deployments.models_core import ManagedServer
-        from apps.deployments.models_mesh import MeshNetwork
+        from apps.deployments.models.core import ManagedServer
+        from apps.deployments.models.mesh import MeshNetwork
 
         if not server:
             raise ValueError("server is required")
@@ -466,7 +466,7 @@ class WireGuardService:
             mesh.is_active = True
             mesh.save(update_fields=["is_active", "updated_at"])
 
-        from apps.deployments.models_mesh import WireGuardPeer
+        from apps.deployments.models.mesh import WireGuardPeer
         local_existed = WireGuardPeer.objects.filter(
             mesh=mesh,
             server=None,
@@ -516,7 +516,7 @@ class WireGuardService:
                 mesh.mesh_last_error = ""
                 mesh.save(update_fields=["mesh_status", "mesh_last_error", "updated_at"])
                 try:
-                    from apps.deployments.tasks_mesh import deploy_mesh_task
+                    from apps.deployments.tasks.infra.tasks_mesh import deploy_mesh_task
                     deploy_mesh_task.delay(str(mesh.id))
                     queued = True
                 except Exception as exc:
@@ -538,8 +538,11 @@ class WireGuardService:
         Remove a peer from the mesh.
 
         1. SSH into the target and tear down WireGuard
-        2. Remove peer from all other configs
+        2. Update configs on all remaining peers
         3. Delete the WireGuardPeer record
+
+        Configs are updated BEFORE deleting the peer record so that if any
+        deploy fails, the peer can still be retried.
         """
         mesh = peer.mesh
         server = peer.server
@@ -551,17 +554,17 @@ class WireGuardService:
             except Exception as e:
                 logger.warning(f"Failed to tear down WG on {server}: {e}")
 
-        # Delete the peer record
-        peer.delete()
-
-        # Update configs on all remaining peers
-        from apps.deployments.models_mesh import WireGuardPeer
-        remaining_peers = WireGuardPeer.objects.filter(mesh=mesh, is_active=True)
+        # Update configs on all remaining peers BEFORE deleting the record
+        from apps.deployments.models.mesh import WireGuardPeer
+        remaining_peers = WireGuardPeer.objects.filter(mesh=mesh, is_active=True).exclude(id=peer.id)
         for p in remaining_peers:
             try:
                 cls.deploy_config(p)
             except Exception as e:
                 logger.warning(f"Failed to update config on {p}: {e}")
+
+        # Now safe to delete
+        peer.delete()
 
     @classmethod
     def deploy_config(cls, peer):
@@ -705,7 +708,7 @@ class WireGuardService:
 
         Call this after adding/removing a peer to update everyone's config.
         """
-        from apps.deployments.models_mesh import MeshNetwork
+        from apps.deployments.models.mesh import MeshNetwork
 
         iface = cls.validate_interface_name(mesh.interface_name)
         if mesh.name != "default":
@@ -721,7 +724,7 @@ class WireGuardService:
                 logger.error(message)
                 return {"success": [], "failed": [{"peer": "mesh", "error": message}]}
 
-        from apps.deployments.models_mesh import WireGuardPeer
+        from apps.deployments.models.mesh import WireGuardPeer
         peers = WireGuardPeer.objects.filter(mesh=mesh, is_active=True)
         results = {"success": [], "failed": []}
 
@@ -752,7 +755,7 @@ class WireGuardService:
 
         Pings each peer from the local server and updates latency_ms.
         """
-        from apps.deployments.models_mesh import WireGuardPeer
+        from apps.deployments.models.mesh import WireGuardPeer
         local_peer = WireGuardPeer.objects.filter(mesh=mesh, is_local=True).first()
         if not local_peer:
             return {"error": "No local peer configured in mesh"}
@@ -866,7 +869,7 @@ class WireGuardService:
         """Detect this server's public IP for the WireGuard endpoint."""
         import requests as req
         try:
-            from apps.deployments.models_core import PlatformConfig
+            from apps.deployments.models.core import PlatformConfig
             config = PlatformConfig.load()
             configured_ip = str(getattr(config, "server_ip", "") or "").strip()
             if configured_ip:

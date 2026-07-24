@@ -161,7 +161,7 @@ class SSLMonitorService:
         # Caddy auto-renews certs. Trigger a safe config apply/reload so
         # failed/paused cert jobs are nudged without manual SSH intervention.
         try:
-            from services.caddy_manager import apply_caddyfile, generate_caddyfile
+            from apps.deployments.services.caddy_manager import apply_caddyfile, generate_caddyfile
 
             config = PlatformConfig.load()
             caddyfile = generate_caddyfile(config)

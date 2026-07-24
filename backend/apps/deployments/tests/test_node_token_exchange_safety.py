@@ -154,7 +154,7 @@ class NodeTokenExchangeSafetyTests(TestCase):
     def test_audits_failed_attempts(self):
         """A failed HMAC attempt writes a NODE_TOKEN_EXCHANGE_ATTEMPT
         audit log row with success=False."""
-        from apps.deployments.models_audit import AuditLog
+        from apps.deployments.models.audit import AuditLog
         AuditLog.objects.all().delete()
         response = self.client.post(
             self.URL,
@@ -172,7 +172,7 @@ class NodeTokenExchangeSafetyTests(TestCase):
 
     def test_audits_successful_attempts(self):
         """A successful exchange writes an audit log row with success=True."""
-        from apps.deployments.models_audit import AuditLog
+        from apps.deployments.models.audit import AuditLog
         AuditLog.objects.all().delete()
         kwargs = _signed_post_kwargs(
             {"username": "admin", "password": "STRONG_password_123!"},

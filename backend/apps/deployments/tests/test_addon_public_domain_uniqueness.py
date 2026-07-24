@@ -5,7 +5,7 @@ from django.test import TestCase
 
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import Service
-from apps.deployments.models_addons import Addon
+from apps.deployments.models.addons import Addon
 
 
 class AddonPublicDomainUniquenessTests(TestCase):

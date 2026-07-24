@@ -11,7 +11,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from apps.deployments.views_servers import (
+from apps.deployments.views.server import (
     ManagedServerViewSet,
     ServerCheckAllThrottle,
 )
@@ -53,7 +53,7 @@ class Finding181CheckAllRateLimitTests(TestCase):
 
         from django.core.cache import cache
 
-        from apps.deployments.models_servers import ManagedServer
+        from apps.deployments.models.servers import ManagedServer
         cache.clear()
         ManagedServer.objects.create(
             owner=self.user, name="s1", host="198.51.100.1",

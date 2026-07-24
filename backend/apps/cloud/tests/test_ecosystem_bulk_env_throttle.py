@@ -27,7 +27,7 @@ ECOSYSTEM_THROTTLE_RATES = {
 
 REST_FRAMEWORK_ECOSYSTEM = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "apps.deployments.api_token_auth.APITokenAuthentication",
+        "apps.deployments.models.api_token.APITokenAuthentication",
         "rest_framework.authentication.TokenAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [

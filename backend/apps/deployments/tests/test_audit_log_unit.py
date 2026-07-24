@@ -4,7 +4,7 @@ import json
 
 from django.test import TestCase
 
-from apps.deployments.models_audit import AuditLog
+from apps.deployments.models.audit import AuditLog
 
 
 class AuditLogUnitTests(TestCase):

@@ -1,6 +1,6 @@
 from rest_framework.exceptions import ValidationError
 
-from apps.deployments.models_core import ManagedServer
+from apps.deployments.models.core import ManagedServer
 
 
 class ServerGuard:
@@ -15,7 +15,10 @@ class ServerGuard:
 
         from django.conf import settings
         # Global override or specific server flag
-        allow_control_plane = getattr(settings, 'CLOUDNEURON_ALLOW_CONTROL_PLANE_WORKLOADS', False)
+        allow_control_plane = getattr(
+            settings, 'GRID_ALLOW_CONTROL_PLANE_WORKLOADS',
+            getattr(settings, 'CLOUDNEURON_ALLOW_CONTROL_PLANE_WORKLOADS', False),
+        )
         server_allows = bool(getattr(server, "allow_user_workloads", False))
 
         is_primary = bool(getattr(server, "is_primary", False))

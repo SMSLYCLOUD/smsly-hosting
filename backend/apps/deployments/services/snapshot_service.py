@@ -63,7 +63,7 @@ class SnapshotService:
         """Assemble the config payload from a live Service instance and
         its related models (env vars, addons, custom domains, etc.).
         """
-        from apps.deployments.models_core import EnvironmentVariable
+        from apps.deployments.models.core import EnvironmentVariable
 
         # Env vars (mask secrets)
         env_vars = {}
@@ -76,7 +76,7 @@ class SnapshotService:
         # Addons summary
         addons = []
         try:
-            from apps.deployments.models_addons import Addon
+            from apps.deployments.models.addons import Addon
             for addon in Addon.objects.filter(service=service):
                 addons.append({
                     'id': str(addon.id),
@@ -166,8 +166,8 @@ class SnapshotService:
         Returns the created ``ServiceSnapshot`` instance.
         """
 
-        from apps.deployments.models_backup import ServiceSnapshot
-        from apps.deployments.models_core import Service
+        from apps.deployments.models.backup import ServiceSnapshot
+        from apps.deployments.models.core import Service
 
         service = Service.objects.get(id=service_id)
         config_data = SnapshotService.build_config_data(service)
@@ -214,7 +214,7 @@ class SnapshotService:
         )
 
         # Upload to cloud storage if scheduled with cloud destination
-        from apps.deployments.models_backup import SnapshotSchedule
+        from apps.deployments.models.backup import SnapshotSchedule
         sched = SnapshotSchedule.objects.filter(service=service).first()
         if sched and sched.storage_backend == 's3' and sched.s3_bucket:
             import json
@@ -261,7 +261,7 @@ class SnapshotService:
         """
         from urllib.parse import urlparse
 
-        from apps.deployments.models_addons import Addon
+        from apps.deployments.models.addons import Addon
 
         # Find the service's POSTGRES addon connection URL
         db_url = None
@@ -288,9 +288,10 @@ class SnapshotService:
                 return None
 
             short_id = str(service.id).split('-')[0] if service.id else 'svc'
+            hint_suffix = f"_{snapshot_id_hint}" if snapshot_id_hint else ""
             import time as _time
             ts = int(_time.time())
-            clone_name = f"smsly_snap_{short_id}_{ts}"
+            clone_name = f"smsly_snap_{short_id}{hint_suffix}_{ts}"
 
             from .safedeploy.postgres_snapshot_manager import PostgresSnapshotManager
             mgr = PostgresSnapshotManager(admin_db_url=db_url)
@@ -325,7 +326,7 @@ class SnapshotService:
         """
         from urllib.parse import urlparse
 
-        from apps.deployments.models_addons import Addon
+        from apps.deployments.models.addons import Addon
 
         db_url = None
         try:
@@ -462,8 +463,8 @@ class SnapshotService:
         """
         from django.db import transaction
 
-        from apps.deployments.models_backup import ServiceSnapshot
-        from apps.deployments.models_core import EnvironmentVariable, Service
+        from apps.deployments.models.backup import ServiceSnapshot
+        from apps.deployments.models.core import EnvironmentVariable, Service
 
         snapshot = ServiceSnapshot.objects.select_related('service').get(
             id=snapshot_id,
@@ -566,14 +567,23 @@ class SnapshotService:
             'db_clone_restored': db_clone_restored,
             'changes': changes,
             'redeployed': False,
+            'requested_by': str(requesting_user.id) if requesting_user else None,
         }
 
         # ── Optionally trigger redeployment ──────────────────────────
         if redeploy:
             try:
-                from apps.deployments.tasks import trigger_deployment_task
-                trigger_deployment_task.delay(
-                    service_id=str(target_service.id),
+                from apps.deployments.tasks import smart_deploy_task
+                from apps.deployments.models import Deployment
+                new_dep = Deployment.objects.create(
+                    service=target_service,
+                    status='QUEUED',
+                    commit_hash='snapshot-restore',
+                    commit_message='Redeploy after snapshot restore',
+                )
+                smart_deploy_task.delay(
+                    deployment_id=str(new_dep.id),
+                    provider_id=str(target_service.provider_id or ''),
                 )
                 result['redeployed'] = True
             except Exception as exc:
@@ -634,7 +644,7 @@ class SnapshotService:
 
         Returns the snapshot metadata and the computed diff.
         """
-        from apps.deployments.models_backup import ServiceSnapshot
+        from apps.deployments.models.backup import ServiceSnapshot
 
         snap_a = ServiceSnapshot.objects.get(id=snapshot_a_id)
         snap_b = ServiceSnapshot.objects.get(id=snapshot_b_id)

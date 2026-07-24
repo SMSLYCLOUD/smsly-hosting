@@ -4,7 +4,7 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from apps.deployments.models import Project, Service
-from apps.deployments.models_cloud_storage import CloudStorageDestination
+from apps.deployments.models.cloud_storage import CloudStorageDestination
 
 User = get_user_model()
 

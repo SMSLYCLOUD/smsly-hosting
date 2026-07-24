@@ -24,7 +24,7 @@ from cryptography.fernet import Fernet
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
-from apps.deployments.models_backup import BackupEncryptionKey
+from apps.deployments.models.backup import BackupEncryptionKey
 from apps.deployments.services.backup_service import (
     _CHUNKED_BACKUP_FINGERPRINT_BYTES,
     _CHUNKED_BACKUP_KEY_ID_BYTES,

@@ -28,7 +28,7 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         from django.utils import timezone as tz
 
-        from apps.deployments.models_backup import BackupEncryptionKey
+        from apps.deployments.models.backup import BackupEncryptionKey
 
         input_path = options["input_file"]
         dry_run = options["dry_run"]

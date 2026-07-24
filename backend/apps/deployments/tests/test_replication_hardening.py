@@ -1,6 +1,6 @@
 import django.test
 
-from apps.deployments.views_replication import ReplicationDeploySerializer
+from apps.deployments.views.replication import ReplicationDeploySerializer
 
 
 class ReplicationHardeningTests(django.test.TestCase):

@@ -456,7 +456,7 @@ def get_installation_for_repo(repo_full_name: str):  # noqa: ANN201
 
     Returns the installation instance or None.
     """
-    from apps.deployments.models_github_app import GitHubAppInstallation
+    from apps.deployments.models.github_app import GitHubAppInstallation
 
     # Check installations with explicit repo lists
     inst = GitHubAppInstallation.objects.filter(

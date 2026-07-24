@@ -79,7 +79,7 @@ class UploadSourceSecurityTests(APITestCase):
         )
 
     def _post_with_provider(self, file_bytes, name="bundle.zip"):
-        with patch("apps.deployments.views.smart_deploy_task.delay"), \
+        with patch("apps.deployments.views.service.deploy.smart_deploy_task.delay"), \
                 patch("apps.deployments.views._resolve_provider_for_service",
                       return_value=self.provider):
             return self._post(file_bytes, name)

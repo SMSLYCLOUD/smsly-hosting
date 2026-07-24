@@ -254,14 +254,14 @@ safe_update_rollback() {
 
     # Stop any app containers left from the failed attempt so the --clean dump
     # does not drop objects while they are connected (avoids partial restore).
-    docker compose -f "$COMPOSE_FILE" stop backend frontend celery celery-deploy celery-fast celery-beat pgcat 2>/dev/null || true
+    docker compose -f "$COMPOSE_FILE" stop --timeout 30 backend frontend celery celery-deploy celery-fast celery-beat pgcat 2>/dev/null || true
 
     # Restore DB BEFORE bringing app containers up, so the --clean dump does not
     # drop objects while backend/celery are connected (transient errors and can
     # leave behind new-version tables from a partial migration).
     if [ -n "${BACKUP_FILE:-}" ] && [ -f "$BACKUP_FILE" ]; then
         _warn "Restoring database from backup..."
-        docker exec -i smsly-postgres-primary psql -U "$POSTGRES_USER" "$POSTGRES_DB" < "$BACKUP_FILE"  && \
+        timeout 600 docker exec -i smsly-postgres-primary psql -U "$POSTGRES_USER" "$POSTGRES_DB" < "$BACKUP_FILE"  && \
             _ok "DB restored" || _warn "DB restore failed"
     fi
 
@@ -323,3 +323,4 @@ if [ "$SAFE_UPDATE_SOURCED" = "false" ]; then
     echo -e "${GREEN}═══════════════════════════════════════════════════════════════${NC}"
     rm -f "$SNAPSHOT_FILE"
 fi
+

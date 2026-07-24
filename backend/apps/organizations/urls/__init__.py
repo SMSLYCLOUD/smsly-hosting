@@ -1,0 +1,13 @@
+"""Organization URL routing."""
+from django.urls import include, path
+from rest_framework.routers import DefaultRouter
+
+from ..views import OrganizationSSOViewSet, OrganizationViewSet
+
+router = DefaultRouter()
+router.register(r'', OrganizationViewSet, basename='organization')
+router.register(r'sso', OrganizationSSOViewSet, basename='org-sso')
+
+urlpatterns = [
+    path('', include(router.urls)),
+]

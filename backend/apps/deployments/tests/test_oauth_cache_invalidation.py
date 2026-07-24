@@ -54,7 +54,7 @@ class OAuthCacheInvalidationTests(TestCase):
         # number of times the post_save receiver fires. The
         # receiver is registered at module import time, so we
         # spy on it through the cache delete side-effect.
-        from apps.deployments import views_oauth
+        from apps.core.views import oauth as views_oauth
         original_delete = views_oauth.cache.delete
         delete_calls = []
 
@@ -91,7 +91,7 @@ class OAuthCacheInvalidationTests(TestCase):
 
         cache.set("social_app:github:42", "stale", timeout=60)
 
-        from apps.deployments.views_oauth import _invalidate_social_app_cache
+        from apps.core.views.oauth import _invalidate_social_app_cache
 
         instance = SocialApp(
             id=42, provider="github", client_id="id", secret="sec", name="GitHub",

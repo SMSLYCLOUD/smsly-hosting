@@ -7,13 +7,13 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 
 from apps.deployments.models import Project, Service
-from apps.deployments.models_backup import (
+from apps.deployments.models.backup import (
     BackupSchedule,
     ServerBackup,
     ServiceBackup,
 )
 from apps.deployments.services.backup_service import purge_user_backups
-from apps.deployments.tasks_backup import purge_user_backups_task
+from apps.deployments.tasks.data.tasks_backup import purge_user_backups_task
 
 User = get_user_model()
 
@@ -125,7 +125,7 @@ class BackupGDPRCleanupTest(TestCase):
                 os.remove(path)
 
     def test_purge_user_backups_task_emits_audit_log(self):
-        from apps.deployments.models_audit import AuditLog
+        from apps.deployments.models.audit import AuditLog
 
         path = self._make_tarball()
         try:

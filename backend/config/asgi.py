@@ -11,7 +11,7 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 django.setup()
 
 import apps.deployments.routing
-from apps.deployments.middleware import (
+from apps.core.middleware.dynamic_hosts import (
     DynamicAllowedHostsASGIMiddleware,
     QueryStringAuthMiddleware,
     RedisResilientMiddleware,

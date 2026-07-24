@@ -1,0 +1,91 @@
+{
+  "operation": "GET /api/v1/topology/",
+  "method": "GET",
+  "path_template": "/api/v1/topology/",
+  "fingerprint": "1358faaf",
+  "case_id": "Fstn6M",
+  "code_sample": "curl -X GET 'http://127.0.0.1:8089/api/v1/topology/?page=0'",
+  "sequence": [
+    {
+      "method": "GET",
+      "url": "http://127.0.0.1:8089/api/v1/topology/?page=0",
+      "url_template": "http://127.0.0.1:8089/api/v1/topology/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "X-Schemathesis-TestCaseId": "Fstn6M"
+      },
+      "response": {
+        "status_code": 401,
+        "headers": {
+          "date": "Tue, 21 Jul 2026 00:17:12 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "www-authenticate": "[Filtered]",
+          "vary": "Accept, Cookie, origin",
+          "allow": "GET, HEAD, OPTIONS",
+          "x-frame-options": "DENY",
+          "content-length": "95",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin"
+        },
+        "body": "{\"error\":\"Authentication credentials were not provided.\",\"code\":\"unauthenticated\",\"status\":401}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "status_code_conformance",
+          "status": "failure",
+          "message": "Undocumented HTTP status code\n\nReceived: 401\nDocumented: 200"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 3.440100408624858e-05,
+          "mode": "negative"
+        },
+        "components": {
+          "HEADER": "negative",
+          "QUERY": "positive"
+        },
+        "phase": {
+          "name": "coverage",
+          "data": {
+            "type": "CoveragePhaseData",
+            "description": "Missing `Authorization` at header",
+            "location": null,
+            "parameter": "Authorization",
+            "parameter_location": "HEADER",
+            "scenario": "missing_parameter"
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {
+          "HEADER": {},
+          "QUERY": {
+            "page": 0
+          }
+        }
+      },
+      "path": "/api/v1/topology/",
+      "path_parameters": {},
+      "query": {
+        "page": "0"
+      },
+      "case_headers": {},
+      "cookies": {},
+      "case_body": {
+        "encoding": "none"
+      },
+      "media_type": null,
+      "parent_index": null
+    }
+  ]
+}

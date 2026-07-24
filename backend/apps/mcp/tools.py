@@ -353,7 +353,7 @@ def provision_service_addon(service_id: str, addon_type: str, user_id: str | Non
         if user:
             assert_can_write(user, svc, action='provision database addon')
 
-        from apps.deployments.services.addon_provisioner import addon_provisioner
+        from apps.addons.services.addon_provisioner import addon_provisioner
         addon_type_upper = addon_type.upper()
         if addon_type_upper not in dict(Addon.Type.choices):
             return {"error": f"Unsupported addon type: {addon_type}. Valid options: {list(dict(Addon.Type.choices).keys())}"}

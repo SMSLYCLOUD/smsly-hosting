@@ -4,7 +4,7 @@ from unittest import mock
 from django.test import TestCase
 
 from apps.deployments.models import PlatformConfig
-from apps.deployments.patching import is_valid_host
+from apps.core.patching import is_valid_host
 
 
 class IsValidHostTests(TestCase):

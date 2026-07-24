@@ -13,7 +13,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from apps.deployments.views_subdomains import RESERVED_LABELS
+from apps.deployments.views.subdomains import RESERVED_LABELS
 
 User = get_user_model()
 

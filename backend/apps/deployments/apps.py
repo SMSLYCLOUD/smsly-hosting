@@ -126,7 +126,7 @@ class DeploymentsConfig(AppConfig):
         # perform database/proxy side effects during management commands.
         if not getattr(settings, 'IS_TESTING', False) and _is_serving_process():
             try:
-                from .startup import schedule_startup_caddy_sync
+                from .services.startup import schedule_startup_caddy_sync
                 schedule_startup_caddy_sync()
             except Exception:
                 pass

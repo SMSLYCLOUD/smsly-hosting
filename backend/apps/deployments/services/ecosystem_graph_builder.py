@@ -54,7 +54,7 @@ def _db_host_port() -> tuple:
 
 def _registry_host_port() -> tuple:
     """Extract registry host and port from settings."""
-    from apps.deployments.models_core import PlatformConfig
+    from apps.deployments.models.core import PlatformConfig
     url = PlatformConfig.get_config_value("container_registry_url") or getattr(
         settings, 'CONTAINER_REGISTRY_URL', 'registry:5000',
     )

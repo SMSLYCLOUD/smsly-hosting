@@ -6,7 +6,7 @@ import sqlparse
 from django.core.cache import cache
 from sqlparse.sql import Statement
 
-from apps.deployments.models_addons import Addon
+from apps.deployments.models.addons import Addon
 
 logger = logging.getLogger(__name__)
 

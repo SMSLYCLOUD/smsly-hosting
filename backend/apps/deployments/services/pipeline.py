@@ -26,11 +26,11 @@ import git
 import yaml
 from django.conf import settings
 from django.utils import timezone
-from services.builders import cleanup_stuck_buildkit as _cleanup_stuck_buildkit
-from services.builders import is_buildkit_cache_error, prune_buildkit_cache
+from apps.deployments.services.builders import cleanup_stuck_buildkit as _cleanup_stuck_buildkit
+from apps.deployments.services.builders import is_buildkit_cache_error, prune_buildkit_cache
 
 from apps.cloud.services.builder import NixpacksBuilder
-from apps.deployments.ai_router import (
+from apps.deployments.services.ai_router import (
     generate_ai_router_proxy_config,
     get_ollama_model_name,
     is_ai_router_service,
@@ -765,7 +765,7 @@ class PipelineManager:
             # Step B: Consult the AI Senate for resource recommendations and diagnosis
             # (Keeping the resource logic as it was but optimizing the prompt)
             prompt = (
-                f"Analyze this repo for deployment on CloudNeuron (Docker-based PaaS).\n"
+                f"Analyze this repo for deployment on Grid (Docker-based PaaS).\n"
                 f"Service: {self.service.name}\n"
                 f"Stack Context:\n{ai_context}\n\n"
                 f"Return ONLY a JSON object:\n"
@@ -1312,7 +1312,7 @@ class PipelineManager:
             otherwise (signalling the caller to fall through to heuristic
             auto-detection).
         """
-        from services.grid_addons_parser import (
+        from apps.addons.services.grid_addons_parser import (
             find_grid_addons_file,
             load_grid_addons,
         )
@@ -1342,7 +1342,7 @@ class PipelineManager:
         )
 
         # ── Phase 1: Provision standard addons ──
-        from services.addon_provisioner import addon_provisioner
+        from apps.addons.services.addon_provisioner import addon_provisioner
 
         from apps.deployments.models import EnvironmentVariable
         from apps.deployments.models_addons import Addon
@@ -1440,7 +1440,7 @@ class PipelineManager:
         if manifest.bundles:
             import hashlib
 
-            from services.bundle_provisioner import bundle_provisioner
+            from apps.addons.services.bundle_provisioner import bundle_provisioner
 
             from apps.deployments.models_bundles import Bundle, BundleComponent
 
@@ -1782,7 +1782,7 @@ class PipelineManager:
 
             # --- Provision missing addons ---
             # pylint: disable=import-outside-toplevel
-            from services.addon_provisioner import addon_provisioner
+            from apps.addons.services.addon_provisioner import addon_provisioner
 
             from apps.deployments.models_addons import Addon
 
@@ -2394,7 +2394,7 @@ class PipelineManager:
             env[ev.key] = ev.value
 
         # Inject addon connection URLs
-        from services.addon_provisioner import AddonProvisioner
+        from apps.addons.services.addon_provisioner import AddonProvisioner
 
         from apps.deployments.models_addons import Addon
         for addon in Addon.objects.filter(

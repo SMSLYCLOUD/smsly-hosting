@@ -494,6 +494,15 @@ get_redis_service() {
     fi
 }
 
+# Return --profile extra-workers if autoscaling is DISABLED.
+# When autoscaling is enabled, celery-2/celery-3 are managed by the
+# autoscaler and should NOT be started by regular compose up commands.
+celery_extra_workers_profile() {
+    if [ "${CELERY_AUTOSCALE_ENABLED:-false}" != "true" ]; then
+        echo "--profile extra-workers"
+    fi
+}
+
 compose_stack_services() {
     local services=""
     services="$(docker compose -f "$COMPOSE_FILE" config --services)" || return $?
@@ -1198,7 +1207,12 @@ safe_refresh_runtime_services() {
 ensure_celery_workers_running() {
     local celery_services=()
     local down_services=()
-    for svc in celery celery-deploy celery-fast celery-beat; do
+    local base_workers=(celery celery-deploy celery-fast celery-beat)
+    # Include extra workers only when autoscaler is not managing them
+    if [ "${CELERY_AUTOSCALE_ENABLED:-false}" != "true" ]; then
+        base_workers+=(celery-2 celery-3)
+    fi
+    for svc in "${base_workers[@]}"; do
         if docker compose -f "$COMPOSE_FILE" config --services  | grep -qx "$svc"; then
             celery_services+=("$svc")
         fi
@@ -1217,8 +1231,24 @@ ensure_celery_workers_running() {
         return 0
     fi
     echo -e "${YELLOW}  ⚠ Celery workers down: ${down_services[*]}. Restarting...${NC}"
-    timeout -k 5 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "${down_services[@]}" || \
-        timeout -k 5 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate "${down_services[@]}" || echo -e "${YELLOW}    ⚠ Celery workers restart failed${NC}"
+    # Separate extra workers (celery-2, celery-3) from base workers because
+    # extra workers require --profile extra-workers when profiles are active.
+    local base_down=()
+    local extra_down=()
+    for svc in "${down_services[@]}"; do
+        case "$svc" in
+            celery-2|celery-3) extra_down+=("$svc") ;;
+            *) base_down+=("$svc") ;;
+        esac
+    done
+    if [ "${#base_down[@]}" -gt 0 ]; then
+        timeout -k 5 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "${base_down[@]}" || \
+            timeout -k 5 60 docker compose -f "$COMPOSE_FILE" up -d --force-recreate "${base_down[@]}" || echo -e "${YELLOW}    ⚠ Celery workers restart failed${NC}"
+    fi
+    if [ "${#extra_down[@]}" -gt 0 ]; then
+        timeout -k 5 60 docker compose -f "$COMPOSE_FILE" --profile extra-workers up -d --force-recreate --no-deps "${extra_down[@]}" || \
+            timeout -k 5 60 docker compose -f "$COMPOSE_FILE" --profile extra-workers up -d --force-recreate "${extra_down[@]}" || echo -e "${YELLOW}    ⚠ Extra celery workers restart failed${NC}"
+    fi
     local all_ok=true
     for svc in "${down_services[@]}"; do
         if wait_for_container_ready "smsly-hosting-${svc}-1" 120; then

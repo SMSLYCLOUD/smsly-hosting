@@ -4,7 +4,7 @@ from unittest.mock import patch
 import django.test
 from django.test import override_settings
 
-from apps.deployments.models_transfer import ServerTransfer
+from apps.deployments.models.transfer import ServerTransfer
 from apps.deployments.services.transfer_service import ServerTransferService
 
 

@@ -77,7 +77,7 @@ def patch_runtime_settings():
                 site = Site.objects.get(id=settings.SITE_ID)
                 if site.domain != effective_domain:
                     site.domain = effective_domain
-                    site.name = f'CloudNeuron ({effective_domain})'
+                    site.name = f'Grid ({effective_domain})'
                     site.save()
         except Site.DoesNotExist:
             with warnings.catch_warnings():
@@ -85,7 +85,7 @@ def patch_runtime_settings():
                 Site.objects.create(
                     id=settings.SITE_ID,
                     domain=effective_domain,
-                    name=f'CloudNeuron ({effective_domain})'
+                    name=f'Grid ({effective_domain})'
                 )
         except Exception as site_exc:
             # django_site table may not exist on first boot (before

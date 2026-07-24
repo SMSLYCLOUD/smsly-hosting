@@ -71,7 +71,7 @@ class BackupAddonFailureTest(TestCase):
 
     def _run_addon_test(self, addon_type, env_vars):
         """Helper to run a single addon failure scenario."""
-        from apps.deployments.models_addons import Addon
+        from apps.deployments.models.addons import Addon
         from apps.deployments.services.backup_service import backup_addon
 
         with patch("docker.from_env") as mock_docker_from_env, \

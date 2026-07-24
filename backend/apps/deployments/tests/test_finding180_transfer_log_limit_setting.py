@@ -11,7 +11,7 @@ the cap down (to keep DB rows small) or up (forensics).
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 
-from apps.deployments.models_transfer import ServerTransfer
+from apps.deployments.models.transfer import ServerTransfer
 from apps.deployments.services.transfer_service import (
     TRANSFER_LOG_LIMIT,
     ServerTransferService,

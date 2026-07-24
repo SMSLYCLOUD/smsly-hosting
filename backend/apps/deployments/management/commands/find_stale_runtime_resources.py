@@ -1,8 +1,8 @@
 import docker
 from django.core.management.base import BaseCommand
 
-from apps.deployments.models_addons import Addon
-from apps.deployments.models_core import Service
+from apps.deployments.models.addons import Addon
+from apps.deployments.models.core import Service
 
 
 class Command(BaseCommand):

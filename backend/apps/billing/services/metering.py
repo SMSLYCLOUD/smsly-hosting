@@ -7,8 +7,8 @@ from apps.billing.models import (
     UserSubscription,
 )
 from apps.deployments.models import Service
-from apps.deployments.models_addons import Addon
-from apps.deployments.models_storage import Volume
+from apps.deployments.models.addons import Addon
+from apps.deployments.models.storage import Volume
 from django.db.models import Sum
 from django.utils import timezone
 

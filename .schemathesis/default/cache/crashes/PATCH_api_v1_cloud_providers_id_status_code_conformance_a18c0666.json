@@ -1,0 +1,110 @@
+{
+  "operation": "PATCH /api/v1/cloud/providers/{id}/",
+  "method": "PATCH",
+  "path_template": "/api/v1/cloud/providers/{id}/",
+  "fingerprint": "a18c0666",
+  "case_id": "g4sNMg",
+  "code_sample": "curl -X PATCH -H 'Content-Type: application/json' -d '{\"name\": \"\", \"provider_type\": \"AWS\", \"region\": \"\", \"project_id\": null, \"is_active\": false}' http://127.0.0.1:8089/api/v1/cloud/providers/e3e70682-c209-1cac-a29f-6fbed82c07cd/",
+  "sequence": [
+    {
+      "method": "PATCH",
+      "url": "http://127.0.0.1:8089/api/v1/cloud/providers/e3e70682-c209-1cac-a29f-6fbed82c07cd/",
+      "url_template": "http://127.0.0.1:8089/api/v1/cloud/providers/{id}/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "X-Schemathesis-TestCaseId": "g4sNMg",
+        "Content-Type": "application/json",
+        "Content-Length": "90"
+      },
+      "response": {
+        "status_code": 401,
+        "headers": {
+          "date": "Tue, 21 Jul 2026 00:18:54 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "www-authenticate": "[Filtered]",
+          "vary": "Accept, Cookie, origin",
+          "allow": "GET, PUT, PATCH, DELETE, HEAD, OPTIONS",
+          "x-frame-options": "DENY",
+          "content-length": "95",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin"
+        },
+        "body": "{\"error\":\"Authentication credentials were not provided.\",\"code\":\"unauthenticated\",\"status\":401}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "status_code_conformance",
+          "status": "failure",
+          "message": "Undocumented HTTP status code\n\nReceived: 401\nDocumented: 200"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 6.465100159402937e-05,
+          "mode": "negative"
+        },
+        "components": {
+          "PATH": "positive",
+          "HEADER": "negative",
+          "BODY": "positive"
+        },
+        "phase": {
+          "name": "coverage",
+          "data": {
+            "type": "CoveragePhaseData",
+            "description": "Missing `Authorization` at header",
+            "location": null,
+            "parameter": "Authorization",
+            "parameter_location": "HEADER",
+            "scenario": "missing_parameter"
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [
+          [
+            "path",
+            "id"
+          ],
+          [
+            "body",
+            "project_id"
+          ]
+        ],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {
+          "PATH": {
+            "id": "e3e70682-c209-1cac-a29f-6fbed82c07cd"
+          },
+          "HEADER": {}
+        }
+      },
+      "path": "/api/v1/cloud/providers/{id}/",
+      "path_parameters": {
+        "id": "e3e70682-c209-1cac-a29f-6fbed82c07cd"
+      },
+      "query": {},
+      "case_headers": {},
+      "cookies": {},
+      "case_body": {
+        "encoding": "json",
+        "value": {
+          "name": "",
+          "provider_type": "AWS",
+          "region": "",
+          "project_id": null,
+          "is_active": false
+        }
+      },
+      "media_type": "application/json",
+      "parent_index": null
+    }
+  ]
+}

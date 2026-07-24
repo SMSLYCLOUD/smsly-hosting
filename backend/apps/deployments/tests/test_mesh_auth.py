@@ -10,8 +10,8 @@ from rest_framework.test import APIRequestFactory, force_authenticate
 from rest_framework.throttling import BaseThrottle
 
 from apps.deployments.models import ManagedServer
-from apps.deployments.models_mesh import MeshNetwork, WireGuardPeer
-from apps.deployments.views_attestation import attestation_verify
+from apps.deployments.models.mesh import MeshNetwork, WireGuardPeer
+from apps.deployments.views.attestation import attestation_verify
 
 
 # Mock the throttle to avoid Redis connection issues
@@ -51,7 +51,7 @@ class TestMeshAuth(TestCase):
         self.server.delete()
         self.user.delete()
 
-    @patch("apps.deployments.views_attestation.cache")
+    @patch("apps.deployments.views.attestation.cache")
     def test_attestation_verify_rejects_invalid_signature_with_401(self, mock_cache):
         mock_cache.get.return_value = "10.8.0.5"
 
@@ -67,7 +67,7 @@ class TestMeshAuth(TestCase):
             self.assertEqual(response.status_code, 401)
             self.assertIn("Signature mismatch", response.data.get("error", ""))
 
-    @patch("apps.deployments.views_attestation.cache")
+    @patch("apps.deployments.views.attestation.cache")
     def test_attestation_verify_accepts_valid_signature(self, mock_cache):
         mock_cache.get.return_value = "10.8.0.5"
 

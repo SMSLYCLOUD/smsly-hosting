@@ -1,0 +1,84 @@
+{
+  "operation": "POST /api/v1/notifications/test-smtp/",
+  "method": "POST",
+  "path_template": "/api/v1/notifications/test-smtp/",
+  "fingerprint": "483b762d",
+  "case_id": "QB8zGA",
+  "code_sample": "curl -X POST http://127.0.0.1:8089/api/v1/notifications/test-smtp/",
+  "sequence": [
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:8089/api/v1/notifications/test-smtp/",
+      "url_template": "http://127.0.0.1:8089/api/v1/notifications/test-smtp/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "X-Schemathesis-TestCaseId": "QB8zGA",
+        "Content-Length": "0"
+      },
+      "response": {
+        "status_code": 403,
+        "headers": {
+          "date": "Mon, 20 Jul 2026 21:12:53 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "x-frame-options": "DENY",
+          "content-length": "41",
+          "vary": "Cookie, origin",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin"
+        },
+        "body": "{\"error\": \"Invalid or missing signature\"}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "status_code_conformance",
+          "status": "failure",
+          "message": "Undocumented HTTP status code\n\nReceived: 403\nDocumented: 200"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 3.452900273259729e-05,
+          "mode": "negative"
+        },
+        "components": {
+          "HEADER": "negative"
+        },
+        "phase": {
+          "name": "coverage",
+          "data": {
+            "type": "CoveragePhaseData",
+            "description": "Missing `Authorization` at header",
+            "location": null,
+            "parameter": "Authorization",
+            "parameter_location": "HEADER",
+            "scenario": "missing_parameter"
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {
+          "HEADER": {}
+        }
+      },
+      "path": "/api/v1/notifications/test-smtp/",
+      "path_parameters": {},
+      "query": {},
+      "case_headers": {},
+      "cookies": {},
+      "case_body": {
+        "encoding": "none"
+      },
+      "media_type": null,
+      "parent_index": null
+    }
+  ]
+}

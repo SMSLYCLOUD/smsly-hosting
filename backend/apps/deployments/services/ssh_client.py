@@ -479,7 +479,7 @@ class SSHClient:
 
         api_token_shell = (
             "from django.contrib.auth import get_user_model; "
-            "from apps.deployments.api_token_auth import APIToken; "
+            "from apps.deployments.models.api_token import APIToken; "
             "User=get_user_model(); "
             "u=User.objects.filter(is_superuser=True,is_active=True).first(); "
             "assert u, 'no active superuser'; "

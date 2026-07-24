@@ -1,4 +1,4 @@
-from apps.deployments.services import dns
+from apps.domains.services import dns
 
 
 def test_ensure_dns_records_updates_proxied_record_to_dns_only(monkeypatch):

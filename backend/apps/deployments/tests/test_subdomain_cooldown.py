@@ -16,7 +16,7 @@ from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from apps.deployments.models_tunnels import ReservedSubdomain
+from apps.deployments.models.tunnels import ReservedSubdomain
 
 User = get_user_model()
 

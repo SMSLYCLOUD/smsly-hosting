@@ -1,0 +1,90 @@
+{
+  "operation": "POST /api/v1/billing/flutterwave/webhook/",
+  "method": "POST",
+  "path_template": "/api/v1/billing/flutterwave/webhook/",
+  "fingerprint": "0c138aa9",
+  "case_id": "ZNQNyi",
+  "code_sample": "curl -X POST -H 'Authorization: [Filtered]' http://127.0.0.1:8089/api/v1/billing/flutterwave/webhook/",
+  "sequence": [
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:8089/api/v1/billing/flutterwave/webhook/",
+      "url_template": "http://127.0.0.1:8089/api/v1/billing/flutterwave/webhook/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "Authorization": "[Filtered]",
+        "X-Schemathesis-TestCaseId": "ZNQNyi",
+        "Content-Length": "0"
+      },
+      "response": {
+        "status_code": 400,
+        "headers": {
+          "date": "Tue, 21 Jul 2026 00:15:37 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "vary": "Accept, Cookie, origin",
+          "allow": "POST, OPTIONS",
+          "x-frame-options": "DENY",
+          "content-length": "74",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin"
+        },
+        "body": "{\"error\":\"A billing error occurred. Please try again or contact support.\"}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "status_code_conformance",
+          "status": "failure",
+          "message": "Undocumented HTTP status code\n\nReceived: 400\nDocumented: 200"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 0.00022692999482387677,
+          "mode": "positive"
+        },
+        "components": {
+          "HEADER": "positive"
+        },
+        "phase": {
+          "name": "coverage",
+          "data": {
+            "type": "CoveragePhaseData",
+            "description": "Default positive test case",
+            "location": null,
+            "parameter": null,
+            "parameter_location": null,
+            "scenario": "default_positive_test"
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {
+          "HEADER": {
+            "Authorization": ""
+          }
+        }
+      },
+      "path": "/api/v1/billing/flutterwave/webhook/",
+      "path_parameters": {},
+      "query": {},
+      "case_headers": {
+        "Authorization": "[Filtered]"
+      },
+      "cookies": {},
+      "case_body": {
+        "encoding": "none"
+      },
+      "media_type": null,
+      "parent_index": null
+    }
+  ]
+}

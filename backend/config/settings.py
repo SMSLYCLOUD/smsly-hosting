@@ -710,7 +710,7 @@ PLATFORM_CERT_DIRS = config(
 
 MIDDLEWARE = [
     'django_prometheus.middleware.PrometheusBeforeMiddleware',
-    'apps.deployments.middleware.DynamicAllowedHostsMiddleware', # Ensures multi-worker host sync
+    'apps.core.middleware.dynamic_hosts.DynamicAllowedHostsMiddleware', # Ensures multi-worker host sync
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
@@ -796,8 +796,8 @@ SESSION_COOKIE_HTTPONLY = True
 ACCOUNT_DEFAULT_HTTP_PROTOCOL = 'https' if not DEBUG and not IS_TESTING else 'http'
 
 # Custom allauth adapters (callback redirect behavior)
-ACCOUNT_ADAPTER = 'apps.deployments.adapters.CustomAccountAdapter'
-SOCIALACCOUNT_ADAPTER = 'apps.deployments.adapters.CustomSocialAccountAdapter'
+ACCOUNT_ADAPTER = 'apps.core.adapters.CustomAccountAdapter'
+SOCIALACCOUNT_ADAPTER = 'apps.core.adapters.CustomSocialAccountAdapter'
 
 AUTHENTICATION_BACKENDS = [
     'django.contrib.auth.backends.ModelBackend',
@@ -969,7 +969,7 @@ SPECTACULAR_SETTINGS = {
 }
 
 REST_FRAMEWORK = {
-    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+    'DEFAULT_SCHEMA_CLASS': 'apps.core.openapi.SmslyAutoSchema',
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 100,
     # Custom exception handler: logs the offending body + serializer errors
@@ -977,8 +977,8 @@ REST_FRAMEWORK = {
     # being the only clue in the log.
     'EXCEPTION_HANDLER': 'apps.core.exception_handler.smsly_exception_handler',
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'apps.deployments.api_token_auth.APITokenAuthentication',
-        'apps.deployments.api_token_auth.RemoteSyncHMACAuthentication',
+        'apps.core.models.api_token.APITokenAuthentication',
+        'apps.core.models.api_token.RemoteSyncHMACAuthentication',
         # SECURITY: ``CookieAwareTokenAuthentication`` extends DRF's
         # ``TokenAuthentication`` and additionally accepts the HttpOnly
         # auth cookie set by ``ThrottledLoginView``. It is registered

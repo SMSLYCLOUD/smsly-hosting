@@ -5,7 +5,7 @@ from django.contrib.auth.models import User
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from apps.deployments.models_core import Service
+from apps.deployments.models.core import Service
 
 
 class ServiceAlertConfigEndpointTests(APITestCase):

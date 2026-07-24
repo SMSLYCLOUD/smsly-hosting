@@ -47,7 +47,7 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        from apps.deployments.models_backup import BackupEncryptionKey
+        from apps.deployments.models.backup import BackupEncryptionKey
 
         keys_qs = BackupEncryptionKey.objects.all()
         count = keys_qs.count()

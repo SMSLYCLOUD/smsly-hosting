@@ -25,8 +25,10 @@ PRISMA_IDEMPOTENT_PATTERNS = (
 
 def prisma_migrate_with_guard(workdir: str, once: bool = True) -> bool:
     """
-    Run `prisma migrate deploy` once. If idempotent errors occur, run
-    `prisma migrate resolve --applied` on the first pending migration and retry.
+    Run `prisma migrate deploy`. If idempotent errors occur and ``once`` is
+    False, run ``prisma migrate resolve --applied`` on the first pending
+    migration and retry. When ``once`` is True (default), return False on
+    first failure without retrying.
     Returns True on success.
     """
     try:
@@ -34,6 +36,10 @@ def prisma_migrate_with_guard(workdir: str, once: bool = True) -> bool:
         first = subprocess.run(base_cmd, cwd=workdir, capture_output=True, text=True)
         if first.returncode == 0:
             return True
+
+        if once:
+            logger.warning("Prisma migrate failed (once=True, no retry): %s", (first.stdout + first.stderr).strip()[:500])
+            return False
 
         output = (first.stdout + "\n" + first.stderr).lower()
         if not any(pat.lower() in output for pat in PRISMA_IDEMPOTENT_PATTERNS):
