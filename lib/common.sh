@@ -494,15 +494,6 @@ get_redis_service() {
     fi
 }
 
-# Return --profile extra-workers if autoscaling is DISABLED.
-# When autoscaling is enabled, celery-2/celery-3 are managed by the
-# autoscaler and should NOT be started by regular compose up commands.
-celery_extra_workers_profile() {
-    if [ "${CELERY_AUTOSCALE_ENABLED:-false}" != "true" ]; then
-        echo "--profile extra-workers"
-    fi
-}
-
 compose_stack_services() {
     local services=""
     services="$(docker compose -f "$COMPOSE_FILE" config --services)" || return $?

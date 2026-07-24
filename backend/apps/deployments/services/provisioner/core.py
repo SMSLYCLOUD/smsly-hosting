@@ -8,6 +8,7 @@ import logging
 import os
 import secrets
 import shlex
+import subprocess
 import time
 from datetime import timedelta
 
@@ -39,6 +40,43 @@ from .helpers import (
 from .provisioning_resources import _ProvisioningResources
 
 logger = logging.getLogger(__name__)
+
+COMPOSE_FILE = os.environ.get("COMPOSE_FILE", "docker-compose.prod.yml")
+INSTALL_DIR = os.environ.get("SMSLY_INSTALL_DIR", "/opt/smsly-hosting")
+
+
+def _ensure_docker_mirror():
+    """Start the docker-mirror pull-through cache if the service exists."""
+    compose_path = os.path.join(INSTALL_DIR, COMPOSE_FILE)
+    if not os.path.exists(compose_path):
+        return
+    try:
+        result = subprocess.run(
+            ["docker", "compose", "-f", compose_path, "--profile", "build-cache",
+             "up", "-d", "--no-deps", "docker-mirror"],
+            capture_output=True, text=True, timeout=60,
+        )
+        if result.returncode == 0:
+            logger.info("Docker mirror started for provisioning")
+        else:
+            logger.debug("Docker mirror start skipped: %s", result.stderr[:200])
+    except Exception as exc:
+        logger.debug("Docker mirror start failed (non-fatal): %s", exc)
+
+
+def _stop_docker_mirror():
+    """Stop the docker-mirror after provisioning completes."""
+    compose_path = os.path.join(INSTALL_DIR, COMPOSE_FILE)
+    if not os.path.exists(compose_path):
+        return
+    try:
+        subprocess.run(
+            ["docker", "compose", "-f", compose_path, "stop", "docker-mirror"],
+            capture_output=True, text=True, timeout=30,
+        )
+        logger.info("Docker mirror stopped after provisioning")
+    except Exception as exc:
+        logger.debug("Docker mirror stop failed (non-fatal): %s", exc)
 
 
 @shared_task(bind=True, max_retries=0, soft_time_limit=1860, time_limit=1920, name="apps.deployments.services.provisioner.provision_server")
@@ -199,6 +237,7 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
                         os.remove(local_bundle_path)
 
         _prepare_remote_install_lock(ssh, server)
+        _ensure_docker_mirror()
         _append_log(server, "⚙️ Running Grid installer (this may take 5-15 minutes)...")
 
         master_ip = os.environ.get("PUBLIC_IP") or "127.0.0.1"
@@ -746,6 +785,7 @@ def provision_server(self, server_id: str, skip_reboot: bool = False):
         server.save(update_fields=["provision_status", "updated_at"])
         _append_log(server, f"\n❌ Provisioning failed: {exc}")
     finally:
+        _stop_docker_mirror()
         if local_bundle_path and os.path.exists(local_bundle_path):
             with contextlib.suppress(OSError):
                 os.remove(local_bundle_path)

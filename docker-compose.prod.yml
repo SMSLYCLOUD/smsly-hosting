@@ -707,6 +707,8 @@ services:
         limits:
           memory: ${CELERY_WORKER2_MEMORY_LIMIT:-4G}
   celery-3:
+    profiles:
+      - extra-workers
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
