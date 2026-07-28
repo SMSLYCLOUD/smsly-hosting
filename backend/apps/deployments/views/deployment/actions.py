@@ -203,11 +203,11 @@ class LifecycleActionsMixin:
                     except docker.errors.NotFound:
                         pass
                     except Exception as e:
-                        logger.warning(f"Failed to cleanup container {c_id}: {e}")
+                        logger.error(f"Failed to cleanup container {c_id}: {e}")
                 if cleaned_any:
                     deployment.build_logs += "\n🧹 Cleaned up container resources."
         except Exception as e:
-            logger.warning(f"Docker client error during cancel cleanup: {e}")
+            logger.error(f"Docker client error during cancel cleanup: {e}")
 
         deployment.save()
 
@@ -299,6 +299,25 @@ class LifecycleActionsMixin:
                 {'error': 'Invalid file type. Only .zip files are allowed'},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+        # Security: Validate zip magic bytes
+        from ..upload_security import validate_zip_magic, validate_zip_entries, validate_zip_no_bomb
+        magic_err = validate_zip_magic(uploaded_file)
+        if magic_err:
+            return magic_err
+
+        # Security: Check for zip-slip (path traversal)
+        is_safe, err_msg = validate_zip_entries(uploaded_file)
+        if not is_safe:
+            return Response(
+                {'error': f'Unsafe archive: {err_msg}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Security: Protect against zip bombs
+        bomb_err = validate_zip_no_bomb(uploaded_file)
+        if bomb_err:
+            return bomb_err
 
         try:
             # ZH-011 FIX: Verify ownership at query level (fail-closed)

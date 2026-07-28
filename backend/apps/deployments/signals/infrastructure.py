@@ -12,6 +12,9 @@ from apps.deployments.services.caddy_manager import apply_caddyfile, generate_ca
 logger = logging.getLogger(__name__)
 
 
+# TODO: This signal does heavy sync I/O: file writes, subprocess calls
+# (htpasswd, docker restart), Caddyfile generation. Should be moved to a
+# Celery task to avoid blocking the request thread.
 @receiver(post_save, sender=PlatformConfig)
 def sync_infrastructure_on_config_change(sender, instance, **kwargs):
     logger = logging.getLogger(__name__)
@@ -149,8 +152,8 @@ def sync_infrastructure_on_config_change(sender, instance, **kwargs):
                         if _updated:
                             with open(_env_path, "w", encoding="utf-8") as _fh:
                                 _fh.writelines(_lines)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("Failed to update .env registry credentials: %s", exc)
 
                 if _htpasswd_written:
                     try:
@@ -160,8 +163,8 @@ def sync_infrastructure_on_config_change(sender, instance, **kwargs):
                             capture_output=True, timeout=30,
                         )
                         logger.info("Restarted registry container after htpasswd update")
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("Failed to restart registry container: %s", exc)
 
                 sync_infrastructure_on_config_change._last_reg_creds = _cred_key
 

@@ -12,6 +12,8 @@ from urllib.parse import quote, urlparse
 import requests
 from celery import shared_task
 
+from apps.deployments.constants import TASK_TIME_LIMIT_TRIVIAL
+
 logger = logging.getLogger(__name__)
 
 # GitLab API state mapping
@@ -64,8 +66,8 @@ def _detect_provider(repository_url: str) -> str:
             configured_host = urlparse(configured).hostname or ""
             if host == configured_host.lower():
                 return "gitlab"
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to detect GitLab provider: %s", exc)
 
     return "github"
 
@@ -77,8 +79,8 @@ def _extract_repo_path(repository_url: str) -> str | None:
         path_parts = parsed.path.strip("/").replace(".git", "").split("/")
         if len(path_parts) >= 2:
             return f"{path_parts[0]}/{path_parts[1]}"
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to extract repo path from %s: %s", repository_url, exc)
     return None
 
 
@@ -347,7 +349,7 @@ def _post_bitbucket(deployment, state: str, description: str, target_url: str) -
 
 # ── Dispatcher Task ───────────────────────────────────────────────────────────
 
-@shared_task(bind=True, max_retries=2, soft_time_limit=30, time_limit=60)
+@shared_task(bind=True, max_retries=2, soft_time_limit=TASK_TIME_LIMIT_TRIVIAL[0], time_limit=TASK_TIME_LIMIT_TRIVIAL[1])
 def update_commit_status(
     self,
     deployment_id: str,

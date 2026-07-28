@@ -126,8 +126,8 @@ class HookMixin:
                     if c.status == 'running':
                         healthy = True
                         break
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Hook container health check failed: %s", exc)
                 _time.sleep(3)
             if healthy:
                 append_log(self.deployment, "[hook] LiteLLM router catalog synced.\n")

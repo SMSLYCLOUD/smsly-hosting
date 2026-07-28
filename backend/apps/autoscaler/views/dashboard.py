@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 import subprocess
 import time
@@ -36,8 +38,8 @@ def _get_system_memory() -> int:
     try:
         import psutil
         return int(psutil.virtual_memory().total / (1024 * 1024))
-    except Exception:
-        pass
+    except (ImportError, AttributeError) as exc:
+        logger.debug("psutil memory detection failed: %s", exc)
     try:
         result = subprocess.run(
             ["free", "-m"], capture_output=True, text=True, timeout=5
@@ -46,8 +48,8 @@ def _get_system_memory() -> int:
             if line.startswith("Mem:"):
                 parts = line.split()
                 return int(parts[1]) if len(parts) >= 2 else 4096
-    except Exception:
-        pass
+    except (subprocess.SubprocessError, (IndexError, ValueError)) as exc:
+        logger.debug("free memory detection failed: %s", exc)
     return 4096
 
 
@@ -203,8 +205,8 @@ def _apply_scaling(decision: dict):
                     namespace, name,
                 )
                 return
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("HPA check failed for %s/%s: %s", namespace, name, exc)
             deployment = apps_v1.read_namespaced_deployment(name, namespace)
             deployment.spec.replicas = target
             apps_v1.patch_namespaced_deployment(name, namespace, deployment)
@@ -264,7 +266,7 @@ def _run_autoscaler_check():
 # ── DRF endpoints ──────────────────────────────────────────────────────────
 @api_view(["GET"])
 @permission_classes([IsAdminUser])
-def autoscaler_status(request):
+def autoscaler_status(request) -> Response:
     try:
         return Response(_run_autoscaler_check())
     except Exception as exc:
@@ -274,7 +276,7 @@ def autoscaler_status(request):
 
 @api_view(["GET"])
 @permission_classes([IsAdminUser])
-def autoscaler_history(request):
+def autoscaler_history(request) -> Response:
     try:
         history = cache.get(CACHE_KEY_HISTORY)
         if not history:
@@ -288,7 +290,7 @@ def autoscaler_history(request):
 
 @api_view(["POST"])
 @permission_classes([IsAdminUser])
-def autoscaler_config(request):
+def autoscaler_config(request) -> Response:
     try:
         cfg = _get_config()
         cfg.update(request.data)
@@ -302,7 +304,7 @@ def autoscaler_config(request):
 
 @api_view(["POST"])
 @permission_classes([IsAdminUser])
-def autoscaler_trigger(request):
+def autoscaler_trigger(request) -> Response:
     try:
         return Response(_run_autoscaler_check())
     except Exception as exc:
@@ -312,5 +314,5 @@ def autoscaler_trigger(request):
 
 @api_view(["POST"])
 @permission_classes([IsAdminUser])
-def autoscaler_scale(request):
+def autoscaler_scale(request) -> Response:
     return autoscaler_trigger(request)

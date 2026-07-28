@@ -34,6 +34,8 @@ import time
 
 import requests
 from celery import shared_task
+
+from apps.deployments.constants import RETRY_DELAY_FAST, TASK_TIME_LIMIT_QUICK, TASK_TIME_LIMIT_TRIVIAL
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.mail import EmailMultiAlternatives
@@ -316,7 +318,9 @@ def _dispatch_in_app(user, title: str, message: str, event_type: str) -> dict:
     name='notifications.dispatch_notification',
     queue='fast',
     max_retries=3,
-    default_retry_delay=30,
+    default_retry_delay=RETRY_DELAY_FAST,
+    soft_time_limit=TASK_TIME_LIMIT_QUICK[0],
+    time_limit=TASK_TIME_LIMIT_QUICK[1],
     acks_late=True,
 )
 def dispatch_notification(
@@ -482,7 +486,7 @@ def dispatch_notification(
 
 # ── Convenience Signal Wrappers ───────────────────────────────────────────────
 
-@shared_task(name='notifications.notify_deploy_event', queue='fast')
+@shared_task(name='notifications.notify_deploy_event', queue='fast', soft_time_limit=TASK_TIME_LIMIT_TRIVIAL[0], time_limit=TASK_TIME_LIMIT_TRIVIAL[1])
 def notify_deploy_event(user_id: int, service_name: str, status: str, commit_hash: str = '', error: str = ''):
     """Fire a deploy success or failure notification for a service owner."""
     if status == 'success':
@@ -512,7 +516,7 @@ def notify_deploy_event(user_id: int, service_name: str, status: str, commit_has
     )
 
 
-@shared_task(name='notifications.notify_health_alert', queue='fast')
+@shared_task(name='notifications.notify_health_alert', queue='fast', soft_time_limit=TASK_TIME_LIMIT_TRIVIAL[0], time_limit=TASK_TIME_LIMIT_TRIVIAL[1])
 def notify_health_alert(user_id: int, service_name: str, metric: str, current_value: float, threshold: float, severity: str = 'WARNING'):
     """Fire a resource/health alert notification for a service owner."""
     severity_emoji = {'INFO': 'ℹ️', 'WARNING': '⚠️', 'CRITICAL': '🚨'}.get(severity, '⚠️')
@@ -537,7 +541,7 @@ def notify_health_alert(user_id: int, service_name: str, metric: str, current_va
     )
 
 
-@shared_task(name='notifications.notify_ssl_expiring', queue='fast')
+@shared_task(name='notifications.notify_ssl_expiring', queue='fast', soft_time_limit=TASK_TIME_LIMIT_TRIVIAL[0], time_limit=TASK_TIME_LIMIT_TRIVIAL[1])
 def notify_ssl_expiring(user_id: int, domain: str, days_remaining: int):
     """Fire an SSL expiry warning notification."""
     urgency = '🚨 URGENT' if days_remaining <= 7 else '⚠️ Warning'
@@ -554,7 +558,7 @@ def notify_ssl_expiring(user_id: int, domain: str, days_remaining: int):
     )
 
 
-@shared_task(name='notifications.notify_backup_completed', queue='fast')
+@shared_task(name='notifications.notify_backup_completed', queue='fast', soft_time_limit=TASK_TIME_LIMIT_TRIVIAL[0], time_limit=TASK_TIME_LIMIT_TRIVIAL[1])
 def notify_backup_completed(user_id: int, backup_id: str, size_mb: float, success: bool):
     """Fire a backup completion notification."""
     if success:
@@ -573,7 +577,7 @@ def notify_backup_completed(user_id: int, backup_id: str, size_mb: float, succes
     )
 
 
-@shared_task(name='notifications.notify_replication_issue', queue='fast')
+@shared_task(name='notifications.notify_replication_issue', queue='fast', soft_time_limit=TASK_TIME_LIMIT_TRIVIAL[0], time_limit=TASK_TIME_LIMIT_TRIVIAL[1])
 def notify_replication_issue(
     user_id: int,
     event_type: str,

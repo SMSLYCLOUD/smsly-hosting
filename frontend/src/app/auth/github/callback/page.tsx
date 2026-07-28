@@ -53,11 +53,12 @@ function GitHubCallbackContent() {
         );
         // Redirect to settings after a brief moment
         setTimeout(() => router.push("/settings"), 2000);
-      } catch (e: any) {
+      } catch (e: unknown) {
         setStatus("error");
+        const axiosErr = e as { response?: { data?: { error?: string; detail?: string } } };
         const detail =
-          e?.response?.data?.error ||
-          e?.response?.data?.detail ||
+          axiosErr?.response?.data?.error ||
+          axiosErr?.response?.data?.detail ||
           "Failed to connect GitHub account.";
         setMessage(String(detail));
       }

@@ -20,7 +20,12 @@ class Command(BaseCommand):
             self.stdout.write(self.style.ERROR("Must specify --dry-run or --apply"))
             return
 
-        client = docker.from_env()
+        try:
+            client = docker.from_env()
+        except Exception as e:
+            self.stdout.write(self.style.ERROR(f"Failed to connect to Docker: {e}"))
+            return
+
         all_containers = client.containers.list(all=True)
 
         stale_containers = []
@@ -85,10 +90,10 @@ class Command(BaseCommand):
                 if apply:
                     self.stdout.write(f"  Removing {c.name}...")
                     try:
-                        c.stop(timeout=5)
+                        c.stop(timeout=10)
                         c.remove(force=True)
                     except Exception as e:
-                        self.stdout.write(self.style.ERROR(f"  Failed: {e}"))
+                        self.stdout.write(self.style.ERROR(f"  Failed to remove {c.name}: {e}"))
 
         with open("/tmp/runtime-cleanup-report.md", "w") as f:
             f.write("\n".join(report_lines))

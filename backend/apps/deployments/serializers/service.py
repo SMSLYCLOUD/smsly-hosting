@@ -1,18 +1,135 @@
 import logging
 import re
 
+from django.db.models import Q
 from rest_framework import serializers
 
 from ..models import Deployment, EnvironmentVariable, Region, Service
+from ..models.core import ManagedServer
 from ..models.registry import RegistryCredential
 
 logger = logging.getLogger(__name__)
+
+
+def _get_latest_deployment(obj) -> dict | None:
+    deployments = getattr(obj, '_prefetched_deployments', None)
+    if deployments is not None:
+        dep = deployments[0] if deployments else None
+    else:
+        dep = obj.deployments.order_by('-created_at').first()
+    if not dep:
+        return None
+    return {
+        'id': str(dep.id),
+        'status': dep.status,
+        'commit_hash': dep.commit_hash or '',
+        'created_at': dep.created_at.isoformat() if dep.created_at else None,
+        'vulnerability_report': dep.vulnerability_report,
+    }
+
+
+def _get_node_metadata(obj) -> dict:
+    server = obj.server
+    active_deps = getattr(obj, '_active_deployments', None)
+    if active_deps is not None:
+        latest_deploy = active_deps[0] if active_deps else None
+    else:
+        latest_deploy = (
+            obj.deployments
+            .filter(status=Deployment.Status.ACTIVE)
+            .order_by('-created_at')
+            .first()
+            or obj.deployments.order_by('-created_at').first()
+        )
+    if not server and latest_deploy and latest_deploy.target_server:
+        server = latest_deploy.target_server
+
+    active_target_type = obj.active_target_type
+    active_host = obj.active_host_ip
+    if (
+        latest_deploy
+        and latest_deploy.target_server
+        and not getattr(latest_deploy, 'target_is_local', False)
+        and (
+            not server
+            or server.is_primary
+            or str(server.id) != str(latest_deploy.target_server_id)
+            or str(active_target_type or '').lower() == 'local'
+        )
+    ):
+        server = latest_deploy.target_server
+        active_target_type = (
+            'lite_agent' if getattr(server, 'is_lite_agent', False) else 'remote'
+        )
+        active_host = (
+            latest_deploy.verified_host_ip
+            or getattr(server, 'wg_address', None)
+            or getattr(server, 'private_ip', None)
+            or getattr(server, 'host', None)
+        )
+
+    if not server and active_host:
+        server = ManagedServer.objects.filter(
+            Q(host=active_host) | Q(private_ip=active_host) | Q(wg_address=active_host)
+        ).first()
+
+    if active_target_type:
+        target_type_label = active_target_type.replace('_', ' ').title()
+        if target_type_label == "Remote":
+            target_type_label = "Remote Server"
+
+        srv_name = server.name if server else "Unknown Server"
+        srv_id = str(server.id) if server else "unknown"
+        if (server and server.is_primary and target_type_label == "Local") or (not server and target_type_label == "Local"):
+            srv_name = "Local Server"
+            srv_id = "local"
+
+        return {
+            "id": srv_id,
+            "name": srv_name,
+            "target_type": target_type_label,
+            "host": active_host or (server.host if server else "Unknown"),
+            "status": (server.status.lower() if server and server.status else "active")
+        }
+
+    if server:
+        target_type_label = (
+            "Local"
+            if server.is_primary
+            else ("Lite Agent" if getattr(server, "is_lite_agent", False) else "Remote Server")
+        )
+        return {
+            "id": "local" if server.is_primary else str(server.id),
+            "name": "Local Server" if server.is_primary else server.name,
+            "target_type": target_type_label,
+            "host": server.host,
+            "status": server.status.lower() if server.status else "active"
+        }
+
+    return {
+        "id": "local",
+        "name": "Local Server",
+        "target_type": "Local",
+        "host": "127.0.0.1",
+        "status": "active"
+    }
 
 
 class EnvVarSerializer(serializers.ModelSerializer):
     class Meta:
         model = EnvironmentVariable
         fields = ['id', 'key', 'value', 'is_secret', 'is_locked', 'source']
+        read_only_fields = ['id']
+
+    def validate_key(self, value):
+        if not value or not isinstance(value, str):
+            raise serializers.ValidationError("key is required.")
+        if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', value):
+            raise serializers.ValidationError(
+                "key must be a valid environment variable name "
+                "(letters, digits, underscores; start with letter or underscore)."
+            )
+        return value
 
     def to_representation(self, instance):
         try:
@@ -36,6 +153,26 @@ class EnvVarSerializer(serializers.ModelSerializer):
         if instance.is_secret and not reveal_secrets:
             ret['value'] = '********'
         return ret
+
+
+class ServiceListSerializer(serializers.ModelSerializer):
+    latest_deployment = serializers.SerializerMethodField()
+    node_metadata = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Service
+        fields = [
+            'id', 'name', 'status', 'owner', 'project',
+            'server', 'public_domain', 'custom_domains', 'internal_port',
+            'health_status', 'deploy_type', 'buildpack', 'created_at',
+            'updated_at', 'latest_deployment', 'node_metadata',
+        ]
+
+    def get_latest_deployment(self, obj: Service) -> dict | None:
+        return _get_latest_deployment(obj)
+
+    def get_node_metadata(self, obj: Service) -> dict:
+        return _get_node_metadata(obj)
 
 
 class ServiceSerializer(serializers.ModelSerializer):
@@ -101,14 +238,57 @@ class ServiceSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Service
-        fields = '__all__'
+        fields = [
+            'id', 'name', 'slug', 'status', 'deletion_error',
+            'owner', 'server', 'project', 'provider',
+            'repository_url', 'branch',
+            'deploy_type', 'buildpack',
+            'docker_image', 'registry_credential',
+            'build_command', 'start_command', 'root_directory',
+            'internal_port',
+            'public_domain', 'public_domain_hidden', 'domain_verified',
+            'custom_domains',
+            'cpu_cores', 'memory_mb',
+            'autoscale_enabled', 'min_replicas', 'max_replicas',
+            'autoscale_cpu_target', 'vpa_enabled', 'alert_config',
+            'disable_crowdsec_waf',
+            'regions', 'primary_region',
+            'safedeploy_enabled', 'preview_environments_enabled',
+            'auto_create_preview_on_branch_push',
+            'migration_auto_approval_policy', 'production_requires_backup',
+            'auto_rollback_enabled', 'auto_rollback_threshold',
+            'deploy_strategy', 'canary_percentage',
+            'is_preview', 'parent_service', 'pr_number',
+            'health_check_path', 'health_check_port',
+            'health_check_interval', 'health_check_timeout',
+            'health_check_retries', 'auto_restart', 'health_status',
+            'restart_policy',
+            'deploy_mode', 'compose_file', 'compose_main_service',
+            'is_public',
+            'active_target_type', 'active_host_ip', 'active_runtime_id',
+            'last_scale_at',
+            'locked', 'locked_reason', 'restrict_to_creator',
+            'allowed_actions', 'restricted_environments',
+            'created_at', 'updated_at',
+            # SerializerMethodField / nested fields
+            'env_vars', 'server_id',
+            'latest_deployment', 'service_url',
+            'project_name', 'project_slug', 'project_emoji',
+            'estimated_cost', 'node_metadata', 'domain_instances',
+        ]
         read_only_fields = [
             'id',
             'created_at',
             'updated_at',
             'owner',
             'server',
-            'verification_token']
+            'verification_token',
+            'compose_file',
+            'active_target_type',
+            'active_host_ip',
+            'active_runtime_id',
+            'last_scale_at',
+        ]
 
     def get_service_url(self, obj: Service) -> str:
         if obj.public_domain and not getattr(obj, "public_domain_hidden", False):
@@ -118,101 +298,10 @@ class ServiceSerializer(serializers.ModelSerializer):
         return f"https://{slug}.{base_domain}"
 
     def get_latest_deployment(self, obj: Service) -> dict | None:
-        dep = obj.deployments.order_by('-created_at').first()
-        if not dep:
-            return None
-        return {
-            'id': str(dep.id),
-            'status': dep.status,
-            'commit_hash': dep.commit_hash or '',
-            'created_at': dep.created_at.isoformat() if dep.created_at else None,
-            'vulnerability_report': dep.vulnerability_report,
-        }
+        return _get_latest_deployment(obj)
 
     def get_node_metadata(self, obj: Service) -> dict:
-        server = obj.server
-        latest_deploy = (
-            obj.deployments
-            .filter(status=Deployment.Status.ACTIVE)
-            .order_by('-created_at')
-            .first()
-            or obj.deployments.order_by('-created_at').first()
-        )
-        if not server and latest_deploy and latest_deploy.target_server:
-            server = latest_deploy.target_server
-
-        active_target_type = obj.active_target_type
-        active_host = obj.active_host_ip
-        if (
-            latest_deploy
-            and latest_deploy.target_server
-            and not getattr(latest_deploy, 'target_is_local', False)
-            and (
-                not server
-                or server.is_primary
-                or str(server.id) != str(latest_deploy.target_server_id)
-                or str(active_target_type or '').lower() == 'local'
-            )
-        ):
-            server = latest_deploy.target_server
-            active_target_type = (
-                'lite_agent' if getattr(server, 'is_lite_agent', False) else 'remote'
-            )
-            active_host = (
-                latest_deploy.verified_host_ip
-                or getattr(server, 'wg_address', None)
-                or getattr(server, 'private_ip', None)
-                or getattr(server, 'host', None)
-            )
-
-        if not server and active_host:
-            from ..models.core import ManagedServer
-            server = ManagedServer.objects.filter(host=active_host).first()
-            if not server:
-                server = ManagedServer.objects.filter(private_ip=active_host).first()
-            if not server:
-                server = ManagedServer.objects.filter(wg_address=active_host).first()
-
-        if active_target_type:
-            target_type_label = active_target_type.replace('_', ' ').title()
-            if target_type_label == "Remote":
-                target_type_label = "Remote Server"
-
-            srv_name = server.name if server else "Unknown Server"
-            srv_id = str(server.id) if server else "unknown"
-            if (server and server.is_primary and target_type_label == "Local") or (not server and target_type_label == "Local"):
-                srv_name = "Local Server"
-                srv_id = "local"
-
-            return {
-                "id": srv_id,
-                "name": srv_name,
-                "target_type": target_type_label,
-                "host": active_host or (server.host if server else "Unknown"),
-                "status": (server.status.lower() if server and server.status else "active")
-            }
-
-        if server:
-            target_type_label = (
-                "Local"
-                if server.is_primary
-                else ("Lite Agent" if getattr(server, "is_lite_agent", False) else "Remote Server")
-            )
-            return {
-                "id": "local" if server.is_primary else str(server.id),
-                "name": "Local Server" if server.is_primary else server.name,
-                "target_type": target_type_label,
-                "host": server.host,
-                "status": server.status.lower() if server.status else "active"
-            }
-
-        return {
-            "id": "local",
-            "name": "Local Server",
-            "target_type": "Local",
-            "host": "127.0.0.1",
-            "status": "active"
-        }
+        return _get_node_metadata(obj)
 
     def get_server_id(self, obj: Service) -> str | None:
         return str(obj.server_id) if obj.server_id else None

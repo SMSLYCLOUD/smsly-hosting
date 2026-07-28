@@ -1,4 +1,7 @@
-"""URL configuration for AI intelligence app."""
+"""URL configuration for AI intelligence app.
+
+Naming convention: URL names use kebab-case (e.g. 'ai-providers-status').
+"""
 from django.urls import path
 
 from ..views import (

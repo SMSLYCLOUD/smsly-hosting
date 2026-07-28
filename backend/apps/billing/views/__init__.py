@@ -135,8 +135,8 @@ class BillingSummaryView(GenericAPIView):
         # Best-effort sync so the UI reflects Stripe changes even if webhooks are delayed.
         try:
             account = StripeService.sync_subscription_from_stripe(account)
-        except Exception: # pylint: disable=broad-exception-caught
-            pass
+        except Exception as exc: # pylint: disable=broad-exception-caught
+            logger.debug("Best-effort Stripe subscription sync failed: %s", exc)
 
         total_cost = (
             UsageRecord.objects.filter(service__owner=user)
@@ -144,13 +144,21 @@ class BillingSummaryView(GenericAPIView):
         )
 
         services_out = []
+        service_costs = dict(
+            UsageRecord.objects.filter(service__owner=user)
+            .values('service_id')
+            .annotate(total=Sum("cost"))
+            .values_list('service_id', 'total')
+        )
+        service_cpu = dict(
+            UsageRecord.objects.filter(service__owner=user, resource_type='cpu_hours')
+            .values('service_id')
+            .annotate(s=Sum('quantity'))
+            .values_list('service_id', 's')
+        )
         for service in user.services.all():
-            service_cost = (
-                service.usage_records.aggregate(total=Sum("cost"))["total"] or Decimal("0.00")
-            )
-            cpu_hours = service.usage_records.filter(
-                resource_type='cpu_hours'
-            ).aggregate(s=Sum('quantity'))['s'] or 0
+            service_cost = service_costs.get(service.id, Decimal("0.00"))
+            cpu_hours = service_cpu.get(service.id, 0) or 0
             services_out.append(
                 {
                     "id": str(service.id),
@@ -425,13 +433,13 @@ class StripeWebhookView(GenericAPIView):
 
             # Ignore other events (invoice.* etc) for now.
         except Exception as e: # pylint: disable=broad-exception-caught
-            logger.warning("Stripe webhook processing failed: %s", e)
+            logger.error("Stripe webhook processing failed: %s", e)
             return Response(
                 {"error": "Webhook processing failed"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-        return Response({"ok": True})
+        return Response(status=status.HTTP_200_OK)
 
 
 class FlutterwaveWebhookView(GenericAPIView):
@@ -488,12 +496,12 @@ class FlutterwaveWebhookView(GenericAPIView):
 
         if not payment:
             logger.warning("Flutterwave webhook for unknown tx_ref=%s", tx_ref)
-            return Response({"ok": True})
+            return Response(status=status.HTTP_200_OK)
 
         with transaction.atomic():
             payment = BillingPayment.objects.select_for_update().filter(id=payment.id).first()
             if not payment or payment.status == BillingPayment.Status.PAID:
-                return Response({"ok": True})
+                return Response(status=status.HTTP_200_OK)
 
             payment.raw_webhook = event
             if transaction_id is not None:
@@ -510,7 +518,7 @@ class FlutterwaveWebhookView(GenericAPIView):
                 payment.status = BillingPayment.Status.PENDING
                 payment.save()
 
-        return Response({"ok": True})
+        return Response(status=status.HTTP_200_OK)
 
 
 class CryptomusWebhookView(GenericAPIView):
@@ -559,12 +567,12 @@ class CryptomusWebhookView(GenericAPIView):
 
         if not payment:
             logger.warning("Cryptomus webhook for unknown order_id=%s", order_id)
-            return Response({"ok": True})
+            return Response(status=status.HTTP_200_OK)
 
         with transaction.atomic():
             payment = BillingPayment.objects.select_for_update().filter(id=payment.id).first()
             if not payment or payment.status == BillingPayment.Status.PAID:
-                return Response({"ok": True})
+                return Response(status=status.HTTP_200_OK)
 
             payment.raw_webhook = payload
             if transaction_id is not None:
@@ -587,7 +595,7 @@ class CryptomusWebhookView(GenericAPIView):
                 payment.status = BillingPayment.Status.PENDING
                 payment.save()
 
-        return Response({"ok": True})
+        return Response(status=status.HTTP_200_OK)
 
 
 class PricingPlanViewSet(viewsets.ReadOnlyModelViewSet):
@@ -602,7 +610,7 @@ class SubscriptionViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, CanViewBilling]
 
     def get_queryset(self):
-        return self.queryset.filter(user=self.request.user)
+        return self.queryset.filter(user=self.request.user).select_related('plan')
 
     @action(detail=False, methods=['POST'])
     def subscribe(self, request):
@@ -616,7 +624,7 @@ class SubscriptionViewSet(viewsets.ModelViewSet):
     def cancel(self, request):
         if not CanManageBilling().has_permission(request, self):
             return Response({'error': 'You do not have billing management access'}, status=status.HTTP_403_FORBIDDEN)
-        sub = self.get_queryset().filter(status='ACTIVE').first()
+        sub = self.get_queryset().filter(status='ACTIVE').select_related('user__billing_account').first()
         if not sub:
             return Response({'error': 'No active subscription'}, status=status.HTTP_400_BAD_REQUEST)
         # Cancel Stripe subscription if one exists.
@@ -625,7 +633,7 @@ class SubscriptionViewSet(viewsets.ModelViewSet):
             if sub.user.billing_account.stripe_subscription_id:
                 StripeService.cancel_subscription(sub.user)
         except Exception as e:
-            logger.warning("Failed to cancel Stripe subscription for %s: %s", sub.user, e)
+            logger.error("Failed to cancel Stripe subscription for %s: %s", sub.user, e)
         sub.status = 'CANCELLED'
         sub.save()
         return Response({'status': 'Subscription cancelled'})
@@ -637,7 +645,7 @@ class InvoiceViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [IsAuthenticated, CanViewBilling]
 
     def get_queryset(self):
-        return self.queryset.filter(user=self.request.user).order_by('-period_end')
+        return self.queryset.filter(user=self.request.user).select_related('subscription').order_by('-period_end')
 
 
 class UsageSummarySerializer(serializers.Serializer):

@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 from ...models.backup import ServiceBackup
+from ...models.core import Deployment
 
 
 class HistoryActionsMixin:
@@ -23,18 +24,38 @@ class HistoryActionsMixin:
         metadata in error_message), plus their associated deployment
         status.  Useful for showing a "Restoration Activity" timeline.
         """
-        qs = ServiceBackup.objects.filter(
-            get_team_q_filter(request.user, prefix='service__', request=request)
-        ).filter(
-            # Restore-related backups have specific markers in error_message
-            error_message__icontains='restored'
-        ).order_by('-created_at')[:20]
+        backups = list(
+            ServiceBackup.objects.filter(
+                get_team_q_filter(request.user, prefix='service__', request=request)
+            ).filter(
+                # Restore-related backups have specific markers in error_message
+                error_message__icontains='restored'
+            ).select_related('service').order_by('-created_at')[:20]
+        )
+
+        dep_map: dict[str, list] = {}
+        if backups:
+            earliest_created = backups[-1].created_at
+            service_ids = {b.service_id for b in backups if b.service_id}
+            deps = Deployment.objects.filter(
+                service_id__in=service_ids,
+                created_at__gte=earliest_created,
+            ).order_by('created_at')
+            for dep in deps:
+                sid = str(dep.service_id)
+                dep_map.setdefault(sid, []).append(dep)
+
+        from bisect import bisect_left
 
         results = []
-        for b in qs:
-            deployment = b.service.deployments.filter(
-                created_at__gte=b.created_at
-            ).order_by('created_at').first() if b.service_id else None
+        for b in backups:
+            deployment = None
+            if b.service_id:
+                sid = str(b.service_id)
+                dep_list = dep_map.get(sid, [])
+                idx = bisect_left(dep_list, b.created_at, key=lambda d: d.created_at)
+                if idx < len(dep_list):
+                    deployment = dep_list[idx]
 
             results.append({
                 'backup_id': str(b.id),

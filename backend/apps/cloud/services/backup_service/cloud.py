@@ -186,8 +186,8 @@ def _alert_cloud_upload_failed(backup, cloud_result: dict):
                         ),
                         event_type='backup_cloud_failed',
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("Failed to send backup cloud failure notification to user: %s", exc)
 
             try:
                 from apps.core.tasks.alerts import (
@@ -200,8 +200,8 @@ def _alert_cloud_upload_failed(backup, cloud_result: dict):
                     bucket=str(bucket),
                     key=str(key),
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to dispatch backup cloud failure alert task: %s", exc)
 
     except Exception as exc:
         logger.warning("Failed to create cloud upload alert: %s", exc)

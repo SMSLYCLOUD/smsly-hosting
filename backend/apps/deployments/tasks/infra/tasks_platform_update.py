@@ -7,8 +7,13 @@ import shutil
 
 from celery import shared_task
 
+from apps.deployments.constants import (
+    RETRY_DELAY_FAST,
+    TASK_TIME_LIMIT_HEAVY,
+)
 
-@shared_task(bind=True, max_retries=0, acks_late=False, reject_on_worker_lost=False, name="apps.deployments.tasks.platform_update_task")
+
+@shared_task(bind=True, max_retries=0, soft_time_limit=TASK_TIME_LIMIT_HEAVY[0], time_limit=TASK_TIME_LIMIT_HEAVY[1], acks_late=False, reject_on_worker_lost=False, name="apps.deployments.tasks.platform_update_task")
 def platform_update_task(self, update_id: str):
     """Execute platform update in background."""
     from apps.deployments.services.platform_updater import perform_update
@@ -31,7 +36,7 @@ def platform_update_task(self, update_id: str):
 
 
 
-@shared_task(bind=True, max_retries=2, default_retry_delay=30, acks_late=False, reject_on_worker_lost=False, name="apps.deployments.tasks.platform_rollback_task")
+@shared_task(bind=True, max_retries=2, default_retry_delay=RETRY_DELAY_FAST, soft_time_limit=TASK_TIME_LIMIT_HEAVY[0], time_limit=TASK_TIME_LIMIT_HEAVY[1], acks_late=False, reject_on_worker_lost=False, name="apps.deployments.tasks.platform_rollback_task")
 def platform_rollback_task(self, update_id: str):
     """Execute platform rollback in background (avoids blocking the request thread).
 

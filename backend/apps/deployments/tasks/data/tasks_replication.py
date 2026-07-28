@@ -7,6 +7,10 @@ from celery import shared_task
 from django.core.cache import cache
 from django.utils import timezone
 
+from apps.deployments.constants import (
+    TASK_TIME_LIMIT_DATA_SYNC,
+    TASK_TIME_LIMIT_STANDARD,
+)
 from apps.deployments.services.task_encryption import decrypt_arg
 
 
@@ -16,8 +20,8 @@ def _bounded_error(exc, limit=2000):
 
 @shared_task(
     name="apps.deployments.tasks_replication.check_replication_health_task",
-    soft_time_limit=300,
-    time_limit=360)
+    soft_time_limit=TASK_TIME_LIMIT_STANDARD[0],
+    time_limit=TASK_TIME_LIMIT_STANDARD[1])
 def check_replication_health_task():
     """
     Periodic task (every 30s): check WAL replication lag across all meshes.
@@ -134,8 +138,8 @@ def _dispatch_replication_alert(mesh, node, *, event_type, lag_bytes=None,
     bind=True,
     name="apps.deployments.tasks_replication.deploy_replication_task",
     max_retries=0,
-    soft_time_limit=1200,
-    time_limit=1260)
+    soft_time_limit=TASK_TIME_LIMIT_DATA_SYNC[0],
+    time_limit=TASK_TIME_LIMIT_DATA_SYNC[1])
 def deploy_replication_task(self, mesh_id: str, db_password: str,
                              admin_password: str,
                              replication_password: str = "repl_pass"):
@@ -234,15 +238,15 @@ def deploy_replication_task(self, mesh_id: str, db_password: str,
                 "replication_updated_at",
                 "updated_at",
             ])
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to save replication failure status: %s", exc)
         logger.error(f"Replication deployment failed: {e}")
         return {"error": _bounded_error(e)}
     finally:
         cache.delete(lock_key)
 
 
-@shared_task(name="apps.deployments.tasks_replication.manual_failover_task")
+@shared_task(name="apps.deployments.tasks_replication.manual_failover_task", soft_time_limit=TASK_TIME_LIMIT_STANDARD[0], time_limit=TASK_TIME_LIMIT_STANDARD[1])
 def manual_failover_task(mesh_id: str, target_wg_address: str):
     """Trigger manual Patroni failover to a target replica (async)."""
     from apps.deployments.models.mesh import MeshNetwork

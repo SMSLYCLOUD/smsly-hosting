@@ -39,7 +39,16 @@ class BackupScheduleSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = BackupSchedule
-        fields = '__all__'
+        fields = [
+            'id', 'service', 'is_server_wide', 'db_only',
+            'cron_expression', 'retention_days', 'enabled',
+            'last_run', 'next_run',
+            'cloud_upload_enabled',
+            'storage_backend',
+            's3_bucket', 's3_region', 's3_endpoint',
+            's3_access_key', 's3_secret_key',
+            'cloud_destination_id',
+        ]
         extra_kwargs = {
             's3_access_key': {'write_only': True},
             's3_secret_key': {'write_only': True},
@@ -84,7 +93,16 @@ class SnapshotScheduleSerializer(serializers.ModelSerializer):
     class Meta:
         from ..models.backup import SnapshotSchedule
         model = SnapshotSchedule
-        fields = '__all__'
+        fields = [
+            'id', 'service', 'is_server_wide',
+            'cron_expression', 'retention_days', 'enabled',
+            'last_run', 'next_run',
+            'cloud_upload_enabled',
+            'storage_backend',
+            's3_bucket', 's3_region', 's3_endpoint',
+            's3_access_key', 's3_secret_key',
+            'cloud_destination_id',
+        ]
         extra_kwargs = {
             's3_access_key': {'write_only': True},
             's3_secret_key': {'write_only': True},
@@ -121,7 +139,12 @@ class SnapshotScheduleSerializer(serializers.ModelSerializer):
 class ServiceSnapshotSerializer(serializers.ModelSerializer):
     class Meta:
         model = ServiceSnapshot
-        fields = '__all__'
+        fields = [
+            'id', 'service', 'created_by', 'label', 'trigger',
+            'config_data', 'parent_snapshot', 'diff_summary',
+            'created_at',
+            'cloud_uploaded', 'cloud_destination', 'cloud_bucket', 'cloud_key',
+        ]
         read_only_fields = ['id', 'created_by', 'created_at', 'config_data', 'diff_summary', 'parent_snapshot']
 
 

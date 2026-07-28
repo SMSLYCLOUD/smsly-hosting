@@ -328,8 +328,8 @@ class IncidentMixin:
                     import json
                     bans = json.loads(bans_result.stdout)
                     ban_count = len(bans) if isinstance(bans, list) else 0
-                except Exception:
-                    pass
+                except (ValueError, TypeError) as exc:
+                    logger.debug("Failed to parse CrowdSec ban JSON: %s", exc)
                 events.append({
                     'type': 'waf_summary',
                     'severity': 'warning' if ban_count > 50 else 'info',
@@ -337,10 +337,8 @@ class IncidentMixin:
                     'title': f'{ban_count} active WAF bans',
                     'detail': 'CrowdSec decisions currently enforcing',
                 })
-        except Exception:
-            pass
-
-        # ── Sort & return ─────────────────────────────────────────────
+        except Exception as exc:
+            logger.debug("CrowdSec WAF summary unavailable: %s", exc)
         events.sort(key=lambda e: e['timestamp'] or '', reverse=True)
 
         # Summary counts

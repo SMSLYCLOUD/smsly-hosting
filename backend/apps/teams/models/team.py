@@ -23,6 +23,11 @@ class Team(models.Model):
     def __str__(self):
         return self.name
 
+    class Meta:
+        indexes = [
+            models.Index(fields=["owner"], name="team_owner_idx"),
+        ]
+
 
 class TeamMember(models.Model):
     class Role(models.TextChoices):
@@ -59,3 +64,7 @@ class TeamMember(models.Model):
 
     class Meta:
         unique_together = ('team', 'user')
+        indexes = [
+            models.Index(fields=["user", "team"], name="teammember_user_team_idx"),
+            models.Index(fields=["user", "is_active"], name="teammember_user_active_idx"),
+        ]

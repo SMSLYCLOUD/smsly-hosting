@@ -1,4 +1,7 @@
-"""Core app URL patterns."""
+"""Core app URL patterns.
+
+Naming convention: URL names use kebab-case (e.g. 'dashboard-overview').
+"""
 from apps.core.views import (
     AdminUserViewSet,
     APIKeyViewSet,

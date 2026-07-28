@@ -28,3 +28,8 @@ class InfrastructureCost(models.Model):
 
     def __str__(self):
         return f"{self.date} {self.cost_type}: ${self.amount_usd}"
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["date", "cost_type"], name="billing_infracost_dt_type_idx"),
+        ]

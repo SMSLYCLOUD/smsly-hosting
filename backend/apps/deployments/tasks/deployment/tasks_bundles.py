@@ -8,10 +8,12 @@ import time as _time
 
 from celery import shared_task
 
+from apps.deployments.constants import TASK_TIME_LIMIT_DATA_SYNC, TASK_TIME_LIMIT_MEDIUM
+
 logger = logging.getLogger(__name__)
 
 
-@shared_task(bind=True, max_retries=3, soft_time_limit=1200, time_limit=1500, name="apps.deployments.tasks_bundles.provision_bundle_task")
+@shared_task(bind=True, max_retries=3, soft_time_limit=TASK_TIME_LIMIT_DATA_SYNC[0], time_limit=TASK_TIME_LIMIT_DATA_SYNC[1], name="apps.deployments.tasks_bundles.provision_bundle_task")
 def provision_bundle_task(
     self,
     bundle_id: str,
@@ -60,7 +62,8 @@ def provision_bundle_task(
 
         # Collect standard addon URLs for template resolution
         addon_urls = {}
-        for addon in service.addons.filter(status='ACTIVE'):
+        active_addons = list(service.addons.filter(status='ACTIVE'))
+        for addon in active_addons:
             if addon.connection_url:
                 addon_urls[addon.name] = addon.connection_url
                 addon_urls[addon.addon_type.lower()] = addon.connection_url
@@ -123,8 +126,8 @@ def provision_bundle_task(
             ADDON_PROVISION_DURATION.labels(
                 addon_type=f"BUNDLE_{bundle.name}",
             ).observe(_time.monotonic() - start_ts)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to report bundle provision metrics: %s", exc)
 
         logger.info(
             "Bundle %s provisioned for service %s (%d components, %.1fs)",
@@ -146,7 +149,7 @@ def provision_bundle_task(
         raise self.retry(exc=exc, countdown=30)
 
 
-@shared_task(bind=True, max_retries=3, soft_time_limit=1200, time_limit=1500)
+@shared_task(bind=True, max_retries=3, soft_time_limit=TASK_TIME_LIMIT_DATA_SYNC[0], time_limit=TASK_TIME_LIMIT_DATA_SYNC[1])
 def reprovision_bundle_task(
     self,
     bundle_id: str,
@@ -179,7 +182,8 @@ def reprovision_bundle_task(
             raise ValueError(f"Bundle '{bundle.name}' not found in manifest")
 
         addon_urls = {}
-        for addon in service.addons.filter(status='ACTIVE'):
+        active_addons = list(service.addons.filter(status='ACTIVE'))
+        for addon in active_addons:
             if addon.connection_url:
                 addon_urls[addon.name] = addon.connection_url
                 addon_urls[addon.addon_type.lower()] = addon.connection_url
@@ -259,7 +263,7 @@ def reprovision_bundle_task(
         raise self.retry(exc=exc, countdown=30)
 
 
-@shared_task(bind=True, max_retries=3, soft_time_limit=600, time_limit=660, name="apps.deployments.tasks_bundles.deprovision_bundle_task")
+@shared_task(bind=True, max_retries=3, soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1], name="apps.deployments.tasks_bundles.deprovision_bundle_task")
 def deprovision_bundle_task(
     self,
     bundle_id: str,
@@ -309,8 +313,8 @@ def deprovision_bundle_task(
             BundleComponent.objects.filter(
                 bundle_id=bundle_id,
             ).update(status=BundleComponent.Status.STOPPED)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to update bundle component statuses: %s", exc)
 
         logger.info("Bundle %s deprovisioned (service %s)", b_name, s_id)
     except Exception as exc:
@@ -319,7 +323,7 @@ def deprovision_bundle_task(
             raise self.retry(exc=exc, countdown=30)
 
 
-@shared_task(bind=True, max_retries=3, soft_time_limit=600, time_limit=660, name="apps.deployments.tasks_bundles.backup_bundle_component_task")
+@shared_task(bind=True, max_retries=3, soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1], name="apps.deployments.tasks_bundles.backup_bundle_component_task")
 def backup_bundle_component_task(
     self,
     component_id: str,
@@ -374,13 +378,13 @@ def backup_bundle_component_task(
                     backup.status = BundleBackup.Status.FAILED
                     backup.error_message = str(exc)[:500]
                     backup.save()
-            except Exception:
-                pass
+            except Exception as inner_exc:
+                logger.warning("Failed to mark bundle backup as FAILED for component %s: %s", component_id, inner_exc)
             return
         raise self.retry(exc=exc, countdown=30)
 
 
-@shared_task(bind=True, max_retries=3, soft_time_limit=600, time_limit=660, name="apps.deployments.tasks_bundles.restore_bundle_component_task")
+@shared_task(bind=True, max_retries=3, soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1], name="apps.deployments.tasks_bundles.restore_bundle_component_task")
 def restore_bundle_component_task(self, backup_id: str):
     """Restore a backup to a bundle component."""
     from apps.addons.services.bundle_provisioner import bundle_provisioner
@@ -408,13 +412,13 @@ def restore_bundle_component_task(self, backup_id: str):
             backup.status = BundleBackup.Status.FAILED
             backup.error_message = str(exc)[:500]
             backup.save(update_fields=['status', 'error_message'])
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to mark bundle backup as failed: %s", exc)
         if self.request.retries < self.max_retries:
             raise self.retry(exc=exc, countdown=30)
 
 
-@shared_task(soft_time_limit=600, time_limit=660, name="apps.deployments.tasks_bundles.delete_bundle_task")
+@shared_task(soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1], name="apps.deployments.tasks_bundles.delete_bundle_task")
 def delete_bundle_task(bundle_id: str):
     """Full deletion of a bundle: deprovision + remove DB records."""
     from apps.addons.services.bundle_provisioner import bundle_provisioner

@@ -17,7 +17,11 @@ import { toast } from '@/components/ui/use-toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { formatDistanceToNow } from 'date-fns';
 
-export function CronTab({ serviceId }: { serviceId: string }) {
+interface CronTabProps {
+    serviceId: string;
+}
+
+export const CronTab = React.memo(function CronTab({ serviceId }: CronTabProps) {
     const confirm = useConfirm();
     const [jobs, setJobs] = useState<CronJob[]>([]);
     const [loading, setLoading] = useState(true);
@@ -190,4 +194,4 @@ export function CronTab({ serviceId }: { serviceId: string }) {
             </Card>
         </div>
     );
-}
+});

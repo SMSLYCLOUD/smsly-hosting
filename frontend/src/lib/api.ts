@@ -9,7 +9,7 @@ const getApiUrl = () => {
   return process.env.NEXT_PUBLIC_API_URL || '/api/v1';
 };
 
-export const downloadBlob = (data: any, path: string) => {
+export const downloadBlob = (data: Blob | ArrayBuffer, path: string) => {
     const url = window.URL.createObjectURL(new Blob([data]));
     const link = document.createElement('a');
     link.href = url;
@@ -20,10 +20,23 @@ export const downloadBlob = (data: any, path: string) => {
     window.URL.revokeObjectURL(url);
 };
 
-export const extractDataList = (response: any): any[] => {
+export interface ApiResponse<T = unknown> {
+  data: T;
+  status: number;
+  statusText: string;
+}
+
+interface AxiosRequestConfigProxy {
+  _skipRemoteProxy?: boolean;
+  _isProxied?: boolean;
+}
+
+export const extractDataList = <T = unknown>(response: { data: unknown }): T[] => {
     const data = response.data;
-    if (Array.isArray(data)) return data;
-    if (data && Array.isArray(data.results)) return data.results;
+    if (Array.isArray(data)) return data as T[];
+    if (data && typeof data === 'object' && 'results' in data && Array.isArray((data as Record<string, unknown>).results)) {
+      return (data as { results: unknown[] }).results as T[];
+    }
     return [];
 };
 
@@ -39,7 +52,7 @@ function isServerProxyUrl(url?: string): boolean {
   return /\/servers\/[^/]+\/proxy\/?$/.test(cleanUrl);
 }
 
-function appendQuery(path: string, params: Record<string, any> | undefined): string {
+function appendQuery(path: string, params: Record<string, unknown> | undefined): string {
   if (!params || typeof params !== 'object') return path;
   const searchParams = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
@@ -156,12 +169,12 @@ api.interceptors.request.use((config) => {
   const activeTeamId = localStorage.getItem('smsly_active_team');
   if (activeTeamId && activeTeamId !== 'null' && activeTeamId !== 'undefined' && activeTeamId !== '') {
     if (!config.headers) {
-      config.headers = {} as any;
+      config.headers = {} as import('axios').AxiosHeaders;
     }
-    (config.headers as any)['X-Team-ID'] = activeTeamId;
+    (config.headers as Record<string, string>)['X-Team-ID'] = activeTeamId;
   }
 
-  if ((config as any)?._skipRemoteProxy) return config;
+  if ((config as unknown as AxiosRequestConfigProxy)?._skipRemoteProxy) return config;
 
   const activeServer = localStorage.getItem('smsly_active_server');
   if (!activeServer) return config;
@@ -188,14 +201,14 @@ api.interceptors.request.use((config) => {
   // Rewrite: original method + path → POST to /servers/{id}/proxy/
   const originalMethod = (config.method || 'GET').toUpperCase();
   let originalPath = `/api/v1${relPath.startsWith('/') ? relPath : '/' + relPath}`;
-  originalPath = appendQuery(originalPath, (config as any).params);
+  originalPath = appendQuery(originalPath, (config as unknown as { params?: Record<string, unknown> }).params);
   const originalBody = config.data;
 
   config.method = 'post';
   config.url = `/servers/${activeServer}/proxy/`;
   // Query params are now embedded in originalPath; prevent axios from adding
   // them to the proxy endpoint itself.
-  delete (config as any).params;
+  delete (config as unknown as { params?: Record<string, unknown> }).params;
   config.data = {
     method: originalMethod,
     path: originalPath,
@@ -203,7 +216,7 @@ api.interceptors.request.use((config) => {
   };
 
   // Mark this config so the response interceptor knows to unwrap it
-  (config as any)._isProxied = true;
+  (config as unknown as AxiosRequestConfigProxy)._isProxied = true;
 
   return config;
 });
@@ -212,7 +225,7 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => {
     const shouldUnwrapProxyResponse = (
-      (response.config as any)?._isProxied ||
+      (response.config as unknown as AxiosRequestConfigProxy)?._isProxied ||
       isServerProxyUrl(response.config?.url)
     ) && response.data?.status_code !== undefined;
 
@@ -226,8 +239,8 @@ api.interceptors.response.use(
 
       // If remote returned an error status, reject as an Axios error
       if (proxyStatusCode >= 400) {
-        const error: any = new Error(`Remote server returned ${proxyStatusCode}`);
-        error.response = { ...response, status: proxyStatusCode, data: proxyData };
+        const error = new Error(`Remote server returned ${proxyStatusCode}`) as Error & { response?: ApiResponse; config?: unknown };
+        error.response = { ...response, status: proxyStatusCode, data: proxyData } as ApiResponse;
         error.config = response.config;
         return Promise.reject(error);
       }
@@ -241,7 +254,7 @@ api.interceptors.response.use(
   },
   (error) => {
     // If the proxy call itself failed (502, network error), provide a clear message
-    const isProxyRequest = (error?.config as any)?._isProxied || isServerProxyUrl(error?.config?.url);
+    const isProxyRequest = (error?.config as unknown as AxiosRequestConfigProxy)?._isProxied || isServerProxyUrl(error?.config?.url);
     if (isProxyRequest) {
       const statusCode = error?.response?.status;
       const isGatewayFailure = statusCode === 502 || statusCode === 503 || statusCode === 504 || !statusCode;
@@ -317,7 +330,7 @@ export interface Service {
   internal_port?: number;
   public_domain?: string;
   custom_domains?: string[];
-  domain_instances?: any[];
+  domain_instances?: { domain: string; verified: boolean }[];
   domain_verified?: boolean;
   verification_token?: string;
   created_at?: string;
@@ -377,6 +390,10 @@ export interface Service {
     confidence?: string;
     breakdown?: Record<string, any>;
   };
+  // GitHub App
+  watch_paths?: string[];
+  bot_pr_strategy?: 'DEPLOY' | 'SKIP' | 'COMMENT_ONLY';
+  last_pr_comment_id?: number;
 }
 
 export interface AiRouterDetectedModel {
@@ -475,7 +492,7 @@ export const servicesApi = {
     const response = await api.get('/services/');
     return extractDataList(response);
   },
-  create: async (data: any, requestConfig?: any): Promise<Service> => {
+  create: async (data: Partial<Service> | FormData, requestConfig?: AxiosRequestConfigProxy): Promise<Service> => {
     // If it's a file upload, use FormData
     if (data instanceof FormData) {
       const response = await api.post('/services/', data, {
@@ -504,7 +521,7 @@ export const servicesApi = {
     const response = await api.post(`/services/${id}/deploy/`, body, { _skipRemoteProxy: true });
     return response.data;
   },
-  uploadDeploy: async (id: string, file: File, onUploadProgress?: (progressEvent: any) => void): Promise<any> => {
+  uploadDeploy: async (id: string, file: File, onUploadProgress?: (progressEvent: { loaded: number; total?: number; progress?: number }) => void): Promise<{ status: string; message?: string }> => {
     const formData = new FormData();
     formData.append('file', file);
     const response = await api.post(`/services/${id}/upload-deploy/`, formData, {
@@ -513,21 +530,21 @@ export const servicesApi = {
     });
     return response.data;
   },
-  restart: async (id: string, forceRebuild: boolean = false): Promise<any> => {
+  restart: async (id: string, forceRebuild: boolean = false): Promise<{ status: string; message?: string }> => {
     const response = await api.post(`/services/${id}/restart/`, { force_rebuild: forceRebuild });
     return response.data;
   },
-  triggerJulesFix: async (serviceId: string, deploymentId?: string): Promise<any> => {
+  triggerJulesFix: async (serviceId: string, deploymentId?: string): Promise<{ status: string; message?: string }> => {
     const body: Record<string, unknown> = {};
     if (deploymentId) body.deployment_id = deploymentId;
     const response = await api.post(`/services/${serviceId}/trigger-jules-fix/`, body);
     return response.data;
   },
-  forceRebuild: async (id: string): Promise<any> => {
+  forceRebuild: async (id: string): Promise<{ status: string; message?: string }> => {
     const response = await api.post(`/services/${id}/restart/`, { force_rebuild: true });
     return response.data;
   },
-  stop: async (id: string): Promise<any> => {
+  stop: async (id: string): Promise<{ status: string; message?: string }> => {
     const response = await api.post(`/services/${id}/stop/`);
     return response.data;
   },
@@ -545,10 +562,10 @@ export const servicesApi = {
     const response = await api.get(`/deployments/${id}/`);
     return response.data;
   },
-  getIncidentReport: async (serviceId: string): Promise<any> => {
+  getIncidentReport: async (serviceId: string) => {
     const response = await api.get(`/services/${serviceId}/incident-report/`, {
       _skipRemoteProxy: true,
-    } as any);
+    } as AxiosRequestConfigProxy);
     return response.data;
   },
   rollback: async (deploymentId: string): Promise<DeploymentRollbackResponse> => {
@@ -558,7 +575,7 @@ export const servicesApi = {
     );
     return response.data;
   },
-  cancelDeployment: async (deploymentId: string): Promise<any> => {
+  cancelDeployment: async (deploymentId: string): Promise<{ status: string; message?: string }> => {
     const response = await api.post(`/deployments/${deploymentId}/cancel/`);
     return response.data;
   },
@@ -566,7 +583,7 @@ export const servicesApi = {
     cpu_cores?: number;
     memory_mb?: number;
     env_overrides?: Record<string, string>;
-  }): Promise<any> => {
+  }): Promise<{ status: string; message?: string }> => {
     const response = await api.post(`/deployments/${deploymentId}/approve/`, overrides || {});
     return response.data;
   },
@@ -574,7 +591,7 @@ export const servicesApi = {
     const response = await api.post('/deployments/bulk-cancel/', { deployment_ids: deploymentIds });
     return response.data;
   },
-  promoteDeployment: async (deploymentId: string): Promise<any> => {
+  promoteDeployment: async (deploymentId: string): Promise<{ status: string; message?: string }> => {
     const response = await api.post(`/deployments/${deploymentId}/promote/`);
     return response.data;
   },
@@ -645,18 +662,18 @@ export const servicesApi = {
   },
 
   // Metrics
-  getMetrics: async (serviceId: string, duration: string = '1h'): Promise<any> => {
+  getMetrics: async (serviceId: string, duration: string = '1h') => {
     const response = await api.get(`/services/${serviceId}/metrics/`, { params: { duration } });
     return response.data;
   },
   // Traffic Geo
-  getTrafficGeo: async (serviceId: string): Promise<any> => {
+  getTrafficGeo: async (serviceId: string) => {
     const response = await api.get(`/services/${serviceId}/traffic-geo/`, {
       _skipRemoteProxy: true,
-    } as any);
+    } as AxiosRequestConfigProxy);
     return response.data;
   },
-  recheckHealth: async (serviceId: string, reset_backoff: boolean = true): Promise<any> => {
+  recheckHealth: async (serviceId: string, reset_backoff: boolean = true): Promise<{ status: string; health_status?: string }> => {
     const response = await api.post(`/services/${serviceId}/recheck-health/`, { reset_backoff });
     return response.data;
   },
@@ -694,7 +711,7 @@ export const servicesApi = {
   },
 
   // Volume Browser
-  browseVolume: async (serviceId: string, volumeId: string, path?: string): Promise<{ path: string; files: any[] }> => {
+  browseVolume: async (serviceId: string, volumeId: string, path?: string): Promise<{ path: string; files: { name: string; type: string; size?: number; modified?: string }[] }> => {
       const res = await api.get(`/services/${serviceId}/volumes/${volumeId}/browse/`, { params: { path } });
       return res.data;
   },
@@ -728,7 +745,7 @@ export const servicesApi = {
       });
       return response.data;
   },
-  browseFiles: async (serviceId: string, path: string = '/app'): Promise<{ path: string; files: any[] }> => {
+  browseFiles: async (serviceId: string, path: string = '/app'): Promise<{ path: string; files: { name: string; type: string; size?: number; modified?: string }[] }> => {
       const response = await api.get(`/services/${serviceId}/file-browse/`, { params: { path } });
       return response.data;
   },
@@ -765,7 +782,7 @@ export const servicesApi = {
 };
 
 export const platformApi = {
-  resources: async (): Promise<any> => {
+  resources: async (): Promise<{ cpu_cores: number; ram_mb: number; disk_gb: number }> => {
     const response = await api.get('/platform/resources/');
     return response.data;
   },
@@ -799,66 +816,70 @@ export const blueprintsApi = {
     const response = await api.get(`/blueprints/${id}/`);
     return response.data;
   },
-  deploy: async (id: string, providerId?: string): Promise<any> => {
+  deploy: async (id: string, providerId?: string): Promise<{ id: string; status: string; message?: string }> => {
     const response = await api.post('/blueprints/deploy/', { blueprint_id: id, provider_id: providerId || "" });
     return response.data;
   },
 };
 
 export const templatesApi = {
-  list: async (): Promise<any[]> => {
+  list: async (): Promise<Blueprint[]> => {
     const response = await api.get('/templates/');
     // Handle pagination if present, or raw list. Safely fallback to empty array.
     return extractDataList(response);
   },
-  get: async (id: string): Promise<any> => {
+  get: async (id: string): Promise<Blueprint> => {
     const response = await api.get(`/templates/${id}/`);
     return response.data;
   }
 };
 
 export const githubApi = {
-  repos: async (params?: any): Promise<any> => {
+  repos: async (params?: Record<string, unknown>): Promise<{ name: string; full_name: string; private: boolean }[]> => {
     const response = await api.get('/integrations/github/repos/', { params });
-    return response.data;
+    return Array.isArray(response.data) ? response.data : response.data?.results || [];
   },
-  branches: async (repo: string): Promise<any> => {
+  branches: async (repo: string): Promise<{ name: string; commit?: { sha: string } }[]> => {
     const response = await api.get('/integrations/github/branches/', { params: { repo } });
-    return response.data;
+    return Array.isArray(response.data) ? response.data : response.data?.results || [];
   },
-  commits: async (repo: string, branch: string): Promise<any> => {
+  commits: async (repo: string, branch: string): Promise<{ sha: string; commit: { message: string; author?: { name: string; date: string } } }[]> => {
     const response = await api.get('/integrations/github/commits/', { params: { repo, branch } });
-    return response.data;
-  }
+    return Array.isArray(response.data) ? response.data : response.data?.results || [];
+  },
+  defaultBranch: async (repo: string): Promise<string> => {
+    const response = await api.get('/integrations/github/default-branch/', { params: { repo } });
+    return response.data?.default_branch || 'main';
+  },
 };
 
 export const gitlabApi = {
-  repos: async (params?: any): Promise<any> => {
+  repos: async (params?: Record<string, unknown>): Promise<{ name: string; path_with_namespace: string; visibility: string }[]> => {
     const response = await api.get('/integrations/gitlab/repos/', { params });
-    return response.data;
+    return Array.isArray(response.data) ? response.data : response.data?.results || [];
   },
-  branches: async (repo: string): Promise<any> => {
+  branches: async (repo: string): Promise<{ name: string; commit?: { id: string } }[]> => {
     const response = await api.get('/integrations/gitlab/branches/', { params: { repo } });
-    return response.data;
+    return Array.isArray(response.data) ? response.data : response.data?.results || [];
   },
-  commits: async (repo: string, branch: string): Promise<any> => {
+  commits: async (repo: string, branch: string): Promise<{ id: string; title: string; author_name?: string; authored_date?: string }[]> => {
     const response = await api.get('/integrations/gitlab/commits/', { params: { repo, branch } });
-    return response.data;
+    return Array.isArray(response.data) ? response.data : response.data?.results || [];
   }
 };
 
 export const bitbucketApi = {
-  repos: async (params?: any): Promise<any> => {
+  repos: async (params?: Record<string, unknown>): Promise<{ name: string; full_name: string; is_private: boolean }[]> => {
     const response = await api.get('/integrations/bitbucket/repos/', { params });
-    return response.data;
+    return Array.isArray(response.data) ? response.data : response.data?.results || [];
   },
-  branches: async (repo: string): Promise<any> => {
+  branches: async (repo: string): Promise<{ name: string; target?: { hash: string } }[]> => {
     const response = await api.get('/integrations/bitbucket/branches/', { params: { repo } });
-    return response.data;
+    return Array.isArray(response.data) ? response.data : response.data?.results || [];
   },
-  commits: async (repo: string, branch: string): Promise<any> => {
+  commits: async (repo: string, branch: string): Promise<{ hash: string; message: string; author?: { raw: string } }[]> => {
     const response = await api.get('/integrations/bitbucket/commits/', { params: { repo, branch } });
-    return response.data;
+    return Array.isArray(response.data) ? response.data : response.data?.results || [];
   }
 };
 
@@ -880,29 +901,29 @@ export const systemApi = {
     const response = await api.get('/system/config/');
     return response.data;
   },
-  getConfig: async (): Promise<any> => {
+  getConfig: async (): Promise<{ ALLOW_REGISTRATION: boolean; require_email_verification: boolean; [key: string]: unknown }> => {
     const response = await api.get('/system/config/');
     return response.data;
   },
-  runMaintenance: async (action: 'clear' | 'refresh' | 'update' | 'registry_gc' | 'build_cache'): Promise<any> => {
+  runMaintenance: async (action: 'clear' | 'refresh' | 'update' | 'registry_gc' | 'build_cache') => {
     const response = await api.post('/system/config/', { action });
     return response.data;
   },
-  getMaintenanceTask: async (taskId: string): Promise<any> => {
+  getMaintenanceTask: async (taskId: string) => {
     const response = await api.get('/system/config/', {
       params: { maintenance_task_id: taskId },
     });
     return response.data;
   },
-  getPlatformUpdate: async (updateId: string): Promise<any> => {
+  getPlatformUpdate: async (updateId: string) => {
     const response = await api.get(`/platform-updates/${updateId}/`);
     return response.data;
   },
-  getDomainConfig: async (): Promise<any> => {
+  getDomainConfig: async () => {
     const response = await api.get('/system/domain-config/');
     return response.data;
   },
-  updateDomainConfig: async (data: Record<string, any>): Promise<any> => {
+  updateDomainConfig: async (data: Record<string, unknown>) => {
     const response = await api.put('/system/domain-config/', data);
     return response.data;
   },
@@ -944,12 +965,12 @@ export const aiApi = {
     const response = await api.get('/ai/providers/', {
       params: includeBalance ? { include_balance: 'true' } : {},
       _skipRemoteProxy: true,
-    } as any);
+    } as AxiosRequestConfigProxy);
     return response.data;
   },
 
   /** Update AI provider settings (admin only). */
-  updateProviders: async (data: Record<string, string>): Promise<any> => {
+  updateProviders: async (data: Record<string, string>): Promise<{ status: string; message?: string }> => {
     const response = await api.post('/ai/providers/update/', data, {
       _skipRemoteProxy: true,
     });
@@ -997,10 +1018,10 @@ export const aiApi = {
   },
 
   /** Get latest intelligence report */
-  getReport: async (): Promise<any> => {
+  getReport: async (): Promise<{ summary: string; issues?: string[]; recommendations?: string[] }> => {
     const res = await api.get('/ai/report/', {
       _skipRemoteProxy: true,
-    } as any);
+    } as AxiosRequestConfigProxy);
     return res.data;
   },
 
@@ -1018,7 +1039,7 @@ export const aiApi = {
   }> => {
     const res = await api.get('/ai/anomalies/', {
       _skipRemoteProxy: true,
-    } as any);
+    } as AxiosRequestConfigProxy);
     return res.data;
   },
 };
@@ -1048,7 +1069,7 @@ export const codeAnalysisApi = {
   }> => {
     const res = await api.get(`/cloud/code-analysis/result/${taskId}/`, {
       _skipRemoteProxy: true,
-    } as any);
+    } as AxiosRequestConfigProxy);
     return res.data;
   },
 };
@@ -1078,7 +1099,7 @@ export interface PreviewEnvironment {
 
 export const previewApi = {
   /** Create a preview environment for a service */
-  create: async (serviceId: string, branch: string, prNumber?: number): Promise<any> => {
+  create: async (serviceId: string, branch: string, prNumber?: number): Promise<PreviewEnvironment> => {
     const res = await api.post(`/services/${serviceId}/create-preview/`, {
       branch,
       ...(prNumber ? { pr_number: prNumber } : {}),
@@ -1137,11 +1158,11 @@ export const teamsApi = {
     const response = await api.get(`/teams/${id}/members/`);
     return extractDataList(response);
   },
-  inviteMember: async (teamId: string, email: string, role: string): Promise<any> => {
+  inviteMember: async (teamId: string, email: string, role: string): Promise<{ message: string }> => {
     const response = await api.post(`/teams/${teamId}/invite_member/`, { email, role });
     return response.data;
   },
-  removeMember: async (teamId: string, userId: number): Promise<any> => {
+  removeMember: async (teamId: string, userId: number): Promise<{ message: string }> => {
     const response = await api.post(`/teams/${teamId}/remove_member/`, { user_id: userId });
     return response.data;
   },
@@ -1170,7 +1191,7 @@ export const deploymentApprovalApi = {
       if (data && Array.isArray(data.results)) return data.results;
       return [];
     }),
-  create: (serviceId: string, data: any): Promise<DeploymentApproval> =>
+  create: (serviceId: string, data: Partial<DeploymentApproval>): Promise<DeploymentApproval> =>
     api.post(`/services/${serviceId}/approvals/`, data).then(r => r.data),
   approve: (serviceId: string, approvalId: string): Promise<DeploymentApproval> =>
     api.post(`/services/${serviceId}/approvals/${approvalId}/approve/`).then(r => r.data),
@@ -1230,7 +1251,7 @@ export interface ManagedServer {
   tls_cert_sha256_set?: boolean;
 }
 
-const proxiedRequestConfig = (): any => ({ _isProxied: true });
+const proxiedRequestConfig = (): AxiosRequestConfigProxy => ({ _isProxied: true });
 
 export const serversApi = {
   list: async (): Promise<ManagedServer[]> => {
@@ -1260,78 +1281,78 @@ export const serversApi = {
     const res = await api.post('/servers/check_all/');
     return res.data;
   },
-  proxy: async (id: string, method: string, path: string, body?: any): Promise<any> => {
+  proxy: async (id: string, method: string, path: string, body?: Record<string, unknown>): Promise<unknown> => {
     const res = await api.post(`/servers/${id}/proxy/`, { method, path, body }, proxiedRequestConfig());
     return res.data;
   },
-  remoteServices: async (id: string): Promise<any> => {
+  remoteServices: async (id: string) => {
     const res = await api.get(`/servers/${id}/services/`);
     return res.data;
   },
-  remoteDeployments: async (id: string): Promise<any> => {
+  remoteDeployments: async (id: string) => {
     const res = await api.get(`/servers/${id}/deployments/`);
     return res.data;
   },
-  remoteDomains: async (id: string): Promise<any> => {
+  remoteDomains: async (id: string) => {
     const res = await api.get(`/servers/${id}/domains/`);
     return res.data;
   },
   // Remote service management via proxy
-  remoteDeployService: async (id: string, serviceId: string, ref: string = 'HEAD'): Promise<any> => {
+  remoteDeployService: async (id: string, serviceId: string, ref: string = 'HEAD'): Promise<{ status: string; message?: string }> => {
     const res = await api.post(`/servers/${id}/proxy/`, {
       method: 'POST', path: `/api/v1/services/${serviceId}/deploy/`, body: { ref },
     }, proxiedRequestConfig());
     return res.data;
   },
-  remoteStopService: async (id: string, serviceId: string): Promise<any> => {
+  remoteStopService: async (id: string, serviceId: string): Promise<{ status: string; message?: string }> => {
     const res = await api.post(`/servers/${id}/proxy/`, {
       method: 'POST', path: `/api/v1/services/${serviceId}/stop/`,
     }, proxiedRequestConfig());
     return res.data;
   },
-  remoteRestartService: async (id: string, serviceId: string): Promise<any> => {
+  remoteRestartService: async (id: string, serviceId: string): Promise<{ status: string; message?: string }> => {
     const res = await api.post(`/servers/${id}/proxy/`, {
       method: 'POST', path: `/api/v1/services/${serviceId}/restart/`,
     }, proxiedRequestConfig());
     return res.data;
   },
   // Remote domain management via proxy
-  remoteAddDomain: async (id: string, serviceId: string, domain: string): Promise<any> => {
+  remoteAddDomain: async (id: string, serviceId: string, domain: string) => {
     const res = await api.post(`/servers/${id}/proxy/`, {
       method: 'POST', path: `/api/v1/services/${serviceId}/add-domain/`, body: { domain },
     }, proxiedRequestConfig());
     return res.data;
   },
-  remoteDeleteDomain: async (id: string, serviceId: string, domain: string): Promise<any> => {
+  remoteDeleteDomain: async (id: string, serviceId: string, domain: string) => {
     const res = await api.post(`/servers/${id}/proxy/`, {
       method: 'POST', path: `/api/v1/services/${serviceId}/delete-domain/`, body: { domain },
     }, proxiedRequestConfig());
     return res.data;
   },
-  remoteVerifyDomain: async (id: string, serviceId: string, domain: string): Promise<any> => {
+  remoteVerifyDomain: async (id: string, serviceId: string, domain: string) => {
     const res = await api.post(`/servers/${id}/proxy/`, {
       method: 'POST', path: `/api/v1/services/${serviceId}/verify-domain/`, body: { domain },
     }, proxiedRequestConfig());
     return res.data;
   },
-  provision: async (data: any): Promise<any> => {
+  provision: async (data: Record<string, unknown>): Promise<{ status: string; message?: string }> => {
     const res = await api.post('/servers/provision/', data);
     return res.data;
   },
-  provisionLogs: async (id: string): Promise<any> => {
+  provisionLogs: async (id: string) => {
     const res = await api.get(`/servers/${id}/provision-logs/`);
     return res.data;
   },
-  updateServer: async (id: string): Promise<any> => {
+  updateServer: async (id: string) => {
     const res = await api.post(`/servers/${id}/update-server/`);
     return res.data;
   },
   runDiagnostics: (id: string) => api.post(`/servers/${id}/diagnostics/`),
-  triggerHealing: (id: string, payload?: any) => api.post(`/servers/${id}/heal/`, payload || {}),
-  getIncidentReport: async (serverId: string): Promise<any> => {
+  triggerHealing: (id: string, payload?: Record<string, unknown>) => api.post(`/servers/${id}/heal/`, payload || {}),
+  getIncidentReport: async (serverId: string) => {
     const response = await api.get(`/servers/${serverId}/incident-report/`, {
       _skipRemoteProxy: true,
-    } as any);
+    } as AxiosRequestConfigProxy);
     return response.data;
   },
 };
@@ -1345,9 +1366,9 @@ export const deployApi = {
     ref: string = 'HEAD',
     serverIds: string[] = [],
     includeLocal: boolean = true,
-    requestConfig?: any,
+    requestConfig?: AxiosRequestConfigProxy,
     registry?: { url?: string; username?: string; password?: string },
-  ): Promise<any> => {
+  ): Promise<{ status: string; message?: string; task_id?: string }> => {
     const payload: Record<string, unknown> = {
       ref,
       server_ids: serverIds,
@@ -1361,11 +1382,11 @@ export const deployApi = {
     const res = await api.post(`/services/${serviceId}/multi-deploy/`, payload, requestConfig);
     return res.data;
   },
-  agentReady: async (id: string): Promise<any> => {
+  agentReady: async (id: string): Promise<{ status: string; message?: string }> => {
     const res = await api.post(`/servers/${id}/agent-ready/`);
     return res.data;
   },
-  agentHeartbeat: async (id: string, payload?: any): Promise<any> => {
+  agentHeartbeat: async (id: string, payload?: Record<string, unknown>): Promise<{ status: string; message?: string }> => {
     const res = await api.post(`/servers/${id}/agent-heartbeat/`, payload || {});
     return res.data;
   },
@@ -1431,7 +1452,7 @@ export interface ReservedSubdomain {
   created_at: string;
 }
 
-function normalizeTunnel(raw: any): Tunnel {
+function normalizeTunnel(raw: Record<string, unknown>): Tunnel {
   return {
     tunnel_id: String(raw?.tunnel_id ?? raw?.tunnelId ?? raw?.id ?? ''),
     subdomain: String(raw?.subdomain ?? ''),
@@ -1440,18 +1461,18 @@ function normalizeTunnel(raw: any): Tunnel {
     type: raw?.type === 'tcp' ? 'tcp' : 'http',
     is_active: Boolean(raw?.is_active ?? raw?.isActive ?? true),
     created_at: String(raw?.created_at ?? raw?.createdAt ?? new Date().toISOString()),
-    expires_at: raw?.expires_at ?? null,
+    expires_at: (raw?.expires_at as string | null) ?? null,
     request_count: Number(raw?.request_count ?? raw?.requestCount ?? 0),
     bandwidth_used: Number(raw?.bandwidth_used ?? raw?.bandwidthUsed ?? 0),
     shared_with: Array.isArray(raw?.shared_with)
-      ? raw.shared_with
-      : (Array.isArray(raw?.sharedWith) ? raw.sharedWith : []),
+      ? (raw.shared_with as string[])
+      : (Array.isArray(raw?.sharedWith) ? (raw.sharedWith as string[]) : []),
     user_id: String(raw?.user_id ?? raw?.userId ?? ''),
     tier: String(raw?.tier ?? ''),
   };
 }
 
-function normalizeTunnelRequest(raw: any): TunnelRequest {
+function normalizeTunnelRequest(raw: Record<string, unknown>): TunnelRequest {
   return {
     id: String(raw?.id ?? ''),
     method: String(raw?.method ?? 'GET'),
@@ -1459,7 +1480,7 @@ function normalizeTunnelRequest(raw: any): TunnelRequest {
     status: Number(raw?.status ?? 0),
     duration: Number(raw?.duration ?? raw?.response_time_ms ?? raw?.responseTimeMs ?? 0),
     timestamp: String(raw?.timestamp ?? new Date().toISOString()),
-    headers: raw?.headers && typeof raw.headers === 'object' ? raw.headers : {},
+    headers: raw?.headers && typeof raw.headers === 'object' ? (raw.headers as Record<string, string>) : {},
     body: typeof raw?.body === 'string' ? raw.body : undefined,
     response_body: typeof raw?.response_body === 'string' ? raw.response_body : undefined,
   };
@@ -1502,13 +1523,13 @@ export const tunnelsApi = {
   },
 
   /** Replay a request */
-  replay: async (tunnelId: string, requestId: string): Promise<any> => {
+  replay: async (tunnelId: string, requestId: string): Promise<{ status: string; message?: string }> => {
     const res = await api.post(`/tunnels/${tunnelId}/replay/${requestId}/`);
     return res.data;
   },
 
   /** Share tunnel with team member */
-  share: async (tunnelId: string, email: string): Promise<any> => {
+  share: async (tunnelId: string, email: string): Promise<{ message: string }> => {
     const res = await api.post(`/tunnels/${tunnelId}/share/`, { email });
     return res.data;
   },
@@ -1612,13 +1633,13 @@ export const billingApi = {
     return results.length > 0 ? results[0] : null;
   },
 
-  subscribe: async (planId: number, cycle: 'MONTHLY' | 'YEARLY'): Promise<any> => {
+  subscribe: async (planId: number, cycle: 'MONTHLY' | 'YEARLY'): Promise<{ status: string; message?: string }> => {
     // This is a placeholder for the actual subscribe flow
     const res = await api.post('/billing/subscription/subscribe/', { plan_id: planId, cycle });
     return res.data;
   },
 
-  cancelSubscription: async (): Promise<any> => {
+  cancelSubscription: async (): Promise<{ status: string; message?: string }> => {
     const res = await api.post('/billing/subscription/cancel/');
     return res.data;
   },
@@ -1650,23 +1671,23 @@ export const billingApi = {
   },
 
   // Admin Analytics
-  adminGetOverview: async (): Promise<any> => {
+  adminGetOverview: async (): Promise<Record<string, unknown>[]> => {
     const res = await api.get('/billing/admin/analytics/');
     return res.data;
   },
-  adminGetRevenue: async (): Promise<any> => {
+  adminGetRevenue: async (): Promise<Record<string, unknown>[]> => {
     const res = await api.get('/billing/admin/analytics/revenue/');
     return res.data;
   },
-  adminGetPlanBreakdown: async (): Promise<any> => {
+  adminGetPlanBreakdown: async (): Promise<Record<string, unknown>[]> => {
     const res = await api.get('/billing/admin/analytics/plans/');
     return res.data;
   },
-  adminGetCustomers: async (): Promise<any> => {
+  adminGetCustomers: async (): Promise<Record<string, unknown>[]> => {
     const res = await api.get('/billing/admin/analytics/customers/');
     return res.data;
   },
-  adminGetCosts: async (): Promise<any> => {
+  adminGetCosts: async () => {
     const res = await api.get('/billing/admin/analytics/costs/');
     return res.data;
   },
@@ -1674,11 +1695,11 @@ export const billingApi = {
 };
 
 export const resourcePriceApi = {
-  list: (params?: any) => api.get('/billing/admin/resource-prices/', { params }).then(r => r.data),
-  create: (data: any) => api.post('/billing/admin/resource-prices/', data).then(r => r.data),
-  detail: (id: string) => api.get(`/billing/admin/resource-prices/${id}/`).then(r => r.data),
-  update: (id: string, data: any) => api.put(`/billing/admin/resource-prices/${id}/`, data).then(r => r.data),
-  delete: (id: string) => api.delete(`/billing/admin/resource-prices/${id}/`).then(r => r.data),
+  list: (params?: Record<string, unknown>): Promise<ResourcePrice[] | { results: ResourcePrice[] }> => api.get('/billing/admin/resource-prices/', { params }).then(r => r.data),
+  create: (data: Partial<ResourcePrice>): Promise<ResourcePrice> => api.post('/billing/admin/resource-prices/', data).then(r => r.data),
+  detail: (id: string): Promise<ResourcePrice> => api.get(`/billing/admin/resource-prices/${id}/`).then(r => r.data),
+  update: (id: string, data: Partial<ResourcePrice>): Promise<ResourcePrice> => api.put(`/billing/admin/resource-prices/${id}/`, data).then(r => r.data),
+  delete: (id: string): Promise<void> => api.delete(`/billing/admin/resource-prices/${id}/`).then(() => undefined),
 };
 
 // ─── Core API ───────────────────────────────────────────────────────────────
@@ -1701,8 +1722,8 @@ export interface DashboardOverview {
     storage_total_gb: number;
     cpu_percent: number;
   };
-  recent_activity: any[];
-  alerts: any[];
+  recent_activity: Record<string, unknown>[];
+  alerts: Record<string, unknown>[];
 }
 
 export const coreApi = {
@@ -1712,11 +1733,11 @@ export const coreApi = {
   },
 
   // API Keys
-  getApiKeys: async (): Promise<any[]> => {
+  getApiKeys: async (): Promise<{ id: number; name: string; prefix: string; created_at: string; last_used_at: string | null }[]> => {
     const res = await api.get('/api-keys/');
     return Array.isArray(res.data) ? res.data : res.data.results || [];
   },
-  createApiKey: async (name: string): Promise<any> => {
+  createApiKey: async (name: string): Promise<{ id: number; name: string; key: string; prefix: string }> => {
     const res = await api.post('/api-keys/', { name });
     return res.data;
   },
@@ -1725,28 +1746,28 @@ export const coreApi = {
   },
 
   // Admin Users Management
-  adminGetUsers: async (): Promise<any[]> => {
+  adminGetUsers: async (): Promise<{ id: number; username: string; email: string; is_active: boolean; is_staff: boolean }[]> => {
     const res = await api.get('/admin/users/');
     return Array.isArray(res.data) ? res.data : res.data.results || [];
   },
-  adminUpdateUser: async (id: number, data: any): Promise<any> => {
+  adminUpdateUser: async (id: number, data: Record<string, unknown>): Promise<Record<string, unknown>> => {
     const res = await api.patch(`/admin/users/${id}/`, data);
     return res.data;
   },
 
   // Notifications
-  getNotifications: async (): Promise<any[]> => {
+  getNotifications: async (): Promise<{ id: string; message: string; read: boolean; created_at: string }[]> => {
     const res = await api.get('/notifications/');
     return Array.isArray(res.data) ? res.data : res.data.results || [];
   },
   markAllNotificationsRead: async (): Promise<void> => {
     await api.post('/notifications/mark_all_read/');
   },
-  getNotificationPreferences: async (): Promise<any[]> => {
+  getNotificationPreferences: async (): Promise<{ id: number; key: string; value: boolean }[]> => {
     const res = await api.get('/preferences/');
     return Array.isArray(res.data) ? res.data : res.data.results || [];
   },
-  updateNotificationPreference: async (id: number, data: any): Promise<any> => {
+  updateNotificationPreference: async (id: number, data: Record<string, unknown>): Promise<Record<string, unknown>> => {
     const res = await api.patch(`/preferences/${id}/`, data);
     return res.data;
   }
@@ -1820,19 +1841,19 @@ export const addonsApi = {
     delete: async (id: string): Promise<void> => {
         await api.delete(`/addons/${id}/`);
     },
-    expose: async (id: string): Promise<any> => {
+    expose: async (id: string): Promise<{ status: string; message?: string }> => {
         const res = await api.post(`/addons/${id}/expose/`);
         return res.data;
     },
-    deprovision: async (id: string): Promise<any> => {
+    deprovision: async (id: string): Promise<{ status: string; message?: string }> => {
         const res = await api.post(`/addons/${id}/deprovision/`);
         return res.data;
     },
-    retryDelete: async (id: string): Promise<any> => {
+    retryDelete: async (id: string): Promise<{ status: string; message?: string }> => {
         const res = await api.post(`/addons/${id}/retry-delete/`);
         return res.data;
     },
-    reprovision: async (id: string): Promise<any> => {
+    reprovision: async (id: string): Promise<{ status: string; message?: string }> => {
         const res = await api.post(`/addons/${id}/reprovision/`);
         return res.data;
     },
@@ -1840,7 +1861,7 @@ export const addonsApi = {
         const res = await api.post(`/addons/${id}/rotate-credentials/`);
         return res.data;
     },
-    getMetrics: async (id: string): Promise<any> => {
+    getMetrics: async (id: string): Promise<{ cpu: number; memory: number; timestamp: string }[]> => {
         const res = await api.get(`/addons/${id}/metrics/`);
         return res.data;
     },
@@ -1852,23 +1873,23 @@ export const addonsApi = {
       const res = await api.get(`/addons/${addonId}/credentials/`);
       return res.data;
     },
-    statusCheck: async (addonId: string): Promise<any> => {
+    statusCheck: async (addonId: string): Promise<{ status: string; message?: string }> => {
       const res = await api.get(`/addons/${addonId}/status_check/`);
       return res.data;
     },
-    backup: async (addonId: string): Promise<any> => {
+    backup: async (addonId: string): Promise<{ status: string; backup_id?: string }> => {
       const res = await api.post(`/addons/${addonId}/backup/`);
       return res.data;
     },
-    restore: async (addonId: string, backupId: string): Promise<any> => {
+    restore: async (addonId: string, backupId: string): Promise<{ status: string; message?: string }> => {
       const res = await api.post(`/addons/${addonId}/restore/`, { backup_id: backupId });
       return res.data;
     },
-    backups: async (addonId: string): Promise<any[]> => {
+    backups: async (addonId: string) => {
       const res = await api.get(`/addons/${addonId}/backups/`);
       return Array.isArray(res.data) ? res.data : [];
     },
-    toggleBucketPublic: async (addonId: string, isPublic: boolean): Promise<any> => {
+    toggleBucketPublic: async (addonId: string, isPublic: boolean): Promise<{ is_public: boolean }> => {
       const res = await api.post(`/addons/${addonId}/toggle_bucket_public/`, { is_public: isPublic });
       return res.data;
     },
@@ -1920,7 +1941,7 @@ export const projectsApi = {
   removeService: async (projectId: string, serviceId: string): Promise<void> => {
     await api.post(`/projects/${projectId}/remove-service/`, { service_id: serviceId });
   },
-  syncEnvs: async (id: string): Promise<any> => {
+  syncEnvs: async (id: string): Promise<{ synced: number; message?: string }> => {
     const response = await api.post(`/projects/${id}/sync-envs/`);
     return response.data;
   },
@@ -2028,7 +2049,7 @@ export const autoscalerApi = {
     const { data } = await api.get('/autoscaler/history/', { params: { minutes } });
     return data;
   },
-  updateConfig: async (config: any): Promise<any> => {
+  updateConfig: async (config: Record<string, unknown>): Promise<Record<string, unknown>> => {
     const { data } = await api.post('/autoscaler/config/', config);
     return data;
   },
@@ -2053,15 +2074,15 @@ export const scalingApi = {
     const response = await api.get('/scaling/replicas/', { params: { service: serviceId } });
     return extractDataList(response);
   },
-  spawnReplica: async (serviceId: string): Promise<any> => {
+  spawnReplica: async (serviceId: string): Promise<Replica> => {
     const response = await api.post(`/scaling/${serviceId}/spawn/`);
     return response.data;
   },
-  destroyReplica: async (replicaId: string): Promise<any> => {
+  destroyReplica: async (replicaId: string): Promise<{ status: string; message?: string }> => {
     const response = await api.delete('/scaling/destroy_replica/', { params: { id: replicaId } });
     return response.data;
   },
-  updateAlertConfig: async (serviceId: string, config: Record<string, unknown>): Promise<any> => {
+  updateAlertConfig: async (serviceId: string, config: Record<string, unknown>): Promise<{ status: string; message?: string }> => {
     const response = await api.put(`/scaling/${serviceId}/alert_config/`, config);
     return response.data;
   },
@@ -2088,11 +2109,11 @@ export const licensingApi = {
     const { data } = await api.get('/licensing/status/');
     return data;
   },
-  activate: async (license_key: string): Promise<any> => {
+  activate: async (license_key: string): Promise<{ status: string; message?: string }> => {
     const { data } = await api.post('/licensing/activate/', { license_key });
     return data;
   },
-  deactivate: async (): Promise<any> => {
+  deactivate: async (): Promise<{ status: string; message?: string }> => {
     const { data } = await api.post('/licensing/deactivate/');
     return data;
   },
@@ -2123,16 +2144,16 @@ export interface CloudResource {
 }
 
 export const cloudResourceApi = {
-  list: () => api.get('/cloud/resources/').then(r => {
+  list: (): Promise<CloudResource[]> => api.get('/cloud/resources/').then(r => {
     const data = r.data;
     if (Array.isArray(data)) return data;
     if (data && Array.isArray(data.results)) return data.results;
     return [];
   }),
-  create: (data: any) => api.post('/cloud/resources/', data).then(r => r.data),
-  detail: (id: string) => api.get(`/cloud/resources/${id}/`).then(r => r.data),
-  update: (id: string, data: any) => api.put(`/cloud/resources/${id}/`, data).then(r => r.data),
-  delete: (id: string) => api.delete(`/cloud/resources/${id}/`).then(r => r.data),
+  create: (data: Partial<CloudResource>): Promise<CloudResource> => api.post('/cloud/resources/', data).then(r => r.data),
+  detail: (id: string): Promise<CloudResource> => api.get(`/cloud/resources/${id}/`).then(r => r.data),
+  update: (id: string, data: Partial<CloudResource>): Promise<CloudResource> => api.put(`/cloud/resources/${id}/`, data).then(r => r.data),
+  delete: (id: string): Promise<void> => api.delete(`/cloud/resources/${id}/`).then(() => undefined),
 };
 
 export interface Domain {
@@ -2149,16 +2170,16 @@ export interface Domain {
 }
 
 export const domainsApi = {
-  list: () => api.get('/domains/').then(r => {
+  list: (): Promise<Domain[]> => api.get('/domains/').then(r => {
     const data = r.data;
     if (Array.isArray(data)) return data;
     if (data && Array.isArray(data.results)) return data.results;
     return [];
   }),
-  create: (data: any) => api.post('/domains/', data).then(r => r.data),
-  detail: (id: string) => api.get(`/domains/${id}/`).then(r => r.data),
-  update: (id: string, data: any) => api.put(`/domains/${id}/`, data).then(r => r.data),
-  delete: (id: string) => api.delete(`/domains/${id}/`).then(r => r.data),
+  create: (data: Partial<Domain>): Promise<Domain> => api.post('/domains/', data).then(r => r.data),
+  detail: (id: string): Promise<Domain> => api.get(`/domains/${id}/`).then(r => r.data),
+  update: (id: string, data: Partial<Domain>): Promise<Domain> => api.put(`/domains/${id}/`, data).then(r => r.data),
+  delete: (id: string): Promise<void> => api.delete(`/domains/${id}/`).then(() => undefined),
 };
 
 export const cloudProviderApi = {
@@ -2298,7 +2319,7 @@ export const organizationsApi = {
     const response = await api.post('/organizations/', { name });
     return response.data;
   },
-  update: async (id: string, data: any) => {
+  update: async (id: string, data: Record<string, unknown>) => {
     const response = await api.patch(`/organizations/${id}/`, data);
     return response.data;
   },
@@ -2314,11 +2335,11 @@ export const organizationsApi = {
     const response = await api.get('/organizations/sso/');
     return Array.isArray(response.data) ? response.data : (response.data?.results || []);
   },
-  createSSO: async (data: any) => {
+  createSSO: async (data: Record<string, unknown>) => {
     const response = await api.post('/organizations/sso/', data);
     return response.data;
   },
-  updateSSO: async (id: string, data: any) => {
+  updateSSO: async (id: string, data: Record<string, unknown>) => {
     const response = await api.patch(`/organizations/sso/${id}/`, data);
     return response.data;
   },
@@ -2341,13 +2362,13 @@ export const notificationsApi = {
     const response = await api.get('/preferences/');
     return Array.isArray(response.data) ? response.data : (response.data?.results || []);
   },
-  updatePreference: async (id: string, data: any) => {
+  updatePreference: async (id: string, data: Record<string, unknown>) => {
     const response = await api.patch(`/preferences/${id}/`, data);
     return response.data;
   }
 };
 
-export const aiAdminApi = { getProviders: async () => { const response = await api.get('/ai/providers/'); return response.data; }, updateProvider: async (provider: string, data: any) => { const response = await api.post('/ai/providers/update/', { provider, ...data }); return response.data; } };
+export const aiAdminApi = { getProviders: async () => { const response = await api.get('/ai/providers/'); return response.data; }, updateProvider: async (provider: string, data: Record<string, unknown>) => { const response = await api.post('/ai/providers/update/', { provider, ...data }); return response.data; } };
 
 export const registryCredentialsApi = {
   list: async () => {
@@ -2404,7 +2425,7 @@ export const networkScopesApi = {
     const res = (await api.get('/network-scopes/')).data;
     return Array.isArray(res) ? res : (res?.results || res || []);
   },
-  create: async (data: any) => (await api.post('/network-scopes/', data)).data,
+  create: async (data: Record<string, unknown>) => (await api.post('/network-scopes/', data)).data,
   delete: async (id: string) => (await api.delete(`/network-scopes/${id}/`)).data,
 };
 

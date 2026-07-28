@@ -1,4 +1,7 @@
-"""Urls module."""
+"""Urls module.
+
+Naming convention: URL names use kebab-case (e.g. 'service-list', 'github-webhook').
+"""
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 from rest_framework_nested import routers
@@ -34,10 +37,11 @@ from ..views.cron import CronJobViewSet
 from ..views.database_replica import DatabaseReplicaViewSet
 from ..views.device import list_devices, register_device, revoke_device
 from ..views.election import ClusterViewSet, heartbeat_receive, vote_request
-from ..views.github import github_branches, github_commits, github_repos
+from ..views.github import github_branches, github_commits, github_default_branch, github_repos
 from ..views.github_app import (
     github_app_callback,
     github_app_install_url,
+    github_app_install_with_oauth,
     github_app_installation_delete,
     github_app_installation_repos,
     github_app_installations,
@@ -188,11 +192,13 @@ urlpatterns = [
     path('integrations/github/repos/', github_repos, name='github-repos'),
     path('integrations/github/branches/', github_branches, name='github-branches'),
     path('integrations/github/commits/', github_commits, name='github-commits'),
+    path('integrations/github/default-branch/', github_default_branch, name='github-default-branch'),
     # API-based OAuth (bypasses session cookies for SPA compatibility)
     path('integrations/github/oauth-url/', github_oauth_url, name='github-oauth-url'),
     path('integrations/github/oauth-callback/', github_oauth_callback, name='github-oauth-callback'),
     # GitHub App installation flow
     path('integrations/github/app/install-url/', github_app_install_url, name='github-app-install-url'),
+    path('integrations/github/app/install/', github_app_install_with_oauth, name='github-app-install-oauth'),
     path('integrations/github/app/callback/', github_app_callback, name='github-app-callback'),
     path('integrations/github/app/installations/', github_app_installations, name='github-app-installations'),
     path('integrations/github/app/installations/<int:installation_id>/repos/', github_app_installation_repos, name='github-app-installation-repos'),

@@ -1,9 +1,13 @@
+from __future__ import annotations
+
 import asyncio
 import logging
 from typing import Any
 
 import docker
 from celery import shared_task
+
+from apps.deployments.constants import TASK_TIME_LIMIT_QUICK, TASK_TIME_LIMIT_STANDARD, TASK_TIME_LIMIT_TRIVIAL
 from decouple import config
 from django.core.cache import cache
 
@@ -39,7 +43,7 @@ def _service_flag(env_map: dict[str, str], key: str, default: bool) -> bool:
     return _env_bool(env_map.get(key.upper()), default=default)
 
 
-def _first_non_empty(*values: Any) -> str:
+def _first_non_empty(*values: Any) -> str:  # UNUSED
     for value in values:
         text = str(value or "").strip()
         if text:
@@ -127,8 +131,8 @@ def _dispatch_failure_alert(deployment, error_message: str) -> dict[str, Any]:
     return _dispatch_notification(owner, title, message, "deploy_failed", env_map)
 
 
-@shared_task(soft_time_limit=300, time_limit=360)
-def scan_running_containers_logs_task():
+@shared_task(soft_time_limit=TASK_TIME_LIMIT_STANDARD[0], time_limit=TASK_TIME_LIMIT_STANDARD[1])
+def scan_running_containers_logs_task() -> None:
     """
     Periodically scans logs of all active containers for crashing errors.
     If an error is found, dispatches an alert.
@@ -185,8 +189,8 @@ def scan_running_containers_logs_task():
             logger.warning("Error scanning logs for deployment %s: %s", deployment.id, exc)
 
 
-@shared_task(bind=True, max_retries=3, soft_time_limit=120, time_limit=150)
-def alert_user_task(self, deployment_id: str, error_message: str):
+@shared_task(bind=True, max_retries=3, soft_time_limit=TASK_TIME_LIMIT_QUICK[0], time_limit=TASK_TIME_LIMIT_QUICK[1])
+def alert_user_task(self, deployment_id: str, error_message: str) -> dict[str, Any]:
     """
     Fan out deployment failure notifications across configured channels.
     """
@@ -205,8 +209,8 @@ def alert_user_task(self, deployment_id: str, error_message: str):
         raise self.retry(exc=exc, countdown=30)
 
 
-@shared_task(bind=True, max_retries=2, soft_time_limit=120, time_limit=150)
-def voice_alert_critical_task(self, deployment_id: str, error_message: str):
+@shared_task(bind=True, max_retries=2, soft_time_limit=TASK_TIME_LIMIT_QUICK[0], time_limit=TASK_TIME_LIMIT_QUICK[1])
+def voice_alert_critical_task(self, deployment_id: str, error_message: str) -> dict[str, Any]:
     """
     Sends a voice call alert for critical failures.
     """
@@ -247,8 +251,8 @@ def voice_alert_critical_task(self, deployment_id: str, error_message: str):
         logger.exception("Failed to send voice alert: %s", exc)
         raise self.retry(exc=exc, countdown=60)
 
-@shared_task(bind=True, soft_time_limit=60, time_limit=90)
-def notify_deployment_success(self, deployment_id: str):
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_TRIVIAL[0], time_limit=TASK_TIME_LIMIT_TRIVIAL[1])
+def notify_deployment_success(self, deployment_id: str) -> dict[str, Any]:
     """
     Optional success notification via SMS.
     """
@@ -286,8 +290,8 @@ def notify_deployment_success(self, deployment_id: str):
         return {"status": "error", "reason": str(exc)}
 
 
-@shared_task(bind=True, soft_time_limit=60, time_limit=90)
-def notify_auto_rollback(self, service_id: str, trigger: str, reason: str, target_commit: str):
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_TRIVIAL[0], time_limit=TASK_TIME_LIMIT_TRIVIAL[1])
+def notify_auto_rollback(self, service_id: str, trigger: str, reason: str, target_commit: str) -> dict[str, Any]:
     from apps.deployments.models import Service as ServiceModel
 
     try:
@@ -315,7 +319,7 @@ def notify_auto_rollback(self, service_id: str, trigger: str, reason: str, targe
     return _dispatch_notification(owner, title, message, "auto_rollback", env_map)
 
 
-@shared_task(soft_time_limit=60, time_limit=90)
+@shared_task(soft_time_limit=TASK_TIME_LIMIT_TRIVIAL[0], time_limit=TASK_TIME_LIMIT_TRIVIAL[1])
 def _send_alerts_for_backup_cloud_failure(service_id: str, backup_id: str, reason: str, bucket: str, key: str):
     from apps.deployments.models import Service
 

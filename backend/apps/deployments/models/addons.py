@@ -1,10 +1,13 @@
 """Models Addons module."""
+import logging
 import uuid
 
 from django.db import models
 from encrypted_model_fields.fields import EncryptedCharField
 
 from .core import Service, TimeStampedModel
+
+logger = logging.getLogger(__name__)
 
 
 class Addon(TimeStampedModel):
@@ -151,8 +154,8 @@ class Addon(TimeStampedModel):
                         result[f'{slug}_USER'] = 'admin'
                     elif self.addon_type in ('SURREALDB', 'ARANGODB'):
                         result[f'{slug}_USER'] = 'root'
-        except Exception:
-            pass
+        except (ValueError, TypeError) as exc:
+            logger.debug("Failed to parse addon connection URL: %s", exc)
 
         # Addon specific custom mappings
         if self.addon_type == self.Type.MINIO:
@@ -231,6 +234,11 @@ class Addon(TimeStampedModel):
 
     def __str__(self):
         return f"{self.addon_type} for {self.service.name}"
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["service", "status"], name="addon_service_status_idx"),
+        ]
 
 
 class Backup(TimeStampedModel):

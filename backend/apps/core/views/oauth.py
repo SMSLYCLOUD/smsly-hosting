@@ -1,4 +1,5 @@
 """OAuth configuration views."""
+import logging
 from collections import OrderedDict
 
 from allauth.socialaccount import providers as allauth_providers
@@ -13,6 +14,8 @@ from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAdminUser
+
+logger = logging.getLogger(__name__)
 from rest_framework.response import Response
 
 # SECURITY (Issue 23): the oauth_credentials POST handler writes
@@ -38,8 +41,8 @@ def _invalidate_social_app_cache(_sender, instance, **kwargs):
     try:
         allauth_providers.registry.provider_map = OrderedDict()
         allauth_providers.registry.loaded = False
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to reset allauth provider registry: %s", exc)
 
 
 @extend_schema(responses=OpenApiTypes.OBJECT)

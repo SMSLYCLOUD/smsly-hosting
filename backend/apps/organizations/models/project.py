@@ -53,6 +53,9 @@ class ProjectMember(models.Model):
         ordering = ['-joined_at']
         verbose_name = "Project Member"
         verbose_name_plural = "Project Members"
+        indexes = [
+            models.Index(fields=["user", "project"], name="projmember_user_proj_idx"),
+        ]
 
     def __str__(self):
         return f"{self.user} ({self.role}) @ {self.project}"

@@ -2,7 +2,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 import json
-import logging
 import os
 import secrets
 import subprocess
@@ -18,6 +17,7 @@ from apps.deployments.services.ai_router import (
     DEFAULT_AI_ROUTER_UI_BASE,
     DEFAULT_BRAID_ALIAS,
 )
+from apps.deployments.constants import TASK_TIME_LIMIT_DEPLOY
 from apps.deployments.models import (
     Deployment,
     EnvironmentVariable,
@@ -28,10 +28,10 @@ from apps.deployments.utils import (
     append_log,
 )
 
-from ..ai.tasks_ai_router import _ensure_shared_ollama_cpp, _pull_ollama_models_into_shared
+from ..ai.ollama import _ensure_shared_ollama_cpp, _pull_ollama_models_into_shared
 
 
-@shared_task(bind=True, max_retries=0, name="apps.deployments.tasks.one_click_deploy_template_task")
+@shared_task(bind=True, max_retries=0, soft_time_limit=TASK_TIME_LIMIT_DEPLOY[0], time_limit=TASK_TIME_LIMIT_DEPLOY[1], name="apps.deployments.tasks.one_click_deploy_template_task")
 def one_click_deploy_template_task(self, service_id: str, template_id: str):
     """
     Background orchestration for template deployments.
@@ -198,8 +198,8 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
             if parsed_addon.hostname:
                 addon_hostname = parsed_addon.hostname
                 addon_port = str(parsed_addon.port or "")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to parse addon connection URL: %s", exc)
 
         # Inject Env (legacy/direct injection)
         key_map = {
@@ -253,6 +253,14 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
             logger.warning("Failed to regenerate Caddyfile after addon provisioning: %s", exc)
 
     # Render and store template environment variables
+    # Pre-fetch injected OLLAMA_BASE_URL once to avoid N+1 in render_value loop
+    _injected_ollama_url = (
+        EnvironmentVariable.objects
+        .filter(service=service, key='OLLAMA_BASE_URL')
+        .values_list('value', flat=True)
+        .first()
+    )
+
     def render_value(raw: str) -> str:
         import secrets
         v = str(raw or '')
@@ -268,13 +276,7 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
 
         # Shared Ollama URL — use the freshly injected service env var if available,
         # fall back to OS environment, then default.
-        injected_ollama = (
-            EnvironmentVariable.objects
-            .filter(service=service, key='OLLAMA_BASE_URL')
-            .values_list('value', flat=True)
-            .first()
-        )
-        ollama_base_default = injected_ollama or os.environ.get('OLLAMA_BASE_URL', 'http://ollama:11434')
+        ollama_base_default = _injected_ollama_url or os.environ.get('OLLAMA_BASE_URL', 'http://ollama:11434')
 
         # System Environment Overrides & Defaults
         default_ai_senate = os.environ.get('AI_SENATE_URL') or 'http://ollama:11434'
@@ -465,8 +467,8 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
                         'is_secret': False,
                     }
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to save AI router service IDs: %s", exc)
 
             # Wire OLLAMA_BASE_URL even if not in template env_vars
             EnvironmentVariable.objects.update_or_create(
@@ -543,8 +545,8 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
                             'is_secret': False,
                         }
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("Failed to save AI_ROUTER_SELECTED_SERVICE_IDS env var: %s", exc)
 
             # Regenerate the Caddyfile so the wildcard block includes
             # the freshly created companion services' public_domains.

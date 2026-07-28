@@ -1,0 +1,58 @@
+# =============================================================================
+# Traefik mTLS Configuration
+# =============================================================================
+# Add this to your Traefik dynamic configuration to enable mTLS at the ingress level.
+#
+# This is OPTIONAL — services can also verify mTLS themselves using the
+# spiffe_mtls Python library or any SPIFFE-compatible library.
+#
+# When enabled, Traefik will:
+# 1. Verify client certificates signed by the SPIRE CA
+# 2. Extract the SPIFFE ID from the client cert SAN
+# 3. Pass the SPIFFE ID to backend services via X-SPIFFE-ID header
+# =============================================================================
+
+# tls:
+#   options:
+#     mtls:
+#       clientAuth:
+#         # Trust bundle from SPIRE server (root CA)
+#         # Mount this file from: /opt/spire/data/bundle.pem
+#         caFiles:
+#           - /etc/traefik/spire-bundle.pem
+#         clientAuthType: RequireAndVerifyClientCert
+#
+#   certificates:
+#     - certFile: /etc/traefik/server.crt
+#       keyFile: /etc/traefik/server.key
+
+# http:
+#   routers:
+#     # Route mTLS traffic to services
+#     mtls-router:
+#       rule: "HostRegexp(`{subdomain:.+}.grid.smsly.cloud`)"
+#       entryPoints:
+#         - mtls
+#       service: dynamic-service
+#       tls:
+#         options: mtls
+#
+#   middlewares:
+#     # Extract SPIFFE ID from client certificate and pass as header
+#     spiffe-header:
+#       headers:
+#         customRequestHeaders:
+#           X-SPIFFE-ID: ""  # Will be populated by Traefik from cert SAN
+#
+#   services:
+#     dynamic-service:
+#       loadBalancer:
+#         servers:
+#           - url: "http://container-name:8000"
+
+# entryPoints:
+#   mtls:
+#     address: ":444"
+#     http:
+#       tls:
+#         options: mtls

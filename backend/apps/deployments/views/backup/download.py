@@ -6,6 +6,9 @@ from rest_framework import permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
+from apps.core.auth import CookieAwareTokenAuthentication
+from rest_framework.authentication import TokenAuthentication
+
 from .._helpers import (
     _generate_signed_download_url,
     _open_backup_download_response,
@@ -44,7 +47,7 @@ class DownloadActionsMixin:
         return Response(info)
 
 
-    @action(detail=True, methods=['get'], url_path='download-key', permission_classes=[permissions.AllowAny], authentication_classes=[])
+    @action(detail=True, methods=['get'], url_path='download-key', permission_classes=[permissions.IsAuthenticated], authentication_classes=[CookieAwareTokenAuthentication, TokenAuthentication])
     def download_key(self, request, pk=None):
         """Download the V2 backup header as a .key.json file alongside
         the backup. The operator stores this file with the backup and
@@ -94,7 +97,7 @@ class DownloadActionsMixin:
         return response
 
 
-    @action(detail=True, methods=['get'], permission_classes=[permissions.AllowAny], authentication_classes=[])
+    @action(detail=True, methods=['get'], permission_classes=[permissions.IsAuthenticated], authentication_classes=[CookieAwareTokenAuthentication, TokenAuthentication])
     def download(self, request, pk=None):
         signed_value = request.query_params.get('signed')
         token_value = request.query_params.get('token')

@@ -1,7 +1,10 @@
 """Platform self-update tracking model."""
+import logging
 import uuid
 
 from django.db import models
+
+logger = logging.getLogger(__name__)
 
 
 class PlatformUpdate(models.Model):
@@ -65,6 +68,10 @@ class PlatformUpdate(models.Model):
 
     class Meta:
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=["status"], name="platupdate_status_idx"),
+            models.Index(fields=["-created_at"], name="platupdate_created_idx"),
+        ]
 
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)
@@ -94,8 +101,8 @@ class PlatformUpdate(models.Model):
                         "log": formatted,
                     }
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to broadcast log message: %s", exc)
 
     def broadcast_status(self):
         """Broadcast state updates via channels."""
@@ -114,8 +121,8 @@ class PlatformUpdate(models.Model):
                         "error_message": self.error_message,
                     }
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to broadcast status update: %s", exc)
 
     def __str__(self):
         return f"Update {self.id} ({self.status})"

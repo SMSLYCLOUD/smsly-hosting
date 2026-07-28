@@ -28,7 +28,7 @@ function CodeBlock({ children, lang = 'bash' }: { children: string; lang?: strin
     };
     return (
         <div className="relative group my-4">
-            <pre className="bg-slate-900 dark:bg-slate-800 text-slate-100 p-4 rounded-xl overflow-x-auto text-sm leading-relaxed font-mono">
+            <pre className="bg-slate-900 dark:bg-slate-900/80 text-slate-100 p-4 pr-12 rounded-xl overflow-x-auto text-sm leading-relaxed font-mono border border-slate-800 dark:border-slate-700/50">
                 <code>{children.trim()}</code>
             </pre>
             <button
@@ -64,20 +64,20 @@ export default function DeploymentsDocsPage() {
         <main className="min-h-screen bg-white dark:bg-slate-950">
 
             <section className="pt-28 pb-10 px-4 bg-gradient-to-b from-indigo-50/60 to-white dark:from-indigo-950/20 dark:to-slate-950 border-b border-slate-200 dark:border-slate-800">
-                <div className="max-w-4xl mx-auto">
+                <div className="max-w-3xl mx-auto">
                     <Link href="/docs" className="inline-flex items-center gap-1.5 text-sm text-indigo-600 dark:text-indigo-400 hover:underline mb-6">
                         <ArrowLeft size={14} /> Back to Docs
                     </Link>
                     <div className="flex items-center gap-3 mb-4">
                         <div className="p-2.5 bg-indigo-100 dark:bg-indigo-900/50 rounded-xl">
-                            <Rocket className="w-6 h-6 text-indigo-700 dark:text-indigo-300" />
+                            <Rocket className="w-5 h-5 text-indigo-700 dark:text-indigo-300" />
                         </div>
                         <span className="text-sm font-semibold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">Deployments</span>
                     </div>
-                    <h1 className="text-3xl md:text-4xl font-extrabold text-slate-900 dark:text-white mb-3">
+                    <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight text-slate-900 dark:text-white mb-3 leading-tight">
                         Deployments
                     </h1>
-                    <p className="text-slate-500 dark:text-slate-400 text-lg md:text-xl max-w-2xl">
+                    <p className="text-slate-500 dark:text-slate-400 text-lg md:text-xl max-w-2xl leading-relaxed">
                         Source to running container. Git, Docker, upload, template, or inline function. Every step observable, audit-logged, rollback-safe.
                     </p>
                 </div>
@@ -86,8 +86,8 @@ export default function DeploymentsDocsPage() {
             <div className="max-w-7xl mx-auto flex gap-8 px-4 py-12">
 
                 <aside className="hidden lg:block w-56 flex-shrink-0">
-                    <nav className="sticky top-24 space-y-1">
-                        <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">On this page</p>
+                    <nav className="sticky top-24 space-y-0.5">
+                        <p className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-3 px-3">On this page</p>
                         {tocItems.map(item => {
                             const Icon = item.icon;
                             return (

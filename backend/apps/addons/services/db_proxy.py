@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 import contextlib
 import logging
 import re
+from typing import Any
 
 import sqlparse
 from django.core.cache import cache
@@ -119,21 +122,30 @@ class DatabaseProxy:
         self.addon = addon
         self.connection_url = addon.connection_url
 
-    def get_connection(self):
+    def _build_pg_connection(proxy):
+        import psycopg2
+        return psycopg2.connect(proxy.connection_url)
+
+    def _build_redis_connection(proxy):
+        import redis
+        return redis.from_url(proxy.connection_url, decode_responses=True)
+
+    def _build_mongo_connection(proxy):
+        from pymongo import MongoClient
+        return MongoClient(proxy.connection_url)
+
+    _CONNECTION_BUILDERS = {
+        'POSTGRES': _build_pg_connection,
+        'REDIS': _build_redis_connection,
+        'MONGODB': _build_mongo_connection,
+    }
+
+    def get_connection(self) -> Any:
         """Create connection based on addon type."""
-        # Note: In production, this service would need to run in the same network
-        # as the addons OR SSH tunnel to the host.
-        # For simplicity in this implementation, we assume network reachability.
-        if self.addon.addon_type == 'POSTGRES':
-            import psycopg2
-            return psycopg2.connect(self.connection_url)
-        elif self.addon.addon_type == 'REDIS':
-            import redis
-            return redis.from_url(self.connection_url, decode_responses=True)
-        elif self.addon.addon_type == 'MONGODB':
-            from pymongo import MongoClient
-            return MongoClient(self.connection_url)
-        return None
+        builder = self._CONNECTION_BUILDERS.get(self.addon.addon_type)
+        if not builder:
+            raise ValueError(f"Unsupported addon type: {self.addon.addon_type}")
+        return builder(self)
 
     # ── Postgres / MySQL ──
     def list_tables(self) -> list[dict]:
@@ -232,7 +244,7 @@ class DatabaseProxy:
             try:
                 conn.rollback()
             except Exception:
-                logger.warning("rollback failed on db proxy connection", exc_info=True)
+                logger.error("rollback failed on db proxy connection", exc_info=True)
             with contextlib.suppress(Exception):
                 conn.close()
 
@@ -268,7 +280,7 @@ class DatabaseProxy:
         # Add other types as needed
         return {'key': key, 'type': dtype, 'ttl': ttl, 'value': val}
 
-    def get_stats(self) -> dict:
+    def get_stats(self) -> dict[str, Any]:
         """Database size, connections, uptime, memory usage."""
         if self.addon.addon_type == 'POSTGRES':
             conn = self.get_connection()

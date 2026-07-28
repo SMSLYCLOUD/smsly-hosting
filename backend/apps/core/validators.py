@@ -1,10 +1,11 @@
 import ipaddress
 import urllib.parse
+from typing import Any
 
 from django.core.exceptions import ValidationError
 
 
-def validate_ssrf(value):
+def validate_ssrf(value: Any) -> None:
     """
     Validate a URL or domain to prevent SSRF attacks.
     Blocks RFC 1918 private IPs, cloud metadata endpoints, and localhost.

@@ -4,6 +4,7 @@ logger = logging.getLogger(__name__)
 
 from celery import shared_task
 
+from apps.deployments.constants import TASK_TIME_LIMIT_MEDIUM
 from apps.deployments.models import (
     Deployment,
 )
@@ -26,7 +27,7 @@ from ..remote.core import (  # noqa: F401
 )
 
 
-@shared_task(bind=True, name="apps.deployments.tasks_deploy_remote.self_heal_remote_deployment", max_retries=0, soft_time_limit=600, time_limit=660)
+@shared_task(bind=True, name="apps.deployments.tasks_deploy_remote.self_heal_remote_deployment", max_retries=0, soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1])
 def self_heal_remote_deployment(self, deployment_id: str, server_id: str):
     try:
         deployment = Deployment.objects.get(id=deployment_id)

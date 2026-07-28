@@ -4,6 +4,8 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     image: postgres:16-alpine
     container_name: smsly-postgres-primary
     restart: unless-stopped
@@ -59,6 +61,8 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     image: postgres:16-alpine
     container_name: smsly-postgres-replica
     restart: unless-stopped
@@ -104,6 +108,8 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     build:
       context: ./infrastructure/pgcat
       dockerfile: Dockerfile
@@ -136,11 +142,15 @@ services:
       resources:
         limits:
           memory: ${PGCAT_MEMORY_LIMIT:-256M}
+          cpus: "0.50"
   # ── Redis HA (primary + replica + 3 sentinels) ─────────────────────────
   redis-primary:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
+    read_only: true
     image: redis:7-alpine
     container_name: smsly-redis-primary
     restart: unless-stopped
@@ -179,6 +189,9 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
+    read_only: true
     image: redis:7-alpine
     container_name: smsly-redis-replica
     restart: unless-stopped
@@ -221,6 +234,9 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
+    read_only: true
     image: redis:7-alpine
     container_name: smsly-redis-sentinel-1
     restart: unless-stopped
@@ -269,6 +285,9 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
+    read_only: true
     image: redis:7-alpine
     container_name: smsly-redis-sentinel-2
     restart: unless-stopped
@@ -317,6 +336,9 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
+    read_only: true
     image: redis:7-alpine
     container_name: smsly-redis-sentinel-3
     restart: unless-stopped
@@ -364,6 +386,8 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     # TODO: pin to digest via dependabot/renovate (Renovate: digest-update).
     image: registry:2.8.3
     restart: unless-stopped
@@ -410,6 +434,8 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     # TODO: pin to digest via dependabot/renovate (Renovate: digest-update).
     image: registry:2.8.3
     restart: unless-stopped
@@ -440,6 +466,8 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     image: sameersbn/apt-cacher-ng:latest
     container_name: smsly-apt-cacher
     restart: unless-stopped
@@ -464,6 +492,8 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     image: verdaccio/verdaccio:5.31 # TODO: pin to digest via dependabot/renovate
     container_name: smsly-verdaccio
     restart: unless-stopped
@@ -489,6 +519,8 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -593,6 +625,8 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -655,6 +689,8 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -712,6 +748,8 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -767,6 +805,8 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -808,10 +848,18 @@ services:
     - managed_by=smsly-hosting
     networks:
     - smsly-net
+    deploy:
+      resources:
+        limits:
+          memory: ${CELERY_BEAT_MEMORY_LIMIT:-512M}
+          cpus: "0.50"
   frontend:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
+    read_only: true
     build:
       context: ./frontend
       dockerfile: Dockerfile
@@ -849,6 +897,8 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -903,6 +953,8 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -959,6 +1011,8 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     # TODO: pin to digest via dependabot/renovate (Renovate: digest-update).
     image: tecnativa/docker-socket-proxy:0.1.2
     restart: unless-stopped
@@ -1000,6 +1054,8 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     image: tecnativa/docker-socket-proxy:0.1.2
     restart: unless-stopped
     environment:
@@ -1028,6 +1084,9 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
+    read_only: true
     image: caddy:2-alpine
     restart: unless-stopped
     volumes:
@@ -1058,6 +1117,8 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     image: crowdsecurity/crowdsec:v1.7.8
     container_name: smsly-crowdsec
     restart: unless-stopped
@@ -1094,6 +1155,13 @@ services:
   traefik:
     image: traefik:v3.6
     restart: unless-stopped
+    security_opt:
+    - no-new-privileges:true
+    - apparmor:docker-default
+    cap_drop:
+    - ALL
+    cap_add:
+    - NET_BIND_SERVICE
     command:
     - --providers.docker=true
     - --providers.docker.exposedbydefault=false
@@ -1150,8 +1218,6 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
-    security_opt:
-    - no-new-privileges:true
     labels:
     - managed_by=smsly-hosting
     - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.enabled=true"
@@ -1171,6 +1237,8 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     # TODO: pin to digest via dependabot/renovate (Renovate: digest-update).
     image: snowdreamtech/frps:0.61.0
     restart: unless-stopped
@@ -1213,6 +1281,8 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     image: rabbitmq:3-management-alpine
     ports:
       # SECURITY: AMQP broker on loopback; producers/consumers talk to it
@@ -1248,6 +1318,10 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
     build:
       context: .
       dockerfile: infrastructure/caddy/Dockerfile
@@ -1283,6 +1357,7 @@ services:
       resources:
         limits:
           memory: ${CADDY_MEMORY_LIMIT:-512M}
+          cpus: "1.0"
 networks:
   smsly-net:
     external: true
@@ -1329,3 +1404,8 @@ volumes:
       device: /opt/smsly-hosting/caddy-logs
   crowdsec_data: null
   crowdsec_config: null
+  
+  # SPIRE mTLS volumes  
+  spire-server-data: null  
+  spire-agent-socket: null  
+  spire-agent-svids: null 

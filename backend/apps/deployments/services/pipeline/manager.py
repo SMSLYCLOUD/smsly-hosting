@@ -1,21 +1,13 @@
-import json
 import logging
 import os
 import re
 import shutil
 import tempfile
 import threading
-from pathlib import Path
-from typing import TYPE_CHECKING
-from urllib.parse import urlparse as parse_url
-
-if TYPE_CHECKING:
-    from apps.deployments.services.manifest_env_resolver import ManifestEnvResolver
 
 from django.conf import settings
-from django.utils import timezone
 
-from apps.deployments.models import Deployment, EnvironmentVariable, PlatformConfig
+from apps.deployments.models import Deployment, PlatformConfig
 from apps.deployments.utils import (
     append_log,
     estimate_resources_from_deps,
@@ -25,8 +17,8 @@ from apps.deployments.utils import (
     redact_values,
     update_stage,
 )
-from .exceptions import PipelineError, BuildError, InfraError
-from .utils import _get_builds_root, _BUILDS_ROOT, _read_env_file
+from .exceptions import PipelineError, InfraError
+from .utils import _get_builds_root
 from .clone import CloneMixin
 from .analysis import AnalysisMixin
 from .addons import AddonMixin

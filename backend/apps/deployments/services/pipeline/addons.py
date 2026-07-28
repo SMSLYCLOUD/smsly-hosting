@@ -91,7 +91,6 @@ class AddonMixin:
         from apps.addons.services.addon_provisioner import addon_provisioner
 
         from apps.deployments.models import EnvironmentVariable
-        from apps.deployments.models.addons import Addon
 
         addon_urls: dict[str, str] = {}
         failed_addons: list[str] = []
@@ -377,8 +376,8 @@ class AddonMixin:
                 for addon_type, keys in env_map.items():
                     if any(k in service_env for k in keys):
                         detected_types.add(addon_type)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to scan service env vars for addon detection: %s", exc)
 
             # --- Strategy 0.5: infer from internal port hints (best-effort) ---
             port_map = {

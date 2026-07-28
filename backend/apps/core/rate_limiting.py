@@ -213,6 +213,15 @@ class AddonDeleteRateThrottle(UserRateThrottle):
     scope = 'addon_delete'
 
 
+class TwoFactorLoginRateThrottle(AnonRateThrottle):
+    """Brute-force guard on POST /api/v1/2fa/login/.
+
+    Keyed by client IP. The rate comes from
+    ``settings.DEFAULT_THROTTLE_RATES['two_factor_login']``.
+    """
+    scope = 'two_factor_login'
+
+
 class TokenCreateRateThrottle(UserRateThrottle):
     """Throttle on POST /api/v1/tokens/create/.
 

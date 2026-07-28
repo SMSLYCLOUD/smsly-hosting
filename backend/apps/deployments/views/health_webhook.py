@@ -152,8 +152,8 @@ class ServiceHealthWebhookView(APIView):
                     update_commit_status.delay(
                         str(deployment.id), 'success', 'Deployment active'
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Failed to post commit status: %s", exc)
 
             AuditLog.objects.create(
                 actor="system",

@@ -8,6 +8,7 @@ propagate secrets at deploy time.
 """
 
 import logging
+import os
 import re
 from typing import Any
 from urllib.parse import urlparse, urlunparse

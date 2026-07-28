@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import logging
+
 from apps.permissions.utils import get_user_permissions
 from dj_rest_auth.serializers import UserDetailsSerializer
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
+
+logger = logging.getLogger(__name__)
 
 User = get_user_model()
 
@@ -51,8 +55,8 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
                     'role': m.role,
                     'can_manage_billing': m.can_manage_billing,
                 })
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to load team memberships: %s", exc)
 
         try:
             from apps.organizations.models import OrganizationMembership
@@ -66,8 +70,8 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
                     'role': m.role,
                     'can_manage_billing': m.can_manage_billing,
                 })
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to load org memberships: %s", exc)
 
         return {
             'teams': teams_out,

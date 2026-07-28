@@ -5,6 +5,7 @@ import logging
 from apps.deployments.models import PlatformConfig
 from celery import shared_task
 
+from apps.deployments.constants import TASK_TIME_LIMIT_STANDARD
 from apps.domains.models import Domain, DomainStatus
 from apps.domains.verification import verify_custom_domain_dns
 
@@ -17,8 +18,8 @@ ROUTABLE_STATUSES = {
 }
 
 
-@shared_task(name="apps.domains.tasks.verify_dns_and_provision_ssl_task")
-def verify_dns_and_provision_ssl_task(domain_id):
+@shared_task(bind=True, name="apps.domains.tasks.verify_dns_and_provision_ssl_task", soft_time_limit=TASK_TIME_LIMIT_STANDARD[0], time_limit=TASK_TIME_LIMIT_STANDARD[1])
+def verify_dns_and_provision_ssl_task(self, domain_id):
     """Verify public DNS and make Caddy eligible to issue direct SSL."""
     try:
         domain = Domain.objects.select_related("service").get(id=domain_id)

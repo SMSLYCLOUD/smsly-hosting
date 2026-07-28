@@ -31,6 +31,8 @@ import backoff
 from celery import shared_task
 from django.conf import settings
 
+from apps.deployments.constants import TASK_TIME_LIMIT_LONG
+
 from apps.deployments.models import Deployment
 from apps.deployments.tasks import enqueue_smart_deploy_task
 from apps.intelligence.models import AIProviderSettings
@@ -264,8 +266,8 @@ def _apply_fix_to_repo(
             default_branch = result.stdout.strip().replace("origin/", "") if result.returncode == 0 else "main"
             _run_git(["checkout", default_branch])
             _run_git(["branch", "-D", branch_name])
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to cleanup branch %s: %s", branch_name, exc)
         return False
     finally:
         os.chdir(original_cwd)
@@ -297,14 +299,11 @@ def _create_pr(
 
 
 @shared_task(
-    bind=True,
     name="apps.intelligence.jules_fix.jules_fix_deployment_failure",
-    max_retries=2,
-    soft_time_limit=900,
-    time_limit=960,
+    soft_time_limit=TASK_TIME_LIMIT_LONG[0],
+    time_limit=TASK_TIME_LIMIT_LONG[1],
 )
 def jules_fix_deployment_failure(
-    self,
     deployment_id: str,
     logs: str,
     repo_path: str,

@@ -167,6 +167,8 @@ def notify_deployment_lifecycle(_sender, instance, created, **kwargs):
         )
 
 
+# TODO: Calls _regenerate_caddyfile() synchronously. Consider dispatching
+# to a Celery task to avoid blocking the request thread.
 @receiver(post_save, sender=Deployment)
 def sync_preview_status_on_deployment_change(_sender, instance, created, **kwargs):
     logger = logging.getLogger(__name__)

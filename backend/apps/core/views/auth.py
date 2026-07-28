@@ -6,7 +6,6 @@ re-exported from ``apps.deployments.views`` for backwards compatibility with
 ``apps.deployments.urls`` and any test that imports it from the parent
 module.
 """
-from django.conf import settings
 from rest_framework import permissions, status
 from rest_framework.generics import GenericAPIView
 from rest_framework.response import Response

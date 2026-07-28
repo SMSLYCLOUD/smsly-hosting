@@ -67,17 +67,15 @@ class SnapshotService:
 
         # Env vars (mask secrets)
         env_vars = {}
-        try:
-            for ev in EnvironmentVariable.objects.filter(service=service):
-                env_vars[ev.key] = _mask_env_value(ev.key, ev.value or '')
-        except Exception:
-            logger.warning("Could not read env vars for service %s", service.id)
-
-        # Addons summary
         addons = []
         try:
             from apps.deployments.models.addons import Addon
-            for addon in Addon.objects.filter(service=service):
+            # Single query for both env vars and addons via prefetch-like approach
+            ev_qs = EnvironmentVariable.objects.filter(service=service)
+            addon_qs = Addon.objects.filter(service=service)
+            for ev in ev_qs:
+                env_vars[ev.key] = _mask_env_value(ev.key, ev.value or '')
+            for addon in addon_qs:
                 addons.append({
                     'id': str(addon.id),
                     'name': addon.name,
@@ -85,7 +83,7 @@ class SnapshotService:
                     'status': addon.status,
                 })
         except Exception:
-            pass
+            logger.warning("Could not read env vars/addons for service %s", service.id)
 
         return {
             # Source/deploy
@@ -271,8 +269,8 @@ class SnapshotService:
             ).first()
             if addon and addon.connection_url:
                 db_url = addon.connection_url
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to fetch POSTGRES addon for snapshot: %s", exc)
 
         if not db_url:
             logger.info(
@@ -335,8 +333,8 @@ class SnapshotService:
             ).first()
             if addon and addon.connection_url:
                 db_url = addon.connection_url
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to fetch POSTGRES addon for clone restore: %s", exc)
 
         if not db_url:
             logger.warning(

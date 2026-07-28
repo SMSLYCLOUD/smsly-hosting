@@ -10,7 +10,7 @@ from rest_framework.generics import GenericAPIView
 from rest_framework.response import Response
 from ..models import Deployment, Service
 from ..serializers import DeploymentSerializer, DeploymentTriggerSerializer
-from ..tasks import enqueue_smart_deploy_task
+from ..tasks.deploy.helpers import enqueue_smart_deploy_task
 from ._helpers import ZeroTrustHMACAuthentication
 class RemoteTriggerView(GenericAPIView):
     """

@@ -96,7 +96,7 @@ def patch_runtime_settings():
 
         # Write initial Prometheus target files for docker-labels
         try:
-            from apps.deployments.services.prometheus_targets import (
+            from apps.autoscaler.services.prometheus_targets import (
                 write_docker_labels_targets,
             )
             write_docker_labels_targets()
@@ -151,8 +151,8 @@ def is_valid_host(host_str: str) -> bool:
             return True
         if cfg.domain and domain == cfg.domain.strip().lower():
             return True
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("PlatformConfig check failed for %s: %s", domain, exc)
 
     # 2. Managed Servers (Nodes)
     try:
@@ -161,16 +161,16 @@ def is_valid_host(host_str: str) -> bool:
         from apps.deployments.models_core import ManagedServer
         if ManagedServer.objects.filter(Q(host=domain) | Q(private_ip=domain)).exists():
             return True
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("ManagedServer check failed for %s: %s", domain, exc)
 
     # 3. Services (Public Domain)
     try:
         from apps.deployments.models import Service
         if Service.objects.filter(public_domain=domain).exists():
             return True
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Service domain check failed for %s: %s", domain, exc)
 
     # 4. Verified Custom Domains
     try:
@@ -183,15 +183,15 @@ def is_valid_host(host_str: str) -> bool:
         ).filter(Q(verified=True) | Q(status=DomainStatus.ACTIVE)).exists()
         if routable:
             return True
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Custom domain check failed for %s: %s", domain, exc)
 
     # 5. Addons
     try:
         from apps.deployments.models_addons import Addon
         if Addon.objects.filter(public_domain=domain).exists():
             return True
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Addon domain check failed for %s: %s", domain, exc)
 
     return False

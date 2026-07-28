@@ -11,6 +11,11 @@ from django.conf import settings
 from django.utils import timezone
 from apps.addons.services.addon_provisioner import addon_provisioner
 
+from apps.deployments.constants import (
+    TASK_TIME_LIMIT_DATA_SYNC,
+    TASK_TIME_LIMIT_MEDIUM,
+    TASK_TIME_LIMIT_QUICK,
+)
 from apps.deployments.models import (
     Deployment,
     EnvironmentVariable,
@@ -197,7 +202,7 @@ def _dispatch_preview_deployment(deployment: Deployment, provider_id: str | None
     return enqueue_smart_deploy_task(str(deployment.id), provider_id or "", skip_review=True)  # type: ignore[arg-type]
 
 def checkout_code(repo_url: str, branch: str, commit_sha: str, target_dir: str, token: str | None = None) -> str:
-    from apps.deployments.services.git_manager import GitManager
+    from apps.cloud.services.git_manager import GitManager
     try:
         result = GitManager.clone_repo(
             repo_url=repo_url,
@@ -211,7 +216,7 @@ def checkout_code(repo_url: str, branch: str, commit_sha: str, target_dir: str, 
         logger.error(f"Git clone failed: {e!s}")
         return ""
 
-@shared_task(soft_time_limit=600, time_limit=660, name="apps.deployments.tasks.deployment.tasks_safedeploy.create_preview_environment_job")
+@shared_task(soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1], name="apps.deployments.tasks.deployment.tasks_safedeploy.create_preview_environment_job")
 def create_preview_environment_job(preview_id: str):
     try:
         preview = PreviewEnvironment.objects.get(id=preview_id)
@@ -227,7 +232,7 @@ def create_preview_environment_job(preview_id: str):
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.exception("Failed to mark preview as BUILD_FAILED: %s", exc)
 
-@shared_task(soft_time_limit=600, time_limit=660, name="apps.deployments.tasks.deployment.tasks_safedeploy.create_database_clone_job")
+@shared_task(soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1], name="apps.deployments.tasks.deployment.tasks_safedeploy.create_database_clone_job")
 def create_database_clone_job(preview_id: str):
     """Provision an isolated preview PostgreSQL container (no data clone from production).
 
@@ -297,7 +302,7 @@ def create_database_clone_job(preview_id: str):
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.exception("Failed to mark preview as DB_CLONE_FAILED: %s", exc)
 
-@shared_task(soft_time_limit=1200, time_limit=1500, name="apps.deployments.tasks.deployment.tasks_safedeploy.run_migration_validation_job")
+@shared_task(soft_time_limit=TASK_TIME_LIMIT_DATA_SYNC[0], time_limit=TASK_TIME_LIMIT_DATA_SYNC[1], name="apps.deployments.tasks.deployment.tasks_safedeploy.run_migration_validation_job")
 def run_migration_validation_job(preview_id: str):
     workspace_dir = None
     try:
@@ -463,13 +468,13 @@ def run_migration_validation_job(preview_id: str):
                 preview.status = PreviewEnvironment.Status.MIGRATION_FAILED
                 preview.error_message = str(e)
                 preview.save()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to update preview environment status: %s", exc)
     finally:
         if workspace_dir:
             shutil.rmtree(workspace_dir, ignore_errors=True)
 
-@shared_task(soft_time_limit=600, time_limit=660, name="apps.deployments.tasks.deployment.tasks_safedeploy.run_preview_tests_job")
+@shared_task(soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1], name="apps.deployments.tasks.deployment.tasks_safedeploy.run_preview_tests_job")
 def run_preview_tests_job(preview_id: str):
     try:
         preview = PreviewEnvironment.objects.get(id=preview_id)
@@ -502,8 +507,14 @@ def run_preview_tests_job(preview_id: str):
         preview.save()
     except Exception as e:
         logger.error(f"Error in run_preview_tests_job for {preview_id}: {e}", exc_info=True)
+        try:
+            preview = PreviewEnvironment.objects.get(id=preview_id)
+            preview.status = PreviewEnvironment.Status.TESTS_FAILED
+            preview.save(update_fields=['status', 'updated_at'])
+        except Exception as inner_exc:
+            logger.warning("Failed to mark preview %s as TESTS_FAILED: %s", preview_id, inner_exc)
 
-@shared_task(soft_time_limit=600, time_limit=660, name="apps.deployments.tasks.deployment.tasks_safedeploy.provision_preview_service_job")
+@shared_task(soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1], name="apps.deployments.tasks.deployment.tasks_safedeploy.provision_preview_service_job")
 def provision_preview_service_job(preview_id: str):
     try:
         preview = PreviewEnvironment.objects.get(id=preview_id)
@@ -604,10 +615,10 @@ def provision_preview_service_job(preview_id: str):
             p.status = PreviewEnvironment.Status.HEALTH_CHECK_FAILED
             p.error_message = str(e)
             p.save()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to update preview status on provision failure: %s", exc)
 
-@shared_task(soft_time_limit=120, time_limit=150, name="apps.deployments.tasks.deployment.tasks_safedeploy.run_preview_health_check_job")
+@shared_task(soft_time_limit=TASK_TIME_LIMIT_QUICK[0], time_limit=TASK_TIME_LIMIT_QUICK[1], name="apps.deployments.tasks.deployment.tasks_safedeploy.run_preview_health_check_job")
 def run_preview_health_check_job(preview_id: str):
     try:
         from apps.deployments.services.safedeploy.health_checks import (
@@ -628,8 +639,14 @@ def run_preview_health_check_job(preview_id: str):
         preview.save()
     except Exception as e:
         logger.error(f"Health check failed for preview {preview_id}: {e}", exc_info=True)
+        try:
+            preview = PreviewEnvironment.objects.get(id=preview_id)
+            preview.status = PreviewEnvironment.Status.HEALTH_CHECK_FAILED
+            preview.save(update_fields=['status', 'updated_at'])
+        except Exception as inner_exc:
+            logger.warning("Failed to mark preview %s as HEALTH_CHECK_FAILED: %s", preview_id, inner_exc)
 
-@shared_task(soft_time_limit=600, time_limit=660, name="apps.deployments.tasks.deployment.tasks_safedeploy.destroy_preview_environment_job")
+@shared_task(soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1], name="apps.deployments.tasks.deployment.tasks_safedeploy.destroy_preview_environment_job")
 def destroy_preview_environment_job(preview_id: str):
     try:
         preview = PreviewEnvironment.objects.get(id=preview_id)
@@ -678,19 +695,19 @@ def destroy_preview_environment_job(preview_id: str):
         preview.delete()
 
     except PreviewEnvironment.DoesNotExist:
-        pass
+        logger.warning("Preview %s already deleted", preview_id)
     except Exception as e:
         logger.error(f"Failed to destroy preview environment {preview_id}: {e}", exc_info=True)
         try:
             p = PreviewEnvironment.objects.get(id=preview_id)
-            p.status = PreviewEnvironment.Status.BUILD_FAILED  # TODO: add DESTROY_FAILED status
+            p.status = PreviewEnvironment.Status.DESTROY_FAILED
             p.error_message = str(e)
             p.save()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to update preview status on destroy failure: %s", exc)
 
 
-@shared_task(soft_time_limit=120, time_limit=150, name="apps.deployments.tasks.deployment.tasks_safedeploy.expire_stale_previews_job")
+@shared_task(soft_time_limit=TASK_TIME_LIMIT_QUICK[0], time_limit=TASK_TIME_LIMIT_QUICK[1], name="apps.deployments.tasks.deployment.tasks_safedeploy.expire_stale_previews_job")
 def expire_stale_previews_job():
     from apps.deployments.models.safedeploy import PreviewEnvironment
     now = timezone.now()
@@ -702,6 +719,7 @@ def expire_stale_previews_job():
             PreviewEnvironment.Status.TESTS_FAILED,
             PreviewEnvironment.Status.MIGRATION_FAILED,
             PreviewEnvironment.Status.DB_CLONE_FAILED,
+            PreviewEnvironment.Status.DESTROY_FAILED,
         ],
     )
     for preview in expired:

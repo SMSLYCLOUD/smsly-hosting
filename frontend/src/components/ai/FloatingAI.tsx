@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { m, AnimatePresence } from 'framer-motion';
 import { X, Send, Bot, User, Loader2, MessageSquare } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -13,7 +13,7 @@ interface Message {
   timestamp: Date;
 }
 
-export function FloatingAI() {
+export const FloatingAI = React.memo(function FloatingAI() {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -243,4 +243,4 @@ export function FloatingAI() {
       </AnimatePresence>
     </>
   );
-}
+})

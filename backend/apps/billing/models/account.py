@@ -1,7 +1,6 @@
 """Models module."""
 import uuid
 
-from django.conf import settings
 from django.db import models
 
 from apps.deployments.models import Service
@@ -118,3 +117,8 @@ class UsageRecord(models.Model):
 
     def __str__(self):
         return f"{self.service.name} - {self.timestamp} - ${self.cost}"
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["service", "-timestamp"], name="billing_usage_svc_ts_idx"),
+        ]

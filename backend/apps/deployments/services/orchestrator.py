@@ -1,9 +1,12 @@
 # pylint: disable=too-few-public-methods,wrong-import-order
 """Orchestrator module - production hardened."""
 # pylint: disable=no-member
+from __future__ import annotations
+
 import logging
 import signal
 import threading
+from uuid import UUID
 
 from apps.deployments.models import Deployment
 from apps.deployments.tasks.ai.tasks_ai import analyze_failure_task
@@ -33,7 +36,7 @@ class Orchestrator:
       - Auto-rollback after N consecutive failures
     """
 
-    def __init__(self, deployment_id):
+    def __init__(self, deployment_id: UUID | str) -> None:
         self.deployment = Deployment.objects.get(id=deployment_id)
         self.build_manager = BuildManager(self.deployment)
         self.cluster_manager = ClusterManager(self.deployment)
@@ -42,7 +45,7 @@ class Orchestrator:
         # Register graceful shutdown handlers
         self._register_signal_handlers()
 
-    def _register_signal_handlers(self):
+    def _register_signal_handlers(self) -> None:
         """Register SIGTERM/SIGINT for graceful shutdown."""
         try:
             signal.signal(signal.SIGTERM, self._handle_shutdown)
@@ -52,7 +55,7 @@ class Orchestrator:
             # Celery handles its own SIGTERM via soft_time_limit
             pass
 
-    def _handle_shutdown(self, signum, frame):
+    def _handle_shutdown(self, signum: int, frame: object) -> None:
         """Mark deployment as failed on shutdown signal."""
         logger.warning(
             "Shutdown signal %s received during deployment %s",
@@ -71,9 +74,10 @@ class Orchestrator:
             )
             self.deployment.save()
 
-    def run_deployment(self):
+    def run_deployment(self) -> None:
         """
         Run deployment process with timeout enforcement.
+
         Raises DeploymentTimeoutError if DEPLOYMENT_TIMEOUT is exceeded.
         """
         self.deployment.status = Deployment.Status.BUILDING
@@ -143,7 +147,7 @@ class Orchestrator:
         finally:
             timeout_timer.cancel()
 
-    def _handle_timeout(self):
+    def _handle_timeout(self) -> None:
         """Called by the timeout timer if deployment exceeds the limit."""
         logger.error(
             "Deployment %s exceeded timeout of %ss",
@@ -158,7 +162,7 @@ class Orchestrator:
         )
         self.deployment.save()
 
-    def _check_auto_rollback(self):
+    def _check_auto_rollback(self) -> None:
         from apps.deployments.services.auto_rollback import (
             AutoRollbackEngine,
             Trigger,

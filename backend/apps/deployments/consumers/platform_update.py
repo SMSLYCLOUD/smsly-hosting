@@ -2,7 +2,6 @@
 import base64
 import contextlib
 import json
-import logging
 
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
@@ -38,13 +37,6 @@ class PlatformUpdateConsumer(AsyncWebsocketConsumer):
                     break
             if not token_key and len(subprotocols) == 1 and subprotocols[0] and subprotocols[0] != 'token':
                 token_key = subprotocols[0]
-
-            if not token_key:
-                query_string = self.scope.get('query_string', b'').decode()
-                for param in query_string.split('&'):
-                    if param.startswith('token='):
-                        token_key = param.split('=', 1)[1]
-                        break
 
             if token_key:
                 self.user = await self._authenticate_token(token_key)

@@ -37,6 +37,8 @@ from django.core.cache import cache
 from django.db import transaction
 from django.utils import timezone
 
+from apps.deployments.constants import TASK_TIME_LIMIT_QUICK
+
 logger = logging.getLogger(__name__)
 
 
@@ -470,8 +472,8 @@ def get_stuck_rollback_heartbeats():
     return stuck
 
 
-@shared_task
-def monitor_stuck_rollback_heartbeats():
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_QUICK[0], time_limit=TASK_TIME_LIMIT_QUICK[1])
+def monitor_stuck_rollback_heartbeats(self):
     """Celery beat task: alert on rollbacks stuck in QUEUED.
 
     For each stuck rollback, we:

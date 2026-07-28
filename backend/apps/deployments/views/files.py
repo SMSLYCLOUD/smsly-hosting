@@ -53,6 +53,28 @@ class ServiceFileActionsMixin:
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        # 2b. Magic byte validation
+        from .upload_security import validate_zip_magic, validate_tar_magic
+        if filename_lower.endswith('.zip'):
+            magic_err = validate_zip_magic(uploaded_file)
+        else:
+            magic_err = validate_tar_magic(uploaded_file)
+        if magic_err:
+            return magic_err
+
+        # 2c. Zip-specific checks: zip-slip and zip bomb
+        if filename_lower.endswith('.zip'):
+            from .upload_security import validate_zip_entries, validate_zip_no_bomb
+            is_safe, err_msg = validate_zip_entries(uploaded_file)
+            if not is_safe:
+                return Response(
+                    {'error': f'Unsafe archive: {err_msg}'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            bomb_err = validate_zip_no_bomb(uploaded_file)
+            if bomb_err:
+                return bomb_err
+
         # 3. Secure Storage Setup
         base_dir = getattr(settings, 'MEDIA_ROOT', '/app/media')
         upload_dir = os.path.join(base_dir, 'uploads', 'services', str(service.id))

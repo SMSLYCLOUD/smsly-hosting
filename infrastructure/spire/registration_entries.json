@@ -1,0 +1,85 @@
+{
+  "entries": [
+    {
+      "spiffe_id": {"trust_domain": "TRUST_DOMAIN_PLACEHOLDER", "path": "/service/gateway"},
+      "parent_id": {"trust_domain": "TRUST_DOMAIN_PLACEHOLDER", "path": "/spire-server"},
+      "selectors": [
+        {"type": "docker", "value": "label:com.paas.service:gateway"}
+      ],
+      "x509_svid_ttl": 3600,
+      "dns_names": ["gateway", "gateway.paas.svc"]
+    },
+    {
+      "spiffe_id": {"trust_domain": "TRUST_DOMAIN_PLACEHOLDER", "path": "/service/identity"},
+      "parent_id": {"trust_domain": "TRUST_DOMAIN_PLACEHOLDER", "path": "/spire-server"},
+      "selectors": [
+        {"type": "docker", "value": "label:com.paas.service:identity"}
+      ],
+      "x509_svid_ttl": 3600,
+      "dns_names": ["identity", "identity.paas.svc"]
+    },
+    {
+      "spiffe_id": {"trust_domain": "TRUST_DOMAIN_PLACEHOLDER", "path": "/service/backend"},
+      "parent_id": {"trust_domain": "TRUST_DOMAIN_PLACEHOLDER", "path": "/spire-server"},
+      "selectors": [
+        {"type": "docker", "value": "label:com.paas.service:backend"}
+      ],
+      "x509_svid_ttl": 3600,
+      "dns_names": ["backend", "backend.paas.svc"]
+    },
+    {
+      "spiffe_id": {"trust_domain": "TRUST_DOMAIN_PLACEHOLDER", "path": "/service/platform"},
+      "parent_id": {"trust_domain": "TRUST_DOMAIN_PLACEHOLDER", "path": "/spire-server"},
+      "selectors": [
+        {"type": "docker", "value": "label:com.paas.service:platform"}
+      ],
+      "x509_svid_ttl": 3600,
+      "dns_names": ["platform", "platform.paas.svc"]
+    },
+    {
+      "spiffe_id": {"trust_domain": "TRUST_DOMAIN_PLACEHOLDER", "path": "/service/audit"},
+      "parent_id": {"trust_domain": "TRUST_DOMAIN_PLACEHOLDER", "path": "/spire-server"},
+      "selectors": [
+        {"type": "docker", "value": "label:com.paas.service:audit"}
+      ],
+      "x509_svid_ttl": 3600,
+      "dns_names": ["audit", "audit.paas.svc"]
+    },
+    {
+      "spiffe_id": {"trust_domain": "TRUST_DOMAIN_PLACEHOLDER", "path": "/service/policy"},
+      "parent_id": {"trust_domain": "TRUST_DOMAIN_PLACEHOLDER", "path": "/spire-server"},
+      "selectors": [
+        {"type": "docker", "value": "label:com.paas.service:policy"}
+      ],
+      "x509_svid_ttl": 3600,
+      "dns_names": ["policy", "policy.paas.svc"]
+    },
+    {
+      "spiffe_id": {"trust_domain": "TRUST_DOMAIN_PLACEHOLDER", "path": "/service/rate-limit"},
+      "parent_id": {"trust_domain": "TRUST_DOMAIN_PLACEHOLDER", "path": "/spire-server"},
+      "selectors": [
+        {"type": "docker", "value": "label:com.paas.service:rate-limit"}
+      ],
+      "x509_svid_ttl": 3600,
+      "dns_names": ["rate-limit", "rate-limit.paas.svc"]
+    },
+    {
+      "spiffe_id": {"trust_domain": "TRUST_DOMAIN_PLACEHOLDER", "path": "/service/chain"},
+      "parent_id": {"trust_domain": "TRUST_DOMAIN_PLACEHOLDER", "path": "/spire-server"},
+      "selectors": [
+        {"type": "docker", "value": "label:com.paas.service:chain"}
+      ],
+      "x509_svid_ttl": 3600,
+      "dns_names": ["chain", "chain.paas.svc"]
+    },
+    {
+      "spiffe_id": {"trust_domain": "TRUST_DOMAIN_PLACEHOLDER", "path": "/service/email"},
+      "parent_id": {"trust_domain": "TRUST_DOMAIN_PLACEHOLDER", "path": "/spire-server"},
+      "selectors": [
+        {"type": "docker", "value": "label:com.paas.service:email"}
+      ],
+      "x509_svid_ttl": 3600,
+      "dns_names": ["email", "email.paas.svc"]
+    }
+  ]
+}

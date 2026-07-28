@@ -99,7 +99,7 @@ ensure_replication_role() {
         red "ERROR: db container not running. Start the stack first."
         exit 1
     fi
-    docker exec -e PGPASSWORD="$POSTGRES_PASSWORD" "$db_container" \
+    timeout 120 docker exec -e PGPASSWORD="$POSTGRES_PASSWORD" "$db_container" \
         psql -U "$PG_USER" -d "$PG_DB" -v ON_ERROR_STOP=1 <<SQL
 DO \$\$
 BEGIN
@@ -119,7 +119,7 @@ ensure_wal_settings() {
     local db_container
     db_container="$(docker compose -f "$COMPOSE_BASE" ps -q db | head -1)"
     local wal_level
-    wal_level="$(docker exec "$db_container" psql -U "$PG_USER" -d "$PG_DB" -tAc "SHOW wal_level")"
+    wal_level="$(timeout 30 docker exec "$db_container" psql -U "$PG_USER" -d "$PG_DB" -tAc "SHOW wal_level")"
     if [ "$wal_level" = "replica" ] || [ "$wal_level" = "logical" ]; then
         green "  OK wal_level=$wal_level"
     else
@@ -172,7 +172,7 @@ wait_for_streaming() {
     local i
     for i in $(seq 1 60); do
         local state
-        state="$(docker exec "$db_container" psql -U "$PG_USER" -d "$PG_DB" -tAc "SELECT state FROM pg_stat_replication LIMIT 1"  || true)"
+        state="$(timeout 15 docker exec "$db_container" psql -U "$PG_USER" -d "$PG_DB" -tAc "SELECT state FROM pg_stat_replication LIMIT 1"  || true)"
         if [ "$state" = "streaming" ]; then
             green "  OK replica is streaming (state=streaming) after ${i}0-second polls"
             return 0

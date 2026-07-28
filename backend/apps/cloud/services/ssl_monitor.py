@@ -7,9 +7,10 @@ from datetime import UTC, datetime
 from apps.deployments.models import PlatformConfig
 from apps.domains.models import Domain, DomainStatus
 from apps.domains.tasks import verify_dns_and_provision_ssl_task
-from apps.notifications.models import Notification
 from celery import shared_task
 from django.utils import timezone
+
+from apps.deployments.constants import TASK_TIME_LIMIT_STANDARD
 
 logger = logging.getLogger(__name__)
 
@@ -62,11 +63,15 @@ class SSLMonitorService:
             self._check_cert_platform(config.domain)
 
         # Retry DNS pending domains
-        for domain_obj in Domain.objects.filter(status__in=[DomainStatus.PENDING, DomainStatus.DNS_PENDING]):
+        for domain_obj in Domain.objects.filter(
+            status__in=[DomainStatus.PENDING, DomainStatus.DNS_PENDING]
+        ).select_related('service__owner'):
             verify_dns_and_provision_ssl_task.delay(domain_obj.id)
 
         # Check custom domains on services
-        for domain_obj in Domain.objects.exclude(status__in=[DomainStatus.PENDING, DomainStatus.DNS_PENDING]):
+        for domain_obj in Domain.objects.exclude(
+            status__in=[DomainStatus.PENDING, DomainStatus.DNS_PENDING]
+        ).select_related('service__owner'):
             self._check_cert_domain_obj(domain_obj)
 
     def _check_cert_platform(self, domain):
@@ -174,7 +179,7 @@ class SSLMonitorService:
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning("Certificate refresh trigger failed for %s: %s", domain, exc)
 
-@shared_task(name="apps.cloud.services.ssl_monitor.check_ssl_certificates_task")
-def check_ssl_certificates_task():
+@shared_task(name="apps.cloud.services.ssl_monitor.check_ssl_certificates_task", soft_time_limit=TASK_TIME_LIMIT_STANDARD[0], time_limit=TASK_TIME_LIMIT_STANDARD[1])
+def check_ssl_certificates_task() -> None:
     """Periodic SSL certificate expiry monitor."""
     SSLMonitorService().check_all_certificates()

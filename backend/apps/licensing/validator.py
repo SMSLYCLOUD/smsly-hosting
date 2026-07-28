@@ -28,8 +28,8 @@ def get_instance_id():
         try:
             with open(id_file) as f:
                 return f.read().strip()
-        except Exception:
-            pass
+        except OSError as exc:
+            logger.debug("Failed to read instance ID file: %s", exc)
 
     # Generate from machine-id + random salt
     machine_id = ''
@@ -39,8 +39,8 @@ def get_instance_id():
                 with open(path) as f:
                     machine_id = f.read().strip()
                 break
-            except Exception:
-                pass
+            except OSError as exc:
+                logger.debug("Failed to read machine-id from %s: %s", path, exc)
 
     if not machine_id:
         # Fallback to random UUID if no machine-id available (e.g. some containers)

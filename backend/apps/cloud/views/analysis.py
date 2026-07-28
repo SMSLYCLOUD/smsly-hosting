@@ -124,14 +124,14 @@ class RepoAnalysisView(GenericAPIView):
     def post(self, request):
         repo_url = request.data.get('repo_url')
         if not repo_url:
-            return Response({"detail": "repo_url required"},
+            return Response({"error": "repo_url required"},
                             status=status.HTTP_400_BAD_REQUEST)
 
         # SECURITY: Validate repo URL format to prevent SSRF
         if not re.match(
                 r'^https?://(github\.com|gitlab\.com|bitbucket\.org)/', repo_url):
             return Response(
-                {"detail": "Only GitHub, GitLab, and Bitbucket repositories are supported."},
+                {"error": "Only GitHub, GitLab, and Bitbucket repositories are supported."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -154,7 +154,7 @@ class RepoAnalysisView(GenericAPIView):
         except Exception as e:
             logger.error(f"Repo analysis error: {e}")
             return Response(
-                {"detail": "Failed to analyze repository. Please try again."},
+                {"error": "Failed to analyze repository. Please try again."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
@@ -505,7 +505,7 @@ class CodeIntelligenceView(GenericAPIView):
         deploy_plan = request.data.get('deploy_plan', {})
 
         if not isinstance(repos_data, list) or not deploy_plan:
-            return Response({"detail": "repos_data and deploy_plan are required."}, status=400)
+            return Response({"error": "repos_data and deploy_plan are required."}, status=400)
 
         from rest_framework.exceptions import PermissionDenied
 

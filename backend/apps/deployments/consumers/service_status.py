@@ -1,7 +1,7 @@
 """WebSocket consumer for real-time service status updates."""
 import asyncio
+import contextlib
 import json
-import logging
 import time
 
 from channels.db import database_sync_to_async
@@ -42,17 +42,17 @@ class ServiceStatusConsumer(AsyncWebsocketConsumer):
         self._redis_healthy = True
 
     async def connect(self):
-        await self.accept()
-
         try:
             self.user = self.scope.get('user')
             if not self.user or not getattr(self.user, 'is_authenticated', False):
+                await self.accept()
                 await self.send(text_data=json.dumps({'error': 'Authentication required'}))
                 await self.close(code=4001)
                 return
 
             self.user_group_name = f"user_services_{self.user.id}"
             await self._join_group_with_retry()
+            await self.accept()
 
             await self._send_initial_services()
 
@@ -76,11 +76,13 @@ class ServiceStatusConsumer(AsyncWebsocketConsumer):
             with contextlib.suppress(asyncio.CancelledError):
                 await self._heartbeat_task
         if self.user_group_name:
-            with contextlib.suppress(_REDIS_WS_ERRORS):
+            try:
                 await self.channel_layer.group_discard(
                     self.user_group_name,
                     self.channel_name
                 )
+            except Exception as exc:
+                logger.debug("group_discard failed (Redis may be down): %s", exc)
 
     async def _join_group_with_retry(self, retries=3, delay=1.0):
         for attempt in range(retries):

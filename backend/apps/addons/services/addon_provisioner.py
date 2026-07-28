@@ -192,7 +192,7 @@ class AddonProvisioner:
                         check=False
                     )
                     if result.returncode != 0:
-                        logger.warning(
+                        logger.error(
                             "Failed to connect %s to proxy network %s: %s",
                             container_name, self.proxy_network_name,
                             result.stderr.strip(),
@@ -200,12 +200,12 @@ class AddonProvisioner:
                     else:
                         logger.debug(f"Connected {container_name} to {self.proxy_network_name}")
             else:
-                logger.warning(
+                logger.error(
                     "Proxy network %s not found — Traefik routing may not work for %s",
                     self.proxy_network_name, container_name,
                 )
         except Exception as e:
-            logger.warning(f"Could not connect {container_name} to proxy network: {e}")
+            logger.error(f"Could not connect {container_name} to proxy network: {e}")
 
     def _connect_to_service_scoped_network(self, container_name: str, addon) -> None:
         """Connect the addon container to the service's scoped bridge for DNS resolution.
@@ -763,8 +763,8 @@ class AddonProvisioner:
                     )
                 finally:
                     test_sock.close()
-            except Exception:
-                pass
+            except (ConnectionError, OSError, TimeoutError) as exc:
+                logger.debug("Socket connectivity test failed: %s", exc)
 
             # Find a free port on the host to map to this container
             host_port = self._get_free_host_port(cast(int, port))
@@ -1153,7 +1153,7 @@ class AddonProvisioner:
                 'mc', 'mb', f'myminio/{bucket_name}'
             ], capture_output=True, check=False) # check=False because it might already exist on re-provision
         except Exception as e:
-            logger.warning("Failed to auto-create default MinIO bucket %s: %s", bucket_name, e)
+            logger.error("Failed to auto-create default MinIO bucket %s: %s", bucket_name, e)
 
         return container_id, connection_url
 
@@ -1269,8 +1269,8 @@ class AddonProvisioner:
                 )
                 if result.returncode == 0:
                     return
-            except Exception:
-                pass
+            except (subprocess.SubprocessError, OSError) as exc:
+                logger.debug("Readiness check failed for %s: %s", container_name, exc)
             time.sleep(1)
         raise RuntimeError(f"{container_name} readiness command timed out after {timeout}s")
 
@@ -1359,7 +1359,7 @@ class AddonProvisioner:
                 text=True,
             )
         except Exception as exc:  # pragma: no cover
-            logger.warning("pgvector extension init failed for %s: %s", container_name, exc)
+            logger.error("pgvector extension init failed for %s: %s", container_name, exc)
 
         return container_id, connection_url
 
@@ -1600,8 +1600,8 @@ class AddonProvisioner:
                     if resp.status_code < 500:
                         logger.info(f"{container_name} is healthy at {url}")
                         return
-                except Exception:
-                    pass
+                except (requests.RequestException, ValueError) as exc:
+                    logger.debug("Health check failed for %s at %s: %s", container_name, url, exc)
                 time.sleep(1)
                 continue
             else:

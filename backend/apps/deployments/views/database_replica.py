@@ -162,13 +162,13 @@ class DatabaseReplicaViewSet(viewsets.ModelViewSet):
         ``/sync/`` to apply changes to pgcat.
 
         Returns:
-            200 { "ok": true|false, "error": "...", "lag_seconds": null }
+            200 { "reachable": true|false, "error": "...", "lag_seconds": null }
         """
         replica = self.get_object()
         ok, err, lag = svc.test_connection(replica)
         return Response(
             {
-                "ok": ok,
+                "reachable": ok,
                 "error": err,
                 "lag_seconds": lag,
                 "endpoint": replica.pgcat_endpoint,

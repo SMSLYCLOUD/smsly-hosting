@@ -24,6 +24,11 @@ class ResourceAlert(models.Model):
     acknowledged = models.BooleanField(default=False)  # type: ignore[var-annotated]
     created_at = models.DateTimeField(auto_now_add=True)  # type: ignore[var-annotated]
 
+    class Meta:
+        indexes = [
+            models.Index(fields=["service", "acknowledged", "-created_at"], name="resalert_svc_ack_created_idx"),
+        ]
+
 
 class NotificationChannel(models.Model):
     """A delivery channel for alert notifications (email, Slack webhook, SMS, etc.)."""

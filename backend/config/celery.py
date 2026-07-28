@@ -123,6 +123,7 @@ app.conf.task_routes = {
     # -- Docker-dependent tasks previously falling to default 'celery' queue --
     'apps.deployments.tasks.run_maintenance_task': {'queue': 'deploy'},
     'apps.deployments.tasks.registry_garbage_collection_task': {'queue': 'deploy'},
+    'apps.deployments.tasks_spiffe.sync_spiffe_entries_task': {'queue': 'deploy'},
     'apps.deployments.services.provisioner.provision_server': {'queue': 'deploy'},
     'apps.core.services.health_monitor.monitor_health_task': {'queue': 'deploy'},
     'apps.autoscaler.services.legacy_autoscaler.check_autoscale_task': {'queue': 'deploy'},
@@ -384,6 +385,12 @@ app.conf.beat_schedule = {
         'task': 'apps.deployments.tasks.registry_garbage_collection_task',
         'schedule': 86400.0,
         'options': {'expires': 86400.0},
+    },
+    # Sync SPIRE mTLS registration entries every 5 minutes
+    'sync-spiffe-entries-every-5m': {
+        'task': 'apps.deployments.tasks_spiffe.sync_spiffe_entries_task',
+        'schedule': 300.0,
+        'options': {'expires': 300.0},
     },
     # Monitor stuck auto-rollback heartbeats every 5 minutes.
     # Alerts when a rollback deployment stays QUEUED for too long

@@ -17,7 +17,7 @@ function CodeBlock({ children, lang = 'bash' }: { children: string; lang?: strin
   };
   return (
     <div className="relative group my-4">
-      <pre className="bg-slate-900 dark:bg-slate-800 text-slate-100 p-4 rounded-xl overflow-x-auto text-sm leading-relaxed font-mono">
+      <pre className="bg-slate-900 dark:bg-slate-900/80 text-slate-100 p-4 pr-12 rounded-xl overflow-x-auto text-sm leading-relaxed font-mono border border-slate-800 dark:border-slate-700/50">
         <code>{children.trim()}</code>
       </pre>
       <button
@@ -72,20 +72,20 @@ export default function InstallGuidePage() {
 
       {/* Hero */}
       <section className="pt-28 pb-10 px-4 bg-gradient-to-b from-emerald-50/60 to-white dark:from-emerald-950/20 dark:to-slate-950 border-b border-slate-200 dark:border-slate-800">
-        <div className="max-w-4xl mx-auto">
+        <div className="max-w-3xl mx-auto">
           <Link href="/docs" className="inline-flex items-center gap-1.5 text-sm text-emerald-600 dark:text-emerald-400 hover:underline mb-6">
             <ArrowLeft size={14} /> Back to Docs
           </Link>
           <div className="flex items-center gap-3 mb-4">
             <div className="p-2.5 bg-emerald-100 dark:bg-emerald-900/50 rounded-xl">
-              <BookOpen className="w-6 h-6 text-emerald-700 dark:text-emerald-300" />
+              <BookOpen className="w-5 h-5 text-emerald-700 dark:text-emerald-300" />
             </div>
             <span className="text-sm font-semibold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider">Installation Guide</span>
           </div>
-          <h1 className="text-3xl md:text-4xl font-extrabold text-slate-900 dark:text-white mb-3">
-            Grid — Installation & Operations Guide
+          <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight text-slate-900 dark:text-white mb-3 leading-tight">
+            Installation & Operations Guide
           </h1>
-          <p className="text-slate-500 dark:text-slate-400 text-lg md:text-xl max-w-2xl">
+          <p className="text-slate-500 dark:text-slate-400 text-lg md:text-xl max-w-2xl leading-relaxed">
             Complete guide to install, update, manage, and troubleshoot your Grid instance.
           </p>
         </div>
@@ -95,8 +95,8 @@ export default function InstallGuidePage() {
 
         {/* ────────────── Sidebar TOC ────────────── */}
         <aside className="hidden lg:block w-56 flex-shrink-0">
-          <nav className="sticky top-24 space-y-1">
-            <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">On this page</p>
+          <nav className="sticky top-24 space-y-0.5">
+            <p className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-3 px-3">On this page</p>
             {tocItems.map(item => {
               const Icon = item.icon;
               return (
@@ -176,8 +176,10 @@ export default function InstallGuidePage() {
           <CodeBlock>{`curl -fsSL https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/main/install.sh -o /tmp/install.sh
 sudo bash /tmp/install.sh`}</CodeBlock>
 
-          <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-xl p-4 my-4 text-sm text-amber-800 dark:text-amber-200">
-            <strong>Important:</strong> Do NOT pipe directly from curl. The installer requires interactive input unless you pre-seed SSL env vars.
+          <div className="docs-callout docs-callout-warning not-prose">
+            <p className="!mt-0">
+              <strong>Important:</strong> Do NOT pipe directly from curl. The installer requires interactive input unless you pre-seed SSL env vars.
+            </p>
           </div>
 
           <h3>What Happens During Installation</h3>
@@ -247,8 +249,10 @@ sudo bash /tmp/install.sh`}</CodeBlock>
             </div>
           </div>
 
-          <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700 rounded-xl p-4 my-4 text-sm text-blue-800 dark:text-blue-200">
-            <strong>Note about HTTPS in IP mode:</strong> When no domain is configured, the server only binds port 80 (HTTP). Port 443 has a self-signed certificate that redirects to HTTP. Browsers will show a &quot;Your connection is not private&quot; warning if you manually type <code>https://&lt;IP&gt;</code>. Click &quot;Advanced&quot; → &quot;Proceed&quot; to be redirected to HTTP. <strong>Always use plain HTTP in IP mode</strong> to avoid this warning entirely.
+          <div className="docs-callout docs-callout-info not-prose">
+            <p className="!mt-0">
+              <strong>Note about HTTPS in IP mode:</strong> When no domain is configured, the server only binds port 80 (HTTP). Port 443 has a self-signed certificate that redirects to HTTP. Browsers will show a &quot;Your connection is not private&quot; warning if you manually type <code>https://&lt;IP&gt;</code>. Click &quot;Advanced&quot; &rarr; &quot;Proceed&quot; to be redirected to HTTP. <strong>Always use plain HTTP in IP mode</strong> to avoid this warning entirely.
+            </p>
           </div>
 
 
@@ -278,8 +282,10 @@ sudo bash /tmp/install.sh`}</CodeBlock>
             Let&apos;s Encrypt cannot issue certificates for raw IP addresses. The self-signed fallback certificate exists on port 443 only to redirect HTTPS traffic back to HTTP. Browsers warn on self-signed certificates before following the redirect. For a zero-warning experience, always access via <strong>HTTP</strong> when no domain is configured.
           </p>
 
-          <div className="bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-700 rounded-xl p-4 my-4 text-sm text-emerald-800 dark:text-emerald-200">
-            <strong>Already set up a domain?</strong> Go to <strong>Settings → Domain &amp; SSL</strong> in the dashboard, enter your domain, toggle SSL on, and save. Caddy will automatically provision a Let&apos;s Encrypt certificate. No SSH required.
+          <div className="docs-callout docs-callout-success not-prose">
+            <p className="!mt-0">
+              <strong>Already set up a domain?</strong> Go to <strong>Settings &rarr; Domain &amp; SSL</strong> in the dashboard, enter your domain, toggle SSL on, and save. Caddy will automatically provision a Let&apos;s Encrypt certificate. No SSH required.
+            </p>
           </div>
 
 
@@ -288,8 +294,10 @@ sudo bash /tmp/install.sh`}</CodeBlock>
             <Key className="w-5 h-5 text-emerald-600" /> Domain & SSL Setup
           </h2>
 
-          <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-xl p-4 my-4 text-sm text-amber-800 dark:text-amber-200">
-            <strong>Important:</strong> You do <em>not</em> need to SSH into the server to set up a domain. Everything is configurable from the dashboard under <strong>Settings → Domain &amp; SSL</strong>.
+          <div className="docs-callout docs-callout-warning not-prose">
+            <p className="!mt-0">
+              <strong>Important:</strong> You do <em>not</em> need to SSH into the server to set up a domain. Everything is configurable from the dashboard under <strong>Settings &rarr; Domain &amp; SSL</strong>.
+            </p>
           </div>
 
           <h3>How It Works</h3>
@@ -321,8 +329,10 @@ sudo bash /tmp/install.sh`}</CodeBlock>
           <CodeBlock>{`dig +short your-domain.com
 # Should return your server IP`}</CodeBlock>
 
-          <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700 rounded-xl p-4 my-4 text-sm text-red-800 dark:text-red-200">
-            <strong>SSL will fail if DNS is not propagated.</strong> Caddy&apos;s ACME challenge (Let&apos;s Encrypt) must be able to reach your server on port 80. If DNS is wrong, the certificate cannot be issued.
+          <div className="docs-callout docs-callout-danger not-prose">
+            <p className="!mt-0">
+              <strong>SSL will fail if DNS is not propagated.</strong> Caddy&apos;s ACME challenge (Let&apos;s Encrypt) must be able to reach your server on port 80. If DNS is wrong, the certificate cannot be issued.
+            </p>
           </div>
 
           <h3>Step 2: Configure via Dashboard</h3>
@@ -350,8 +360,10 @@ sudo bash /tmp/install.sh`}</CodeBlock>
             Visit <code>https://your-domain.com</code>. The first visit may take 5-10 seconds as Caddy obtains the Let&apos;s Encrypt certificate on-demand. Subsequent visits are instant.
           </p>
 
-          <div className="bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-700 rounded-xl p-4 my-4 text-sm text-emerald-800 dark:text-emerald-200">
-            <strong>Tip:</strong> The first visitor triggers certificate issuance. If the certificate doesn&apos;t appear after 30 seconds, check Caddy logs via <code>docker logs smsly-hosting-caddy-1</code> on the server.
+          <div className="docs-callout docs-callout-success not-prose">
+            <p className="!mt-0">
+              <strong>Tip:</strong> The first visitor triggers certificate issuance. If the certificate doesn&apos;t appear after 30 seconds, check Caddy logs via <code>docker logs smsly-hosting-caddy-1</code> on the server.
+            </p>
           </div>
 
           <h3>What the Backend Updates Automatically</h3>

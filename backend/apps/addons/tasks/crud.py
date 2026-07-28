@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 
 logger = logging.getLogger(__name__)
@@ -5,14 +7,15 @@ logger = logging.getLogger(__name__)
 from celery import shared_task
 from apps.addons.services.addon_provisioner import addon_provisioner
 
+from apps.deployments.constants import RETRY_DELAY_STANDARD, TASK_TIME_LIMIT_DATA_SYNC, TASK_TIME_LIMIT_MEDIUM
 from apps.deployments.models import (
     EnvironmentVariable,
 )
 from apps.deployments.models.addons import Addon, Backup
 
 
-@shared_task(bind=True, max_retries=3, soft_time_limit=600, time_limit=660, name="apps.deployments.tasks.provision_addon_task")
-def provision_addon_task(self, addon_id: str):
+@shared_task(bind=True, max_retries=3, soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1], name="apps.deployments.tasks.provision_addon_task")
+def provision_addon_task(self, addon_id: str) -> None:
     """Provision an addon Docker container and inject env vars."""
     import time as _time
     _start_ts = _time.monotonic()
@@ -41,7 +44,7 @@ def provision_addon_task(self, addon_id: str):
                 caddy_content = generate_caddyfile(cfg)
                 apply_caddyfile(caddy_content)
             except Exception as ce:
-                logger.warning("Failed to sync Caddy configuration for addon %s: %s", addon.id, ce)
+                logger.error("Failed to sync Caddy configuration for addon %s: %s", addon.id, ce)
 
         # Auto-inject addon credentials as env vars
         creds = addon.parsed_credentials
@@ -79,8 +82,8 @@ def provision_addon_task(self, addon_id: str):
 
 
 
-@shared_task(bind=True, max_retries=3, soft_time_limit=600, time_limit=660, name="apps.deployments.tasks.deprovision_addon_task")
-def deprovision_addon_task(self, addon_id: str):
+@shared_task(bind=True, max_retries=3, soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1], name="apps.deployments.tasks.deprovision_addon_task")
+def deprovision_addon_task(self, addon_id: str) -> None:
     """Delete addon container."""
     try:
         addon = Addon.objects.get(id=addon_id)
@@ -95,8 +98,8 @@ def deprovision_addon_task(self, addon_id: str):
 
 
 
-@shared_task(bind=True, max_retries=3, soft_time_limit=1200, time_limit=1500, name="apps.deployments.tasks.backup_addon_task")
-def backup_addon_task(self, addon_id: str):
+@shared_task(bind=True, max_retries=3, soft_time_limit=TASK_TIME_LIMIT_DATA_SYNC[0], time_limit=TASK_TIME_LIMIT_DATA_SYNC[1], name="apps.deployments.tasks.backup_addon_task")
+def backup_addon_task(self, addon_id: str) -> None:
     """Create a backup for the specified addon."""
     backup = None
     try:
@@ -157,8 +160,8 @@ def backup_addon_task(self, addon_id: str):
 
 
 
-@shared_task(bind=True, soft_time_limit=1200, time_limit=1500, max_retries=2, default_retry_delay=60, name="apps.deployments.tasks.restore_addon_task")
-def restore_addon_task(self, backup_id: str):
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_DATA_SYNC[0], time_limit=TASK_TIME_LIMIT_DATA_SYNC[1], max_retries=2, default_retry_delay=RETRY_DELAY_STANDARD, name="apps.deployments.tasks.restore_addon_task")
+def restore_addon_task(self, backup_id: str) -> None:
     """Restore a backup to the addon."""
     try:
         backup = Backup.objects.get(id=backup_id)
@@ -170,8 +173,8 @@ def restore_addon_task(self, backup_id: str):
 
 
 
-@shared_task(bind=True, max_retries=3, soft_time_limit=600, time_limit=660, name="apps.deployments.tasks.delete_addon_task")
-def delete_addon_task(self, addon_id: str):
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1], name="apps.deployments.tasks.delete_addon_task")
+def delete_addon_task(self, addon_id: str) -> None:
     """Async reliable deletion of an Addon"""
     from apps.addons.services.addon_provisioner import addon_provisioner
 

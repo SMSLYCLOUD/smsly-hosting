@@ -37,7 +37,12 @@ class CloudProviderCreateSerializer(serializers.ModelSerializer):
 class CloudResourceSerializer(serializers.ModelSerializer):
     class Meta:
         model = CloudResource
-        fields = '__all__'
+        fields = [
+            'id', 'provider', 'resource_id', 'resource_type',
+            'name', 'region', 'status', 'metadata',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
 
 
 class SecretSerializer(serializers.ModelSerializer):

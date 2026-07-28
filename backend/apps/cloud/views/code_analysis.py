@@ -10,6 +10,7 @@ Analyzes a service's git repository and generates a visual graph of:
 
 Integrates with Intelligence AI providers for high-level architecture summary.
 """
+from __future__ import annotations
 
 import ast
 import logging
@@ -18,10 +19,13 @@ import re
 import shutil
 import tempfile
 import uuid
+from typing import Any
 
 from apps.deployments.models import Service
 from celery import shared_task
 from rest_framework import permissions, serializers, status, viewsets
+
+from apps.deployments.constants import TASK_TIME_LIMIT_STANDARD
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
@@ -473,8 +477,8 @@ def _generate_ai_summary(analysis: dict) -> str:
 
 # ─── Celery Task ─────────────────────────────────────────────────────────────
 
-@shared_task(bind=True, max_retries=1, soft_time_limit=300, time_limit=360)
-def analyze_service_code_task(self, service_id: str, user_id: str):
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_STANDARD[0], time_limit=TASK_TIME_LIMIT_STANDARD[1])
+def analyze_service_code_task(self, service_id: str, user_id: str) -> dict[str, Any]:
     """
     Clone a service repo and analyze its codebase structure.
     Results are cached on the Service model (or a related store).

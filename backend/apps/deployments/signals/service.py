@@ -57,6 +57,8 @@ def regenerate_caddyfile_on_service_change(_sender, instance, created, **kwargs)
         logger.warning("Could not regenerate Caddyfile from Service signal: %s", exc)
 
 
+# TODO: Does DB queries (TeamMember filter) + WebSocket sends. Consider
+# dispatching WebSocket broadcast to a Celery task.
 @receiver(post_save, sender=Service)
 def broadcast_service_status_change(_sender, instance, created, **kwargs):
     if not created:

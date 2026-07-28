@@ -1,4 +1,5 @@
 """Github module."""
+import fnmatch
 import hashlib
 import hmac
 import logging
@@ -10,6 +11,23 @@ from apps.deployments.tasks.deployment.tasks_deploy import smart_deploy_task
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _matches_watch_paths(changed_files: set, watch_paths: list) -> bool:
+    """Check if any changed file matches any watch path pattern.
+
+    Supports simple globs like ``services/api/**``, ``packages/shared/*``,
+    or exact file paths.
+    """
+    for pattern in watch_paths:
+        for f in changed_files:
+            if fnmatch.fnmatch(f, pattern):
+                return True
+            if pattern.endswith('/**'):
+                prefix = pattern[:-3]
+                if f.startswith(prefix):
+                    return True
+    return False
 
 
 def _check_duplicate_delivery(delivery_id, event_type):
@@ -57,8 +75,8 @@ class GitHubWebhookHandler:
             db_secret = PlatformConfig.load().get_webhook_secret('github')
             if db_secret:
                 secret = db_secret
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to load GitHub webhook secret from PlatformConfig: %s", exc)
         if not secret:
             logger.warning("GITHUB_WEBHOOK_SECRET not set, rejecting webhook")
             return False  # SECURITY: Fail closed - never skip verification
@@ -105,6 +123,29 @@ class GitHubWebhookHandler:
             s for s in candidates
             if s.repository_url and match_service_repo(s.repository_url, repo_url)
         ]
+
+        # Filter by watch_paths (monorepo support)
+        if services:
+            commits = payload.get('commits', [])
+            changed_files = set()
+            for c in commits:
+                changed_files.update(c.get('added', []))
+                changed_files.update(c.get('modified', []))
+                changed_files.update(c.get('removed', []))
+            filtered = []
+            for s in services:
+                watch = getattr(s, 'watch_paths', None) or []
+                if not watch or not changed_files:
+                    filtered.append(s)
+                    continue
+                if _matches_watch_paths(changed_files, watch):
+                    filtered.append(s)
+                else:
+                    logger.info(
+                        "Skipping deploy for %s: changed files don't match watch_paths",
+                        s.name,
+                    )
+            services = filtered
 
         triggered_count = 0
         for service in services:
@@ -164,9 +205,22 @@ class GitHubWebhookHandler:
                 f"No parent service found for PR #{pr_number} on {repo_url} (base: {base_ref})")
             return False
 
+        # Check bot PR strategy
+        sender = payload.get('sender', {})
+        is_bot = sender.get('type') == 'Bot' or sender.get('login', '').endswith('[bot]')
+
         triggered_count = 0
 
         for parent in parent_services:
+            if is_bot:
+                strategy = getattr(parent, 'bot_pr_strategy', 'DEPLOY')
+                if strategy == 'SKIP':
+                    logger.info(
+                        "Skipping bot PR from %s on %s (strategy=SKIP)",
+                        sender.get('login'), parent.name,
+                    )
+                    continue
+
             if action in ['opened', 'reopened', 'synchronize']:
                 triggered_count += self._create_or_update_preview(
                     parent, int(pr_number) if pr_number is not None else 0, head_ref, head_sha  # type: ignore[arg-type]
@@ -229,6 +283,33 @@ class GitHubWebhookHandler:
             skip = getattr(preview_service.parent_service, 'can_auto_deploy', False) if preview_service.parent_service else False
             smart_deploy_task.delay(deployment_id=str(deployment.id), provider_id=provider_id,
                                    skip_review=skip)
+
+            # Post/update PR comment with preview info
+            try:
+                from apps.deployments.services.github_pr_comment import (
+                    post_pr_comment, build_preview_comment,
+                )
+                from apps.deployments.tasks.cicd.tasks_commit_status import _extract_repo_path
+                repo_name = _extract_repo_path(parent.repository_url or '')
+                if repo_name:
+                    base_domain = Service.default_public_base_domain()
+                    preview_url = f"https://{preview_slug}.{base_domain}"
+                    body = build_preview_comment(
+                        service_name=preview_name,
+                        url=preview_url,
+                        branch=branch,
+                        commit_sha=commit_hash,
+                        pr_number=pr_number,
+                        status='building',
+                    )
+                    comment_id = preview_service.last_pr_comment_id
+                    new_id = post_pr_comment(repo_name, pr_number, body, comment_id=comment_id)
+                    if new_id:
+                        preview_service.last_pr_comment_id = new_id
+                        preview_service.save(update_fields=['last_pr_comment_id'])
+            except Exception as e:
+                logger.debug("Failed to post PR comment: %s", e)
+
             return 1
         return 0
 
@@ -264,6 +345,21 @@ class GitHubWebhookHandler:
 
             preview_service.delete()
             logger.info(f"Destroyed preview service {name}")
+
+            # Update PR comment that preview is destroyed
+            try:
+                from apps.deployments.services.github_pr_comment import (
+                    post_pr_comment, build_preview_destroyed_comment,
+                )
+                from apps.deployments.tasks.cicd.tasks_commit_status import _extract_repo_path
+                repo_name = _extract_repo_path(parent.repository_url or '')
+                if repo_name:
+                    body = build_preview_destroyed_comment(name, pr_number)
+                    comment_id = preview_service.last_pr_comment_id
+                    post_pr_comment(repo_name, pr_number, body, comment_id=comment_id)
+            except Exception as e:
+                logger.debug("Failed to update PR comment on destroy: %s", e)
+
             return 1
         except Service.DoesNotExist:
             logger.warning(

@@ -6,6 +6,7 @@ from datetime import timedelta
 from celery import shared_task
 from django.utils import timezone
 
+from apps.deployments.constants import TASK_TIME_LIMIT_LONG, TASK_TIME_LIMIT_MEDIUM, TASK_TIME_LIMIT_STANDARD
 from apps.deployments.models import Deployment, Service
 from apps.core.models.audit import AuditLog
 from apps.intelligence.analyzer import LogAnalyzer
@@ -14,8 +15,8 @@ from apps.intelligence.remediator import RemediationEngine
 logger = logging.getLogger(__name__)
 
 
-@shared_task
-def detect_anomalies_task(batch_size: int = 100):
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1])
+def detect_anomalies_task(self, batch_size: int = 100):
     """
     Periodically scan services for anomaly patterns and auto-remediate when safe.
 
@@ -86,8 +87,8 @@ def _process_service_anomaly(
     return {"issues_count": len(issues), "fixed_count": fixed_count}
 
 
-@shared_task
-def proactive_health_scan_task():
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1])
+def proactive_health_scan_task(self):
     """
     Proactive health scan — runs every 5 minutes.
     Checks ALL services for:
@@ -106,8 +107,8 @@ def proactive_health_scan_task():
             logger.error("Health scan failed for service %s: %s", service.id, exc)
 
 
-@shared_task
-def ai_deployment_review_task(deployment_id: str):
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_STANDARD[0], time_limit=TASK_TIME_LIMIT_STANDARD[1])
+def ai_deployment_review_task(self, deployment_id: str):
     """
     Post-deployment AI review — triggered after every deployment.
     Analyzes build logs + runtime behavior in first 2 minutes.
@@ -133,8 +134,8 @@ def ai_deployment_review_task(deployment_id: str):
         logger.error("Deployment %s not found for AI review", deployment_id)
 
 
-@shared_task
-def daily_intelligence_report_task():
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_LONG[0], time_limit=TASK_TIME_LIMIT_LONG[1])
+def daily_intelligence_report_task(self):
     """
     Daily intelligence report — runs once per day.
     Generates a summary of:

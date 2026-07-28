@@ -263,8 +263,8 @@ def _remap_domain_on_restore(service, metadata):
             new_domain = svc_domain.replace(old_domain, current_domain)
             service.public_domain = new_domain
             logger.info("Domain remapped on restore: %s → %s", svc_domain, new_domain)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed to remap domain during restore: %s", exc)
 
 
 def repair_double_encrypted_env_vars(service_id: str | None = None) -> dict:
@@ -433,7 +433,7 @@ def purge_user_backups(user_id) -> dict:
                 'cloud_objects_deleted': counters.get('cloud_objects_deleted', 0),
             },
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed to log GDPR backup purge event: %s", exc)
 
     return counters

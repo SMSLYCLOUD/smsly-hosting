@@ -1,14 +1,10 @@
 """Views module."""
 import logging
 import re
-from decimal import Decimal
 
-from django.core.cache import cache
-from django.utils import timezone
 from rest_framework import permissions, serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.throttling import UserRateThrottle
 
 from apps.cloud.models import CloudProvider, CloudResource
 from apps.cloud.serializers import (

@@ -17,6 +17,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import requests
+from django.db.models import Prefetch
 from django.utils import timezone
 from rest_framework.response import Response
 
@@ -61,8 +62,8 @@ def _append_log_safe(server, message):
             line = f"[{_tz.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}"
             server.provision_logs = (server.provision_logs or "") + line + "\n"
             server.save(update_fields=["provision_logs", "updated_at"])
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to append provision log: %s", exc)
 
 
 def _append_unique(values: list[str], value: str):
@@ -292,7 +293,7 @@ def _refresh_managed_server_health(server):
                     deploy_async=True,
                 )
         except Exception as exc:
-            logger.warning("Automatic VPN mesh setup failed for %s: %s", server.id, exc)
+            logger.error("Automatic VPN mesh setup failed for %s: %s", server.id, exc)
 
     return server
 
@@ -416,8 +417,8 @@ def _try_auto_token_exchange(server, base_url: str) -> str | None:
                                 server.host, url_base,
                             )
                             return token
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Token exchange failed for %s: %s", url_base, exc)
 
         return None
 
@@ -634,7 +635,23 @@ def _lite_agent_proxy_response(server, request, method: str, path: str) -> Respo
             Service.objects
             .filter(server=server)
             .exclude(status=Service.Status.DELETED)
-            .select_related("project")
+            .select_related("project", "owner", "server")
+            .prefetch_related(
+                Prefetch(
+                    'deployments',
+                    queryset=Deployment.objects.filter(
+                        status=Deployment.Status.ACTIVE
+                    ).order_by('-created_at')[:1],
+                    to_attr='_active_deployments',
+                ),
+                Prefetch(
+                    'deployments',
+                    queryset=Deployment.objects.order_by('-created_at')[:1],
+                    to_attr='_prefetched_deployments',
+                ),
+                'domain_instances',
+                'env_vars',
+            )
             .order_by("-updated_at")
         )
         data = ServiceSerializer(services_qs, many=True, context={"request": request}).data

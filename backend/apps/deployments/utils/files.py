@@ -175,8 +175,8 @@ def validate_and_sanitize_path(path: str, skip_system_check: bool = False, conta
                         raise ValueError("Path contains environment variables")
 
                     normalized_path = resolved_path
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Path normalization failed for %s: %s", path, exc)
 
     return normalized_path
 
@@ -237,7 +237,7 @@ def find_binary(name: str) -> str | None:
                 for p in parts[1:]:
                     if os.path.isfile(p) and os.access(p, os.X_OK):
                         return p
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Binary lookup for %s failed: %s", name, exc)
 
     return None

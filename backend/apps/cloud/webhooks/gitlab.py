@@ -19,8 +19,8 @@ class GitLabWebhookHandler:
             db_secret = PlatformConfig.load().get_webhook_secret('gitlab')
             if db_secret:
                 secret = db_secret
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to load GitLab webhook secret from PlatformConfig: %s", exc)
         if not secret:
             logger.warning("GITLAB_WEBHOOK_SECRET not set, rejecting webhook")
             return False
@@ -172,8 +172,8 @@ class GitLabWebhookHandler:
                     try:
                         c = adapter.docker_client.containers.get(name)
                         c.remove(force=True)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("Failed to remove preview container %s: %s", name, exc)
 
             preview_service.delete()
             logger.info("Destroyed preview service %s", name)

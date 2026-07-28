@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 from decimal import Decimal
 
@@ -17,7 +19,7 @@ logger = logging.getLogger(__name__)
 class UsageMeter:
     """Tracks resource usage per user per billing period."""
 
-    def record_usage(self, service, cpu_cores, memory_mb, cost, timestamp=None):
+    def record_usage(self, service: Service, cpu_cores: Decimal, memory_mb: int, cost: Decimal, timestamp: object = None) -> None:
         """Record a usage data point for a service (called by Celery tasks)."""
         from ..models import UsageRecord
         UsageRecord.objects.create(
@@ -27,7 +29,7 @@ class UsageMeter:
             cost=cost,
         )
 
-    def get_usage_summary(self, user, period_start, period_end):
+    def get_usage_summary(self, user: object, period_start: object, period_end: object) -> dict[str, Decimal]:
         """Aggregate usage for billing period."""
         # Summary dict to return
         summary = {
@@ -68,12 +70,17 @@ class UsageMeter:
         # 5. Add current unrecorded usage for currently active services
         now = timezone.now()
         active_services = Service.objects.filter(owner=user, deployments__status='ACTIVE').distinct()
+        # Bulk-fetch the most recent usage record per service to avoid N+1 queries
+        from django.db.models import Subquery, OuterRef
+        latest_record_timestamps = UsageRecord.objects.filter(
+            service=OuterRef('pk'),
+        ).order_by('-timestamp').values('timestamp')[:1]
+        active_services = active_services.annotate(
+            last_record_ts=Subquery(latest_record_timestamps)
+        )
         for service in active_services:
-            # Find the most recent usage record for this service
-            last_record = UsageRecord.objects.filter(service=service).order_by('-timestamp').first()
-
             # If there's a record, calculate time since then. Otherwise, use service created_at.
-            start_time = last_record.timestamp if last_record else service.created_at
+            start_time = service.last_record_ts if service.last_record_ts else service.created_at
 
             # Ensure start_time is within the current billing period
             start_time = max(start_time, period_start)
@@ -89,7 +96,7 @@ class UsageMeter:
 
         return summary
 
-    def calculate_cost(self, user, period_start, period_end):
+    def calculate_cost(self, user: object, period_start: object, period_end: object) -> Decimal:
         """Calculate total cost for billing period including overages."""
         try:
             sub = user.active_subscription
@@ -153,7 +160,7 @@ class UsageMeter:
         except ResourcePrice.DoesNotExist:
             return default
 
-    def check_quota(self, user, resource_type, requested_amount=1):
+    def check_quota(self, user: object, resource_type: str, requested_amount: int = 1) -> tuple[bool, int]:
         """Check if user can use more of a resource. Returns (allowed, remaining)."""
         try:
             sub = user.active_subscription

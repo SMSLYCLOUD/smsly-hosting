@@ -82,8 +82,8 @@ class RestoreActionsMixin:
                     try:
                         if BSC.compute_backup_key_fingerprint(key_provided) == meta_fingerprint:
                             meta_matched = True
-                    except Exception:
-                        pass
+                    except (ValueError, TypeError) as exc:
+                        logger.debug("Backup key fingerprint comparison failed: %s", exc)
                 if not meta_matched and BSC.lookup_key_by_id(meta_fingerprint):
                     meta_matched = True
                 if not meta_matched and BSC.lookup_key_by_id(meta_key_id):
@@ -178,12 +178,14 @@ class RestoreActionsMixin:
         if not file or not service_id:
             return Response({'error': 'file and service_id are required.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        MAX_UPLOAD_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
-        if file.size > MAX_UPLOAD_SIZE:
-            return Response(
-                {'error': f'File too large. Maximum size is {MAX_UPLOAD_SIZE // (1024*1024)}MB.'},
-                status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            )
+        from ..upload_security import validate_upload_size, validate_tar_magic
+        size_err = validate_upload_size(file, max_size=2 * 1024 * 1024 * 1024)
+        if size_err:
+            return size_err
+
+        magic_err = validate_tar_magic(file)
+        if magic_err:
+            return magic_err
 
         try:
             target_service = Service.objects.get(id=service_id)

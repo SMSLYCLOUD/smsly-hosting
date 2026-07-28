@@ -7,14 +7,16 @@ import logging
 from celery import shared_task
 from django.utils import timezone
 
+from apps.deployments.constants import TASK_TIME_LIMIT_STANDARD
+
 logger = logging.getLogger(__name__)
 
 
 @shared_task(
     name='apps.permissions.tasks.deactivate_expired_memberships',
     bind=True,
-    max_retries=2,
-    default_retry_delay=300,
+    soft_time_limit=TASK_TIME_LIMIT_STANDARD[0],
+    time_limit=TASK_TIME_LIMIT_STANDARD[1],
 )
 def deactivate_expired_memberships(self):
     """Deactivate expired team, org, and project memberships.

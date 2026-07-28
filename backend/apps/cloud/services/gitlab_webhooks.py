@@ -4,7 +4,6 @@ from urllib.parse import urlparse
 
 import requests
 from django.conf import settings
-from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 

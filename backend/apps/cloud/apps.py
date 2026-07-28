@@ -7,9 +7,5 @@ class CloudConfig(AppConfig):
     name = 'apps.cloud'
 
     def ready(self):
-        # Globally patch docker.from_env across all threads and workers
-        try:
-            pass
-        except Exception:
-            pass
+        pass
 

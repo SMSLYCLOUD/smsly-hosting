@@ -66,10 +66,15 @@ class ProjectViewSet(viewsets.ModelViewSet):
             validators: list = []
 
         def get_services_count(self, obj):
+            counts = getattr(self, '_service_counts', None)
+            if counts is not None:
+                return counts.get(obj.id, 0)
             return obj.services.count()
 
         def get_latest_deploy_status(self, obj):
-            """Aggregate: status of the most recent deploy across all project services."""
+            statuses = getattr(self, '_latest_statuses', None)
+            if statuses is not None:
+                return statuses.get(obj.id)
             from apps.deployments.models import Deployment
             dep = (
                 Deployment.objects
@@ -81,6 +86,9 @@ class ProjectViewSet(viewsets.ModelViewSet):
             return dep['status'] if dep else None
 
         def get_latest_deploy_at(self, obj):
+            times = getattr(self, '_latest_times', None)
+            if times is not None:
+                return times.get(obj.id)
             from apps.deployments.models import Deployment
             dep = (
                 Deployment.objects
@@ -91,7 +99,54 @@ class ProjectViewSet(viewsets.ModelViewSet):
             )
             return dep['created_at'].isoformat() if dep else None
 
+        @classmethod
+        def prefetch_for_list(cls, queryset):
+            """Attach bulk-fetched data to avoid N+1 in list views."""
+            from django.db.models import Count, Max
+            from apps.deployments.models import Deployment
+            from apps.deployments.models import Service
+
+            project_ids = list(queryset.values_list('id', flat=True))
+
+            service_counts = dict(
+                Service.objects.filter(project_id__in=project_ids)
+                .values('project_id')
+                .annotate(cnt=Count('id'))
+                .values_list('project_id', 'cnt')
+            )
+
+            latest_deps = dict(
+                Deployment.objects.filter(service__project_id__in=project_ids)
+                .values('service__project_id')
+                .annotate(latest_status=Max('status'), latest_at=Max('created_at'))
+                .values_list('service__project_id', 'latest_status', 'latest_at')
+            )
+
+            instance = cls()
+            instance._service_counts = service_counts
+            instance._latest_statuses = {pid: status for pid, status, _ in latest_deps.items()}
+            instance._latest_times = {
+                pid: at.isoformat() if at else None
+                for pid, _, at in latest_deps.items()
+            }
+            return instance
+
     serializer_class = ProjectSerializer
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.ProjectSerializer.prefetch_for_list(
+                queryset.__class__(page)
+            )
+            serializer.instance = page
+            serializer.context = {'request': request}
+            return self.get_paginated_response(serializer.data)
+        serializer = self.ProjectSerializer.prefetch_for_list(queryset)
+        serializer.instance = queryset
+        serializer.context = {'request': request}
+        return Response(serializer.data)
 
     def get_queryset(self):
         """Owner and Team scoped: users see their own projects and team projects.

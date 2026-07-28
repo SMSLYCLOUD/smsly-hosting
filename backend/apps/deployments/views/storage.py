@@ -137,8 +137,8 @@ def _validate_volume_name(value: str) -> str:
 class VolumeSerializer(serializers.ModelSerializer):
     class Meta:
         model = Volume
-        fields = '__all__'
-        read_only_fields = ('service',)
+        fields = ['id', 'service', 'name', 'mount_path', 'size_gb', 'created_at']
+        read_only_fields = ['id', 'service', 'created_at']
 
     def validate_mount_path(self, value):
         return _validate_volume_mount_path(value)
@@ -226,8 +226,8 @@ class VolumeViewSet(viewsets.ModelViewSet):
                 for vol in volumes:
                     if isinstance(vol, dict) and vol.get('name') == volume_name:
                         return vol.get('id')
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to parse volume list response: %s", exc)
         return None
 
     def _proxied_volume_action(self, volume, config):
@@ -641,6 +641,12 @@ class VolumeViewSet(viewsets.ModelViewSet):
             return Response({'error': 'file and path are required'}, status=status.HTTP_400_BAD_REQUEST)
 
         uploaded_file = request.FILES['file']
+
+        from .upload_security import validate_upload_size
+        size_err = validate_upload_size(uploaded_file, max_size=50 * 1024 * 1024)
+        if size_err:
+            return size_err
+
         file_bytes = uploaded_file.read()
 
         try:

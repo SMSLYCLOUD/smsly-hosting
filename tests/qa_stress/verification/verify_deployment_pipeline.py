@@ -19,7 +19,7 @@ if not settings.configured:
     django.setup()
 
 from apps.cloud.adapters.local import LocalAdapter
-from apps.deployments.services.git_manager import GitManager
+from apps.cloud.services.git_manager import GitManager
 from apps.deployments.utils import extract_dockerfile_arg_names
 
 

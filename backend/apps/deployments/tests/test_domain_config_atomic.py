@@ -50,7 +50,7 @@ class DomainConfigAtomicTests(TestCase):
         return self.client.put(self.url, payload, format="json")
 
     @patch(
-        "apps.deployments.services.dns.ensure_dns_records",
+        "apps.domains.services.dns.ensure_dns_records",
         return_value={"ok": True, "errors": []},
     )
     @patch(

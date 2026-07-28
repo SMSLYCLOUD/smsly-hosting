@@ -168,8 +168,8 @@ class FileBrowserActionsMixin:
                         data = fb_resp.json()
                         data['path'] = fb
                         return Response(data)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("File browse fallback failed for %s: %s", fb, exc)
             return None
 
         return self._dispatch_file_operation(
@@ -482,6 +482,12 @@ class FileBrowserActionsMixin:
 
         if 'file' in request.FILES:
             uploaded_file = request.FILES['file']
+
+            from ..upload_security import validate_upload_size
+            size_err = validate_upload_size(uploaded_file, max_size=50 * 1024 * 1024)
+            if size_err:
+                return size_err
+
             file_bytes = uploaded_file.read()
         elif 'content' in request.data:
             file_bytes = base64.b64decode(request.data['content'])

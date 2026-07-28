@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 _patching_lock = threading.Lock()
 _patching_in_progress = False
 
-def patch_runtime_settings():
+def patch_runtime_settings() -> None:
     """
     Sync PlatformConfig values (domain, use_ssl) to Django settings.
     Updates ALLOWED_HOSTS, CSRF_TRUSTED_ORIGINS, and SITE_URL.
@@ -96,7 +96,7 @@ def patch_runtime_settings():
 
         # Write initial Prometheus target files for docker-labels
         try:
-            from apps.deployments.services.prometheus_targets import (
+            from apps.autoscaler.services.prometheus_targets import (
                 write_docker_labels_targets,
             )
             write_docker_labels_targets()
@@ -151,8 +151,8 @@ def is_valid_host(host_str: str) -> bool:
             return True
         if cfg.domain and domain == cfg.domain.strip().lower():
             return True
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Domain validation failed for PlatformConfig check (%s): %s", domain, exc)
 
     # 2. Managed Servers (Nodes)
     try:
@@ -161,16 +161,16 @@ def is_valid_host(host_str: str) -> bool:
         from apps.deployments.models.core import ManagedServer
         if ManagedServer.objects.filter(Q(host=domain) | Q(private_ip=domain)).exists():
             return True
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Domain validation failed for ManagedServer check (%s): %s", domain, exc)
 
     # 3. Services (Public Domain)
     try:
         from apps.deployments.models import Service
         if Service.objects.filter(public_domain=domain).exists():
             return True
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Domain validation failed for Service check (%s): %s", domain, exc)
 
     # 4. Verified Custom Domains
     try:
@@ -183,15 +183,15 @@ def is_valid_host(host_str: str) -> bool:
         ).filter(Q(verified=True) | Q(status=DomainStatus.ACTIVE)).exists()
         if routable:
             return True
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Domain validation failed for Domain model check (%s): %s", domain, exc)
 
     # 5. Addons
     try:
         from apps.deployments.models.addons import Addon
         if Addon.objects.filter(public_domain=domain).exists():
             return True
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Domain validation failed for Addon check (%s): %s", domain, exc)
 
     return False

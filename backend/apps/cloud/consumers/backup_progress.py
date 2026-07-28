@@ -1,8 +1,6 @@
 """Real-time backup/restore progress streaming consumer."""
 import contextlib
 import json
-import logging
-
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from django.conf import settings
@@ -67,7 +65,6 @@ class BackupProgressConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def _verify_ownership(self):
-        from django.db.models import Q
         from .models.backup import ServiceBackup, ServerBackup
         try:
             sb = ServiceBackup.objects.filter(id=self.backup_id).select_related(
@@ -78,12 +75,12 @@ class BackupProgressConsumer(AsyncWebsocketConsumer):
                     sb.service.owner_id == self.user.id
                     or sb.service.project.team.members.filter(user=self.user).exists()
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to authorize backup progress for service backup %s: %s", self.backup_id, exc)
         try:
             server_bu = ServerBackup.objects.filter(id=self.backup_id).first()
             if server_bu:
                 return True
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to authorize backup progress for server backup %s: %s", self.backup_id, exc)
         return False

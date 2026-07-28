@@ -38,8 +38,8 @@ export default function LicensingPage() {
       await fetchLicense();
       setNewKey("");
       toast({ title: "License updated successfully" });
-    } catch (e: any) {
-      toast({ title: "Error updating license", description: e.message, variant: "destructive" });
+    } catch (e: unknown) {
+      toast({ title: "Error updating license", description: e instanceof Error ? e.message : 'Unknown error', variant: "destructive" });
       setLoading(false);
     }
   };

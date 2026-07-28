@@ -37,8 +37,6 @@ class SigningMixin:
             )
             return
 
-        from apps.deployments.utils import find_binary
-
         cosign_bin = find_binary("cosign")
         if not cosign_bin:
             append_log(

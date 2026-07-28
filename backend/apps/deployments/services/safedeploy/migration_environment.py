@@ -194,8 +194,8 @@ def build_migration_environment(
             timeout=120,
             check=False,
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to create virtualenv: %s", exc)
 
     installed = False
     install_error = ""

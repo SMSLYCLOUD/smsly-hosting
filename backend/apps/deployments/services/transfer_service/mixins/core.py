@@ -1,6 +1,5 @@
 """CoreMixin extracted from ServerTransferService."""
 
-import contextlib
 import hashlib
 import hmac
 import json
@@ -10,9 +9,7 @@ import re
 import secrets
 import shlex
 import socket
-import tempfile
 import time
-from datetime import timedelta
 
 import requests
 from django.conf import settings
@@ -21,7 +18,7 @@ from django.utils import timezone
 
 from apps.deployments.models.core import PlatformConfig
 
-from ...backup_service import BackupService, UnknownBackupKeyIdError
+from ...backup_service import BackupService
 from ..helpers import (
     TRANSFER_ERROR_LIMIT,
     _command_text,
@@ -64,8 +61,8 @@ class CoreMixin:
             cfg = PlatformConfig.load()
             if cfg and cfg.server_ip:
                 local_ips.add(cfg.server_ip.strip())
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to load PlatformConfig for local IP check: %s", exc)
         return ip in local_ips or ip.startswith('10.100.0.')
 
     def _node_api_url(self):

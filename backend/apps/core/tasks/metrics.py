@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 
 logger = logging.getLogger(__name__)
@@ -5,6 +7,8 @@ import logging
 import random
 
 from celery import shared_task
+
+from apps.deployments.constants import TASK_TIME_LIMIT_STANDARD
 from django.utils import timezone
 
 from apps.deployments.models import (
@@ -79,7 +83,7 @@ def _collect_container_stats(container_id: str):
         return None
 
 
-def _simulate_stats(service):
+def _simulate_stats(service):  # UNUSED
     """Generate simulated metrics when Docker stats are unavailable."""
     cpu_limit = float(service.cpu_cores)
     mem_limit = service.memory_mb
@@ -95,14 +99,14 @@ def _simulate_stats(service):
     }
 
 
-@shared_task(soft_time_limit=300, time_limit=360)
-def collect_metrics_task():
+@shared_task(soft_time_limit=TASK_TIME_LIMIT_STANDARD[0], time_limit=TASK_TIME_LIMIT_STANDARD[1])
+def collect_metrics_task() -> None:
     """
     Collect metrics for all active services with running deployments.
     Tries real Docker stats first, falls back to simulation.
     """
     now = timezone.now()
-    services = Service.objects.all()
+    services = Service.objects.only("id", "cpu_cores", "memory_mb", "owner__id")
     collected = 0
 
     for service in services:
@@ -144,10 +148,8 @@ def collect_metrics_task():
                 meter.record_usage(service.owner, 'cpu_hours', cpu_pct / 100, timestamp=now)
             if mem_mb > 0:
                 meter.record_usage(service.owner, 'memory_gb_hours', mem_mb / 1024, timestamp=now)
-        except Exception:
-            pass
-
-    # Prune old metrics (keep 7 days)
+        except Exception as exc:
+            logger.debug("Failed to record billing usage for %s: %s", service.name, exc)
     cutoff = now - timezone.timedelta(days=7)
     deleted, _ = ServiceMetric.objects.filter(timestamp__lt=cutoff).delete()
     if deleted:
@@ -156,8 +158,8 @@ def collect_metrics_task():
     logger.info("Collected metrics for %d services", collected)
 
 
-@shared_task(soft_time_limit=300, time_limit=360)
-def cleanup_build_cache_task():
+@shared_task(soft_time_limit=TASK_TIME_LIMIT_STANDARD[0], time_limit=TASK_TIME_LIMIT_STANDARD[1])
+def cleanup_build_cache_task() -> None:
     """Clean up Docker build cache to free disk space."""
     client = _get_docker_client()
     if not client:
@@ -202,5 +204,5 @@ def _check_metric_thresholds(service, stats, now):
                 severity='WARNING',
                 message='; '.join(alerts),
             )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to check metric thresholds: %s", exc)

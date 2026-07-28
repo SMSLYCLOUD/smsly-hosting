@@ -146,17 +146,17 @@ fi
 
 # ── 5. Drop and recreate the database ─────────────────────────────────
 log "Dropping existing database..."
-docker exec "$DB_CONTAINER" psql -U "$DB_USER" -c \
+timeout 120 docker exec "$DB_CONTAINER" psql -U "$DB_USER" -c \
     "SELECT pg_terminate_backend(pg_stat_activity.pid) FROM pg_stat_activity WHERE pg_stat_activity.datname = '$DB_NAME' AND pid <> pg_backend_pid();"  || true
-docker exec "$DB_CONTAINER" dropdb -U "$DB_USER" --if-exists "$DB_NAME"  || true
+timeout 120 docker exec "$DB_CONTAINER" dropdb -U "$DB_USER" --if-exists "$DB_NAME"  || true
 
 log "Creating fresh database '$DB_NAME'..."
-docker exec "$DB_CONTAINER" createdb -U "$DB_USER" "$DB_NAME"
+timeout 120 docker exec "$DB_CONTAINER" createdb -U "$DB_USER" "$DB_NAME"
 
 # ── 6. Copy dump into container and restore ───────────────────────────
 DEST="/tmp/db_dump_$$.sql"
 log "Copying dump file into container..."
-docker cp "$DUMP_FILE" "${DB_CONTAINER}:${DEST}"
+timeout 120 docker cp "$DUMP_FILE" "${DB_CONTAINER}:${DEST}"
 
 log "Restoring database (this may take a while)..."
 RESTORE_START=$(date +%s)
@@ -171,7 +171,7 @@ fi
 
 # Resynchronize sequences to prevent duplicate key IntegrityErrors on future inserts
 log "Resynchronizing database sequences..."
-docker exec "$DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" -c "
+timeout 120 docker exec "$DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" -c "
 DO \$\$
 DECLARE
     seq_record RECORD;
@@ -202,13 +202,13 @@ RESTORE_END=$(date +%s)
 RESTORE_DURATION=$((RESTORE_END - RESTORE_START))
 
 # Cleanup temp file
-docker exec "$DB_CONTAINER" rm -f "$DEST"
+timeout 30 docker exec "$DB_CONTAINER" rm -f "$DEST"
 
 # ── 7. Verify row counts ──────────────────────────────────────────────
 log "Verifying restore..."
-TOTAL_ROWS=$(docker exec "$DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" -tAc \
+TOTAL_ROWS=$(timeout 120 docker exec "$DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" -tAc \
     "SELECT sum(n_live_tup) FROM pg_stat_user_tables;"  || echo 0)
-TABLE_COUNT=$(docker exec "$DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" -tAc \
+TABLE_COUNT=$(timeout 120 docker exec "$DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" -tAc \
     "SELECT count(*) FROM pg_stat_user_tables;"  || echo 0)
 
 log "${GREEN}Restore complete!${NC}"

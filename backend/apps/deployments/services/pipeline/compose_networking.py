@@ -7,6 +7,12 @@ import yaml
 
 from apps.deployments.models import PlatformConfig
 from apps.deployments.utils import append_log
+from apps.deployments.services.mtls_integration import (
+    is_mtls_enabled,
+    get_mtls_labels,
+    get_mtls_env_vars,
+    get_mtls_volumes,
+)
 from .exceptions import BuildError
 
 
@@ -52,7 +58,8 @@ class ComposeNetworkingMixin:
         if primary:
             domains.append(primary)
         else:
-            domains.append(f"{self.service.name.lower()}.apps.smsly.cloud")
+            default_domain = os.getenv("DEFAULT_APP_DOMAIN", "apps.example.com")
+            domains.append(f"{self.service.name.lower()}.{default_domain}")
 
         for item in self.service.custom_domains or []:
             value = str(item or "").strip().lower()
@@ -89,6 +96,15 @@ class ComposeNetworkingMixin:
             "traefik.enable": "true" if is_public else "false",
             "traefik.docker.network": self._resolve_service_network_name(),
         }
+
+        # --- mTLS: Add SPIRE workload attestation labels (all services) ---
+        try:
+            if is_mtls_enabled(self.service):
+                mtls_labels = get_mtls_labels(self.service)
+                labels.update(mtls_labels)
+        except Exception as e:
+            logger.debug("mTLS label injection skipped: %s", e)
+
         if not is_public:
             return labels
 
@@ -158,6 +174,7 @@ class ComposeNetworkingMixin:
                     f"traefik.http.middlewares.{middleware_name}.headers.customrequestheaders.X-Forwarded-Ssl": "on",
                 }
             )
+
         return labels
 
 
@@ -233,6 +250,17 @@ class ComposeNetworkingMixin:
                             (user_compose.get("networks") or {}).keys()
                         )
 
+                        # --- mTLS: Prepare SPIRE volumes and env vars ---
+                        mtls_volumes = []
+                        mtls_env = {}
+                        try:
+                            if is_mtls_enabled(self.service):
+                                for host_vol, container_path, mode in get_mtls_volumes():
+                                    mtls_volumes.append(f"{host_vol}:{container_path}:{mode}")
+                                mtls_env = get_mtls_env_vars(self.service)
+                        except Exception as e:
+                            logger.debug("mTLS compose injection skipped: %s", e)
+
                         for svc_name in user_compose["services"]:
                             if svc_name not in override_payload["services"]:
                                 override_payload["services"][svc_name] = {}
@@ -252,6 +280,22 @@ class ComposeNetworkingMixin:
                                 if network_name not in svc_networks:
                                     svc_networks.append(network_name)
                                     override_payload["services"][svc_name]["networks"] = svc_networks
+
+                            # --- mTLS: Add SPIRE volumes to every service ---
+                            if mtls_volumes:
+                                existing_vols = override_payload["services"][svc_name].get("volumes") or []
+                                for vol in mtls_volumes:
+                                    if vol not in existing_vols:
+                                        existing_vols.append(vol)
+                                override_payload["services"][svc_name]["volumes"] = existing_vols
+
+                            # --- mTLS: Add SPIFFE env vars to every service ---
+                            if mtls_env:
+                                existing_env = override_payload["services"][svc_name].get("environment") or {}
+                                if isinstance(existing_env, list):
+                                    existing_env = dict(e.split("=", 1) for e in existing_env if "=" in e)
+                                existing_env.update(mtls_env)
+                                override_payload["services"][svc_name]["environment"] = existing_env
             except Exception:
                 # Fallback to just securing the main service if parsing fails
                 details: dict = {

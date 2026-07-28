@@ -42,3 +42,10 @@ class Domain(models.Model):
 
     def __str__(self):
         return self.domain_name
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["service"], name="domain_service_idx"),
+            models.Index(fields=["status"], name="domain_status_idx"),
+            models.Index(fields=["service", "status"], name="domain_service_status_idx"),
+        ]

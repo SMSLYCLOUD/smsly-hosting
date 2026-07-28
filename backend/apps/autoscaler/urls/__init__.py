@@ -1,3 +1,7 @@
+"""URLs for autoscaler app.
+
+Naming convention: URL names use kebab-case (e.g. 'autoscaler-scale').
+"""
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
@@ -12,6 +16,6 @@ urlpatterns = [
     path('history/', views.autoscaler_history),
     path('config/', views.autoscaler_config),
     path('trigger/', views.autoscaler_trigger),
-    path('scale/', views.autoscaler_scale, name='autoscaler_scale'),
+    path('scale/', views.autoscaler_scale, name='autoscaler-scale'),
     path('', include(router.urls)),
 ]

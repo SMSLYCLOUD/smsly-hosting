@@ -208,7 +208,7 @@ if [ -z "$RESOLVED_DB_URL" ]; then
 
     log "Waiting for PostgreSQL..."
     for i in $(seq 1 30); do
-        if docker compose -f "$COMPOSE_FILE" exec -T db pg_isready -U "$DB_USER" ; then
+        if timeout 10 docker compose -f "$COMPOSE_FILE" exec -T db pg_isready -U "$DB_USER" ; then
             ok "PostgreSQL ready"
             break
         fi
@@ -218,7 +218,7 @@ if [ -z "$RESOLVED_DB_URL" ]; then
 
     BACKUP_SIZE=$(du -h "$BACKUP_PATH" | cut -f1)
     log "Restoring backup: $(basename "$BACKUP_PATH") ($BACKUP_SIZE)..."
-    gunzip -c "$BACKUP_PATH" | docker compose -f "$COMPOSE_FILE" exec -T db psql -U "$DB_USER" -d "$DB_NAME" 2>&1 | tail -3
+    timeout 600 gunzip -c "$BACKUP_PATH" | docker compose -f "$COMPOSE_FILE" exec -T db psql -U "$DB_USER" -d "$DB_NAME" 2>&1 | tail -3
     RESOLVED_DB_URL="postgresql://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}"
     ok "Database restored from agent backup"
 fi
@@ -284,7 +284,7 @@ ok "Master stack started"
 # ──────────────────────────────────────────────────────────────────────
 log "Running migrations..."
 sleep 10  # give backend time to connect to DB
-docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py migrate --noinput 2>&1 | tail -3
+timeout 300 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py migrate --noinput 2>&1 | tail -3
 ok "Migrations complete"
 
 # ──────────────────────────────────────────────────────────────────────

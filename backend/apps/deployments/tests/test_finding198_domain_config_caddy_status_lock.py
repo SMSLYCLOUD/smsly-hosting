@@ -67,7 +67,7 @@ class Finding198DomainConfigLockTests(TestCase):
             "apps.deployments.services.caddy_manager.apply_caddyfile",
             return_value={"ok": True, "message": "ok"},
         ), patch(
-            "apps.deployments.services.dns.ensure_dns_records",
+            "apps.domains.services.dns.ensure_dns_records",
             return_value={"ok": True, "errors": []},
         ):
             resp = self.client.put(

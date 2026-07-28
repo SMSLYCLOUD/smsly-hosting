@@ -77,6 +77,13 @@ class UserSubscription(models.Model):
     def __str__(self):
         return f"{self.user.username} - {self.plan.name}"
 
+    class Meta:
+        indexes = [
+            models.Index(fields=["status", "user"], name="billing_sub_status_user_idx"),
+            models.Index(fields=["stripe_subscription_id"], name="billing_sub_stripe_id_idx"),
+            models.Index(fields=["status", "current_period_end"], name="billing_sub_status_pend_idx"),
+        ]
+
 
 class Invoice(models.Model):
     """Generated invoice per billing period."""
@@ -98,3 +105,11 @@ class Invoice(models.Model):
 
     def __str__(self):
         return f"Invoice {self.id} for {self.user.username}"
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["user", "status"], name="billing_inv_user_status_idx"),
+            models.Index(fields=["-period_end"], name="billing_invoice_period_end_idx"),
+        models.Index(fields=["status", "due_date"], name="billing_invoice_status_due_idx"),
+        models.Index(fields=["status", "paid_at"], name="billing_inv_status_paid_idx"),
+        ]

@@ -61,8 +61,8 @@ export default function AddonDetailPage() {
       // reload
       const updated = await addonsApi.get(addon.id);
       setAddon(updated);
-    } catch (e: any) {
-      toast({ title: 'Error', description: e.message, variant: 'destructive' });
+    } catch (e: unknown) {
+      toast({ title: 'Error', description: e instanceof Error ? e.message : 'Unknown error', variant: 'destructive' });
     }
   };
 
@@ -72,8 +72,8 @@ export default function AddonDetailPage() {
       await addonsApi.deprovision(addon.id);
       toast({ title: 'Deprovisioning started' });
       router.push('/dashboard');
-    } catch (e: any) {
-      toast({ title: 'Error', description: e.message, variant: 'destructive' });
+    } catch (e: unknown) {
+      toast({ title: 'Error', description: e instanceof Error ? e.message : 'Unknown error', variant: 'destructive' });
     }
   };
 
@@ -97,8 +97,8 @@ export default function AddonDetailPage() {
               <ArrowLeft size={20} />
             </Link>
             <span className="text-3xl block h-8 w-8 relative">
-              {(meta as any)?.logo ? (
-                <Image src={(meta as any).logo} alt={meta?.label || ''} className="w-full h-full object-contain" unoptimized />
+              {meta?.logo ? (
+                <Image src={meta.logo} alt={meta?.label || ''} className="w-full h-full object-contain" unoptimized />
               ) : (
                 <Database className="w-full h-full text-muted-foreground" />
               )}

@@ -53,7 +53,7 @@ echo -e "${BLUE}═════════════════════�
 
 # ── Helper: run redis-cli inside a sentinel container ────────────────────────
 redis_cli_sentinel() {
-    docker exec "$SENTINEL_1" redis-cli -p "$SENTINEL_PORT" "$@"
+    timeout 10 docker exec "$SENTINEL_1" redis-cli -p "$SENTINEL_PORT" "$@"
 }
 
 # ── Helper: run redis-cli inside the primary container ───────────────────────
@@ -61,9 +61,9 @@ redis_cli_primary() {
     # Pass REDIS_PASSWORD from host env or fall back to sentinel config
     local pass="${REDIS_PASSWORD:-}"
     if [ -n "$pass" ]; then
-        docker exec "$PRIMARY_CONTAINER" redis-cli -a "$pass" "$@" 2>/dev/null
+        timeout 10 docker exec "$PRIMARY_CONTAINER" redis-cli -a "$pass" "$@" 2>/dev/null
     else
-        docker exec "$PRIMARY_CONTAINER" redis-cli "$@"
+        timeout 10 docker exec "$PRIMARY_CONTAINER" redis-cli "$@"
     fi
 }
 
@@ -122,7 +122,7 @@ if [ "$PRIMARY_IP" = "$CURRENT_MASTER_HOST" ]; then
 fi
 
 # The container hostname might differ from IP; also check by resolving
-PRIMARY_HOSTNAME=$(docker exec "$PRIMARY_CONTAINER" hostname 2>/dev/null || echo "")
+PRIMARY_HOSTNAME=$(timeout 5 docker exec "$PRIMARY_CONTAINER" hostname 2>/dev/null || echo "")
 if [ -n "$PRIMARY_HOSTNAME" ] && [ "$PRIMARY_HOSTNAME" = "$CURRENT_MASTER_HOST" ]; then
     echo -e "${GREEN}  ✅ Container '$PRIMARY_CONTAINER' (hostname: $PRIMARY_HOSTNAME) IS the Sentinel master.${NC}"
     echo -e "${GREEN}  → No recovery needed.${NC}"

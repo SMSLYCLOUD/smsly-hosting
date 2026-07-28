@@ -1,5 +1,7 @@
 """Celery tasks for collecting Traefik access log traffic and resolving
 IP geolocations asynchronously (non-blocking)."""
+from __future__ import annotations
+
 import json
 import logging
 import time
@@ -7,6 +9,8 @@ from pathlib import Path
 
 import requests
 from celery import shared_task
+
+from apps.deployments.constants import TASK_TIME_LIMIT_MEDIUM, TASK_TIME_LIMIT_STANDARD
 from django.db import IntegrityError
 from django.db.models import F
 
@@ -189,8 +193,8 @@ def _extract_log_fields(entry: dict) -> tuple[str, str, str, int]:
 # ---------------------------------------------------------------------------
 # Task 1: Collect Traefik / Caddy access log entries
 # ---------------------------------------------------------------------------
-@shared_task(bind=True, ignore_result=True, max_retries=2)
-def collect_traefik_logs(self):
+@shared_task(bind=True, ignore_result=True, max_retries=2, soft_time_limit=TASK_TIME_LIMIT_STANDARD[0], time_limit=TASK_TIME_LIMIT_STANDARD[1])
+def collect_traefik_logs(self) -> None:
     """Tail Traefik / Caddy access.log (JSON format), map RequestHost -> Service,
     and upsert ServiceTrafficLog rows. Runs every ~15 seconds."""
     if not _is_traffic_geo_enabled():
@@ -254,8 +258,8 @@ def collect_traefik_logs(self):
 # ---------------------------------------------------------------------------
 # Task 2: Resolve IP geolocations asynchronously
 # ---------------------------------------------------------------------------
-@shared_task(bind=True, ignore_result=True, max_retries=3)
-def resolve_traffic_geolocations(self):
+@shared_task(bind=True, ignore_result=True, soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1])
+def resolve_traffic_geolocations(self) -> None:
     """Batch-resolve unresolved IPs via ip-api.com. Rate-limited to 45 req/min.
     Runs every ~30 seconds, processes up to 20 IPs per batch."""
     if not _is_traffic_geo_enabled():

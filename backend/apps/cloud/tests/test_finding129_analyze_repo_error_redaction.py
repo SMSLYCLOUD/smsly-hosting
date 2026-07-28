@@ -24,7 +24,7 @@ class Finding129AnalyzeRepoErrorRedactionTests(TestCase):
             "not found\n"
         )
         with patch(
-            "apps.deployments.services.git_manager.GitManager.clone_repo",
+            "apps.cloud.services.git_manager.GitManager.clone_repo",
             side_effect=Exception(raw_git_stderr),
         ), patch(
             "apps.deployments.utils.get_github_oauth_token_for_user",
@@ -51,7 +51,7 @@ class Finding129AnalyzeRepoErrorRedactionTests(TestCase):
             "'https://user:supersecrettoken@github.com/x/y.git/'\n"
         )
         with patch(
-            "apps.deployments.services.git_manager.GitManager.clone_repo",
+            "apps.cloud.services.git_manager.GitManager.clone_repo",
             side_effect=Exception(raw_git_stderr),
         ), patch(
             "apps.deployments.utils.get_github_oauth_token_for_user",

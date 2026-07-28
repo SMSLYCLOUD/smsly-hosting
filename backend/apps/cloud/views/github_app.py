@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
-def github_app_install_url(request):
+def github_app_install_url(request) -> Response:
     """Return the URL to redirect the user to for GitHub App installation."""
     from apps.deployments.services.github_app import get_github_app_service
 
@@ -41,18 +41,98 @@ def github_app_install_url(request):
     return Response({"url": f"https://github.com/apps/{slug}/installations/new"})
 
 
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def github_app_install_with_oauth(request) -> Response:
+    """Start combined GitHub App install + OAuth flow.
+
+    Redirects to GitHub's installation page with a state token encoding
+    the user's ID.  After installation, GitHub redirects back with both
+    ``installation_id`` and ``code`` (OAuth), which the callback exchanges
+    to automatically identify and link the user.
+    """
+    import time
+    from urllib.parse import urlencode
+
+    from django.conf import settings
+    import jwt as pyjwt
+
+    from apps.deployments.services.github_app import get_github_app_service
+
+    svc = get_github_app_service()
+    if svc is None:
+        return Response(
+            {"error": "GitHub App is not configured."},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    slug = svc.get_app_slug()
+    if not slug:
+        return Response(
+            {"error": "Could not determine GitHub App slug."},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+
+    state_payload = {
+        "user_id": str(request.user.id),
+        "iat": int(time.time()),
+        "exp": int(time.time()) + 600,
+    }
+    state_token = pyjwt.encode(
+        state_payload,
+        settings.SECRET_KEY,
+        algorithm="HS256",
+    )
+
+    install_url = (
+        f"https://github.com/apps/{slug}/installations/new"
+        f"?{urlencode({'state': state_token})}"
+    )
+    return Response({"url": install_url})
+
+
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
-def github_app_callback(request):
+def github_app_callback(request) -> Response:
     """Process a GitHub App installation callback.
 
-    Expects {"installation_id": <int>} in the request body.
-    Fetches installation details from GitHub and creates/updates the local record.
+    Supports two modes:
+    1. Direct: ``{"installation_id": <int>}`` in request body (existing flow).
+    2. Combined OAuth: ``installation_id`` and ``state`` as query params or
+       body fields, where *state* is a JWT encoding the user ID (from
+       ``github_app_install_with_oauth``).  When *state* is present the
+       user is identified from the JWT rather than the session, so the
+       endpoint can be called unauthenticated (e.g. from a redirect).
     """
+    import jwt as pyjwt
+    from django.conf import settings as dj_settings
+
     from apps.cloud.models.github_app import GitHubAppInstallation
     from apps.deployments.services.github_app import get_github_app_service
 
-    installation_id = request.data.get("installation_id")
+    # Accept installation_id from body or query params
+    installation_id = (
+        request.data.get("installation_id")
+        or request.query_params.get("installation_id")
+    )
+    state = (
+        request.data.get("state")
+        or request.query_params.get("state")
+    )
+
+    # If state token is present, resolve user from JWT
+    target_user = request.user
+    if state and not target_user.is_authenticated:
+        try:
+            payload = pyjwt.decode(state, dj_settings.SECRET_KEY, algorithms=["HS256"])
+            user_id = payload.get("user_id")
+            if user_id:
+                from django.contrib.auth import get_user_model
+                User = get_user_model()
+                target_user = User.objects.filter(id=user_id).first() or target_user
+        except Exception:
+            pass
+
     if not installation_id:
         return Response(
             {"error": "installation_id is required."},
@@ -96,7 +176,7 @@ def github_app_callback(request):
     # Prevent ownership hijack: if installation already linked to a different user, reject
     from apps.cloud.models.github_app import GitHubAppInstallation as GHAI
     existing = GHAI.objects.filter(installation_id=installation_id).first()
-    if existing and existing.user and existing.user != request.user:
+    if existing and existing.user and existing.user != target_user:
         return Response(
             {"error": "This installation is already linked to another account."},
             status=status.HTTP_409_CONFLICT,
@@ -115,7 +195,7 @@ def github_app_callback(request):
             "repositories": repositories,
             "permissions": inst_data.get("permissions", {}),
             "events": inst_data.get("events", []),
-            "user": request.user,
+            "user": target_user if target_user.is_authenticated else None,
             "suspended_at": None,
             "deleted_at": None,
         },
@@ -136,7 +216,7 @@ def github_app_callback(request):
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
-def github_app_installations(request):
+def github_app_installations(request) -> Response:
     """List GitHub App installations linked to the current user."""
     from apps.cloud.models.github_app import GitHubAppInstallation
 
@@ -166,7 +246,7 @@ def github_app_installations(request):
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
-def github_app_installation_repos(request, installation_id: int):
+def github_app_installation_repos(request, installation_id: int) -> Response:
     """List repos accessible to a specific installation."""
     from apps.cloud.models.github_app import GitHubAppInstallation
     from apps.deployments.services.github_app import get_github_app_service
@@ -201,7 +281,7 @@ def github_app_installation_repos(request, installation_id: int):
 
 @api_view(["DELETE"])
 @permission_classes([IsAuthenticated])
-def github_app_installation_delete(request, installation_id: int):
+def github_app_installation_delete(request, installation_id: int) -> Response:
     """Unlink an installation from the platform.
 
     This does NOT uninstall the app on GitHub — the user must do that separately.

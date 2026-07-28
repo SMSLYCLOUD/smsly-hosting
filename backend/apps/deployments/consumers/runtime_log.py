@@ -2,13 +2,15 @@
 import asyncio
 import contextlib
 import json
+import os
+import signal
 import subprocess
 
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from django.conf import settings
 
-from .base import authenticate_ws_token, get_websocket_subprotocol, logger
+from .base import authenticate_ws_token, get_websocket_subprotocol, verify_deployment_ownership, logger
 
 
 class RuntimeLogConsumer(AsyncWebsocketConsumer):
@@ -51,8 +53,6 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         self.deployment_id = self.scope['url_route']['kwargs']['deployment_id']
 
-        await self.accept(subprotocol=get_websocket_subprotocol(self.scope))
-
         try:
             self.user = self.scope.get('user')
 
@@ -65,6 +65,8 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
                 await self.send(text_data=json.dumps({'error': 'Access denied'}))
                 await self.close(code=4003)
                 return
+
+            await self.accept(subprotocol=get_websocket_subprotocol(self.scope))
 
             self.group_name = f"runtime_logs_{self.deployment_id}"
             await self.channel_layer.group_add(
@@ -105,9 +107,11 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
             self._stream_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._stream_task
-        if self._proc:
-            with contextlib.suppress(Exception):
-                self._proc.terminate()
+        if self._proc and self._proc.poll() is None:
+            try:
+                os.killpg(os.getpgid(self._proc.pid), signal.SIGTERM)
+            except (ProcessLookupError, OSError):
+                pass
             self._proc = None
         if self.group_name:
             with contextlib.suppress(Exception):
@@ -141,20 +145,8 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
             'timestamp': event.get('timestamp', ''),
         }))
 
-    @database_sync_to_async
-    def _verify_ownership(self):
-        from apps.deployments.models import Deployment
-        try:
-            dep = Deployment.objects.select_related(
-                'service', 'service__owner'
-            ).get(id=self.deployment_id)
-            if dep.service.owner_id == self.user.id:
-                return True
-            if hasattr(dep.service, 'project') and dep.service.project:
-                return dep.service.project.team.members.filter(user=self.user).exists()
-            return False
-        except Deployment.DoesNotExist:
-            return False
+    async def _verify_ownership(self):
+        return await verify_deployment_ownership(self.user, self.deployment_id)
 
     @database_sync_to_async
     def _get_initial_state(self, tail=200):
@@ -236,6 +228,7 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
+                preexec_fn=os.setsid,  # process group for clean terminate
             )
             loop = asyncio.get_event_loop()
             while not self._proc.stdout.closed:
@@ -255,8 +248,10 @@ class RuntimeLogConsumer(AsyncWebsocketConsumer):
             logger.debug("Runtime log stream ended for %s: %s", self.deployment_id, e)
         finally:
             if self._proc:
-                with contextlib.suppress(Exception):
-                    self._proc.terminate()
+                try:
+                    os.killpg(os.getpgid(self._proc.pid), signal.SIGTERM)
+                except (ProcessLookupError, OSError):
+                    pass
                 self._proc = None
 
     async def _authenticate_token(self, token_key):

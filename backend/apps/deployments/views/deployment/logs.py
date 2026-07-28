@@ -1,4 +1,6 @@
 """logs mixin."""
+from __future__ import annotations
+
 import logging
 import re as _re
 
@@ -8,7 +10,7 @@ from rest_framework.response import Response
 logger = logging.getLogger(__name__)
 
 
-def _find_container_for_logs(deployment):
+def _find_container_for_logs(deployment: object) -> tuple[object, str]:
     """Find the Docker container for a deployment using multiple strategies.
 
     Tries in order:
@@ -32,8 +34,8 @@ def _find_container_for_logs(deployment):
             container = client.containers.get(container_id)
             if container.status == 'running':
                 return container, f"found by container_id={container_id}"
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Container lookup by ID %s failed: %s", container_id, exc)
 
         # Also try by short_id / name (container_id might be a compose name)
         try:
@@ -42,8 +44,8 @@ def _find_container_for_logs(deployment):
             )
             if containers:
                 return containers[0], f"found by container_id name match={container_id}"
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Container lookup by name %s failed: %s", container_id, exc)
 
     # Strategy 2: Label-based lookup (most reliable for all deploy types)
     try:
@@ -52,8 +54,8 @@ def _find_container_for_logs(deployment):
         )
         if containers:
             return containers[0], f"found by label smsly.service_id={service_id}"
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Container lookup by label service_id=%s failed: %s", service_id, exc)
 
     # Strategy 3: Name substring match (legacy fallback)
     try:
@@ -62,16 +64,16 @@ def _find_container_for_logs(deployment):
         )
         if containers:
             return containers[0], f"found by name substring={service_name}"
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Container lookup by name substring %s failed: %s", service_name, exc)
 
     # Strategy 4: Try stopped/exited containers (for crash log viewing)
     if container_id:
         try:
             container = client.containers.get(container_id)
             return container, f"found stopped container_id={container_id}"
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Stopped container lookup by ID %s failed: %s", container_id, exc)
 
     return None, "no matching container found (tried container_id, label, name)"
 
@@ -81,7 +83,7 @@ class LogsActionsMixin:
 
 
     @action(detail=True, methods=['get'], url_path='build-logs')
-    def build_logs(self, request, pk=None):
+    def build_logs(self, request: object, pk: str | None = None) -> Response:
         """
         Get build logs for a deployment (REST fallback for non-WebSocket).
         GET /api/v1/deployments/{id}/build-logs/
@@ -98,7 +100,7 @@ class LogsActionsMixin:
 
 
     @action(detail=True, methods=['get'], url_path='runtime-logs')
-    def runtime_logs(self, request, pk=None):
+    def runtime_logs(self, request: object, pk: str | None = None) -> Response:
         """
         Get live runtime logs from the deployed Docker container.
         GET /api/v1/deployments/{id}/runtime-logs/?tail=200
@@ -149,8 +151,8 @@ class LogsActionsMixin:
                         err_text = err_json.get("message") or err_json.get("detail") or str(err_json)
                         if err_text:
                             err_detail = f"HTTP {resp.status_code}: {err_text}"
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("Failed to parse remote error JSON response: %s", exc)
                 return Response({
                     'id': str(deployment.id),
                     'runtime_logs': '',
@@ -223,7 +225,7 @@ class LogsActionsMixin:
 
 
     @action(detail=True, methods=['post'])
-    def diagnose(self, request, pk=None):
+    def diagnose(self, request: object, pk: str | None = None) -> Response:
         """
         Trigger AI diagnosis for a deployment.
         """

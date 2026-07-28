@@ -1,9 +1,6 @@
-import json
 import logging
 import os
 import re
-
-from django.utils import timezone
 
 from apps.deployments.models import EnvironmentVariable, PlatformConfig
 from apps.deployments.utils import (
@@ -14,7 +11,7 @@ from apps.deployments.utils import (
     parse_ai_resource_recommendation,
     update_stage,
 )
-from .exceptions import BuildError
+from apps.intelligence.services.env_intelligence import EnvironmentIntelligenceService
 
 
 logger = logging.getLogger(__name__)

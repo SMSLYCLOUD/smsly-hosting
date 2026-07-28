@@ -223,9 +223,11 @@ def _persist_one_heartbeat(snapshot):
 
 from celery import shared_task
 
+from apps.deployments.constants import TASK_TIME_LIMIT_QUICK
 
-@shared_task
-def persist_heartbeats_task():
+
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_QUICK[0], time_limit=TASK_TIME_LIMIT_QUICK[1])
+def persist_heartbeats_task(self):
     """Celery task: drain the bus and write one audit row per
     peer. Runs every 60 seconds via the beat schedule. The hot
     publish path does NOT call this — the bus holds the latest

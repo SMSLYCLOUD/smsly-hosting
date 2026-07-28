@@ -284,7 +284,7 @@ class InstantCustomDomainApiTests(APITestCase):
         self.assertIn('instant.example.com', self.service.custom_domains)
         self.assertEqual(self.service.deployments.count(), 1)
 
-    @patch('apps.deployments.services.dns.ensure_dns_records')
+    @patch('apps.domains.services.dns.ensure_dns_records')
     @patch('apps.deployments.views.ServiceViewSet._sync_caddy', return_value={'ok': True, 'message': 'ok'})
     @patch('apps.domains.tasks.verify_dns_and_provision_ssl_task.delay')
     def test_add_domain_does_not_use_platform_cloudflare_for_custom_dns(

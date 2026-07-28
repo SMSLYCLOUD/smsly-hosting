@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { Card, CardContent, CardFooter, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -13,7 +13,7 @@ interface BlueprintCardProps {
   onDeploy?: (id: string) => void;
 }
 
-export function BlueprintCard({ blueprint, onDeploy }: BlueprintCardProps) {
+export const BlueprintCard = React.memo(function BlueprintCard({ blueprint, onDeploy }: BlueprintCardProps) {
   const [deploying, setDeploying] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -109,4 +109,4 @@ export function BlueprintCard({ blueprint, onDeploy }: BlueprintCardProps) {
       </CardFooter>
     </Card>
   );
-}
+});

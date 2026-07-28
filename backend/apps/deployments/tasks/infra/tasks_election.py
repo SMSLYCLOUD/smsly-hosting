@@ -2,6 +2,8 @@ import logging
 
 from celery import shared_task
 
+from apps.deployments.constants import TASK_TIME_LIMIT_TRIVIAL
+
 logger = logging.getLogger(__name__)
 
 
@@ -14,8 +16,8 @@ def _get_local_role() -> str:
         if mesh:
             cluster = ElectionService.get_or_create_cluster(mesh=mesh)
             return cluster.local_role
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to get role from ElectionService: %s", exc)
     try:
         with open("/tmp/.smsly_cluster_role") as f:
             return f.read().strip()
@@ -23,7 +25,7 @@ def _get_local_role() -> str:
         return "FOLLOWER"
 
 
-@shared_task(name="apps.deployments.tasks_election.heartbeat_task", soft_time_limit=30, time_limit=45)
+@shared_task(name="apps.deployments.tasks_election.heartbeat_task", soft_time_limit=TASK_TIME_LIMIT_TRIVIAL[0], time_limit=TASK_TIME_LIMIT_TRIVIAL[1])
 def heartbeat_task():
     """
     Periodic task (every 5s):
@@ -60,7 +62,7 @@ def heartbeat_task():
                 logger.error(f"Leader timeout check failed: {e}")
 
 
-@shared_task(name="apps.deployments.tasks_election.cleanup_heartbeat_logs_task", soft_time_limit=60, time_limit=90)
+@shared_task(name="apps.deployments.tasks_election.cleanup_heartbeat_logs_task", soft_time_limit=TASK_TIME_LIMIT_TRIVIAL[0], time_limit=TASK_TIME_LIMIT_TRIVIAL[1])
 def cleanup_heartbeat_logs_task():
     """
     Scheduled task (every 10 minutes): Clean up old heartbeat logs.
@@ -80,7 +82,7 @@ def cleanup_heartbeat_logs_task():
             logger.error(f"Heartbeat cleanup failed for mesh {mesh.name}: {e}")
 
 
-@shared_task(name="apps.deployments.tasks_election.force_election_task", soft_time_limit=30, time_limit=45)
+@shared_task(name="apps.deployments.tasks_election.force_election_task", soft_time_limit=TASK_TIME_LIMIT_TRIVIAL[0], time_limit=TASK_TIME_LIMIT_TRIVIAL[1])
 def force_election_task(mesh_id: str | None = None):
     """
     Force a new election (admin action).

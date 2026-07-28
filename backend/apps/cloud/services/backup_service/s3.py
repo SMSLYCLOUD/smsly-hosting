@@ -1,4 +1,5 @@
 """S3/object-storage operations for backups."""
+from __future__ import annotations
 
 import logging
 import time
@@ -151,7 +152,7 @@ def delete_cloud_backup_object(s3_bucket: str, s3_key: str,
     return False
 
 
-def normalize_s3_key(s3_key, bucket=None):
+def normalize_s3_key(s3_key: str, bucket: str | None = None) -> str:
     """Normalize an S3 key copied from various cloud dashboard formats."""
     key = s3_key.strip()
 

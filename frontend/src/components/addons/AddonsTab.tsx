@@ -222,8 +222,8 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                                 }`}
                             >
                                 <span className="text-2xl block h-6 w-6 relative">
-                                    {(type as any).logo ? (
-                                        <Image src={(type as any).logo} alt={type.label} className="w-full h-full object-contain" unoptimized />
+                                    {type.logo ? (
+                                        <Image src={type.logo} alt={type.label} className="w-full h-full object-contain" unoptimized />
                                     ) : (
                                         <span className="text-sm font-mono text-muted-foreground">?</span>
                                     )}
@@ -283,8 +283,8 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                                 >
                                     <div className="flex items-center gap-4">
                                         <span className="text-3xl block h-8 w-8 relative">
-                                            {(meta as any).logo ? (
-                                                <Image src={(meta as any).logo} alt={meta.label} className="w-full h-full object-contain" unoptimized />
+                                            {meta.logo ? (
+                                                <Image src={meta.logo} alt={meta.label} className="w-full h-full object-contain" unoptimized />
                                             ) : (
                                                 <span className="text-sm font-mono text-muted-foreground">?</span>
                                             )}

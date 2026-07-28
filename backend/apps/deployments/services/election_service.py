@@ -521,8 +521,8 @@ class ElectionService:
         try:
             with open(role_file, "w") as f:
                 f.write(role)
-        except Exception:
-            pass
+        except OSError as exc:
+            logger.debug("Failed to write cluster role file %s: %s", role_file, exc)
         logger.info(f"Local server role: {role}")
 
     @staticmethod

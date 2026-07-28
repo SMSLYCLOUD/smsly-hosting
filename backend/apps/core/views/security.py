@@ -256,8 +256,8 @@ class SecurityStatusView(GenericAPIView):
             device_trust["registered_devices"] = TrustedDevice.objects.filter(
                 is_active=True
             ).count()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to count trusted devices: %s", exc)
 
         return Response({
             "container_runtime": container_runtime,

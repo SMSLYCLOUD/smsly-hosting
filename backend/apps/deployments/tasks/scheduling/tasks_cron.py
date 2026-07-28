@@ -5,6 +5,11 @@ import croniter  # type: ignore[import-untyped]
 from celery import shared_task
 from django.utils import timezone
 
+from apps.deployments.constants import (
+    RETRY_DELAY_SLOW,
+    TASK_TIME_LIMIT_QUICK,
+    TASK_TIME_LIMIT_STANDARD,
+)
 from apps.deployments.models.cron import CronJob
 
 logger = logging.getLogger(__name__)
@@ -16,8 +21,8 @@ _CRON_MIN_INTERVAL = 60
 
 @shared_task(
     bind=True,
-    soft_time_limit=120,
-    time_limit=180,
+    soft_time_limit=TASK_TIME_LIMIT_QUICK[0],
+    time_limit=TASK_TIME_LIMIT_QUICK[1],
     max_retries=0,
     name="apps.deployments.tasks_cron.check_cron_jobs")
 def check_cron_jobs(self):
@@ -66,10 +71,10 @@ def check_cron_jobs(self):
 
 @shared_task(
     bind=True,
-    soft_time_limit=300,
-    time_limit=360,
+    soft_time_limit=TASK_TIME_LIMIT_STANDARD[0],
+    time_limit=TASK_TIME_LIMIT_STANDARD[1],
     max_retries=1,
-    default_retry_delay=120,
+    default_retry_delay=RETRY_DELAY_SLOW,
     name="apps.deployments.tasks_cron.trigger_cron_job")
 def trigger_cron_job(self, job_id):
     """Execute a single cron job inside its service container."""

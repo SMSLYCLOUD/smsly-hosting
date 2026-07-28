@@ -55,7 +55,7 @@ class ScalingAIDecisionTests(TestCase):
             "SCALE_DOWN_CPU must be lower than CPU_HIGH",
         )
 
-    @patch("apps.deployments.services.scaling_ai.requests.get")
+    @patch("apps.autoscaler.services.scaling_ai.requests.get")
     def test_scale_down_decision_does_not_raise_nameerror(self, mock_get):
         from apps.deployments.models.replica import ServiceReplica
         from apps.autoscaler.services.scaling_ai import (

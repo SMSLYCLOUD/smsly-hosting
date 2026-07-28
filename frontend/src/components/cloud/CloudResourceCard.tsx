@@ -142,7 +142,7 @@ interface CloudResourceCardProps {
   onDelete: (id: string) => void;
 }
 
-export function CloudResourceCard({ resource, onEdit, onDelete }: CloudResourceCardProps) {
+export const CloudResourceCard = React.memo(function CloudResourceCard({ resource, onEdit, onDelete }: CloudResourceCardProps) {
   const [configOpen, setConfigOpen] = React.useState(false);
   const provider = PROVIDER_STYLES[resource.provider?.toLowerCase()] || DEFAULT_PROVIDER;
   const statusKey = resource.status?.toLowerCase();
@@ -241,4 +241,4 @@ export function CloudResourceCard({ resource, onEdit, onDelete }: CloudResourceC
       </div>
     </motion.div>
   );
-}
+});

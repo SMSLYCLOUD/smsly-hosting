@@ -39,12 +39,21 @@ class Command(BaseCommand):
             self.stdout.write(self.style.ERROR(f"Failed to connect to Docker: {e}"))
             return
 
-        active_service_ids = {str(sid) for sid in Service.objects.exclude(status='DELETED').values_list('id', flat=True)}
-        active_addon_ids = {str(aid) for aid in Addon.objects.exclude(status='DELETED').values_list('id', flat=True)}
+        try:
+            active_service_ids = {str(sid) for sid in Service.objects.exclude(status='DELETED').values_list('id', flat=True)}
+            active_addon_ids = {str(aid) for aid in Addon.objects.exclude(status='DELETED').values_list('id', flat=True)}
+        except Exception as e:
+            self.stdout.write(self.style.ERROR(f"Failed to query database: {e}"))
+            return
 
         orchestrator = DeletionOrchestrator()
 
-        all_containers = client.containers.list(all=True)
+        try:
+            all_containers = client.containers.list(all=True)
+        except Exception as e:
+            self.stdout.write(self.style.ERROR(f"Failed to list containers: {e}"))
+            return
+
         orphans = []
 
         # 1. Detect orphaned containers
@@ -81,6 +90,9 @@ class Command(BaseCommand):
 
                 if apply:
                     self.stdout.write(f"    Removing {c.name}...")
-                    orchestrator._safe_remove_container(c)
+                    try:
+                        orchestrator._safe_remove_container(c)
+                    except Exception as e:
+                        self.stdout.write(self.style.ERROR(f"    Failed to remove {c.name}: {e}"))
 
         self.stdout.write(self.style.SUCCESS("Reconciliation complete."))

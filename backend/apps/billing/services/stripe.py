@@ -152,7 +152,7 @@ class StripeService:
         try:
             sub = stripe.Subscription.retrieve(account.stripe_subscription_id)
         except Exception as e:
-            logger.warning("Stripe subscription retrieve failed: %s", e)
+            logger.error("Stripe subscription retrieve failed: %s", e)
             return account
 
         status = (sub.get("status") or "").upper()

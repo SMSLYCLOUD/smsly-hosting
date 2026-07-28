@@ -3,13 +3,15 @@ import logging
 
 from celery import shared_task
 from django.core.cache import cache
+
+from apps.deployments.constants import TASK_TIME_LIMIT_MEDIUM, TASK_TIME_LIMIT_QUICK, TASK_TIME_LIMIT_STANDARD
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
 
-@shared_task(queue="media-telemetry")
-def check_stale_media_nodes():
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_QUICK[0], time_limit=TASK_TIME_LIMIT_QUICK[1], queue="media-telemetry")
+def check_stale_media_nodes(self):
     """Detect nodes silent > 60s — mark degraded."""
     from apps.media.models import MediaNodeProfile
 
@@ -26,8 +28,8 @@ def check_stale_media_nodes():
         logger.warning("Media node %s stale — no telemetry for >60s", node.server_id)
 
 
-@shared_task(queue="media-telemetry")
-def aggregate_media_capacity():
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_STANDARD[0], time_limit=TASK_TIME_LIMIT_STANDARD[1], queue="media-telemetry")
+def aggregate_media_capacity(self):
     """Recompute global capacity from Redis telemetry snapshots."""
     from apps.media.models import MediaNodeProfile
     from apps.media.services.capacity import MediaCapacityService
@@ -43,8 +45,8 @@ def aggregate_media_capacity():
         node.save(update_fields=["capacity_score"])
 
 
-@shared_task(queue="media-telemetry")
-def flush_telemetry_to_db():
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1], queue="media-telemetry")
+def flush_telemetry_to_db(self):
     """Batch-write Redis telemetry snapshots to PostgreSQL."""
     from apps.media.models import MediaNodeProfile
 
@@ -72,22 +74,22 @@ def flush_telemetry_to_db():
             logger.exception("Failed to flush telemetry for node %s", node_id)
 
 
-@shared_task(queue="deploy")
-def rotate_media_node_keys():
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_STANDARD[0], time_limit=TASK_TIME_LIMIT_STANDARD[1], queue="deploy")
+def rotate_media_node_keys(self):
     """Trigger key rotation on all media nodes."""
     # TODO: SSH or management daemon call to rotate LiveKit/TURN keys
     logger.info("Key rotation triggered for all media nodes")
 
 
-@shared_task(queue="media-audit")
-def verify_federation_chains():
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_STANDARD[0], time_limit=TASK_TIME_LIMIT_STANDARD[1], queue="media-audit")
+def verify_federation_chains(self):
     """Verify cross-verifier trust chains (hourly)."""
     # TODO: Forward to SMSLYCLOUD Chain verification endpoint
     logger.info("Federation chain verification triggered")
 
 
-@shared_task(queue="media-telemetry")
-def process_media_heartbeat(node_id: str, payload: dict):
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_QUICK[0], time_limit=TASK_TIME_LIMIT_QUICK[1], queue="media-telemetry")
+def process_media_heartbeat(self, node_id: str, payload: dict):
     """Process incoming heartbeat from a media node."""
     from apps.media.models import MediaNodeProfile
 

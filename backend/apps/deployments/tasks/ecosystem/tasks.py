@@ -7,6 +7,12 @@ from typing import Any
 from celery import shared_task
 from celery.exceptions import SoftTimeLimitExceeded
 from apps.addons.services.addon_provisioner import addon_provisioner
+from apps.deployments.constants import (
+    RETRY_DELAY_FAST,
+    RETRY_DELAY_HEAVY,
+    RETRY_DELAY_STANDARD,
+    TASK_TIME_LIMIT_DEPLOY,
+)
 
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import (
@@ -67,7 +73,7 @@ from .helpers import (
 )
 
 
-@shared_task(bind=True, name="apps.deployments.tasks_ecosystem.ecosystem_scan_task", queue='deploy', soft_time_limit=1800, time_limit=2100, max_retries=2, default_retry_delay=30, autoretry_for=(Exception,))
+@shared_task(bind=True, name="apps.deployments.tasks_ecosystem.ecosystem_scan_task", queue='deploy', soft_time_limit=TASK_TIME_LIMIT_DEPLOY[0], time_limit=TASK_TIME_LIMIT_DEPLOY[1], max_retries=2, default_retry_delay=RETRY_DELAY_FAST, autoretry_for=(Exception,))
 def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provider: str | None = None, selected_repos: list | None = None, plan_id: str | None = None, project_id: str | None = None) -> dict:
     """
     Scan all of a user's GitHub repos and return a deploy plan.
@@ -113,8 +119,8 @@ def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provi
                 plan_record.scan_progress = "Scan complete!"
                 plan_record.status = EcosystemPlan.Status.REVIEW
                 plan_record.save(update_fields=['plan', 'scan_progress', 'status', 'updated_at'])
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to save ecosystem plan result: %s", exc)
 
         return result
     except SoftTimeLimitExceeded:
@@ -138,10 +144,10 @@ def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provi
 
 @shared_task(
     bind=True, name="apps.deployments.tasks_ecosystem.ecosystem_deferred_build_task", queue='fast',
-    soft_time_limit=3600,   # 1 hour soft
-    time_limit=4200,        # 1h 10m hard
+    soft_time_limit=TASK_TIME_LIMIT_DEPLOY[0],
+    time_limit=TASK_TIME_LIMIT_DEPLOY[1],
     max_retries=_DEFERRED_TASK_MAX_RETRIES,
-    default_retry_delay=300,
+    default_retry_delay=RETRY_DELAY_HEAVY,
     autoretry_for=(Exception,),
 )
 def ecosystem_deferred_build_task(self, deployment_id: str, provider_id: str, wave_index: int) -> dict:
@@ -181,7 +187,7 @@ def ecosystem_deferred_build_task(self, deployment_id: str, provider_id: str, wa
     return {"status": "dispatched", "deployment_id": deployment_id}
 
 
-@shared_task(bind=True, name="apps.deployments.tasks_ecosystem.ecosystem_release_wave_task", queue='fast', soft_time_limit=1800, time_limit=2400, max_retries=3, default_retry_delay=60, autoretry_for=(Exception,))
+@shared_task(bind=True, name="apps.deployments.tasks_ecosystem.ecosystem_release_wave_task", queue='fast', soft_time_limit=TASK_TIME_LIMIT_DEPLOY[0], time_limit=TASK_TIME_LIMIT_DEPLOY[1], max_retries=3, default_retry_delay=RETRY_DELAY_STANDARD, autoretry_for=(Exception,))
 def ecosystem_release_wave_task(
     self,
     provider_id: str,
@@ -391,8 +397,8 @@ def ecosystem_release_wave_task(
 
 @shared_task(
     bind=True, name="apps.deployments.tasks_ecosystem.ecosystem_deploy_task", queue='deploy',
-    soft_time_limit=3600, time_limit=4200,
-    max_retries=3, default_retry_delay=60,
+    soft_time_limit=TASK_TIME_LIMIT_DEPLOY[0], time_limit=TASK_TIME_LIMIT_DEPLOY[1],
+    max_retries=3, default_retry_delay=RETRY_DELAY_STANDARD,
     autoretry_for=(Exception,),
 )
 def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = None, project_id: str | None = None) -> dict:
@@ -466,8 +472,8 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             _plan_rec = EcosystemPlan.objects.filter(id=plan_id, user=user).first()
             if _plan_rec and _plan_rec.project:
                 project = _plan_rec.project
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to look up ecosystem plan project: %s", exc)
 
     if not project:
         from apps.deployments.models.core import Project
@@ -495,8 +501,8 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
             if project and not _plan_rec.project:
                 _plan_rec.project = project
                 _plan_rec.save(update_fields=["project", "updated_at"])
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to link ecosystem plan to project: %s", exc)
 
     # Ensure the ecosystem project always has its own ScopedRegistry.
     # Use .env credentials (which match the registry container's htpasswd) and
@@ -793,8 +799,8 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                     server = ManagedServer.get_primary()
                 else:
                     server = ManagedServer.objects.filter(id=server_id, owner=user).first()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to resolve deployment server %s: %s", server_id, exc)
         else:
             from apps.deployments.services.node_selector import select_eligible_node
             server = select_eligible_node(user)
@@ -1113,8 +1119,8 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str | None = 
                 else:
                     plan_record.status = EcosystemPlan.Status.DEPLOYING
                 plan_record.save(update_fields=['services_created', 'status', 'error_message', 'updated_at'])
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to update ecosystem plan deployment status: %s", exc)
 
     return deploy_result
 

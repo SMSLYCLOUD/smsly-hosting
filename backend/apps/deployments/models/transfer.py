@@ -85,6 +85,12 @@ class ServerTransfer(models.Model):
         help_text='Target platform domain for cross-platform migration (e.g., app.interserver.com)',
     )
 
+    class Meta:
+        indexes = [
+            models.Index(fields=["status"], name="srvtransfer_status_idx"),
+            models.Index(fields=["owner", "status"], name="srvtransfer_owner_status_idx"),
+        ]
+
     def save(self, *args, **kwargs):
         from apps.deployments.services.transfer_service import _redact_transfer_text
         for field in ('logs', 'error_message'):

@@ -1,6 +1,11 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+// TODO: Migrate this page to React Query (TanStack Query). This 1615-line page
+// has multiple useEffect+useState fetch patterns that could be simplified with
+// useQuery/useMutation — automatic caching, deduplication, retry, and stale-while-
+// revalidate would replace the manual polling and error-handling logic here.
+
+import { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -730,7 +735,7 @@ export default function ServersPage() {
 
 // ── Sub-components ───────────────────────────────────────────────────────
 
-function StatCard({ icon: Icon, label, value, color, subtitle }: { icon: any; label: string; value: number; color: string; subtitle?: string }) {
+const StatCard = memo(function StatCard({ icon: Icon, label, value, color, subtitle }: { icon: any; label: string; value: number; color: string; subtitle?: string }) {
     return (
         <div className="bg-card border border-border rounded-xl p-4 flex items-center gap-3">
             <div className={`w-10 h-10 rounded-lg bg-muted/30 flex items-center justify-center ${color}`}>
@@ -743,7 +748,7 @@ function StatCard({ icon: Icon, label, value, color, subtitle }: { icon: any; la
             </div>
         </div>
     );
-}
+});
 
 function TestConnectionButton({ testing, onClick, result }: { testing: boolean; onClick: () => void; result: { ok: boolean; message: string } | null }) {
     return (

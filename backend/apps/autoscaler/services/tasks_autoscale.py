@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 import logging
 
 logger = logging.getLogger(__name__)
 from celery import shared_task
 from django.db import models as db_models
 
+from apps.deployments.constants import TASK_TIME_LIMIT_MEDIUM
 from apps.deployments.models import Service
 from apps.autoscaler.models.replica import ServiceReplica
 
@@ -16,8 +19,10 @@ AUTOSCALE_BATCH_SIZE = 20
     name='apps.autoscaler.services.tasks_autoscale.analyze_all_services_task',
     bind=True,
     ignore_result=True,
+    soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0],
+    time_limit=TASK_TIME_LIMIT_MEDIUM[1],
 )
-def analyze_all_services_task(self):
+def analyze_all_services_task(self) -> dict[str, int]:
     """Periodic task: analyze active services and auto-scale as needed.
 
     Uses an ``id__gt`` cursor so the batch of 20 never silently drops
@@ -55,7 +60,7 @@ def analyze_all_services_task(self):
     return {'analyzed': analyzed}
 
 
-def analyze_and_scale_service(service_id):
+def analyze_and_scale_service(service_id) -> dict[str, object] | None:
     """Public entry point used by the Celery task, REST endpoint, and tests.
 
     Accepts a ``Service`` UUID string (from the Celery task / test mocks)

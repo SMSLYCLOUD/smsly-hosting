@@ -126,8 +126,8 @@ class Reconciler:
                     logger.warning("Local spawn failed for %s: %s", self.service.name, exc)
                     try:
                         spawner.destroy(replica)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("Destroy replica after local spawn failure: %s", exc)
                     replica.status = 'DESTROYED'
                     replica.save(update_fields=['status'])
                     local_ok = False
@@ -169,8 +169,8 @@ class Reconciler:
                                    self.service.name, node.name, exc)
                     try:
                         spawner.destroy(replica)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("Destroy replica after remote spawn failure: %s", exc)
                     replica.status = 'DESTROYED'
                     replica.save(update_fields=['status'])
             if spawned > 0:

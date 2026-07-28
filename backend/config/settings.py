@@ -201,6 +201,12 @@ else:
     CSRF_COOKIE_SECURE = False
     SECURE_PROXY_SSL_HEADER = None
 
+# ── Additional security headers (unconditional) ──────────────────────────────
+SECURE_BROWSER_XSS_FILTER = True
+SECURE_CONTENT_TYPE_NOSNIFF = True
+X_FRAME_OPTIONS = 'DENY'
+CSRF_COOKIE_HTTPONLY = True
+
 # Trusted proxy IPs for X-Real-IP header validation.
 # Only requests arriving from these IPs are allowed to set X-Real-IP.
 # Empty list (default) means X-Real-IP is NEVER trusted — REMOTE_ADDR
@@ -759,7 +765,7 @@ REST_AUTH = {
 # Google/Bitbucket OAuth, the provider has already verified the email, so
 # requiring a second verification breaks the UX (user is redirected to /login
 # instead of being logged in).
-ACCOUNT_EMAIL_VERIFICATION = 'none'
+ACCOUNT_EMAIL_VERIFICATION = 'mandatory' if not DEBUG else 'none'
 
 # Store social OAuth tokens (required for private-repo deploys via linked GitHub accounts).
 # Explicitly set to avoid relying on allauth defaults.
@@ -1014,12 +1020,11 @@ REST_FRAMEWORK = {
         # effectively unlimited for normal UI use. Per-action
         # guards (deployments, server_*, transfers, etc.) still
         # protect against abusive write operations.
-        # The 'anon' throttle is bumped from 200/hour to
-        # 10000/hour so unauthenticated probes (health checks
-        # from monitoring) aren't capped. The middleware
+        # The 'anon' throttle is 1000/hour so unauthenticated
+        # probes aren't overused. The middleware
         # (RateLimitMiddleware) provides a separate per-IP
         # edge guard.
-        'anon': '10000/hour',
+        'anon': '1000/hour',
         'user': '5000/hour',
         # SECURITY (Batch I): the 'deployment_burst' was
         # 30/minute which was still too tight for interactive
@@ -1097,6 +1102,8 @@ REST_FRAMEWORK = {
         # SECURITY (Issue 137): cron-jobs POST is uncapped, a user
         # can spam cron jobs. Cap at 10/hour per user.
         'cron_jobs_create': '10/hour',
+        'addon_delete': '10/minute',
+        'token_create': '10/minute',
         # SECURITY: AI endpoints were missing throttle rates →
         # ImproperlyConfigured crash on any AI chat/analysis call.
         'ai_chat': '30/minute',

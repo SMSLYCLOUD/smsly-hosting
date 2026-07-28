@@ -90,8 +90,8 @@ def _handle_remote_deployment_legacy(deployment, server):
                 update_commit_status.delay(
                     str(deployment.id), 'success', 'Deployment active'
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to post commit status: %s", exc)
 
             append_log(deployment, "✅ Remote deployment successful!\n")
             return
@@ -433,8 +433,8 @@ def _poll_remote_deployment(
                             update_commit_status.delay(
                                 str(deployment.id), 'success', 'Deployment active'
                             )
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.debug("Failed to post commit status for verified deploy: %s", exc)
 
                         append_log(deployment, "Remote deployment completed and VERIFIED successfully.\n")
                         return

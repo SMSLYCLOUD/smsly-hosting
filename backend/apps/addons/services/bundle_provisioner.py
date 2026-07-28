@@ -459,7 +459,7 @@ class BundleProvisioner:
                 capture_output=True, timeout=30,
             )
             if result.returncode != 0:
-                logger.warning("docker stop failed for %s: %s", container_name, result.stderr)
+                logger.error("docker stop failed for %s: %s", container_name, result.stderr)
 
             result = subprocess.run(
                 ["docker", "cp", backup_path, f"{container_name}:/tmp/restore.tar.gz"],
@@ -813,8 +813,8 @@ class BundleProvisioner:
 
                 if all_running:
                     return
-            except Exception:
-                pass
+            except (subprocess.SubprocessError, OSError) as exc:
+                logger.debug("Bundle readiness check failed: %s", exc)
             time.sleep(1)
 
     def _build_repo_service(

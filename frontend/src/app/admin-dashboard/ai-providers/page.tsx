@@ -42,8 +42,8 @@ export default function AIProvidersPage() {
       if (providerName === 'openai') setOpenaiKey("");
       if (providerName === 'anthropic') setAnthropicKey("");
       toast({ title: `${providerName} provider updated successfully` });
-    } catch (e: any) {
-      toast({ title: `Error updating ${providerName}`, description: e.message, variant: "destructive" });
+    } catch (e: unknown) {
+      toast({ title: `Error updating ${providerName}`, description: e instanceof Error ? e.message : 'Unknown error', variant: "destructive" });
     } finally {
       setSaving(false);
     }

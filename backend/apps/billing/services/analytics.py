@@ -7,7 +7,7 @@ from apps.billing.models import (
     PricingPlan,
     UserSubscription,
 )
-from django.db.models import Sum
+from django.db.models import Q, Sum, Count
 from django.utils import timezone
 
 
@@ -131,17 +131,27 @@ class RevenueAnalytics:
 
     def get_plan_breakdown(self):
         """Revenue by plan tier."""
-        # Snapshot of current MRR distribution
+        # Snapshot of current MRR distribution — single query with plan counts
+        plan_ids = list(
+            PricingPlan.objects.values_list('id', flat=True)
+        )
+        plan_sub_counts = {}
+        for plan_id, mc, yc in (
+            UserSubscription.objects
+            .filter(status='ACTIVE', plan_id__in=plan_ids)
+            .values('plan_id')
+            .annotate(
+                monthly_count=Count('id', filter=Q(billing_cycle='MONTHLY')),
+                yearly_count=Count('id', filter=Q(billing_cycle='YEARLY')),
+            )
+            .values_list('plan_id', 'monthly_count', 'yearly_count')
+        ):
+            plan_sub_counts[plan_id] = (mc, yc)
+        plans = PricingPlan.objects.in_bulk(plan_ids)
         data = []
-        plans = PricingPlan.objects.all()
-        for plan in plans:
-            subs = UserSubscription.objects.filter(status='ACTIVE', plan=plan)
-            plan_mrr = 0
-            for sub in subs:
-                if sub.billing_cycle == 'MONTHLY':
-                    plan_mrr += float(plan.price_monthly_usd)
-                else:
-                    plan_mrr += float(plan.price_yearly_usd) / 12
+        for plan_id, plan in plans.items():
+            monthly_count, yearly_count = plan_sub_counts.get(plan_id, (0, 0))
+            plan_mrr = float(plan.price_monthly_usd) * monthly_count + float(plan.price_yearly_usd) / 12 * yearly_count
             if plan_mrr > 0:
                 data.append({'name': plan.name, 'value': plan_mrr})
         return data

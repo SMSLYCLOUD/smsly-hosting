@@ -4,7 +4,8 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
+
+import yaml
 
 from django.conf import settings
 from django.utils import timezone
@@ -319,6 +320,9 @@ class BuildMixin:
             self.deployment,
             f"  📛 Traefik labels prepared at container creation for {main_svc}\n"
         )
+
+        # Derive the compose container name for post-deploy hooks & health checks
+        container_name = f"{project_name}-{main_svc}-1"
 
         # Post-deploy hooks (e.g., Prisma migrate) for ai-router / litellm templates
         self._post_deploy_hooks(container_name)
@@ -682,7 +686,7 @@ class BuildMixin:
         builder simultaneously.
         """
         import subprocess
-        lock = PipelineManager._buildx_driver_lock
+        lock = type(self)._buildx_driver_lock
         with lock:
             try:
                 inspect = subprocess.run(

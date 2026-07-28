@@ -1,11 +1,15 @@
 """Shared utilities for deployment WebSocket consumers."""
+from __future__ import annotations
+
 import hashlib
 import logging
+from typing import TYPE_CHECKING
 
 from channels.db import database_sync_to_async
 from django.core.cache import cache
 
-from apps.deployments.utils import log_event
+if TYPE_CHECKING:
+    from django.contrib.auth.models import AbstractUser
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +22,22 @@ _REDIS_WS_ERRORS = (
 
 
 @database_sync_to_async
-def authenticate_ws_token(token_key: str):
+def verify_deployment_ownership(user, deployment_id) -> bool:
+    """Check whether *user* owns the deployment (directly or via team)."""
+    from django.db.models import Q
+    from apps.deployments.models import Deployment
+    try:
+        return Deployment.objects.filter(
+            Q(service__owner=user) |
+            Q(service__project__team__members__user=user),
+            id=deployment_id,
+        ).exists()
+    except Exception:
+        return False
+
+
+@database_sync_to_async
+def authenticate_ws_token(token_key: str) -> AbstractUser | None:
     """
     Validate WS token against DRF Tokens and APITokens, returning the active User if valid.
     """
@@ -44,14 +63,16 @@ def authenticate_ws_token(token_key: str):
             )
             if api_token.user.is_active:
                 return api_token.user
-        except Exception:
+        except (Token.DoesNotExist, APIToken.DoesNotExist):
             pass
+        except Exception:
+            pass  # fallback for unexpected errors
 
     cache.set(cache_key, True, 300)
     return None
 
 
-def get_websocket_subprotocol(scope):
+def get_websocket_subprotocol(scope: dict) -> str | None:
     """
     Return the subprotocol to negotiate during WebSocket accept().
     When XtermConsole or a browser client requests subprotocols (e.g. ['token', '<wsToken>']),

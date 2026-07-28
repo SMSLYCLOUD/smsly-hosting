@@ -16,14 +16,31 @@ from apps.core.rate_limiting import CronJobCreateRateThrottle
 class CronJobSerializer(serializers.ModelSerializer):
     class Meta:
         model = CronJob
-        fields = '__all__'
+        fields = [
+            'id', 'service', 'name', 'schedule', 'command',
+            'is_active', 'cloud_destination',
+            'last_run_at', 'next_run_at',
+            'created_at', 'updated_at',
+        ]
         read_only_fields = [
-            'id',
-            'created_at',
-            'updated_at',
-            'last_run_at',
-            'next_run_at',
-            'service']
+            'id', 'service', 'created_at', 'updated_at',
+            'last_run_at', 'next_run_at',
+        ]
+
+    def validate_schedule(self, value):
+        if not value or not value.strip():
+            raise serializers.ValidationError("schedule is required.")
+        parts = value.strip().split()
+        if len(parts) not in (5, 6):
+            raise serializers.ValidationError(
+                "schedule must be 5 or 6 fields (e.g. '*/5 * * * *')."
+            )
+        return value
+
+    def validate_command(self, value):
+        if not value or not value.strip():
+            raise serializers.ValidationError("command is required.")
+        return value
 
     def update(self, instance, validated_data):
         # Reset next_run_at if the schedule changes so it gets recalculated immediately

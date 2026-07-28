@@ -1,4 +1,6 @@
 """Device trust API — hardware-fingerprint-based device enrollment."""
+from __future__ import annotations
+
 import hashlib
 import json
 import logging
@@ -14,7 +16,7 @@ from apps.deployments.models.core import TrustedDevice
 logger = logging.getLogger(__name__)
 
 
-def _device_trust_enforced():
+def _device_trust_enforced() -> bool:
     """Check if device trust enforcement is enabled in PlatformConfig."""
     try:
         from apps.deployments.models.core import PlatformConfig
@@ -26,7 +28,7 @@ def _device_trust_enforced():
 
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
-def register_device(request):
+def register_device(request) -> Response:
     """
     Register the current device as a trusted device.
 
@@ -105,7 +107,7 @@ def register_device(request):
 
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
-def list_devices(request):
+def list_devices(request) -> Response:
     """List all trusted devices for the current user."""
     devices = TrustedDevice.objects.filter(user=request.user, is_active=True)
     return Response({
@@ -127,7 +129,7 @@ def list_devices(request):
 
 @api_view(['DELETE'])
 @permission_classes([permissions.IsAuthenticated])
-def revoke_device(request, device_id):
+def revoke_device(request, device_id) -> Response:
     """Revoke a trusted device by its ID."""
     try:
         device = TrustedDevice.objects.get(id=device_id, user=request.user)

@@ -27,16 +27,16 @@ def log_exhaustive_deployment_diagnostics(deployment, service=None, build_dir=No
         import psutil
         mem = psutil.virtual_memory()
         mem_info = f"Total: {mem.total // (1024**2)}MB, Available: {mem.available // (1024**2)}MB ({mem.percent}% used)"
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("psutil memory detection failed: %s", exc)
 
     disk_info = "Unknown"
     try:
         check_path = build_dir if build_dir and os.path.exists(build_dir) else "/"
         total, used, free = shutil.disk_usage(check_path)
         disk_info = f"Total: {total // (1024**3)}GB, Free: {free // (1024**3)}GB"
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Disk usage detection failed: %s", exc)
 
     docker_bin = find_binary("docker")
     docker_ver = "Not found"
@@ -45,8 +45,8 @@ def log_exhaustive_deployment_diagnostics(deployment, service=None, build_dir=No
             res = subprocess.run([docker_bin, "--version"], capture_output=True, text=True, timeout=3)
             if res.returncode == 0:
                 docker_ver = res.stdout.strip()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("docker version detection failed: %s", exc)
 
     nixpacks_bin = find_binary("nixpacks")
     nixpacks_ver = "Not found"
@@ -55,8 +55,8 @@ def log_exhaustive_deployment_diagnostics(deployment, service=None, build_dir=No
             res = subprocess.run([nixpacks_bin, "--version"], capture_output=True, text=True, timeout=3)
             if res.returncode == 0:
                 nixpacks_ver = res.stdout.strip()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("nixpacks version detection failed: %s", exc)
 
     trivy_bin = find_binary("trivy")
     trivy_ver = "Not installed (Using default baseline security scanner)"
@@ -65,8 +65,8 @@ def log_exhaustive_deployment_diagnostics(deployment, service=None, build_dir=No
             res = subprocess.run([trivy_bin, "--version"], capture_output=True, text=True, timeout=3)
             if res.returncode == 0:
                 trivy_ver = res.stdout.splitlines()[0].strip() if res.stdout else f"Installed ({trivy_bin})"
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("trivy version detection failed: %s", exc)
 
     cosign_bin = find_binary("cosign")
     cosign_ver = "Not installed (Keyless Sigstore image signing disabled)"
@@ -75,8 +75,8 @@ def log_exhaustive_deployment_diagnostics(deployment, service=None, build_dir=No
             res = subprocess.run([cosign_bin, "version"], capture_output=True, text=True, timeout=3)
             if res.returncode == 0:
                 cosign_ver = res.stdout.splitlines()[0].strip() if res.stdout else f"Installed ({cosign_bin})"
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("cosign version detection failed: %s", exc)
 
     sandbox_runtime = "runc (default)"
     sandbox_isolation = "Process-level (standard Docker)"
@@ -92,8 +92,8 @@ def log_exhaustive_deployment_diagnostics(deployment, service=None, build_dir=No
         else:
             sandbox_runtime = "runc (default)"
             sandbox_isolation = "Process-level — standard Linux namespace isolation"
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Container runtime detection failed: %s", exc)
 
     buildpack = getattr(svc, 'buildpack', 'AUTO')
     deploy_type = getattr(svc, 'deploy_type', 'DOCKER')
@@ -180,8 +180,8 @@ def log_exhaustive_clone_diagnostics(deployment, repo_url, branch, target_dir):
         res = subprocess.run(["git", "--version"], capture_output=True, text=True, timeout=3)
         if res.returncode == 0:
             git_ver = res.stdout.strip()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("git version detection failed: %s", exc)
 
     file_count = 0
     dir_count = 0
@@ -194,10 +194,10 @@ def log_exhaustive_clone_diagnostics(deployment, repo_url, branch, target_dir):
                 for f in files:
                     try:
                         total_size += os.path.getsize(os.path.join(root, f))
-                    except Exception:
+                    except OSError:
                         pass
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Directory walk failed: %s", exc)
 
     size_mb = round(total_size / (1024 * 1024), 2)
     log_lines = [
@@ -228,8 +228,8 @@ def log_exhaustive_env_diagnostics(deployment, service, source_label="Manifest/A
             capture_output=True, text=True, timeout=3
         )
         infisical_running = "infisical" in (res.stdout or "")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Infisical container detection failed: %s", exc)
 
     has_infisical_token = bool(
         os.environ.get("INFISICAL_SERVICE_TOKEN")
@@ -275,8 +275,8 @@ def log_exhaustive_build_diagnostics(deployment, builder_type, context_dir, buil
     try:
         if context_dir and os.path.exists(context_dir):
             context_files = os.listdir(context_dir)[:10]
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to list context directory: %s", exc)
 
     log_lines = [
         "\n" + "─" * 60,
@@ -370,8 +370,8 @@ def log_exhaustive_push_diagnostics(deployment, registry_url, image_name):
     try:
         deployment.vulnerability_report = vuln_report
         deployment.save(update_fields=["vulnerability_report"])
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to save vulnerability report: %s", exc)
 
     cosign_bin = find_binary("cosign")
     if cosign_bin:
@@ -478,8 +478,8 @@ def log_exhaustive_runtime_activation_diagnostics(deployment, service, container
             runtime_name = "Kata Containers — Lightweight hardware VM micro-isolation active 🛡️"
         elif preferred == "runc":
             runtime_name = "runc — Standard Linux cgroups & namespace isolation active"
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Container runtime detection failed: %s", exc)
 
     log_lines = [
         "\n" + "─" * 60,

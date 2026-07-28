@@ -4930,7 +4930,7 @@ sync_platform_domain_state() {
 
 
 
-        docker compose -f "$COMPOSE_FILE" exec -T \
+        timeout 60 docker compose -f "$COMPOSE_FILE" exec -T \
             -e SMSLY_DISABLE_STARTUP_TASKS=true \
             -e SMSLY_SYNC_DOMAIN="$sync_domain" \
             -e SMSLY_SYNC_USE_SSL="$sync_use_ssl" \
@@ -5677,7 +5677,7 @@ queue_active_service_redeploys() {
 
 
 
-    docker compose -f "$COMPOSE_FILE" exec -T \
+    timeout 300 docker compose -f "$COMPOSE_FILE" exec -T \
         -e SMSLY_DISABLE_STARTUP_TASKS=true \
         -e SMSLY_REDEPLOY_REASON="$reason" \
         -e SMSLY_SERVICE_IDS="$service_ids" \
@@ -8174,7 +8174,7 @@ diagnose_migration_locks() {
 
 
 
-    docker compose -f "$COMPOSE_FILE" exec -T \
+    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T \
         -e PGPASSWORD="${POSTGRES_PASSWORD:-}" \
         db psql \
             -U "${POSTGRES_USER:-smsly_admin}" \
@@ -10276,7 +10276,7 @@ CADDYFIX
 
 
 
-        docker compose -f "$COMPOSE_FILE" exec caddy caddy reload --config /etc/caddy/Caddyfile  || \
+        timeout 15 docker compose -f "$COMPOSE_FILE" exec caddy caddy reload --config /etc/caddy/Caddyfile  || \
             docker compose -f "$COMPOSE_FILE" restart caddy  || true
 
 
@@ -12298,7 +12298,7 @@ restart_edge_stack() {
 
 
 
-    timeout 30 docker compose -f "$COMPOSE_FILE" up -d --force-recreate traefik  || true
+    timeout 30 docker compose -f "$COMPOSE_FILE" up -d --no-deps traefik  || true
 
 
 
@@ -13224,7 +13224,7 @@ sync_agent_lite_rabbitmq_password() {
 
 
 
-    if docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" ; then
+    if timeout 15 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" ; then
 
 
 
@@ -13248,19 +13248,19 @@ sync_agent_lite_rabbitmq_password() {
 
 
 
-    docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl add_user "$rabbitmq_user" "$rabbitmq_password"  || true
+    timeout 15 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl add_user "$rabbitmq_user" "$rabbitmq_password"  || true
 
 
 
-    docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl change_password "$rabbitmq_user" "$rabbitmq_password" 
+    timeout 15 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl change_password "$rabbitmq_user" "$rabbitmq_password" 
 
 
 
-    docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_user_tags "$rabbitmq_user" administrator 
+    timeout 15 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_user_tags "$rabbitmq_user" administrator 
 
 
 
-    docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_permissions -p / "$rabbitmq_user" ".*" ".*" ".*" 
+    timeout 15 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_permissions -p / "$rabbitmq_user" ".*" ".*" ".*" 
 
 
 
@@ -13268,7 +13268,7 @@ sync_agent_lite_rabbitmq_password() {
 
 
 
-    if docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" ; then
+    if timeout 15 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" ; then
 
 
 
@@ -13783,7 +13783,7 @@ debug_platform_status() {
 
 
 
-    curl -iSsf http://127.0.0.1:8000/health  | head -20 || echo "http://127.0.0.1:8000/health failed"
+    timeout 10 curl -iSsf --max-time 8 http://127.0.0.1:8000/health  | head -20 || echo "http://127.0.0.1:8000/health failed"
 
 
 
@@ -13799,7 +13799,7 @@ debug_platform_status() {
 
 
 
-    docker compose -f "$COMPOSE_FILE" exec -T backend getent hosts db pgcat redis  || echo "backend DNS check failed"
+    timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend getent hosts db pgcat redis  || echo "backend DNS check failed"
 
 
 
@@ -14363,7 +14363,7 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
 
 
 
-        if docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health ; then
+        if timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health ; then
 
 
 
@@ -14635,7 +14635,7 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
 
 
 
-    ALL_SVC_DOMAINS="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+    ALL_SVC_DOMAINS="$(timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 
 
 
@@ -16044,7 +16044,7 @@ fi
 
 
 
-            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput  || true
+            timeout 120 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput  || true
 
 
 
@@ -16068,7 +16068,7 @@ fi
 
 
 
-            docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule  || true
+            timeout 10 docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule  || true
 
 
 
@@ -16368,7 +16368,7 @@ fi
 
 
 
-            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput  || true
+            timeout 120 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput  || true
 
 
 
@@ -16384,7 +16384,7 @@ fi
 
 
 
-            docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule  || true
+            timeout 10 docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule  || true
 
 
 
@@ -16960,7 +16960,7 @@ fi
 
 
 
-            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput  || true
+            timeout 120 docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput  || true
 
 
 
@@ -16976,7 +16976,7 @@ fi
 
 
 
-            docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule  || true
+            timeout 10 docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule  || true
 
 
 
@@ -17092,7 +17092,7 @@ fi
 
 
 
-                docker exec "$backend_container" python manage.py deploy_docker_labels_exporters  || true
+                timeout 60 docker exec "$backend_container" python manage.py deploy_docker_labels_exporters  || true
 
 
 
@@ -17520,7 +17520,7 @@ if d_count > 0:
 
 
 
-    if docker exec -i "$worker_container" celery -A config inspect active_queues --timeout=10  | grep -q "deploy"; then
+    if timeout 30 docker exec -i "$worker_container" celery -A config inspect active_queues --timeout=10  | grep -q "deploy"; then
 
 
 
@@ -18776,7 +18776,7 @@ if d and d != 'localhost':
 
 
 
-            if docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health ; then
+        if timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health ; then
 
 
 
@@ -18896,7 +18896,7 @@ if d and d != 'localhost':
 
 
 
-    EP_DOMAIN="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+    EP_DOMAIN="$(timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 
 
 
@@ -19108,7 +19108,7 @@ if d and d != 'localhost':
 
 
 
-    ALL_SVC_DOMAINS="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+    ALL_SVC_DOMAINS="$(timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 
 
 
@@ -23613,7 +23613,7 @@ env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
 
 
 
-            docker exec "$backend_container" python manage.py deploy_docker_labels_exporters  || true
+            timeout 60 docker exec "$backend_container" python manage.py deploy_docker_labels_exporters  || true
 
 
 
@@ -23713,7 +23713,7 @@ for i in $(seq 1 24); do
 
 
 
-    if docker compose -f "$COMPOSE_FILE" exec -T db pg_isready -U smsly_admin ; then
+    if timeout 10 docker compose -f "$COMPOSE_FILE" exec -T db pg_isready -U smsly_admin ; then
 
 
 
@@ -23813,7 +23813,7 @@ echo -e "${BLUE}  → Syncing database password...${NC}"
 
 
 
-if docker compose -f "$COMPOSE_FILE" exec -T db \
+if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T db \
     psql -U postgres -c "ALTER USER smsly_admin WITH PASSWORD '${POSTGRES_PASSWORD}';" \
  ; then
 
@@ -23823,7 +23823,7 @@ if docker compose -f "$COMPOSE_FILE" exec -T db \
 
 
 
-elif docker compose -f "$COMPOSE_FILE" exec -T -e PGPASSWORD="${POSTGRES_PASSWORD}" db \
+elif timeout 15 docker compose -f "$COMPOSE_FILE" exec -T -e PGPASSWORD="${POSTGRES_PASSWORD}" db \
     psql -U smsly_admin -d smsly_hosting -c "SELECT 1;" ; then
 
 
@@ -23844,7 +23844,7 @@ else
 
 
 
-    docker compose -f "$COMPOSE_FILE" exec -T db \
+    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T db \
         psql -U postgres -c "ALTER USER smsly_admin WITH PASSWORD '${POSTGRES_PASSWORD}';" \
   || echo -e "${RED}  ✗ Could not sync password. Check pg_hba.conf${NC}"
 
@@ -23950,7 +23950,7 @@ sleep 5
 
 
 
-    docker compose -f "$COMPOSE_FILE" exec -T db \
+    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T db \
         psql -U smsly_admin -d smsly_hosting \
         -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND backend_type = 'client backend'" \
   || true
@@ -24001,7 +24001,7 @@ sleep 5
 
 
 
-        docker compose -f "$COMPOSE_FILE" exec -T db \
+        timeout 30 docker compose -f "$COMPOSE_FILE" exec -T db \
             psql -U smsly_admin -d smsly_hosting \
             -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND backend_type = 'client backend'" \
   || true
@@ -24088,11 +24088,11 @@ sleep 5
 
 
 
-    docker compose -f "$COMPOSE_FILE" exec -T --user root backend chown -R 1000:1000 /app/staticfiles /app/media /app/backups  || true
+    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T --user root backend chown -R 1000:1000 /app/staticfiles /app/media /app/backups  || true
 
 
 
-    docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic --noinput  || true
+    timeout 120 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic --noinput  || true
 
 
 
@@ -24184,7 +24184,7 @@ else
 
 
 
-ADMIN_EXISTS=$(echo "from django.contrib.auth import get_user_model; User = get_user_model(); print('1' if User.objects.filter(username='admin').exists() else '0')" | docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell  | tail -1)
+ADMIN_EXISTS=$(echo "from django.contrib.auth import get_user_model; User = get_user_model(); print('1' if User.objects.filter(username='admin').exists() else '0')" | timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell  | tail -1)
 
 
 
@@ -24300,7 +24300,7 @@ print(token.key)
 
 
 
-" | docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell  | tail -1 > "$INSTALL_DIR/.token"
+" | timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell  | tail -1 > "$INSTALL_DIR/.token"
 
 
 
@@ -24412,7 +24412,7 @@ print('CREATED' if created else 'EXISTS')
 
 
 
-" | docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell  | tail -1 
+" | timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell  | tail -1 
 
 
 
@@ -26167,7 +26167,7 @@ for attempt in $(seq 1 24); do
 
 
 
-    if docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS http://127.0.0.1:8000/health/live ; then
+    if timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS http://127.0.0.1:8000/health/live ; then
 
 
 
@@ -26299,7 +26299,7 @@ for attempt in $(seq 1 $MAX_ATTEMPTS); do
 
 
 
-    if docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health/live ; then
+    if timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health/live ; then
 
 
 
@@ -26359,7 +26359,7 @@ if [ "$HEALTH_OK" = "true" ]; then
 
 
 
-    docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health/ready  && READY_OK=true
+    timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health/ready  && READY_OK=true
 
 
 
@@ -27074,11 +27074,11 @@ echo -e "${BLUE}  → Registering this node and creating authentication tokens..
 
 
 
-if docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py help diagnose_nodes ; then
+if timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py help diagnose_nodes ; then
 
 
 
-    docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py diagnose_nodes --fix || true
+    timeout 60 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py diagnose_nodes --fix || true
 
 
 
@@ -27583,7 +27583,7 @@ if [ -n "$SSH_CONNECTION" ] && command -v ssh-add ; then
 
 
 
-        docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+        timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 
 
 

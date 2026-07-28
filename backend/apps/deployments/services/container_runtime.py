@@ -120,3 +120,21 @@ def get_runtime_for_container(
     if runtime == "runc":
         return None
     return runtime
+
+
+class ContainerRuntime:
+    """Wrapper for common Docker container operations."""
+
+    def __init__(self):
+        import docker
+        self.client = docker.from_env()
+
+    def restart_container(self, container_id: str, timeout: int = 10):
+        """Restart a container by ID. Returns the container object."""
+        container = self.client.containers.get(container_id)
+        container.restart(timeout=timeout)
+        return container
+
+    def get_container(self, container_id: str):
+        """Get a container object by ID."""
+        return self.client.containers.get(container_id)

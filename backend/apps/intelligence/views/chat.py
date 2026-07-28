@@ -24,13 +24,13 @@ class AIChatView(GenericAPIView):
         from apps.intelligence.providers import SYSTEM_PROMPT, _cached_ask
         message = request.data.get('message')
         if not message:
-            return Response({"detail": "Message required"},
+            return Response({"error": "Message required"},
                             status=status.HTTP_400_BAD_REQUEST)
 
         # SECURITY: Input length limit to prevent abuse
         if len(message) > 2000:
             return Response(
-                {"detail": "Message too long. Maximum 2000 characters."},
+                {"error": "Message too long. Maximum 2000 characters."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -48,6 +48,6 @@ class AIChatView(GenericAPIView):
         except Exception as e:
             logger.error("AI chat error: %s", e)
             return Response(
-                {"detail": "AI chat temporarily unavailable."},
+                {"error": "AI chat temporarily unavailable."},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )

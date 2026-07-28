@@ -6,6 +6,7 @@ import time
 
 import docker
 from celery import shared_task
+from celery.exceptions import SoftTimeLimitExceeded
 from django.conf import settings
 from django.utils import timezone
 
@@ -14,6 +15,7 @@ from apps.deployments.models import (
     Deployment,
 )
 from apps.deployments.services.pipeline import PipelineError, PipelineManager
+from apps.deployments.constants import TASK_TIME_LIMIT_DEPLOY, TASK_TIME_LIMIT_QUICK
 from apps.deployments.utils import (
     append_log,
     broadcast_status,
@@ -29,7 +31,7 @@ from ..deploy.helpers import (  # noqa: F401
     _run_managed_image_post_deploy_hooks,
     fleet_build_lock,
 )
-from ..deploy.build import _build_function, _build_uploaded_source
+from ..deploy.build_nixpacks import _build_function, _build_uploaded_source
 from .tasks_deploy_remote import _handle_remote_deployment, _resume_remote_deployment
 from ..tasks_utils import (
     should_skip_review_for_commit_message,
@@ -39,8 +41,8 @@ from ..tasks_utils import (
 @shared_task(
     bind=True,
     max_retries=3,
-    soft_time_limit=3600,
-    time_limit=3900,
+    soft_time_limit=TASK_TIME_LIMIT_DEPLOY[0],
+    time_limit=TASK_TIME_LIMIT_DEPLOY[1],
     name="apps.deployments.tasks.smart_deploy_task",
 )
 def smart_deploy_task(self, deployment_id: str, provider_id: str,
@@ -57,8 +59,39 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
             update_commit_status.delay(
                 str(deployment.id), 'pending', 'Deployment started'
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to post commit status for deployment %s: %s", deployment_id, exc)
+
+        try:
+            from apps.deployments.tasks.cicd.tasks_commit_status import _detect_provider, _extract_repo_path
+            from apps.deployments.services.github_app import get_github_app_service, get_installation_for_repo
+            if _detect_provider(deployment.service.repository_url or '') == 'github':
+                repo_name = _extract_repo_path(deployment.service.repository_url or '')
+                inst = get_installation_for_repo(repo_name) if repo_name else None
+                svc = get_github_app_service()
+                if inst and svc and deployment.commit_hash:
+                    env_name = 'preview' if deployment.service.is_preview else 'production'
+                    gh_depl_id = svc.create_deployment(
+                        installation_id=inst.installation_id,
+                        repo_full_name=repo_name,
+                        ref=deployment.commit_hash,
+                        environment=env_name,
+                        description=f"Deploying {deployment.commit_hash[:7]}",
+                        transient_environment=deployment.service.is_preview,
+                        production_environment=not deployment.service.is_preview,
+                    )
+                    if gh_depl_id:
+                        deployment.github_deployment_id = gh_depl_id
+                        deployment.save(update_fields=['github_deployment_id'])
+                        svc.create_deployment_status(
+                            installation_id=inst.installation_id,
+                            repo_full_name=repo_name,
+                            github_deployment_id=gh_depl_id,
+                            state='in_progress',
+                            description='Building and deploying...',
+                        )
+        except Exception as exc:
+            logger.debug("Failed to create GitHub deployment for %s: %s", deployment_id, exc)
 
         skip_review = skip_review or deployment.is_rollback or should_skip_review_for_commit_message(
             deployment.commit_message
@@ -168,6 +201,12 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
 
     except PipelineError as e:
         _handle_failure(self, deployment, str(e), "Pipeline Failure")
+    except (docker.errors.DockerException, ConnectionError, TimeoutError) as exc:
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=exc, countdown=30)
+        _handle_failure(self, deployment, str(exc), "Transient Failure")
+    except SoftTimeLimitExceeded:
+        _handle_failure(self, deployment, "Task exceeded time limit", "Timeout Failure")
     except Exception as e:
         _handle_failure(self, deployment, str(e), "System Failure")
 
@@ -175,9 +214,8 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
 
 @shared_task(
     bind=True,
-    max_retries=2,
-    soft_time_limit=3600,
-    time_limit=3900,
+    soft_time_limit=TASK_TIME_LIMIT_DEPLOY[0],
+    time_limit=TASK_TIME_LIMIT_DEPLOY[1],
     name="apps.deployments.tasks.resume_deploy_task",
 )
 def resume_deploy_task(self, deployment_id: str, provider_id: str):
@@ -283,7 +321,7 @@ def _sync_service_dns_to_node(deployment, service):
 
 
 
-@shared_task(bind=True, max_retries=0, soft_time_limit=120, time_limit=150, name="apps.deployments.tasks._post_deploy_monitor")
+@shared_task(bind=True, max_retries=0, soft_time_limit=TASK_TIME_LIMIT_QUICK[0], time_limit=TASK_TIME_LIMIT_QUICK[1], name="apps.deployments.tasks._post_deploy_monitor")
 def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
                          image_name):
     try:
@@ -357,7 +395,7 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
                 err_summary = "; ".join(addon_errors)
                 append_log(
                     deployment,
-                    f"\n⚠️  Post-deploy addon connectivity warning:\n"
+                    "\n⚠️  Post-deploy addon connectivity warning:\n"
                     + "\n".join(f"  - {e}" for e in addon_errors)
                     + "\n\nThe container is running but may fail to serve requests "
                     "if it cannot reach its database or cache.\n"

@@ -93,8 +93,8 @@ def resolve_running_container(service, deployment=None):
             container = client.containers.get(container_id)
             if container.status == 'running':
                 return container
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Container lookup by ID failed: %s", exc)
 
     try:
         containers = client.containers.list(
@@ -102,8 +102,8 @@ def resolve_running_container(service, deployment=None):
         )
         if containers:
             return containers[0]
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Container lookup by service_id label failed: %s", exc)
 
     try:
         containers = client.containers.list(
@@ -111,8 +111,8 @@ def resolve_running_container(service, deployment=None):
         )
         if containers:
             return containers[0]
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Container lookup by name failed: %s", exc)
 
     return None
 

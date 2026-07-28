@@ -35,6 +35,9 @@ def _resolve_encryption_key(request):
             return key_material
     key_file = request.FILES.get('key_file')
     if key_file:
+        from .upload_security import MAX_KEY_FILE_SIZE
+        if key_file.size > MAX_KEY_FILE_SIZE:
+            return None
         import json
         try:
             payload = json.loads(key_file.read())
@@ -405,8 +408,8 @@ class CaddySecretOrAdminPermission(permissions.BasePermission):
             db_secret = str(getattr(cfg, 'caddy_ask_secret', '') or '').strip()
             if db_secret:
                 return db_secret
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to load Caddy ask secret from PlatformConfig: %s", exc)
         return str(getattr(settings, "CADDY_ASK_SECRET", "") or "")
 
 
@@ -461,13 +464,13 @@ def _setup_provider_webhook(user, repo_url: str):
     from urllib.parse import urlparse as _urlparse
     hostname = _urlparse(repo_url).hostname or ''
     if 'github' in hostname:
-        from apps.deployments.services.github_webhooks import setup_github_webhook
+        from apps.cloud.services.github_webhooks import setup_github_webhook
         setup_github_webhook(user, repo_url)
     elif 'gitlab' in hostname:
-        from apps.deployments.services.gitlab_webhooks import setup_gitlab_webhook
+        from apps.cloud.services.gitlab_webhooks import setup_gitlab_webhook
         setup_gitlab_webhook(user, repo_url)
     elif 'bitbucket' in hostname:
-        from apps.deployments.services.bitbucket_webhooks import setup_bitbucket_webhook
+        from apps.cloud.services.bitbucket_webhooks import setup_bitbucket_webhook
         setup_bitbucket_webhook(user, repo_url)
 
 
@@ -559,8 +562,8 @@ def _service_for_domain(domain: str):
         return direct
     try:
         return Service.objects.filter(custom_domains__contains=[domain]).first()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Custom domain lookup failed: %s", exc)
     for service in Service.objects.only("id", "custom_domains")[:500]:
         values = [
             str(value or "").strip().lower()

@@ -287,8 +287,8 @@ class RepoScanner:
                                 key = line.split('=', 1)[0].strip()
                                 key = re.sub(r'^export\s+', '', key)
                                 add_var(key, f"Found in {f}")
-                    except Exception: # pylint: disable=broad-exception-caught
-                        pass
+                    except Exception as exc:  # pylint: disable=broad-exception-caught
+                        logger.debug("Failed to scan env file %s: %s", f, exc)
 
         # 2. Scan code files for env var patterns across 50+ frameworks
         code_patterns = [
@@ -367,8 +367,8 @@ class RepoScanner:
                                     add_var(var_name, full_ctx)
                                 except (IndexError, AttributeError):
                                     continue
-                except Exception: # pylint: disable=broad-exception-caught
-                    pass
+                except Exception as exc:
+                    logger.debug("Failed to scan file %s for env vars: %s", filepath, exc)
 
         # 3. Post-processing: detect pydantic env_prefix and lowercase snake_case fields
         pydantic_prefix_pat = re.compile(r'env_prefix\s*=\s*["\']([A-Z_][A-Z0-9_]*)["\']')
@@ -391,8 +391,8 @@ class RepoScanner:
                         env_var = (prefix + m.group(1).upper()) if prefix else m.group(1).upper()
                         ctx_line = m.group(0).strip()
                         add_var(env_var, f"Found in {f} (pydantic field): {ctx_line}")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Failed to scan file %s for env vars: %s", f, exc)
 
         # 4. Scan docker-compose files for ${VAR} interpolation
         compose_pattern = re.compile(r'\$\{([A-Z_][A-Z0-9_]*)(?::?[-?+])?[^}]*\}')
@@ -440,10 +440,10 @@ class RepoScanner:
                                                         add_var(k, f"Found in {f} ({svc_name} environment block)")
                                                     elif isinstance(item, str):
                                                         add_var(item, f"Found in {f} ({svc_name} environment block pass-through)")
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
+                        except Exception as exc:
+                            logger.debug("Failed to parse YAML environment blocks in %s: %s", f, exc)
+                except Exception as exc:
+                    logger.debug("Failed to scan compose/Dockerfile %s: %s", filepath, exc)
 
         return env_vars
 

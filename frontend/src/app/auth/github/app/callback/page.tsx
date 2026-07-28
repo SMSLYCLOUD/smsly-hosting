@@ -53,8 +53,9 @@ function GitHubAppCallbackContent() {
           `${res.data?.repositories?.length || 0} repositories accessible.`
         );
         setTimeout(() => router.push("/settings"), 2000);
-      } catch (e: any) {
-        const statusCode = e?.response?.status;
+      } catch (e: unknown) {
+        const axiosErr = e as { response?: { status?: number; data?: { error?: string; detail?: string } } };
+        const statusCode = axiosErr?.response?.status;
         if (statusCode === 401) {
           setStatus("error");
           setMessage("Your session has expired. Redirecting to login...");
@@ -63,8 +64,8 @@ function GitHubAppCallbackContent() {
         }
         setStatus("error");
         const detail =
-          e?.response?.data?.error ||
-          e?.response?.data?.detail ||
+          axiosErr?.response?.data?.error ||
+          axiosErr?.response?.data?.detail ||
           "Failed to link GitHub App installation.";
         setMessage(String(detail));
       }

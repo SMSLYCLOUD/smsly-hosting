@@ -298,8 +298,8 @@ def _detect_env_vars(files: list[str], stack: str, port: int,
                             key = line.split('=', 1)[0].strip()
                             if key and re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', key):
                                 var_keys.append(key)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to scan file %s for env vars: %s", full_path, exc)
 
         # NEW: Scan docker-compose files for environment variables
         compose_files = [f for f in files if os.path.basename(f) in ('docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml')]
@@ -328,8 +328,8 @@ def _detect_env_vars(files: list[str], stack: str, port: int,
                                         elif isinstance(item, str): # if it's just VAR meaning pass-through
                                             if item and re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', item):
                                                 var_keys.append(item)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to scan compose file %s: %s", cf, exc)
 
         # 3. Scan config.py / settings.py for os.environ / os.getenv patterns
         config_candidates = [f for f in files
@@ -344,8 +344,8 @@ def _detect_env_vars(files: list[str], stack: str, port: int,
                     content
                 )
                 var_keys.extend(patterns)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to scan config file %s: %s", cf, exc)
 
     # 4. Deduplicate while preserving order
     seen: set = set()

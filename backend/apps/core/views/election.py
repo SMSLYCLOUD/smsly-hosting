@@ -8,6 +8,7 @@ Internal endpoints (HMAC-authenticated, WireGuard mesh):
 - heartbeat_receive: Accept heartbeats from leader
 - vote_request: Handle vote requests from candidates
 """
+from __future__ import annotations
 
 import hashlib
 import hmac as hmac_mod
@@ -195,7 +196,7 @@ class ClusterViewSet(viewsets.ReadOnlyModelViewSet):
 
 @api_view(["POST"])
 @_election_hmac_required
-def heartbeat_receive(request):
+def heartbeat_receive(request) -> Response:
     """
     Receive a heartbeat from the cluster leader.
 
@@ -279,7 +280,7 @@ def heartbeat_receive(request):
 
 @api_view(["POST"])
 @_election_hmac_required
-def vote_request(request):
+def vote_request(request) -> Response:
     """
     Handle a vote request from a candidate server.
 

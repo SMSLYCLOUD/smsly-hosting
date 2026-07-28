@@ -66,6 +66,9 @@ const nextConfig = {
   outputFileTracingRoot: path.join(__dirname),
   poweredByHeader: false,
   compress: true,
+  experimental: {
+    optimizePackageImports: ['lucide-react', 'framer-motion', 'date-fns', '@heroicons/react/24/outline'],
+  },
   images: {
     formats: ['image/avif', 'image/webp'],
     remotePatterns: [

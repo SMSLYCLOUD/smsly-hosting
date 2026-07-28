@@ -211,8 +211,8 @@ class SystemConfigView(GenericAPIView):
                 with open('/proc/loadavg') as f:
                     parts = f.read().split()
                     infra['load_avg'] = [float(parts[i]) for i in range(3)]
-            except Exception:
-                pass
+            except (OSError, ValueError) as exc:
+                logger.debug("Failed to read /proc/loadavg: %s", exc)
 
         # ── Docker containers ─────────────────────────────────────
         KNOWN_SERVICES = [
@@ -262,8 +262,8 @@ class SystemConfigView(GenericAPIView):
             with connection.cursor() as cursor:
                 cursor.execute('SELECT 1')
                 db_ok = True
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("DB health probe failed: %s", exc)
 
         redis_ok = False
         try:
@@ -286,8 +286,8 @@ class SystemConfigView(GenericAPIView):
                 )
                 r.ping()
                 redis_ok = True
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Redis health probe failed: %s", exc)
 
         celery_ok = False
         try:
@@ -296,8 +296,8 @@ class SystemConfigView(GenericAPIView):
             active = inspect.active()
             if active is not None:
                 celery_ok = True
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Celery health probe failed: %s", exc)
 
         HTTP_PROBES = {
             'grafana': 'http://localhost:3001/api/health',

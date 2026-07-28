@@ -5,29 +5,29 @@ export default function GitHubAppSetupPage() {
   return (
     <main className="min-h-screen bg-white dark:bg-slate-950">
       <section className="pt-28 pb-10 px-4 bg-gradient-to-b from-slate-50/60 to-white dark:from-slate-950/60 dark:to-slate-950 border-b border-slate-200 dark:border-slate-800">
-        <div className="max-w-4xl mx-auto">
+        <div className="max-w-3xl mx-auto">
           <Link href="/docs" className="inline-flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-400 hover:underline mb-6">
             <ArrowLeft size={14} /> Back to Docs
           </Link>
           <div className="flex items-center gap-3 mb-4">
             <div className="p-2.5 bg-slate-100 dark:bg-slate-800 rounded-xl">
-              <Github className="w-6 h-6 text-slate-700 dark:text-slate-300" />
+              <Github className="w-5 h-5 text-slate-700 dark:text-slate-300" />
             </div>
             <span className="text-sm font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider">Integration</span>
           </div>
-          <h1 className="text-3xl md:text-4xl font-extrabold text-slate-900 dark:text-white mb-3">
+          <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight text-slate-900 dark:text-white mb-3 leading-tight">
             GitHub App Setup
           </h1>
-          <p className="text-slate-500 dark:text-slate-400 text-lg max-w-2xl">
+          <p className="text-slate-500 dark:text-slate-400 text-lg max-w-2xl leading-relaxed">
             Create and configure a GitHub App for automatic deployments, PR previews, and commit statuses.
           </p>
         </div>
       </section>
 
-      <div className="max-w-3xl mx-auto px-4 py-12 prose prose-slate dark:prose-invert">
+      <div className="max-w-3xl mx-auto px-4 py-12 prose prose-slate dark:prose-invert prose-headings:scroll-mt-24">
 
-        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700 rounded-xl p-4 mb-8 not-prose">
-          <p className="text-sm text-blue-800 dark:text-blue-200">
+        <div className="docs-callout docs-callout-info not-prose">
+          <p className="!mt-0 text-sm">
             <strong>Why a GitHub App?</strong> A GitHub App provides automatic webhook management, commit deployment statuses in your PRs, and organization-level repo access — all without needing individual OAuth tokens for each user.
           </p>
         </div>

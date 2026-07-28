@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import Any
+
 ADDON_ALERT_RULES = [
     {'metric': 'connection_count', 'threshold': 90, 'percent_of_max': True,
      'severity': 'warning', 'message': 'Approaching max connections'},
@@ -7,7 +11,7 @@ ADDON_ALERT_RULES = [
      'severity': 'warning', 'message': 'Memory pressure detected'},
 ]
 
-def check_alerts(addon, metrics):
+def check_alerts(addon: Any, metrics: dict[str, Any]) -> list[dict[str, str]]:
     alerts = []
     for rule in ADDON_ALERT_RULES:
         val = metrics.get(rule['metric'])

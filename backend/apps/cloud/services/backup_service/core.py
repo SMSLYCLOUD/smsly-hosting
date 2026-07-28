@@ -68,8 +68,8 @@ class BackupService:
                 active = BackupEncryptionKey.objects.filter(is_active=True).first()
                 if active and active.key_material_encrypted:
                     key = active.key_material_encrypted.strip()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to load backup encryption key from settings/model: %s", exc)
         return key
 
     def __init__(self):
@@ -537,13 +537,13 @@ class BackupService:
             if temp_dir and os.path.exists(temp_dir):
                 try:
                     shutil.rmtree(temp_dir, ignore_errors=True)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Failed to cleanup temp dir during backup: %s", exc)
             try:
                 if image_tag and not backup.db_only and 'backup/' in image_tag:
                     self.docker_client.images.remove(image_tag, force=True)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to remove backup image %s: %s", image_tag, exc)
 
     def restore_service(self, backup_id, target_service_id=None, requesting_user_id=None, raise_on_snapshot_failure=True):
         if not _acquire_service_lock(str(backup_id), 'restore'):
@@ -673,13 +673,13 @@ class BackupService:
                     ctr.exec_run(['redis-cli', '--pipe'], data_input=open(db_dump_path, 'rb').read())
 
             vol_files = [f for f in extracted_files if f.startswith('volume_') and f.endswith('.tar.gz')]
+            all_vols = list(Volume.objects.filter(service=target_service))
             for vol_file in vol_files:
                 vol_name_part = vol_file[len('volume_'):-len('.tar.gz')]
                 vol_name = vol_name_part.replace('_', '/', 1) if '/' in vol_name_part else vol_name_part
 
-                matching_vols = Volume.objects.filter(service=target_service)
                 target_vol = None
-                for v in matching_vols:
+                for v in all_vols:
                     safe = v.name.replace('/', '_').replace('\\', '_').replace('..', '_')
                     if safe == vol_name_part:
                         target_vol = v
@@ -755,8 +755,8 @@ class BackupService:
             if cleanup_archive:
                 try:
                     os.remove(cleanup_archive)
-                except Exception:
-                    pass
+                except OSError as exc:
+                    logger.debug("Failed to remove archive %s: %s", cleanup_archive, exc)
             from .cloud import _delete_backup_cloud_object
             _delete_backup_cloud_object(backup)
 
@@ -775,7 +775,7 @@ class BackupService:
                 try:
                     shutil.rmtree(temp_dir, ignore_errors=True)
                 except Exception:
-                    pass
+                    pass  # best-effort cleanup in finally block
 
     def _backup_remote_service(self, service, backup, server, include_secret_values) -> ServiceBackup:
         logger.info("Starting remote backup for %s on server %s", service.name, server.host)
@@ -934,8 +934,8 @@ rm -rf {remote_tmp}
                 os.remove(archive_path)
                 if cleanup_archive != archive_path:
                     os.remove(cleanup_archive)
-            except Exception:
-                pass
+            except OSError as exc:
+                logger.debug("Failed to remove archive files: %s", exc)
 
         from .cloud import _delete_backup_cloud_object
         _delete_backup_cloud_object(backup)
@@ -1155,8 +1155,8 @@ rm -rf {remote_tmp}
             if cleanup_archive:
                 try:
                     os.remove(cleanup_archive)
-                except Exception:
-                    pass
+                except OSError as exc:
+                    logger.debug("Failed to remove archive %s: %s", cleanup_archive, exc)
 
             from .cloud import _delete_backup_cloud_object
             _delete_backup_cloud_object(backup)
@@ -1210,8 +1210,8 @@ rm -rf {remote_tmp}
                         'total_bytes': total_bytes,
                     }
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to send backup progress notification for %s: %s", backup_id, exc)
 
     @staticmethod
     def _backup_encryption_required() -> bool:
@@ -1260,8 +1260,8 @@ rm -rf {remote_tmp}
                 raw_key = BackupService._decode_backup_key(key_material)
                 expected_fp = BackupService.compute_backup_key_fingerprint(key_material)
                 return raw_key, expected_fp
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Key lookup by id %s failed, falling back to passed key: %s", key_id, exc)
         expected_fp = BackupService.compute_backup_key_fingerprint(passed_key)
         return raw_key, expected_fp
 
@@ -1361,8 +1361,8 @@ rm -rf {remote_tmp}
         if path and os.path.exists(path):
             try:
                 os.remove(path)
-            except Exception:
-                pass
+            except OSError as exc:
+                logger.debug("Failed to remove decrypted path %s: %s", path, exc)
 
     @staticmethod
     def _decrypt_chunked_backup(path: str, key: str) -> str:

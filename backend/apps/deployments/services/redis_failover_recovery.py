@@ -11,6 +11,8 @@ import docker
 from celery import shared_task
 from celery.exceptions import SoftTimeLimitExceeded
 
+from apps.deployments.constants import TASK_TIME_LIMIT_QUICK
+
 logger = logging.getLogger(__name__)
 
 PRIMARY_CONTAINER = "smsly-redis-primary"
@@ -96,8 +98,8 @@ def check_and_recover(dry_run: bool = False) -> dict:
                 "IS the Sentinel master by hostname."
             )
             return result
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Sentinel master check failed: %s", exc)
 
     logger.warning(
         "Failover detected: container=%s (%s) is NOT master (%s:%s)",
@@ -135,8 +137,8 @@ def check_and_recover(dry_run: bool = False) -> dict:
     bind=True,
     name="apps.deployments.tasks.recover_redis_failover",
     max_retries=2,
-    soft_time_limit=120,
-    time_limit=150,
+    soft_time_limit=TASK_TIME_LIMIT_QUICK[0],
+    time_limit=TASK_TIME_LIMIT_QUICK[1],
 )
 def recover_redis_failover(self):
     """Celery beat task: detect and clean up orphaned Redis primary."""

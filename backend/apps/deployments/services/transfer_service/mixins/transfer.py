@@ -1,21 +1,17 @@
 """TransferMixin — extracted from ServerTransferService for lifecycle methods."""
 
-import json
 import logging
 import os
-import shlex
 import socket
 import time
 from datetime import timedelta
 
 import requests
-from django.conf import settings
 from django.db.models import Q
 from django.utils import timezone
 
 from apps.deployments.models.core import PlatformConfig
 
-from ...backup_service import BackupService
 from ..helpers import (
     TRANSFER_ERROR_LIMIT,
     _command_text,
@@ -39,8 +35,8 @@ class TransferMixin:
             container = client.containers.get(self.transfer.service.name)
             container.stop(timeout=10)
             container.remove()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to stop/remove source container: %s", exc)
 
     def _dns_cutover(self):
         self._update(85, 'DNS cutover: updating records...')
@@ -270,8 +266,8 @@ class TransferMixin:
                 )
                 exec_result = self._exec_on_target(domain_script)
                 new_base = (exec_result.get('stdout') or '').strip()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to resolve target domain: %s", exc)
 
         if not new_base and target_server:
             new_base = target_server.host or ''

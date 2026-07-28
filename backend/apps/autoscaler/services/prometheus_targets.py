@@ -2,6 +2,8 @@
 Prometheus target file management.
 Writes file_sd_configs JSON files for remote docker-labels exporters.
 """
+from __future__ import annotations
+
 import contextlib
 import json
 import logging
@@ -73,7 +75,7 @@ def _ensure_target_dir_writable() -> bool:
     return False
 
 
-def write_docker_labels_targets():
+def write_docker_labels_targets() -> None:
     """Write Prometheus file_sd target files for all remote docker-labels exporters."""
     try:
         from apps.deployments.models.core import ManagedServer
@@ -155,7 +157,7 @@ def write_docker_labels_targets():
     )
 
 
-def deploy_docker_labels_exporter_on_node(server, force: bool = False):
+def deploy_docker_labels_exporter_on_node(server, force: bool = False) -> bool:
     """SSH into a remote ManagedServer and deploy the docker-labels exporter container."""
     from apps.deployments.services.ssh_client import SSHClient
 
@@ -238,13 +240,13 @@ CADVISOR_PORT = 8080
 NODE_EXPORTER_PORT = 9100
 
 
-def _node_bind_ip(server) -> str:
+def _node_bind_ip(server) -> str:  # UNUSED
     """Return the WireGuard mesh IP if available, else 0.0.0.0."""
     wg = getattr(server, "wg_address", None)
     return wg if wg else "0.0.0.0"
 
 
-def deploy_cadvisor_on_node(server, force: bool = False):
+def deploy_cadvisor_on_node(server, force: bool = False) -> bool:
     """SSH into a remote server and deploy cAdvisor for container metrics."""
     from apps.deployments.services.ssh_client import SSHClient
     client = SSHClient(
@@ -276,7 +278,7 @@ def deploy_cadvisor_on_node(server, force: bool = False):
             client.close()
 
 
-def deploy_node_exporter_on_node(server, force: bool = False):
+def deploy_node_exporter_on_node(server, force: bool = False) -> bool:
     """SSH into a remote server and deploy Node Exporter for host metrics."""
     from apps.deployments.services.ssh_client import SSHClient
     client = SSHClient(
@@ -309,7 +311,7 @@ def deploy_node_exporter_on_node(server, force: bool = False):
 PROMTAIL_PORT = 9080
 
 
-def deploy_promtail_on_node(server, force: bool = False):
+def deploy_promtail_on_node(server, force: bool = False) -> bool:
     """SSH into a remote ManagedServer and deploy a Promtail log collector container.
 
     The Promtail pushes container logs to the primary (VPS) Loki instance.

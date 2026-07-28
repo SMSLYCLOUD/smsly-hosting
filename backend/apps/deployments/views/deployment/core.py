@@ -3,6 +3,7 @@ import contextlib
 import logging
 import os
 
+import docker
 from django.utils import timezone
 
 from rest_framework import parsers, permissions, status, viewsets
@@ -73,7 +74,7 @@ class DeploymentViewSet(LifecycleActionsMixin, ReviewActionsMixin, LogsActionsMi
 
     def get_queryset(self):
         """Return deployments for services accessible to the requesting user."""
-        base_qs = self.queryset.select_related('service')
+        base_qs = self.queryset.select_related('service', 'rollback_from', 'target_server')
         if self.action == 'list':
             base_qs = base_qs.defer(
                 'build_logs',
@@ -307,8 +308,8 @@ class DeploymentViewSet(LifecycleActionsMixin, ReviewActionsMixin, LogsActionsMi
                         container = client.containers.get(dep.container_id)
                         container.remove(force=True)
                         containers_removed += 1
-                    except Exception:
-                        pass
+                    except docker.errors.NotFound:
+                        logger.debug("Container %s already gone", dep.container_id)
 
             for addon_obj in failed_addons:
                 container_name = f"smsly-addon-{addon_obj.addon_type.lower()}-{addon_obj.id}"
@@ -316,14 +317,14 @@ class DeploymentViewSet(LifecycleActionsMixin, ReviewActionsMixin, LogsActionsMi
                     c = client.containers.get(container_name)
                     c.remove(force=True)
                     containers_removed += 1
-                except Exception:
-                    pass
+                except docker.errors.NotFound:
+                    logger.debug("Addon container %s already gone", container_name)
                 try:
                     c = client.containers.get(addon_obj.name)
                     c.remove(force=True)
                     containers_removed += 1
-                except Exception:
-                    pass
+                except docker.errors.NotFound:
+                    logger.debug("Addon container %s already gone", addon_obj.name)
 
             # Prune all stopped containers to be sure
             client.containers.prune()
@@ -358,7 +359,7 @@ class DeploymentViewSet(LifecycleActionsMixin, ReviewActionsMixin, LogsActionsMi
                             with contextlib.suppress(OSError):
                                 shutil.rmtree(d_path)
         except Exception as exc:
-            logger.warning("Docker/Temp prune failed during deployment cleanup: %s", exc)
+            logger.error("Docker/Temp prune failed during deployment cleanup: %s", exc)
 
         # ── 3. DB: Delete records ──
         count = base_qs.delete()[0]

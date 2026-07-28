@@ -3,7 +3,7 @@ Unified metrics sources for the autoscaler.
 
 Replaces the three independent metric paths previously used by:
   * apps.deployments.services.autoscaler (DB-stored ServiceMetric)
-  * apps.deployments.services.scaling_ai (Prometheus + Loki + Docker fallback)
+  * apps.autoscaler.services.scaling_ai (Prometheus + Loki + Docker fallback)
   * apps.autoscaler.views (`docker stats` / K8s metrics API)
 
 All callers go through ``MetricsCollector.collect(service)`` and get the

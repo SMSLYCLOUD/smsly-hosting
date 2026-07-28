@@ -39,8 +39,8 @@ class EnvVarActionsMixin:
                     decoded = base64.urlsafe_b64decode(padded)
                     if len(decoded) >= 57 and decoded[0] == 0x80:
                         return True
-                except Exception:
-                    pass
+                except (ValueError, UnicodeDecodeError):
+                    pass  # not valid base64, not ciphertext
             return False
 
         if request.method.upper() == 'GET':

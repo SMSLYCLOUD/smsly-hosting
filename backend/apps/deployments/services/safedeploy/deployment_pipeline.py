@@ -124,8 +124,8 @@ class ProductionDeploymentPipeline:
             update_commit_status.delay(
                 str(deployment.id), 'success', 'Deployment active'
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to post success commit status: %s", exc)
 
         return deployment
 
@@ -170,7 +170,7 @@ class ProductionDeploymentPipeline:
             from apps.deployments.utils import get_github_oauth_token_for_user
             token = get_github_oauth_token_for_user(svc.owner)
 
-            from apps.deployments.services.git_manager import GitManager
+            from apps.cloud.services.git_manager import GitManager
             cloned_path = GitManager.clone_repo(
                 repo_url=repo_url,
                 branch=svc.branch or 'main',
@@ -291,7 +291,7 @@ class ProductionDeploymentPipeline:
             from apps.deployments.utils import get_github_oauth_token_for_user
             token = get_github_oauth_token_for_user(svc.owner)
 
-            from apps.deployments.services.git_manager import GitManager
+            from apps.cloud.services.git_manager import GitManager
             cloned_path = GitManager.clone_repo(
                 repo_url=repo_url,
                 branch=svc.branch or 'main',
@@ -397,7 +397,7 @@ class ProductionDeploymentPipeline:
             from apps.deployments.utils import get_github_oauth_token_for_user
             token = get_github_oauth_token_for_user(svc.owner)
 
-            from apps.deployments.services.git_manager import GitManager
+            from apps.cloud.services.git_manager import GitManager
             cloned_path = GitManager.clone_repo(
                 repo_url=repo_url,
                 branch=svc.branch or 'main',

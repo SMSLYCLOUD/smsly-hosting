@@ -1,4 +1,6 @@
 """Views Addons module."""
+from __future__ import annotations
+
 import logging
 import re
 
@@ -48,7 +50,7 @@ class _ClosingFileResponse(FileResponse):
                 try:
                     f.close()
                 except Exception:  # pylint: disable=broad-exception-caught
-                    pass
+                    logger.debug("Failed to close file handle", exc_info=True)
 
 
 class AddonSerializer(serializers.ModelSerializer):
@@ -88,7 +90,7 @@ class AddonViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         """Filter addons to only those belonging to the user's accessible services."""
         allowed_services = Service.objects.filter(get_team_q_filter(self.request.user))
-        qs = self.queryset.filter(
+        qs = self.queryset.select_related('service').filter(
             Q(service__in=allowed_services)
         )
         # Superusers can see ownerless (orphaned) addons for cleanup.
@@ -128,7 +130,6 @@ class AddonViewSet(viewsets.ModelViewSet):
         self.perform_destroy(instance)
         return Response(
             {
-                "ok": True,
                 "status": "deletion_pending",
                 "message": "Deletion has started.",
                 "resource_id": str(instance.id),
@@ -466,7 +467,7 @@ from rest_framework.decorators import api_view, permission_classes
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
-def service_addons_unified(request, service_id):
+def service_addons_unified(request, service_id) -> Response:
     """Return all addons AND bundle components for a service in one list.
 
     This powers the Addons tab in the frontend.  Each item has a
@@ -527,7 +528,7 @@ from rest_framework.permissions import IsAuthenticated
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
-def toggle_bucket_public_api(request, pk):
+def toggle_bucket_public_api(request, pk) -> Response:
     """Standalone API function with maximal diagnostic logging."""
     if settings.DEBUG:
         logger.info("toggle_bucket_public_api entered for pk=%s, method=%s", pk, request.method)

@@ -11,7 +11,7 @@ from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from django.conf import settings
 
-from .base import authenticate_ws_token, get_websocket_subprotocol, logger
+from .base import authenticate_ws_token, get_websocket_subprotocol, verify_deployment_ownership
 
 logger = logging.getLogger(__name__)
 
@@ -132,8 +132,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 msg = '\r\n\x1b[36m[status] initializing stable tunnel...\x1b[0m\r\n\r\n'
                 enc = base64.b64encode(msg.encode('utf-8')).decode('utf-8')
                 await self._out_queue.put({'message': enc})
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to send init message: %s", exc)
 
             self._send_task = asyncio.create_task(self._send_loop())
             self._setup_task = asyncio.create_task(self._async_setup())
@@ -302,8 +302,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 raw.send(data.encode('utf-8'))
             elif hasattr(raw, 'write'):
                 raw.write(data.encode('utf-8'))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to write to exec socket: %s", exc)
 
     async def _read_output(self):
         loop = asyncio.get_running_loop()
@@ -319,7 +319,14 @@ class TerminalConsumer(AsyncWebsocketConsumer):
 
         try:
             while True:
-                data = await loop.run_in_executor(None, self._blocking_read)
+                try:
+                    data = await asyncio.wait_for(
+                        loop.run_in_executor(None, self._blocking_read),
+                        timeout=20.0
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("Terminal read timed out")
+                    return
 
                 if data is None:
                     exec_reconnect_count += 1
@@ -333,8 +340,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                             await self._out_queue.put({'message': enc_msg})
                             await asyncio.sleep(0.5)
                             await self.close(code=4000)
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.debug("Failed to send reconnect limit message: %s", exc)
                         break
 
                     logger.info(
@@ -346,8 +353,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                             exec_reconnect_count, max_exec_reconnects)
                         enc_msg = base64.b64encode(msg.encode('utf-8')).decode('utf-8')
                         await self._out_queue.put({'message': enc_msg})
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("Failed to send reconnecting message: %s", exc)
 
                     self._close_exec_socket()
                     await asyncio.sleep(1.0)
@@ -363,8 +370,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                         msg = '\x1b[32m[reconnected to container]\x1b[0m\r\n'
                         enc_msg = base64.b64encode(msg.encode('utf-8')).decode('utf-8')
                         await self._out_queue.put({'message': enc_msg})
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("Failed to send reconnected message: %s", exc)
                     continue
 
                 if data == b'':
@@ -380,8 +387,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                                 'message': enc_msg
                             }))
                             await self.close(code=4000)
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.debug("Failed to send idle timeout message: %s", exc)
                         break
                     await asyncio.sleep(0.5)
                     continue
@@ -557,15 +564,5 @@ class TerminalConsumer(AsyncWebsocketConsumer):
     async def _authenticate_token(self, token_key):
         return await authenticate_ws_token(token_key)
 
-    @database_sync_to_async
-    def _verify_ownership(self):
-        from django.db.models import Q
-        from apps.deployments.models import Deployment
-        try:
-            return Deployment.objects.filter(
-                Q(service__owner=self.user) |
-                Q(service__project__team__members__user=self.user),
-                id=self.deployment_id,
-            ).exists()
-        except Exception:
-            return False
+    async def _verify_ownership(self):
+        return await verify_deployment_ownership(self.user, self.deployment_id)

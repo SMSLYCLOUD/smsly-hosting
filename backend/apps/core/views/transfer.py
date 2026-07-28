@@ -447,8 +447,8 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
             local_cfg_ip = PlatformConfig.load().server_ip
             if local_cfg_ip:
                 local_ips.add(local_cfg_ip.strip())
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to load PlatformConfig for local IP check: %s", exc)
         target_is_local = (
             not payload.get('target_server_id')
             and target_server_ip in local_ips
@@ -755,8 +755,8 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
                 container = client.containers.get(container_name)
                 container.stop(timeout=10)
                 container.remove()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to stop/remove container %s: %s", container_name, exc)
             return Response({'status': 'stopped'})
         except Exception:
             logger.exception("Container stop failed")

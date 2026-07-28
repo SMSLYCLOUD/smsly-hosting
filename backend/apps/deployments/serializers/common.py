@@ -49,4 +49,7 @@ class RegistryCredentialSerializer(serializers.ModelSerializer):
 class RegionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Region
-        fields = '__all__'
+        fields = [
+            'id', 'name', 'slug', 'provider',
+            'country_code', 'city', 'lat', 'lng', 'is_active',
+        ]

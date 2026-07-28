@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Activity, Box, DollarSign, Loader2, RefreshCw, Server, HardDrive } from 'lucide-react';
 
 import api from '@/lib/api';
@@ -71,8 +71,10 @@ export default function AdminDashboardPage() {
       const overview = overviewRes.status === 'fulfilled' ? overviewRes.value.data : {};
 
       const activeCount = services.filter(
-        (s: any) =>
-          s.latest_deployment?.status === 'ACTIVE' || s.latest_deployment?.status === 'RUNNING'
+        (s: Record<string, unknown>) => {
+          const deploy = s.latest_deployment as Record<string, unknown> | undefined;
+          return deploy?.status === 'ACTIVE' || deploy?.status === 'RUNNING';
+        }
       ).length;
 
       setStats({
@@ -86,7 +88,7 @@ export default function AdminDashboardPage() {
         storage_used_percent: Number(configRes.data?.STORAGE_USED_PERCENT || 0),
       });
 
-      const recentEvents: PlatformEvent[] = deployments.slice(0, 10).map((d: any) => ({
+      const recentEvents: PlatformEvent[] = deployments.slice(0, 10).map((d: Record<string, unknown>) => ({
         type:
           d.status === 'ACTIVE' || d.status === 'RUNNING'
             ? 'success'
@@ -100,12 +102,12 @@ export default function AdminDashboardPage() {
             ? 'Deployment Failed'
             : `Status: ${d.status}`,
         user: d.triggered_by || d.user || '-',
-        service: d.service_name || d.service?.name || `deploy-${String(d.id || '').slice(0, 8)}`,
-        project: d.service?.project_name || d.project_name || 'Ungrouped',
-        time: d.created_at ? new Date(d.created_at).toLocaleString() : '-',
+        service: d.service_name || ((d.service as Record<string, unknown>)?.name as string) || `deploy-${String(d.id || '').slice(0, 8)}`,
+        project: (d.service as Record<string, unknown>)?.project_name || d.project_name || 'Ungrouped',
+        time: d.created_at ? new Date(d.created_at as string).toLocaleString() : '-',
       }));
       setEvents(recentEvents);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to fetch admin data:', err);
     } finally {
       setLoading(false);
@@ -219,7 +221,15 @@ export default function AdminDashboardPage() {
   );
 }
 
-function StatsCard({ title, value, subValue, icon, color }: any) {
+interface StatsCardProps {
+  title: string;
+  value: string | number;
+  subValue?: string;
+  icon: React.ReactNode;
+  color: string;
+}
+
+function StatsCard({ title, value, subValue, icon, color }: StatsCardProps) {
   return (
     <div className={`bg-card p-6 rounded-xl shadow-sm border-l-4 ${color} border-y border-r border-border`}>
       <div className="flex items-center justify-between mb-2">
@@ -234,7 +244,16 @@ function StatsCard({ title, value, subValue, icon, color }: any) {
   );
 }
 
-function EventRow({ type, event, user, project, service, time }: any) {
+interface EventRowProps {
+  type: 'success' | 'error' | 'info';
+  event: string;
+  user: string;
+  project: string;
+  service: string;
+  time: string;
+}
+
+const EventRow = React.memo(function EventRow({ type, event, user, project, service, time }: EventRowProps) {
   const color = type === 'success' ? 'text-emerald-500' : type === 'error' ? 'text-red-500' : 'text-blue-500';
   return (
     <tr className="hover:bg-muted/50 transition-colors">
@@ -245,4 +264,4 @@ function EventRow({ type, event, user, project, service, time }: any) {
       <td className="px-6 py-4 text-muted-foreground">{time}</td>
     </tr>
   );
-}
+})

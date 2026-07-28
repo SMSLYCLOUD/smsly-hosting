@@ -1,4 +1,6 @@
 """Tasks module."""
+from __future__ import annotations
+
 import logging
 from datetime import timedelta
 from decimal import Decimal
@@ -10,6 +12,7 @@ from django.utils import timezone
 from apps.billing.models import Invoice, UsageRecord, UserSubscription
 from apps.billing.models.analytics import DailyRevenue, InfrastructureCost
 from apps.billing.services.metering import UsageMeter
+from apps.deployments.constants import TASK_TIME_LIMIT_DEPLOY, TASK_TIME_LIMIT_MEDIUM, TASK_TIME_LIMIT_STANDARD
 from apps.deployments.models import Deployment, Service
 
 logger = logging.getLogger(__name__)
@@ -19,8 +22,8 @@ PRICE_CPU_HOUR = Decimal("0.01")
 PRICE_RAM_GB_HOUR = Decimal("0.005")
 
 
-@shared_task(soft_time_limit=300, time_limit=330)
-def collect_usage_task():
+@shared_task(soft_time_limit=TASK_TIME_LIMIT_STANDARD[0], time_limit=TASK_TIME_LIMIT_STANDARD[1])
+def collect_usage_task() -> None:
     """
     Runs hourly. Snapshots active services and calculates cost.
     """
@@ -29,24 +32,28 @@ def collect_usage_task():
             deployments__status=Deployment.Status.ACTIVE
         ).distinct()
 
+        records = []
         for service in active_services:
             cpu = service.cpu_cores
             ram_gb = Decimal(service.memory_mb) / 1024
 
             cost = (cpu * PRICE_CPU_HOUR) + (ram_gb * PRICE_RAM_GB_HOUR)
 
-            UsageRecord.objects.create(
+            records.append(UsageRecord(
                 service=service,
                 cpu_cores=cpu,
                 memory_mb=service.memory_mb,
-                cost=cost
-            )
+                cost=cost,
+            ))
+
+        if records:
+            UsageRecord.objects.bulk_create(records, batch_size=500)
     except Exception as e:
         logger.error(f"Error collecting usage: {e}")
 
 
-@shared_task(soft_time_limit=3600, time_limit=3900)
-def generate_monthly_invoices():
+@shared_task(soft_time_limit=TASK_TIME_LIMIT_DEPLOY[0], time_limit=TASK_TIME_LIMIT_DEPLOY[1])
+def generate_monthly_invoices() -> None:
     """Run on 1st of each month — generate invoices for all active subscriptions."""
     meter = UsageMeter()
     # Get subscriptions that need billing (active)
@@ -110,8 +117,8 @@ def generate_monthly_invoices():
             logger.error(f"Failed to generate invoice for subscription {sub.id}: {e}")
 
 
-@shared_task(soft_time_limit=600, time_limit=660)
-def send_payment_reminders():
+@shared_task(soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1])
+def send_payment_reminders() -> None:
     """Run daily — mark past-due invoices OVERDUE and send reminders."""
     try:
         now = timezone.now()
@@ -129,8 +136,8 @@ def send_payment_reminders():
     except Exception as e:
         logger.error("Error sending payment reminders: %s", e)
 
-@shared_task(soft_time_limit=600, time_limit=660)
-def aggregate_daily_revenue():
+@shared_task(soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1])
+def aggregate_daily_revenue() -> None:
     """Run at midnight — snapshot yesterday's revenue."""
     yesterday = timezone.now().date() - timedelta(days=1)
 
@@ -165,8 +172,8 @@ def aggregate_daily_revenue():
     from apps.billing.services.alerts import AdminAlertService
     AdminAlertService().check_revenue_drop()
 
-@shared_task(soft_time_limit=600, time_limit=660)
-def calculate_infrastructure_costs():
+@shared_task(soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1])
+def calculate_infrastructure_costs() -> None:
     """Run daily — pull costs from cloud provider APIs."""
     yesterday = timezone.now().date() - timedelta(days=1)
 

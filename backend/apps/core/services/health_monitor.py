@@ -9,13 +9,18 @@ Design goals:
 - Avoid duplicate restarts while another deployment is already in progress.
 - Detect crashed containers via Docker state for instant fail-fast.
 """
+from __future__ import annotations
+
 import logging
 import os
 import time
 
+import docker
 import requests
 from celery import shared_task
 from django.core.cache import cache
+
+from apps.deployments.constants import TASK_TIME_LIMIT_QUICK
 from django.utils import timezone
 
 from apps.deployments.services.tls_verify import should_verify
@@ -169,8 +174,8 @@ def _candidate_ports(service) -> list[int]:
         port_var = service.env_vars.filter(key="PORT").order_by("-updated_at").first()
         if port_var is not None:
             _add(port_var.value)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to read PORT env var: %s", exc)
 
     raw = os.environ.get("HEALTH_CHECK_FALLBACK_PORTS", "8000,3000,8080,5000")
     for chunk in str(raw).split(","):
@@ -402,8 +407,8 @@ def _check_infrastructure_health():
         logger.debug("fail2ban health check skipped: %s", exc)
 
 
-@shared_task
-def monitor_health_task():
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_QUICK[0], time_limit=TASK_TIME_LIMIT_QUICK[1])
+def monitor_health_task(self) -> None:
     """
     Check health for all services with configured health paths.
 
@@ -411,7 +416,13 @@ def monitor_health_task():
     """
     from apps.deployments.models import Deployment, Service
 
-    services = Service.objects.exclude(health_check_path="")
+    services = Service.objects.exclude(health_check_path="").only(
+        "id", "name", "health_check_path", "health_check_port", "health_check_interval",
+        "health_check_timeout", "health_check_retries", "auto_restart",
+        "health_status", "internal_port", "public_domain", "public_domain_hidden",
+        "cpu_cores", "memory_mb", "auto_rollback_threshold",
+        "server__id", "server__is_lite_agent", "server__private_ip", "server__verify_tls",
+    )
     checked = 0
     skipped = 0
 
@@ -445,12 +456,12 @@ def _probe_container_state(container_id: str) -> dict:
     Returns {"status": "unknown", "exit_code": None, "restart_count": 0,
              "started_at": ""} if Docker is unreachable.
     """
-    import docker
+    from apps.deployments.services.docker_client import get_docker_client
 
     if not container_id:
         return {"status": "unknown", "exit_code": None, "restart_count": 0, "started_at": ""}
     try:
-        client = docker.from_env()
+        client = get_docker_client()
         container = client.containers.get(container_id)
         state = container.attrs.get("State", {})
         status = (state.get("Status") or "unknown").lower()
@@ -469,7 +480,7 @@ def _probe_container_state(container_id: str) -> dict:
         return {"status": "unknown", "exit_code": None, "restart_count": 0, "started_at": ""}
 
 
-def _check_service_health(service, Deployment):
+def _check_service_health(service: object, Deployment: object) -> None:
     """Check a single service's health and update service status."""
     active = (
         Deployment.objects.filter(service=service, status=Deployment.Status.ACTIVE)
@@ -583,12 +594,12 @@ def _check_service_health(service, Deployment):
 def _fetch_container_logs(service) -> str:
     """Fetch container logs for a service. Returns empty string on failure."""
     try:
-        import docker
+        from apps.deployments.services.docker_client import get_docker_client
         from apps.deployments.models import Deployment as D
         active = D.objects.filter(service=service, status=D.Status.ACTIVE).order_by("-created_at").first()
         if not active or not active.container_id:
             return ""
-        client = docker.from_env()
+        client = get_docker_client()
         container = client.containers.get(active.container_id)
         logs = container.logs(tail=200, stdout=True, stderr=True, timestamps=True)
         return logs.decode("utf-8", errors="replace")
@@ -967,7 +978,7 @@ def _trigger_restart(service, service_key: str) -> bool:
         return False
 
 
-def reset_restart_state(service_id: str):
+def reset_restart_state(service_id: str) -> None:
     """
     Clear restart/failure state.
     Call on manual restart/deploy so backoff does not linger.

@@ -2,7 +2,8 @@
 import asyncio
 import contextlib
 import json
-import logging
+import os
+import signal
 import subprocess
 
 from channels.db import database_sync_to_async
@@ -49,20 +50,22 @@ class AddonLogConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         self.addon_id = self.scope['url_route']['kwargs']['addon_id']
 
-        await self.accept(subprotocol=get_websocket_subprotocol(self.scope))
-
         try:
             self.user = self.scope.get('user')
 
             if not self.user or self.user.is_anonymous:
+                await self.accept()
                 await self.send(text_data=json.dumps({'error': 'Authentication required'}))
                 await self.close(code=4002)
                 return
 
             if not await self._verify_ownership():
+                await self.accept()
                 await self.send(text_data=json.dumps({'error': 'Access denied'}))
                 await self.close(code=4003)
                 return
+
+            await self.accept(subprotocol=get_websocket_subprotocol(self.scope))
 
             self.group_name = f"addon_logs_{self.addon_id}"
             await self.channel_layer.group_add(
@@ -100,9 +103,11 @@ class AddonLogConsumer(AsyncWebsocketConsumer):
             self._stream_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._stream_task
-        if self._proc:
-            with contextlib.suppress(Exception):
-                self._proc.terminate()
+        if self._proc and self._proc.poll() is None:
+            try:
+                os.killpg(os.getpgid(self._proc.pid), signal.SIGTERM)
+            except (ProcessLookupError, OSError):
+                pass
             self._proc = None
         if self.group_name:
             with contextlib.suppress(Exception):
@@ -129,7 +134,6 @@ class AddonLogConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def _verify_ownership(self):
-        from django.db.models import Q
         from .models.addons import Addon
         try:
             addon = Addon.objects.select_related('service', 'service__owner').get(id=self.addon_id)
@@ -175,6 +179,7 @@ class AddonLogConsumer(AsyncWebsocketConsumer):
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
+                preexec_fn=os.setsid,  # process group for clean terminate
             )
             loop = asyncio.get_event_loop()
             while not self._proc.stdout.closed:
@@ -194,8 +199,10 @@ class AddonLogConsumer(AsyncWebsocketConsumer):
             logger.debug("Addon log stream ended for %s: %s", self.addon_id, e)
         finally:
             if self._proc:
-                with contextlib.suppress(Exception):
-                    self._proc.terminate()
+                try:
+                    os.killpg(os.getpgid(self._proc.pid), signal.SIGTERM)
+                except (ProcessLookupError, OSError):
+                    pass
                 self._proc = None
 
     async def _authenticate_token(self, token_key):

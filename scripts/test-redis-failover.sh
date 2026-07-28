@@ -53,7 +53,7 @@ done
 
 # ── Helper: redis-cli via sentinel container ─────────────────────────────────
 redis_sentinel() {
-    docker exec "$SENTINEL_1" redis-cli -p 26379 "$@"
+    timeout 10 docker exec "$SENTINEL_1" redis-cli -p 26379 "$@"
 }
 
 # ── Helper: redis-cli to a specific host/port ────────────────────────────────
@@ -61,9 +61,9 @@ redis_cmd() {
     local host="$1"; shift
     local pass="${REDIS_PASSWORD:-}"
     if [ -n "$pass" ]; then
-        docker exec "$SENTINEL_1" redis-cli -h "$host" -a "$pass" "$@" 2>/dev/null
+        timeout 10 docker exec "$SENTINEL_1" redis-cli -h "$host" -a "$pass" "$@" 2>/dev/null
     else
-        docker exec "$SENTINEL_1" redis-cli -h "$host" "$@"
+        timeout 10 docker exec "$SENTINEL_1" redis-cli -h "$host" "$@"
     fi
 }
 

@@ -4,11 +4,12 @@ logger = logging.getLogger(__name__)
 from celery import shared_task
 from django.core.cache import cache
 
+from apps.deployments.constants import TASK_TIME_LIMIT_DEPLOY, TASK_TIME_LIMIT_PROVISION
 from apps.deployments.models.transfer import ServerTransfer as TransferModel
 from apps.deployments.services.transfer_service import ServerTransferService
 
 
-@shared_task(bind=True, soft_time_limit=3600, time_limit=4200, name="apps.deployments.tasks.execute_server_transfer_task")
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_DEPLOY[0], time_limit=TASK_TIME_LIMIT_DEPLOY[1], name="apps.deployments.tasks.execute_server_transfer_task")
 def execute_server_transfer_task(self, transfer_id):
     from apps.deployments.services.transfer_service import (
         ServerTransferService,
@@ -71,7 +72,7 @@ def execute_server_transfer_task(self, transfer_id):
 
 
 
-@shared_task(bind=True, name="apps.deployments.tasks.rollback_transfer_task")
+@shared_task(bind=True, name="apps.deployments.tasks.rollback_transfer_task", soft_time_limit=TASK_TIME_LIMIT_PROVISION[0], time_limit=TASK_TIME_LIMIT_PROVISION[1])
 def rollback_transfer_task(self, transfer_id):
 
     lock_key = f"server-transfer-rollback:{transfer_id}"

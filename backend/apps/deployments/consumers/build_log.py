@@ -1,12 +1,12 @@
 """Real-time build log streaming consumer."""
+import contextlib
 import json
-import logging
 
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from django.conf import settings
 
-from .base import authenticate_ws_token, get_websocket_subprotocol, logger
+from .base import authenticate_ws_token, get_websocket_subprotocol, verify_deployment_ownership, logger
 
 
 class BuildLogConsumer(AsyncWebsocketConsumer):
@@ -43,8 +43,6 @@ class BuildLogConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         self.deployment_id = self.scope['url_route']['kwargs']['deployment_id']
 
-        await self.accept(subprotocol=get_websocket_subprotocol(self.scope))
-
         try:
             self.user = self.scope.get('user')
 
@@ -57,6 +55,8 @@ class BuildLogConsumer(AsyncWebsocketConsumer):
                 await self.send(text_data=json.dumps({'error': 'Access denied'}))
                 await self.close(code=4003)
                 return
+
+            await self.accept(subprotocol=get_websocket_subprotocol(self.scope))
 
             self.group_name = f"build_logs_{self.deployment_id}"
             await self.channel_layer.group_add(
@@ -118,18 +118,8 @@ class BuildLogConsumer(AsyncWebsocketConsumer):
     async def _authenticate_token(self, token_key):
         return await authenticate_ws_token(token_key)
 
-    @database_sync_to_async
-    def _verify_ownership(self):
-        from django.db.models import Q
-        from apps.deployments.models import Deployment
-        try:
-            return Deployment.objects.filter(
-                Q(service__owner=self.user) |
-                Q(service__project__team__members__user=self.user),
-                id=self.deployment_id,
-            ).exists()
-        except Exception:
-            return False
+    async def _verify_ownership(self):
+        return await verify_deployment_ownership(self.user, self.deployment_id)
 
     @database_sync_to_async
     def _get_current_state(self):

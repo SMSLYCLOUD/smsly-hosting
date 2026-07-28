@@ -125,5 +125,5 @@ class FlutterwaveService:
         try:
             return json.loads(raw_body.decode("utf-8"))
         except Exception as e:
-            logger.warning("Flutterwave webhook parse failed: %s", e)
+            logger.error("Flutterwave webhook parse failed: %s", e)
             raise ValueError("Invalid JSON payload") from e

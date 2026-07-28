@@ -11,7 +11,7 @@ import git
 from django.utils import timezone
 
 from apps.deployments.models import EnvironmentVariable
-from apps.deployments.utils import append_log, redact_values, update_stage
+from apps.deployments.utils import append_log, log_exhaustive_clone_diagnostics, redact_values, update_stage
 from .exceptions import BuildError
 
 

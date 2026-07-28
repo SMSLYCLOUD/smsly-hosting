@@ -5,6 +5,7 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useParams, useSearchParams } from 'next/navigation';
 import { getWsUrl } from '@/lib/websocket';
 import ScalingTab from '@/components/settings/ScalingTab';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { ServiceLayout } from '@/components/layout/ServiceLayout';
 import { Activity, Shield, Terminal, Zap, DollarSign, Globe, Rocket, Loader2 as Spinner, Server, Wrench, FolderKanban, Box, Container, RotateCcw, ShieldCheck, Plug } from 'lucide-react';
 import dynamic from 'next/dynamic';
@@ -364,7 +365,12 @@ export default function ServiceDetailPage() {
 
     return (
         <ServiceLayout service={service} activeTab={activeTab} setActiveTab={setActiveTab}>
+            <ErrorBoundary>
             {activeTab === 'overview' && (
+                // TODO(extract): Extract the stats cards grid (Status, Health, Build Time, Deploy Mode) into a
+                // standalone `OverviewStatsCards` component. They re-render on every 3s poll even when the
+                // user is on a different tab. Wrapping with React.memo and splitting would avoid unnecessary
+                // re-renders of the 200-line config/registry/deployment sections below.
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-6 animate-in fade-in slide-in-from-bottom-4">
                     <div className="col-span-1 md:col-span-4">
                         <ResourceAlerts serviceId={service.id} />
@@ -849,6 +855,10 @@ export default function ServiceDetailPage() {
             {activeTab === 'addons' && <AddonsTab serviceId={service.id} />}
 
             {activeTab === 'settings' && (
+                // TODO(extract): The Jules AI Configuration + Runtime Watch sections (~200 lines of JSX) are
+                // inlined here. Extract into `SettingsTab` (or `JulesSettingsTab`) to reduce this page from
+                // 1000+ lines. The save/load handlers (`handleSaveWatchConfig`, `loadWatchConfig`) and their
+                // 10+ state variables (`alertEmail`, `notifySms`, etc.) should move with it.
                 <div className="space-y-6">
                     {/* AI Configuration */}
                     <div className="bg-card border border-border p-6 rounded-xl shadow-sm space-y-5">
@@ -1006,6 +1016,10 @@ export default function ServiceDetailPage() {
             {activeTab === 'advanced' && <AdvancedTab service={service} />}
 
             {activeTab === 'console' && (
+                // TODO(extract): Extract the terminal/console tab into `ConsoleTab` component.
+                // The WS token fetch logic (useEffect at line 82-101) and the inline IIFE could be
+                // encapsulated. XtermConsole is already dynamically imported, so the tab shell is
+                // lightweight — but the token-fetching effect runs on every render of this page.
                 <div className="h-[600px] bg-zinc-950 rounded-xl overflow-hidden border border-border shadow-2xl">
                     {(() => {
                         const deploymentId = deployment?.id || service.latest_deployment?.id;
@@ -1046,6 +1060,7 @@ export default function ServiceDetailPage() {
                     })()}
                 </div>
             )}
+            </ErrorBoundary>
         </ServiceLayout>
     );
 }

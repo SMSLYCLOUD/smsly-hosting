@@ -11,7 +11,28 @@ class DeploymentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Deployment
-        fields = '__all__'
+        fields = [
+            'id', 'service', 'service_name',
+            'commit_hash', 'commit_message', 'branch', 'status',
+            'build_logs', 'runtime_logs_url', 'pipeline_stages',
+            'ai_diagnosis', 'review_summary', 'vulnerability_report',
+            'container_id', 'remote_deployment_id', 'green_container_id',
+            'started_at', 'finished_at', 'duration_seconds',
+            'is_rollback', 'source_node', 'rollback_from',
+            'target_server', 'target_is_local',
+            'ecosystem_retry_count', 'queued_min_replicas',
+            'metadata', 'registry_override',
+            'verified_target_type', 'verified_host_ip',
+            'verified_runtime_id', 'verified_at',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = [
+            'id', 'container_id', 'remote_deployment_id',
+            'green_container_id', 'target_server', 'target_is_local',
+            'verified_target_type', 'verified_host_ip',
+            'verified_runtime_id', 'verified_at',
+            'started_at', 'finished_at', 'created_at', 'updated_at',
+        ]
 
 
 class DeploymentTimelineSerializer(serializers.ModelSerializer):
@@ -64,7 +85,11 @@ class InstantRollbackSerializer(serializers.Serializer):
 class AuditLogSerializer(serializers.ModelSerializer):
     class Meta:
         model = AuditLog
-        fields = '__all__'
+        fields = [
+            'id', 'timestamp', 'user', 'project',
+            'actor', 'action', 'target', 'metadata',
+        ]
+        read_only_fields = ['id', 'timestamp', 'user', 'actor', 'metadata']
 
 
 class DeploymentApproveSerializer(serializers.Serializer):

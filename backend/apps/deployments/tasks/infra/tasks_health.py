@@ -12,13 +12,19 @@ from celery.exceptions import SoftTimeLimitExceeded
 from django.conf import settings
 from django.utils import timezone
 
+from apps.deployments.constants import (
+    TASK_TIME_LIMIT_MEDIUM,
+    TASK_TIME_LIMIT_QUICK,
+    TASK_TIME_LIMIT_STANDARD,
+)
+
 from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
 
 
 @shared_task(
     name="apps.deployments.tasks.auto_authenticate_nodes_task",
-    soft_time_limit=120,
-    time_limit=150,
+    soft_time_limit=TASK_TIME_LIMIT_QUICK[0],
+    time_limit=TASK_TIME_LIMIT_QUICK[1],
 )
 def auto_authenticate_nodes_task():
     """
@@ -52,7 +58,7 @@ def auto_authenticate_nodes_task():
     return count
 
 
-@shared_task(name="apps.deployments.tasks.check_agent_heartbeats_task")
+@shared_task(name="apps.deployments.tasks.check_agent_heartbeats_task", soft_time_limit=TASK_TIME_LIMIT_QUICK[0], time_limit=TASK_TIME_LIMIT_QUICK[1])
 def check_agent_heartbeats_task():
     """
     Periodic task (every 60s) to detect silent agent outages.
@@ -102,7 +108,7 @@ def check_agent_heartbeats_task():
 
 
 
-@shared_task(name="apps.deployments.tasks.check_managed_servers_health_task")
+@shared_task(name="apps.deployments.tasks.check_managed_servers_health_task", soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1])
 def check_managed_servers_health_task():
     """
     Periodic task (every 5 min) to check health of all managed servers.
@@ -126,7 +132,7 @@ def check_managed_servers_health_task():
     # cAdvisor, Node Exporter) is handled by node_watchdog_task to avoid redundant
     # SSH connections per cycle.
     try:
-        from apps.deployments.services.prometheus_targets import (
+        from apps.autoscaler.services.prometheus_targets import (
             write_docker_labels_targets,
         )
         write_docker_labels_targets()
@@ -139,7 +145,7 @@ def check_managed_servers_health_task():
 
 
 
-@shared_task(bind=True, name="apps.deployments.tasks.node_watchdog_task", max_retries=0, soft_time_limit=300, time_limit=330)
+@shared_task(bind=True, name="apps.deployments.tasks.node_watchdog_task", max_retries=0, soft_time_limit=TASK_TIME_LIMIT_STANDARD[0], time_limit=TASK_TIME_LIMIT_STANDARD[1])
 def node_watchdog_task(self):
     """
     Periodic watchdog that checks all managed servers for health issues.
@@ -155,7 +161,7 @@ def node_watchdog_task(self):
     """
     # Update Prometheus target files for docker-labels exporters
     try:
-        from apps.deployments.services.prometheus_targets import (
+        from apps.autoscaler.services.prometheus_targets import (
             write_docker_labels_targets,
         )
         write_docker_labels_targets()
@@ -201,7 +207,7 @@ def node_watchdog_task(self):
             # Auto-deploy docker-labels exporter on online nodes
             if server.status == ManagedServer.Status.ONLINE:
                 try:
-                    from apps.deployments.services.prometheus_targets import (
+                    from apps.autoscaler.services.prometheus_targets import (
                         deploy_cadvisor_on_node,
                         deploy_docker_labels_exporter_on_node,
                         deploy_node_exporter_on_node,
@@ -250,8 +256,8 @@ def node_watchdog_task(self):
                 server.status = ManagedServer.Status.OFFLINE
                 server.last_health_check = timezone.now()
                 server.save(update_fields=["status", "last_health_check", "updated_at"])
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to mark server %s as offline: %s", server.name, exc)
 
     logger.info(
         "Node watchdog complete: checked=%d healed=%d failed=%d offline=%d",
@@ -261,7 +267,7 @@ def node_watchdog_task(self):
 
 
 
-@shared_task(bind=True, max_retries=2, soft_time_limit=600, time_limit=900, name="apps.deployments.tasks.refresh_managed_server_health")
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1], name="apps.deployments.tasks.refresh_managed_server_health")
 def refresh_managed_server_health(self, server_id: str):
     """Refresh the health/status of a single managed server."""
     from .models.servers import ManagedServer
@@ -276,7 +282,7 @@ def refresh_managed_server_health(self, server_id: str):
 
 
 
-@shared_task(soft_time_limit=600, time_limit=900, name="apps.deployments.tasks.sync_master_db_to_agents_task")
+@shared_task(soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1], name="apps.deployments.tasks.sync_master_db_to_agents_task")
 def sync_master_db_to_agents_task():
     """
     Periodically push a compressed pg_dump of the master database to all

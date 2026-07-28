@@ -11,6 +11,9 @@ from django.http import HttpResponse
 from rest_framework import parsers, permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
+
+from apps.core.auth import CookieAwareTokenAuthentication
+from rest_framework.authentication import TokenAuthentication
 from ..models.backup import ServerBackup
 from ..models.audit import AuditLog
 from ..serializers import ServerBackupSerializer
@@ -30,7 +33,7 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
         backup = serializer.save(status='PENDING')
         create_server_backup_task.delay(backup_id=str(backup.id))
 
-    @action(detail=True, methods=['get'], url_path='download-key', permission_classes=[permissions.AllowAny], authentication_classes=[])
+    @action(detail=True, methods=['get'], url_path='download-key', permission_classes=[permissions.IsAuthenticated], authentication_classes=[CookieAwareTokenAuthentication, TokenAuthentication])
     def download_key(self, request, pk=None):
         """Download the V2 backup header as a .key.json file. See
         ServiceBackupViewSet.download_key for details. Public for the
@@ -191,7 +194,7 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
             ),
         })
 
-    @action(detail=True, methods=['get'], permission_classes=[permissions.AllowAny], authentication_classes=[])
+    @action(detail=True, methods=['get'], permission_classes=[permissions.IsAuthenticated], authentication_classes=[CookieAwareTokenAuthentication, TokenAuthentication])
     def download(self, request, pk=None):
         signed_value = request.query_params.get('signed')
         token_value = request.query_params.get('token')
@@ -270,12 +273,22 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
             parser_classes=[parsers.MultiPartParser])
     def upload_restore(self, request):
         """Accept a backup .tar.gz file upload and restore from it."""
+        from .upload_security import validate_upload_size, validate_tar_magic
+
         uploaded = request.FILES.get('file')
         if not uploaded:
             return Response({'error': 'No file uploaded. Send a .tar.gz file as "file".'}, status=status.HTTP_400_BAD_REQUEST)
 
         if not uploaded.name.endswith(('.tar.gz', '.tgz')):
             return Response({'error': 'File must be a .tar.gz or .tgz archive.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        size_err = validate_upload_size(uploaded, max_size=2 * 1024 * 1024 * 1024)
+        if size_err:
+            return size_err
+
+        magic_err = validate_tar_magic(uploaded)
+        if magic_err:
+            return magic_err
 
         import uuid as _uuid
 

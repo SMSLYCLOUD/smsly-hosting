@@ -86,8 +86,8 @@ def check_health() -> bool:
             req = urllib.request.urlopen(HEALTH_CHECK_URL, timeout=5)
             if req.status == 200:
                 return True
-        except Exception:
-            pass
+        except (urllib.error.URLError, OSError) as exc:
+            logger.debug("Health check attempt failed: %s", exc)
         time.sleep(HEALTH_CHECK_INTERVAL)
     return False
 

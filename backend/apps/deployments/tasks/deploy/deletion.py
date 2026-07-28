@@ -9,23 +9,29 @@ from celery.exceptions import SoftTimeLimitExceeded
 from django.utils import timezone
 from apps.addons.services.addon_provisioner import addon_provisioner
 
+from apps.deployments.constants import (
+    STALL_RECOVERY_BATCH_SIZE,
+    STALL_RECOVERY_THRESHOLD_MINUTES,
+    TASK_TIME_LIMIT_QUICK,
+    TASK_TIME_LIMIT_STANDARD,
+)
 from apps.deployments.models import Service
 from apps.deployments.models.addons import Addon
 from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
 
 logger = logging.getLogger(__name__)
-@shared_task(bind=True, name="apps.deployments.tasks.recover_stalled_deletions", max_retries=2, soft_time_limit=120, time_limit=150)
+@shared_task(bind=True, name="apps.deployments.tasks.recover_stalled_deletions", soft_time_limit=TASK_TIME_LIMIT_QUICK[0], time_limit=TASK_TIME_LIMIT_QUICK[1])
 def recover_stalled_deletions(self):
     """Periodic task: re-queue services stuck in DELETION_PENDING for too long."""
     from datetime import timedelta
 
 
-    threshold = timezone.now() - timedelta(minutes=10)
+    threshold = timezone.now() - timedelta(minutes=STALL_RECOVERY_THRESHOLD_MINUTES)
     services = list(
         Service.objects.filter(
             status=Service.Status.DELETION_PENDING,
             updated_at__lt=threshold,
-        ).values_list("id", flat=True)[:20]
+        ).values_list("id", flat=True)[:STALL_RECOVERY_BATCH_SIZE]
     )
     if not services:
         return {"recovered": 0}
@@ -173,7 +179,7 @@ def _clear_orphaned_runtime_resources() -> dict:
         "images_reclaimed_bytes": image_prune.get("SpaceReclaimed", 0),
     }
 
-@shared_task(bind=True, max_retries=3, soft_time_limit=300, time_limit=330, name="apps.deployments.tasks.delete_service_task")
+@shared_task(bind=True, max_retries=3, soft_time_limit=TASK_TIME_LIMIT_STANDARD[0], time_limit=TASK_TIME_LIMIT_STANDARD[1], name="apps.deployments.tasks.delete_service_task")
 def delete_service_task(self, service_id: str, force: bool = False):
     """Async reliable deletion of a Service"""
     from apps.deployments.models.core import Service

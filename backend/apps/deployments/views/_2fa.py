@@ -10,7 +10,7 @@ from django_otp.plugins.otp_totp.models import TOTPDevice
 from rest_framework import permissions, status
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.response import Response
-from rest_framework.throttling import AnonRateThrottle
+from apps.core.rate_limiting import TwoFactorLoginRateThrottle
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +116,7 @@ def two_factor_disable(request):
 
 @api_view(['POST'])
 @permission_classes([permissions.AllowAny])
-@throttle_classes([AnonRateThrottle])
+@throttle_classes([TwoFactorLoginRateThrottle])
 def two_factor_login(request):
     """
     Verify a 2FA token during login.

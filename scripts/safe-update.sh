@@ -174,8 +174,8 @@ safe_update_post_verify() {
             docker inspect "$ctr" --format='{{.State.Running}}'  | grep -q true && \
                 _ok "$ctr" || { _warn "$ctr not running (observability stack may not be deployed)"; }
         done
-        curl -sf http://localhost:3100/ready  && _ok "Loki: ready" || { _warn "Loki: not ready"; }
-        curl -sf http://127.0.0.1:9090/api/v1/targets  && _ok "Prometheus: responding" || { _warn "Prometheus: not responding"; }
+        curl -sf --max-time 10 http://localhost:3100/ready  && _ok "Loki: ready" || { _warn "Loki: not ready"; }
+        curl -sf --max-time 10 http://127.0.0.1:9090/api/v1/targets  && _ok "Prometheus: responding" || { _warn "Prometheus: not responding"; }
     fi
 
     local traefik_ok=false
@@ -187,7 +187,7 @@ safe_update_post_verify() {
             traefik_ok=true
             break
         fi
-        curl -sf http://127.0.0.1:8082/ping  && { _ok "Traefik: responding"; traefik_ok=true; break; }
+        curl -sf --max-time 10 http://127.0.0.1:8082/ping  && { _ok "Traefik: responding"; traefik_ok=true; break; }
         [ "$i" -lt 5 ] && sleep 10
     done
     [ "$traefik_ok" = "true" ] || { _warn "Traefik: not responding"; failed=$((failed + 1)); }

@@ -30,8 +30,8 @@ class RegistryMixin:
             scope_obj = self.service.project or self.service.owner
             registry_info = ScopedRegistry.resolve_registry_credentials(scope_obj)
             registry_url = (registry_info.get("url") or "").split("://")[-1]
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to resolve registry credentials: %s", exc)
 
         if not registry_url:
             return

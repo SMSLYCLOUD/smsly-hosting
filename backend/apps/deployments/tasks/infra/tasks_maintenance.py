@@ -7,6 +7,8 @@ from celery import shared_task
 from django.core.cache import cache
 from django.utils import timezone
 
+from apps.deployments.constants import TASK_TIME_LIMIT_MEDIUM, TASK_TIME_LIMIT_STANDARD
+
 from ..deploy.deletion import (  # noqa: F401
     _clear_orphaned_runtime_resources,
     _extract_addon_id_from_name,
@@ -16,7 +18,7 @@ from ..remote.update import ThrottledLogAppender  # noqa: F401
 from .tasks_platform_update import platform_update_task
 
 
-@shared_task(bind=True, soft_time_limit=300, time_limit=360, name="apps.deployments.tasks.run_maintenance_task")
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_STANDARD[0], time_limit=TASK_TIME_LIMIT_STANDARD[1], name="apps.deployments.tasks.run_maintenance_task")
 def run_maintenance_task(self, command_flag: str, lock_key: str = ""):
     """
     Run maintenance commands via the Docker API from inside the Celery container.
@@ -120,7 +122,7 @@ def run_maintenance_task(self, command_flag: str, lock_key: str = ""):
 
 
 
-@shared_task(soft_time_limit=600, time_limit=900, name="apps.deployments.tasks.registry_garbage_collection_task")
+@shared_task(soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1], name="apps.deployments.tasks.registry_garbage_collection_task")
 def registry_garbage_collection_task():
     """
     Periodically run Docker registry garbage collection to reclaim disk

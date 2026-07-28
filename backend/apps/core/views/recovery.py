@@ -9,7 +9,7 @@ from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
 
 from apps.deployments.models.core import PlatformConfig
-from apps.deployments.services.recovery import (
+from apps.core.services.recovery import (
     generate_recovery_phrase,
     generate_recovery_salt,
     hash_recovery_phrase,

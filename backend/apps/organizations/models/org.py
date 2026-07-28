@@ -71,6 +71,9 @@ class OrganizationMembership(models.Model):
         unique_together = [('organization', 'user')]
         verbose_name = "Organization Membership"
         verbose_name_plural = "Organization Memberships"
+        indexes = [
+            models.Index(fields=["user", "organization"], name="orgmember_user_org_idx"),
+        ]
 
     def __str__(self):
         return f"{self.user} ({self.role}) @ {self.organization}"

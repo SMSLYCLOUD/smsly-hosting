@@ -6,6 +6,19 @@ import os
 
 from celery import shared_task
 
+from apps.deployments.constants import (
+    FILE_CHUNK_SIZE,
+    RETRY_DELAY_BACKUP,
+    RETRY_DELAY_HEAVY,
+    RETRY_DELAY_SLOW,
+    RETRY_DELAY_STANDARD,
+    TASK_TIME_LIMIT_DATA_SYNC,
+    TASK_TIME_LIMIT_DEPLOY,
+    TASK_TIME_LIMIT_HEAVY,
+    TASK_TIME_LIMIT_MEDIUM,
+    TASK_TIME_LIMIT_STANDARD,
+)
+
 # Serializes backup/restore tasks that carry a per-request encryption key.
 # Without this lock, two concurrent Celery workers can clobber each other's
 # BACKUP_ENCRYPTION_KEY in os.environ (process-wide).  Tasks that use the
@@ -18,7 +31,7 @@ from apps.deployments.services.backup_service import BackupService
 from apps.deployments.utils import log_event
 
 
-@shared_task(bind=True, soft_time_limit=3600, time_limit=3900, max_retries=3, default_retry_delay=300, name="apps.deployments.tasks_backup.create_service_backup_task")
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_DEPLOY[0], time_limit=TASK_TIME_LIMIT_DEPLOY[1], max_retries=3, default_retry_delay=RETRY_DELAY_HEAVY, name="apps.deployments.tasks_backup.create_service_backup_task")
 def create_service_backup_task(self, service_id, backup_type='MANUAL', backup_id=None, schedule_id=None, encryption_key=None):
     from apps.deployments.utils import log_event
 
@@ -86,7 +99,7 @@ def create_service_backup_task(self, service_id, backup_type='MANUAL', backup_id
             _touch_schedule_last_run(schedule_id)
 
 
-@shared_task(bind=True, soft_time_limit=600, time_limit=900, name="apps.deployments.tasks_backup.verify_backup_integrity_task")
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1], name="apps.deployments.tasks_backup.verify_backup_integrity_task")
 def verify_backup_integrity_task(self, backup_ids: list | None = None, sample_size: int = 3):
     """Verify backup archive integrity by checking checksums and archive validity.
 
@@ -142,7 +155,7 @@ def verify_backup_integrity_task(self, backup_ids: list | None = None, sample_si
             if expected_hash:
                 sha = _hashlib.sha256()
                 with open(filepath, 'rb') as f:
-                    for chunk in iter(lambda: f.read(8192), b''):
+                    for chunk in iter(lambda: f.read(FILE_CHUNK_SIZE), b''):
                         sha.update(chunk)
                 if sha.hexdigest() != expected_hash:
                     raise ValueError("Checksum mismatch — backup may be corrupted")
@@ -186,11 +199,11 @@ def _touch_schedule_last_run(schedule_id):
     try:
         from django.utils import timezone as tz
         BackupSchedule.objects.filter(id=schedule_id).update(last_run=tz.now())
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to update backup schedule last_run %s: %s", schedule_id, exc)
 
 
-@shared_task(bind=True, soft_time_limit=7200, time_limit=7500, max_retries=2, default_retry_delay=600, name="apps.deployments.tasks_backup.create_server_backup_task")
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_HEAVY[0], time_limit=TASK_TIME_LIMIT_HEAVY[1], max_retries=2, default_retry_delay=RETRY_DELAY_BACKUP, name="apps.deployments.tasks_backup.create_server_backup_task")
 def create_server_backup_task(self, backup_id=None, schedule_id=None, encryption_key=None):
     log_event(
         action='BACKUP_CREATE',
@@ -230,12 +243,12 @@ def create_server_backup_task(self, backup_id=None, schedule_id=None, encryption
             _touch_schedule_last_run(schedule_id)
     except Exception as exc:
         if self.request.retries < self.max_retries:
-            raise self.retry(exc=exc, countdown=600)
+            raise self.retry(exc=exc, countdown=RETRY_DELAY_BACKUP)
         raise
 
 
 
-@shared_task(bind=True, soft_time_limit=3600, time_limit=3900, max_retries=2, default_retry_delay=300, name="apps.deployments.tasks_backup.restore_service_backup_task")
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_DEPLOY[0], time_limit=TASK_TIME_LIMIT_DEPLOY[1], name="apps.deployments.tasks_backup.restore_service_backup_task")
 def restore_service_backup_task(self, backup_id, target_service_id=None, requesting_user_id=None, raise_on_snapshot_failure=True, encryption_key=None):
     log_event(
         action='BACKUP_RESTORE',
@@ -278,7 +291,7 @@ def restore_service_backup_task(self, backup_id, target_service_id=None, request
 
 
 
-@shared_task(bind=True, soft_time_limit=7200, time_limit=7500, max_retries=0, name="apps.deployments.tasks_backup.restore_server_backup_task")
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_HEAVY[0], time_limit=TASK_TIME_LIMIT_HEAVY[1], max_retries=0, name="apps.deployments.tasks_backup.restore_server_backup_task")
 # max_retries=0: destructive operation — no automatic retry on partial restore
 def restore_server_backup_task(self, backup_id, requesting_user_id=None, encryption_key=None):
     log_event(
@@ -308,7 +321,7 @@ def restore_server_backup_task(self, backup_id, requesting_user_id=None, encrypt
 
 
 
-@shared_task(bind=True, soft_time_limit=7200, time_limit=7500, max_retries=2, default_retry_delay=120, name="apps.deployments.tasks_backup.purge_user_backups_task")
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_HEAVY[0], time_limit=TASK_TIME_LIMIT_HEAVY[1], max_retries=2, default_retry_delay=RETRY_DELAY_SLOW, name="apps.deployments.tasks_backup.purge_user_backups_task")
 def purge_user_backups_task(self, user_id, actor: str = 'system', force: bool = False):
     """
     GDPR right-to-erasure background task.
@@ -355,7 +368,7 @@ def purge_user_backups_task(self, user_id, actor: str = 'system', force: bool = 
 
 
 
-@shared_task(soft_time_limit=600, time_limit=900, name="apps.deployments.tasks_backup.cleanup_old_backups_task")
+@shared_task(soft_time_limit=TASK_TIME_LIMIT_MEDIUM[0], time_limit=TASK_TIME_LIMIT_MEDIUM[1], name="apps.deployments.tasks_backup.cleanup_old_backups_task")
 def cleanup_old_backups_task():
     """Delete backups older than retention_days per schedule, including cloud objects."""
     from datetime import timedelta
@@ -449,7 +462,7 @@ def _make_aware(dt):
     return dt
 
 
-@shared_task(soft_time_limit=3600, time_limit=3900, name="apps.deployments.tasks_backup.run_scheduled_backups_task")
+@shared_task(soft_time_limit=TASK_TIME_LIMIT_DEPLOY[0], time_limit=TASK_TIME_LIMIT_DEPLOY[1], name="apps.deployments.tasks_backup.run_scheduled_backups_task")
 def run_scheduled_backups_task():
     """Execute all due BackupSchedule entries."""
     import croniter  # type: ignore[import-untyped]
@@ -483,7 +496,7 @@ def run_scheduled_backups_task():
     return ran
 
 
-@shared_task(soft_time_limit=3600, time_limit=3900, name="apps.deployments.tasks_backup.run_scheduled_snapshots_task")
+@shared_task(soft_time_limit=TASK_TIME_LIMIT_DEPLOY[0], time_limit=TASK_TIME_LIMIT_DEPLOY[1], name="apps.deployments.tasks_backup.run_scheduled_snapshots_task")
 def run_scheduled_snapshots_task():
     """Execute all due SnapshotSchedule entries."""
     import croniter  # type: ignore[import-untyped]
@@ -518,7 +531,7 @@ def run_scheduled_snapshots_task():
     return ran
 
 
-@shared_task(bind=True, soft_time_limit=300, time_limit=360, max_retries=2, default_retry_delay=60, name="apps.deployments.tasks_backup.create_snapshot_task")
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_STANDARD[0], time_limit=TASK_TIME_LIMIT_STANDARD[1], max_retries=2, default_retry_delay=RETRY_DELAY_STANDARD, name="apps.deployments.tasks_backup.create_snapshot_task")
 def create_snapshot_task(self, service_id: str, trigger: str = 'MANUAL', label: str = '', created_by_id: str | None = None):
     from django.contrib.auth import get_user_model
 

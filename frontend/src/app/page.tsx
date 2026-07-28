@@ -9,8 +9,9 @@ import {
     Container, Fingerprint, ScanLine, Bug, ShieldAlert,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { NatureBackground } from "@/components/effects/NatureBackground";
-import { EcosystemDeployVisual } from "@/components/effects/EcosystemDeployVisual";
+import dynamic from "next/dynamic";
+const NatureBackground = dynamic(() => import("@/components/effects/NatureBackground").then(m => m.NatureBackground), { ssr: false });
+const EcosystemDeployVisual = dynamic(() => import("@/components/effects/EcosystemDeployVisual").then(m => m.EcosystemDeployVisual), { ssr: false });
 
 // ============================================
 // HERO SLIDES — Carousel data

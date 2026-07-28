@@ -26,6 +26,19 @@ class OrganizationViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return self.queryset.filter(get_org_q_filter(self.request.user)).prefetch_related('memberships')
 
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        qs_for_prefetch = queryset
+        if page is not None:
+            qs_for_prefetch = queryset.__class__(page)
+        serializer = OrganizationSerializer.prefetch_for_list(qs_for_prefetch, request.user)
+        serializer.instance = page if page is not None else queryset
+        serializer.context = {'request': request}
+        if page is not None:
+            return self.get_paginated_response(serializer.data)
+        return Response(serializer.data)
+
     def perform_destroy(self, instance):
         assert_owner(self.request.user, instance)
         instance.delete()

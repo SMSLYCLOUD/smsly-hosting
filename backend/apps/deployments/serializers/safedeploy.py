@@ -54,25 +54,47 @@ class ApprovalCreateSerializer(serializers.ModelSerializer):
 class DatabaseCloneSerializer(serializers.ModelSerializer):
     class Meta:
         model = DatabaseClone
-        fields = '__all__'
+        fields = [
+            'id', 'service', 'preview_environment',
+            'source_environment', 'source_database_name',
+            'clone_database_name', 'clone_database_url_secret_ref',
+            'status', 'expires_at', 'size_bytes', 'error_message',
+            'created_at', 'updated_at',
+        ]
 
 
 class MigrationValidationSerializer(serializers.ModelSerializer):
     class Meta:
         model = MigrationValidation
-        fields = '__all__'
+        fields = [
+            'id', 'preview_environment', 'deployment',
+            'risk_level', 'risk_score', 'status', 'summary',
+            'reasons', 'detected_operations', 'recommendations',
+            'auto_deploy_policy', 'requires_backup', 'error_message',
+            'created_at', 'updated_at',
+        ]
 
 
 class DeploymentArtifactSerializer(serializers.ModelSerializer):
     class Meta:
         model = DeploymentArtifact
-        fields = '__all__'
+        fields = [
+            'id', 'service', 'deployment', 'preview_environment',
+            'artifact_type', 'content', 'file_path', 'is_archived',
+            'created_at', 'updated_at',
+        ]
 
 
 class DeploymentApprovalSerializer(serializers.ModelSerializer):
     class Meta:
         model = DeploymentApproval
-        fields = '__all__'
+        fields = [
+            'id', 'service', 'deployment', 'preview_environment',
+            'requested_by', 'approved_by', 'rejected_by',
+            'status', 'risk_level', 'approval_notes',
+            'approved_at', 'rejected_at',
+            'created_at', 'updated_at',
+        ]
 
 
 class PreviewEnvironmentSerializer(serializers.ModelSerializer):
@@ -82,4 +104,10 @@ class PreviewEnvironmentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = PreviewEnvironment
-        fields = '__all__'
+        fields = [
+            'id', 'service', 'project_id', 'branch_name', 'commit_sha',
+            'preview_url', 'image_tag', 'status', 'created_by',
+            'expires_at', 'error_message',
+            'created_at', 'updated_at',
+            'database_clone', 'migration_validation', 'artifacts',
+        ]

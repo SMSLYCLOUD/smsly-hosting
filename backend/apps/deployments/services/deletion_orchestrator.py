@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 from typing import Any
 
@@ -15,11 +17,11 @@ class DeletionOrchestrator:
     Central orchestrator for reliable runtime resource cleanup.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         try:
             self.docker_client = get_docker_client()
-        except Exception as e:
-            logger.error(f"DeletionOrchestrator failed to initialize docker client: {e}")
+        except Exception as exc:
+            logger.warning("Docker client init failed for DeletionOrchestrator: %s", exc)
             self.docker_client = None
 
     def delete_service_resources(self, service: Service, force: bool = False) -> bool:

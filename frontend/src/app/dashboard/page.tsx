@@ -7,6 +7,7 @@ import { SkeletonDashboard } from "@/components/ui/skeleton";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { DashboardShell } from "@/components/layout/DashboardShell";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { SpaceOpsLegend } from "@/components/effects/SpaceOpsLegend";
 import { EcosystemSuggestion } from "@/components/dashboard/EcosystemSuggestion";
 import { useAuth } from "@/components/auth-provider";
@@ -189,8 +190,9 @@ export default function DashboardPage() {
     }
   ];
 
-  return (
+    return (
     <DashboardShell>
+      <ErrorBoundary>
       <div className="flex-1 p-4 pt-safe sm:p-8 relative z-10">
         <motion.div
           className="flex-1 space-y-6 max-w-7xl mx-auto"
@@ -471,6 +473,7 @@ export default function DashboardPage() {
         </motion.div>
       </div>
       <SpaceOpsLegend />
+      </ErrorBoundary>
     </DashboardShell>
   );
 }

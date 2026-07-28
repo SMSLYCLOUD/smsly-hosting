@@ -1,6 +1,10 @@
+import logging
+
 from rest_framework import serializers
 from drf_spectacular.openapi import AutoSchema
 from drf_spectacular.plumbing import build_serializer_context
+
+logger = logging.getLogger(__name__)
 
 
 class _PlaceholderSerializer(serializers.Serializer):
@@ -20,6 +24,6 @@ class SmslyAutoSchema(AutoSchema):
                 return view.get_serializer_class()(context=context)
             elif hasattr(view, 'serializer_class'):
                 return view.serializer_class
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to resolve serializer for %s: %s", view, exc)
         return _PlaceholderSerializer()

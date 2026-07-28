@@ -17,12 +17,48 @@ interface CloudDestination {
     name: string;
     provider_display: string;
     bucket: string;
+    service?: string | null;
+}
+
+interface BackupSchedule {
+    id?: string;
+    is_server_wide?: boolean;
+    cron_expression: string;
+    retention_days: number;
+    enabled: boolean;
+    db_only?: boolean;
+    cloud_upload_enabled?: boolean;
+    cloud_destination?: string | null;
+    last_run?: string;
+    next_run?: string;
+}
+
+interface ServerBackup {
+    id: string;
+    status: string;
+    size_bytes: number;
+    created_at: string;
+    completed_at?: string;
+    error_message?: string;
+    services_included?: string[];
+    db_only?: boolean;
+    cloud_uploaded?: boolean;
+}
+
+interface SnapshotSchedule {
+    id?: string;
+    is_server_wide?: boolean;
+    cron_expression: string;
+    retention_days: number;
+    enabled: boolean;
+    cloud_upload_enabled?: boolean;
+    cloud_destination?: string | null;
 }
 
 export default function ServerBackupsPage() {
     const { toast } = useToast();
     const confirm = useConfirm();
-    const [backups, setBackups] = useState<any[]>([]);
+    const [backups, setBackups] = useState<ServerBackup[]>([]);
     const [destinations, setDestinations] = useState<CloudDestination[]>([]);
     const [selectedDestination, setSelectedDestination] = useState<string>('');
     const [loading, setLoading] = useState(true);
@@ -57,7 +93,7 @@ export default function ServerBackupsPage() {
         s3_secret_key: '',
         encryption_key: ''
     });
-    const [cloudBackupList, setCloudBackupList] = useState<any[]>([]);
+    const [cloudBackupList, setCloudBackupList] = useState<Record<string, unknown>[]>([]);
     const [cloudBackupListLoading, setCloudBackupListLoading] = useState(false);
     const [cloudBackupPrefix, setCloudBackupPrefix] = useState('smsly-backups/');
 
@@ -81,7 +117,7 @@ export default function ServerBackupsPage() {
     }, [cloudRestorePromptOpen, cloudRestoreForm.cloud_storage_id, cloudBackupPrefix]);
 
     // Schedule state
-    const [schedule, setSchedule] = useState<any | null>(null);
+    const [schedule, setSchedule] = useState<BackupSchedule | null>(null);
     const [cronExpression, setCronExpression] = useState('0 3 * * *');
     const [retentionDays, setRetentionDays] = useState(7);
     const [scheduleEnabled, setScheduleEnabled] = useState(true);
@@ -93,7 +129,7 @@ export default function ServerBackupsPage() {
     const [dbOnly, setDbOnly] = useState(false);
 
     // Snapshot schedule state (server-wide)
-    const [snapSchedule, setSnapSchedule] = useState<any | null>(null);
+    const [snapSchedule, setSnapSchedule] = useState<SnapshotSchedule | null>(null);
     const [snapCronExpression, setSnapCronExpression] = useState('0 3 * * *');
     const [snapRetentionDays, setSnapRetentionDays] = useState(7);
     const [snapScheduleEnabled, setSnapScheduleEnabled] = useState(true);
@@ -112,7 +148,7 @@ export default function ServerBackupsPage() {
         try {
             const res = await api.get('/backup-schedules/', { params: { is_server_wide: true } });
             const schedules = Array.isArray(res.data) ? res.data : res.data.results || [];
-            const sched = schedules.find((s: any) => s.is_server_wide);
+            const sched = schedules.find((s: BackupSchedule) => s.is_server_wide);
             if (sched) {
                 setSchedule(sched);
                 setCronExpression(sched.cron_expression);
@@ -135,7 +171,7 @@ export default function ServerBackupsPage() {
         try {
             const res = await api.get('/snapshot-schedules/', { params: { is_server_wide: true } });
             const schedules = Array.isArray(res.data) ? res.data : res.data.results || [];
-            const sched = schedules.find((s: any) => s.is_server_wide);
+            const sched = schedules.find((s: SnapshotSchedule) => s.is_server_wide);
             if (sched) {
                 setSnapSchedule(sched);
                 setSnapCronExpression(sched.cron_expression);
@@ -160,7 +196,7 @@ export default function ServerBackupsPage() {
             
             const allDestinations = Array.isArray(destsRes.data) ? destsRes.data : destsRes.data.results || [];
             // For server backups, we want platform-wide destinations (service=null)
-            const relevant = allDestinations.filter((d: any) => !d.service);
+            const relevant = allDestinations.filter((d: CloudDestination) => !d.service);
             setDestinations(relevant);
         } catch (err) {
             console.error(err);
@@ -172,7 +208,7 @@ export default function ServerBackupsPage() {
     const handleSaveSchedule = async () => {
         setSavingSchedule(true);
         try {
-            const payload: any = {
+            const payload: Record<string, unknown> = {
                 is_server_wide: true,
                 cron_expression: cronExpression,
                 retention_days: retentionDays,
@@ -204,7 +240,7 @@ export default function ServerBackupsPage() {
     const handleSaveSnapSchedule = async () => {
         setSavingSnapSchedule(true);
         try {
-            const payload: any = {
+            const payload: Record<string, unknown> = {
                 is_server_wide: true,
                 cron_expression: snapCronExpression,
                 retention_days: snapRetentionDays,
@@ -239,8 +275,9 @@ export default function ServerBackupsPage() {
             await api.post('/server/backups/', payload);
             toast({ title: "Server Backup Started", description: "This captures all services and configuration." });
             loadBackups();
-        } catch (err: any) {
-            const msg = err?.response?.data?.error || err?.response?.data?.detail || "Failed to start server backup.";
+        } catch (err: unknown) {
+            const axiosErr = err as { response?: { data?: { error?: string; detail?: string } } };
+            const msg = axiosErr?.response?.data?.error || axiosErr?.response?.data?.detail || "Failed to start server backup.";
             toast({ title: "Backup Failed", description: msg, variant: "destructive" });
         } finally {
             setCreating(false);

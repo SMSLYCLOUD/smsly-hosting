@@ -1,11 +1,15 @@
-"""URLs for cloud app."""
+"""URLs for cloud app.
+
+Naming convention: URL names use kebab-case (e.g. 'ecosystem-scan').
+"""
 from apps.cloud.views import (
     CloudProviderViewSet,
     CloudResourceViewSet,
     IntelligenceViewSet,
 )
-from apps.cloud.views.code_analysis import CodeAnalysisViewSet
 from apps.cloud.views.analysis import CodeIntelligenceView, DeepScanTaskStatusView
+from apps.cloud.views.code_analysis import CodeAnalysisViewSet
+from apps.deployments.views.github import github_repos
 from django.urls import path
 from rest_framework.routers import DefaultRouter
 
@@ -84,7 +88,7 @@ urlpatterns = [
     # Backward-compatible github integrations path for cached frontends.
     path(
         'integrations/github/repos/',
-        __import__('apps.deployments.views.github', fromlist=['github_repos']).github_repos,
+        github_repos,
         name='cloud-github-repos-alias',
     ),
     *router.urls,

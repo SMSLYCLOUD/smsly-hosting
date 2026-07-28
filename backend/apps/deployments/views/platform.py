@@ -26,12 +26,12 @@ class PlatformResourcesView(GenericAPIView):
         vm = psutil.virtual_memory()
         disk = shutil.disk_usage("/")
         load = os.getloadavg() if hasattr(os, "getloadavg") else (0.0, 0.0, 0.0)
-        services = Service.objects.all()
+        services = Service.objects.only("id", "name", "owner__id")
         if not request.user.is_superuser:
             services = services.filter(owner=request.user)
         running = services.filter(deployments__status=Deployment.Status.ACTIVE).distinct().count()
         failed = services.filter(deployments__status=Deployment.Status.FAILED).distinct().count()
-        servers = ManagedServer.objects.all()
+        servers = ManagedServer.objects.only("id", "name", "host", "owner__id")
         if not request.user.is_superuser:
             servers = servers.filter(owner=request.user)
         nodes = [{
@@ -85,13 +85,13 @@ class PlatformConfigViewSet(viewsets.GenericViewSet):
         client = get_infisical_client()
         if not client:
             return Response(
-                {"status": "error", "message": "Infisical client not configured or unreachable."},
+                {"error": "Infisical client not configured or unreachable."},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
         ws_id = get_or_create_workspace(client)
         if not ws_id:
             return Response(
-                {"status": "error", "message": "Failed to resolve Infisical workspace."},
+                {"error": "Failed to resolve Infisical workspace."},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 

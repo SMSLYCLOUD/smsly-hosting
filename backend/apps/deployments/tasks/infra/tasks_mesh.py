@@ -7,6 +7,8 @@ from celery import shared_task
 from django.core.cache import cache
 from django.utils import timezone
 
+from apps.deployments.constants import TASK_TIME_LIMIT_LONG, TASK_TIME_LIMIT_STANDARD
+
 
 def _bounded_error(exc, limit=2000):
     return str(exc).replace("\x00", "")[:limit]
@@ -14,8 +16,8 @@ def _bounded_error(exc, limit=2000):
 
 @shared_task(
     name="apps.deployments.tasks.infra.tasks_mesh.check_mesh_health_task",
-    soft_time_limit=300,
-    time_limit=360)
+    soft_time_limit=TASK_TIME_LIMIT_STANDARD[0],
+    time_limit=TASK_TIME_LIMIT_STANDARD[1])
 def check_mesh_health_task():
     """
     Periodic task that pings all WireGuard peers in all active meshes
@@ -132,8 +134,8 @@ def check_mesh_health_task():
     bind=True,
     name="apps.deployments.tasks.infra.tasks_mesh.deploy_mesh_task",
     max_retries=0,
-    soft_time_limit=900,
-    time_limit=960)
+    soft_time_limit=TASK_TIME_LIMIT_LONG[0],
+    time_limit=TASK_TIME_LIMIT_LONG[1])
 def deploy_mesh_task(self, mesh_id: str):
     """Deploy WireGuard configs to all peers in a mesh (async)."""
     from apps.deployments.models.mesh import MeshNetwork
@@ -186,8 +188,8 @@ def deploy_mesh_task(self, mesh_id: str):
                 "mesh_last_result",
                 "updated_at",
             ])
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to save mesh deploy failure status: %s", exc)
         logger.error(f"Mesh deploy failed: {e}")
         return {"error": _bounded_error(e)}
     finally:

@@ -37,3 +37,8 @@ class CronJob(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.schedule})"
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["is_active", "next_run_at"], name="cron_active_next_idx"),
+        ]

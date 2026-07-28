@@ -40,7 +40,7 @@ _log() {
 _get_queue_depth() {
     local total=0
     local raw
-    raw=$(docker exec rabbitmq rabbitmqctl list_queues name messages 2>/dev/null \
+    raw=$(timeout 10 docker exec rabbitmq rabbitmqctl list_queues name messages 2>/dev/null \
         | grep -E '^celery\b' \
         | awk '{print $2}' \
         || echo "0")

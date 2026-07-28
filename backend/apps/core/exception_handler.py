@@ -24,6 +24,7 @@ from rest_framework.exceptions import (
     Throttled,
     ValidationError,
 )
+from rest_framework.response import Response
 from rest_framework.views import exception_handler as drf_exception_handler
 
 logger = logging.getLogger("smsly.api.errors")
@@ -84,7 +85,7 @@ def _coerce_errors(detail: Any) -> Any:
     return str(detail)
 
 
-def smsly_exception_handler(exc, context):
+def smsly_exception_handler(exc, context) -> Response | None:
     """Wrap DRF's default handler so we:
       * always log the body + serializer errors for 4xx responses
       * return a consistent JSON envelope

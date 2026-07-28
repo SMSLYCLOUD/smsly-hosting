@@ -19,8 +19,8 @@ export default function CostsPage() {
                 await api.get('/system/config/');
                 const data = await billingApi.adminGetCosts();
                 setCosts(data);
-            } catch (err: any) {
-                if (err?.response?.status === 403) {
+            } catch (err: unknown) {
+                if ((err as { response?: { status?: number } })?.response?.status === 403) {
                     setAccessDenied(true);
                 } else {
                     console.error(err);

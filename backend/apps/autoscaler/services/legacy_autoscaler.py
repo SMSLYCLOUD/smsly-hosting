@@ -1,4 +1,6 @@
 # pylint: disable=invalid-name
+from __future__ import annotations
+
 """
 Autoscaler service — thin entry point that delegates to the unified
 ``apps.autoscaler.engine`` pipeline.
@@ -14,11 +16,13 @@ from datetime import timedelta
 from celery import shared_task
 from django.utils import timezone
 
+from apps.deployments.constants import TASK_TIME_LIMIT_QUICK
+
 logger = logging.getLogger(__name__)
 
 
-@shared_task
-def check_autoscale_task():
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_QUICK[0], time_limit=TASK_TIME_LIMIT_QUICK[1])
+def check_autoscale_task(self) -> None:
     """Check CPU usage for all services and scale replicas if needed.
 
     Delegates to the unified engine so the two Celery beat tasks

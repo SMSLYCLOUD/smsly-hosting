@@ -79,6 +79,10 @@ class ServiceBackup(models.Model):
 
     class Meta:
         db_table = 'deployments_servicebackup'
+        indexes = [
+            models.Index(fields=["service", "status"], name="svcbackup_service_status_idx"),
+            models.Index(fields=["service", "-created_at"], name="svcbackup_service_created_idx"),
+        ]
 
 class ServerBackup(models.Model):
     """Full server export: all services + platform config + Traefik + SSL certs."""
@@ -103,6 +107,10 @@ class ServerBackup(models.Model):
 
     class Meta:
         db_table = 'deployments_serverbackup'
+        indexes = [
+            models.Index(fields=["status"], name="srvbackup_status_idx"),
+            models.Index(fields=["-created_at"], name="srvbackup_created_idx"),
+        ]
 
 class BackupSchedule(models.Model):
     """Cron-based backup schedule per service or server-wide."""
@@ -135,6 +143,9 @@ class BackupSchedule(models.Model):
 
     class Meta:
         db_table = 'deployments_backupschedule'
+        indexes = [
+            models.Index(fields=["service", "enabled"], name="bkupsched_service_enabled_idx"),
+        ]
 
     def clean(self):
         super().clean()

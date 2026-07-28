@@ -359,3 +359,56 @@ def github_commits(request):
     except Exception as exc:
         logger.warning(f"Failed to fetch commits for {repo} on branch {branch}: {exc}")
         return Response({"error": "Failed to fetch commits"}, status=status.HTTP_502_BAD_GATEWAY)
+
+
+@extend_schema(responses=OpenApiTypes.OBJECT)
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def github_default_branch(request):
+    """Get the default branch for a repository.
+
+    Uses the GitHub App installation token when available, falling back
+    to the user's OAuth token.  Returns ``{"default_branch": "main"}``.
+    """
+    repo = request.query_params.get("repo")
+    if not repo:
+        return Response({"error": "repo parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Try GitHub App installation first
+    try:
+        from apps.deployments.services.github_app import get_github_app_service, get_installation_for_repo
+        installation = get_installation_for_repo(repo)
+        if installation:
+            svc = get_github_app_service()
+            if svc:
+                token = svc.get_installation_token_for_id(installation.installation_id)
+                if token:
+                    resp = requests.get(
+                        f"https://api.github.com/repos/{repo}",
+                        headers=svc._auth_headers(token),
+                        timeout=10,
+                    )
+                    if resp.status_code == 200:
+                        return Response({"default_branch": resp.json().get("default_branch", "main")})
+    except Exception as exc:
+        logger.debug("Failed to get default branch via App: %s", exc)
+
+    # Fall back to user OAuth token
+    token = _get_github_token(request.user)
+    if not token:
+        return Response({"error": "GitHub not connected"}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        resp = requests.get(
+            f"https://api.github.com/repos/{repo}",
+            headers={
+                "Authorization": f"token {token}",
+                "Accept": "application/vnd.github.v3+json",
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return Response({"default_branch": resp.json().get("default_branch", "main")})
+    except Exception as exc:
+        logger.warning("Failed to fetch default branch for %s: %s", repo, exc)
+        return Response({"error": "Failed to fetch repository info"}, status=status.HTTP_502_BAD_GATEWAY)

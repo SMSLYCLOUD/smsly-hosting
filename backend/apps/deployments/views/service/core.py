@@ -8,10 +8,12 @@ from rest_framework import filters, permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
+from django.db.models import Prefetch
+
 from ...models import Deployment, Service
 from ...models.audit import AuditLog
 from apps.core.rate_limiting import BurstRateThrottle, DeploymentRateThrottle
-from ...serializers import DeploymentSerializer, ServiceSerializer
+from ...serializers import DeploymentSerializer, ServiceSerializer, ServiceListSerializer
 from ...services.server_guard import ServerGuard
 from ...tasks import smart_deploy_task
 from .._helpers import (
@@ -55,12 +57,29 @@ class ServiceViewSet(DeployActionsMixin, DomainActionsMixin, EnvVarActionsMixin,
     throttle_classes: list = []
 
 
+    def _optimize_queryset(self, qs):
+        return qs.select_related('project', 'owner', 'server').prefetch_related(
+            Prefetch(
+                'deployments',
+                queryset=Deployment.objects.filter(
+                    status=Deployment.Status.ACTIVE
+                ).order_by('-created_at')[:1],
+                to_attr='_active_deployments',
+            ),
+            Prefetch(
+                'deployments',
+                queryset=Deployment.objects.order_by('-created_at')[:1],
+                to_attr='_prefetched_deployments',
+            ),
+            'domain_instances',
+        )
+
     def get_queryset(self):
         user = self.request.user
         if not user or not user.is_authenticated:
             return self.queryset.none()
         if user.is_superuser or is_remote_sync_request(self.request):
-            return self.queryset.all().select_related('project').prefetch_related('deployments')
+            return self._optimize_queryset(self.queryset.all())
         qs = self.queryset.filter(
             get_team_q_filter(user, request=self.request)
         )
@@ -71,8 +90,12 @@ class ServiceViewSet(DeployActionsMixin, DomainActionsMixin, EnvVarActionsMixin,
             qs = qs.exclude(
                 status__in=[Service.Status.DELETED, Service.Status.DELETION_PENDING]
             )
-        return qs.select_related('project').prefetch_related('deployments')
+        return self._optimize_queryset(qs)
 
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return ServiceListSerializer
+        return ServiceSerializer
 
     def perform_create(self, serializer):
         project = serializer.validated_data.get('project')
@@ -165,7 +188,6 @@ class ServiceViewSet(DeployActionsMixin, DomainActionsMixin, EnvVarActionsMixin,
         self.perform_destroy(instance, force=force)
         return Response(
             {
-                "ok": True,
                 "status": "deletion_pending",
                 "message": "Deletion has started.",
                 "resource_id": str(instance.id),
@@ -193,7 +215,6 @@ class ServiceViewSet(DeployActionsMixin, DomainActionsMixin, EnvVarActionsMixin,
             self._sync_caddy()
             return Response(
                 {
-                    "ok": True,
                     "status": "deleted",
                     "message": "Remote runtime resources were removed.",
                     "resource_id": service_id,
@@ -210,7 +231,6 @@ class ServiceViewSet(DeployActionsMixin, DomainActionsMixin, EnvVarActionsMixin,
         instance.save(update_fields=['status', 'deletion_error'])
         return Response(
             {
-                "ok": False,
                 "status": "deletion_failed",
                 "error": instance.deletion_error,
                 "resource_id": str(instance.id),
@@ -249,7 +269,7 @@ class ServiceViewSet(DeployActionsMixin, DomainActionsMixin, EnvVarActionsMixin,
                 orchestrator = DeletionOrchestrator()
                 orchestrator.delete_service_resources(instance, force=True)
             except Exception as exc:
-                logger.warning("Resource cleanup failed during force-purge of %s: %s", instance.id, exc)
+                logger.error("Resource cleanup failed during force-purge of %s: %s", instance.id, exc)
             try:
                 instance.delete()
                 logger.info("Force-purge complete for service %s.", instance.id)
@@ -280,7 +300,7 @@ class ServiceViewSet(DeployActionsMixin, DomainActionsMixin, EnvVarActionsMixin,
                 orchestrator = DeletionOrchestrator()
                 orchestrator.delete_service_resources(instance, force=True)
             except Exception as exc:
-                logger.warning("Resource cleanup failed during retry force-purge of %s: %s", instance.id, exc)
+                logger.error("Resource cleanup failed during retry force-purge of %s: %s", instance.id, exc)
             try:
                 instance.delete()
                 logger.info("Force-purge complete for service %s via retry-delete.", instance.id)
@@ -323,7 +343,7 @@ class ServiceViewSet(DeployActionsMixin, DomainActionsMixin, EnvVarActionsMixin,
                         timeout=15,
                     )
         except Exception as e:
-            logger.warning("Stop resolution/remote call failed for service %s: %s", service.id, e)
+            logger.error("Stop resolution/remote call failed for service %s: %s", service.id, e)
 
         # Cancel any active/building deployments
         active_deployments = service.deployments.filter(
@@ -435,16 +455,15 @@ class ServiceViewSet(DeployActionsMixin, DomainActionsMixin, EnvVarActionsMixin,
                                 'message': f'Service {service.name} restarted (fast) remotely',
                                 'method': 'remote_docker_restart',
                             })
-                        logger.warning("Fast remote restart failed for %s. Falling back to full rebuild.", service.name)
+                        logger.error("Fast remote restart failed for %s. Falling back to full rebuild.", service.name)
                 except Exception as exc:
-                    logger.warning("Fast remote restart request failed: %s", exc)
+                    logger.error("Fast remote restart request failed: %s", exc)
 
             elif container_id:
                 try:
-                    import docker as docker_lib
-                    client = docker_lib.from_env()
-                    container = client.containers.get(container_id)
-                    container.restart(timeout=10)
+                    from apps.deployments.services.container_runtime import ContainerRuntime
+                    runtime = ContainerRuntime()
+                    runtime.restart_container(container_id)
 
                     # Update health status
                     service.health_status = 'starting'
@@ -638,7 +657,7 @@ class ServiceViewSet(DeployActionsMixin, DomainActionsMixin, EnvVarActionsMixin,
                 'saved_logs_source': 'build_logs' if saved_logs else None,
             })
         except Exception as exc:  # pylint: disable=broad-exception-caught
-            logger.warning("Service runtime status failed for %s: %s", service.id, exc)
+            logger.error("Service runtime status failed for %s: %s", service.id, exc)
             return Response(
                 {
                     'service_id': str(service.id),
@@ -649,9 +668,6 @@ class ServiceViewSet(DeployActionsMixin, DomainActionsMixin, EnvVarActionsMixin,
                 },
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
-
-    @action(detail=True, methods=['post'])
-
 
     def get_permissions(self):
         """Hardened auth for the Caddy ask endpoint: shared secret OR admin user."""
@@ -702,9 +718,6 @@ class ServiceViewSet(DeployActionsMixin, DomainActionsMixin, EnvVarActionsMixin,
         if self.request.method in permissions.SAFE_METHODS:
             return []
         return [BurstRateThrottle(), DeploymentRateThrottle()]
-
-    @action(detail=False, methods=['get'], url_path='check-domain')
-
 
     def _is_remote_sync_request(self):
         return is_remote_sync_request(self.request)

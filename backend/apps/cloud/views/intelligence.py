@@ -763,8 +763,8 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
                 stale_plan.save(update_fields=['status', 'error_message', 'updated_at'])
                 try:
                     result.revoke(terminate=False)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Failed to revoke stale task %s: %s", task_id, exc)
                 return Response({
                     'task_id': task_id,
                     'status': 'FAILURE',
@@ -969,7 +969,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             iter_repo_files,
             walk_repo_with_cap,
         )
-        from apps.deployments.services.git_manager import GitManager
+        from apps.cloud.services.git_manager import GitManager
         from apps.deployments.services.ecosystem import heuristic_analysis
 
         MAX_FILES = 500

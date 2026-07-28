@@ -22,7 +22,10 @@ registry host that is not on this list — that includes personal
 ``attacker.example.com`` repositories, link-local hosts, and
 private IP ranges that aren't our own.
 """
+import logging
 import re
+
+logger = logging.getLogger(__name__)
 
 # Canonical allowlist; consumed by serializers.py and
 # models_registry_scope.py via ``all_allowed_registry_hosts()``
@@ -68,8 +71,8 @@ def all_allowed_registry_hosts() -> list[str]:
                 _cfg_host = _cfg_url.split("/")[0].rstrip("/")
             if _cfg_host and _cfg_host not in hosts:
                 hosts.append(_cfg_host)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to resolve registry hosts: %s", exc)
     return hosts
 
 
@@ -129,8 +132,8 @@ def validate_image_registry(image: str, service=None) -> str:
             for h in scoped_hosts:
                 if h not in allowed_hosts:
                     allowed_hosts.append(h)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to resolve scoped registry hosts for project: %s", exc)
 
     # User's custom RegistryCredential hosts (existing behaviour)
     if service and getattr(service, "owner_id", None):

@@ -5,6 +5,7 @@ logger = logging.getLogger(__name__)
 import logging
 
 from celery import shared_task
+from apps.deployments.constants import TASK_TIME_LIMIT_QUICK
 from apps.deployments.services.ai_engine import DevOpsAgent
 
 from apps.deployments.models import (  # type: ignore[attr-defined]
@@ -35,7 +36,7 @@ def _sanitize_for_llm(logs: str) -> str:
     return out
 
 
-@shared_task(soft_time_limit=180, time_limit=210)
+@shared_task(soft_time_limit=TASK_TIME_LIMIT_QUICK[0], time_limit=TASK_TIME_LIMIT_QUICK[1])
 def analyze_failure_task(deployment_id):
     """
     Uses Jules AI (via SMSLY Platform) to analyze build logs and suggest fixes.

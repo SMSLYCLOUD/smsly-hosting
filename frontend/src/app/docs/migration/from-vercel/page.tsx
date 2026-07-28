@@ -5,28 +5,28 @@ export default function FromVercelPage() {
     return (
         <main className="min-h-screen bg-white dark:bg-slate-950">
             <section className="pt-28 pb-10 px-4 bg-gradient-to-b from-zinc-50 to-white dark:from-zinc-950/20 dark:to-slate-950 border-b border-slate-200 dark:border-slate-800">
-                <div className="max-w-4xl mx-auto">
+                <div className="max-w-3xl mx-auto">
                     <Link href="/docs/migration" className="inline-flex items-center gap-1.5 text-sm text-amber-600 dark:text-amber-400 hover:underline mb-4">
                         <ArrowLeft size={14} /> Migration Guides
                     </Link>
                     <div className="flex items-center gap-3 mb-4">
                         <div className="p-2.5 bg-zinc-100 dark:bg-zinc-800 rounded-xl">
-                            <Zap className="w-6 h-6 text-black dark:text-white" />
+                            <Zap className="w-5 h-5 text-black dark:text-white" />
                         </div>
                         <span className="text-sm font-semibold text-zinc-600 dark:text-zinc-400 uppercase tracking-wider">Guide</span>
                     </div>
-                    <h1 className="text-3xl md:text-4xl font-extrabold text-slate-900 dark:text-white mb-3">
+                    <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight text-slate-900 dark:text-white mb-3 leading-tight">
                         Migrating from Vercel
                     </h1>
-                    <p className="text-slate-500 dark:text-slate-400 text-lg max-w-2xl">
+                    <p className="text-slate-500 dark:text-slate-400 text-lg max-w-2xl leading-relaxed">
                         Move your projects from Vercel&apos;s serverless platform to Grid&apos;s container-based infrastructure.
                     </p>
                 </div>
             </section>
 
-            <div className="max-w-3xl mx-auto px-4 py-12 prose prose-slate dark:prose-invert">
-                <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-xl p-4 mb-8 not-prose">
-                    <p className="text-sm text-amber-800 dark:text-amber-200">
+            <div className="max-w-3xl mx-auto px-4 py-12 prose prose-slate dark:prose-invert prose-headings:scroll-mt-24">
+                <div className="docs-callout docs-callout-warning not-prose">
+                    <p className="!mt-0 text-sm">
                         <strong>Before you start:</strong> Ensure Grid is installed and running. See the{' '}
                         <Link href="/docs/install" className="text-amber-900 dark:text-amber-100 underline font-semibold">Installation Guide</Link> if you haven&apos;t set it up yet.
                     </p>

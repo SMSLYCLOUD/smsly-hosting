@@ -1,4 +1,3 @@
-import json as _json
 import os
 from collections.abc import Generator
 

@@ -152,7 +152,7 @@ def discover_ai_router_targets(service: Service) -> list[OllamaTarget]:
         Service.objects
         .filter(owner=service.owner, is_preview=False)
         .exclude(id=service.id)
-        .prefetch_related("env_vars")
+        .prefetch_related("env_vars", "deployments")
         .order_by("name")
     )
     if service.project_id:

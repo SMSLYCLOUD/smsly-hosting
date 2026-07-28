@@ -193,8 +193,8 @@ class Command(BaseCommand):
                         data = resp.json()
                         count = data.get("count", len(data.get("results", data if isinstance(data, list) else [])))
                         self.stdout.write(f"        Services visible: {count}")
-                    except Exception:
-                        pass
+                    except (ValueError, KeyError) as exc:
+                        self.stdout.write(f"        (Could not parse response: {exc})")
                 else:
                     self.stdout.write(self.style.ERROR(
                         f"     ❌ GET {api_path} → HTTP {resp.status_code} with TOKEN auth"

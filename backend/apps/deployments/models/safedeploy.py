@@ -24,6 +24,7 @@ class PreviewEnvironment(TimeStampedModel):
         READY = 'READY', 'Ready'
         EXPIRED = 'EXPIRED', 'Expired'
         DESTROYING = 'DESTROYING', 'Destroying'
+        DESTROY_FAILED = 'DESTROY_FAILED', 'Destroy Failed'
         DESTROYED = 'DESTROYED', 'Destroyed'
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)  # type: ignore[var-annotated]
@@ -41,6 +42,10 @@ class PreviewEnvironment(TimeStampedModel):
     class Meta:
         ordering = ['-created_at']
         unique_together = (('service', 'branch_name', 'commit_sha'),)
+        indexes = [
+            models.Index(fields=["service", "status"], name="preview_service_status_idx"),
+            models.Index(fields=["service", "-created_at"], name="preview_service_created_idx"),
+        ]
 
     def __str__(self):
         return f"{self.service.name} - {self.branch_name} ({self.status})"
@@ -131,6 +136,11 @@ class DeploymentApproval(TimeStampedModel):
 
     approved_at = models.DateTimeField(null=True, blank=True)  # type: ignore[var-annotated]
     rejected_at = models.DateTimeField(null=True, blank=True)  # type: ignore[var-annotated]
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["service", "status"], name="deployapproval_svc_status_idx"),
+        ]
 
 class DeploymentArtifact(TimeStampedModel):
     class ArtifactType(models.TextChoices):
