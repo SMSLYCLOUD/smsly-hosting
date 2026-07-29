@@ -64,6 +64,10 @@ def register_extra_tasks(_sender, **kwargs):  # pylint: disable=unused-argument
     import apps.autoscaler.services.legacy_autoscaler  # noqa: F401
     import apps.autoscaler.services.tasks_autoscale  # noqa: F401
     import apps.deployments.services.redis_failover_recovery  # noqa: F401
+    # -- Tasks in subpackages not auto-discovered (not {app}.tasks) --
+    import apps.deployments.tasks.ai.tasks_ai  # noqa: F401  # analyze_failure_task
+    import apps.deployments.tasks.ai.tasks_code_intelligence  # noqa: F401  # deep_scan_and_verify_task
+    import apps.deployments.tasks.infra.tasks_health  # noqa: F401  # check_agent_heartbeats_task
     # -- All other task modules are auto-discovered via autodiscover_tasks()
     #    which imports {app}.tasks for every INSTALLED_APPS entry. App-level
     #    tasks.py or tasks/__init__.py re-exports from subpackages.
@@ -163,6 +167,9 @@ app.conf.task_routes = {
     'apps.intelligence.tasks.proactive_health_scan_task': {'queue': 'deploy'},
     'apps.intelligence.tasks.daily_intelligence_report_task': {'queue': 'deploy'},
     'apps.intelligence.tasks.ai_deployment_review_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.ai.tasks_ai.analyze_failure_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.ai.tasks_code_intelligence.deep_scan_and_verify_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.infra.tasks_health.check_agent_heartbeats_task': {'queue': 'deploy'},
 }
 
 app.conf.beat_schedule = {
@@ -450,6 +457,13 @@ if os.environ.get('SMSLY_ENABLE_MEDIA_NODES'):
             'schedule': 3600.0,
             'options': {'expires': 3600.0, 'queue': 'media-audit'},
         },
+    })
+    app.conf.task_routes.update({
+        'apps.media.tasks.check_stale_media_nodes': {'queue': 'media-telemetry'},
+        'apps.media.tasks.aggregate_media_capacity': {'queue': 'media-telemetry'},
+        'apps.media.tasks.flush_telemetry_to_db': {'queue': 'media-telemetry'},
+        'apps.media.tasks.rotate_media_node_keys': {'queue': 'deploy'},
+        'apps.media.tasks.verify_federation_chains': {'queue': 'media-audit'},
     })
 
 
