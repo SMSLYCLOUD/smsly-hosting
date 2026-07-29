@@ -351,7 +351,7 @@ fi
 for lib in "$LIB_DIR"/*.sh; do
     # Skip mode-entry files — they are sourced on-demand by the
     # mode dispatch below (they contain inline code, not just functions).
-    case "$lib" in */fresh.sh|*/update.sh|*/install-gvisor.sh|*/install-kata.sh) continue ;; esac
+    case "$lib" in */fresh*.sh|*/update.sh|*/install-gvisor.sh|*/install-kata.sh) continue ;; esac
     [ -f "$lib" ] && source "$lib"
 done
 # --- END_LIB_SOURCING ---
