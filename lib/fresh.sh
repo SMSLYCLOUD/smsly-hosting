@@ -10,7 +10,26 @@ export PATH="/usr/local/bin:$PATH"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-source "$SCRIPT_DIR/state.sh"
+echo "DEBUG: SCRIPT_DIR=$SCRIPT_DIR" >&2
+echo "DEBUG: BASH_SOURCE=${BASH_SOURCE[0]}" >&2
+echo "DEBUG: PWD=$PWD" >&2
+
+if [ ! -f "$SCRIPT_DIR/state.sh" ]; then
+    echo "ERROR: state.sh not found at $SCRIPT_DIR/state.sh" >&2
+    exit 1
+fi
+
+echo "DEBUG: sourcing state.sh" >&2
+. "$SCRIPT_DIR/state.sh"
+
+echo "DEBUG: checking is_checkpoint_done" >&2
+if ! command -v is_checkpoint_done >/dev/null 2>&1; then
+    echo "ERROR: is_checkpoint_done not defined after sourcing state.sh" >&2
+    exit 1
+fi
+
+echo "DEBUG: is_checkpoint_done available" >&2
+
 source "$SCRIPT_DIR/fresh_interactive.sh"
 source "$SCRIPT_DIR/fresh_preflight.sh"
 source "$SCRIPT_DIR/fresh_deps.sh"
