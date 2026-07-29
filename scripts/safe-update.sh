@@ -224,7 +224,7 @@ safe_update_rollback() {
     cd "$INSTALL_DIR"
 
     if [ -n "${PREV_HASH:-}" ] && [ "$PREV_HASH" != "unknown" ]; then
-        git fetch origin "${PREV_BRANCH:-main}"  || true
+        git fetch origin "${PREV_BRANCH:-master}"  || true
         if git reset --hard "$PREV_HASH" ; then
             _ok "Git: reverted to $PREV_HASH"
         else

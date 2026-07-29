@@ -14,7 +14,7 @@ export PATH="/usr/local/bin:$PATH"
 
 # ─── Defaults for unset env vars ─────────────────────────────────────────────
 export SMSLY_SERVICE_PROXY_UPSTREAM=${SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
-export SMSLY_BRANCH="${SMSLY_BRANCH:-main}"
+export SMSLY_BRANCH="${SMSLY_BRANCH:-master}"
 export SMSLY_GIT_REMOTE="${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}"
 
 # ─── Root Check ──────────────────────────────────────────────────────────────
@@ -262,7 +262,7 @@ if [ ! -d "$SCRIPT_DIR/lib" ] && [ -n "${SMSLY_GIT_REMOTE:-}" ]; then
     mkdir -p "$BOOTSTRAP_LIB_DIR"
     echo -e "\033[0;34m  → Bootstrapping lib/ from $SMSLY_GIT_REMOTE ...\033[0m"
     # Try tarball download first (cheap and deterministic)
-    _lib_branch="${SMSLY_BRANCH:-main}"
+    _lib_branch="${SMSLY_BRANCH:-master}"
     _lib_tar_url="${SMSLY_GIT_REMOTE%.git}/archive/refs/heads/${_lib_branch}.tar.gz"
     if command -v curl; then
         if curl -fsSL "$SMSLY_GIT_REMOTE/archive/refs/heads/${_lib_branch}.tar.gz" -o "/tmp/smsly-repo-${$}.tar.gz" \
@@ -278,7 +278,7 @@ if [ ! -d "$SCRIPT_DIR/lib" ] && [ -n "${SMSLY_GIT_REMOTE:-}" ]; then
     # Fallback: try git clone if tarball failed
     if [ ! -d "$BOOTSTRAP_LIB_DIR/common.sh" ] && command -v git; then
         _tmp_clone=$(mktemp -d)
-        if git clone --depth 1 --branch "${SMSLY_BRANCH:-main}" "$SMSLY_GIT_REMOTE" "$_tmp_clone"; then
+        if git clone --depth 1 --branch "${SMSLY_BRANCH:-master}" "$SMSLY_GIT_REMOTE" "$_tmp_clone"; then
             if [ -d "$_tmp_clone/lib" ]; then
                 cp -r "$_tmp_clone/lib/"* "$BOOTSTRAP_LIB_DIR/" && \
                     echo -e "\033[0;32m  ✓ lib/ bootstrapped via git clone\033[0m"
@@ -364,7 +364,7 @@ SNAPSHOT_FILE="$INSTALL_DIR/.update-safe-snapshot"
 BACKUP_DIR="$INSTALL_DIR/.update-backups"
 LOCK_FILE="/tmp/smsly-install.lock"
 CADDY_LAST_GOOD="$INSTALL_DIR/caddy-config/Caddyfile.smsly-last-good"
-SMSLY_BRANCH="${SMSLY_BRANCH:-main}"
+SMSLY_BRANCH="${SMSLY_BRANCH:-master}"
 SMSLY_GIT_REMOTE="${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}"
 
 # ─── Second argument parser ────────────────────────────────────────────────────
