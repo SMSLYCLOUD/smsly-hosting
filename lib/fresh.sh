@@ -10,18 +10,25 @@ export PATH="/usr/local/bin:$PATH"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Source state.sh with explicit error handling
+echo "DEBUG: SCRIPT_DIR=$SCRIPT_DIR" >&2
+echo "DEBUG: BASH_SOURCE=${BASH_SOURCE[0]}" >&2
+echo "DEBUG: PWD=$PWD" >&2
+
 if [ ! -f "$SCRIPT_DIR/state.sh" ]; then
-    echo -e "${RED}ERROR: state.sh not found at $SCRIPT_DIR/state.sh${NC}" >&2
+    echo "ERROR: state.sh not found at $SCRIPT_DIR/state.sh" >&2
     exit 1
 fi
+
+echo "DEBUG: sourcing state.sh" >&2
 . "$SCRIPT_DIR/state.sh"
 
-# Verify is_checkpoint_done is available
+echo "DEBUG: checking is_checkpoint_done" >&2
 if ! command -v is_checkpoint_done >/dev/null 2>&1; then
-    echo -e "${RED}ERROR: is_checkpoint_done not defined after sourcing state.sh${NC}" >&2
+    echo "ERROR: is_checkpoint_done not defined after sourcing state.sh" >&2
     exit 1
 fi
+
+echo "DEBUG: is_checkpoint_done available" >&2
 
 source "$SCRIPT_DIR/fresh_interactive.sh"
 source "$SCRIPT_DIR/fresh_preflight.sh"
