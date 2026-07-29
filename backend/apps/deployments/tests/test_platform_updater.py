@@ -4,10 +4,10 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
-from services import platform_updater
-from services.platform_updater import perform_update
+from apps.deployments.services import platform_updater
+from apps.deployments.services.platform_updater import perform_update
 
-from apps.deployments.models_updates import PlatformUpdate
+from apps.deployments.models.updates import PlatformUpdate
 
 User = get_user_model()
 
@@ -29,7 +29,7 @@ class PlatformUpdaterTest(TestCase):
             self.addCleanup(patcher.stop)
         self.addCleanup(self.tmpdir.cleanup)
 
-    @patch('services.platform_updater._run')
+    @patch('apps.deployments.services.platform_updater._run')
     def test_prevent_concurrent_updates(self, mock_run):
         PlatformUpdate.objects.create(status='MIGRATING')
 
@@ -41,9 +41,9 @@ class PlatformUpdaterTest(TestCase):
         self.assertIn('Another update is currently in progress', self.update.error_message)
         mock_run.assert_not_called()
 
-    @patch('services.platform_updater.check_health', return_value=True)
-    @patch('services.platform_updater._wait_for_watcher', return_value=True)
-    @patch('services.platform_updater._run', return_value=(True, 'abc123\n'))
+    @patch('apps.deployments.services.platform_updater.check_health', return_value=True)
+    @patch('apps.deployments.services.platform_updater._wait_for_watcher', return_value=True)
+    @patch('apps.deployments.services.platform_updater._run', return_value=(True, 'abc123\n'))
     def test_update_writes_watcher_flag_and_completes(self, _mock_run, mock_wait, _mock_health):
         result = perform_update(self.update)
 
@@ -54,9 +54,9 @@ class PlatformUpdaterTest(TestCase):
         self.assertEqual((self.watch_dir / '.update').read_text(), f'update:{self.update.id}\n')
         mock_wait.assert_called_once_with(self.update)
 
-    @patch('services.platform_updater.check_health', return_value=False)
-    @patch('services.platform_updater._wait_for_watcher', return_value=True)
-    @patch('services.platform_updater._run', return_value=(True, 'abc123\n'))
+    @patch('apps.deployments.services.platform_updater.check_health', return_value=False)
+    @patch('apps.deployments.services.platform_updater._wait_for_watcher', return_value=True)
+    @patch('apps.deployments.services.platform_updater._run', return_value=(True, 'abc123\n'))
     def test_update_fails_if_service_unhealthy(self, _mock_run, _mock_wait, _mock_health):
         result = perform_update(self.update)
 

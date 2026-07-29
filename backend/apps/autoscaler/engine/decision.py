@@ -6,7 +6,7 @@ Merges the two previous engines:
   * ``apps.deployments.services.autoscaler._evaluate_scaling`` —
     per-service CPU target, ``last_scale_at`` cooldown, 1m up / 5m down.
 
-  * ``apps.deployments.services.scaling_ai.ScalingAnalyzer._decide`` —
+  * ``apps.autoscaler.services.scaling_ai.ScalingAnalyzer._decide`` —
     env-configured CPU_HIGH / CPU_LOW / CPU_CRITICAL thresholds,
     memory-trend scaling, OOM/crash-loop urgent scaling, formula-based
     replica count, replica-record cooldowns.

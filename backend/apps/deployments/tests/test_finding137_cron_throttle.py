@@ -15,9 +15,9 @@ from rest_framework.test import APIClient
 
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import Service
-from apps.deployments.models_cron import CronJob
-from apps.deployments.rate_limiting import CronJobCreateRateThrottle
-from apps.deployments.views_cron import CronJobViewSet
+from apps.deployments.models.cron import CronJob
+from apps.core.rate_limiting import CronJobCreateRateThrottle
+from apps.deployments.views.cron import CronJobViewSet
 
 User = get_user_model()
 

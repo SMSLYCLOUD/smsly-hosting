@@ -44,7 +44,7 @@ class Command(BaseCommand):
             if not master_mesh_ip or master_mesh_ip == master_ip:
                 master_mesh_ip = meta.get('master_mesh_ip', master_ip)
 
-        from apps.deployments.models_servers import ManagedServer
+        from apps.deployments.models.servers import ManagedServer
 
         agents = ManagedServer.objects.filter(
             is_lite_agent=True,
@@ -102,53 +102,57 @@ class Command(BaseCommand):
             port=agent.ssh_port or 22,
             user=agent.ssh_user or 'root',
         )
-        ssh.connect()
+        try:
+            ssh.connect()
+        except Exception as e:
+            raise RuntimeError(f"SSH connection to {agent.host} failed: {e}") from e
 
-        env_updates = {
-            'MASTER_IP': master_ip,
-            'MASTER_MESH_IP': master_mesh_ip,
-            'GATEWAY_SECRET': gateway_secret,
-        }
-        if db_password:
-            env_updates['MASTER_DB_PASSWORD'] = db_password
+        try:
+            env_updates = {
+                'MASTER_IP': master_ip,
+                'MASTER_MESH_IP': master_mesh_ip,
+                'GATEWAY_SECRET': gateway_secret,
+            }
+            if db_password:
+                env_updates['MASTER_DB_PASSWORD'] = db_password
 
-        for key, value in env_updates.items():
-            cmd = (
-                f"grep -q '^{key}=' /opt/smsly-hosting/.env "
-                f"&& sed -i 's|^{key}=.*|{key}={value}|' /opt/smsly-hosting/.env "
-                f"|| echo '{key}={value}' >> /opt/smsly-hosting/.env"
+            for key, value in env_updates.items():
+                cmd = (
+                    f"grep -q '^{key}=' /opt/smsly-hosting/.env "
+                    f"&& sed -i 's|^{key}=.*|{key}={value}|' /opt/smsly-hosting/.env "
+                    f"|| echo '{key}={value}' >> /opt/smsly-hosting/.env"
+                )
+                ssh.exec_command(cmd, raise_on_error=False)
+
+            # Rebuild the agent's DATABASE_URL from the new master's credentials
+            rebuild_cmd = (
+                "cd /opt/smsly-hosting && "
+                "DB_USER=$(grep -m1 '^MASTER_DB_USER=' .env | cut -d= -f2-) && "
+                "DB_PASS=$(grep -m1 '^MASTER_DB_PASSWORD=' .env | cut -d= -f2-) && "
+                "DB_NAME=$(grep -m1 '^POSTGRES_DB=' .env 2>/dev/null || echo 'smsly_hosting') && "
+                f"NEW_URL=\"postgresql://${{DB_USER}}:${{DB_PASS}}@{master_mesh_ip}:5432/${{DB_NAME}}\" && "
+                "grep -q '^DATABASE_URL=' .env && "
+                "sed -i \"s|^DATABASE_URL=.*|DATABASE_URL=${NEW_URL}|\" .env || "
+                "echo \"DATABASE_URL=${NEW_URL}\" >> .env"
             )
-            ssh.exec_command(cmd, raise_on_error=False)
+            ssh.exec_command(rebuild_cmd, raise_on_error=False)
 
-        # Rebuild the agent's DATABASE_URL from the new master's credentials
-        rebuild_cmd = (
-            "cd /opt/smsly-hosting && "
-            "DB_USER=$(grep -m1 '^MASTER_DB_USER=' .env | cut -d= -f2-) && "
-            "DB_PASS=$(grep -m1 '^MASTER_DB_PASSWORD=' .env | cut -d= -f2-) && "
-            "DB_NAME=$(grep -m1 '^POSTGRES_DB=' .env 2>/dev/null || echo 'smsly_hosting') && "
-            f"NEW_URL=\"postgresql://${{DB_USER}}:${{DB_PASS}}@{master_mesh_ip}:5432/${{DB_NAME}}\" && "
-            "grep -q '^DATABASE_URL=' .env && "
-            "sed -i \"s|^DATABASE_URL=.*|DATABASE_URL=${NEW_URL}|\" .env || "
-            "echo \"DATABASE_URL=${NEW_URL}\" >> .env"
-        )
-        ssh.exec_command(rebuild_cmd, raise_on_error=False)
+            # Restart the agent's backend to pick up new DB URL
+            ssh.exec_command(
+                "cd /opt/smsly-hosting && "
+                "docker compose -f infrastructure/docker/docker-compose.agent-lite.yml restart backend",
+                raise_on_error=False,
+            )
 
-        # Restart the agent's backend to pick up new DB URL
-        ssh.exec_command(
-            "cd /opt/smsly-hosting && "
-            "docker compose -f infrastructure/docker/docker-compose.agent-lite.yml restart backend",
-            raise_on_error=False,
-        )
-
-        # Verify the agent's backend is healthy
-        time.sleep(5)
-        verify_cmd = (
-            "curl -sS --max-time 10 http://localhost:8000/health/live 2>/dev/null "
-            "|| echo 'UNHEALTHY'"
-        )
-        result = ssh.exec_command(verify_cmd, raise_on_error=False)
-        status = result[0] if isinstance(result, tuple) else str(result)
-        if 'UNHEALTHY' in str(status):
-            logger.warning("Agent %s backend may not be healthy after re-point", agent.name)
-
-        ssh.close()
+            # Verify the agent's backend is healthy
+            time.sleep(5)
+            verify_cmd = (
+                "curl -sS --max-time 10 http://localhost:8000/health/live 2>/dev/null "
+                "|| echo 'UNHEALTHY'"
+            )
+            result = ssh.exec_command(verify_cmd, raise_on_error=False)
+            status = result[0] if isinstance(result, tuple) else str(result)
+            if 'UNHEALTHY' in str(status):
+                logger.warning("Agent %s backend may not be healthy after re-point", agent.name)
+        finally:
+            ssh.close()

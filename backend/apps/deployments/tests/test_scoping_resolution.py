@@ -4,9 +4,9 @@ from django.test import TestCase
 
 from apps.organizations.models import Organization
 from apps.teams.models import Team
-from apps.deployments.models_core import Project, Service
-from apps.deployments.models_registry_scope import ScopedRegistry
-from apps.deployments.models_network_scope import ScopedNetwork
+from apps.deployments.models.core import Project, Service
+from apps.deployments.models.registry_scope import ScopedRegistry
+from apps.deployments.models.network_scope import ScopedNetwork
 from apps.deployments.services.spawning_service import _scoped_network_for
 
 

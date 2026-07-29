@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { memo } from 'react';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useRouter } from 'next/navigation';
 import {
@@ -34,7 +34,7 @@ interface ServicesGridProps {
   services: (Service & { isAddon?: boolean; addon_type?: string; connection_url?: string })[];
 }
 
-export function ServicesGrid({ services }: ServicesGridProps) {
+export const ServicesGrid = memo(function ServicesGrid({ services }: ServicesGridProps) {
   const router = useRouter();
   const confirm = useConfirm();
   const { has } = usePermissions();
@@ -322,7 +322,7 @@ export function ServicesGrid({ services }: ServicesGridProps) {
       ))}
     </div>
   );
-}
+});
 
 function EmptyServicesState() {
   return (

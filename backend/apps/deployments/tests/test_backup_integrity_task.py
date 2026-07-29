@@ -15,8 +15,8 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 
 from apps.deployments.models import Project, Service
-from apps.deployments.models_backup import ServerBackup, ServiceBackup
-from apps.deployments.tasks_backup import verify_backup_integrity_task
+from apps.deployments.models.backup import ServerBackup, ServiceBackup
+from apps.deployments.tasks.data.tasks_backup import verify_backup_integrity_task
 
 User = get_user_model()
 
@@ -174,7 +174,7 @@ class VerifyBackupIntegrityTaskTest(TestCase):
 
     def test_audit_log_written(self):
         """Verify run creates a BACKUP_INTEGRITY_CHECK audit entry."""
-        from apps.deployments.models_audit import AuditLog
+        from apps.deployments.models.audit import AuditLog
 
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".tar.gz")
         _make_valid_tar(tmp.name)

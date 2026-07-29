@@ -5,8 +5,8 @@ from unittest.mock import MagicMock, patch
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
-from apps.deployments.models_mesh import MeshNetwork, WireGuardPeer
-from apps.deployments.models_servers import ManagedServer
+from apps.deployments.models.mesh import MeshNetwork, WireGuardPeer
+from apps.deployments.models.servers import ManagedServer
 from apps.deployments.services.wireguard_service import WireGuardService
 
 
@@ -99,7 +99,7 @@ class MeshNetworkTest(TestCase):
 
     @patch('apps.deployments.services.wireguard_service.WireGuardService._detect_local_endpoint',
            return_value='198.51.100.1:51820')
-    @patch('apps.deployments.tasks_mesh.deploy_mesh_task.delay')
+    @patch('apps.deployments.tasks.infra.tasks_mesh.deploy_mesh_task.delay')
     def test_ensure_server_in_default_mesh_adds_local_and_remote_peers(
         self, mock_deploy_mesh, _detect_endpoint
     ):

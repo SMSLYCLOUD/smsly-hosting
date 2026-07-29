@@ -8,9 +8,9 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIRequestFactory
 
-from apps.deployments.models_servers import ManagedServer
-from apps.deployments.views_servers import _build_remote_headers
-from apps.deployments.views_transfer import _verify_transfer_sync_hmac
+from apps.deployments.models.servers import ManagedServer
+from apps.deployments.views.server.helpers import _build_remote_headers
+from apps.core.views.transfer import _verify_transfer_sync_hmac
 
 TEST_SECRET = "nonce-test-secret-1234"
 
@@ -121,7 +121,7 @@ class HmacNonceTests(TestCase):
         request._body = body
 
         with patch(
-            "apps.deployments.views_transfer._gateway_secret_candidates",
+            "apps.core.views.transfer._gateway_secret_candidates",
             return_value=[TEST_SECRET],
         ):
             self.assertFalse(_verify_transfer_sync_hmac(request, "203.0.113.50", body))
@@ -132,7 +132,7 @@ class HmacNonceTests(TestCase):
             self.factory, body=body, source_ip="203.0.113.50"
         )
         with patch(
-            "apps.deployments.views_transfer._gateway_secret_candidates",
+            "apps.core.views.transfer._gateway_secret_candidates",
             return_value=[TEST_SECRET],
         ):
             self.assertTrue(_verify_transfer_sync_hmac(request, "203.0.113.50", body))
@@ -156,7 +156,7 @@ class HmacNonceTests(TestCase):
         request.META["HTTP_X_GATEWAY_SIGNATURE_V2"] = original_signature
 
         with patch(
-            "apps.deployments.views_transfer._gateway_secret_candidates",
+            "apps.core.views.transfer._gateway_secret_candidates",
             return_value=[TEST_SECRET],
         ):
             self.assertFalse(

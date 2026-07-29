@@ -18,7 +18,7 @@ from rest_framework.test import APIClient
 from apps.cloud.models import CloudProvider
 
 from ..models import Deployment, Service  # type: ignore[attr-defined]
-from ..models_servers import ManagedServer
+from ..models.servers import ManagedServer
 from ..tasks import (
     enqueue_smart_deploy_task,
     fleet_build_lock,

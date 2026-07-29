@@ -16,8 +16,8 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from apps.deployments.models_tunnels import Tunnel
-from apps.deployments.views_tunnels import (
+from apps.deployments.models.tunnels import Tunnel
+from apps.deployments.views.tunnels import (
     ALLOWED_TUNNEL_PORTS,
     DENIED_TUNNEL_PORTS,
 )

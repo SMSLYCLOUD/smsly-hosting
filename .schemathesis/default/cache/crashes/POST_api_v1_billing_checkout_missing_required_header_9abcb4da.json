@@ -1,0 +1,90 @@
+{
+  "operation": "POST /api/v1/billing/checkout/",
+  "method": "POST",
+  "path_template": "/api/v1/billing/checkout/",
+  "fingerprint": "9abcb4da",
+  "case_id": "rvfvSa",
+  "code_sample": "curl -X POST -H 'Content-Type: application/json' -d '{\"plan\": \"HOBBY\", \"provider\": \"\"}' http://127.0.0.1:8089/api/v1/billing/checkout/",
+  "sequence": [
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:8089/api/v1/billing/checkout/",
+      "url_template": "http://127.0.0.1:8089/api/v1/billing/checkout/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "X-Schemathesis-TestCaseId": "rvfvSa",
+        "Content-Type": "application/json",
+        "Content-Length": "33"
+      },
+      "response": {
+        "status_code": 403,
+        "headers": {
+          "date": "Mon, 20 Jul 2026 21:12:09 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "x-frame-options": "DENY",
+          "content-length": "41",
+          "vary": "Cookie, origin",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin"
+        },
+        "body": "{\"error\": \"Invalid or missing signature\"}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "missing_required_header",
+          "status": "failure",
+          "message": "Missing header not rejected\n\nGot 403 when missing required 'Authorization' header, expected 401"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 1.740799780236557e-05,
+          "mode": "negative"
+        },
+        "components": {
+          "HEADER": "negative",
+          "BODY": "positive"
+        },
+        "phase": {
+          "name": "coverage",
+          "data": {
+            "type": "CoveragePhaseData",
+            "description": "Missing `Authorization` at header",
+            "location": null,
+            "parameter": "Authorization",
+            "parameter_location": "HEADER",
+            "scenario": "missing_parameter"
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {
+          "HEADER": {}
+        }
+      },
+      "path": "/api/v1/billing/checkout/",
+      "path_parameters": {},
+      "query": {},
+      "case_headers": {},
+      "cookies": {},
+      "case_body": {
+        "encoding": "json",
+        "value": {
+          "plan": "HOBBY",
+          "provider": ""
+        }
+      },
+      "media_type": "application/json",
+      "parent_index": null
+    }
+  ]
+}

@@ -1,0 +1,99 @@
+{
+  "operation": "GET /api/v1/templates/{id}/",
+  "method": "GET",
+  "path_template": "/api/v1/templates/{id}/",
+  "fingerprint": "2c32926d",
+  "case_id": "Ow28zF",
+  "code_sample": "curl -X GET -H 'Authorization: [Filtered]' http://127.0.0.1:8089/api/v1/templates/0/",
+  "sequence": [
+    {
+      "method": "GET",
+      "url": "http://127.0.0.1:8089/api/v1/templates/0/",
+      "url_template": "http://127.0.0.1:8089/api/v1/templates/{id}/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "Authorization": "[Filtered]",
+        "X-Schemathesis-TestCaseId": "Ow28zF"
+      },
+      "response": {
+        "status_code": 404,
+        "headers": {
+          "date": "Tue, 21 Jul 2026 00:17:15 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "vary": "Accept, Cookie, origin",
+          "allow": "GET, HEAD, OPTIONS",
+          "x-frame-options": "DENY",
+          "content-length": "0",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin"
+        },
+        "body": ""
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "status_code_conformance",
+          "status": "failure",
+          "message": "Undocumented HTTP status code\n\nReceived: 404\nDocumented: 200"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 0.0006256769993342459,
+          "mode": "positive"
+        },
+        "components": {
+          "PATH": "positive",
+          "HEADER": "positive"
+        },
+        "phase": {
+          "name": "coverage",
+          "data": {
+            "type": "CoveragePhaseData",
+            "description": "Default positive test case",
+            "location": null,
+            "parameter": null,
+            "parameter_location": null,
+            "scenario": "default_positive_test"
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [
+          [
+            "path",
+            "id"
+          ]
+        ],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {
+          "PATH": {
+            "id": "0"
+          },
+          "HEADER": {
+            "Authorization": ""
+          }
+        }
+      },
+      "path": "/api/v1/templates/{id}/",
+      "path_parameters": {
+        "id": "0"
+      },
+      "query": {},
+      "case_headers": {
+        "Authorization": "[Filtered]"
+      },
+      "cookies": {},
+      "case_body": {
+        "encoding": "none"
+      },
+      "media_type": null,
+      "parent_index": null
+    }
+  ]
+}

@@ -5,28 +5,28 @@ export default function GettingStartedPage() {
   return (
     <main className="min-h-screen bg-white dark:bg-slate-950">
       <section className="pt-28 pb-10 px-4 bg-gradient-to-b from-blue-50/60 to-white dark:from-blue-950/20 dark:to-slate-950 border-b border-slate-200 dark:border-slate-800">
-        <div className="max-w-4xl mx-auto">
+        <div className="max-w-3xl mx-auto">
           <Link href="/docs" className="inline-flex items-center gap-1.5 text-sm text-blue-600 dark:text-blue-400 hover:underline mb-6">
             <ArrowLeft size={14} /> Back to Docs
           </Link>
           <div className="flex items-center gap-3 mb-4">
             <div className="p-2.5 bg-blue-100 dark:bg-blue-900/50 rounded-xl">
-              <Rocket className="w-6 h-6 text-blue-700 dark:text-blue-300" />
+              <Rocket className="w-5 h-5 text-blue-700 dark:text-blue-300" />
             </div>
             <span className="text-sm font-semibold text-blue-600 dark:text-blue-400 uppercase tracking-wider">Guide</span>
           </div>
-          <h1 className="text-3xl md:text-4xl font-extrabold text-slate-900 dark:text-white mb-3">
+          <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight text-slate-900 dark:text-white mb-3">
             Getting Started
           </h1>
-          <p className="text-slate-500 dark:text-slate-400 text-lg max-w-2xl">
+          <p className="text-slate-500 dark:text-slate-400 text-lg max-w-2xl leading-relaxed">
             Deploy your first application on Grid.
           </p>
         </div>
       </section>
 
-      <div className="max-w-3xl mx-auto px-4 py-12 prose prose-slate dark:prose-invert">
-        <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-xl p-4 mb-8 not-prose">
-          <p className="text-sm text-amber-800 dark:text-amber-200">
+      <div className="max-w-3xl mx-auto px-4 py-12 prose prose-slate dark:prose-invert prose-headings:scroll-mt-24">
+        <div className="docs-callout docs-callout-warning not-prose">
+          <p className="!mt-0">
             <strong>Before you start:</strong> If you haven&apos;t installed Grid yet, follow the{' '}
             <Link href="/docs/install" className="text-amber-900 dark:text-amber-100 underline font-semibold">Installation Guide</Link> first.
           </p>
@@ -40,7 +40,7 @@ export default function GettingStartedPage() {
         </ul>
 
         <h2>Step 1: Connect your account</h2>
-        <p>Go to <strong>Settings → OAuth</strong> and connect your GitHub account. This allows Grid to access your repositories.</p>
+        <p>Go to <strong>Settings &rarr; OAuth</strong> and connect your GitHub account. This allows Grid to access your repositories.</p>
 
         <h2>Step 2: Create a Service</h2>
         <p>Click <strong>&quot;New Service&quot;</strong> on the dashboard. Select your repository. Grid will auto-detect the framework.</p>

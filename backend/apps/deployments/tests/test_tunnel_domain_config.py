@@ -5,9 +5,9 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
-from services.tunnels.tcp_server import TCPTunnelServer
+from apps.deployments.services.tunnels.tcp_server import TCPTunnelServer
 
-from apps.deployments.models_tunnels import Tunnel
+from apps.deployments.models.tunnels import Tunnel
 
 User = get_user_model()
 

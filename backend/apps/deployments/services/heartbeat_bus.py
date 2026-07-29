@@ -176,7 +176,7 @@ def _persist_one_heartbeat(snapshot):
     snapshot. The hot publish path is unaffected; this is a
     best-effort audit drain.
     """
-    from apps.deployments.models_election import (
+    from apps.deployments.models.election import (
         ClusterState,
         HeartbeatLog,
     )
@@ -185,7 +185,7 @@ def _persist_one_heartbeat(snapshot):
     if not wg_address:
         return False
     try:
-        from apps.deployments.models_servers import ManagedServer
+        from apps.deployments.models.servers import ManagedServer
         server = ManagedServer.objects.filter(
             wg_address=wg_address,
         ).first()
@@ -223,9 +223,11 @@ def _persist_one_heartbeat(snapshot):
 
 from celery import shared_task
 
+from apps.deployments.constants import TASK_TIME_LIMIT_QUICK
 
-@shared_task
-def persist_heartbeats_task():
+
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_QUICK[0], time_limit=TASK_TIME_LIMIT_QUICK[1])
+def persist_heartbeats_task(self):
     """Celery task: drain the bus and write one audit row per
     peer. Runs every 60 seconds via the beat schedule. The hot
     publish path does NOT call this — the bus holds the latest

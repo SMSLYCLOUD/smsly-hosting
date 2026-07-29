@@ -70,7 +70,7 @@ if ! docker ps --format '{{.Names}}' | grep -qx "$NEW_DB_CONTAINER"; then
     echo -e "  → Waiting for postgres-primary to become healthy..."
     for _i in $(seq 1 30); do
         if docker ps --format '{{.Names}}' | grep -qx "$NEW_DB_CONTAINER" && \
-           docker exec "$NEW_DB_CONTAINER" pg_isready -U "$DB_USER" ; then
+           timeout 30 docker exec "$NEW_DB_CONTAINER" pg_isready -U "$DB_USER" ; then
             echo -e "${GREEN}  ✓ postgres-primary is ready${NC}"
             break
         fi
@@ -83,7 +83,7 @@ if ! docker ps --format '{{.Names}}' | grep -qx "$NEW_DB_CONTAINER"; then
 fi
 
 # ── Check if postgres-primary already has data ────────────────────────────────
-TABLE_COUNT=$(docker exec "$NEW_DB_CONTAINER" \
+TABLE_COUNT=$(timeout 120 docker exec "$NEW_DB_CONTAINER" \
     psql -U "$DB_USER" -d "$DB_NAME" -t -A \
     -c "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';" \
      || echo "0")
@@ -92,11 +92,11 @@ if [ "$TABLE_COUNT" -gt 0 ]; then
     echo -e "${YELLOW}⚠ postgres-primary already has $TABLE_COUNT tables — checking if migration needed...${NC}"
 
     # Compare row counts between old and new
-    OLD_ROWS=$(docker exec "$OLD_DB_CONTAINER" \
+    OLD_ROWS=$(timeout 120 docker exec "$OLD_DB_CONTAINER" \
         psql -U "$DB_USER" -d "$DB_NAME" -t -A \
         -c "SELECT sum(n_live_tup) FROM pg_stat_user_tables;" \
          || echo "0")
-    NEW_ROWS=$(docker exec "$NEW_DB_CONTAINER" \
+    NEW_ROWS=$(timeout 120 docker exec "$NEW_DB_CONTAINER" \
         psql -U "$DB_USER" -d "$DB_NAME" -t -A \
         -c "SELECT sum(n_live_tup) FROM pg_stat_user_tables;" \
          || echo "0")
@@ -123,7 +123,7 @@ fi
 echo ""
 echo -e "${BLUE}→ Step 1: Dumping database from $OLD_DB_CONTAINER...${NC}"
 
-docker exec "$OLD_DB_CONTAINER" \
+timeout 600 docker exec "$OLD_DB_CONTAINER" \
     pg_dump -U "$DB_USER" -d "$DB_NAME" \
     --no-owner --no-acl --clean --if-exists \
     -F p  > "$DUMP_FILE"
@@ -156,7 +156,7 @@ echo -e "${BLUE}→ Step 3: Restoring to $NEW_DB_CONTAINER...${NC}"
 # so fall back to $DB_USER (which is typically smsly_admin, a superuser).
 # Connect to template1 so we're not blocking the target database.
 for _try_user in "postgres" "$DB_USER"; do
-    if docker exec "$NEW_DB_CONTAINER" psql -U "$_try_user" -d template1 -c "SELECT 1;" ; then
+    if timeout 30 docker exec "$NEW_DB_CONTAINER" psql -U "$_try_user" -d template1 -c "SELECT 1;" ; then
         _admin_user="$_try_user"
         break
     fi
@@ -166,7 +166,7 @@ echo "  → Using admin role: $_admin_user"
 
 echo "  → Killing active connections to $DB_NAME..."
 set +e
-docker exec -i "$NEW_DB_CONTAINER" psql -U "$_admin_user" -d template1 <<EOSQL 
+timeout 120 docker exec -i "$NEW_DB_CONTAINER" psql -U "$_admin_user" -d template1 <<EOSQL 
 SELECT pg_terminate_backend(pid)
 FROM pg_stat_activity
 WHERE datname = '$DB_NAME'
@@ -176,13 +176,13 @@ set -e
 
 echo "  → Dropping $DB_NAME if it exists..."
 set +e
-_drop_output=$(docker exec -i "$NEW_DB_CONTAINER" psql -U "$_admin_user" -d template1 -c "DROP DATABASE IF EXISTS $DB_NAME;" )
+_drop_output=$(timeout 120 docker exec -i "$NEW_DB_CONTAINER" psql -U "$_admin_user" -d template1 -c "DROP DATABASE IF EXISTS $DB_NAME;" )
 _drop_rc=$?
 set -e
 echo "    $_drop_output" | tail -1
 
 echo "  → Creating $DB_NAME..."
-docker exec -i "$NEW_DB_CONTAINER" psql -U "$_admin_user" -d template1 -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"  || {
+timeout 120 docker exec -i "$NEW_DB_CONTAINER" psql -U "$_admin_user" -d template1 -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"  || {
     echo -e "${RED}  ✗ Failed to create database${NC}"
     rm -f "$DUMP_FILE"
     exit 1
@@ -191,7 +191,7 @@ docker exec -i "$NEW_DB_CONTAINER" psql -U "$_admin_user" -d template1 -c "CREAT
 # Pipe the dump into the new container
 echo "  → Restoring SQL dump (117 MB)..."
 set +e
-_restore_output=$(cat "$DUMP_FILE" | docker exec -i "$NEW_DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" )
+_restore_output=$(cat "$DUMP_FILE" | timeout 3600 docker exec -i "$NEW_DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" )
 _restore_rc=$?
 set -e
 if [ $_restore_rc -ne 0 ]; then
@@ -208,11 +208,11 @@ echo -e "${GREEN}  ✓ Database restored to postgres-primary${NC}"
 echo ""
 echo -e "${BLUE}→ Step 4: Verifying migration...${NC}"
 
-NEW_TABLE_COUNT=$(docker exec "$NEW_DB_CONTAINER" \
+NEW_TABLE_COUNT=$(timeout 120 docker exec "$NEW_DB_CONTAINER" \
     psql -U "$DB_USER" -d "$DB_NAME" -t -A \
     -c "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';")
 
-NEW_ROWS_VERIFY=$(docker exec "$NEW_DB_CONTAINER" \
+NEW_ROWS_VERIFY=$(timeout 120 docker exec "$NEW_DB_CONTAINER" \
     psql -U "$DB_USER" -d "$DB_NAME" -t -A \
     -c "SELECT sum(n_live_tup) FROM pg_stat_user_tables;" || echo "0")
 
@@ -221,7 +221,7 @@ echo -e "  Total rows:                ${NEW_ROWS_VERIFY:-0}"
 
 # Check critical tables exist
 for tbl in auth_user accounts_organization deployments_project deployments_service; do
-    EXISTS=$(docker exec "$NEW_DB_CONTAINER" \
+    EXISTS=$(timeout 120 docker exec "$NEW_DB_CONTAINER" \
         psql -U "$DB_USER" -d "$DB_NAME" -t -A \
         -c "SELECT 1 FROM information_schema.tables WHERE table_name='$tbl' LIMIT 1;"  || echo "")
     if [ "$EXISTS" = "1" ]; then
@@ -232,7 +232,7 @@ for tbl in auth_user accounts_organization deployments_project deployments_servi
 done
 
 # Check user count
-USER_COUNT=$(docker exec "$NEW_DB_CONTAINER" \
+USER_COUNT=$(timeout 120 docker exec "$NEW_DB_CONTAINER" \
     psql -U "$DB_USER" -d "$DB_NAME" -t -A \
     -c "SELECT count(*) FROM auth_user;"  || echo "0")
 echo -e "  Users in database: $USER_COUNT"

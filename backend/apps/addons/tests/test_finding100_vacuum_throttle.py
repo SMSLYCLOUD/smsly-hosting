@@ -7,8 +7,8 @@ from rest_framework.test import APIRequestFactory, force_authenticate
 
 from apps.addons.views import AddonMaintenanceViewSet
 from apps.deployments.models import Service
-from apps.deployments.models_addons import Addon
-from apps.deployments.rate_limiting import DBVacuumRateThrottle
+from apps.deployments.models.addons import Addon
+from apps.core.rate_limiting import DBVacuumRateThrottle
 
 User = get_user_model()
 

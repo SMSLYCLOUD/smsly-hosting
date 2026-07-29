@@ -4,11 +4,11 @@
 
 32 connected microservices were deployed via "Ecosystem Deploy" (one-click). **All failed.** This analysis is based on full codebase review of:
 
-- [tasks_ecosystem.py](file:///c:/Users/osaretin/Downloads/smslycloud-master/smsly-hosting/backend/apps/deployments/tasks_ecosystem.py) — 789 lines, wave-based deployment orchestrator
-- [ecosystem.py](file:///c:/Users/osaretin/Downloads/smslycloud-master/smsly-hosting/backend/services/ecosystem.py) — 612 lines, AI scan + heuristic analysis
-- [ecosystem_graph.py](file:///c:/Users/osaretin/Downloads/smslycloud-master/smsly-hosting/backend/services/ecosystem_graph.py) — 207 lines, live dependency graph
-- [tasks.py](file:///c:/Users/osaretin/Downloads/smslycloud-master/smsly-hosting/backend/apps/deployments/tasks.py) — deployment execution (smart_deploy_task)
-- [local.py](file:///c:/Users/osaretin/Downloads/smslycloud-master/smsly-hosting/backend/apps/cloud/adapters/local.py) — Docker adapter
+- [tasks_ecosystem.py](backend/apps/deployments/tasks_ecosystem.py) — 789 lines, wave-based deployment orchestrator
+- [ecosystem.py](backend/apps/deployments/models/ecosystem.py) — 612 lines, AI scan + heuristic analysis
+- [ecosystem_graph.py](backend/apps/deployments/services/ecosystem_graph.py) — 207 lines, live dependency graph
+- [tasks.py](backend/apps/deployments/tasks.py) — deployment execution (smart_deploy_task)
+- [local.py](backend/apps/cloud/adapters/local.py) — Docker adapter
 
 ---
 

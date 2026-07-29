@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, memo } from 'react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -21,7 +21,7 @@ import {
 
 // ─── Status badge helper ──────────────────────────────────────────────────────
 
-function StatusBadge({ status, lastError }: { status: DatabaseReplicaStatus; lastError?: string }) {
+const StatusBadge = memo(function StatusBadge({ status, lastError }: { status: DatabaseReplicaStatus; lastError?: string }) {
     const map: Record<DatabaseReplicaStatus, { color: string; icon: React.ReactNode; label: string }> = {
         ok:     { color: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30', icon: <CheckCircle2 className="h-3 w-3" />, label: 'Healthy' },
         warn:   { color: 'bg-amber-500/15 text-amber-400 border-amber-500/30',     icon: <AlertCircle className="h-3 w-3" />,  label: 'Lag' },
@@ -37,7 +37,7 @@ function StatusBadge({ status, lastError }: { status: DatabaseReplicaStatus; las
             {m.icon}{m.label}
         </span>
     );
-}
+});
 
 // ─── Add-replica form (collapsible card) ─────────────────────────────────────
 

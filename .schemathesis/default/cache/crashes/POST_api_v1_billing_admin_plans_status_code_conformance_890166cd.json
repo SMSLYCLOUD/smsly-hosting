@@ -1,0 +1,119 @@
+{
+  "operation": "POST /api/v1/billing/admin/plans/",
+  "method": "POST",
+  "path_template": "/api/v1/billing/admin/plans/",
+  "fingerprint": "890166cd",
+  "case_id": "FVGqcW",
+  "code_sample": "curl -X POST -H 'Content-Type: application/json' -d '{\"name\": \"\", \"slug\": \"0\", \"description\": \"\", \"is_active\": false, \"sort_order\": 0, \"max_services\": 0, \"max_cpu_cores\": \"\", \"max_memory_mb\": 0, \"max_storage_gb\": 0, \"max_bandwidth_gb\": 0, \"max_addons\": 0, \"max_custom_domains\": 0, \"max_team_members\": 0, \"has_auto_scaling\": false, \"has_priority_support\": false, \"has_backup\": false, \"has_server_transfer\": false, \"has_advanced_metrics\": false, \"has_ai_diagnosis\": false, \"price_monthly_usd\": \"\", \"price_yearly_usd\": \"\", \"stripe_price_id_monthly\": \"\", \"stripe_price_id_yearly\": \"\", \"flutterwave_plan_id\": \"\"}' http://127.0.0.1:8089/api/v1/billing/admin/plans/",
+  "sequence": [
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:8089/api/v1/billing/admin/plans/",
+      "url_template": "http://127.0.0.1:8089/api/v1/billing/admin/plans/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "X-Schemathesis-TestCaseId": "FVGqcW",
+        "Content-Type": "application/json",
+        "Content-Length": "554"
+      },
+      "response": {
+        "status_code": 401,
+        "headers": {
+          "date": "Tue, 21 Jul 2026 00:15:37 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "www-authenticate": "[Filtered]",
+          "vary": "Accept, Cookie, origin",
+          "allow": "GET, POST, HEAD, OPTIONS",
+          "x-frame-options": "DENY",
+          "content-length": "95",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin"
+        },
+        "body": "{\"error\":\"Authentication credentials were not provided.\",\"code\":\"unauthenticated\",\"status\":401}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "status_code_conformance",
+          "status": "failure",
+          "message": "Undocumented HTTP status code\n\nReceived: 401\nDocumented: 201"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 4.437899769982323e-05,
+          "mode": "negative"
+        },
+        "components": {
+          "HEADER": "negative",
+          "BODY": "positive"
+        },
+        "phase": {
+          "name": "coverage",
+          "data": {
+            "type": "CoveragePhaseData",
+            "description": "Missing `Authorization` at header",
+            "location": null,
+            "parameter": "Authorization",
+            "parameter_location": "HEADER",
+            "scenario": "missing_parameter"
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [
+          [
+            "body",
+            "flutterwave_plan_id"
+          ]
+        ],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {
+          "HEADER": {}
+        }
+      },
+      "path": "/api/v1/billing/admin/plans/",
+      "path_parameters": {},
+      "query": {},
+      "case_headers": {},
+      "cookies": {},
+      "case_body": {
+        "encoding": "json",
+        "value": {
+          "name": "",
+          "slug": "0",
+          "description": "",
+          "is_active": false,
+          "sort_order": 0,
+          "max_services": 0,
+          "max_cpu_cores": "",
+          "max_memory_mb": 0,
+          "max_storage_gb": 0,
+          "max_bandwidth_gb": 0,
+          "max_addons": 0,
+          "max_custom_domains": 0,
+          "max_team_members": 0,
+          "has_auto_scaling": false,
+          "has_priority_support": false,
+          "has_backup": false,
+          "has_server_transfer": false,
+          "has_advanced_metrics": false,
+          "has_ai_diagnosis": false,
+          "price_monthly_usd": "",
+          "price_yearly_usd": "",
+          "stripe_price_id_monthly": "",
+          "stripe_price_id_yearly": "",
+          "flutterwave_plan_id": ""
+        }
+      },
+      "media_type": "application/json",
+      "parent_index": null
+    }
+  ]
+}

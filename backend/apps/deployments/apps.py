@@ -1,5 +1,6 @@
 """Apps module."""
 import contextlib
+import logging
 import os
 import sys
 from pathlib import Path
@@ -7,6 +8,8 @@ from pathlib import Path
 from django.apps import AppConfig
 from django.conf import settings
 from django.db.backends.signals import connection_created
+
+logger = logging.getLogger(__name__)
 
 
 def _on_first_db_connection(sender, connection, **kwargs):
@@ -25,8 +28,8 @@ def _on_first_db_connection(sender, connection, **kwargs):
     try:
         from .patching import patch_runtime_settings
         patch_runtime_settings()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("patch_runtime_settings failed at startup: %s", exc)
 
     try:
         from config.metrics import SERVICES_ACTIVE
@@ -35,8 +38,8 @@ def _on_first_db_connection(sender, connection, **kwargs):
         SERVICES_ACTIVE.set(
             Service.objects.filter(status=Service.Status.ACTIVE).count()
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to set SERVICES_ACTIVE metric: %s", exc)
 
     connection_created.disconnect(_on_first_db_connection)
 
@@ -126,7 +129,7 @@ class DeploymentsConfig(AppConfig):
         # perform database/proxy side effects during management commands.
         if not getattr(settings, 'IS_TESTING', False) and _is_serving_process():
             try:
-                from .startup import schedule_startup_caddy_sync
+                from .services.startup import schedule_startup_caddy_sync
                 schedule_startup_caddy_sync()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("schedule_startup_caddy_sync failed: %s", exc)

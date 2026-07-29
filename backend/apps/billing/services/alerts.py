@@ -3,7 +3,7 @@ from datetime import timedelta
 
 from django.utils import timezone
 
-from .models_analytics import DailyRevenue
+from .models.analytics import DailyRevenue
 
 logger = logging.getLogger(__name__)
 

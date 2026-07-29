@@ -1,5 +1,5 @@
 """Urls module."""
-from apps.deployments.views_addons import toggle_bucket_public_api
+from apps.addons.views_crud import toggle_bucket_public_api
 from django.conf import settings
 from django.contrib import admin
 from django.urls import include, path, re_path
@@ -30,31 +30,31 @@ urlpatterns = [
     # /api/v1/<anything>/ matchers in deployments.urls do not eat
     # these paths first and 404 the frontend.
     path('api/v1/dashboard/overview/',
-         include('apps.core.urls_dashboard_alias')),
+         include('apps.core.urls.dashboard_alias')),
     path('api/v1/system/health/',
-         include('apps.core.urls_system_health_alias')),
+         include('apps.core.urls.system_health_alias')),
     path('api/v1/system/resources/',
-         include('apps.core.urls_system_resources_alias')),
+         include('apps.core.urls.system_resources_alias')),
     path('api/v1/preferences/',
-         include('apps.notifications.urls_preferences_alias')),
+         include('apps.notifications.urls.preferences_alias')),
     path('api/v1/ecosystem/bulk-update-environment/',
-         include('apps.cloud.urls_ecosystem_bulk_env_alias')),
+         include('apps.cloud.urls.ecosystem_bulk_env_alias')),
     path('api/v1/ecosystem/cached-scan/',
-         include('apps.cloud.urls_ecosystem_cached_scan_alias')),
+         include('apps.cloud.urls.ecosystem_cached_scan_alias')),
     path('api/v1/resource-alerts/',
-         include('apps.notifications.urls_resource_alerts_alias')),
+         include('apps.notifications.urls.resource_alerts_alias')),
     path('api/v1/api-keys/',
-         include('apps.core.urls_api_keys_alias')),
+         include('apps.core.urls.api_keys_alias')),
     path('api/v1/admin/users/',
-         include('apps.core.urls_admin_users_alias')),
+         include('apps.core.urls.admin_users_alias')),
     path('api/v1/observability/',
-         include('apps.core.urls_observability_alias')),
+         include('apps.core.urls.observability_alias')),
     # OAuth callback aliases — the frontend uses
     # /api/v1/accounts/<provider>/login/ but allauth is mounted
     # at /accounts/<provider>/login/. The alias re-exports
     # allauth.urls under the /api/v1/accounts/ prefix.
     path('api/v1/accounts/',
-         include('apps.deployments.urls_accounts_alias')),
+         include('apps.deployments.urls.accounts_alias')),
 
     # API
     path('api/v1/', include('apps.deployments.urls')),
@@ -75,9 +75,9 @@ urlpatterns = [
     # below and keep their default global throttle. The
     # throttled URLs MUST come first so they win the URL
     # resolution race.
-    path('api/v1/auth/', include('apps.core.urls_throttled_auth')),
+    path('api/v1/auth/', include('apps.core.urls.throttled_auth')),
     path('api/v1/auth/', include('dj_rest_auth.urls')),
-    path('api/v1/auth/2fa/', include('apps.deployments.urls_2fa')),
+    path('api/v1/auth/2fa/', include('apps.deployments.urls.2fa')),
     path(
         'api/v1/auth/registration/',
         include('dj_rest_auth.registration.urls')),
@@ -103,14 +103,14 @@ if 'apps.addons' in settings.INSTALLED_APPS:
 
 if 'apps.intelligence' in settings.INSTALLED_APPS:
     urlpatterns.append(path('api/v1/ai/', include('apps.intelligence.urls')))
-    urlpatterns.append(path('api/v1/', include('apps.intelligence.urls_openai')))
+    urlpatterns.append(path('api/v1/', include('apps.intelligence.urls.openai')))
 
 if 'apps.media' in settings.INSTALLED_APPS:
     urlpatterns.append(path('api/v1/media/', include('apps.media.urls')))
 
 # ─── Server Identity Attestation (Zero-Trust challenge-response) ──────────
 try:
-    from apps.deployments.views_attestation import (
+    from apps.deployments.views.attestation import (
         attestation_challenge,
         attestation_verify,
     )
@@ -124,7 +124,7 @@ except ImportError:
 # ─── Tunnel API (function-based views, not DRF router) ────────────────────
 try:
     if getattr(settings, 'ENABLE_LEGACY_TUNNEL_API', False):
-        from services.tunnels.api import get_urlpatterns as tunnel_urls
+        from apps.deployments.services.tunnels.api import get_urlpatterns as tunnel_urls
         urlpatterns += [path('api/v1/legacy/', include(tunnel_urls()))]
 except ImportError:
     pass  # tunnels module not installed

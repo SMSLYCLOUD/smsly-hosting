@@ -20,10 +20,10 @@ from django.contrib.auth import get_user_model
 from django.http import HttpRequest
 from django.test import TestCase, override_settings
 
-import apps.deployments.views_registry_auth as auth_mod
-from apps.deployments.models_core import Project
-from apps.deployments.models_project import ProjectMember
-from apps.deployments.views_registry_auth import (
+import apps.deployments.views.registry_auth as auth_mod
+from apps.deployments.models.core import Project
+from apps.deployments.models.project import ProjectMember
+from apps.deployments.views.registry_auth import (
     _check_registry_permission,
     _reset_registry_secret_cache,
     _resolve_registry_secret,
@@ -275,7 +275,7 @@ class RegistryTokenEndpointSelfHealTests(TestCase):
         """The CRITICAL log line must fire on first self-heal, then NOT
         fire again for subsequent calls in the same process."""
         with self.assertLogs(
-            "apps.deployments.views_registry_auth", level="CRITICAL",
+            "apps.deployments.views.registry_auth", level="CRITICAL",
         ) as cm:
             req = _make_request(scope="repository:foo/web:pull")
             registry_token(req)

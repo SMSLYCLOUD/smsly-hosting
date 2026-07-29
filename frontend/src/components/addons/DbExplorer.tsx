@@ -14,7 +14,7 @@ interface DbExplorerProps {
 
 export function DbExplorer({ addonId }: DbExplorerProps) {
     const [query, setQuery] = useState("SELECT * FROM information_schema.tables LIMIT 10;");
-    const [results, setResults] = useState<any[]>([]);
+    const [results, setResults] = useState<Record<string, unknown>[]>([]);
     const [columns, setColumns] = useState<string[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);

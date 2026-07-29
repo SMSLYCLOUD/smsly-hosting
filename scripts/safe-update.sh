@@ -174,8 +174,8 @@ safe_update_post_verify() {
             docker inspect "$ctr" --format='{{.State.Running}}'  | grep -q true && \
                 _ok "$ctr" || { _warn "$ctr not running (observability stack may not be deployed)"; }
         done
-        curl -sf http://localhost:3100/ready  && _ok "Loki: ready" || { _warn "Loki: not ready"; }
-        curl -sf http://127.0.0.1:9090/api/v1/targets  && _ok "Prometheus: responding" || { _warn "Prometheus: not responding"; }
+        curl -sf --max-time 10 http://localhost:3100/ready  && _ok "Loki: ready" || { _warn "Loki: not ready"; }
+        curl -sf --max-time 10 http://127.0.0.1:9090/api/v1/targets  && _ok "Prometheus: responding" || { _warn "Prometheus: not responding"; }
     fi
 
     local traefik_ok=false
@@ -187,7 +187,7 @@ safe_update_post_verify() {
             traefik_ok=true
             break
         fi
-        curl -sf http://127.0.0.1:8082/ping  && { _ok "Traefik: responding"; traefik_ok=true; break; }
+        curl -sf --max-time 10 http://127.0.0.1:8082/ping  && { _ok "Traefik: responding"; traefik_ok=true; break; }
         [ "$i" -lt 5 ] && sleep 10
     done
     [ "$traefik_ok" = "true" ] || { _warn "Traefik: not responding"; failed=$((failed + 1)); }
@@ -254,14 +254,14 @@ safe_update_rollback() {
 
     # Stop any app containers left from the failed attempt so the --clean dump
     # does not drop objects while they are connected (avoids partial restore).
-    docker compose -f "$COMPOSE_FILE" stop backend frontend celery celery-deploy celery-fast celery-beat pgcat 2>/dev/null || true
+    docker compose -f "$COMPOSE_FILE" stop --timeout 30 backend frontend celery celery-deploy celery-fast celery-beat pgcat 2>/dev/null || true
 
     # Restore DB BEFORE bringing app containers up, so the --clean dump does not
     # drop objects while backend/celery are connected (transient errors and can
     # leave behind new-version tables from a partial migration).
     if [ -n "${BACKUP_FILE:-}" ] && [ -f "$BACKUP_FILE" ]; then
         _warn "Restoring database from backup..."
-        docker exec -i smsly-postgres-primary psql -U "$POSTGRES_USER" "$POSTGRES_DB" < "$BACKUP_FILE"  && \
+        timeout 600 docker exec -i smsly-postgres-primary psql -U "$POSTGRES_USER" "$POSTGRES_DB" < "$BACKUP_FILE"  && \
             _ok "DB restored" || _warn "DB restore failed"
     fi
 
@@ -323,3 +323,4 @@ if [ "$SAFE_UPDATE_SOURCED" = "false" ]; then
     echo -e "${GREEN}═══════════════════════════════════════════════════════════════${NC}"
     rm -f "$SNAPSHOT_FILE"
 fi
+

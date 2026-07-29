@@ -1,0 +1,93 @@
+{
+  "operation": "POST /api/v1/server/backups/upload-restore/",
+  "method": "POST",
+  "path_template": "/api/v1/server/backups/upload-restore/",
+  "fingerprint": "7bfd16af",
+  "case_id": "vteD7K",
+  "code_sample": "curl -X POST -H 'Content-Type: multipart/form-data; boundary=650e6fdd2171055f56cd72ec26c79c92' -d $'--fa1d43bfb56e9517c7c79c71d3164b29\\r\\nContent-Disposition: form-data; name=\"label\"\\r\\n\\r\\n\\r\\n--fa1d43bfb56e9517c7c79c71d3164b29\\r\\nContent-Disposition: form-data; name=\"db_only\"\\r\\n\\r\\nFalse\\r\\n--fa1d43bfb56e9517c7c79c71d3164b29\\r\\nContent-Disposition: form-data; name=\"cloud_destination\"\\r\\n\\r\\nNone\\r\\n--fa1d43bfb56e9517c7c79c71d3164b29--\\r\\n' http://127.0.0.1:8089/api/v1/server/backups/upload-restore/",
+  "sequence": [
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:8089/api/v1/server/backups/upload-restore/",
+      "url_template": "http://127.0.0.1:8089/api/v1/server/backups/upload-restore/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "X-Schemathesis-TestCaseId": "vteD7K",
+        "Content-Length": "319",
+        "Content-Type": "multipart/form-data; boundary=650e6fdd2171055f56cd72ec26c79c92"
+      },
+      "response": {
+        "status_code": 403,
+        "headers": {
+          "date": "Mon, 20 Jul 2026 21:13:23 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "x-frame-options": "DENY",
+          "content-length": "41",
+          "vary": "Cookie, origin",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin"
+        },
+        "body": "{\"error\": \"Invalid or missing signature\"}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "status_code_conformance",
+          "status": "failure",
+          "message": "Undocumented HTTP status code\n\nReceived: 403\nDocumented: 200"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 1.3004999345866963e-05,
+          "mode": "negative"
+        },
+        "components": {
+          "HEADER": "negative",
+          "BODY": "positive"
+        },
+        "phase": {
+          "name": "coverage",
+          "data": {
+            "type": "CoveragePhaseData",
+            "description": "Missing `Authorization` at header",
+            "location": null,
+            "parameter": "Authorization",
+            "parameter_location": "HEADER",
+            "scenario": "missing_parameter"
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {
+          "HEADER": {}
+        }
+      },
+      "path": "/api/v1/server/backups/upload-restore/",
+      "path_parameters": {},
+      "query": {},
+      "case_headers": {},
+      "cookies": {},
+      "case_body": {
+        "encoding": "json",
+        "value": {
+          "label": "",
+          "db_only": false,
+          "cloud_destination": {
+            "__schemathesis_bytes__": "Tm9uZQ=="
+          }
+        }
+      },
+      "media_type": "multipart/form-data",
+      "parent_index": null
+    }
+  ]
+}

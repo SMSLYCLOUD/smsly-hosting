@@ -1,0 +1,97 @@
+{
+  "operation": "GET /api/v1/services/{service_pk}/volumes/",
+  "method": "GET",
+  "path_template": "/api/v1/services/{service_pk}/volumes/",
+  "fingerprint": "74aa987d",
+  "case_id": "37f20J",
+  "code_sample": "curl -X GET 'http://127.0.0.1:8089/api/v1/services/0/volumes/?page=0'",
+  "sequence": [
+    {
+      "method": "GET",
+      "url": "http://127.0.0.1:8089/api/v1/services/0/volumes/?page=0",
+      "url_template": "http://127.0.0.1:8089/api/v1/services/{service_pk}/volumes/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "X-Schemathesis-TestCaseId": "37f20J"
+      },
+      "response": {
+        "status_code": 401,
+        "headers": {
+          "date": "Tue, 21 Jul 2026 00:17:11 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "www-authenticate": "[Filtered]",
+          "vary": "Accept, Cookie, origin",
+          "allow": "GET, POST, HEAD, OPTIONS",
+          "x-frame-options": "DENY",
+          "content-length": "95",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin"
+        },
+        "body": "{\"error\":\"Authentication credentials were not provided.\",\"code\":\"unauthenticated\",\"status\":401}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "status_code_conformance",
+          "status": "failure",
+          "message": "Undocumented HTTP status code\n\nReceived: 401\nDocumented: 200"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 4.0948994865175337e-05,
+          "mode": "negative"
+        },
+        "components": {
+          "PATH": "positive",
+          "HEADER": "negative",
+          "QUERY": "positive"
+        },
+        "phase": {
+          "name": "coverage",
+          "data": {
+            "type": "CoveragePhaseData",
+            "description": "Missing `Authorization` at header",
+            "location": null,
+            "parameter": "Authorization",
+            "parameter_location": "HEADER",
+            "scenario": "missing_parameter"
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {
+          "PATH": {
+            "service_pk": "0"
+          },
+          "HEADER": {},
+          "QUERY": {
+            "page": 0
+          }
+        }
+      },
+      "path": "/api/v1/services/{service_pk}/volumes/",
+      "path_parameters": {
+        "service_pk": "0"
+      },
+      "query": {
+        "page": "0"
+      },
+      "case_headers": {},
+      "cookies": {},
+      "case_body": {
+        "encoding": "none"
+      },
+      "media_type": null,
+      "parent_index": null
+    }
+  ]
+}

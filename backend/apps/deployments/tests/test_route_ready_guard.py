@@ -3,7 +3,7 @@
 import requests
 from django.test import SimpleTestCase
 
-from apps.deployments.tasks_deploy_remote import _route_misroute_reason
+from apps.deployments.tasks.deployment.tasks_deploy_remote import _route_misroute_reason
 
 
 def _response(body: str = "", headers: dict | None = None, status_code: int = 200):

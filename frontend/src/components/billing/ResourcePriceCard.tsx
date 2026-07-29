@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import React, { useState } from "react";
 import { Edit2, Save, X, DollarSign, Cpu, HardDrive, Globe, Database, Network, Mail, Eye, RefreshCw, Box, Layout, Zap, Container, Check } from "lucide-react";
 import { ResourcePrice } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -35,7 +35,7 @@ interface ResourcePriceCardProps {
   onDelete: (id: number) => Promise<void>;
 }
 
-export function ResourcePriceCard({ price, onUpdate, onDelete }: ResourcePriceCardProps) {
+export const ResourcePriceCard = React.memo(function ResourcePriceCard({ price, onUpdate, onDelete }: ResourcePriceCardProps) {
   const confirm = useConfirm();
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState<Partial<ResourcePrice>>({
@@ -205,4 +205,4 @@ export function ResourcePriceCard({ price, onUpdate, onDelete }: ResourcePriceCa
       </CardContent>
     </Card>
   );
-}
+})

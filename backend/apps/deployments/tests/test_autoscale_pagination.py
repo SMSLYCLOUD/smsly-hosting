@@ -7,7 +7,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 
 from apps.deployments.models import Project, Service
-from apps.deployments.tasks_autoscale import (
+from apps.autoscaler.services.tasks_autoscale import (
     AUTOSCALE_BATCH_SIZE,
     analyze_all_services_task,
 )
@@ -52,7 +52,7 @@ class AutoscalePaginationTests(TestCase):
             Service.objects.filter(name__startswith=name_prefix).order_by("id")
         )
 
-    @patch("apps.deployments.tasks_autoscale.analyze_and_scale_service")
+    @patch("apps.autoscaler.services.tasks_autoscale.analyze_and_scale_service")
     def test_processes_all_50_services_across_batches(self, mock_analyze):
         services = self._make_services(50)
 
@@ -63,7 +63,7 @@ class AutoscalePaginationTests(TestCase):
         analyzed_ids = {call.args[0] for call in mock_analyze.call_args_list}
         self.assertEqual(analyzed_ids, {str(s.id) for s in services})
 
-    @patch("apps.deployments.tasks_autoscale.analyze_and_scale_service")
+    @patch("apps.autoscaler.services.tasks_autoscale.analyze_and_scale_service")
     def test_each_iteration_respects_batch_size(self, mock_analyze):
         self._make_services(AUTOSCALE_BATCH_SIZE * 3)
 
@@ -72,7 +72,7 @@ class AutoscalePaginationTests(TestCase):
         self.assertEqual(mock_analyze.call_count, AUTOSCALE_BATCH_SIZE * 3)
         self.assertEqual(result["analyzed"], AUTOSCALE_BATCH_SIZE * 3)
 
-    @patch("apps.deployments.tasks_autoscale.analyze_and_scale_service")
+    @patch("apps.autoscaler.services.tasks_autoscale.analyze_and_scale_service")
     def test_last_id_cursor_advances(self, mock_analyze):
         services = self._make_services(AUTOSCALE_BATCH_SIZE + 5)
 
@@ -82,13 +82,13 @@ class AutoscalePaginationTests(TestCase):
         actual_order = [call.args[0] for call in mock_analyze.call_args_list]
         self.assertEqual(actual_order, expected_order)
 
-    @patch("apps.deployments.tasks_autoscale.analyze_and_scale_service")
+    @patch("apps.autoscaler.services.tasks_autoscale.analyze_and_scale_service")
     def test_empty_services_returns_zero(self, mock_analyze):
         result = analyze_all_services_task()
         self.assertEqual(result["analyzed"], 0)
         mock_analyze.assert_not_called()
 
-    @patch("apps.deployments.tasks_autoscale.analyze_and_scale_service")
+    @patch("apps.autoscaler.services.tasks_autoscale.analyze_and_scale_service")
     def test_skips_failing_service_and_continues(self, mock_analyze):
         services = self._make_services(25)
         target_id = str(services[4].id)

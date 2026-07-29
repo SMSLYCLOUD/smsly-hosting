@@ -21,7 +21,7 @@ TEMPLATES_URL = "/api/v1/cloud-storage/templates/"
 @override_settings(
     REST_FRAMEWORK={
         "DEFAULT_AUTHENTICATION_CLASSES": [
-            "apps.deployments.api_token_auth.APITokenAuthentication",
+            "apps.deployments.models.api_token.APITokenAuthentication",
             "rest_framework.authentication.TokenAuthentication",
         ],
         "DEFAULT_PERMISSION_CLASSES": [
@@ -47,7 +47,7 @@ class CloudStorageTemplatesThrottleTests(TestCase):
         # class attribute at import time. Patch it on the class
         # for the duration of the test so the override_settings
         # value is read.
-        from apps.deployments.views_cloud_storage import (
+        from apps.cloud.views_cloud_storage import (
             CloudStorageTemplatesRateThrottle,
         )
         CloudStorageTemplatesRateThrottle.THROTTLE_RATES = (
@@ -60,7 +60,7 @@ class CloudStorageTemplatesThrottleTests(TestCase):
         self.client.force_authenticate(user=self.user)
 
     def tearDown(self):
-        from apps.deployments.views_cloud_storage import (
+        from apps.cloud.views_cloud_storage import (
             CloudStorageTemplatesRateThrottle,
         )
         # Delete the class-level THROTTLE_RATES attr we set in setUp so that

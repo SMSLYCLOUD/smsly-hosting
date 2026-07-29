@@ -29,7 +29,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 
 from apps.deployments.models import Service
-from apps.deployments.models_transfer import ServerTransfer
+from apps.deployments.models.transfer import ServerTransfer
 from apps.deployments.services import transfer_service
 
 User = get_user_model()
@@ -90,7 +90,7 @@ class Finding147RemoteBackupCleanupTests(TestCase):
     def test_upload_failure_triggers_cleanup(self):
         """If ``ssh.upload_file`` raises, the helper must be called
         and ``_uploaded_remote_backup_path`` must end up cleared."""
-        from apps.deployments.models_backup import ServiceBackup
+        from apps.deployments.models.backup import ServiceBackup
 
         with tempfile.NamedTemporaryFile(
             delete=False, suffix=".tar.gz",

@@ -1,0 +1,83 @@
+{
+  "operation": "POST /api/v1/auth/recovery/verify/",
+  "method": "POST",
+  "path_template": "/api/v1/auth/recovery/verify/",
+  "fingerprint": "8c8bf75f",
+  "case_id": "IuftM5",
+  "code_sample": "curl -X POST http://127.0.0.1:8089/api/v1/auth/recovery/verify/",
+  "sequence": [
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:8089/api/v1/auth/recovery/verify/",
+      "url_template": "http://127.0.0.1:8089/api/v1/auth/recovery/verify/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "X-Schemathesis-TestCaseId": "IuftM5",
+        "Content-Length": "0"
+      },
+      "response": {
+        "status_code": 429,
+        "headers": {
+          "date": "Tue, 21 Jul 2026 00:19:10 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "vary": "Accept, Cookie, origin",
+          "allow": "OPTIONS, POST",
+          "x-frame-options": "DENY",
+          "content-length": "66",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin"
+        },
+        "body": "{\"error\":\"Request was throttled.\",\"code\":\"throttled\",\"status\":429}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "positive_data_acceptance",
+          "status": "failure",
+          "message": "API rejected schema-compliant request\n\nValid data should have been accepted\nExpected: 2xx, 401, 403, 404, 409, 5xx"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 0.0021209889964666218,
+          "mode": "positive"
+        },
+        "components": {
+          "HEADER": "positive"
+        },
+        "phase": {
+          "name": "fuzzing",
+          "data": {
+            "type": "FuzzingPhaseData",
+            "description": "Positive test case",
+            "location": null,
+            "parameter": null,
+            "parameter_location": null,
+            "mutations": []
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {}
+      },
+      "path": "/api/v1/auth/recovery/verify/",
+      "path_parameters": {},
+      "query": {},
+      "case_headers": {},
+      "cookies": {},
+      "case_body": {
+        "encoding": "none"
+      },
+      "media_type": null,
+      "parent_index": null
+    }
+  ]
+}

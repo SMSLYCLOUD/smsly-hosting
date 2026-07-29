@@ -30,7 +30,7 @@ def _activate_paid_plan(*, user, plan: str):
 
     if plan == BillingAccount.Plan.PRO:
         account.subscription_status = BillingAccount.SubscriptionStatus.ACTIVE
-        from apps.deployments.models_core import PlatformConfig
+        from apps.deployments.models.core import PlatformConfig
         days = int(PlatformConfig.get_config_value('billing_pro_period_days', '30') or 30)
         base = account.current_period_end \
             if account.current_period_end and account.current_period_end > timezone.now() \

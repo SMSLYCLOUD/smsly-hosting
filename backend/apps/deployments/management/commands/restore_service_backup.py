@@ -13,7 +13,7 @@ from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
 
 from apps.deployments.models import Service
-from apps.deployments.models_backup import ServiceBackup
+from apps.deployments.models.backup import ServiceBackup
 from apps.deployments.services.backup_service import BackupService
 
 

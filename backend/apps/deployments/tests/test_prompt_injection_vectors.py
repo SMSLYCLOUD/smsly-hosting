@@ -20,7 +20,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 
 from apps.deployments.models import Deployment, Service
-from apps.deployments.tasks_ai import _sanitize_for_llm, analyze_failure_task
+from apps.deployments.tasks.ai.tasks_ai import _sanitize_for_llm, analyze_failure_task
 
 User = get_user_model()
 
@@ -158,7 +158,7 @@ class SanitizeEndToEndTests(TestCase):
             captured['logs'] = logs
             return "ok"
 
-        with patch("services.ai_engine.DevOpsAgent.diagnose_logs", new=fake_diagnose):
+        with patch("apps.deployments.services.ai_engine.DevOpsAgent.diagnose_logs", new=fake_diagnose):
             result = analyze_failure_task(str(deployment.id))
 
         self.assertEqual(result['status'], 'ok')
@@ -180,7 +180,7 @@ class SanitizeEndToEndTests(TestCase):
             captured['logs'] = logs
             return "ok"
 
-        with patch("services.ai_engine.DevOpsAgent.diagnose_logs", new=fake_diagnose):
+        with patch("apps.deployments.services.ai_engine.DevOpsAgent.diagnose_logs", new=fake_diagnose):
             analyze_failure_task(str(deployment.id))
 
         self.assertNotIn("[INST]", captured['logs'])
@@ -200,7 +200,7 @@ class SanitizeEndToEndTests(TestCase):
             captured['logs'] = logs
             return "ok"
 
-        with patch("services.ai_engine.DevOpsAgent.diagnose_logs", new=fake_diagnose):
+        with patch("apps.deployments.services.ai_engine.DevOpsAgent.diagnose_logs", new=fake_diagnose):
             analyze_failure_task(str(deployment.id))
 
         self.assertNotIn("\u200b", captured['logs'])
@@ -223,7 +223,7 @@ class SanitizeEndToEndTests(TestCase):
             captured['logs'] = logs
             return "ok"
 
-        with patch("services.ai_engine.DevOpsAgent.diagnose_logs", new=fake_diagnose):
+        with patch("apps.deployments.services.ai_engine.DevOpsAgent.diagnose_logs", new=fake_diagnose):
             analyze_failure_task(str(deployment.id))
 
         self.assertLessEqual(len(captured['logs']), 15000)

@@ -389,6 +389,15 @@ Before committing changes to this codebase:
 14. **After touching migration logic:** Verify migrations are not run redundantly
     across scripts in the same pipeline. `grep -rn "migrate\|collectstatic"
     lib/*.sh scripts/*.sh`.
+15. **After adding magic numbers to task decorators:** Verify they reference
+    constants from `apps/deployments/constants.py`. Run:
+    ```bash
+    grep -rn "soft_time_limit=[0-9]\|time_limit=[0-9]\|default_retry_delay=[0-9]" \
+      backend/apps/deployments/tasks/ backend/apps/deployments/services/ \
+      --include="*.py" | grep -v __pycache__ | grep -v "constants"
+    ```
+    Any remaining literal values should be replaced with named constants
+    (TASK_TIME_LIMIT_*, RETRY_DELAY_*).
 
 ---
 

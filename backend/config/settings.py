@@ -201,6 +201,12 @@ else:
     CSRF_COOKIE_SECURE = False
     SECURE_PROXY_SSL_HEADER = None
 
+# ── Additional security headers (unconditional) ──────────────────────────────
+SECURE_BROWSER_XSS_FILTER = True
+SECURE_CONTENT_TYPE_NOSNIFF = True
+X_FRAME_OPTIONS = 'DENY'
+CSRF_COOKIE_HTTPONLY = True
+
 # Trusted proxy IPs for X-Real-IP header validation.
 # Only requests arriving from these IPs are allowed to set X-Real-IP.
 # Empty list (default) means X-Real-IP is NEVER trusted — REMOTE_ADDR
@@ -710,7 +716,7 @@ PLATFORM_CERT_DIRS = config(
 
 MIDDLEWARE = [
     'django_prometheus.middleware.PrometheusBeforeMiddleware',
-    'apps.deployments.middleware.DynamicAllowedHostsMiddleware', # Ensures multi-worker host sync
+    'apps.core.middleware.dynamic_hosts.DynamicAllowedHostsMiddleware', # Ensures multi-worker host sync
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
@@ -759,7 +765,7 @@ REST_AUTH = {
 # Google/Bitbucket OAuth, the provider has already verified the email, so
 # requiring a second verification breaks the UX (user is redirected to /login
 # instead of being logged in).
-ACCOUNT_EMAIL_VERIFICATION = 'none'
+ACCOUNT_EMAIL_VERIFICATION = 'mandatory' if not DEBUG else 'none'
 
 # Store social OAuth tokens (required for private-repo deploys via linked GitHub accounts).
 # Explicitly set to avoid relying on allauth defaults.
@@ -796,8 +802,8 @@ SESSION_COOKIE_HTTPONLY = True
 ACCOUNT_DEFAULT_HTTP_PROTOCOL = 'https' if not DEBUG and not IS_TESTING else 'http'
 
 # Custom allauth adapters (callback redirect behavior)
-ACCOUNT_ADAPTER = 'apps.deployments.adapters.CustomAccountAdapter'
-SOCIALACCOUNT_ADAPTER = 'apps.deployments.adapters.CustomSocialAccountAdapter'
+ACCOUNT_ADAPTER = 'apps.core.adapters.CustomAccountAdapter'
+SOCIALACCOUNT_ADAPTER = 'apps.core.adapters.CustomSocialAccountAdapter'
 
 AUTHENTICATION_BACKENDS = [
     'django.contrib.auth.backends.ModelBackend',
@@ -969,7 +975,7 @@ SPECTACULAR_SETTINGS = {
 }
 
 REST_FRAMEWORK = {
-    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+    'DEFAULT_SCHEMA_CLASS': 'apps.core.openapi.SmslyAutoSchema',
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 100,
     # Custom exception handler: logs the offending body + serializer errors
@@ -977,8 +983,8 @@ REST_FRAMEWORK = {
     # being the only clue in the log.
     'EXCEPTION_HANDLER': 'apps.core.exception_handler.smsly_exception_handler',
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'apps.deployments.api_token_auth.APITokenAuthentication',
-        'apps.deployments.api_token_auth.RemoteSyncHMACAuthentication',
+        'apps.core.models.api_token.APITokenAuthentication',
+        'apps.core.models.api_token.RemoteSyncHMACAuthentication',
         # SECURITY: ``CookieAwareTokenAuthentication`` extends DRF's
         # ``TokenAuthentication`` and additionally accepts the HttpOnly
         # auth cookie set by ``ThrottledLoginView``. It is registered
@@ -1014,12 +1020,11 @@ REST_FRAMEWORK = {
         # effectively unlimited for normal UI use. Per-action
         # guards (deployments, server_*, transfers, etc.) still
         # protect against abusive write operations.
-        # The 'anon' throttle is bumped from 200/hour to
-        # 10000/hour so unauthenticated probes (health checks
-        # from monitoring) aren't capped. The middleware
+        # The 'anon' throttle is 1000/hour so unauthenticated
+        # probes aren't overused. The middleware
         # (RateLimitMiddleware) provides a separate per-IP
         # edge guard.
-        'anon': '10000/hour',
+        'anon': '1000/hour',
         'user': '5000/hour',
         # SECURITY (Batch I): the 'deployment_burst' was
         # 30/minute which was still too tight for interactive
@@ -1097,6 +1102,8 @@ REST_FRAMEWORK = {
         # SECURITY (Issue 137): cron-jobs POST is uncapped, a user
         # can spam cron jobs. Cap at 10/hour per user.
         'cron_jobs_create': '10/hour',
+        'addon_delete': '10/minute',
+        'token_create': '10/minute',
         # SECURITY: AI endpoints were missing throttle rates →
         # ImproperlyConfigured crash on any AI chat/analysis call.
         'ai_chat': '30/minute',

@@ -8,7 +8,7 @@ from rest_framework.test import APIRequestFactory, APITestCase
 
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import Deployment, Project, Service
-from apps.deployments.models_safedeploy import (
+from apps.deployments.models.safedeploy import (
     DeploymentApproval,
     MigrationValidation,
     PreviewEnvironment,

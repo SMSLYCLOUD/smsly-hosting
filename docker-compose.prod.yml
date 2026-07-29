@@ -4,6 +4,8 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     image: postgres:16-alpine
     container_name: smsly-postgres-primary
     restart: unless-stopped
@@ -59,6 +61,8 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     image: postgres:16-alpine
     container_name: smsly-postgres-replica
     restart: unless-stopped
@@ -104,6 +108,8 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     build:
       context: ./infrastructure/pgcat
       dockerfile: Dockerfile
@@ -136,11 +142,15 @@ services:
       resources:
         limits:
           memory: ${PGCAT_MEMORY_LIMIT:-256M}
+          cpus: "0.50"
   # ── Redis HA (primary + replica + 3 sentinels) ─────────────────────────
   redis-primary:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
+    read_only: true
     image: redis:7-alpine
     container_name: smsly-redis-primary
     restart: unless-stopped
@@ -179,6 +189,9 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
+    read_only: true
     image: redis:7-alpine
     container_name: smsly-redis-replica
     restart: unless-stopped
@@ -221,10 +234,15 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
+    read_only: true
     image: redis:7-alpine
     container_name: smsly-redis-sentinel-1
     restart: unless-stopped
     env_file: .env
+    environment:
+      SENTINEL_PASSWORD: ${SENTINEL_PASSWORD}
     command:
       - sh
       - -c
@@ -237,13 +255,17 @@ services:
           "sentinel parallel-syncs mymaster 1" \
           "sentinel resolve-hostnames yes" \
           "sentinel announce-hostnames yes" \
-          > /tmp/sentinel.conf \
-        && redis-sentinel /tmp/sentinel.conf
+          > /tmp/sentinel.conf
+        if [ -n "$$SENTINEL_PASSWORD" ]; then
+          echo "sentinel sentinel-user default" >> /tmp/sentinel.conf
+          echo "sentinel sentinel-password $$SENTINEL_PASSWORD" >> /tmp/sentinel.conf
+        fi
+        exec redis-sentinel /tmp/sentinel.conf
     depends_on:
       redis-primary:
-        condition: service_healthy
+        condition: service_started
       redis-replica:
-        condition: service_healthy
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -p 26379 ping | grep PONG"]
       interval: 10s
@@ -263,10 +285,15 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
+    read_only: true
     image: redis:7-alpine
     container_name: smsly-redis-sentinel-2
     restart: unless-stopped
     env_file: .env
+    environment:
+      SENTINEL_PASSWORD: ${SENTINEL_PASSWORD}
     command:
       - sh
       - -c
@@ -279,13 +306,17 @@ services:
           "sentinel parallel-syncs mymaster 1" \
           "sentinel resolve-hostnames yes" \
           "sentinel announce-hostnames yes" \
-          > /tmp/sentinel.conf \
-        && redis-sentinel /tmp/sentinel.conf
+          > /tmp/sentinel.conf
+        if [ -n "$$SENTINEL_PASSWORD" ]; then
+          echo "sentinel sentinel-user default" >> /tmp/sentinel.conf
+          echo "sentinel sentinel-password $$SENTINEL_PASSWORD" >> /tmp/sentinel.conf
+        fi
+        exec redis-sentinel /tmp/sentinel.conf
     depends_on:
       redis-primary:
-        condition: service_healthy
+        condition: service_started
       redis-replica:
-        condition: service_healthy
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -p 26379 ping | grep PONG"]
       interval: 10s
@@ -305,10 +336,15 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
+    read_only: true
     image: redis:7-alpine
     container_name: smsly-redis-sentinel-3
     restart: unless-stopped
     env_file: .env
+    environment:
+      SENTINEL_PASSWORD: ${SENTINEL_PASSWORD}
     command:
       - sh
       - -c
@@ -321,13 +357,17 @@ services:
           "sentinel parallel-syncs mymaster 1" \
           "sentinel resolve-hostnames yes" \
           "sentinel announce-hostnames yes" \
-          > /tmp/sentinel.conf \
-        && redis-sentinel /tmp/sentinel.conf
+          > /tmp/sentinel.conf
+        if [ -n "$$SENTINEL_PASSWORD" ]; then
+          echo "sentinel sentinel-user default" >> /tmp/sentinel.conf
+          echo "sentinel sentinel-password $$SENTINEL_PASSWORD" >> /tmp/sentinel.conf
+        fi
+        exec redis-sentinel /tmp/sentinel.conf
     depends_on:
       redis-primary:
-        condition: service_healthy
+        condition: service_started
       redis-replica:
-        condition: service_healthy
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -p 26379 ping | grep PONG"]
       interval: 10s
@@ -346,6 +386,8 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     # TODO: pin to digest via dependabot/renovate (Renovate: digest-update).
     image: registry:2.8.3
     restart: unless-stopped
@@ -387,9 +429,13 @@ services:
         limits:
           memory: ${REGISTRY_MEMORY_LIMIT:-1G}
   docker-mirror:
+    profiles:
+      - build-cache
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     # TODO: pin to digest via dependabot/renovate (Renovate: digest-update).
     image: registry:2.8.3
     restart: unless-stopped
@@ -420,6 +466,8 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     image: sameersbn/apt-cacher-ng:latest
     container_name: smsly-apt-cacher
     restart: unless-stopped
@@ -444,6 +492,8 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     image: verdaccio/verdaccio:5.31 # TODO: pin to digest via dependabot/renovate
     container_name: smsly-verdaccio
     restart: unless-stopped
@@ -469,6 +519,8 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -492,7 +544,7 @@ services:
       # overlay to the registry container.
       CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-registry:5000}
       DOCKER_HOST: tcp://socket-proxy:2375
-      BUILDKIT_HOST: tcp://buildkitd:1234
+
       SMSLY_ENABLE_STARTUP_CADDY_SYNC: ${SMSLY_ENABLE_STARTUP_CADDY_SYNC:-true}
       SMSLY_BUILDS_DIR: /opt/smsly-hosting/builds
       APT_CACHE_HOST: http://apt-cacher:3142
@@ -500,8 +552,8 @@ services:
     depends_on:
       pgcat:
         condition: service_healthy
-      redis-primary:
-        condition: service_healthy
+      redis-sentinel-1:
+        condition: service_started
       socket-proxy:
         condition: service_healthy
       rabbitmq:
@@ -573,11 +625,77 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     build:
       context: ./backend
       dockerfile: Dockerfile
     image: smsly-hosting-backend:latest
-    command: celery -A config worker -l info --autoscale=${CELERY_AUTOSCALE:-12,4} -Q celery
+    command: celery -A config worker -l info --autoscale=${CELERY_AUTOSCALE:-12,4} -Q ${CELERY_QUEUES:-celery}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      REDIS_HOST: redis-primary
+      MASTER_MESH_IP: ${MASTER_MESH_IP:-}
+      CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-registry:5000}
+      DOCKER_HOST: tcp://socket-proxy:2375
+
+      DOCKER_NETWORK: smsly-net
+      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
+      SMSLY_BUILDS_DIR: /opt/smsly-hosting/builds
+      APT_CACHE_HOST: http://apt-cacher:3142
+      NPM_REGISTRY_URL: http://verdaccio:4873
+    depends_on:
+      pgcat:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+      redis-sentinel-1:
+        condition: service_started
+      socket-proxy:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      registry:
+        condition: service_started
+    volumes:
+    - media_volume:/app/media
+    - caddy_config:/caddy-config
+    - /opt/smsly-cache:/opt/smsly-cache:z
+    - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds:z
+    - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets:z
+    - backups_data:/app/backups
+    - traefik_logs:/var/log/traefik:ro
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - celery -A config inspect ping --timeout 10 2>/dev/null | grep -q pong || exit 1
+      interval: 30s
+      timeout: 20s
+      retries: 5
+      start_period: 300s
+    labels:
+    - managed_by=smsly-hosting
+    networks:
+    - smsly-net
+    - socket-proxy
+    deploy:
+      resources:
+        limits:
+          memory: ${CELERY_MEMORY_LIMIT:-4G}
+  celery-2:
+    profiles:
+      - extra-workers
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
+    cap_drop:
+      - ALL
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: smsly-hosting-backend:latest
+    command: celery -A config worker -l info --autoscale=${CELERY_WORKER2_AUTOSCALE:-8,2} -Q celery
     restart: unless-stopped
     env_file: .env
     environment:
@@ -593,8 +711,8 @@ services:
         condition: service_healthy
       backend:
         condition: service_healthy
-      redis-primary:
-        condition: service_healthy
+      redis-sentinel-1:
+        condition: service_started
       socket-proxy:
         condition: service_healthy
       rabbitmq:
@@ -623,11 +741,72 @@ services:
     deploy:
       resources:
         limits:
-          memory: ${CELERY_MEMORY_LIMIT:-4G}
+          memory: ${CELERY_WORKER2_MEMORY_LIMIT:-4G}
+  celery-3:
+    profiles:
+      - extra-workers
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:docker-default
+    cap_drop:
+      - ALL
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: smsly-hosting-backend:latest
+    command: celery -A config worker -l info --autoscale=${CELERY_WORKER3_AUTOSCALE:-8,2} -Q celery
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      REDIS_HOST: redis-primary
+      MASTER_MESH_IP: ${MASTER_MESH_IP:-}
+      CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-registry:5000}
+      DOCKER_HOST: tcp://socket-proxy:2375
+      DOCKER_NETWORK: smsly-net
+      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
+      SMSLY_BUILDS_DIR: /opt/smsly-hosting/builds
+    depends_on:
+      pgcat:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+      redis-sentinel-1:
+        condition: service_started
+      socket-proxy:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      registry:
+        condition: service_started
+    volumes:
+    - media_volume:/app/media
+    - caddy_config:/caddy-config
+    - /opt/smsly-cache:/opt/smsly-cache:z
+    - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds:z
+    - /opt/smsly-hosting/prometheus-targets:/opt/smsly-hosting/prometheus-targets:z
+    - backups_data:/app/backups
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - celery -A config inspect ping --timeout 10 2>/dev/null | grep -q pong || exit 1
+      interval: 30s
+      timeout: 20s
+      retries: 5
+      start_period: 300s
+    labels:
+    - managed_by=smsly-hosting
+    networks:
+    - smsly-net
+    deploy:
+      resources:
+        limits:
+          memory: ${CELERY_WORKER3_MEMORY_LIMIT:-4G}
   celery-beat:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -647,8 +826,8 @@ services:
         condition: service_healthy
       backend:
         condition: service_healthy
-      redis-primary:
-        condition: service_healthy
+      redis-sentinel-1:
+        condition: service_started
       rabbitmq:
         condition: service_healthy
     volumes:
@@ -669,10 +848,18 @@ services:
     - managed_by=smsly-hosting
     networks:
     - smsly-net
+    deploy:
+      resources:
+        limits:
+          memory: ${CELERY_BEAT_MEMORY_LIMIT:-512M}
+          cpus: "0.50"
   frontend:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
+    read_only: true
     build:
       context: ./frontend
       dockerfile: Dockerfile
@@ -710,6 +897,8 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -730,8 +919,8 @@ services:
         condition: service_healthy
       backend:
         condition: service_healthy
-      redis-primary:
-        condition: service_healthy
+      redis-sentinel-1:
+        condition: service_started
       socket-proxy:
         condition: service_healthy
       rabbitmq:
@@ -764,6 +953,8 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -776,7 +967,7 @@ services:
       MASTER_MESH_IP: ${MASTER_MESH_IP:-}
       CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-registry:5000}
       DOCKER_HOST: tcp://socket-proxy:2375
-      BUILDKIT_HOST: tcp://buildkitd:1234
+
       DOCKER_NETWORK: smsly-net
       BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
       SMSLY_BUILDS_DIR: /opt/smsly-hosting/builds
@@ -787,8 +978,8 @@ services:
         condition: service_healthy
       backend:
         condition: service_healthy
-      redis-primary:
-        condition: service_healthy
+      redis-sentinel-1:
+        condition: service_started
       socket-proxy:
         condition: service_healthy
       rabbitmq:
@@ -820,6 +1011,8 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     # TODO: pin to digest via dependabot/renovate (Renovate: digest-update).
     image: tecnativa/docker-socket-proxy:0.1.2
     restart: unless-stopped
@@ -861,6 +1054,8 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     image: tecnativa/docker-socket-proxy:0.1.2
     restart: unless-stopped
     environment:
@@ -889,6 +1084,9 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
+    read_only: true
     image: caddy:2-alpine
     restart: unless-stopped
     volumes:
@@ -919,6 +1117,8 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     image: crowdsecurity/crowdsec:v1.7.8
     container_name: smsly-crowdsec
     restart: unless-stopped
@@ -955,6 +1155,13 @@ services:
   traefik:
     image: traefik:v3.6
     restart: unless-stopped
+    security_opt:
+    - no-new-privileges:true
+    - apparmor:docker-default
+    cap_drop:
+    - ALL
+    cap_add:
+    - NET_BIND_SERVICE
     command:
     - --providers.docker=true
     - --providers.docker.exposedbydefault=false
@@ -1011,8 +1218,6 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
-    security_opt:
-    - no-new-privileges:true
     labels:
     - managed_by=smsly-hosting
     - "traefik.http.middlewares.crowdsec-bouncer.plugin.crowdsec-bouncer.enabled=true"
@@ -1032,6 +1237,8 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     # TODO: pin to digest via dependabot/renovate (Renovate: digest-update).
     image: snowdreamtech/frps:0.61.0
     restart: unless-stopped
@@ -1074,6 +1281,8 @@ services:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
     image: rabbitmq:3-management-alpine
     ports:
       # SECURITY: AMQP broker on loopback; producers/consumers talk to it
@@ -1105,35 +1314,14 @@ services:
           memory: ${RABBITMQ_MEMORY_RESERVATION:-256M}
         limits:
           memory: ${RABBITMQ_MEMORY_LIMIT:-1G}
-  buildkitd:
-    image: moby/buildkit:v0.18.2
-    container_name: smsly-buildkitd
-    restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
-    cap_add:
-      - SYS_ADMIN
-    networks:
-      - smsly-net
-    volumes:
-      - buildkit_data:/var/lib/buildkit
-    tmpfs:
-      - /tmp
-    command:
-      - --addr=tcp://127.0.0.1:1234
-    healthcheck:
-      test: ["CMD", "buildctl", "debug", "workers"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    deploy:
-      resources:
-        limits:
-          memory: ${BUILDKIT_MEMORY_LIMIT:-2G}
   caddy:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
     build:
       context: .
       dockerfile: infrastructure/caddy/Dockerfile
@@ -1169,6 +1357,7 @@ services:
       resources:
         limits:
           memory: ${CADDY_MEMORY_LIMIT:-512M}
+          cpus: "1.0"
 networks:
   smsly-net:
     external: true
@@ -1205,7 +1394,7 @@ volumes:
   apt_cache: null
   apt_log: null
   verdaccio_data: null
-  buildkit_data: null
+
   traefik_logs: null
   caddy_logs:
     driver: local
@@ -1215,3 +1404,8 @@ volumes:
       device: /opt/smsly-hosting/caddy-logs
   crowdsec_data: null
   crowdsec_config: null
+  
+  # SPIRE mTLS volumes  
+  spire-server-data: null  
+  spire-agent-socket: null  
+  spire-agent-svids: null 

@@ -2,7 +2,7 @@
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
-from apps.deployments.models_core import Service
+from apps.deployments.models.core import Service
 from apps.deployments.services.safedeploy.branch_preview_manager import (
     BRANCH_NAME_RE,
     COMMIT_SHA_RE,

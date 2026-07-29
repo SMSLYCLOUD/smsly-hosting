@@ -1,0 +1,43 @@
+"""
+Generic SPIFFE mTLS Helper Library for Python
+=============================================
+Language-agnostic mTLS integration via file-based SVIDs.
+Works with any application — no dependency on smsly-core or SMSLYCLOUD.
+
+Quick Start:
+    # 1. Set environment variables (or use defaults)
+    export SPIFFE_SVID_CERT_PATH=/opt/spire/svids/cert.pem
+    export SPIFFE_SVID_KEY_PATH=/opt/spire/svids/key.pem
+    export SPIFFE_BUNDLE_PATH=/opt/spire/svids/bundle.pem
+    export SPIFFE_TRUST_DOMAIN=platform.local
+
+    # 2. Use in your application
+    from spiffe_mtls import create_mtls_context, SpiffeMiddleware
+
+    # Outgoing requests (Python requests library)
+    import requests
+    ctx = create_mtls_context()
+    resp = requests.get("https://other-service/path", verify=ctx)
+
+    # Outgoing requests (httpx)
+    from spiffe_mtls import create_mtls_client
+    client = create_mtls_client()
+    resp = await client.get("https://other-service/path")
+
+    # FastAPI incoming requests
+    from fastapi import FastAPI
+    app = FastAPI()
+    app.add_middleware(SpiffeMiddleware, trust_domain="platform.local")
+
+    # Django incoming requests
+    # settings.py: MIDDLEWARE = ["spiffe_mtls.DjangoSpiffeMiddleware"]
+
+For non-Python applications, use file-based SVIDs directly:
+    - cert.pem: X.509 certificate (your service identity)
+    - key.pem: Private key (sign with this)
+    - bundle.pem: Trust bundle (verify other services against this)
+    - Mount via: volumes: [spire-agent-svids:/opt/spire/svids:ro]
+"""
+
+name = "spiffe_mtls"
+version = "1.0.0"

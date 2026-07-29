@@ -36,7 +36,7 @@ export default function AdminUsersPage() {
       await api.get("/system/config/"); // verify admin
       const data = await coreApi.adminGetUsers();
       setUsers(data);
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast({ title: "Failed to load users", variant: "destructive" });
     } finally {
       setLoading(false);

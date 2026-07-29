@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 from django.test import SimpleTestCase, TestCase
 
-from apps.deployments.models_audit import AuditLog
+from apps.deployments.models.audit import AuditLog
 
 
 class TierGatesAuditTests(SimpleTestCase):

@@ -4,7 +4,7 @@ import sys
 from dataclasses import asdict
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'backend'))
-from services.app_templates import APP_TEMPLATES
+from apps.deployments.services.app_templates import APP_TEMPLATES
 
 
 def main():

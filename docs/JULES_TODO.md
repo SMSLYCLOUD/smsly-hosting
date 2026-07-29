@@ -43,9 +43,9 @@ slice to tackle first.
 |------|------:|--------|-----------------|
 | `backend/apps/deployments/views.py` | 5,033 | API | 18 classes; `ServiceViewSet` alone is 2,979 lines / 26 `@action`s. Per-domain sibling pattern already exists (24 `views_*.py` files). |
 | `backend/apps/deployments/tasks.py` | 4,952 | Celery | ~118 funcs. Per-domain siblings exist (`tasks_*.py`). |
-| `backend/services/ecosystem.py` | 2,078 | Ecosystem orchestrator | No siblings yet. Suggested: `ecosystem/{graph,deploy,plan,persist,ai,env}.py`. |
-| `backend/services/caddy_manager.py` | 1,158 | Caddy config | Suggested: `caddy/{config,cert,upstream,watcher,monolith}.py`. |
-| `backend/services/addon_provisioner.py` | 789 | Addon lifecycle | Acceptable size but tightly coupled — consider splitting after E-1. |
+| `backend/apps/deployments/models/ecosystem.py` | 2,078 | Ecosystem orchestrator | No siblings yet. Suggested: `ecosystem/{graph,deploy,plan,persist,ai,env}.py`. |
+| `backend/apps/deployments/services/caddy_manager.py` | 1,158 | Caddy config | Suggested: `caddy/{config,cert,upstream,watcher,monolith}.py`. |
+| `backend/apps/addons/services/addon_provisioner.py` | 789 | Addon lifecycle | Acceptable size but tightly coupled — consider splitting after E-1. |
 | `backend/apps/deployments/services/pipeline.py` | ~2,500 | Deploy pipeline | Suggested: `pipeline/{stages,runner,promote,rollback}.py`. |
 | `backend/apps/deployments/services/backup_service.py` | ~2,600 | Backup + restore + retention | Suggested: `backup/{create,restore,retention,encrypt}.py`. |
 | `backend/apps/deployments/services/transfer_service.py` | ~1,900 | Server transfer | Suggested: `transfer/{plan,execute,verify,cleanup}.py`. |

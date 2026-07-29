@@ -14,29 +14,52 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 django.setup()
 
 
+# ---------------------------------------------------------------------------
+# Autouse fixtures
+# ---------------------------------------------------------------------------
+
 @pytest.fixture(autouse=True)
-def disable_signature_check(settings):
-    """
-    Disable HMAC signature check for all tests.
-    """
+def _isolate_test_environment(settings):
+    """Disable HMAC signature checks and reset caches for all tests."""
     settings.SMSLY_DISABLE_SIGNATURE_CHECK = True
-
-
-@pytest.fixture(autouse=True)
-def clear_throttle_cache():
-    """
-    Reset DRF throttle state between tests so the 3/minute burst
-    and 10/hour deployment throttles don't leak across test cases.
-    """
     from django.core.cache import cache
     cache.clear()
     yield
     cache.clear()
 
 
-@pytest.fixture(autouse=True)
-def _isolate_test_environment(settings):
-    """Disable HMAC signature checks for all tests by default.
-    Tests that need to verify HMAC behavior should explicitly
-    override settings.SMSLY_DISABLE_SIGNATURE_CHECK = False."""
-    settings.SMSLY_DISABLE_SIGNATURE_CHECK = True
+# ---------------------------------------------------------------------------
+# Shared user fixture
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def user(db):
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+    return User.objects.create_user(
+        username="testuser",
+        email="test@example.com",
+        password="testpass123",
+    )
+
+
+# ---------------------------------------------------------------------------
+# DRF API client
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def api_client():
+    from rest_framework.test import APIClient
+    return APIClient()
+
+
+# ---------------------------------------------------------------------------
+# Mock Docker client
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def mock_docker():
+    from unittest.mock import MagicMock
+    client = MagicMock()
+    client.ping.return_value = True
+    return client

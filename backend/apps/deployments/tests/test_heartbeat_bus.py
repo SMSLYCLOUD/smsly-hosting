@@ -15,8 +15,8 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.test import SimpleTestCase, TestCase
 
-from apps.deployments.models_election import HeartbeatLog
-from apps.deployments.models_servers import ManagedServer
+from apps.deployments.models.election import HeartbeatLog
+from apps.deployments.models.servers import ManagedServer
 
 User = get_user_model()
 

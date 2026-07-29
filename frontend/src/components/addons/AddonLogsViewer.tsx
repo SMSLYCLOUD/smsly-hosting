@@ -28,7 +28,7 @@ interface AddonLogsViewerProps {
     compact?: boolean;
 }
 
-export function AddonLogsViewer({ addonId, addonType, status, compact = false }: AddonLogsViewerProps) {
+export const AddonLogsViewer = React.memo(function AddonLogsViewer({ addonId, addonType, status, compact = false }: AddonLogsViewerProps) {
     const { toast } = useToast();
     const [logs, setLogs] = useState('');
     const [loading, setLoading] = useState(true);
@@ -225,4 +225,4 @@ export function AddonLogsViewer({ addonId, addonType, status, compact = false }:
             </div>
         </div>
     );
-}
+})

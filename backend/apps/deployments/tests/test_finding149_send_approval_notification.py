@@ -21,8 +21,8 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 
 from apps.deployments.models import Service
-from apps.deployments.models_safedeploy import DeploymentApproval
-from apps.deployments.views_safedeploy import send_approval_notification
+from apps.deployments.models.safedeploy import DeploymentApproval
+from apps.deployments.views.safedeploy import send_approval_notification
 
 User = get_user_model()
 

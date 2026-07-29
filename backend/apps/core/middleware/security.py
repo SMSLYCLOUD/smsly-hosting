@@ -169,7 +169,7 @@ class SecurityMiddleware:
 
         try:
             if token_key.startswith("smsly_"):
-                from apps.deployments.api_token_auth import APIToken
+                from apps.core.models.api_token import APIToken
                 token_hash = hashlib.sha256(token_key.encode()).hexdigest()
                 return APIToken.objects.filter(
                     token_hash=token_hash,

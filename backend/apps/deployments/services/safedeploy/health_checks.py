@@ -6,7 +6,7 @@ import requests
 import urllib3
 from requests.exceptions import RequestException
 
-from apps.deployments.models_safedeploy import HealthCheckResult
+from apps.deployments.models.safedeploy import HealthCheckResult
 
 logger = logging.getLogger(__name__)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)

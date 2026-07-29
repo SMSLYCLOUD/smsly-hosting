@@ -195,14 +195,14 @@ class SSHClient:
                 key_file = io.StringIO(pem)
                 paramiko.RSAKey.from_private_key(key_file)
                 return pem
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to validate PEM as RSA key: %s", exc)
             try:
                 key_file = io.StringIO(pem)
                 paramiko.Ed25519Key.from_private_key(key_file)
                 return pem
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to validate PEM as Ed25519 key: %s", exc)
         return None
 
     def connect(self):
@@ -460,8 +460,8 @@ class SSHClient:
             path = out.strip().splitlines()[0] if code == 0 and out.strip() else ""
             if path:
                 return path
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to detect hosting path via SSH: %s", exc)
 
         return candidates[0]  # Default to /opt/smsly-hosting
 
@@ -479,7 +479,7 @@ class SSHClient:
 
         api_token_shell = (
             "from django.contrib.auth import get_user_model; "
-            "from apps.deployments.api_token_auth import APIToken; "
+            "from apps.deployments.models.api_token import APIToken; "
             "User=get_user_model(); "
             "u=User.objects.filter(is_superuser=True,is_active=True).first(); "
             "assert u, 'no active superuser'; "
@@ -559,8 +559,8 @@ class SSHClient:
             secret = out.strip().strip("'\"")
             if secret:
                 return secret
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to fetch gateway secret via SSH: %s", exc)
         return None
 
     def restart_stack(self, hosting_path=None):

@@ -38,7 +38,7 @@ class PlatformConfigEmailBackend(SMTPBackend):
             return
         self._pc_loaded = True
         try:
-            from apps.deployments.models_core import PlatformConfig
+            from apps.deployments.models.core import PlatformConfig
             config = PlatformConfig.load()
             if not config.smtp_host:
                 return

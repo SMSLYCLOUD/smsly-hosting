@@ -34,9 +34,9 @@ function BitbucketCallbackContent() {
         setStatus("success");
         setMessage(`Bitbucket connected as ${res.data?.account?.login || "your account"}!`);
         setTimeout(() => router.push("/settings"), 2000);
-      } catch (e: any) {
+      } catch (e: unknown) {
         setStatus("error");
-        setMessage(String(e?.response?.data?.error || "Failed to connect Bitbucket account."));
+        setMessage(String((e as { response?: { data?: { error?: string } } })?.response?.data?.error || "Failed to connect Bitbucket account."));
       }
     };
 

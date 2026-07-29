@@ -10,7 +10,7 @@ use cn_core::entities::user;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use tracing::{info, warn};
 
-/// CloudNeuron Management CLI (replaces Django manage.py)
+/// Grid Management CLI (replaces Django manage.py)
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {

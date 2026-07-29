@@ -45,7 +45,7 @@ class GracefulShutdown:
         signal.signal(signal.SIGINT, self._handle_signal)
         logger.info("Graceful shutdown handlers registered")
 
-    def _handle_signal(self, signum, frame):
+    def _handle_signal(self, signum, _frame):
         """Handle shutdown signal."""
         signal_name = signal.Signals(signum).name
         logger.info(f"Received {signal_name}, initiating graceful shutdown...")
@@ -141,3 +141,4 @@ class GracefulShutdownMiddleware:
 
 # Initialize on module load
 shutdown_handler = GracefulShutdown()
+shutdown_handler.register_signals()

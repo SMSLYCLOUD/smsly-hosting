@@ -5,7 +5,7 @@ import pytest
 from django.contrib.auth import get_user_model
 
 from apps.deployments.models import EnvironmentVariable, Service
-from apps.deployments.tasks_templates import one_click_deploy_template_task
+from apps.deployments.tasks.deployment.tasks_templates import one_click_deploy_template_task
 
 User = get_user_model()
 
@@ -34,7 +34,7 @@ def test_render_value_with_env_overrides():
         # We need to bypass the actual deployment trigger and addon provisioning
         with patch('apps.deployments.tasks.Addon.objects.filter') as mock_addon_filter, \
              patch('apps.deployments.tasks.smart_deploy_task.delay'), \
-             patch('apps.deployments.tasks.json.load', return_value=[template]):
+             patch('apps.deployments.tasks.deployment.tasks_templates.json.load', return_value=[template]):
 
             # Mock empty addons
             mock_addon_filter.return_value.all.return_value = []
@@ -71,7 +71,7 @@ def test_render_value_default_fallback():
     with patch.dict(os.environ, {}, clear=True):
         with patch('apps.deployments.tasks.Addon.objects.filter') as mock_addon_filter, \
              patch('apps.deployments.tasks.smart_deploy_task.delay'), \
-             patch('apps.deployments.tasks.json.load', return_value=[template]):
+             patch('apps.deployments.tasks.deployment.tasks_templates.json.load', return_value=[template]):
 
             mock_addon_filter.return_value.all.return_value = []
             mock_addon_filter.return_value.first.return_value = None
@@ -103,7 +103,7 @@ def test_ai_router_runtime_defaults_are_applied():
     }, clear=True):
         with patch('apps.deployments.tasks.Addon.objects.filter') as mock_addon_filter, \
              patch('apps.deployments.tasks.smart_deploy_task.delay'), \
-             patch('apps.deployments.tasks.json.load', return_value=[template]):
+             patch('apps.deployments.tasks.deployment.tasks_templates.json.load', return_value=[template]):
 
             mock_addon_filter.return_value.all.return_value = []
             mock_addon_filter.return_value.first.return_value = None

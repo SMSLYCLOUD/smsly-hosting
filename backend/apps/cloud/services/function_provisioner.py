@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import logging
 import os
@@ -411,7 +413,7 @@ def _is_blocked_addr(addr):
     return False
 
 
-def safe_url(target):
+def safe_url(target: str) -> str:
     url = urlparse(target)
     if url.scheme not in ('http', 'https'):
         raise ValueError(f'Blocked: protocol {url.scheme} not allowed')
@@ -477,7 +479,7 @@ class FunctionRequest:
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
-        print("%s - %s" % (self.address_string(), fmt % args))
+        logger.debug("%s - %s", self.address_string(), fmt % args)
 
     def _send_json(self, status, payload):
         data = json.dumps(payload).encode("utf-8")

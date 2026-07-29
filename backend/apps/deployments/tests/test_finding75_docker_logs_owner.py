@@ -18,7 +18,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 
 from apps.deployments.models import Service
-from apps.deployments.views_servers import (
+from apps.deployments.views.server.helpers import (
     _bind_request_user,
     _is_command_allowed,
     _user_owns_container_name,

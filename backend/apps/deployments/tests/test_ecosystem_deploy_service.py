@@ -14,6 +14,6 @@ class EcosystemDeployServiceTests(TestCase):
         self.service1 = Service.objects.create(name='Service A', project=self.project)
         self.service2 = Service.objects.create(name='Service B', project=self.project)
 
-    @patch('apps.deployments.tasks._link_ecosystem')
+    @patch('apps.deployments.tasks.deploy.build._link_ecosystem')
     def test_link_ecosystem_called(self, mock_link):
         pass

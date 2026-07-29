@@ -1,0 +1,112 @@
+{
+  "operation": "POST /api/v1/servers/{id}/health_check/",
+  "method": "POST",
+  "path_template": "/api/v1/servers/{id}/health_check/",
+  "fingerprint": "233afbb8",
+  "case_id": "groA4g",
+  "code_sample": "curl -X POST -H 'Content-Type: application/json' -d '{\"name\": \"\", \"host\": \"\", \"private_ip\": null, \"api_url\": \"https://A.COM\", \"ssh_port\": 0, \"ssh_user\": \"\", \"provider_metadata\": null, \"is_primary\": false, \"allow_user_workloads\": false, \"provision_logs\": \"\", \"verify_tls\": false}' http://127.0.0.1:8089/api/v1/servers/e3e70682-c209-1cac-a29f-6fbed82c07cd/health_check/",
+  "sequence": [
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:8089/api/v1/servers/e3e70682-c209-1cac-a29f-6fbed82c07cd/health_check/",
+      "url_template": "http://127.0.0.1:8089/api/v1/servers/{id}/health_check/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "X-Schemathesis-TestCaseId": "groA4g",
+        "Content-Type": "application/json",
+        "Content-Length": "225"
+      },
+      "response": {
+        "status_code": 401,
+        "headers": {
+          "date": "Tue, 21 Jul 2026 00:17:31 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "www-authenticate": "[Filtered]",
+          "vary": "Accept, Cookie, origin",
+          "allow": "POST, OPTIONS",
+          "x-frame-options": "DENY",
+          "content-length": "95",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin"
+        },
+        "body": "{\"error\":\"Authentication credentials were not provided.\",\"code\":\"unauthenticated\",\"status\":401}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "status_code_conformance",
+          "status": "failure",
+          "message": "Undocumented HTTP status code\n\nReceived: 401\nDocumented: 200"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 6.570400000782683e-05,
+          "mode": "negative"
+        },
+        "components": {
+          "PATH": "positive",
+          "HEADER": "negative",
+          "BODY": "positive"
+        },
+        "phase": {
+          "name": "coverage",
+          "data": {
+            "type": "CoveragePhaseData",
+            "description": "Missing `Authorization` at header",
+            "location": null,
+            "parameter": "Authorization",
+            "parameter_location": "HEADER",
+            "scenario": "missing_parameter"
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [
+          [
+            "path",
+            "id"
+          ]
+        ],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {
+          "PATH": {
+            "id": "e3e70682-c209-1cac-a29f-6fbed82c07cd"
+          },
+          "HEADER": {}
+        }
+      },
+      "path": "/api/v1/servers/{id}/health_check/",
+      "path_parameters": {
+        "id": "e3e70682-c209-1cac-a29f-6fbed82c07cd"
+      },
+      "query": {},
+      "case_headers": {},
+      "cookies": {},
+      "case_body": {
+        "encoding": "json",
+        "value": {
+          "name": "",
+          "host": "",
+          "private_ip": null,
+          "api_url": "https://A.COM",
+          "ssh_port": 0,
+          "ssh_user": "",
+          "provider_metadata": null,
+          "is_primary": false,
+          "allow_user_workloads": false,
+          "provision_logs": "",
+          "verify_tls": false
+        }
+      },
+      "media_type": "application/json",
+      "parent_index": null
+    }
+  ]
+}

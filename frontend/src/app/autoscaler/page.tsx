@@ -113,9 +113,9 @@ export default function AutoscalerPage() {
           }), {})
         });
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       // Silently handle 503 (service not installed) — show offline state
-      const is503 = err?.response?.status === 503;
+      const is503 = (err as { response?: { status?: number } })?.response?.status === 503;
       if (is503) {
         setOffline(true);
         setAutoRefresh(false); // Stop polling when offline
@@ -210,7 +210,7 @@ export default function AutoscalerPage() {
 
   // Chart data preparation
   const chartData = history?.timestamps.map((ts, i) => {
-    const point: any = { timestamp: new Date(ts).toLocaleTimeString() };
+    const point: Record<string, string | number> = { timestamp: new Date(ts).toLocaleTimeString() };
     Object.keys(history.services).forEach(svc => {
       point[`${svc}_mem`] = history.services[svc].memory_mb[i];
       point[`${svc}_demand`] = history.services[svc].demand_score[i];
@@ -797,8 +797,8 @@ export default function AutoscalerPage() {
                               ));
                               toast({ title: 'Alert Config Saved', description: `Resource alert thresholds updated for ${services.length} service(s).` });
                               setAlertsOpen(false);
-                            } catch (err: any) {
-                              toast({ title: 'Save failed', description: err?.message ?? 'Could not persist alert config.', variant: 'destructive' });
+                            } catch (err: unknown) {
+                              toast({ title: 'Save failed', description: err instanceof Error ? err.message : 'Could not persist alert config.', variant: 'destructive' });
                             } finally {
                               setSavingAlertConfig(false);
                             }

@@ -4,7 +4,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 
 from apps.deployments.models import Service
-from apps.deployments.models_storage import Volume
+from apps.deployments.models.storage import Volume
 
 User = get_user_model()
 

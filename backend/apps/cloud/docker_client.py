@@ -4,6 +4,8 @@ L-3 fix: Always respects DOCKER_HOST env var to ensure all Docker SDK
 calls go through the socket-proxy service rather than hitting the raw
 Docker socket directly.
 """
+from __future__ import annotations
+
 import logging
 import os
 
@@ -39,8 +41,8 @@ def _get_fallback_sockets():
                 user_sock = f"unix:///run/user/{os.getuid()}/docker.sock"
                 if user_sock not in sockets:
                     sockets.append(user_sock)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed to detect user Docker socket: %s", e)
     # Cross-platform TCP fallbacks (socket-proxy, docker-in-docker, local TCP)
     for tcp_sock in ['tcp://127.0.0.1:2375', 'tcp://localhost:2375', 'tcp://docker:2375', 'tcp://socket-proxy:2375']:
         if tcp_sock not in sockets:
@@ -68,7 +70,7 @@ def _create_resilient_client(primary_url: str, **kwargs):
         raise exc
 
 
-def get_docker_client(**kwargs):
+def get_docker_client(**kwargs) -> docker.DockerClient:
     """Return a Docker client that respects DOCKER_HOST with resilient fallback.
 
     Accepts the same keyword arguments as docker.DockerClient (e.g.
@@ -81,7 +83,7 @@ def get_docker_client(**kwargs):
     return _create_resilient_client(primary_url=docker_host, **kwargs)
 
 
-def get_docker_exec_client():
+def get_docker_exec_client() -> docker.DockerClient:
     """Return a Docker client tuned for long-running exec sessions.
 
     Uses a much longer HTTP timeout so terminal sessions don't get
@@ -92,7 +94,7 @@ def get_docker_exec_client():
     return _create_resilient_client(primary_url=docker_host, timeout=_EXEC_TIMEOUT)
 
 
-def from_env(**kwargs):
+def from_env(**kwargs) -> docker.DockerClient:
     """Alias for get_docker_client for drop-in compatibility with docker.from_env()."""
     return get_docker_client(**kwargs)
 
@@ -109,8 +111,8 @@ def _resilient_from_env(**kwargs):
             for fallback_url in _get_fallback_sockets():
                 try:
                     return docker.DockerClient(base_url=fallback_url, **kwargs)
-                except Exception:
-                    pass
+                except Exception as fb_exc:
+                    logger.debug("Fallback Docker host '%s' failed: %s", fallback_url, fb_exc)
         raise exc
 
 docker.from_env = _resilient_from_env

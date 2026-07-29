@@ -90,7 +90,7 @@ class FileWritePathSafetyTests(APITestCase):
             ],
         )
 
-    @patch('apps.deployments.views_storage.resolve_running_container')
+    @patch('apps.deployments.views.storage.resolve_running_container')
     def test_allows_path_inside_mount(self, mock_resolve):
         mock_container = MagicMock()
         mock_container.exec_run.return_value = (0, b'')

@@ -12,7 +12,7 @@ from django.core.exceptions import ValidationError
 from django.test import TestCase
 
 from apps.deployments.models import Service
-from apps.deployments.models_safedeploy import DeploymentApproval
+from apps.deployments.models.safedeploy import DeploymentApproval
 
 User = get_user_model()
 

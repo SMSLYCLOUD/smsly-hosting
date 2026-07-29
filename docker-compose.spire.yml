@@ -1,0 +1,117 @@
+# =============================================================================
+# SPIRE mTLS Infrastructure for smsly-hosting PaaS
+# =============================================================================
+# Run: docker compose -f docker-compose.spire.yml up -d
+# =============================================================================
+
+services:
+  spire-server:
+    image: ghcr.io/spiffe/spire-server:1.9.6
+    container_name: ${SPIRE_SERVER_CONTAINER:-smsly-spire-server}
+    hostname: spire-server
+    restart: unless-stopped
+    volumes:
+      - spire-server-data:/opt/spire/data
+      - ./infrastructure/spire/server.conf:/etc/spire/server.conf:ro,z
+      - ./infrastructure/spire/registration_entries.json:/etc/spire/entries.json:ro,z
+    environment:
+      SPIFFE_TRUST_DOMAIN: ${SPIFFE_TRUST_DOMAIN:-platform.local}
+    command: ["-config", "/etc/spire/server.conf"]
+    networks:
+      - smsly-net
+    ports:
+      - "127.0.0.1:8081:8081"
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD", "/opt/spire/bin/spire-server", "healthcheck", "-socketPath", "/opt/spire/data/server.sock"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    labels:
+      - managed_by=smsly-hosting
+    deploy:
+      resources:
+        limits:
+          memory: ${SPIRE_SERVER_MEMORY_LIMIT:-256M}
+
+  spire-agent:
+    image: ghcr.io/spiffe/spire-agent:1.9.6
+    container_name: ${SPIRE_AGENT_CONTAINER:-smsly-spire-agent}
+    hostname: spire-agent
+    restart: unless-stopped
+    volumes:
+      - spire-agent-socket:/opt/spire/run
+      - spire-agent-svids:/opt/spire/svids
+      - ./infrastructure/spire/agent.conf:/etc/spire/agent.conf:ro,z
+    environment:
+      SPIFFE_TRUST_DOMAIN: ${SPIFFE_TRUST_DOMAIN:-platform.local}
+    command: ["-config", "/etc/spire/agent.conf"]
+    networks:
+      - smsly-net
+    depends_on:
+      spire-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/opt/spire/bin/spire-agent", "healthcheck", "-socketPath", "/opt/spire/run/agent.sock"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    labels:
+      - managed_by=smsly-hosting
+    deploy:
+      resources:
+        limits:
+          memory: ${SPIRE_AGENT_MEMORY_LIMIT:-128M}
+
+  spire-init:
+    image: ghcr.io/spiffe/spire-server:1.9.6
+    container_name: ${SPIRE_INIT_CONTAINER:-smsly-spire-init}
+    volumes:
+      - spire-server-data:/opt/spire/data
+      - ./infrastructure/spire/server.conf:/etc/spire/server.conf:ro,z
+      - ./infrastructure/spire/registration_entries.json:/etc/spire/entries.json:ro,z
+    environment:
+      SPIFFE_TRUST_DOMAIN: ${SPIFFE_TRUST_DOMAIN:-platform.local}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Waiting for SPIRE server to be ready..."
+        until /opt/spire/bin/spire-server healthcheck -socketPath /opt/spire/data/server.sock 2>/dev/null; do
+          sleep 2
+        done
+        echo "SPIRE server ready. Loading registration entries..."
+        sed -i "s/TRUST_DOMAIN_PLACEHOLDER/$${SPIFFE_TRUST_DOMAIN}/g" /etc/spire/entries.json
+        /opt/spire/bin/spire-server entry create -socketPath /opt/spire/data/server.sock -data @/etc/spire/entries.json || true
+        echo "Registration entries loaded."
+    networks:
+      - smsly-net
+    depends_on:
+      spire-server:
+        condition: service_healthy
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    labels:
+      - managed_by=smsly-hosting
+
+volumes:
+  spire-server-data:
+  spire-agent-socket:
+  spire-agent-svids:
+
+networks:
+  smsly-net:
+    external: true
+    name: smsly-net

@@ -31,8 +31,8 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        from apps.deployments.models_core import ManagedServer
-        from apps.deployments.services.prometheus_targets import (
+        from apps.deployments.models.core import ManagedServer
+        from apps.autoscaler.services.prometheus_targets import (
             deploy_cadvisor_on_node,
             deploy_docker_labels_exporter_on_node,
             deploy_node_exporter_on_node,

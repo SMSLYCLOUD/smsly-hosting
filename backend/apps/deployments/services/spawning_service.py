@@ -2,11 +2,19 @@
 import contextlib
 import json
 import logging
+import os
 import shlex
 
 from django.utils import timezone
 
 from .container_runtime import get_runtime_for_container
+from .mtls_integration import (
+    is_mtls_enabled,
+    get_mtls_labels,
+    get_mtls_env_vars,
+    get_mtls_docker_run_args,
+    get_mtls_docker_run_volumes,
+)
 from .network_scope import apply_egress_restrictions, ensure_scoped_network
 from .ssh_client import SSHClient
 
@@ -22,7 +30,7 @@ def _scoped_network_for(service) -> str:
     """
     project = getattr(service, "project", None)
     if project:
-        from apps.deployments.models_network_scope import ScopedNetwork
+        from apps.deployments.models.network_scope import ScopedNetwork
         scoped = ScopedNetwork.get_for_object(project)
         if scoped:
             cfg = ScopedNetwork.resolve_network_config(project)
@@ -31,7 +39,8 @@ def _scoped_network_for(service) -> str:
             return cfg["name"]
 
     short_id = str(service.id).replace("-", "")[:12]
-    net_name = f"smsly-svc-{short_id}"
+    net_prefix = os.getenv("PAAS_NETWORK_PREFIX", "paas-svc")
+    net_name = f"{net_prefix}-{short_id}"
     ensure_scoped_network({
         "name": net_name,
         "driver": "bridge",
@@ -129,12 +138,26 @@ class SpawningService:
             labels.append(f"traefik.http.routers.{router}.entrypoints=websecure")
             labels.append("traefik.http.routers.{router}.tls=true")
 
+        # --- mTLS: Add SPIRE workload attestation labels ---
+        try:
+            for k, v in get_mtls_labels(service).items():
+                labels.append(f"{k}={v}")
+        except Exception as e:
+            logger.debug("mTLS label injection skipped: %s", e)
+
         label_args = " ".join(f"-l {shlex.quote(label)}" for label in labels)
 
         # Env vars from the service
         env_args = ""
         for ev in service.env_vars.all():
             env_args += f" -e {shlex.quote(ev.key)}={shlex.quote(ev.value)}"
+
+        # --- mTLS: Add SPIFFE env vars ---
+        try:
+            for k, v in get_mtls_env_vars(service).items():
+                env_args += f" -e {shlex.quote(k)}={shlex.quote(v)}"
+        except Exception as e:
+            logger.debug("mTLS env injection skipped: %s", e)
 
         login_cmd = ""
         if getattr(service, 'registry_credential_id', None) and service.registry_credential.is_active:
@@ -156,7 +179,7 @@ class SpawningService:
         elif not login_cmd:
             # Fall back to ScopedRegistry chain (Project → Team → Organization → PlatformConfig)
             try:
-                from apps.deployments.models_registry_scope import ScopedRegistry
+                from apps.deployments.models.registry_scope import ScopedRegistry
                 scope_obj = getattr(service, 'project', None)
                 registry_info = ScopedRegistry.resolve_registry_credentials(scope_obj)
                 raw_url = (registry_info.get("url") or "").split("://")[-1].rstrip("/")
@@ -183,6 +206,13 @@ class SpawningService:
             f"--memory={mem_mb}m --cpus={cpus} --pids-limit=1024 "
         )
 
+        # --- mTLS: SPIRE volume mounts ---
+        try:
+            mtls_volumes = get_mtls_docker_run_args(service)
+        except Exception as e:
+            logger.debug("mTLS volume injection skipped: %s", e)
+            mtls_volumes = ""
+
         cmd = (
             f"{login_cmd}"
             f"docker pull {shlex.quote(image)} 2>/dev/null; "
@@ -191,6 +221,7 @@ class SpawningService:
             f"{sec_flags}"
             f"{runtime_flag} "
             f"--restart unless-stopped --network {shlex.quote(net)} "
+            f"{mtls_volumes}"
             f"{label_args} {env_args} "
             f"{shlex.quote(image)}; "
         )
@@ -283,6 +314,12 @@ class SpawningService:
             labels[f"traefik.http.routers.{router}.entrypoints"] = "websecure,web"
             labels[f"traefik.http.routers.{router}.tls"] = "true"
 
+        # --- mTLS: Add SPIRE workload attestation labels ---
+        try:
+            labels.update(get_mtls_labels(service))
+        except Exception as e:
+            logger.debug("mTLS label injection skipped: %s", e)
+
         if getattr(service, 'registry_credential_id', None) and service.registry_credential.is_active:
             try:
                 client.login(
@@ -294,6 +331,15 @@ class SpawningService:
                 logger.warning("Local docker login failed: %s", e)
 
         env_vars = {ev.key: ev.value for ev in service.env_vars.all()}
+
+        # --- mTLS: Add SPIFFE env vars ---
+        try:
+            env_vars.update(get_mtls_env_vars(service))
+        except Exception as e:
+            logger.debug("mTLS env injection skipped: %s", e)
+
+        # --- mTLS: SPIRE volume mounts ---
+        mtls_volumes = get_mtls_docker_run_volumes(service)
 
         mem_mb = getattr(service, 'memory_mb', 2048) or 2048
         cpus = getattr(service, 'cpu_cores', 1.0) or 1.0
@@ -307,6 +353,7 @@ class SpawningService:
             network=net,
             labels=labels,
             environment=env_vars,
+            volumes=mtls_volumes,
             security_opt=["no-new-privileges:true", "apparmor:docker-default"],
             cap_drop=["ALL"],
             cap_add=["NET_BIND_SERVICE", "CHOWN", "SETUID", "SETGID"],

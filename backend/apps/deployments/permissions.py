@@ -2,8 +2,8 @@ import logging
 
 from rest_framework import permissions
 
-from .models_core import Service
-from .models_safedeploy import DeploymentApproval, MigrationValidation
+from .models.core import Service
+from .models.safedeploy import DeploymentApproval, MigrationValidation
 
 logger = logging.getLogger(__name__)
 

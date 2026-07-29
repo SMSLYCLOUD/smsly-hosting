@@ -2,7 +2,7 @@ import ast
 import os
 from typing import Any
 
-from apps.deployments.models_safedeploy import MigrationValidation
+from apps.deployments.models.safedeploy import MigrationValidation
 
 from .command_executor import CommandExecutor
 

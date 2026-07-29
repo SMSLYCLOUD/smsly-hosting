@@ -15,7 +15,7 @@ class Command(BaseCommand):
         # ensure Site domain is correct
         site = Site.objects.get(id=settings.SITE_ID)
         site.domain = settings.DOMAIN
-        site.name = 'CloudNeuron'  # Updated brand name
+        site.name = 'Grid'  # Updated brand name
         site.save()
         self.stdout.write(self.style.SUCCESS(f'Updated Site: {site.domain} ({site.name})'))
 

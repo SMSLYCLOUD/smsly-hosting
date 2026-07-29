@@ -241,20 +241,4 @@ class Migration(migrations.Migration):
                 "ordering": ["-created_at"],
             },
         ),
-        # ── Add node_type to ManagedServer ──
-        migrations.AddField(
-            model_name="managedserver",
-            name="node_type",
-            field=models.CharField(
-                choices=[
-                    ("master", "Master (full stack)"),
-                    ("node", "Node (full stack, no Caddy)"),
-                    ("agent-lite", "Agent Lite (minimal)"),
-                    ("media", "Media Node (voice + video baremetal)"),
-                ],
-                default="agent-lite",
-                help_text="Determines provisioning mode and available services.",
-                max_length=20,
-            ),
-        ),
     ]

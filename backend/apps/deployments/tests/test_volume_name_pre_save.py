@@ -13,7 +13,7 @@ from django.test import TestCase
 
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import Service
-from apps.deployments.models_storage import Volume
+from apps.deployments.models.storage import Volume
 
 User = get_user_model()
 

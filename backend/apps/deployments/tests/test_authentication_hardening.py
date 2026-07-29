@@ -10,7 +10,7 @@ from unittest.mock import patch  # noqa: E402
 from django.test import RequestFactory  # noqa: E402
 from rest_framework.exceptions import AuthenticationFailed  # noqa: E402
 
-from apps.deployments.api_token_auth import RemoteSyncHMACAuthentication  # noqa: E402
+from apps.deployments.models.api_token import RemoteSyncHMACAuthentication  # noqa: E402
 
 
 class TestAuthenticationHardening(unittest.TestCase):
@@ -18,7 +18,7 @@ class TestAuthenticationHardening(unittest.TestCase):
         self.factory = RequestFactory()
         self.auth = RemoteSyncHMACAuthentication()
 
-    @patch("apps.deployments.api_token_auth.settings")
+    @patch("apps.deployments.models.api_token.settings")
     def test_missing_gateway_secret_fails_closed(self, mock_settings):
         mock_settings.GATEWAY_SECRET = ""
         mock_settings.SECRET_KEY = "should-not-fallback"
@@ -35,7 +35,7 @@ class TestAuthenticationHardening(unittest.TestCase):
 
         self.assertIn("not configured", str(context.exception))
 
-    @patch("apps.deployments.api_token_auth.settings")
+    @patch("apps.deployments.models.api_token.settings")
     def test_invalid_signature_fails(self, mock_settings):
         mock_settings.GATEWAY_SECRET = "secret123"
 

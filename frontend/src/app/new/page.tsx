@@ -5,6 +5,7 @@ import Image from 'next/image';
 import { useRouter } from "next/navigation"
 import { Github, Box, Layers, ArrowRight, Loader2, Search, Sparkles, Zap, Settings2, Rocket, CheckCircle2, Code2, Database, Globe, GitBranch, Key, SkipForward, Server, Monitor, Wifi, WifiOff, Filter, Tag, LayoutGrid, ListFilter, UploadCloud } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { ErrorBoundary } from "@/components/ErrorBoundary"
 import { DashboardShell } from "@/components/layout/DashboardShell"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -376,11 +377,10 @@ export default function NewServicePage() {
           deploy_type: sourceType === "upload" ? "UPLOAD" : deployType,
           buildpack: sourceType === "docker" ? "DOCKER" : sourceType === "upload" ? "DOCKER" : buildpack,
           repository_url: (sourceType === "docker" || sourceType === "upload") ? null : finalRepo,
-          docker_image: sourceType === "docker" ? dockerImage : null,
+          docker_image: sourceType === "docker" ? dockerImage ?? undefined : undefined,
           branch: branch || "main",
           cpu_cores: cpuCores,
           memory_mb: memoryMb,
-          regions: [],
           ...(selectedProject && selectedProject !== "none" ? { project: selectedProject } : {}),
           ...(sourceType === "docker" && registryCredentialId !== "none" ? { registry_credential: registryCredentialId } : {})
       }, localOnlyRequest)
@@ -457,6 +457,7 @@ export default function NewServicePage() {
   // ── Render ─────────────────────────────────────────────────────────────
   return (
     <DashboardShell>
+    <ErrorBoundary>
     <div className="container max-w-5xl py-10 relative z-10">
       <div className="mb-8">
         <h1 className="text-3xl font-bold tracking-tight">Create New Service</h1>
@@ -1542,6 +1543,7 @@ export default function NewServicePage() {
         </div>
       </div>
     </div>
+    </ErrorBoundary>
     </DashboardShell>
   )
 }

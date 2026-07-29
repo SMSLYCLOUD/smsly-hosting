@@ -1,5 +1,5 @@
 """
-diagnose_nodes - CloudNeuron inter-node communications diagnostic.
+diagnose_nodes - Grid inter-node communications diagnostic.
 
 Run on each node to see:
 1. What ManagedServer records exist (api_url, status, whether a token is stored)
@@ -20,13 +20,13 @@ import requests
 from django.core.management.base import BaseCommand
 from rest_framework.authtoken.models import Token as DRFToken
 
-from apps.deployments.api_token_auth import APIToken
-from apps.deployments.models_servers import ManagedServer
+from apps.deployments.models.api_token import APIToken
+from apps.deployments.models.servers import ManagedServer
 from apps.deployments.services.tls_verify import audit_verify, should_verify
 
 
 class Command(BaseCommand):
-    help = "Diagnose CloudNeuron inter-node connectivity and authentication issues."
+    help = "Diagnose Grid inter-node connectivity and authentication issues."
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -38,7 +38,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         fix = options["fix"]
-        self.stdout.write(self.style.MIGRATE_HEADING("\n====== CloudNeuron Node Diagnostics ======\n"))
+        self.stdout.write(self.style.MIGRATE_HEADING("\n====== Grid Node Diagnostics ======\n"))
 
         # --- 1. Local node info ---
         self.stdout.write(self.style.MIGRATE_HEADING("1. LOCAL NODE CREDENTIALS\n"))
@@ -115,7 +115,7 @@ class Command(BaseCommand):
         self.stdout.write("     It will auto-SSH into remote nodes and pull tokens if credentials exist.\n")
 
     def _test_connectivity(self, server: ManagedServer, has_token: bool, has_secret: bool):
-        from apps.deployments.views_servers import _candidate_api_urls
+        from apps.deployments.views.server.helpers import _candidate_api_urls
         candidates = _candidate_api_urls(server)
 
         # Local-first fallbacks for self-diagnostics
@@ -193,8 +193,8 @@ class Command(BaseCommand):
                         data = resp.json()
                         count = data.get("count", len(data.get("results", data if isinstance(data, list) else [])))
                         self.stdout.write(f"        Services visible: {count}")
-                    except Exception:
-                        pass
+                    except (ValueError, KeyError) as exc:
+                        self.stdout.write(f"        (Could not parse response: {exc})")
                 else:
                     self.stdout.write(self.style.ERROR(
                         f"     ❌ GET {api_path} → HTTP {resp.status_code} with TOKEN auth"

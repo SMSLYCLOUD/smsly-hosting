@@ -1,13 +1,16 @@
+import logging
 import re
 
 from django.db import transaction
 
-from apps.deployments.models_core import Service
-from apps.deployments.models_safedeploy import (
+from apps.deployments.models.core import Service
+from apps.deployments.models.safedeploy import (
     DatabaseClone,
     MigrationValidation,
     PreviewEnvironment,
 )
+
+logger = logging.getLogger(__name__)
 
 BRANCH_NAME_RE = re.compile(r'^[a-zA-Z0-9_./-]{1,200}$')
 COMMIT_SHA_RE = re.compile(r'^[a-f0-9]{7,40}$')
@@ -105,7 +108,7 @@ class BranchPreviewManager:
         # Prefer the preview addon's own DATABASE_URL (isolated container)
         # over the clone URL (which shares the parent's DB server).
         try:
-            from apps.deployments.models_addons import Addon
+            from apps.deployments.models.addons import Addon
             preview_pg = Addon.objects.filter(
                 service__name__startswith=f"preview-{preview.id.hex}",
                 addon_type=Addon.Type.POSTGRES,
@@ -114,8 +117,8 @@ class BranchPreviewManager:
             if preview_pg and preview_pg.connection_url:
                 env_vars['DATABASE_URL'] = preview_pg.connection_url
                 return env_vars
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to look up preview Postgres addon: %s", exc)
 
         # Fallback: use clone URL if no preview addon found (legacy path)
         try:

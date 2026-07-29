@@ -98,8 +98,8 @@ class Reconciler:
 
     # ── Scale up ─────────────────────────────────────────────────────────────
     def _scale_up(self, rec: Recommendation) -> ScaleResult:
-        from apps.deployments.models_core import ManagedServer
-        from apps.deployments.models_replica import ServiceReplica
+        from apps.deployments.models.core import ManagedServer
+        from apps.autoscaler.models.replica import ServiceReplica
         from apps.deployments.services.node_scorer import NodeScorer
         from apps.deployments.services.spawning_service import SpawningService
 
@@ -126,8 +126,8 @@ class Reconciler:
                     logger.warning("Local spawn failed for %s: %s", self.service.name, exc)
                     try:
                         spawner.destroy(replica)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("Destroy replica after local spawn failure: %s", exc)
                     replica.status = 'DESTROYED'
                     replica.save(update_fields=['status'])
                     local_ok = False
@@ -169,8 +169,8 @@ class Reconciler:
                                    self.service.name, node.name, exc)
                     try:
                         spawner.destroy(replica)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("Destroy replica after remote spawn failure: %s", exc)
                     replica.status = 'DESTROYED'
                     replica.save(update_fields=['status'])
             if spawned > 0:
@@ -183,7 +183,7 @@ class Reconciler:
 
     # ── Scale down ───────────────────────────────────────────────────────────
     def _scale_down(self, rec: Recommendation) -> ScaleResult:
-        from apps.deployments.models_replica import ServiceReplica
+        from apps.autoscaler.models.replica import ServiceReplica
         from apps.deployments.services.spawning_service import SpawningService
         destroyed = 0
         target = max(rec.scale_down_by, 1)
@@ -211,6 +211,6 @@ class Reconciler:
     # ── Cooldown write-back ─────────────────────────────────────────────────
     @transaction.atomic
     def _record_scale(self):
-        from apps.deployments.models_core import Service
+        from apps.deployments.models.core import Service
         Service.objects.filter(id=self.service.id).update(last_scale_at=self.now)
         self.service.last_scale_at = self.now

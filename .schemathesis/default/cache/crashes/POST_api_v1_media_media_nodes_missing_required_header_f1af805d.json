@@ -1,0 +1,98 @@
+{
+  "operation": "POST /api/v1/media/media-nodes/",
+  "method": "POST",
+  "path_template": "/api/v1/media/media-nodes/",
+  "fingerprint": "f1af805d",
+  "case_id": "dxibTo",
+  "code_sample": "curl -X POST -H 'Content-Type: application/json' -d '{\"server\": \"e3e70682-c209-1cac-a29f-6fbed82c07cd\", \"livekit_host\": \"\", \"livekit_port\": 0, \"turn_realm\": \"\", \"turn_port_tcp\": 0, \"turn_port_tls\": 0, \"max_voice_calls\": 0, \"max_video_rooms\": 0, \"max_participants\": 0, \"max_rtp_sessions\": 0}' http://127.0.0.1:8089/api/v1/media/media-nodes/",
+  "sequence": [
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:8089/api/v1/media/media-nodes/",
+      "url_template": "http://127.0.0.1:8089/api/v1/media/media-nodes/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "X-Schemathesis-TestCaseId": "dxibTo",
+        "Content-Type": "application/json",
+        "Content-Length": "237"
+      },
+      "response": {
+        "status_code": 403,
+        "headers": {
+          "date": "Mon, 20 Jul 2026 21:12:50 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "x-frame-options": "DENY",
+          "content-length": "41",
+          "vary": "Cookie, origin",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin"
+        },
+        "body": "{\"error\": \"Invalid or missing signature\"}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "missing_required_header",
+          "status": "failure",
+          "message": "Missing header not rejected\n\nGot 403 when missing required 'Authorization' header, expected 401"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 2.3682001483393833e-05,
+          "mode": "negative"
+        },
+        "components": {
+          "HEADER": "negative",
+          "BODY": "positive"
+        },
+        "phase": {
+          "name": "coverage",
+          "data": {
+            "type": "CoveragePhaseData",
+            "description": "Missing `Authorization` at header",
+            "location": null,
+            "parameter": "Authorization",
+            "parameter_location": "HEADER",
+            "scenario": "missing_parameter"
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {
+          "HEADER": {}
+        }
+      },
+      "path": "/api/v1/media/media-nodes/",
+      "path_parameters": {},
+      "query": {},
+      "case_headers": {},
+      "cookies": {},
+      "case_body": {
+        "encoding": "json",
+        "value": {
+          "server": "e3e70682-c209-1cac-a29f-6fbed82c07cd",
+          "livekit_host": "",
+          "livekit_port": 0,
+          "turn_realm": "",
+          "turn_port_tcp": 0,
+          "turn_port_tls": 0,
+          "max_voice_calls": 0,
+          "max_video_rooms": 0,
+          "max_participants": 0,
+          "max_rtp_sessions": "[Filtered]"
+        }
+      },
+      "media_type": "application/json",
+      "parent_index": null
+    }
+  ]
+}

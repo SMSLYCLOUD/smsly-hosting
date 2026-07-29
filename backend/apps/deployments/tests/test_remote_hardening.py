@@ -6,7 +6,7 @@ from django.test import TestCase
 
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import Deployment, PlatformConfig, Service
-from apps.deployments.models_core import ManagedServer
+from apps.deployments.models.core import ManagedServer
 from apps.deployments.services.pipeline import PipelineManager
 from apps.deployments.services.ssh_client import SSHClient
 from apps.deployments.utils import is_deployment_local

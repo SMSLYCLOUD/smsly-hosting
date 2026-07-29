@@ -104,9 +104,6 @@ function injectRustTwinAuthHeader(request: NextRequest): NextResponse {
   const token = getRustTwinToken(request);
   if (token) {
     requestHeaders.set("authorization", `Token ${token}`);
-    console.debug(
-      `[middleware] injected Authorization for ${request.nextUrl.pathname}`,
-    );
   }
   return NextResponse.next({ request: { headers: requestHeaders } });
 }

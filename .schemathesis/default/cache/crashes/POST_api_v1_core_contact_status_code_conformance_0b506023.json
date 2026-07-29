@@ -1,0 +1,97 @@
+{
+  "operation": "POST /api/v1/core/contact/",
+  "method": "POST",
+  "path_template": "/api/v1/core/contact/",
+  "fingerprint": "0b506023",
+  "case_id": "1uu9rV",
+  "code_sample": "curl -X POST -H 'Authorization: [Filtered]' -H 'Content-Type: multipart/form-data; boundary=cf390b6062b3102a85983a6994976314' -d $'--cee53821c8a959ed1199f29ef09688d9\\r\\nContent-Disposition: form-data; name=\"email\"\\r\\n\\r\\n0@a.com\\r\\n--cee53821c8a959ed1199f29ef09688d9\\r\\nContent-Disposition: form-data; name=\"company\"\\r\\n\\r\\n\\r\\n--cee53821c8a959ed1199f29ef09688d9\\r\\nContent-Disposition: form-data; name=\"message\"\\r\\n\\r\\n\\r\\n--cee53821c8a959ed1199f29ef09688d9--\\r\\n' http://127.0.0.1:8089/api/v1/core/contact/",
+  "sequence": [
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:8089/api/v1/core/contact/",
+      "url_template": "http://127.0.0.1:8089/api/v1/core/contact/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "Authorization": "[Filtered]",
+        "X-Schemathesis-TestCaseId": "1uu9rV",
+        "Content-Length": "307",
+        "Content-Type": "multipart/form-data; boundary=cf390b6062b3102a85983a6994976314"
+      },
+      "response": {
+        "status_code": 400,
+        "headers": {
+          "date": "Tue, 21 Jul 2026 00:15:40 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "vary": "Accept, Cookie, origin",
+          "allow": "POST, OPTIONS",
+          "x-frame-options": "DENY",
+          "content-length": "79",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin"
+        },
+        "body": "{\"name\":[\"This field is required.\"],\"message\":[\"This field may not be blank.\"]}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "status_code_conformance",
+          "status": "failure",
+          "message": "Undocumented HTTP status code\n\nReceived: 400\nDocumented: 200"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 5.7099001423921436e-05,
+          "mode": "negative"
+        },
+        "components": {
+          "HEADER": "positive",
+          "BODY": "negative"
+        },
+        "phase": {
+          "name": "coverage",
+          "data": {
+            "type": "CoveragePhaseData",
+            "description": "Missing required property: name",
+            "location": "/required",
+            "parameter": "multipart/form-data",
+            "parameter_location": "BODY",
+            "scenario": "object_missing_required_property"
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {
+          "HEADER": {
+            "Authorization": ""
+          }
+        }
+      },
+      "path": "/api/v1/core/contact/",
+      "path_parameters": {},
+      "query": {},
+      "case_headers": {
+        "Authorization": "[Filtered]"
+      },
+      "cookies": {},
+      "case_body": {
+        "encoding": "json",
+        "value": {
+          "email": "0@a.com",
+          "company": "",
+          "message": ""
+        }
+      },
+      "media_type": "multipart/form-data",
+      "parent_index": null
+    }
+  ]
+}

@@ -139,9 +139,130 @@ const config: Config = {
         'hero-pattern': 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
         'telecom-gradient': 'linear-gradient(135deg, #6366f1 0%, #06b6d4 50%, #10b981 100%)',
       },
+      typography: {
+        DEFAULT: {
+          css: {
+            maxWidth: 'none',
+            color: 'inherit',
+            a: {
+              color: 'inherit',
+              textDecoration: 'underline',
+              fontWeight: '500',
+              '&:hover': {
+                opacity: '0.8',
+              },
+            },
+            strong: {
+              fontWeight: '600',
+            },
+            code: {
+              fontWeight: '400',
+              backgroundColor: 'hsl(var(--muted))',
+              padding: '0.15rem 0.4rem',
+              borderRadius: '0.25rem',
+              fontSize: '0.85em',
+            },
+            'code::before': { content: 'none' },
+            'code::after': { content: 'none' },
+            h1: {
+              fontWeight: '700',
+              letterSpacing: '-0.025em',
+            },
+            h2: {
+              fontWeight: '700',
+              letterSpacing: '-0.02em',
+              marginTop: '2.5em',
+              marginBottom: '0.75em',
+            },
+            h3: {
+              fontWeight: '600',
+              letterSpacing: '-0.01em',
+              marginTop: '2em',
+              marginBottom: '0.5em',
+            },
+            h4: {
+              fontWeight: '600',
+              marginTop: '1.5em',
+              marginBottom: '0.5em',
+            },
+            p: {
+              marginTop: '1em',
+              marginBottom: '1em',
+              lineHeight: '1.8',
+            },
+            li: {
+              marginTop: '0.375em',
+              marginBottom: '0.375em',
+              lineHeight: '1.75',
+            },
+            'ul > li': {
+              paddingLeft: '0.375em',
+            },
+            'ol > li': {
+              paddingLeft: '0.375em',
+            },
+            blockquote: {
+              borderLeftWidth: '3px',
+              borderLeftColor: 'hsl(var(--primary) / 0.4)',
+              fontStyle: 'normal',
+              marginTop: '1.5em',
+              marginBottom: '1.5em',
+              paddingLeft: '1.25em',
+            },
+            table: {
+              fontSize: '0.875rem',
+              marginTop: '1.5em',
+              marginBottom: '1.5em',
+            },
+            thead: {
+              borderBottomWidth: '1px',
+              borderBottomColor: 'hsl(var(--border))',
+            },
+            th: {
+              fontWeight: '600',
+              textTransform: 'uppercase',
+              fontSize: '0.75rem',
+              letterSpacing: '0.05em',
+              color: 'hsl(var(--muted-foreground))',
+            },
+            td: {
+              paddingTop: '0.75em',
+              paddingBottom: '0.75em',
+              paddingLeft: '1em',
+              paddingRight: '1em',
+            },
+            pre: {
+              backgroundColor: 'hsl(220 13% 12%)',
+              borderRadius: '0.75rem',
+              padding: '1rem 1.25rem',
+              marginTop: '1.5em',
+              marginBottom: '1.5em',
+              overflowX: 'auto',
+            },
+            hr: {
+              marginTop: '2em',
+              marginBottom: '2em',
+              borderTopWidth: '1px',
+            },
+          },
+        },
+        invert: {
+          css: {
+            code: {
+              backgroundColor: 'rgba(255, 255, 255, 0.1)',
+            },
+            pre: {
+              backgroundColor: 'hsl(220 13% 8%)',
+            },
+          },
+        },
+      },
     },
   },
-  plugins: [require("tailwindcss-animate")],
+  plugins: [
+    require("tailwindcss-animate"),
+    require("@tailwindcss/typography"),
+  ],
 };
 
 export default config;

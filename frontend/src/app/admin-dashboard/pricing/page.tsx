@@ -53,8 +53,8 @@ export default function AdminPricingPage() {
       setRefreshing(true);
       const data = await resourcePriceApi.list();
       setPrices(Array.isArray(data) ? data : data?.results || []);
-    } catch (err: any) {
-      if (err?.response?.status === 403) {
+    } catch (err: unknown) {
+      if ((err as { response?: { status?: number } })?.response?.status === 403) {
         setAccessDenied(true);
       } else {
         toast({ title: "Failed to load resource prices", variant: "destructive" });

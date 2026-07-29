@@ -60,7 +60,7 @@ class DeviceTrustMiddleware:
 
         # Check if enforcement is enabled (lazy-load PlatformConfig)
         try:
-            from apps.deployments.models_core import PlatformConfig
+            from apps.deployments.models.core import PlatformConfig
             config = PlatformConfig.load()
             if not getattr(config, 'enforce_device_trust', False):
                 return self.get_response(request)
@@ -88,7 +88,7 @@ class DeviceTrustMiddleware:
 
         # Validate the device token
         try:
-            from apps.deployments.models_core import TrustedDevice
+            from apps.deployments.models.core import TrustedDevice
             device = TrustedDevice.objects.filter(
                 user=request.user,
                 device_token=device_token,

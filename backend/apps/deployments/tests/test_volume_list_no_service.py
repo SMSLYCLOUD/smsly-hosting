@@ -15,8 +15,8 @@ from django.test import RequestFactory, TestCase
 
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import Service
-from apps.deployments.models_storage import Volume
-from apps.deployments.views_storage import VolumeViewSet
+from apps.deployments.models.storage import Volume
+from apps.deployments.views.storage import VolumeViewSet
 
 User = get_user_model()
 

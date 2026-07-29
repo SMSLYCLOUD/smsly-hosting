@@ -2,7 +2,7 @@
 import re
 
 from ..models import Service  # type: ignore[attr-defined]
-from ..models_addons import Addon
+from ..models.addons import Addon
 
 
 class TopologyService:
@@ -11,7 +11,7 @@ class TopologyService:
         links = []
 
         # 1. Services as Nodes
-        services = Service.objects.prefetch_related('env_vars').all()
+        services = Service.objects.prefetch_related('env_vars').only("id", "name")
         for svc in services:
             nodes.append({
                 "id": f"svc-{svc.id}",
@@ -21,7 +21,7 @@ class TopologyService:
             })
 
         # 2. Addons as Nodes
-        addons = Addon.objects.all()
+        addons = Addon.objects.only("id", "name", "addon_type", "status", "connection_url")
         for addon in addons:
             nodes.append({
                 "id": f"addon-{addon.id}",

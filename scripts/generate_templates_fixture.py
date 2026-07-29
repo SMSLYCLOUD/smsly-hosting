@@ -60,7 +60,7 @@ def _icon_for(template_id: str, category: str) -> str:
 
 def build_base_templates() -> list[dict[str, Any]]:
     # Import from the backend registry (works when run from repo root).
-    from backend.services.app_templates import APP_TEMPLATES
+    from apps.deployments.services.app_templates import APP_TEMPLATES
 
     base: list[dict[str, Any]] = []
     for t in sorted(APP_TEMPLATES.values(), key=lambda x: x.id):

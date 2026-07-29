@@ -21,7 +21,7 @@ generate_safe_caddyfile() {
 
     # 1. Discover domain: DB first, .env fallback
     local domain=""
-    domain=$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell  <<'PY'
+    domain=$(timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell  <<'PY'
 from apps.deployments.models import PlatformConfig
 c = PlatformConfig.load()
 d = (c.domain or '').strip()
@@ -36,7 +36,7 @@ PY
 
     # 2. Discover ALL deployed service domains from DB (public + custom)
     local svc_blocks=""
-    svc_blocks=$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell  <<'PY'
+    svc_blocks=$(timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell  <<'PY'
 import os
 upstream = os.environ.get('SMSLY_SERVICE_PROXY_UPSTREAM', 'traefik:80')
 from apps.deployments.models import Service

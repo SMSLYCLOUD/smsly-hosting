@@ -3,8 +3,8 @@ from unittest.mock import MagicMock, patch
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
-from apps.deployments.models_addons import Addon
-from apps.deployments.models_core import ManagedServer, Service
+from apps.deployments.models.addons import Addon
+from apps.deployments.models.core import ManagedServer, Service
 from apps.deployments.services.deletion_orchestrator import DeletionOrchestrator
 from apps.deployments.tasks import delete_service_task
 

@@ -24,8 +24,8 @@ from apps.deployments.models import (
     Deployment,
     Service,
 )
-from apps.deployments.models_audit import AuditLog
-from apps.deployments.models_core import PlatformConfig
+from apps.deployments.models.audit import AuditLog
+from apps.deployments.models.core import PlatformConfig
 
 User = get_user_model()
 
@@ -106,7 +106,7 @@ class DeployAtomicTests(APITestCase):
         self.svc = Service.objects.create(name='deploy-svc', owner=self.user)
         self.url = f'/api/v1/services/{self.svc.id}/deploy/'
 
-    @patch('apps.deployments.views.enqueue_smart_deploy_task')
+    @patch('apps.deployments.views.service.deploy.enqueue_smart_deploy_task')
     @patch('apps.deployments.views._has_active_deployment', return_value=None)
     @patch('apps.deployments.views._resolve_provider_for_target')
     def test_deploy_creates_deployment_atomically(
@@ -135,7 +135,7 @@ class AddDomainAtomicTests(APITestCase):
 
     @patch('apps.domains.tasks.verify_dns_and_provision_ssl_task')
     def test_add_domain_succeeds(self, _mock_verify):
-        from apps.deployments.views_service import ServiceViewSet
+        from apps.deployments.views.service import ServiceViewSet
         with patch.object(ServiceViewSet, '_sync_caddy', return_value={'ok': True}):
             resp = self.client.post(
                 self.url, {'domain': 'example.com'}, format='json',

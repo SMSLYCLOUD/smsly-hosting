@@ -12,7 +12,7 @@ import { LazyMotion, domAnimation } from "framer-motion";
 
 export const metadata: Metadata = {
   title: "Grid — Free Open-Source PaaS for Ecosystem Deployment",
-  description: "Grid is a free, open-source PaaS powered by CloudNeuron. Deploy apps, services, databases, workers, queues, SSL, backups, and multi-server infrastructure on your own VPS.",
+  description: "Grid is a free, open-source PaaS powered by Grid. Deploy apps, services, databases, workers, queues, SSL, backups, and multi-server infrastructure on your own VPS.",
   icons: {
     icon: "/images/logo.svg",
     apple: "/images/logo.svg",

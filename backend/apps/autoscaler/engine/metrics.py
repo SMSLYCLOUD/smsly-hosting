@@ -3,7 +3,7 @@ Unified metrics sources for the autoscaler.
 
 Replaces the three independent metric paths previously used by:
   * apps.deployments.services.autoscaler (DB-stored ServiceMetric)
-  * apps.deployments.services.scaling_ai (Prometheus + Loki + Docker fallback)
+  * apps.autoscaler.services.scaling_ai (Prometheus + Loki + Docker fallback)
   * apps.autoscaler.views (`docker stats` / K8s metrics API)
 
 All callers go through ``MetricsCollector.collect(service)`` and get the
@@ -126,7 +126,7 @@ class MetricsCollector:
     def _from_service_metrics(self) -> MetricsSnapshot:
         from datetime import timedelta
 
-        from apps.deployments.models_metrics import ServiceMetric
+        from apps.autoscaler.models.metrics import ServiceMetric
         now = timezone.now()
         recent = ServiceMetric.objects.filter(
             service=self.service,

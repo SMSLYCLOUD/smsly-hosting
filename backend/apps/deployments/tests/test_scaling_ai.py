@@ -22,7 +22,7 @@ class ScalingAIDecisionTests(TestCase):
 
     def setUp(self):
         from apps.deployments.models import Project, Service
-        from apps.deployments.services.scaling_ai import (
+        from apps.autoscaler.services.scaling_ai import (
             SCALE_DOWN_CPU,
             ScalingAnalyzer,
         )
@@ -39,7 +39,7 @@ class ScalingAIDecisionTests(TestCase):
 
     def test_scale_down_cpu_constant_defined(self):
         # Regression: the constant used to be missing, causing NameError.
-        from apps.deployments.services import scaling_ai
+        from apps.autoscaler.services import scaling_ai
 
         self.assertTrue(
             hasattr(scaling_ai, "SCALE_DOWN_CPU"),
@@ -47,7 +47,7 @@ class ScalingAIDecisionTests(TestCase):
         )
         self.assertIsInstance(self.SCALE_DOWN_CPU, (int, float))
         # Sanity: scale-down threshold should be lower than the high threshold.
-        from apps.deployments.services.scaling_ai import CPU_HIGH
+        from apps.autoscaler.services.scaling_ai import CPU_HIGH
 
         self.assertLess(
             self.SCALE_DOWN_CPU,
@@ -55,10 +55,10 @@ class ScalingAIDecisionTests(TestCase):
             "SCALE_DOWN_CPU must be lower than CPU_HIGH",
         )
 
-    @patch("apps.deployments.services.scaling_ai.requests.get")
+    @patch("apps.autoscaler.services.scaling_ai.requests.get")
     def test_scale_down_decision_does_not_raise_nameerror(self, mock_get):
-        from apps.deployments.models_replica import ServiceReplica
-        from apps.deployments.services.scaling_ai import (
+        from apps.deployments.models.replica import ServiceReplica
+        from apps.autoscaler.services.scaling_ai import (
             CPU_LOW,
         )
 

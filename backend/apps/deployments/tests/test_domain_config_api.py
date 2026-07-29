@@ -36,8 +36,8 @@ class DomainConfigApiTests(APITestCase):
         cfg.cloudflare_api_token = "existing-token"
         cfg.save()
 
-    @patch("services.caddy_manager.apply_caddyfile", return_value={"ok": True, "message": "ok"})
-    @patch("services.caddy_manager.generate_caddyfile", return_value=":80 { reverse_proxy localhost:8090 }")
+    @patch("apps.deployments.services.caddy_manager.apply_caddyfile", return_value={"ok": True, "message": "ok"})
+    @patch("apps.deployments.services.caddy_manager.generate_caddyfile", return_value=":80 { reverse_proxy localhost:8090 }")
     def test_put_without_token_field_keeps_existing_token(self, _gen_mock, apply_mock):
         response = self.client.put(
             self.url,
@@ -57,8 +57,8 @@ class DomainConfigApiTests(APITestCase):
             "existing-token",
         )
 
-    @patch("services.caddy_manager.apply_caddyfile", return_value={"ok": True, "message": "ok"})
-    @patch("services.caddy_manager.generate_caddyfile", return_value=":80 { reverse_proxy localhost:8090 }")
+    @patch("apps.deployments.services.caddy_manager.apply_caddyfile", return_value={"ok": True, "message": "ok"})
+    @patch("apps.deployments.services.caddy_manager.generate_caddyfile", return_value=":80 { reverse_proxy localhost:8090 }")
     def test_put_with_empty_token_clears_existing_token(self, _gen_mock, apply_mock):
         response = self.client.put(
             self.url,
@@ -93,8 +93,8 @@ class DomainConfigApiTests(APITestCase):
         cfg = PlatformConfig.load()
         self.assertEqual(cfg.cloudflare_api_token, "existing-token")
 
-    @patch("services.caddy_manager.apply_caddyfile", return_value={"ok": True, "message": "ok"})
-    @patch("services.caddy_manager.generate_caddyfile", return_value=":80 { reverse_proxy localhost:8090 }")
+    @patch("apps.deployments.services.caddy_manager.apply_caddyfile", return_value={"ok": True, "message": "ok"})
+    @patch("apps.deployments.services.caddy_manager.generate_caddyfile", return_value=":80 { reverse_proxy localhost:8090 }")
     def test_put_rewrites_existing_service_public_domains(self, _gen_mock, _apply_mock):
         service = Service.objects.create(name="marketer", owner=self.admin)
         original_public_domain = service.public_domain

@@ -4,12 +4,12 @@ from tabulate import tabulate
 
 # --- Constants & Pricing Models ---
 
-# CloudNeuron Managed: Pro Plan ($29) + Usage
+# Grid Managed: Pro Plan ($29) + Usage
 CN_MANAGED_BASE = 29.00
 CN_CPU_RATE = 0.01      # per vCPU/hour
 CN_RAM_RATE = 0.005     # per GB/hour
 
-# CloudNeuron Self-Hosted (VPS Cost approximation - e.g., Hetzner/DO)
+# Grid Self-Hosted (VPS Cost approximation - e.g., Hetzner/DO)
 # Assuming efficient bin-packing on standard VPS sizes
 # e.g. $6/mo for 2vCPU/4GB (Hetzner CPX21 is ~€8)
 # Let's average $4 per vCPU/2GB unit.
@@ -70,10 +70,10 @@ for s in scenarios:
     cpu = s["cpu"]
     ram = s["ram"]
 
-    # CloudNeuron Self-Hosted
+    # Grid Self-Hosted
     cn_self = calculate_monthly_cost("CN Self-Hosted", cpu, ram, is_self_hosted=True)
 
-    # CloudNeuron Managed
+    # Grid Managed
     cn_managed = calculate_monthly_cost("CN Managed", cpu, ram, base_fee=CN_MANAGED_BASE, cpu_rate=CN_CPU_RATE, ram_rate=CN_RAM_RATE)
 
     # AWS Fargate
@@ -106,12 +106,12 @@ print(markdown_table)
 
 # Save to file
 with open("docs/COMPETITOR_PRICING.md", "w") as f:
-    f.write("# CloudNeuron Competitor Pricing Analysis\n\n")
+    f.write("# Grid Competitor Pricing Analysis\n\n")
     f.write(f"Generated on {pd.Timestamp.now()}\n\n")
     f.write(markdown_table)
     f.write("\n\n## Assumptions\n")
-    f.write(f"* **CloudNeuron Self-Hosted**: ${CN_SELF_HOSTED_UNIT_COST}/mo per 1vCPU/2GB unit (VPS cost).\n")
-    f.write(f"* **CloudNeuron Managed**: ${CN_MANAGED_BASE}/mo base + ${CN_CPU_RATE}/vCPU-hr + ${CN_RAM_RATE}/GB-hr.\n")
+    f.write(f"* **Grid Self-Hosted**: ${CN_SELF_HOSTED_UNIT_COST}/mo per 1vCPU/2GB unit (VPS cost).\n")
+    f.write(f"* **Grid Managed**: ${CN_MANAGED_BASE}/mo base + ${CN_CPU_RATE}/vCPU-hr + ${CN_RAM_RATE}/GB-hr.\n")
     f.write(f"* **AWS Fargate**: ${AWS_CPU_RATE}/vCPU-hr + ${AWS_RAM_RATE}/GB-hr (us-east-1).\n")
     f.write(f"* **GCP Cloud Run**: ${GCP_CPU_RATE}/vCPU-hr + ${GCP_RAM_RATE}/GB-hr.\n")
     f.write(f"* **Railway**: ${RAILWAY_CPU_RATE}/vCPU-hr + ${RAILWAY_RAM_RATE}/GB-hr.\n")

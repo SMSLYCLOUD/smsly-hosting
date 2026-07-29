@@ -161,10 +161,10 @@ class LocalAdapter(BaseCloudAdapter):
             if _svc is None and hasattr(self, 'service_id'):
                 _svc = self._service if hasattr(self, '_service') else None
             if _svc and hasattr(_svc, 'project') and _svc.project:
-                from apps.deployments.models_network_scope import ScopedNetwork
+                from apps.deployments.models.network_scope import ScopedNetwork
                 network_name = ScopedNetwork.resolve_network_name(_svc.project)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to resolve scoped network for service: %s", exc)
         return network_name
 
     def _apply_egress_restrictions(self, network_name: str) -> None:
@@ -333,7 +333,7 @@ class LocalAdapter(BaseCloudAdapter):
         except docker.errors.NotFound:
             driver = "bridge"
             try:
-                from apps.deployments.models_network_scope import ScopedNetwork
+                from apps.deployments.models.network_scope import ScopedNetwork
                 if hasattr(self, 'service_id'):
                     from apps.deployments.models import Service as _Svc2
                     _svc2 = _Svc2.objects.filter(id=self.service_id).select_related('project').first() if hasattr(self, 'service_id') and hasattr(self, '_service') else None
@@ -342,8 +342,8 @@ class LocalAdapter(BaseCloudAdapter):
                     if _svc2 and hasattr(_svc2, 'project') and _svc2.project:
                         cfg = ScopedNetwork.resolve_network_config(_svc2.project)
                         driver = cfg.get("driver", "bridge")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to resolve scoped network driver for service: %s", exc)
             self.docker_client.networks.create(network_name, driver=driver)
 
         # Prepare volumes
@@ -374,8 +374,8 @@ class LocalAdapter(BaseCloudAdapter):
             svc_obj = Service.objects.filter(name=name).first()
             if svc_obj is not None:
                 is_public = svc_obj.is_public
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to look up service %s for public flag: %s", name, exc)
 
         all_domains = [domain]
         custom = env.get('CUSTOM_DOMAINS', '')

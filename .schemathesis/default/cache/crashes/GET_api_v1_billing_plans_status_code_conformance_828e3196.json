@@ -1,0 +1,101 @@
+{
+  "operation": "GET /api/v1/billing/plans/",
+  "method": "GET",
+  "path_template": "/api/v1/billing/plans/",
+  "fingerprint": "828e3196",
+  "case_id": "EpaUJU",
+  "code_sample": "curl -X GET -H 'Authorization: [Filtered]' 'http://127.0.0.1:8089/api/v1/billing/plans/?page=null&page=null'",
+  "sequence": [
+    {
+      "method": "GET",
+      "url": "http://127.0.0.1:8089/api/v1/billing/plans/?page=null&page=null",
+      "url_template": "http://127.0.0.1:8089/api/v1/billing/plans/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "Authorization": "[Filtered]",
+        "X-Schemathesis-TestCaseId": "EpaUJU"
+      },
+      "response": {
+        "status_code": 404,
+        "headers": {
+          "date": "Tue, 21 Jul 2026 00:17:04 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "vary": "Accept, Cookie, origin",
+          "allow": "GET, HEAD, OPTIONS",
+          "x-frame-options": "DENY",
+          "content-length": "57",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin"
+        },
+        "body": "{\"error\":\"Invalid page.\",\"code\":\"not_found\",\"status\":404}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "status_code_conformance",
+          "status": "failure",
+          "message": "Undocumented HTTP status code\n\nReceived: 404\nDocumented: 200"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 3.0113995308056474e-05,
+          "mode": "negative"
+        },
+        "components": {
+          "HEADER": "positive",
+          "QUERY": "negative"
+        },
+        "phase": {
+          "name": "coverage",
+          "data": {
+            "type": "CoveragePhaseData",
+            "description": "Incorrect type",
+            "location": "/type",
+            "parameter": "page",
+            "parameter_location": "QUERY",
+            "scenario": "incorrect_type"
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {
+          "HEADER": {
+            "Authorization": ""
+          },
+          "QUERY": {
+            "page": [
+              "null",
+              "null"
+            ]
+          }
+        }
+      },
+      "path": "/api/v1/billing/plans/",
+      "path_parameters": {},
+      "query": {
+        "page": [
+          "null",
+          "null"
+        ]
+      },
+      "case_headers": {
+        "Authorization": "[Filtered]"
+      },
+      "cookies": {},
+      "case_body": {
+        "encoding": "none"
+      },
+      "media_type": null,
+      "parent_index": null
+    }
+  ]
+}

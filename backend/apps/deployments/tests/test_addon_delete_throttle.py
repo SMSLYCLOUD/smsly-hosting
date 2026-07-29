@@ -18,8 +18,8 @@ from rest_framework.test import APIClient
 
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import Service
-from apps.deployments.models_addons import Addon
-from apps.deployments.rate_limiting import AddonDeleteRateThrottle
+from apps.deployments.models.addons import Addon
+from apps.core.rate_limiting import AddonDeleteRateThrottle
 
 User = get_user_model()
 
@@ -33,7 +33,7 @@ ADDON_THROTTLE_RATES = {
 
 REST_FRAMEWORK_ADDON = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "apps.deployments.api_token_auth.APITokenAuthentication",
+        "apps.deployments.models.api_token.APITokenAuthentication",
         "rest_framework.authentication.TokenAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [

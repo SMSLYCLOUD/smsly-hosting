@@ -1,6 +1,6 @@
 # SMSLY CLI
 
-The SMSLY Command Line Interface (CLI) is used to interact with your CloudNeuron platform directly from the terminal.
+The SMSLY Command Line Interface (CLI) is used to interact with your Grid platform directly from the terminal.
 
 ## Installation
 

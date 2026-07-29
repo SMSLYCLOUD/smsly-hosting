@@ -14,7 +14,7 @@ from rest_framework.authtoken.models import Token
 from rest_framework.test import APIClient
 
 from apps.deployments.models import EnvironmentVariable, Project, Service
-from apps.deployments.models_backup import BackupSchedule, ServerBackup, ServiceBackup
+from apps.deployments.models.backup import BackupSchedule, ServerBackup, ServiceBackup
 from apps.deployments.services.backup_service import BackupService
 
 User = get_user_model()

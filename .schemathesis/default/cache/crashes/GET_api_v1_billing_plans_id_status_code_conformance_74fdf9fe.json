@@ -1,0 +1,100 @@
+{
+  "operation": "GET /api/v1/billing/plans/{id}/",
+  "method": "GET",
+  "path_template": "/api/v1/billing/plans/{id}/",
+  "fingerprint": "74fdf9fe",
+  "case_id": "BmxfLA",
+  "code_sample": "curl -X GET -H 'Authorization: [Filtered]' http://127.0.0.1:8089/api/v1/billing/plans/null%2Cnull/",
+  "sequence": [
+    {
+      "method": "GET",
+      "url": "http://127.0.0.1:8089/api/v1/billing/plans/null%2Cnull/",
+      "url_template": "http://127.0.0.1:8089/api/v1/billing/plans/{id}/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "Authorization": "[Filtered]",
+        "X-Schemathesis-TestCaseId": "BmxfLA"
+      },
+      "response": {
+        "status_code": 404,
+        "headers": {
+          "date": "Tue, 21 Jul 2026 00:18:44 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "vary": "Accept, Cookie, origin",
+          "allow": "GET, HEAD, OPTIONS",
+          "x-frame-options": "DENY",
+          "content-length": "54",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin"
+        },
+        "body": "{\"error\":\"Not found.\",\"code\":\"api_error\",\"status\":404}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "status_code_conformance",
+          "status": "failure",
+          "message": "Undocumented HTTP status code\n\nReceived: 404\nDocumented: 200"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 0.00012085299385944381,
+          "mode": "negative"
+        },
+        "components": {
+          "PATH": "negative",
+          "HEADER": "positive"
+        },
+        "phase": {
+          "name": "coverage",
+          "data": {
+            "type": "CoveragePhaseData",
+            "description": "Incorrect type",
+            "location": "/type",
+            "parameter": "id",
+            "parameter_location": "PATH",
+            "scenario": "incorrect_type"
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [
+          [
+            "path",
+            "id"
+          ]
+        ],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {
+          "PATH": {
+            "id": "null,null"
+          },
+          "HEADER": {
+            "Authorization": ""
+          }
+        }
+      },
+      "path": "/api/v1/billing/plans/{id}/",
+      "path_parameters": {
+        "id": "null%2Cnull"
+      },
+      "query": {},
+      "case_headers": {
+        "Authorization": "[Filtered]"
+      },
+      "cookies": {},
+      "case_body": {
+        "encoding": "none"
+      },
+      "media_type": null,
+      "parent_index": null
+    }
+  ]
+}

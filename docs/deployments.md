@@ -67,6 +67,7 @@ Every deployment carries a single `status` value. The list below covers all defi
 | `MIGRATION_FAILED` | pre-deploy | Migration failed. The deploy is paused. | No |
 | `DEPLOYING` | deploy | The new container is starting. | No |
 | `HEALTH_CHECK` | health | The container is running; the platform is waiting for the health probe to return 200. | No |
+| `HEALTH_CHECK_FAILED` | health | The health check failed after retries. May trigger auto-rollback. | Yes |
 | `ACTIVE` | (success) | The deployment is the live revision. Other `ACTIVE` rows for the same service have been demoted. | Yes (lifecycle) |
 | `INACTIVE` | (post-success) | A previously `ACTIVE` deployment that has been demoted by a newer promotion. Retained for rollback. | Yes (lifecycle) |
 | `FAILED` | (any) | A non-recoverable error occurred. The previous `ACTIVE` deployment is preserved. | Yes |
@@ -248,7 +249,7 @@ curl -sS -X POST http://localhost:8000/api/v1/deployments/2d3e4f5a-6b7c-8d9e-0f1
 
 | Status | Cause |
 | --- | --- |
-| 400 | `confirm` was not `"true"`, or the target deployment has no `commit_hash`, or the target deployment is not in `ACTIVE` / `SUCCEEDED`. |
+| 400 | `confirm` was not `"true"`, or the target deployment has no `commit_hash`, or the target deployment is not in `ACTIVE` / `INACTIVE`. |
 | 404 | Deployment not found. |
 
 ### `POST /api/v1/services/{id}/instant-rollback/`
@@ -259,6 +260,7 @@ One-click rollback. The endpoint looks up the most recent `ACTIVE` deployment fo
 
 | Field | Type | Notes |
 | --- | --- | --- |
+| `confirm` | string/bool | **Required.** Must be `"true"`. Without it, returns HTTP 400. |
 | `message` | string | Optional. Reason for the rollback; stored on the new deployment's `commit_message`. |
 
 **Example request:**
@@ -267,7 +269,7 @@ One-click rollback. The endpoint looks up the most recent `ACTIVE` deployment fo
 curl -sS -X POST http://localhost:8000/api/v1/services/9c8b4b1a-7d1c-4a2b-9a55-2e8c3d4f9b21/instant-rollback/ \
   -H "Authorization: Token $SMSLY_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"message": "5xx spike after deploy"}'
+  -d '{"confirm": true, "message": "5xx spike after deploy"}'
 ```
 
 **Example response (HTTP 201):**

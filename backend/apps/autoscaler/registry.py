@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import Any, Callable
+
 """
 Autoscaler container classification registry.
 
@@ -7,10 +11,10 @@ a callable that receives a container name and returns a tuple
 """
 
 # Global list of registered classifiers
-_CLASSIFIERS: list = []
+_CLASSIFIERS: list[Callable[..., Any]] = []
 
 
-def register_classifier(func):
+def register_classifier(func: Callable[..., Any]) -> Callable[..., Any]:
     """
     Decorator to register a custom classifier.
 
@@ -24,7 +28,7 @@ def register_classifier(func):
     return func
 
 
-def classify(name: str):
+def classify(name: str) -> tuple[str, str] | None:
     """
     Dispatch to registered classifiers; fall back to the built-in
     _builtin_classify logic.

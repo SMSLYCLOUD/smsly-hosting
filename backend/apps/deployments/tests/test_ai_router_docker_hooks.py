@@ -5,15 +5,15 @@ import pytest
 from django.contrib.auth import get_user_model
 
 from apps.deployments.models import Deployment, EnvironmentVariable, Service
-from apps.deployments.tasks_deploy import _run_managed_image_post_deploy_hooks
+from apps.deployments.tasks.deployment.tasks_deploy import _run_managed_image_post_deploy_hooks
 
 User = get_user_model()
 
 
 @pytest.mark.django_db
-@patch("apps.deployments.tasks._wait_for_local_container_healthy", return_value=True)
-@patch("apps.deployments.tasks.subprocess.run")
-@patch("apps.deployments.tasks.docker.from_env")
+@patch("apps.deployments.tasks.deploy.build._wait_for_local_container_healthy", return_value=True)
+@patch("apps.deployments.tasks.deploy.build.subprocess.run")
+@patch("apps.deployments.tasks.deploy.build.docker.from_env")
 def test_ai_router_docker_hooks_sync_live_router_config(
     mock_docker_from_env,
     mock_run,

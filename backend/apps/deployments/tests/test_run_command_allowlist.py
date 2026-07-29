@@ -5,10 +5,10 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from apps.deployments.models_servers import ManagedServer
+from apps.deployments.models.servers import ManagedServer
 
 try:
-    from apps.deployments.views_servers import _is_command_allowed
+    from apps.deployments.views.server.helpers import _is_command_allowed
     _HAS_HELPER = True
 except ImportError:
     _HAS_HELPER = False

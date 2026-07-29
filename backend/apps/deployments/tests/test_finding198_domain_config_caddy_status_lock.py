@@ -64,10 +64,10 @@ class Finding198DomainConfigLockTests(TestCase):
             "django.db.models.QuerySet.select_for_update",
             new=_fake,
         ), patch(
-            "services.caddy_manager.apply_caddyfile",
+            "apps.deployments.services.caddy_manager.apply_caddyfile",
             return_value={"ok": True, "message": "ok"},
         ), patch(
-            "apps.deployments.services.dns.ensure_dns_records",
+            "apps.domains.services.dns.ensure_dns_records",
             return_value={"ok": True, "errors": []},
         ):
             resp = self.client.put(
@@ -92,7 +92,7 @@ class Finding198DomainConfigLockTests(TestCase):
             return original(self, *args, **kwargs)
 
         with patch(
-            "services.caddy_manager.apply_caddyfile",
+            "apps.deployments.services.caddy_manager.apply_caddyfile",
             side_effect=RuntimeError("caddy boom"),
         ), patch(
             "django.db.models.QuerySet.select_for_update",

@@ -1,0 +1,129 @@
+{
+  "operation": "POST /api/v1/services/{service_pk}/previews/{id}/destroy_preview/",
+  "method": "POST",
+  "path_template": "/api/v1/services/{service_pk}/previews/{id}/destroy_preview/",
+  "fingerprint": "de8d942b",
+  "case_id": "as00T4",
+  "code_sample": "curl -X POST -H 'Content-Type: application/json' -d '{\"project_id\": null, \"branch_name\": \"\", \"commit_sha\": \"\", \"preview_url\": null, \"image_tag\": null, \"status\": \"PENDING\", \"expires_at\": null, \"error_message\": \"\", \"service\": \"e3e70682-c209-1cac-a29f-6fbed82c07cd\", \"created_by\": null}' http://127.0.0.1:8089/api/v1/services/e3e70682-c209-1cac-a29f-6fbed82c07cd/previews/e3e70682-c209-1cac-a29f-6fbed82c07cd/destroy_preview/",
+  "sequence": [
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:8089/api/v1/services/e3e70682-c209-1cac-a29f-6fbed82c07cd/previews/e3e70682-c209-1cac-a29f-6fbed82c07cd/destroy_preview/",
+      "url_template": "http://127.0.0.1:8089/api/v1/services/{service_pk}/previews/{id}/destroy_preview/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "X-Schemathesis-TestCaseId": "as00T4",
+        "Content-Type": "application/json",
+        "Content-Length": "230"
+      },
+      "response": {
+        "status_code": 401,
+        "headers": {
+          "date": "Tue, 21 Jul 2026 00:18:24 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "www-authenticate": "[Filtered]",
+          "vary": "Accept, Cookie, origin",
+          "allow": "POST, OPTIONS",
+          "x-frame-options": "DENY",
+          "content-length": "95",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin"
+        },
+        "body": "{\"error\":\"Authentication credentials were not provided.\",\"code\":\"unauthenticated\",\"status\":401}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "status_code_conformance",
+          "status": "failure",
+          "message": "Undocumented HTTP status code\n\nReceived: 401\nDocumented: 200"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 4.323800385463983e-05,
+          "mode": "negative"
+        },
+        "components": {
+          "PATH": "positive",
+          "HEADER": "negative",
+          "BODY": "positive"
+        },
+        "phase": {
+          "name": "coverage",
+          "data": {
+            "type": "CoveragePhaseData",
+            "description": "Missing `Authorization` at header",
+            "location": null,
+            "parameter": "Authorization",
+            "parameter_location": "HEADER",
+            "scenario": "missing_parameter"
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [
+          [
+            "path",
+            "id"
+          ],
+          [
+            "body",
+            "project_id"
+          ],
+          [
+            "body",
+            "branch_name"
+          ],
+          [
+            "body",
+            "commit_sha"
+          ],
+          [
+            "body",
+            "service"
+          ]
+        ],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {
+          "PATH": {
+            "id": "e3e70682-c209-1cac-a29f-6fbed82c07cd",
+            "service_pk": "e3e70682-c209-1cac-a29f-6fbed82c07cd"
+          },
+          "HEADER": {}
+        }
+      },
+      "path": "/api/v1/services/{service_pk}/previews/{id}/destroy_preview/",
+      "path_parameters": {
+        "id": "e3e70682-c209-1cac-a29f-6fbed82c07cd",
+        "service_pk": "e3e70682-c209-1cac-a29f-6fbed82c07cd"
+      },
+      "query": {},
+      "case_headers": {},
+      "cookies": {},
+      "case_body": {
+        "encoding": "json",
+        "value": {
+          "project_id": null,
+          "branch_name": "",
+          "commit_sha": "",
+          "preview_url": null,
+          "image_tag": null,
+          "status": "PENDING",
+          "expires_at": null,
+          "error_message": "",
+          "service": "e3e70682-c209-1cac-a29f-6fbed82c07cd",
+          "created_by": null
+        }
+      },
+      "media_type": "application/json",
+      "parent_index": null
+    }
+  ]
+}

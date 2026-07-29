@@ -4,7 +4,7 @@ import sys
 # Add backend to path so we can import services
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'backend'))
 try:
-    from services.app_templates import APP_TEMPLATES
+    from apps.deployments.services.app_templates import APP_TEMPLATES
 except ImportError as e:
     print(f"Error importing backend modules: {e}")
     sys.exit(1)

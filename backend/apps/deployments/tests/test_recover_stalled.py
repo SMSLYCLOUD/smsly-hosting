@@ -14,7 +14,7 @@ from django.test import TestCase
 
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import Deployment, Service
-from apps.deployments.tasks_deploy import recover_stalled_queued_deployments
+from apps.deployments.tasks.deployment.tasks_deploy import recover_stalled_queued_deployments
 
 
 class RecoverStalledTests(TestCase):

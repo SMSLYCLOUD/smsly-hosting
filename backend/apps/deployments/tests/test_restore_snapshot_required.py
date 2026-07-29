@@ -5,7 +5,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 
 from apps.deployments.models import Project, Service
-from apps.deployments.models_backup import ServiceBackup
+from apps.deployments.models.backup import ServiceBackup
 from apps.deployments.services.backup_service import BackupService
 
 User = get_user_model()

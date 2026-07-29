@@ -39,7 +39,7 @@ class AnalyzeRepoByteCapTests(TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             _populate_repo(tmp, total_bytes)
             with patch(
-                'apps.deployments.services.git_manager.GitManager.clone_repo',
+                'apps.cloud.services.git_manager.GitManager.clone_repo',
                 return_value=tmp,
             ), patch(
                 'apps.deployments.utils.get_github_oauth_token_for_user',

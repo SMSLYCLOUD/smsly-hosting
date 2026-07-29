@@ -1,0 +1,7 @@
+{
+  "format_version": 1,
+  "schemathesis_version": "4.24.0",
+  "schema_location": "/tmp/schema.yml",
+  "base_url": "http://localhost:1",
+  "created_at": "2026-07-20T21:10:31.020268+00:00"
+}

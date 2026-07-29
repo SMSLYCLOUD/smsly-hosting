@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, memo } from 'react';
 import { AlertTriangle, XCircle, Activity } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
@@ -23,7 +23,7 @@ function apiUrl(path: string) {
     return `${base}${path}`;
 }
 
-export function ResourceAlerts({ serviceId }: { serviceId: string }) {
+export const ResourceAlerts = memo(function ResourceAlerts({ serviceId }: { serviceId: string }) {
     const [alerts, setAlerts] = useState<ResourceAlert[]>([]);
 
     useEffect(() => {
@@ -76,4 +76,4 @@ export function ResourceAlerts({ serviceId }: { serviceId: string }) {
             ))}
         </div>
     );
-}
+});

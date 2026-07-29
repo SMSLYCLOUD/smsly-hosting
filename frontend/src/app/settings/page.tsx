@@ -1,5 +1,10 @@
 "use client";
 
+// TODO: Migrate this page to React Query (TanStack Query). This 1605-line page
+// fetches config, AI providers, teams, OAuth, webhooks, and more via useEffect.
+// React Query would eliminate manual loading/error state, provide automatic
+// cache invalidation on mutations, and deduplicate concurrent requests.
+
 import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";

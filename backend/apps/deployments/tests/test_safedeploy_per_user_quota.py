@@ -12,9 +12,9 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from apps.deployments import views_safedeploy
-from apps.deployments.models_core import Service
-from apps.deployments.models_safedeploy import PreviewEnvironment
+from apps.deployments.views import safedeploy as views_safedeploy
+from apps.deployments.models.core import Service
+from apps.deployments.models.safedeploy import PreviewEnvironment
 
 User = get_user_model()
 

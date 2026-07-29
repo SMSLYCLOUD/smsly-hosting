@@ -1,7 +1,7 @@
 """Django admin configuration for deployments app."""
 from django.contrib import admin
 
-from .models_github_app import GitHubAppInstallation
+from .models.github_app import GitHubAppInstallation
 
 
 @admin.register(GitHubAppInstallation)

@@ -1,14 +1,14 @@
 # pylint: disable=invalid-name
 """
-Tests for environment variable shortcodes (services.env_resolver).
+Tests for environment variable shortcodes (apps.deployments.services.env_resolver).
 """
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
-from services.env_resolver import resolve_shortcodes
+from apps.deployments.services.env_resolver import resolve_shortcodes
 
 from apps.deployments.models import Region, Service
-from apps.deployments.models_addons import Addon
+from apps.deployments.models.addons import Addon
 
 User = get_user_model()
 

@@ -243,6 +243,96 @@
   z-index: -1;
 }
 
+/* ===== DOCS PROSE: Enhanced Typography ===== */
+.prose {
+  --tw-prose-body: hsl(150 10% 30%);
+  --tw-prose-headings: hsl(150 10% 12%);
+  --tw-prose-bold: hsl(150 10% 12%);
+  --tw-prose-links: hsl(160 84% 39%);
+  --tw-prose-code: hsl(150 10% 20%);
+  --tw-prose-pre-bg: hsl(220 13% 12%);
+  --tw-prose-pre-code: hsl(210 40% 90%);
+  --tw-prose-quotes: hsl(150 10% 25%);
+  --tw-prose-quote-borders: hsl(160 84% 39% / 0.3);
+  --tw-prose-hr: hsl(150 10% 90%);
+  --tw-prose-td-borders: hsl(150 10% 90%);
+}
+
+.dark .prose {
+  --tw-prose-body: hsl(150 10% 75%);
+  --tw-prose-headings: hsl(150 10% 95%);
+  --tw-prose-bold: hsl(150 10% 98%);
+  --tw-prose-links: hsl(160 84% 55%);
+  --tw-prose-code: hsl(150 10% 80%);
+  --tw-prose-pre-bg: hsl(220 13% 8%);
+  --tw-prose-pre-code: hsl(210 40% 85%);
+  --tw-prose-quotes: hsl(150 10% 70%);
+  --tw-prose-quote-borders: hsl(160 84% 55% / 0.3);
+  --tw-prose-hr: hsl(160 25% 15%);
+  --tw-prose-td-borders: hsl(160 25% 15%);
+}
+
+/* Docs-specific prose refinements */
+.prose pre {
+  @apply border border-white/5;
+}
+.dark .prose pre {
+  @apply border-white/5;
+}
+.prose pre code {
+  @apply bg-transparent p-0 text-sm font-mono;
+  font-variant-ligatures: none;
+}
+.prose :where(code):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+  @apply font-mono;
+}
+.prose :where(a):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+  @apply transition-opacity duration-150;
+}
+.prose :where(strong):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+  @apply font-semibold;
+}
+.prose :where(thead th):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+  @apply border-b border-border;
+}
+.prose :where(tbody tr):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+  @apply border-b border-border/50;
+}
+.prose :where(blockquote):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+  @apply italic;
+}
+.prose :where(ol > li::marker):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+  @apply text-muted-foreground;
+}
+
+/* ===== DOCS CALLOUTS: Styled callout boxes ===== */
+.docs-callout {
+  @apply rounded-xl p-4 my-6 text-sm border;
+}
+.docs-callout-info {
+  @apply bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800/50 text-blue-800 dark:text-blue-200;
+}
+.docs-callout-warning {
+  @apply bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800/50 text-amber-800 dark:text-amber-200;
+}
+.docs-callout-danger {
+  @apply bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-800/50 text-red-800 dark:text-red-200;
+}
+.docs-callout-success {
+  @apply bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800/50 text-emerald-800 dark:text-emerald-200;
+}
+
+/* ===== DOCS STEPS: Numbered step lists ===== */
+.docs-steps {
+  @apply space-y-4 my-6;
+}
+.docs-step {
+  @apply flex items-start gap-4 p-4 rounded-xl bg-slate-50 dark:bg-slate-900/50 border border-slate-100 dark:border-slate-800;
+}
+.docs-step-number {
+  @apply flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-full bg-primary/10 text-primary text-sm font-bold;
+}
+
 /* React Flow Overrides - Themed */
 .react-flow__controls {
   @apply shadow-md border border-border rounded-lg overflow-hidden;

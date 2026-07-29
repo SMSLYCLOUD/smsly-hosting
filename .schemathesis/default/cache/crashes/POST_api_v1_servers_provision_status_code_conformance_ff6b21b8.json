@@ -1,0 +1,101 @@
+{
+  "operation": "POST /api/v1/servers/provision/",
+  "method": "POST",
+  "path_template": "/api/v1/servers/provision/",
+  "fingerprint": "ff6b21b8",
+  "case_id": "h80dYB",
+  "code_sample": "curl -X POST -H 'Content-Type: application/json' -d '{\"name\": \"\", \"host\": \"\", \"ssh_port\": 0, \"ssh_user\": \"\", \"ssh_password\": \"\", \"ssh_key\": \"\", \"ssh_auth_method\": \"password\", \"is_primary\": false, \"allow_user_workloads\": false, \"is_lite_agent\": false, \"node_certificate\": \"\"}' http://127.0.0.1:8089/api/v1/servers/provision/",
+  "sequence": [
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:8089/api/v1/servers/provision/",
+      "url_template": "http://127.0.0.1:8089/api/v1/servers/provision/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "X-Schemathesis-TestCaseId": "h80dYB",
+        "Content-Type": "application/json",
+        "Content-Length": "221"
+      },
+      "response": {
+        "status_code": 401,
+        "headers": {
+          "date": "Tue, 21 Jul 2026 00:16:58 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "www-authenticate": "[Filtered]",
+          "vary": "Accept, Cookie, origin",
+          "allow": "POST, OPTIONS",
+          "x-frame-options": "DENY",
+          "content-length": "95",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin"
+        },
+        "body": "{\"error\":\"Authentication credentials were not provided.\",\"code\":\"unauthenticated\",\"status\":401}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "status_code_conformance",
+          "status": "failure",
+          "message": "Undocumented HTTP status code\n\nReceived: 401\nDocumented: 200"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 2.715899609029293e-05,
+          "mode": "negative"
+        },
+        "components": {
+          "HEADER": "negative",
+          "BODY": "positive"
+        },
+        "phase": {
+          "name": "coverage",
+          "data": {
+            "type": "CoveragePhaseData",
+            "description": "Missing `Authorization` at header",
+            "location": null,
+            "parameter": "Authorization",
+            "parameter_location": "HEADER",
+            "scenario": "missing_parameter"
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {
+          "HEADER": {}
+        }
+      },
+      "path": "/api/v1/servers/provision/",
+      "path_parameters": {},
+      "query": {},
+      "case_headers": {},
+      "cookies": {},
+      "case_body": {
+        "encoding": "json",
+        "value": {
+          "name": "",
+          "host": "",
+          "ssh_port": 0,
+          "ssh_user": "",
+          "ssh_password": "[Filtered]",
+          "ssh_key": "[Filtered]",
+          "ssh_auth_method": "[Filtered]",
+          "is_primary": false,
+          "allow_user_workloads": false,
+          "is_lite_agent": false,
+          "node_certificate": ""
+        }
+      },
+      "media_type": "application/json",
+      "parent_index": null
+    }
+  ]
+}

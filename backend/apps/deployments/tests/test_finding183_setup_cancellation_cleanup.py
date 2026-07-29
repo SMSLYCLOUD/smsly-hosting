@@ -65,7 +65,7 @@ class Finding183AsyncSetupCancellationCleanupTests(TestCase):
                  patch.object(consumer, '_start_exec', AsyncMock(side_effect=RuntimeError('start fail'))), \
                  patch.object(consumer, 'close', AsyncMock()), \
                  patch.object(consumer, '_close_exec_socket', close_mock), \
-                 patch('apps.deployments.consumers.asyncio.sleep', AsyncMock()):
+                 patch('apps.deployments.consumers.terminal.asyncio.sleep', AsyncMock()):
                 await consumer._async_setup()
             return close_mock
 

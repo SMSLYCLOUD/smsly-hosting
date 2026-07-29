@@ -229,6 +229,113 @@ class GitHubAppService:
         )
         return None
 
+    # ── GitHub Deployments API ───────────────────────────────────────────────
+
+    def create_deployment(
+        self,
+        installation_id: int,
+        repo_full_name: str,
+        ref: str,
+        environment: str,
+        description: str = "",
+        transient_environment: bool = False,
+        production_environment: bool = False,
+    ) -> int | None:
+        """Create a GitHub Deployment. Returns the deployment ID.
+
+        The deployment appears in the repository's Environments tab and can
+        be linked to deployment statuses for environment URL tracking.
+        """
+        try:
+            token = self.get_installation_token_for_id(installation_id)
+            if not token:
+                return None
+
+            payload: dict = {
+                "ref": ref,
+                "environment": environment,
+                "description": description[:140],
+                "auto_merge": False,
+                "required_contexts": [],  # skip status checks
+            }
+            if transient_environment:
+                payload["transient_environment"] = True
+            if production_environment:
+                payload["production_environment"] = True
+
+            resp = requests.post(
+                f"{_GH_API}/repos/{repo_full_name}/deployments",
+                headers=self._auth_headers(token),
+                json=payload,
+                timeout=10,
+            )
+            if resp.status_code == 201:
+                dep_id = resp.json().get("id")
+                logger.info(
+                    "GitHubAppService: deployment %s created on %s (env=%s)",
+                    dep_id, repo_full_name, environment,
+                )
+                return dep_id
+
+            logger.error(
+                "GitHubAppService: create_deployment failed (status %s): %s",
+                resp.status_code, resp.text[:200],
+            )
+        except Exception:
+            logger.exception(
+                "GitHubAppService: error creating deployment on %s", repo_full_name
+            )
+        return None
+
+    def create_deployment_status(
+        self,
+        installation_id: int,
+        repo_full_name: str,
+        github_deployment_id: int,
+        state: str,
+        environment_url: str = "",
+        log_url: str = "",
+        description: str = "",
+    ) -> bool:
+        """Update a GitHub Deployment with a status.
+
+        States: pending, in_progress, success, failure, error, inactive.
+        """
+        try:
+            token = self.get_installation_token_for_id(installation_id)
+            if not token:
+                return False
+
+            payload: dict = {"state": state, "description": description[:140]}
+            if environment_url:
+                payload["environment_url"] = environment_url
+            if log_url:
+                payload["log_url"] = log_url
+
+            resp = requests.post(
+                f"{_GH_API}/repos/{repo_full_name}/deployments/{github_deployment_id}/statuses",
+                headers=self._auth_headers(token),
+                json=payload,
+                timeout=10,
+            )
+            if resp.status_code == 201:
+                logger.info(
+                    "GitHubAppService: deployment %s status → %s on %s",
+                    github_deployment_id, state, repo_full_name,
+                )
+                return True
+
+            logger.error(
+                "GitHubAppService: create_deployment_status failed (status %s): %s",
+                resp.status_code, resp.text[:200],
+            )
+        except Exception:
+            logger.exception(
+                "GitHubAppService: error updating deployment %s status on %s",
+                github_deployment_id, repo_full_name,
+            )
+        return False
+
     # ── App metadata ──────────────────────────────────────────────────────────
 
     def get_app_info(self) -> dict | None:
@@ -456,7 +563,7 @@ def get_installation_for_repo(repo_full_name: str):  # noqa: ANN201
 
     Returns the installation instance or None.
     """
-    from apps.deployments.models_github_app import GitHubAppInstallation
+    from apps.deployments.models.github_app import GitHubAppInstallation
 
     # Check installations with explicit repo lists
     inst = GitHubAppInstallation.objects.filter(

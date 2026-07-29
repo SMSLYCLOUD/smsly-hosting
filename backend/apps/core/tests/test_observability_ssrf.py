@@ -3,7 +3,7 @@
 from datetime import UTC
 from unittest.mock import patch
 
-from apps.core.views_observability import (
+from apps.core.views.observability import (
     ALLOWED_LOKI_LABELS,
     MAX_LOKI_QUERY_LENGTH,
     MAX_PROMETHEUS_QUERY_LENGTH,
@@ -148,7 +148,7 @@ class ObservabilitySafetyTests(TestCase):
         safe = sorted(ALLOWED_LOKI_LABELS)
         unsafe = ['tenant', 'user', 'admin', 'password']
         for label in safe:
-            with patch('apps.core.views_observability.requests.get') as gget:
+            with patch('apps.core.views.observability.requests.get') as gget:
                 gget.return_value.status_code = 200
                 gget.return_value.json.return_value = {'data': []}
                 gget.return_value.raise_for_status = lambda: None
@@ -182,9 +182,7 @@ class ObservabilitySafetyTests(TestCase):
         self.assertIn('error', resp.data)
 
     @override_settings(
-        CACHES={'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMem.Cache'}}
-        if False else
-        {'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}},
+        CACHES={'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}},
     )
     def test_prometheus_query_rejects_oversize_query(self):
         big = 'a' * (MAX_PROMETHEUS_QUERY_LENGTH + 1)
@@ -208,7 +206,7 @@ class ObservabilitySafetyTests(TestCase):
             name='obs-svc', owner=self.user, repository_url='', branch='main',
         )
         too_old = (datetime.now(UTC) - timedelta(days=365)).timestamp()
-        with patch('apps.core.views_observability.requests.get') as gget:
+        with patch('apps.core.views.observability.requests.get') as gget:
             gget.return_value.status_code = 200
             gget.return_value.json.return_value = {'data': {'result': []}}
             gget.return_value.raise_for_status = lambda: None
@@ -246,11 +244,11 @@ class ObservabilitySafetyTests(TestCase):
         CACHES={'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}},
     )
     def test_loki_query_injects_tenant_scope_for_user_with_service(self):
-        from apps.deployments.models_core import Service
+        from apps.deployments.models.core import Service
         Service.objects.create(
             owner=self.user, name='alpha', deploy_type='DOCKER',
         )
-        with patch('apps.core.views_observability.requests.get') as gget:
+        with patch('apps.core.views.observability.requests.get') as gget:
             gget.return_value.status_code = 200
             gget.return_value.json.return_value = {
                 'data': {'result': [], 'stats': {}},
@@ -272,7 +270,7 @@ class UserOwnedServiceNamesTests(TestCase):
         self.other = User.objects.create_user(username='svc-stranger', password='x')
 
     def test_returns_only_owned_service_names(self):
-        from apps.deployments.models_core import Service
+        from apps.deployments.models.core import Service
         Service.objects.create(owner=self.user, name='mine', deploy_type='DOCKER')
         Service.objects.create(owner=self.other, name='theirs', deploy_type='DOCKER')
         names = _user_owned_service_names(self.user)

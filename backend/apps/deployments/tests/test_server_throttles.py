@@ -5,7 +5,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
-from apps.deployments.models_servers import ManagedServer
+from apps.deployments.models.servers import ManagedServer
 
 TEST_CACHES = {
     "default": {
@@ -31,8 +31,8 @@ REST_FRAMEWORK_FAST = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 100,
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "apps.deployments.api_token_auth.APITokenAuthentication",
-        "apps.deployments.api_token_auth.RemoteSyncHMACAuthentication",
+        "apps.deployments.models.api_token.APITokenAuthentication",
+        "apps.deployments.models.api_token.RemoteSyncHMACAuthentication",
         "rest_framework.authentication.TokenAuthentication",
         "apps.core.auth.CsrfExemptSessionAuthentication",
     ],

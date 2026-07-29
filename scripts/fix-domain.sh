@@ -140,7 +140,7 @@ if [ -z "$BACKEND_CONTAINER" ]; then
 fi
 
 # Update PlatformConfig in the database
-docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell <<PY  || echo -e "${YELLOW}  ⚠ DB sync skipped (backend not ready)${NC}"
+timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell <<PY  || echo -e "${YELLOW}  ⚠ DB sync skipped (backend not ready)${NC}"
 from apps.deployments.models import PlatformConfig
 cfg = PlatformConfig.load()
 old = cfg.domain
@@ -249,7 +249,7 @@ fi
 
 # Container Caddy
 if docker compose -f "$COMPOSE_FILE" ps -q caddy  | grep -q .; then
-    docker compose -f "$COMPOSE_FILE" exec caddy caddy reload --config /etc/caddy/Caddyfile  || \
+    timeout 15 docker compose -f "$COMPOSE_FILE" exec caddy caddy reload --config /etc/caddy/Caddyfile  || \
         docker compose -f "$COMPOSE_FILE" restart caddy || echo -e "${YELLOW}    ⚠ Caddy restart failed${NC}"
     echo -e "${GREEN}  ✓ Container Caddy reloaded${NC}"
 fi

@@ -70,7 +70,7 @@ def get_effective_role(user, service_or_project) -> str | None:
     # Project-level membership takes precedence.
     if project:
         try:
-            from apps.deployments.models_project import ProjectMember
+            from apps.organizations.models.project import ProjectMember
             pm = ProjectMember.objects.filter(
                 project=project, user=user,
             ).first()
@@ -116,7 +116,7 @@ def _get_team_member_permissions(user, team) -> list[str] | None:
 def _get_project_member_permissions(user, project) -> list[str] | None:
     """Return custom permission overrides from ProjectMember, or None if not set."""
     try:
-        from apps.deployments.models_project import ProjectMember
+        from apps.organizations.models.project import ProjectMember
         pm = ProjectMember.objects.filter(project=project, user=user).first()
         if pm and pm.expires_at and pm.expires_at < timezone.now():
             return None
@@ -274,7 +274,7 @@ def get_user_permissions(user, project=None) -> list[str]:
         else:
             # If project member without custom perms, still resolve role
             try:
-                from apps.deployments.models_project import ProjectMember
+                from apps.organizations.models.project import ProjectMember
                 pm = ProjectMember.objects.filter(
                     project=project, user=user,
                 ).first()
@@ -329,7 +329,7 @@ def get_accessible_q(user) -> Q:
         pass
 
     try:
-        from apps.deployments.models_project import ProjectMember
+        from apps.organizations.models.project import ProjectMember
         project_ids = list(
             ProjectMember.objects.filter(user=user).exclude(
                 expires_at__isnull=False, expires_at__lt=timezone.now(),

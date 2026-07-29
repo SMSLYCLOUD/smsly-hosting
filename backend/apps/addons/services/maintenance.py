@@ -1,6 +1,6 @@
 import logging
 
-from apps.deployments.models_addons import Addon
+from apps.deployments.models.addons import Addon
 
 from .db_proxy import DatabaseProxy
 

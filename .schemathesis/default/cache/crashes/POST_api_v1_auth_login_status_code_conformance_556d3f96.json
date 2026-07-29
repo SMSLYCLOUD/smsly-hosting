@@ -1,0 +1,96 @@
+{
+  "operation": "POST /api/v1/auth/login/",
+  "method": "POST",
+  "path_template": "/api/v1/auth/login/",
+  "fingerprint": "556d3f96",
+  "case_id": "a9wzpg",
+  "code_sample": "curl -X POST -H 'Authorization: [Filtered]' -H 'Content-Type: multipart/form-data; boundary=3cdf446ad1e2737d832a1e11f9260ff8' -d $'--75b4d235290bd57e63736eb73bb457aa\\r\\nContent-Disposition: form-data; name=\"username\"\\r\\n\\r\\n\\r\\n--75b4d235290bd57e63736eb73bb457aa\\r\\nContent-Disposition: form-data; name=\"email\"\\r\\n\\r\\n0@a.com\\r\\n--75b4d235290bd57e63736eb73bb457aa--\\r\\n' http://127.0.0.1:8089/api/v1/auth/login/",
+  "sequence": [
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:8089/api/v1/auth/login/",
+      "url_template": "http://127.0.0.1:8089/api/v1/auth/login/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "Authorization": "[Filtered]",
+        "X-Schemathesis-TestCaseId": "a9wzpg",
+        "Content-Length": "220",
+        "Content-Type": "multipart/form-data; boundary=3cdf446ad1e2737d832a1e11f9260ff8"
+      },
+      "response": {
+        "status_code": 400,
+        "headers": {
+          "date": "Tue, 21 Jul 2026 00:15:33 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "vary": "Accept, Cookie, origin",
+          "allow": "POST, OPTIONS",
+          "x-frame-options": "DENY",
+          "content-length": "89",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin"
+        },
+        "body": "{\"error\":{\"password\":[\"This field is required.\"]},\"code\":\"validation_error\",\"status\":400}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "status_code_conformance",
+          "status": "failure",
+          "message": "Undocumented HTTP status code\n\nReceived: 400\nDocumented: 200"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 9.113999840337783e-05,
+          "mode": "negative"
+        },
+        "components": {
+          "HEADER": "positive",
+          "BODY": "negative"
+        },
+        "phase": {
+          "name": "coverage",
+          "data": {
+            "type": "CoveragePhaseData",
+            "description": "Missing required property: password",
+            "location": "/required",
+            "parameter": "multipart/form-data",
+            "parameter_location": "BODY",
+            "scenario": "object_missing_required_property"
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {
+          "HEADER": {
+            "Authorization": ""
+          }
+        }
+      },
+      "path": "/api/v1/auth/login/",
+      "path_parameters": {},
+      "query": {},
+      "case_headers": {
+        "Authorization": "[Filtered]"
+      },
+      "cookies": {},
+      "case_body": {
+        "encoding": "json",
+        "value": {
+          "username": "",
+          "email": "0@a.com"
+        }
+      },
+      "media_type": "multipart/form-data",
+      "parent_index": null
+    }
+  ]
+}

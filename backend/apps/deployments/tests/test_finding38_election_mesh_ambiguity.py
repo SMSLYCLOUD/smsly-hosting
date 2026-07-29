@@ -4,8 +4,8 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from apps.deployments.models_mesh import MeshNetwork, WireGuardPeer
-from apps.deployments.models_servers import ManagedServer
+from apps.deployments.models.mesh import MeshNetwork, WireGuardPeer
+from apps.deployments.models.servers import ManagedServer
 
 User = get_user_model()
 
@@ -63,7 +63,7 @@ class Finding38ElectionMeshMultiplicityTests(TestCase):
 
     def test_vote_request_rejects_when_peer_in_multiple_active_meshes(self):
         with patch(
-            'apps.deployments.views_election._verify_election_hmac',
+            'apps.core.views.election._verify_election_hmac',
             side_effect=_always_valid_hmac,
         ):
             resp = self._post(
@@ -87,7 +87,7 @@ class Finding38ElectionMeshMultiplicityTests(TestCase):
             private_key='sk2', is_active=True,
         )
         with patch(
-            'apps.deployments.views_election._verify_election_hmac',
+            'apps.core.views.election._verify_election_hmac',
             side_effect=_always_valid_hmac,
         ):
             resp = self._post(
@@ -99,7 +99,7 @@ class Finding38ElectionMeshMultiplicityTests(TestCase):
 
     def test_heartbeat_does_not_silently_route_when_peer_in_multiple_meshes(self):
         with patch(
-            'apps.deployments.views_election._verify_election_hmac',
+            'apps.core.views.election._verify_election_hmac',
             side_effect=_always_valid_hmac,
         ), patch(
             'apps.deployments.services.election_service.'

@@ -1,0 +1,104 @@
+{
+  "operation": "POST /api/v1/media/media-nodes/{node_pk}/rooms/{room_pk}/participants/",
+  "method": "POST",
+  "path_template": "/api/v1/media/media-nodes/{node_pk}/rooms/{room_pk}/participants/",
+  "fingerprint": "52b20c17",
+  "case_id": "WAsXJc",
+  "code_sample": "curl -X POST -H 'Content-Type: application/json' -d '{\"room\": 0, \"participant_id\": \"\", \"user\": null}' http://127.0.0.1:8089/api/v1/media/media-nodes/0/rooms/0/participants/",
+  "sequence": [
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:8089/api/v1/media/media-nodes/0/rooms/0/participants/",
+      "url_template": "http://127.0.0.1:8089/api/v1/media/media-nodes/{node_pk}/rooms/{room_pk}/participants/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "X-Schemathesis-TestCaseId": "WAsXJc",
+        "Content-Type": "application/json",
+        "Content-Length": "47"
+      },
+      "response": {
+        "status_code": 403,
+        "headers": {
+          "date": "Mon, 20 Jul 2026 21:12:52 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "x-frame-options": "DENY",
+          "content-length": "41",
+          "vary": "Cookie, origin",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin"
+        },
+        "body": "{\"error\": \"Invalid or missing signature\"}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "missing_required_header",
+          "status": "failure",
+          "message": "Missing header not rejected\n\nGot 403 when missing required 'Authorization' header, expected 401"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 4.6486999053740874e-05,
+          "mode": "negative"
+        },
+        "components": {
+          "PATH": "positive",
+          "HEADER": "negative",
+          "BODY": "positive"
+        },
+        "phase": {
+          "name": "coverage",
+          "data": {
+            "type": "CoveragePhaseData",
+            "description": "Missing `Authorization` at header",
+            "location": null,
+            "parameter": "Authorization",
+            "parameter_location": "HEADER",
+            "scenario": "missing_parameter"
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [
+          [
+            "body",
+            "participant_id"
+          ]
+        ],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {
+          "PATH": {
+            "node_pk": "0",
+            "room_pk": 0
+          },
+          "HEADER": {}
+        }
+      },
+      "path": "/api/v1/media/media-nodes/{node_pk}/rooms/{room_pk}/participants/",
+      "path_parameters": {
+        "node_pk": "0",
+        "room_pk": "0"
+      },
+      "query": {},
+      "case_headers": {},
+      "cookies": {},
+      "case_body": {
+        "encoding": "json",
+        "value": {
+          "room": 0,
+          "participant_id": "",
+          "user": null
+        }
+      },
+      "media_type": "application/json",
+      "parent_index": null
+    }
+  ]
+}

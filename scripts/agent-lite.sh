@@ -463,7 +463,7 @@ wait_for_local_rabbitmq() {
     local elapsed=0
 
     while [ "$elapsed" -lt "$timeout" ]; do
-        if docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmq-diagnostics -q check_running ; then
+        if timeout 15 docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmq-diagnostics -q check_running ; then
             echo -e "${GREEN}  OK Local RabbitMQ is ready${NC}"
             return 0
         fi
@@ -492,18 +492,18 @@ sync_local_rabbitmq_password() {
 
     wait_for_local_rabbitmq 120 || exit 1
 
-    if docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" ; then
+    if timeout 15 docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" ; then
         echo -e "${GREEN}  OK Local RabbitMQ password already matches .env${NC}"
         return 0
     fi
 
     echo -e "${BLUE}  -> Syncing local RabbitMQ password for ${rabbitmq_user}...${NC}"
-    docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl add_user "$rabbitmq_user" "$rabbitmq_password" || echo -e "${YELLOW}    ⚠ RabbitMQ add_user failed (user may already exist)${NC}"
-    docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl change_password "$rabbitmq_user" "$rabbitmq_password" 
-    docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl set_user_tags "$rabbitmq_user" administrator 
-    docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl set_permissions -p / "$rabbitmq_user" ".*" ".*" ".*" 
+    timeout 15 docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl add_user "$rabbitmq_user" "$rabbitmq_password" || echo -e "${YELLOW}    ⚠ RabbitMQ add_user failed (user may already exist)${NC}"
+    timeout 15 docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl change_password "$rabbitmq_user" "$rabbitmq_password" 
+    timeout 15 docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl set_user_tags "$rabbitmq_user" administrator 
+    timeout 15 docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl set_permissions -p / "$rabbitmq_user" ".*" ".*" ".*" 
 
-    if docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" ; then
+    if timeout 15 docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" ; then
         echo -e "${GREEN}  OK Local RabbitMQ password synced${NC}"
         return 0
     fi
@@ -563,16 +563,16 @@ run_migrations() {
         return 0
     fi
     echo -e "${BLUE}  → Running migrations...${NC}"
-    if docker compose -f "$COMPOSE_PATH" exec -T backend python manage.py migrate --noinput ; then
+    if timeout 300 docker compose -f "$COMPOSE_PATH" exec -T backend python manage.py migrate --noinput ; then
         echo -e "${GREEN}  ✓ Migrations complete${NC}"
     else
         echo -e "${YELLOW}  ⚠ Migration failed, retrying in 10s...${NC}"
         sleep 10
-        docker compose -f "$COMPOSE_PATH" exec -T backend python manage.py migrate --noinput  && \
+        timeout 300 docker compose -f "$COMPOSE_PATH" exec -T backend python manage.py migrate --noinput  && \
             echo -e "${GREEN}  ✓ Migrations complete on retry${NC}" || \
             echo -e "${YELLOW}  ⚠ Migrations still failing (non-fatal, will retry on next update)${NC}"
     fi
-    docker compose -f "$COMPOSE_PATH" exec -T --user root backend python manage.py collectstatic --noinput || echo -e "${YELLOW}    ⚠ collectstatic failed${NC}"
+    timeout 120 docker compose -f "$COMPOSE_PATH" exec -T --user root backend python manage.py collectstatic --noinput || echo -e "${YELLOW}    ⚠ collectstatic failed${NC}"
 }
 
 wait_for_backend() {
@@ -581,7 +581,7 @@ wait_for_backend() {
     echo -e "${BLUE}  → Waiting for backend health (up to ${timeout}s)...${NC}"
     local elapsed=0
     while [ "$elapsed" -lt "$timeout" ]; do
-        if docker compose -f "$COMPOSE_PATH" exec -T backend curl -sf http://localhost:8000/health/live ; then
+        if timeout 10 docker compose -f "$COMPOSE_PATH" exec -T backend curl -sf --max-time 8 http://localhost:8000/health/live ; then
             echo -e "${GREEN}  ✓ Backend healthy${NC}"
             return 0
         fi
@@ -603,7 +603,7 @@ wait_for_registrar() {
         if docker compose -f "$COMPOSE_PATH" ps --status running agent-registrar  | grep -q "Up"; then
             # Verify the Python process is actually running inside
             # the container (it might be in start_period limbo)
-            if docker compose -f "$COMPOSE_PATH" exec -T agent-registrar pgrep -f agent_registrar.py ; then
+            if timeout 10 docker compose -f "$COMPOSE_PATH" exec -T agent-registrar pgrep -f agent_registrar.py ; then
                 echo -e "${GREEN}  ✓ Agent registrar is running${NC}"
                 return 0
             fi
@@ -630,7 +630,7 @@ final_health_check() {
     local wg_ok=0
 
     # 1. Backend healthy?
-    if docker compose -f "$COMPOSE_PATH" exec -T backend curl -fsS http://localhost:8000/health/live ; then
+    if timeout 10 docker compose -f "$COMPOSE_PATH" exec -T backend curl -fsS --max-time 8 http://localhost:8000/health/live ; then
         backend_ok=1
         echo -e "${GREEN}    ✓ Backend /health/live${NC}"
     else
@@ -638,13 +638,13 @@ final_health_check() {
     fi
 
     # 2. Celery worker subscribed to its queue?
-    if docker compose -f "$COMPOSE_PATH" exec -T celery-worker celery -A config inspect ping -d celery@$(hostname)@%h  | grep -q "pong"; then
+    if timeout 15 docker compose -f "$COMPOSE_PATH" exec -T celery-worker celery -A config inspect ping -d celery@$(hostname)@%h  | grep -q "pong"; then
         celery_ok=1
         echo -e "${GREEN}    ✓ Celery worker (ping pong)${NC}"
     else
         # Fall back to a queue-depth check — the worker's queue
         # list is queryable without the ping pong dance.
-        if docker compose -f "$COMPOSE_PATH" exec -T celery-worker celery -A config inspect active  | head -1 | grep -q ":"; then
+        if timeout 15 docker compose -f "$COMPOSE_PATH" exec -T celery-worker celery -A config inspect active  | head -1 | grep -q ":"; then
             celery_ok=1
             echo -e "${GREEN}    ✓ Celery worker (active)${NC}"
         else
@@ -653,7 +653,7 @@ final_health_check() {
     fi
 
     # 3. Agent registrar running?
-    if docker compose -f "$COMPOSE_PATH" exec -T agent-registrar pgrep -f agent_registrar.py ; then
+    if timeout 10 docker compose -f "$COMPOSE_PATH" exec -T agent-registrar pgrep -f agent_registrar.py ; then
         registrar_ok=1
         echo -e "${GREEN}    ✓ Agent registrar process is alive${NC}"
     else

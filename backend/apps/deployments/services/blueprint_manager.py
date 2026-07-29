@@ -8,9 +8,9 @@ from django.conf import settings
 
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import Deployment, EnvironmentVariable, Service
-from apps.deployments.models_addons import Addon
-from apps.deployments.tasks_addons import provision_addon_task
-from apps.deployments.tasks_deploy import enqueue_smart_deploy_task
+from apps.deployments.models.addons import Addon
+from apps.addons.tasks.crud import provision_addon_task
+from apps.deployments.tasks.deployment.tasks_deploy import enqueue_smart_deploy_task
 
 logger = logging.getLogger(__name__)
 

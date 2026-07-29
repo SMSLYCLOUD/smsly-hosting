@@ -25,8 +25,8 @@ def _mask_url_password(url: str) -> str:
                 netloc += f":{parsed.port}"
             masked = parsed._replace(netloc=netloc)
             return urlunparse(masked)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to mask database URL: %s", exc)
     return url
 
 class PostgresSnapshotManager:
@@ -99,7 +99,7 @@ class PostgresSnapshotManager:
                 try:
                     conn.close()
                 except Exception:  # pylint: disable=broad-exception-caught
-                    pass
+                    pass  # best-effort cleanup in finally block
 
     def _run_psql(self, db_url: str, sql: str, check: bool = True,
                   timeout: int = 120) -> SimpleNamespace:
@@ -218,7 +218,7 @@ class PostgresSnapshotManager:
                 "issued against %s to clone to %s", source_db_name, clone_db_name
             )
             try:
-                from apps.deployments.models_audit import AuditLog
+                from apps.deployments.models.audit import AuditLog
                 AuditLog.objects.create(
                     actor='system',
                     action='DB_CLONE_PRODUCTION_DISRUPTION',

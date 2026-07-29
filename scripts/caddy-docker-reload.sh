@@ -60,7 +60,7 @@ reload_caddy() {
         fi
 
         # Try caddy reload inside the container
-        if docker exec "$CONTAINER_NAME" caddy reload --config /etc/caddy/Caddyfile ; then
+        if timeout 15 docker exec "$CONTAINER_NAME" caddy reload --config /etc/caddy/Caddyfile ; then
             echo "$LOG_PREFIX Caddy reloaded successfully via docker exec"
             sleep 2
             if candidate_requires_https "$CADDY_CONF" && ! https_listener_active; then

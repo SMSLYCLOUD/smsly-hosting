@@ -1,5 +1,5 @@
 # FRP Server Configuration
-# CloudNeuron Tunnel Relay
+# Grid Tunnel Relay
 
 bindPort = 7000
 vhostHTTPPort = 7080

@@ -1,0 +1,88 @@
+{
+  "operation": "POST /api/v1/auth/registration/resend-email/",
+  "method": "POST",
+  "path_template": "/api/v1/auth/registration/resend-email/",
+  "fingerprint": "45e20ff3",
+  "case_id": "uCYx3Q",
+  "code_sample": "curl -X POST -H 'Content-Type: application/json' -d '{\"email\": \"0@a.com\"}' http://127.0.0.1:8089/api/v1/auth/registration/resend-email/",
+  "sequence": [
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:8089/api/v1/auth/registration/resend-email/",
+      "url_template": "http://127.0.0.1:8089/api/v1/auth/registration/resend-email/",
+      "headers": {
+        "User-Agent": "schemathesis/4.24.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "*/*",
+        "Connection": "keep-alive",
+        "X-Schemathesis-TestCaseId": "uCYx3Q",
+        "Content-Type": "application/json",
+        "Content-Length": "20"
+      },
+      "response": {
+        "status_code": 200,
+        "headers": {
+          "date": "Tue, 21 Jul 2026 00:19:10 GMT",
+          "server": "WSGIServer/0.2 CPython/3.12.3",
+          "content-type": "application/json",
+          "vary": "Accept, Cookie, origin",
+          "allow": "POST, OPTIONS",
+          "x-frame-options": "DENY",
+          "content-length": "15",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "same-origin",
+          "cross-origin-opener-policy": "same-origin"
+        },
+        "body": "{\"detail\":\"ok\"}"
+      },
+      "link": null,
+      "checks": [
+        {
+          "name": "status_code_conformance",
+          "status": "failure",
+          "message": "Undocumented HTTP status code\n\nReceived: 200\nDocumented: 201"
+        }
+      ],
+      "meta": {
+        "generation": {
+          "time": 0.012529110004834365,
+          "mode": "positive"
+        },
+        "components": {
+          "HEADER": "positive",
+          "BODY": "positive"
+        },
+        "phase": {
+          "name": "fuzzing",
+          "data": {
+            "type": "FuzzingPhaseData",
+            "description": "Positive test case",
+            "location": null,
+            "parameter": null,
+            "parameter_location": null,
+            "mutations": []
+          }
+        },
+        "pool_draws": [],
+        "pool_misses": [],
+        "semantic_draws": [],
+        "dictionary_draws": [],
+        "constants_draws": [],
+        "raw_containers": {}
+      },
+      "path": "/api/v1/auth/registration/resend-email/",
+      "path_parameters": {},
+      "query": {},
+      "case_headers": {},
+      "cookies": {},
+      "case_body": {
+        "encoding": "json",
+        "value": {
+          "email": "0@a.com"
+        }
+      },
+      "media_type": "application/json",
+      "parent_index": null
+    }
+  ]
+}

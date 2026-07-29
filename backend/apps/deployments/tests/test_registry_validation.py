@@ -122,7 +122,7 @@ class AllowlistConsistencyTests(TestCase):
     """
 
     def test_allowlist_matches_serializers(self):
-        from apps.deployments.serializers import _all_allowed_registry_hosts as serializer_allowed_hosts
+        from apps.deployments.serializers.common import _all_allowed_registry_hosts as serializer_allowed_hosts
         from apps.deployments.services.registry_validation import all_allowed_registry_hosts
 
         self.assertEqual(

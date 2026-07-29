@@ -50,15 +50,15 @@ class DomainConfigAtomicTests(TestCase):
         return self.client.put(self.url, payload, format="json")
 
     @patch(
-        "apps.deployments.services.dns.ensure_dns_records",
+        "apps.domains.services.dns.ensure_dns_records",
         return_value={"ok": True, "errors": []},
     )
     @patch(
-        "services.caddy_manager.apply_caddyfile",
+        "apps.deployments.services.caddy_manager.apply_caddyfile",
         return_value={"ok": True, "message": "ok"},
     )
     @patch(
-        "services.caddy_manager.generate_caddyfile",
+        "apps.deployments.services.caddy_manager.generate_caddyfile",
         return_value=":80 { reverse_proxy localhost:8090 }",
     )
     def test_happy_path_uses_select_for_update(self, _gen, _apply, _dns):
@@ -79,11 +79,11 @@ class DomainConfigAtomicTests(TestCase):
         self.assertEqual(cfg.caddy_status, "applied")
 
     @patch(
-        "services.caddy_manager.apply_caddyfile",
+        "apps.deployments.services.caddy_manager.apply_caddyfile",
         return_value={"ok": False, "message": "caddy reload failed"},
     )
     @patch(
-        "services.caddy_manager.generate_caddyfile",
+        "apps.deployments.services.caddy_manager.generate_caddyfile",
         return_value=":80 { reverse_proxy localhost:8090 }",
     )
     def test_caddy_failure_marks_caddy_status_error(self, _gen, _apply):

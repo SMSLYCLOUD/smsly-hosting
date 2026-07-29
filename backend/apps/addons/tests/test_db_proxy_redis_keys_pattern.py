@@ -12,7 +12,7 @@ from django.test import TestCase
 
 from apps.addons.services.db_proxy import DatabaseProxy
 from apps.deployments.models import Service
-from apps.deployments.models_addons import Addon
+from apps.deployments.models.addons import Addon
 
 User = get_user_model()
 

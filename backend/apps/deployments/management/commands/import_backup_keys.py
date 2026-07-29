@@ -8,7 +8,7 @@ Raises an error on fingerprint mismatch (operator must resolve conflict).
 """
 import json
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 
 
 class Command(BaseCommand):
@@ -28,7 +28,7 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         from django.utils import timezone as tz
 
-        from apps.deployments.models_backup import BackupEncryptionKey
+        from apps.deployments.models.backup import BackupEncryptionKey
 
         input_path = options["input_file"]
         dry_run = options["dry_run"]
@@ -37,13 +37,11 @@ class Command(BaseCommand):
             with open(input_path, encoding="utf-8") as f:
                 data = json.load(f)
         except (OSError, json.JSONDecodeError) as exc:
-            self.stderr.write(f"Failed to read input file: {exc}")
-            raise SystemExit(1) from exc
+            raise CommandError(f"Failed to read input file: {exc}") from exc
 
         version = data.get("version")
         if version != 1:
-            self.stderr.write(f"Unsupported export version: {version}")
-            raise SystemExit(1)
+            raise CommandError(f"Unsupported export version: {version}")
 
         keys = data.get("keys", [])
         if not keys:
@@ -101,6 +99,6 @@ class Command(BaseCommand):
         if conflicts:
             summary += f", Conflicts: {conflicts}"
             self.stdout.write(self.style.ERROR(summary))
-            raise SystemExit(1)
+            raise CommandError(summary)
         else:
             self.stdout.write(self.style.SUCCESS(summary))

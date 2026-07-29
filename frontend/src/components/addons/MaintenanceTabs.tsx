@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, memo } from 'react';
 import { addonMaintenanceApi, addonsApi } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/use-toast';
@@ -242,7 +242,7 @@ export function MaintenanceTabs({ addonId }: MaintenanceTabsProps) {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {tables.map((t: any, i: number) => (
+                  {tables.map((t: { name?: string; table_name?: string; row_count?: number; rows?: number; size?: string; total_size?: string; live_tuples?: number; dead_tuples?: number }, i: number) => (
                     <TableRow key={t.name || i}>
                       <TableCell className="font-mono text-sm">{t.name || t.table_name}</TableCell>
                       <TableCell className="text-right font-mono text-sm">{t.row_count ?? t.rows ?? '-'}</TableCell>
@@ -446,7 +446,7 @@ export function MaintenanceTabs({ addonId }: MaintenanceTabsProps) {
   );
 }
 
-function StatCard({ icon: Icon, label, value }: { icon: any; label: string; value: string }) {
+const StatCard = memo(function StatCard({ icon: Icon, label, value }: { icon: React.ComponentType<{ className?: string }>; label: string; value: string }) {
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between pb-2">
@@ -458,4 +458,4 @@ function StatCard({ icon: Icon, label, value }: { icon: any; label: string; valu
       </CardContent>
     </Card>
   );
-}
+});

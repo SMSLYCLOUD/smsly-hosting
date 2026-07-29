@@ -28,7 +28,7 @@ const battleCards = [
         type: "Sovereign PaaS",
         price: "$0",
         priceDetail: "Open Source & Free",
-        description: "Your infrastructure, your rules. Powered by CloudNeuron.",
+        description: "Your infrastructure, your rules. Powered by Grid.",
         features: [
             "Self-Hosted (AWS, Hetzner, etc.)",
             "Zero Vendor Lock-in",

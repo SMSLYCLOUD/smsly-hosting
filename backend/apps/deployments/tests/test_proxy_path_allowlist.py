@@ -13,7 +13,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from apps.deployments.models_servers import ManagedServer
+from apps.deployments.models.servers import ManagedServer
 
 
 def _make_mock_response(status_code=200, payload=None):

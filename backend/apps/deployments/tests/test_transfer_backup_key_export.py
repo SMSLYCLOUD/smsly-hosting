@@ -7,7 +7,7 @@ from unittest.mock import patch
 from cryptography.fernet import Fernet
 from django.test import TestCase
 
-from apps.deployments.models_backup import BackupEncryptionKey
+from apps.deployments.models.backup import BackupEncryptionKey
 from apps.deployments.services.backup_service import BackupService
 from apps.deployments.services.transfer_service import ServerTransferService
 

@@ -12,7 +12,7 @@
 ## 2. Files changed
 - `.gitignore`: Updated to explicitly ignore `.svg` cache files while preserving explicitly downloaded repository sources.
 - `backend/apps/deployments/fixtures/templates.json`: Synced with extended `app_templates.py`.
-- `backend/services/app_templates.py`: Added metadata properties like `logo_url`, `dashboard_port`, `supports_dashboard`, etc.
+- `backend/apps/deployments/services/app_templates.py`: Added metadata properties like `logo_url`, `dashboard_port`, `supports_dashboard`, etc.
 - `frontend/src/app/marketplace/page.tsx`: Replaced generic 2-letter placeholders and dynamic `<Image />` configurations with statically-proven `<img>` references driven by registry values.
 - `frontend/src/components/addons/AddonsTab.tsx`: Adjusted Addons tab to display canonical icons instead of Lucide fallbacks when available.
 - `frontend/src/lib/addonConstants.ts`: Refactored to proxy values from `addonRegistry.ts`.

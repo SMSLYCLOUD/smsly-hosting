@@ -11,7 +11,7 @@ identifiers.
 """
 from unittest.mock import patch
 
-from apps.cloud import views_code_analysis as vca
+from apps.cloud.views import code_analysis as vca
 from django.test import SimpleTestCase
 
 

@@ -4,7 +4,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from apps.deployments.models import EnvironmentVariable, Project, Service
-from apps.deployments.models_backup import ServiceSnapshot
+from apps.deployments.models.backup import ServiceSnapshot
 from apps.deployments.services.snapshot_service import SnapshotService
 
 User = get_user_model()

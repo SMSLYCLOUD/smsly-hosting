@@ -8,9 +8,9 @@ from django.urls import reverse
 from rest_framework.test import APIClient
 
 from apps.cloud.models import CloudProvider
-from apps.deployments.models_addons import Addon
-from apps.deployments.models_core import Service
-from apps.deployments.tasks_maintenance import _clear_orphaned_runtime_resources
+from apps.deployments.models.addons import Addon
+from apps.deployments.models.core import Service
+from apps.deployments.tasks.infra.tasks_maintenance import _clear_orphaned_runtime_resources
 
 User = get_user_model()
 
@@ -52,7 +52,7 @@ class SystemMaintenanceApiTests(TestCase):
         self.assertEqual(response.json()["task_id"], "existing-task-456")
         mock_apply_async.assert_not_called()
 
-    @patch("apps.deployments.views.AsyncResult")
+    @patch("apps.core.views.system.AsyncResult")
     def test_maintenance_task_status_returns_result(self, mock_async_result):
         mock_async_result.return_value = SimpleNamespace(
             state="SUCCESS",
@@ -90,8 +90,8 @@ class SystemMaintenanceCleanupTests(TestCase):
             status=Addon.Status.ACTIVE,
         )
 
-    @patch("apps.deployments.tasks._clear_directory_contents")
-    @patch("apps.deployments.tasks.docker.from_env")
+    @patch("apps.deployments.tasks.deploy.deletion._clear_directory_contents")
+    @patch("apps.deployments.tasks.deploy.deletion.docker.from_env")
     def test_clear_orphaned_resources_protects_active_addons(self, mock_docker, mock_clear_dir):
         active_addon_container = MagicMock()
         active_addon_container.name = f"smsly-addon-postgres-{self.addon.id}"

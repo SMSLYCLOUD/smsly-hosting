@@ -1,5 +1,10 @@
 'use client';
 
+// TODO: Migrate this page to React Query (TanStack Query). This 1530-line page
+// manages topology data, scan results, bulk env updates, and service deployment
+// plans via useEffect+useState. React Query's useQuery/useMutation would handle
+// cache management, background refetching, and optimistic updates cleanly.
+
 import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {

@@ -95,7 +95,11 @@ export function GitIntegrationCard({ provider }: GitIntegrationCardProps) {
   const startGitHubAppInstall = async () => {
     setInstallLoading(true);
     try {
-      const res = await api.get("/integrations/github/app/install-url/");
+      // Use combined OAuth+install flow when user is not yet connected
+      const endpoint = data?.connected
+        ? "/integrations/github/app/install-url/"
+        : "/integrations/github/app/install/";
+      const res = await api.get(endpoint);
       const target = res.data?.url;
       if (!target) throw new Error("No install URL returned");
       window.location.assign(target);

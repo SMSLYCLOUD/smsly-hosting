@@ -26,9 +26,9 @@ def run():
             else:
                 print("❌ ERROR: 'Grid' text not found.")
 
-            # Check for legacy CloudNeuron text
-            if page.get_by_text("CloudNeuron").count() > 0:
-                print("❌ ERROR: Found legacy 'CloudNeuron' text!")
+            # Check for legacy Grid text
+            if page.get_by_text("Grid").count() > 0:
+                print("❌ ERROR: Found legacy 'Grid' text!")
 
         except Exception as e:
             print(f"Error on Landing: {e}")

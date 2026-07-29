@@ -66,7 +66,7 @@ class CodeAnalysisOwnerTests(TestCase):
             provider=provider,
         )
         cache.clear()
-        with patch("apps.cloud.views_code_analysis.analyze_service_code_task.delay") as mock_task:
+        with patch("apps.cloud.views.code_analysis.analyze_service_code_task.delay") as mock_task:
             mock_task.return_value = MagicMock(id="test-task-id")
             response = self.client.post(
                 "/api/v1/cloud/code-analysis/analyze/",

@@ -37,6 +37,8 @@ from django.core.cache import cache
 from django.db import transaction
 from django.utils import timezone
 
+from apps.deployments.constants import TASK_TIME_LIMIT_QUICK
+
 logger = logging.getLogger(__name__)
 
 
@@ -136,9 +138,9 @@ class AutoRollbackEngine:
         # Local imports to avoid circular import between models, tasks, and
         # this helper.
         from apps.deployments.models import Deployment
-        from apps.deployments.models_audit import AuditLog
-        from apps.deployments.tasks_alerts import notify_auto_rollback
-        from apps.deployments.tasks_deploy import (
+        from apps.deployments.models.audit import AuditLog
+        from apps.core.tasks.alerts import notify_auto_rollback
+        from apps.deployments.tasks.deployment.tasks_deploy import (
             _resolve_provider_for_service,
             enqueue_smart_deploy_task,
         )
@@ -470,8 +472,8 @@ def get_stuck_rollback_heartbeats():
     return stuck
 
 
-@shared_task
-def monitor_stuck_rollback_heartbeats():
+@shared_task(bind=True, soft_time_limit=TASK_TIME_LIMIT_QUICK[0], time_limit=TASK_TIME_LIMIT_QUICK[1])
+def monitor_stuck_rollback_heartbeats(self):
     """Celery beat task: alert on rollbacks stuck in QUEUED.
 
     For each stuck rollback, we:
@@ -482,8 +484,8 @@ def monitor_stuck_rollback_heartbeats():
          for the same stuck rollback.
     """
     # Local imports to avoid circular import at module load time.
-    from apps.deployments.models_audit import AuditLog
-    from apps.deployments.tasks_alerts import notify_auto_rollback
+    from apps.deployments.models.audit import AuditLog
+    from apps.core.tasks.alerts import notify_auto_rollback
 
     stuck = get_stuck_rollback_heartbeats()
     if not stuck:

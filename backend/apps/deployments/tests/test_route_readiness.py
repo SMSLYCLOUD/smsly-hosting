@@ -3,7 +3,7 @@
 import requests
 from django.test import SimpleTestCase
 
-from apps.deployments.tasks_deploy_remote import _is_traefik_not_ready
+from apps.deployments.tasks.deployment.tasks_deploy_remote import _is_traefik_not_ready
 
 
 def _build_response(status_code: int, body: str, headers=None) -> requests.Response:

@@ -26,7 +26,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
-from apps.deployments.models_backup import BackupEncryptionKey
+from apps.deployments.models.backup import BackupEncryptionKey
 from apps.deployments.services.backup_service import (
     _CHUNKED_BACKUP_FINGERPRINT_BYTES,
     _CHUNKED_BACKUP_KEY_ID_BYTES,
@@ -149,7 +149,7 @@ class V3DecryptBackwardCompatTest(TestCase):
         # Register the key so _resolve_key_for_v2 can look it up by
         # fingerprint matching (comparing passed key's fingerprint
         # against the V2 header).
-        from apps.deployments.models_backup import BackupEncryptionKey
+        from apps.deployments.models.backup import BackupEncryptionKey
 
         def _v2_encrypt(src_path, enc_key):
             """Simulate writing a V2 backup (used by old code)."""

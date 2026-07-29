@@ -18,7 +18,7 @@ from django.utils import timezone
 
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import Deployment, Service
-from apps.deployments.services import health_monitor as hm
+from apps.core.services import health_monitor as hm
 
 
 class AutoRestartFallbackTests(TestCase):

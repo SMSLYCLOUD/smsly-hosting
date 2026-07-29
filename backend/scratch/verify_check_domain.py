@@ -22,7 +22,7 @@ settings.CACHES = {
     }
 }
 
-from apps.deployments.views_service import ServiceViewSet
+from apps.deployments.views.service import ServiceViewSet
 from apps.deployments.models import ManagedServer
 from django.contrib.auth import get_user_model
 

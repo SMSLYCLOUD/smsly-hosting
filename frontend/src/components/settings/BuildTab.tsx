@@ -8,7 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Service, servicesApi, githubApi, gitlabApi, bitbucketApi } from '@/lib/api';
 import { useToast } from '@/components/ui/use-toast';
 import { BuildpackSelector, BuildpackType } from '@/components/deployments/BuildpackSelector';
-import { FolderRoot, Container, Layers, AlertTriangle, GitBranch, Github } from 'lucide-react';
+import { FolderRoot, Container, Layers, AlertTriangle, GitBranch, Github, Filter, Bot } from 'lucide-react';
 
 interface BuildTabProps {
   service: Service;
@@ -22,6 +22,8 @@ export function BuildTab({ service }: BuildTabProps) {
   const [rootDirectory, setRootDirectory] = useState(service.root_directory || '/');
   const [buildCommand, setBuildCommand] = useState(service.build_command || '');
   const [deployMode, setDeployMode] = useState<'SINGLE' | 'COMPOSE'>(service.deploy_mode || 'SINGLE');
+  const [watchPaths, setWatchPaths] = useState<string>((service.watch_paths || []).join('\n'));
+  const [botPrStrategy, setBotPrStrategy] = useState<string>(service.bot_pr_strategy || 'DEPLOY');
   const [saving, setSaving] = useState(false);
 
   // Branch fetching state
@@ -58,6 +60,8 @@ export function BuildTab({ service }: BuildTabProps) {
         root_directory: rootDirectory,
         build_command: buildCommand,
         deploy_mode: deployMode,
+        watch_paths: watchPaths.split('\n').map(s => s.trim()).filter(Boolean),
+        bot_pr_strategy: botPrStrategy as 'DEPLOY' | 'SKIP' | 'COMMENT_ONLY',
       });
       toast({
         title: "Build settings updated",
@@ -226,6 +230,55 @@ export function BuildTab({ service }: BuildTabProps) {
               Custom build command. Leave empty to use the default for your buildpack.
             </p>
           </div>
+
+          {/* GitHub App: Watch Paths & Bot PR Strategy */}
+          {repositoryUrl?.includes('github.com') && (
+            <div className="space-y-4 p-4 rounded-lg border border-border bg-muted/30">
+              <h4 className="text-sm font-semibold flex items-center gap-2">
+                <Github className="h-4 w-4" />
+                GitHub App Settings
+              </h4>
+
+              <div className="space-y-2">
+                <Label htmlFor="watch-paths" className="flex items-center gap-1.5">
+                  <Filter className="h-3.5 w-3.5" />
+                  Watch Paths (monorepo)
+                </Label>
+                <textarea
+                  id="watch-paths"
+                  value={watchPaths}
+                  onChange={(e) => setWatchPaths(e.target.value)}
+                  placeholder={"services/api/**\npackages/shared/**"}
+                  rows={3}
+                  className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring font-mono"
+                />
+                <p className="text-xs text-muted-foreground">
+                  One glob pattern per line. Only pushes that match these paths will trigger a deploy.
+                  Leave empty to deploy on any file change.
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="bot-pr-strategy" className="flex items-center gap-1.5">
+                  <Bot className="h-3.5 w-3.5" />
+                  Bot PR Strategy
+                </Label>
+                <select
+                  id="bot-pr-strategy"
+                  value={botPrStrategy}
+                  onChange={(e) => setBotPrStrategy(e.target.value)}
+                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                >
+                  <option value="DEPLOY">Deploy — treat bot PRs like normal PRs</option>
+                  <option value="SKIP">Skip — ignore bot PRs entirely</option>
+                  <option value="COMMENT_ONLY">Comment Only — post status but don&apos;t deploy</option>
+                </select>
+                <p className="text-xs text-muted-foreground">
+                  How to handle PRs from bots (Dependabot, Renovate, Copilot, etc.).
+                </p>
+              </div>
+            </div>
+          )}
 
           <div className="flex justify-end">
             <Button onClick={handleSave} disabled={saving}>

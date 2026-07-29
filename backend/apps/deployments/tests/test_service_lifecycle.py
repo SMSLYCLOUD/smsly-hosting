@@ -250,7 +250,7 @@ class ServiceDeployActionTests(APITestCase):
         self.client.post(url, {}, format='json')
         mock_task.assert_called_once()
 
-    @patch('apps.deployments.views.enqueue_smart_deploy_task')
+    @patch('apps.deployments.views.service.deploy.enqueue_smart_deploy_task')
     def test_manual_deploy_cannot_skip_review(self, mock_enqueue):
         """User-triggered deploys cannot bypass the SafeDeploy review gate."""
         url = f'/api/v1/services/{self.service.id}/deploy/'
@@ -262,7 +262,7 @@ class ServiceDeployActionTests(APITestCase):
 
     @patch('apps.deployments.views.ServerGuard.check_user_workload_allowed',
            return_value={'ok': True})
-    @patch('apps.deployments.views.enqueue_smart_deploy_task')
+    @patch('apps.deployments.views.service.deploy.enqueue_smart_deploy_task')
     def test_explicit_local_target_overrides_assigned_remote_server(
         self, mock_enqueue, _guard
     ):
@@ -293,7 +293,7 @@ class ServiceDeployActionTests(APITestCase):
 
     @patch('apps.deployments.views.ServerGuard.check_user_workload_allowed',
            return_value={'ok': True})
-    @patch('apps.deployments.views.enqueue_smart_deploy_task')
+    @patch('apps.deployments.views.service.deploy.enqueue_smart_deploy_task')
     def test_explicit_remote_target_is_saved_on_deployment(
         self, mock_enqueue, _guard
     ):

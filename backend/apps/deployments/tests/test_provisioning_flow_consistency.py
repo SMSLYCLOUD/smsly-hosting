@@ -17,7 +17,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from apps.deployments.models_servers import ManagedServer
+from apps.deployments.models.servers import ManagedServer
 from apps.deployments.services.tls_verify import (
     _allow_insecure_inter_node_tls,
     resolve_tls_verify_for_url,
@@ -46,7 +46,7 @@ class ManagedServerSerializerTLSFieldsTests(TestCase):
 
     def test_unpinned_server_reports_verify_tls_true(self):
         # Default verify_tls is True. The boolean pin flag is False.
-        from apps.deployments.views_servers import ManagedServerSerializer
+        from apps.deployments.views.server import ManagedServerSerializer
         data = ManagedServerSerializer(self.server).data
         self.assertTrue(data["verify_tls"])
         self.assertFalse(data["tls_cert_sha256_set"])
@@ -58,7 +58,7 @@ class ManagedServerSerializerTLSFieldsTests(TestCase):
                       # only need non-empty.
         )
         self.server.save(update_fields=["tls_cert_sha256"])
-        from apps.deployments.views_servers import ManagedServerSerializer
+        from apps.deployments.views.server import ManagedServerSerializer
         data = ManagedServerSerializer(self.server).data
         self.assertTrue(data["verify_tls"])
         self.assertTrue(data["tls_cert_sha256_set"])
@@ -71,7 +71,7 @@ class ManagedServerSerializerTLSFieldsTests(TestCase):
         pin = "deadbeef" * 8  # 64 hex chars
         self.server.tls_cert_sha256 = pin
         self.server.save(update_fields=["tls_cert_sha256"])
-        from apps.deployments.views_servers import ManagedServerSerializer
+        from apps.deployments.views.server import ManagedServerSerializer
         data = ManagedServerSerializer(self.server).data
         # The pin value must NOT appear anywhere in the response
         serialized = str(data)

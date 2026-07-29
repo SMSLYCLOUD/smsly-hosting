@@ -9,7 +9,7 @@ class TestNodeSelectorSafe(TestCase):
     @patch('apps.deployments.services.node_selector.settings')
     def test_select_node(self, mock_settings, mock_model):
         from apps.deployments.services.node_selector import select_eligible_node
-        mock_settings.CLOUDNEURON_ALLOW_CONTROL_PLANE_WORKLOADS = False
+        mock_settings.GRID_ALLOW_CONTROL_PLANE_WORKLOADS = False
 
         s1 = MagicMock()
         s1.is_control_plane = True

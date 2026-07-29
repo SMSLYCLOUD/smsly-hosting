@@ -170,7 +170,7 @@ class MetricsCollectorTests(TestCase):
 
     def test_returns_snapshot_with_source(self):
         from apps.deployments.models import Project
-        from apps.deployments.models_core import Service
+        from apps.deployments.models.core import Service
 
         user = User.objects.create_user(username='mc-user', password='x')
         project = Project.objects.create(name='mc-proj', owner=user)
@@ -188,7 +188,7 @@ class MetricsCollectorTests(TestCase):
 
     def test_prefer_prometheus_uses_prometheus_first(self):
         from apps.deployments.models import Project
-        from apps.deployments.models_core import Service
+        from apps.deployments.models.core import Service
 
         user = User.objects.create_user(username='mc-pp', password='x')
         project = Project.objects.create(name='mc-proj-pp', owner=user)
@@ -204,8 +204,8 @@ class MetricsCollectorTests(TestCase):
 
     def test_prefer_db_uses_db_first(self):
         from apps.deployments.models import Project
-        from apps.deployments.models_core import Service
-        from apps.deployments.models_metrics import ServiceMetric
+        from apps.deployments.models.core import Service
+        from apps.deployments.models.metrics import ServiceMetric
 
         user = User.objects.create_user(username='mc-db', password='x')
         project = Project.objects.create(name='mc-proj-db', owner=user)
@@ -235,7 +235,7 @@ class ReconcilerRaceConditionTests(TestCase):
 
     def setUp(self):
         from apps.deployments.models import Project
-        from apps.deployments.models_core import Service
+        from apps.deployments.models.core import Service
 
         self.user = User.objects.create_user(username='race-user', password='x')
         self.project = Project.objects.create(name='race-proj', owner=self.user)
@@ -318,7 +318,7 @@ class ReconcilerRaceConditionTests(TestCase):
     def test_lock_is_per_service(self):
         """The lock for service A must not block work for service B."""
         from apps.autoscaler.engine.reconciler import _SPAWN_LOCKS
-        from apps.deployments.models_core import Service
+        from apps.deployments.models.core import Service
 
         other_service = Service.objects.create(
             name='race-svc-b', owner=self.user, project=self.project,
@@ -342,8 +342,8 @@ class AnalyzeAndApplyTests(TestCase):
 
     def setUp(self):
         from apps.deployments.models import Project
-        from apps.deployments.models_core import Service
-        from apps.deployments.models_metrics import ServiceMetric
+        from apps.deployments.models.core import Service
+        from apps.deployments.models.metrics import ServiceMetric
 
         self.user = User.objects.create_user(username='pipe-user', password='x')
         self.project = Project.objects.create(name='pipe-proj', owner=self.user)
@@ -376,7 +376,7 @@ class AnalyzeAndApplyTests(TestCase):
         from apps.autoscaler.engine.reconciler import _SPAWN_LOCKS
         _SPAWN_LOCKS.pop(str(self.service.id), None)
         # Clear the metrics so the analyzer has no data
-        from apps.deployments.models_metrics import ServiceMetric
+        from apps.deployments.models.metrics import ServiceMetric
         ServiceMetric.objects.filter(service=self.service).delete()
 
         with patch('apps.deployments.services.spawning_service.SpawningService.spawn_local'), \
