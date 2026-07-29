@@ -35,7 +35,7 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Run Trivy filesystem scan (backend)
         uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bcbf0874569a87b02f # 0.28.0
         with:
@@ -61,7 +61,7 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Run Trivy filesystem scan (frontend)
         uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bcbf0874569a87b02f # 0.28.0
         with:
@@ -87,7 +87,7 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build backend image
         run: docker build -t smsly-backend:ci -f backend/Dockerfile backend/
       - name: Run Trivy image scan (backend)
@@ -115,7 +115,7 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build frontend image
         run: docker build -t smsly-frontend:ci -f frontend/Dockerfile frontend/
       - name: Run Trivy image scan (frontend)
@@ -143,7 +143,7 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Run Trivy config scan
         uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bcbf0874569a87b02f # 0.28.0
         with:
