@@ -30,7 +30,7 @@ ensure_local_ignores() {
 LOG_FILE="/var/log/smsly-install.log"
 INSTALL_DIR="/opt/smsly-hosting"
 CREDENTIALS_FILE="$INSTALL_DIR/.credentials"
-COMPOSE_FILE="docker-compose.prod.yml"
+COMPOSE_FILE="$INSTALL_DIR/docker-compose.prod.yml"
 LOCK_FILE="/tmp/smsly-install.lock"
 ROLLBACK_NEEDED=false
 CADDY_LAST_GOOD="$INSTALL_DIR/caddy-config/Caddyfile.smsly-last-good"

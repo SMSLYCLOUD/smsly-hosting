@@ -33,7 +33,7 @@ _DETECTED_INSTALL_MODE=""
 _CLI_INSTALL_MODE=""
 _CLI_MODE_CONFLICT=false
 RESUME_MODE=false
-COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
+COMPOSE_FILE="${COMPOSE_FILE:-/opt/smsly-hosting/docker-compose.prod.yml}"
 NO_SCREEN="${NO_SCREEN:-false}"
 
 # Read and export all variables from .env early if it exists

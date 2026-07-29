@@ -222,7 +222,7 @@ RESUME_MODE=false
 
 
 
-COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
+COMPOSE_FILE="${COMPOSE_FILE:-/opt/smsly-hosting/docker-compose.prod.yml}"
 
 
 
@@ -7893,7 +7893,7 @@ CREDENTIALS_FILE="$INSTALL_DIR/.credentials"
 
 
 
-COMPOSE_FILE="docker-compose.prod.yml"
+COMPOSE_FILE="$INSTALL_DIR/docker-compose.prod.yml"
 
 
 
