@@ -2724,7 +2724,7 @@ clear_checkpoint() {
 
 
 
-SMSLY_BRANCH="${SMSLY_BRANCH:-main}"
+SMSLY_BRANCH="${SMSLY_BRANCH:-master}"
 
 
 
@@ -20475,7 +20475,7 @@ fi
 
 
 
-SMSLY_BRANCH="${SMSLY_BRANCH:-main}"
+SMSLY_BRANCH="${SMSLY_BRANCH:-master}"
 
 
 

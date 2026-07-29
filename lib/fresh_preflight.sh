@@ -45,7 +45,7 @@ if [ "$DISK_AVAIL_MB" -lt 3000 ]; then
 fi
 
 # ─── Git Initialization & Sync ──────────────────────────────────────────────
-SMSLY_BRANCH="${SMSLY_BRANCH:-main}"
+SMSLY_BRANCH="${SMSLY_BRANCH:-master}"
 SMSLY_GIT_REMOTE="${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}"
 
 if [ -d "$INSTALL_DIR/.git" ]; then
