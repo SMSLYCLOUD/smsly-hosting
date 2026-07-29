@@ -20,7 +20,7 @@ wipe_existing_install() {
         fi
     fi
 
-    if [ -f "$INSTALL_DIR/$COMPOSE_FILE" ]; then
+    if [ -f "$COMPOSE_FILE" ]; then
         cd "$INSTALL_DIR"
         docker compose -f "$COMPOSE_FILE" down -v --remove-orphans || echo -e "${YELLOW}    ⚠ docker compose down failed${NC}"
     fi

@@ -351,7 +351,7 @@ fi
 for lib in "$LIB_DIR"/*.sh; do
     # Skip mode-entry files — they are sourced on-demand by the
     # mode dispatch below (they contain inline code, not just functions).
-    case "$lib" in */fresh*.sh|*/update.sh|*/install-gvisor.sh|*/install-kata.sh) continue ;; esac
+    case "$lib" in */fresh*.sh|*/update*.sh|*/harden_*.sh|*/install-gvisor.sh|*/install-kata.sh) continue ;; esac
     [ -f "$lib" ] && source "$lib"
 done
 # --- END_LIB_SOURCING ---
@@ -444,13 +444,13 @@ cleanup_on_failure() {
         echo -e "\n${RED}════════════════════════════════════════════════════════════${NC}"
         echo -e "${RED}  INSTALLATION FAILED (exit code: $exit_code)${NC}"
         echo -e "${RED}════════════════════════════════════════════════════════════${NC}"
-        if [ -f "$INSTALL_DIR/$COMPOSE_FILE" ]; then
+        if [ -f "$COMPOSE_FILE" ]; then
             cd "$INSTALL_DIR" || true
             dump_diagnostic_logs "$INSTALL_DIR/.env" || true
         fi
         echo -e "${YELLOW}  → Rolling back...${NC}"
         restore_last_good_caddy || true
-        if [ "${SMSLY_ROLLBACK_DOWN:-false}" = "true" ] && [ -f "$INSTALL_DIR/$COMPOSE_FILE" ]; then
+        if [ "${SMSLY_ROLLBACK_DOWN:-false}" = "true" ] && [ -f "$COMPOSE_FILE" ]; then
             cd "$INSTALL_DIR" || true
             docker compose -f "$COMPOSE_FILE" down || true
         else
@@ -620,16 +620,79 @@ fi
 
 # ─── Verify Mode ──────────────────────────────────────────────────────────────
 if [ "$VERIFY_MODE" = "true" ]; then
-    # Re-source ops.sh — the verify dispatch block at the end is gated by
-    # VERIFY_MODE, which is now set, so it will execute and exit 0.
-    source "$LIB_DIR/ops.sh"
-    exit 0
+    verify_endpoints
 fi
 
 # ─── Debug Mode ───────────────────────────────────────────────────────────────
 if [ "$DEBUG_MODE" = "true" ]; then
+    cd "$INSTALL_DIR"  || cd /root  || cd /
     debug_platform_status
     exit 0
+fi
+
+# ─── Clear Mode ───────────────────────────────────────────────────────────────
+if [ "${CLEAR_MODE:-false}" = "true" ]; then
+    if [ "$EUID" -ne 0 ]; then
+        echo -e "${RED}x Please run as root (sudo bash install.sh --clear)${NC}"
+        exit 1
+    fi
+    echo -e "\n${BLUE}  🧹 Running Maintenance Clear...${NC}"
+
+    # Prune unused docker resources
+    echo -e "  → Pruning unused Docker containers and images..."
+    docker container prune -f || echo -e "${YELLOW}    ⚠ docker container prune failed${NC}"
+    docker image prune -af || echo -e "${YELLOW}    ⚠ docker image prune failed${NC}"
+
+    # Stop and remove all stale smsly-addon-* containers (only those NOT running)
+    echo -e "  → Removing stale/orphaned service addons (protecting active databases)..."
+    ADDON_IDS=$(docker ps -a -q --filter "name=smsly-addon" --filter "status=exited" --filter "status=created" --filter "status=dead")
+    if [ -n "$ADDON_IDS" ]; then
+        docker rm -f $ADDON_IDS || echo -e "${YELLOW}    ⚠ docker rm addons failed${NC}"
+        echo -e "${GREEN}  ✓ Removed inactive orphaned addon containers.${NC}"
+    else
+        echo -e "${YELLOW}  - No inactive orphaned addons found.${NC}"
+    fi
+
+    # Stop and remove all stale deployment/blue-green containers
+    echo -e "  → Removing stale deployment containers (protecting active routes)..."
+    GREEN_IDS=$(docker ps -a -q --filter "name=-green-" --filter "status=exited" --filter "status=created" --filter "status=dead")
+    ROUTER_IDS=$(docker ps -a -q --filter "name=ai-router" --filter "status=exited" --filter "status=created" --filter "status=dead")
+
+    if [ -n "$GREEN_IDS" ]; then
+        docker rm -f $GREEN_IDS || echo -e "${YELLOW}    ⚠ docker rm green containers failed${NC}"
+        echo -e "${GREEN}  ✓ Removed inactive deployment containers.${NC}"
+    fi
+    if [ -n "$ROUTER_IDS" ]; then
+        docker rm -f $ROUTER_IDS || echo -e "${YELLOW}    ⚠ docker rm routers failed${NC}"
+        echo -e "${GREEN}  ✓ Removed inactive AI routers.${NC}"
+    fi
+
+    # Clean caches
+    echo -e "  → Cleaning system caches..."
+    rm -rf /opt/smsly-cache/*  || true
+    echo -e "${GREEN}  ✓ Cleared /opt/smsly-cache/.${NC}"
+
+    echo -e "\n${GREEN}  ✨ Maintenance complete. You can now re-run deployments.${NC}"
+    exit 0
+fi
+
+# ─── Recreate-Traefik Mode ───────────────────────────────────────────────────
+if [ "$RECREATE_TRAEFIK" = "true" ]; then
+    if [ "$EUID" -ne 0 ]; then
+        echo -e "${RED}x Please run as root (sudo bash install.sh --recreate-traefik)${NC}"
+        exit 1
+    fi
+    if [ ! -f "$COMPOSE_FILE" ]; then
+        echo -e "${RED}x Missing $COMPOSE_FILE. Run fresh install first.${NC}"
+        exit 1
+    fi
+    cd "$INSTALL_DIR"
+    should_manage_caddy || {
+        echo -e "${YELLOW}  WARN should_manage_caddy=false; aborting to avoid clobbering.${NC}"
+        exit 1
+    }
+    recreate_traefik_preserving_certs
+    exit $?
 fi
 
 # ─── Update Mode ──────────────────────────────────────────────────────────────

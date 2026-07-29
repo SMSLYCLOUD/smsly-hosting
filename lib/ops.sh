@@ -4,124 +4,14 @@ source "${BASH_SOURCE[0]%/*}/ops_recovery.sh"
 source "${BASH_SOURCE[0]%/*}/ops_debug.sh"
 
 # =============================================================================
-# DEBUG/RECOVER MODES
+# ops.sh — Function library for install/update/ops operations
+# Mode dispatch is handled by install.sh, NOT here.
+# This file only defines functions and sources sub-modules.
 # =============================================================================
-if [ "$DEBUG_MODE" = "true" ]; then
-    cd "$INSTALL_DIR"  || cd /root  || cd /
-    debug_platform_status
-    exit 0
-fi
 
-if [ "$RECOVER_MODE" = "true" ]; then
-    if [ "$EUID" -ne 0 ]; then
-        echo -e "${RED}x Please run as root (sudo bash install.sh --recover)${NC}"
-        exit 1
-    fi
-    if [ ! -f "$INSTALL_DIR/$COMPOSE_FILE" ]; then
-        echo -e "${RED}x Missing $INSTALL_DIR/$COMPOSE_FILE. Run fresh install first.${NC}"
-        exit 1
-    fi
-    cd "$INSTALL_DIR"
-    ensure_env_runtime_defaults "$INSTALL_DIR/.env" || true
-    RECOVER_STATUS=0
-    recover_runtime_stack || RECOVER_STATUS=$?
-    debug_platform_status
-    exit "$RECOVER_STATUS"
-fi
-
-if [ "$REFRESH_MODE" = "true" ]; then
-    if [ "$EUID" -ne 0 ]; then
-        echo -e "${RED}x Please run as root (sudo bash install.sh --refresh)${NC}"
-        exit 1
-    fi
-    if [ ! -f "$INSTALL_DIR/$COMPOSE_FILE" ]; then
-        echo -e "${RED}x Missing $INSTALL_DIR/$COMPOSE_FILE. Run fresh install first.${NC}"
-        exit 1
-    fi
-    cd "$INSTALL_DIR"
-    ensure_env_runtime_defaults "$INSTALL_DIR/.env" || true
-    REFRESH_STATUS=0
-    refresh_runtime_services || REFRESH_STATUS=$?
-    debug_platform_status
-    exit "$REFRESH_STATUS"
-fi
-
-# =============================================================================
-# RECREATE-TRAEFIK MODE — One-time safe recreate of the traefik container.
-# Preserves letsencrypt volume + acme.json; only forces recreate when needed
-# to pick up new entrypoints/flags (e.g. websecure:443, metrics:8082).
-# Bypassed by --update to avoid downtime. Caddy is also NOT recreated here.
-# =============================================================================
-if [ "$RECREATE_TRAEFIK" = "true" ]; then
-    if [ "$EUID" -ne 0 ]; then
-        echo -e "${RED}x Please run as root (sudo bash install.sh --recreate-traefik)${NC}"
-        exit 1
-    fi
-    if [ ! -f "$INSTALL_DIR/$COMPOSE_FILE" ]; then
-        echo -e "${RED}x Missing $INSTALL_DIR/$COMPOSE_FILE. Run fresh install first.${NC}"
-        exit 1
-    fi
-    cd "$INSTALL_DIR"
-    should_manage_caddy || {
-        echo -e "${YELLOW}  WARN should_manage_caddy=false; aborting to avoid clobbering.${NC}"
-        exit 1
-    }
-    recreate_traefik_preserving_certs
-    exit $?
-fi
-
-# =============================================================================
-# CLEAR MODE — Remove stale addons and cache
-# =============================================================================
-if [ "${CLEAR_MODE:-false}" = "true" ]; then
-    if [ "$EUID" -ne 0 ]; then
-        echo -e "${RED}x Please run as root (sudo bash install.sh --clear)${NC}"
-        exit 1
-    fi
-    echo -e "\n${BLUE}  🧹 Running Maintenance Clear...${NC}"
-
-    # Prune unused docker resources
-    echo -e "  → Pruning unused Docker containers and images..."
-    docker container prune -f || echo -e "${YELLOW}    ⚠ docker container prune failed${NC}"
-    docker image prune -af || echo -e "${YELLOW}    ⚠ docker image prune failed${NC}"
-
-    # Stop and remove all stale smsly-addon-* containers (only those NOT running)
-    echo -e "  → Removing stale/orphaned service addons (protecting active databases)..."
-    ADDON_IDS=$(docker ps -a -q --filter "name=smsly-addon" --filter "status=exited" --filter "status=created" --filter "status=dead")
-    if [ -n "$ADDON_IDS" ]; then
-        docker rm -f $ADDON_IDS || echo -e "${YELLOW}    ⚠ docker rm addons failed${NC}"
-        echo -e "${GREEN}  ✓ Removed inactive orphaned addon containers.${NC}"
-    else
-        echo -e "${YELLOW}  - No inactive orphaned addons found.${NC}"
-    fi
-
-    # Stop and remove all stale deployment/blue-green containers
-    echo -e "  → Removing stale deployment containers (protecting active routes)..."
-    GREEN_IDS=$(docker ps -a -q --filter "name=-green-" --filter "status=exited" --filter "status=created" --filter "status=dead")
-    ROUTER_IDS=$(docker ps -a -q --filter "name=ai-router" --filter "status=exited" --filter "status=created" --filter "status=dead")
-
-    if [ -n "$GREEN_IDS" ]; then
-        docker rm -f $GREEN_IDS || echo -e "${YELLOW}    ⚠ docker rm green containers failed${NC}"
-        echo -e "${GREEN}  ✓ Removed inactive deployment containers.${NC}"
-    fi
-    if [ -n "$ROUTER_IDS" ]; then
-        docker rm -f $ROUTER_IDS || echo -e "${YELLOW}    ⚠ docker rm routers failed${NC}"
-        echo -e "${GREEN}  ✓ Removed inactive AI routers.${NC}"
-    fi
-
-    # Clean caches
-    echo -e "  → Cleaning system caches..."
-    rm -rf /opt/smsly-cache/*  || true
-    echo -e "${GREEN}  ✓ Cleared /opt/smsly-cache/.${NC}"
-
-    echo -e "\n${GREEN}  ✨ Maintenance complete. You can now re-run deployments.${NC}"
-    exit 0
-fi
-
-# =============================================================================
-# VERIFY MODE — Run endpoint checks only (no changes)
-# =============================================================================
-if [ "${VERIFY_MODE:-false}" = "true" ]; then
+# ─── VERIFY MODE — Run endpoint checks only (no changes) ──────────────────────
+# Called from install.sh when VERIFY_MODE=true
+verify_endpoints() {
     if [ "$EUID" -ne 0 ]; then
         echo -e "${RED}x Please run as root (sudo bash install.sh --verify)${NC}"
         exit 1
@@ -260,4 +150,4 @@ for s in Service.objects.exclude(public_domain__isnull=True).exclude(public_doma
     docker compose -f "$COMPOSE_FILE" ps --format "table {{.Name}}\t{{.Status}}"  || \
         docker compose -f "$COMPOSE_FILE" ps  || true
     exit 0
-fi
+}
