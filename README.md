@@ -305,7 +305,7 @@ smsly-hosting/
 | 2026-06 | **Traefik `--api.insecure=true` removed**; Grafana anonymous disabled; all `:latest` image tags pinned | `docker-compose.prod.yml`, `infrastructure/monitoring/*` |
 | 2026-06 | **Internal service ports bound to `127.0.0.1`** | `docker-compose.prod.yml` |
 | 2026-06 | **Helm chart hardening**: `securityContext` defaults, `NetworkPolicy` (default-deny + intra-namespace), `PodDisruptionBudget`, per-component `ServiceAccount` with `automountServiceAccountToken: false`, `change-me`/`latest` sentinels in `_validators.tpl` | `charts/smsly-hosting/templates/_securitycontext.tpl`, `networkpolicy.yaml`, `pdb.yaml`, `serviceaccount.yaml`, `_validators.tpl` |
-| 2026-06 | **`tls_verify.py` centralised policy**; 18+ scattered `verify=False` calls replaced | `backend/services/tls_verify.py`, `backend/apps/**/services/*.py` |
+| 2026-06 | **`tls_verify.py` centralised policy**; 18+ scattered `verify=False` calls replaced | `backend/apps/deployments/services/tls_verify.py`, `backend/apps/**/services/*.py` |
 | 2026-06 | **Caddy HSTS, Permissions-Policy, `on_demand_tls` allowlist** | `caddy-config/Caddyfile` |
 | 2026-06 | **GitHub Actions pinned to commit SHAs** with `permissions:` block; `pip-audit`, `bandit`, `gitleaks`, `npm audit` added to CI | `.github/workflows/*` |
 | 2026-06 | **`SECURITY.md`**, **`CODEOWNERS`**, **`dependabot.yml`**, **`.pre-commit-config.yaml`** added | repo root, `.github/`, `.pre-commit-config.yaml` |

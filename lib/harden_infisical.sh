@@ -24,6 +24,7 @@ _harden_infisical_bootstrap() {
 }
 
 _harden_infisical_verify() {
+    command -v docker >/dev/null 2>&1 || return 0
     if docker ps --format '{{.Names}}'  | grep -q "smsly-infisical"; then
         _harden_log ok "Infisical running"
         return 0

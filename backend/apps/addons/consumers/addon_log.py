@@ -54,14 +54,10 @@ class AddonLogConsumer(AsyncWebsocketConsumer):
             self.user = self.scope.get('user')
 
             if not self.user or self.user.is_anonymous:
-                await self.accept()
-                await self.send(text_data=json.dumps({'error': 'Authentication required'}))
                 await self.close(code=4002)
                 return
 
             if not await self._verify_ownership():
-                await self.accept()
-                await self.send(text_data=json.dumps({'error': 'Access denied'}))
                 await self.close(code=4003)
                 return
 

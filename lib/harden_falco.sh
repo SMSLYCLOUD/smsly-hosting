@@ -1,6 +1,7 @@
 #!/bin/bash
 
 _harden_falco_bootstrap() {
+    command -v docker >/dev/null 2>&1 || return 0
     local compose_file="$INSTALL_DIR/infrastructure/docker/docker-compose.falco.yml"
     [ -f "$compose_file" ] || return 1
 
@@ -16,6 +17,7 @@ _harden_falco_bootstrap() {
 }
 
 _harden_falco_verify() {
+    command -v docker >/dev/null 2>&1 || return 0
     if ! docker ps --format '{{.Names}}'  | grep -q "smsly-falco"; then
         _harden_log warn "falco — container not running"
         return 1

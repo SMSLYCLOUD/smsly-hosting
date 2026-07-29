@@ -484,8 +484,8 @@ smsly-hosting/
 
 ### Key Technologies
 
-- **Backend:** Django 4+, DRF, Celery, PostgreSQL, Redis
-- **Frontend:** Next.js 14+, React 18, TypeScript, Tailwind CSS
+- **Backend:** Django 5.x, DRF, Celery, PostgreSQL, Redis
+- **Frontend:** Next.js 15, React 18, TypeScript, Tailwind CSS
 - **Infrastructure:** Docker, Docker Compose, Traefik (reverse proxy)
 - **Task Queue:** Celery with Redis broker, beat scheduler
 

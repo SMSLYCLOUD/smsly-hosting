@@ -86,12 +86,12 @@ if ! command -v docker ; then
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg --yes
     echo \
       "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-      $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list 
+      $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list
     apt_run apt-get update -qq
     apt_run apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
     systemctl enable docker || echo -e "${YELLOW}    ⚠ docker.service enable failed${NC}"
     systemctl start docker || echo -e "${YELLOW}    ⚠ docker.service start failed${NC}"
-    if ! docker info ; then
+    if ! timeout 30 docker info ; then
         echo -e "${RED}  ✗ Docker daemon failed to start. Check 'systemctl status docker' and kernel modules.${NC}"
         exit 1
     fi

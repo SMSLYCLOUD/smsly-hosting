@@ -1,6 +1,7 @@
 #!/bin/bash
 
 _harden_docker_daemon_bootstrap() {
+    command -v docker >/dev/null 2>&1 || return 0
     local daemon_cfg="/etc/docker/daemon.json"
     [ ! -f "$daemon_cfg" ] && echo '{}' > "$daemon_cfg"
 
@@ -73,6 +74,7 @@ with open('$daemon_cfg','w') as f: json.dump(cfg, f, indent=2)
 }
 
 _harden_docker_daemon_verify() {
+    command -v docker >/dev/null 2>&1 || return 0
     local daemon_cfg="/etc/docker/daemon.json"
     if [ -f "$daemon_cfg" ] && python3 -c "import json; json.load(open('$daemon_cfg'))" ; then
         _harden_log ok "docker daemon security config present"

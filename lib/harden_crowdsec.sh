@@ -1,6 +1,7 @@
 #!/bin/bash
 
 _harden_crowdsec_bootstrap() {
+    command -v docker >/dev/null 2>&1 || return 0
     # CrowdSec comes from the main docker-compose stack — if the container
     # isn't running, try docker compose up -d for just that service.
     if docker ps --format '{{.Names}}'  | grep -q "smsly-crowdsec"; then
@@ -18,6 +19,7 @@ _harden_crowdsec_bootstrap() {
 }
 
 _harden_crowdsec_verify() {
+    command -v docker >/dev/null 2>&1 || return 0
     if ! docker ps --format '{{.Names}}'  | grep -q "smsly-crowdsec"; then
         _harden_log warn "crowdsec — container not running"
         return 1

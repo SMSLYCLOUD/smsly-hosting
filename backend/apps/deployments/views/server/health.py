@@ -27,7 +27,7 @@ class HealthMixin:
     @action(detail=False, methods=["post"])
     @throttle_classes([ServerCheckAllThrottle])
     def check_all(self, request):
-        from .tasks_health import refresh_managed_server_health
+        from apps.deployments.tasks.infra.tasks_health import refresh_managed_server_health
         servers = list(self.get_queryset())
         for server in servers:
             refresh_managed_server_health.delay(str(server.id))
