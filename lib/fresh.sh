@@ -10,6 +10,7 @@ export PATH="/usr/local/bin:$PATH"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+source "$SCRIPT_DIR/state.sh"
 source "$SCRIPT_DIR/fresh_interactive.sh"
 source "$SCRIPT_DIR/fresh_preflight.sh"
 source "$SCRIPT_DIR/fresh_deps.sh"
