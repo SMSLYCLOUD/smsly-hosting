@@ -1,5 +1,5 @@
-# TODO: pin to digest via dependabot/renovate
-FROM ghcr.io/postgresml/pgcat:2.1.0
+# Pinned to digest of levkk/pgcat:latest (2026-07-30)
+FROM levkk/pgcat@sha256:b22ad4dc71970dcfc6de027d6219c07d39c43a1a97c0a01dad6c7a1a600416a5
 
 USER root
 RUN apt-get update && apt-get install -y python3 python3-pip && rm -rf /var/lib/apt/lists/*
