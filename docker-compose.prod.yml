@@ -26,8 +26,6 @@ services:
       -c wal_keep_size=1GB
       -c max_slot_wal_keep_size=${PG_MAX_SLOT_WAL_KEEP_SIZE:-5GB}
       -c wal_sender_timeout=60s
-      -c synchronous_commit=${PG_SYNCHRONOUS_COMMIT:-on}
-      -c synchronous_standby_names=${PG_SYNCHRONOUS_STANDBY_NAMES:-'*'}
       -c archive_mode=on
       -c archive_command='mkdir -p /var/lib/postgresql/archive && cp %p /var/lib/postgresql/archive/%f'
       -c max_connections=${DB_MAX_CONNECTIONS:-200}

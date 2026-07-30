@@ -464,6 +464,8 @@ EOF
     # Atomic move and validation
     if validate_env_file "$ENV_TMP"; then
         mv "$ENV_TMP" "$INSTALL_DIR/.env"
+        # Sync the backup so rollback doesn't restore stale/empty .env.backup
+        cp "$INSTALL_DIR/.env" "$INSTALL_DIR/.env.backup"
         # 664 so the backend container (runs as UID 1000) can read AND write it.
         # This allows the domain-config signal to persist DOMAIN/USE_SSL back to
         # .env when the user updates settings via the web UI — no SSH needed.
