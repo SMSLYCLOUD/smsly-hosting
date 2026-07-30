@@ -493,6 +493,7 @@ echo -e "${BLUE}═════════════════════�
 
 # ─── Wipe Mode ────────────────────────────────────────────────────────────────
 if [ "$WIPE_MODE" = "true" ]; then
+    FORCE_WIPE=1
     wipe_existing_install
     exit 0
 fi
