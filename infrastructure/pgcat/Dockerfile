@@ -1,4 +1,5 @@
-FROM ghcr.io/postgresml/pgcat:2.1.0 # TODO: pin to digest via dependabot/renovate
+# TODO: pin to digest via dependabot/renovate
+FROM ghcr.io/postgresml/pgcat:2.1.0
 
 USER root
 RUN apt-get update && apt-get install -y python3 python3-pip && rm -rf /var/lib/apt/lists/*
