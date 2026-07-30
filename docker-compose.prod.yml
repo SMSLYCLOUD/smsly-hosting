@@ -2,10 +2,7 @@ services:
   # ── PostgreSQL HA (primary + replica) ──────────────────────────────────
   postgres-primary:
     security_opt:
-      - no-new-privileges:true
       - apparmor:docker-default
-    cap_drop:
-      - ALL
     image: postgres:16-alpine
     container_name: smsly-postgres-primary
     restart: unless-stopped
@@ -59,10 +56,7 @@ services:
 
   postgres-replica:
     security_opt:
-      - no-new-privileges:true
       - apparmor:docker-default
-    cap_drop:
-      - ALL
     image: postgres:16-alpine
     container_name: smsly-postgres-replica
     restart: unless-stopped
@@ -146,10 +140,7 @@ services:
   # ── Redis HA (primary + replica + 3 sentinels) ─────────────────────────
   redis-primary:
     security_opt:
-      - no-new-privileges:true
       - apparmor:docker-default
-    cap_drop:
-      - ALL
     read_only: true
     image: redis:7-alpine
     container_name: smsly-redis-primary
@@ -187,10 +178,7 @@ services:
 
   redis-replica:
     security_opt:
-      - no-new-privileges:true
       - apparmor:docker-default
-    cap_drop:
-      - ALL
     read_only: true
     image: redis:7-alpine
     container_name: smsly-redis-replica
@@ -232,10 +220,7 @@ services:
 
   redis-sentinel-1:
     security_opt:
-      - no-new-privileges:true
       - apparmor:docker-default
-    cap_drop:
-      - ALL
     read_only: true
     image: redis:7-alpine
     container_name: smsly-redis-sentinel-1
@@ -283,10 +268,7 @@ services:
 
   redis-sentinel-2:
     security_opt:
-      - no-new-privileges:true
       - apparmor:docker-default
-    cap_drop:
-      - ALL
     read_only: true
     image: redis:7-alpine
     container_name: smsly-redis-sentinel-2
@@ -334,10 +316,7 @@ services:
 
   redis-sentinel-3:
     security_opt:
-      - no-new-privileges:true
       - apparmor:docker-default
-    cap_drop:
-      - ALL
     read_only: true
     image: redis:7-alpine
     container_name: smsly-redis-sentinel-3
