@@ -96,12 +96,10 @@ services:
           memory: ${DB_REPLICA_RESERVATION:-1G}
         limits:
           memory: ${DB_REPLICA_LIMIT:-4G}
-  pgcat:
+   pgcat:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
-    cap_drop:
-      - ALL
     build:
       context: ./infrastructure/pgcat
       dockerfile: Dockerfile
@@ -220,6 +218,8 @@ services:
     security_opt:
       - apparmor:docker-default
     read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=1M
     image: redis:7-alpine
     container_name: smsly-redis-sentinel-1
     restart: unless-stopped
@@ -268,6 +268,8 @@ services:
     security_opt:
       - apparmor:docker-default
     read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=1M
     image: redis:7-alpine
     container_name: smsly-redis-sentinel-2
     restart: unless-stopped
@@ -316,6 +318,8 @@ services:
     security_opt:
       - apparmor:docker-default
     read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=1M
     image: redis:7-alpine
     container_name: smsly-redis-sentinel-3
     restart: unless-stopped
