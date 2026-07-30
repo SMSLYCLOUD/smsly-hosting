@@ -145,7 +145,7 @@ export default function ChangelogPage() {
 
               <div className="ml-[2.75rem] space-y-2">
                 {release.changes.map((change, i) => {
-                  const meta = changeIcons[change.type];
+                  const meta = changeIcons[change.type as keyof typeof changeIcons];
                   const Icon = meta.icon;
                   return (
                     <div key={i} className="flex items-start gap-3 py-2">
