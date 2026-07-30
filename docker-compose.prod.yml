@@ -443,10 +443,7 @@ services:
           memory: ${DOCKER_MIRROR_MEMORY_LIMIT:-512M}
   apt-cacher:
     security_opt:
-      - no-new-privileges:true
       - apparmor:docker-default
-    cap_drop:
-      - ALL
     image: sameersbn/apt-cacher-ng:latest
     container_name: smsly-apt-cacher
     restart: unless-stopped
@@ -1061,10 +1058,7 @@ services:
           memory: ${TRAEFIK_SOCKET_PROXY_MEMORY_LIMIT:-128M}
   route-fallback:
     security_opt:
-      - no-new-privileges:true
       - apparmor:docker-default
-    cap_drop:
-      - ALL
     read_only: true
     image: caddy:2-alpine
     restart: unless-stopped
@@ -1258,10 +1252,7 @@ services:
           memory: ${FRPS_MEMORY_LIMIT:-256M}
   rabbitmq:
     security_opt:
-      - no-new-privileges:true
       - apparmor:docker-default
-    cap_drop:
-      - ALL
     image: rabbitmq:3-management-alpine
     ports:
       # SECURITY: AMQP broker on loopback; producers/consumers talk to it
@@ -1295,12 +1286,7 @@ services:
           memory: ${RABBITMQ_MEMORY_LIMIT:-1G}
   caddy:
     security_opt:
-      - no-new-privileges:true
       - apparmor:docker-default
-    cap_drop:
-      - ALL
-    cap_add:
-      - NET_BIND_SERVICE
     build:
       context: .
       dockerfile: infrastructure/caddy/Dockerfile
