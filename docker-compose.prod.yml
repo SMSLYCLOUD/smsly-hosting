@@ -1059,12 +1059,12 @@ services:
   route-fallback:
     security_opt:
       - apparmor:docker-default
-    read_only: true
     image: caddy:2-alpine
     restart: unless-stopped
     volumes:
     - ./infrastructure/route-fallback/Caddyfile:/etc/caddy/Caddyfile:ro,z
     - ./infrastructure/route-fallback/index.html:/srv/index.html:ro,z
+    - caddy_data:/data
     labels:
     - traefik.enable=true
     - traefik.http.routers.route-fallback.rule=PathPrefix(`/`)
