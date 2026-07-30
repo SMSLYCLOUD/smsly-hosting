@@ -225,9 +225,9 @@ compose_stack_up() {
         stop_node_excluded_services
         services="$(compose_stack_service_args)"
         [ -n "$services" ] || return 1
-        timeout -k 5 60 docker compose -f "$COMPOSE_FILE" up -d "$@" $services
+        timeout -k 10 300 docker compose -f "$COMPOSE_FILE" up -d "$@" $services
     else
-        timeout -k 5 60 docker compose -f "$COMPOSE_FILE" up -d "$@"
+        timeout -k 10 300 docker compose -f "$COMPOSE_FILE" up -d "$@"
     fi
 }
 
