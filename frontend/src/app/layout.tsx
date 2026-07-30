@@ -27,6 +27,7 @@ export const viewport: Viewport = {
 
 import { LazyMount } from "@/components/LazyMount";
 import { ThreeCompat } from "@/components/three-compat";
+import { ReactQueryProvider } from "@/components/react-query-provider";
 import { SpaceOpsBackground } from "@/components/effects/SpaceOpsBackground";
 import { Navbar } from "@/components/layout/Navbar";
 import { Footer } from "@/components/layout/Footer";
@@ -46,6 +47,7 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className="font-sans antialiased cloud-bg">
+        <ReactQueryProvider>
         <ThemeProvider
             attribute="class"
             defaultTheme="system"
@@ -77,6 +79,7 @@ export default function RootLayout({
               </LazyMotion>
             </AuthProvider>
         </ThemeProvider>
+        </ReactQueryProvider>
       </body>
     </html>
   );
