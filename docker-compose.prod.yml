@@ -1096,7 +1096,7 @@ services:
     container_name: smsly-crowdsec
     restart: unless-stopped
     environment:
-      COLLECTIONS: "crowdsecurity/traefik crowdsecurity/caddy crowdsecurity/http-cve crowdsecurity/base-http-scenarios crowdsecurity/prometheus"
+      COLLECTIONS: "crowdsecurity/traefik crowdsecurity/caddy crowdsecurity/http-cve crowdsecurity/base-http-scenarios"
       ENROLL_KEY: "${CROWDSEC_ENROLL_KEY:-}"
       ENROLL_INSTANCE_NAME: "${DOMAIN:-smsly-hosting}"
       BOUNCER_KEY_traefik_bouncer: "${CROWDSEC_BOUNCER_KEY:-}"
