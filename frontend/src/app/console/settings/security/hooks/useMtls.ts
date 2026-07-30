@@ -4,7 +4,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { config } from '@/lib/config';
 import { tokenManager } from '@/lib/token-manager';
-import type { MtlsHealth, MtlsConfig } from './types';
+import type { MtlsHealth, MtlsConfig } from '../types';
 
 const API_BASE = config.api.baseUrl;
 
