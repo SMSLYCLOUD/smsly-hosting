@@ -5,7 +5,7 @@ USER root
 # Buster (Debian 10) is EOL — repos moved to archive
 RUN sed -i 's|deb.debian.org|archive.debian.org|g; s|http://security.debian.org/debian-security|http://archive.debian.org/debian-security|g' /etc/apt/sources.list && \
     apt-get update && apt-get install -y python3 python3-pip && rm -rf /var/lib/apt/lists/*
-RUN pip3 install --break-system-packages psycopg2-binary
+RUN pip3 install psycopg2-binary
 
 COPY entrypoint.sh /entrypoint.sh
 COPY render_pgcat_config.py /scripts/render_pgcat_config.py
