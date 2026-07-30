@@ -96,7 +96,7 @@ services:
           memory: ${DB_REPLICA_RESERVATION:-1G}
         limits:
           memory: ${DB_REPLICA_LIMIT:-4G}
-   pgcat:
+  pgcat:
     security_opt:
       - no-new-privileges:true
       - apparmor:docker-default
