@@ -4,8 +4,8 @@ FROM levkk/pgcat@sha256:b22ad4dc71970dcfc6de027d6219c07d39c43a1a97c0a01dad6c7a1a
 USER root
 # Buster (Debian 10) is EOL — repos moved to archive
 RUN sed -i 's|deb.debian.org|archive.debian.org|g; s|http://security.debian.org/debian-security|http://archive.debian.org/debian-security|g' /etc/apt/sources.list && \
-    apt-get update && apt-get install -y python3 python3-pip && rm -rf /var/lib/apt/lists/*
-RUN pip3 install psycopg2-binary
+    apt-get update && apt-get install -y python3 python3-pip libpq-dev && rm -rf /var/lib/apt/lists/*
+RUN pip3 install --upgrade pip && pip3 install psycopg2-binary
 
 COPY entrypoint.sh /entrypoint.sh
 COPY render_pgcat_config.py /scripts/render_pgcat_config.py
