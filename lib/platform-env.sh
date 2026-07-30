@@ -209,6 +209,9 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "SMSLY_ENABLE_STARTUP_CADDY_SYNC" "false" "Keep AppConfig.ready side-effect free; installer/watchers sync edge config"
     env_ensure_var "$env_file" "PGCAT_ADMIN_PASSWORD" "$(gen_hex_secret 48)" "PgCat administration password (mandatory for 1.2+)"
     env_ensure_var "$env_file" "GRAFANA_PASSWORD" "$(python3 -c "import secrets,string; print(''.join(secrets.choice(string.ascii_letters+string.digits+'-_') for _ in range(40)))"  || openssl rand -base64 30 | tr -d '+/=')" "Grafana admin password (used by the standalone observability stack)"
+    env_ensure_var "$env_file" "REPLICATION_PASSWORD" "$(gen_hex_secret 32)" "PostgreSQL streaming replication password"
+    env_ensure_var "$env_file" "SENTINEL_PASSWORD" "$(gen_hex_secret 32)" "Redis Sentinel authentication password"
+    env_ensure_var "$env_file" "REGISTRY_HTTP_SECRET" "$(gen_hex_secret 32)" "Docker registry HTTP secret"
     env_ensure_var "$env_file" "SMSLY_STRICT_SSH_HOST_KEY_CHECK" "false" "SSH host key verification (True=strict, False=accept-first)"
     sync_install_mode_env_file "$env_file"
 
