@@ -41,19 +41,6 @@ with open('$daemon_cfg','w') as f: json.dump(cfg, f, indent=2)
         changed=true
     }
 
-    # userns-remap — only when no containers are running (would orphan them)
-    python3 -c "import json; d=json.load(open('$daemon_cfg')); exit(0 if d.get('userns-remap') else 1)"  || {
-        if [ -z "$(docker ps -q  | head -1)" ]; then
-            python3 -c "
-import json
-with open('$daemon_cfg') as f: cfg = json.load(f)
-cfg['userns-remap'] = 'default'
-with open('$daemon_cfg','w') as f: json.dump(cfg, f, indent=2)
-"
-            changed=true
-        fi
-    }
-
     # Restart Docker if config changed AND no SMSLY containers are running
     # (doing so live would kill production).
     if [ "$changed" = "true" ]; then
