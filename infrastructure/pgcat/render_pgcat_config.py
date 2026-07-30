@@ -136,10 +136,8 @@ def main():
     all_servers = [primary_server, *replica_entries]
     servers_str = ",\n        ".join(all_servers)
 
-    listen_addr = f"0.0.0.0:{db_port}"
     lines = [
         '[general]',
-        f'bind_addr = "{listen_addr}"',
         f'admin_username = "{admin_user}"',
         f'admin_password = "{admin_pass}"',
         'server_lifetime = 86400000',

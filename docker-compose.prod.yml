@@ -117,7 +117,7 @@ services:
     healthcheck:
       test:
       - CMD-SHELL
-      - PGPASSWORD="$${POSTGRES_PASSWORD}" psql -h 127.0.0.1 -p 5432 -U "$${POSTGRES_USER:-smsly_admin}" -d "$${POSTGRES_DB:-smsly_hosting}" -c "SELECT 1;" >/dev/null 2>&1
+      - PGPASSWORD="$${POSTGRES_PASSWORD}" psql -h 127.0.0.1 -p 6432 -U "$${POSTGRES_USER:-smsly_admin}" -d "$${POSTGRES_DB:-smsly_hosting}" -c "SELECT 1;" >/dev/null 2>&1
       interval: 10s
       timeout: 10s
       retries: 10
@@ -125,7 +125,7 @@ services:
     labels:
     - managed_by=smsly-hosting
     ports:
-      - "10.100.0.1:5432:5432"
+      - "10.100.0.1:5432:6432"
     networks:
     - smsly-net
     deploy:
