@@ -129,6 +129,8 @@ docker_login
 
 # Ensure bind-mounted config paths exist before `docker compose up`.
 ensure_infrastructure_permissions
+# Pre-create caddy bind-mount directories (needed by compose volume driver)
+mkdir -p "$INSTALL_DIR/caddy-config" "$INSTALL_DIR/caddy-logs"
 if [ "$MODE_AGENT_LITE" = "true" ]; then
     echo -e "${BLUE}  → Lite Agent mode: disabling master-only Caddy services before Traefik bind.${NC}"
     true
