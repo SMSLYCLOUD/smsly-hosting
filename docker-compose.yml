@@ -52,10 +52,7 @@ services:
   # APT package cache (Debian/Ubuntu)
   apt-cacher:
     security_opt:
-      - no-new-privileges:true
       - apparmor:docker-default
-    cap_drop:
-      - ALL
     image: sameersbn/apt-cacher-ng:3.1-20240122 # TODO: pin to digest via dependabot/renovate
     container_name: smsly-apt-cacher
     restart: unless-stopped
@@ -243,10 +240,7 @@ services:
   # ============================================================
   db:
     security_opt:
-      - no-new-privileges:true
       - apparmor:docker-default
-    cap_drop:
-      - ALL
     image: postgres:16-alpine
     restart: unless-stopped
     command: postgres -c max_connections=200
@@ -278,10 +272,7 @@ services:
   # ============================================================
   redis:
     security_opt:
-      - no-new-privileges:true
       - apparmor:docker-default
-    cap_drop:
-      - ALL
     image: redis:7-alpine
     command: redis-server ${REDIS_PASSWORD:+--requirepass ${REDIS_PASSWORD}}
     restart: unless-stopped
@@ -303,10 +294,7 @@ services:
   # ============================================================
   rabbitmq:
     security_opt:
-      - no-new-privileges:true
       - apparmor:docker-default
-    cap_drop:
-      - ALL
     image: rabbitmq:3-management-alpine
     restart: unless-stopped
     ports:
@@ -982,12 +970,7 @@ services:
   # ============================================================
   caddy:
     security_opt:
-      - no-new-privileges:true
       - apparmor:docker-default
-    cap_drop:
-      - ALL
-    cap_add:
-      - NET_BIND_SERVICE
     build:
       context: .
       dockerfile: infrastructure/caddy/Dockerfile
