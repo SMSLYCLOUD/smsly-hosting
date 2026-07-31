@@ -47,7 +47,7 @@ app.autodiscover_tasks()
 # These imports MUST be deferred until Django apps are fully loaded,
 # otherwise models.py triggers AppRegistryNotReady.
 @app.on_after_finalize.connect
-def register_extra_tasks(_sender, **kwargs):  # pylint: disable=unused-argument
+def register_extra_tasks(sender=None, **kwargs):  # pylint: disable=unused-argument
     # Importing the module is enough — the @shared_task decorator
     # registers the task with the worker on import.
     # pylint: disable=import-outside-toplevel
@@ -68,6 +68,13 @@ def register_extra_tasks(_sender, **kwargs):  # pylint: disable=unused-argument
     import apps.deployments.tasks.ai.tasks_ai  # noqa: F401  # analyze_failure_task
     import apps.deployments.tasks.ai.tasks_code_intelligence  # noqa: F401  # deep_scan_and_verify_task
     import apps.deployments.tasks.infra.tasks_health  # noqa: F401  # check_agent_heartbeats_task
+    import apps.deployments.tasks.scheduling.tasks_cron  # noqa: F401  # check_cron_jobs, trigger_cron_job
+    import apps.deployments.tasks_spiffe  # noqa: F401  # sync_spiffe_entries_task
+    # -- apps.core.tasks is an empty package (only submodules hold tasks),
+    #    so autodiscovery has nothing to import. Load them explicitly. --
+    import apps.core.tasks.metrics  # noqa: F401  # collect_metrics_task, cleanup_build_cache_task
+    import apps.core.tasks.traffic  # noqa: F401  # collect_traefik_logs, resolve_traffic_geolocations
+    import apps.core.tasks.alerts  # noqa: F401  # scan_running_containers_logs_task
     # -- All other task modules are auto-discovered via autodiscover_tasks()
     #    which imports {app}.tasks for every INSTALLED_APPS entry. App-level
     #    tasks.py or tasks/__init__.py re-exports from subpackages.
@@ -169,7 +176,7 @@ app.conf.task_routes = {
     'apps.intelligence.tasks.ai_deployment_review_task': {'queue': 'deploy'},
     'apps.deployments.tasks.ai.tasks_ai.analyze_failure_task': {'queue': 'deploy'},
     'apps.deployments.tasks.ai.tasks_code_intelligence.deep_scan_and_verify_task': {'queue': 'deploy'},
-    'apps.deployments.tasks.infra.tasks_health.check_agent_heartbeats_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.check_agent_heartbeats_task': {'queue': 'deploy'},
 }
 
 app.conf.beat_schedule = {
