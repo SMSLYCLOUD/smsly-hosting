@@ -110,7 +110,7 @@ select_management_database() {
 
 
 
-        echo "[INFO] DIRECT_DATABASE_URL is set. Using direct database alias for management tasks."
+        echo "[INFO] DIRECT_DATABASE_URL is set. Using direct database alias for management tasks." >&2
 
 
 
