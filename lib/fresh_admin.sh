@@ -91,7 +91,7 @@ from django.middleware.csrf import CsrfViewMiddleware
 response = recovery_phrase_generate(request)
 import json
 print(json.dumps(response.data))
-"  | tail -1 || true)"
+"  < /dev/null | tail -1 || true)"
     if [ -n "$RECOVERY_PHRASE" ]; then
         RECOVERY_PHRASE_TEXT="$(printf '%s' "$RECOVERY_PHRASE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('phrase',''))"  || true)"
         if [ -n "$RECOVERY_PHRASE_TEXT" ]; then

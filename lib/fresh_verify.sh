@@ -39,7 +39,7 @@ BACKEND_OK=false
 BACKEND_STATUS=""
 for attempt in $(seq 1 24); do
     BACKEND_STATUS="$(docker compose -f "$COMPOSE_FILE" ps backend --format "{{.Status}}"  || true)"
-    if timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS http://127.0.0.1:8000/health/live ; then
+    if timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS http://127.0.0.1:8000/health/live < /dev/null ; then
         BACKEND_OK=true
         break
     fi
@@ -72,7 +72,7 @@ echo -e "${BLUE}  → [1/4] Running health check...${NC}"
 HEALTH_OK=false
 MAX_ATTEMPTS=36
 for attempt in $(seq 1 $MAX_ATTEMPTS); do
-    if timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health/live ; then
+    if timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health/live < /dev/null ; then
         HEALTH_OK=true
         break
     elif curl -sfL --max-time 5 http://127.0.0.1:8000/health/live ; then
@@ -87,7 +87,7 @@ echo ""
 if [ "$HEALTH_OK" = "true" ]; then
     echo -e "${GREEN}  ✓ Health Check Passed!${NC}"
     READY_OK=false
-    timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health/ready  && READY_OK=true
+    timeout 15 docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS --max-time 5 http://127.0.0.1:8000/health/ready < /dev/null  && READY_OK=true
     if ! $READY_OK && ! curl -sfL --max-time 5 http://127.0.0.1:8000/health/ready ; then
         echo -e "${YELLOW}  ⚠ Readiness endpoint is still warming; continuing because liveness passed.${NC}"
     fi
@@ -306,8 +306,8 @@ fi
 echo -e "\n${YELLOW}[11/11] Finalizing Inter-Node Connectivity...${NC}"
 echo -e "${BLUE}  → Registering this node and creating authentication tokens...${NC}"
 # Use -T to avoid TTY issues in non-interactive mode
-if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py help diagnose_nodes ; then
-    timeout 120 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py diagnose_nodes --fix || true
+if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py help diagnose_nodes < /dev/null ; then
+    timeout 120 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py diagnose_nodes --fix < /dev/null || true
     echo -e "${GREEN}  ✓ Node registered as Primary (if Master) and API tokens verified${NC}"
 else
     echo -e "${YELLOW}  ⚠ diagnose_nodes command not available in this version; skipping.${NC}"

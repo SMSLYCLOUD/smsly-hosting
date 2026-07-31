@@ -11,7 +11,7 @@ else
 echo -e "${BLUE}  → Waiting for Database...${NC}"
 DB_READY=false
 for i in $(seq 1 24); do
-    if timeout 10 docker compose -f "$COMPOSE_FILE" exec -T db pg_isready -U smsly_admin ; then
+    if timeout 10 docker compose -f "$COMPOSE_FILE" exec -T db pg_isready -U smsly_admin < /dev/null ; then
         echo -e "${GREEN}  ✓ Database is ready (attempt $i).${NC}"
         DB_READY=true
         break
@@ -38,16 +38,17 @@ echo -e "${BLUE}  → Syncing database password...${NC}"
 # Try local trust auth first (Docker default), then try with PGPASSWORD
 if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T db \
     psql -U postgres -c "ALTER USER smsly_admin WITH PASSWORD '${POSTGRES_PASSWORD}';" \
-    ; then
+    < /dev/null ; then
     echo -e "${GREEN}  ✓ Database password synced${NC}"
 elif timeout 30 docker compose -f "$COMPOSE_FILE" exec -T -e PGPASSWORD="${POSTGRES_PASSWORD}" db \
-    psql -U smsly_admin -d smsly_hosting -c "SELECT 1;" ; then
+    psql -U smsly_admin -d smsly_hosting -c "SELECT 1;" < /dev/null ; then
     echo -e "${GREEN}  ✓ Database password already matches${NC}"
 else
     echo -e "${YELLOW}  ⚠ Password mismatch — resetting via postgres superuser...${NC}"
     # Last resort: the Docker postgres container always accepts local postgres user
     timeout 30 docker compose -f "$COMPOSE_FILE" exec -T db \
         psql -U postgres -c "ALTER USER smsly_admin WITH PASSWORD '${POSTGRES_PASSWORD}';" \
+        < /dev/null \
          || echo -e "${RED}  ✗ Could not sync password. Check pg_hba.conf${NC}"
 fi
 
@@ -77,6 +78,7 @@ sleep 5
     timeout 30 docker compose -f "$COMPOSE_FILE" exec -T db \
         psql -U smsly_admin -d smsly_hosting \
         -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND backend_type = 'client backend'" \
+        < /dev/null \
          || echo -e "${YELLOW}    ⚠ Failed to terminate stale connections${NC}"
     sleep 2
 
@@ -92,6 +94,7 @@ sleep 5
         timeout 30 docker compose -f "$COMPOSE_FILE" exec -T db \
             psql -U smsly_admin -d smsly_hosting \
             -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND backend_type = 'client backend'" \
+            < /dev/null \
              || echo -e "${YELLOW}    ⚠ Failed to terminate stale connections${NC}"
         sleep 5
         if run_backend_migrations ; then
@@ -114,9 +117,9 @@ sleep 5
 echo -e "${BLUE}  → Collecting Static Files...${NC}"
     # Fix volume ownership — Docker creates named volumes as root
     echo -e "${BLUE}    ↳ Fixing volume ownership...${NC}"
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T --user root backend chown -R 1000:1000 /app/staticfiles /app/media /app/backups || echo -e "${YELLOW}    ⚠ Volume ownership fix failed${NC}"
+    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T --user root backend chown -R 1000:1000 /app/staticfiles /app/media /app/backups < /dev/null || echo -e "${YELLOW}    ⚠ Volume ownership fix failed${NC}"
     echo -e "${BLUE}    ↳ Running collectstatic...${NC}"
-    timeout 120 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic --noinput || echo -e "${YELLOW}    ⚠ collectstatic failed or timed out${NC}"
+    timeout 120 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic --noinput < /dev/null || echo -e "${YELLOW}    ⚠ collectstatic failed or timed out${NC}"
 
     sync_platform_domain_state "$INSTALL_DIR/.env"
     set_checkpoint "database_initialized"

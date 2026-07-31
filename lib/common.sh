@@ -108,6 +108,7 @@ diagnose_migration_locks() {
             -v ON_ERROR_STOP=1 \
             -P pager=off \
             -c "SELECT pid, usename, application_name, state, wait_event_type, wait_event, now() - COALESCE(xact_start, query_start) AS age, left(regexp_replace(query, '\s+', ' ', 'g'), 180) AS query FROM pg_stat_activity WHERE datname = current_database() ORDER BY COALESCE(xact_start, query_start) NULLS LAST LIMIT 20;" \
+            < /dev/null \
          || echo -e "${YELLOW}  -> Could not read pg_stat_activity.${NC}"
 }
 
@@ -241,7 +242,7 @@ reload_container_caddy() {
     should_manage_caddy || return 0
     local compose_f="${COMPOSE_FILE:-docker-compose.prod.yml}"
     if command -v docker  && docker compose -f "$compose_f" ps -q caddy  | grep -q .; then
-        timeout -k 5 20 docker compose -f "$compose_f" exec -T caddy caddy reload --config /etc/caddy/Caddyfile || \
+        timeout -k 5 20 docker compose -f "$compose_f" exec -T caddy caddy reload --config /etc/caddy/Caddyfile < /dev/null || \
             timeout -k 5 20 docker compose -f "$compose_f" restart caddy || \
             echo -e "${YELLOW}    ⚠ Caddy reload failed${NC}"
     fi
@@ -282,7 +283,7 @@ c = PlatformConfig.load()
 d = (c.domain or '').strip()
 if d and d != 'localhost':
     print(d)
-"  | tr -d '[:space:]' || true)"
+"  < /dev/null | tr -d '[:space:]' || true)"
     if [ -z "$domain" ]; then
         domain="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env"  | cut -d= -f2- || true)"
     fi
@@ -300,7 +301,7 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
         cd = cd.strip()
         if cd:
             print(f'{cd} {{\n    reverse_proxy {upstream}\n    encode gzip\n}}\n')
-"  | tr -d '\r' || true)"
+"  < /dev/null | tr -d '\r' || true)"
 
     local is_real_domain=false
     if [ -n "$domain" ] && [ "$domain" != "localhost" ]; then
@@ -371,7 +372,7 @@ SAFECADDY
 caddy_needs_fix() {
     should_manage_caddy || return 1
     local dest="${INSTALL_DIR:-/opt/smsly-hosting}/caddy-config/Caddyfile"
-    if ! timeout -k 5 15 docker compose -f "$COMPOSE_FILE" exec -T caddy caddy validate --config /etc/caddy/Caddyfile ; then
+    if ! timeout -k 5 15 docker compose -f "$COMPOSE_FILE" exec -T caddy caddy validate --config /etc/caddy/Caddyfile < /dev/null ; then
         return 0
     fi
     if grep -q 'dns cloudflare' "$dest" ; then
@@ -420,18 +421,18 @@ sync_agent_lite_rabbitmq_password() {
         exit 1
     }
 
-    if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" ; then
+    if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null ; then
         echo -e "${GREEN}  OK Lite Agent RabbitMQ password already matches .env${NC}"
         return 0
     fi
 
     echo -e "${BLUE}  -> Syncing Lite Agent RabbitMQ password for ${rabbitmq_user}...${NC}"
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl add_user "$rabbitmq_user" "$rabbitmq_password" || echo -e "${YELLOW}    ⚠ RabbitMQ add_user failed${NC}"
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl change_password "$rabbitmq_user" "$rabbitmq_password" || true
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_user_tags "$rabbitmq_user" administrator || true
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_permissions -p / "$rabbitmq_user" ".*" ".*" ".*" || true
+    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl add_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null || echo -e "${YELLOW}    ⚠ RabbitMQ add_user failed${NC}"
+    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl change_password "$rabbitmq_user" "$rabbitmq_password" < /dev/null || true
+    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_user_tags "$rabbitmq_user" administrator < /dev/null || true
+    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_permissions -p / "$rabbitmq_user" ".*" ".*" ".*" < /dev/null || true
 
-    if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" ; then
+    if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" < /dev/null ; then
         echo -e "${GREEN}  OK Lite Agent RabbitMQ password synced${NC}"
         return 0
     fi
