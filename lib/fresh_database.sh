@@ -35,21 +35,41 @@ source "$INSTALL_DIR/.env"  || true
 set +a
 echo -e "${BLUE}  → Syncing database password...${NC}"
 
-# Try local trust auth first (Docker default), then try with PGPASSWORD
+# The DB volume persists with the password from FIRST init, and .env may have
+# been regenerated since. Local socket auth is TRUST in the official postgres
+# image, so ALTER USER over the socket works regardless of the current DB
+# password. Note: with POSTGRES_USER=smsly_admin the "postgres" role does NOT
+# exist — smsly_admin itself is the superuser.
+DB_SUPERUSER="${POSTGRES_USER:-smsly_admin}"
+DB_NAME="${POSTGRES_DB:-smsly_hosting}"
+PW_SYNCED=false
 if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T db \
-    psql -U postgres -c "ALTER USER smsly_admin WITH PASSWORD '${POSTGRES_PASSWORD}';" \
+    psql -U "$DB_SUPERUSER" -d postgres \
+    -c "ALTER USER ${DB_SUPERUSER} WITH PASSWORD '${POSTGRES_PASSWORD}';" \
     < /dev/null ; then
-    echo -e "${GREEN}  ✓ Database password synced${NC}"
-elif timeout 30 docker compose -f "$COMPOSE_FILE" exec -T -e PGPASSWORD="${POSTGRES_PASSWORD}" db \
-    psql -U smsly_admin -d smsly_hosting -c "SELECT 1;" < /dev/null ; then
-    echo -e "${GREEN}  ✓ Database password already matches${NC}"
+    echo -e "${GREEN}  ✓ Database password synced via superuser ${DB_SUPERUSER}${NC}"
+    PW_SYNCED=true
+elif timeout 30 docker compose -f "$COMPOSE_FILE" exec -T db \
+    psql -U postgres -d postgres \
+    -c "ALTER USER ${DB_SUPERUSER} WITH PASSWORD '${POSTGRES_PASSWORD}';" \
+    < /dev/null ; then
+    echo -e "${GREEN}  ✓ Database password synced via postgres superuser${NC}"
+    PW_SYNCED=true
 else
-    echo -e "${YELLOW}  ⚠ Password mismatch — resetting via postgres superuser...${NC}"
-    # Last resort: the Docker postgres container always accepts local postgres user
-    timeout 30 docker compose -f "$COMPOSE_FILE" exec -T db \
-        psql -U postgres -c "ALTER USER smsly_admin WITH PASSWORD '${POSTGRES_PASSWORD}';" \
-        < /dev/null \
-         || echo -e "${RED}  ✗ Could not sync password. Check pg_hba.conf${NC}"
+    echo -e "${RED}  ✗ Could not sync password over local socket. Check pg_hba.conf${NC}"
+fi
+
+# The socket check above bypasses auth (trust), so verify over TCP with the
+# .env password — this is the only check that proves the password actually
+# matches what the app will use. Must use the network hostname (eth0), not
+# 127.0.0.1: the official postgres image trusts loopback too.
+if timeout 30 docker compose -f "$COMPOSE_FILE" exec -T \
+    -e PGPASSWORD="${POSTGRES_PASSWORD}" db \
+    psql -h db -U "$DB_SUPERUSER" -d "$DB_NAME" -c "SELECT 1;" < /dev/null ; then
+    echo -e "${GREEN}  ✓ Database password verified over TCP${NC}"
+else
+    echo -e "${RED}  ✗ Password verification over TCP failed — migrations will fail. Check pg_hba.conf${NC}"
+    exit 1
 fi
 
 # ─── Ensure PgCat is fresh and connected ──────────────────────────────────────
