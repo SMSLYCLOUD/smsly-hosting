@@ -9,7 +9,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ("autoscaler", "0002_alter_autoscalerconfig_options_and_more"),
-        ("deployments", "0154_service_autoscale_enabled"),
+        ("deployments", "0155_remove_apitoken_user_remove_auditlog_project_and_more"),
     ]
 
     operations = [
