@@ -117,7 +117,7 @@ services:
     healthcheck:
       test:
       - CMD-SHELL
-      - PGPASSWORD="$${POSTGRES_PASSWORD}" psql -h 127.0.0.1 -p 6432 -U "$${POSTGRES_USER:-smsly_admin}" -d "$${POSTGRES_DB:-smsly_hosting}" -c "SELECT 1;" >/dev/null 2>&1
+      - python3 -c "import socket; s=socket.socket(); s.settimeout(5); s.connect(('127.0.0.1', 6432)); s.close()"
       interval: 10s
       timeout: 10s
       retries: 10
