@@ -22,16 +22,6 @@
 	on_demand_tls {
 		ask http://backend:8000/api/v1/services/check-domain/
 	}
-
-	# Global security headers (applied to every site block)
-	header {
-		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
-		X-Content-Type-Options "nosniff"
-		Referrer-Policy "strict-origin-when-cross-origin"
-		Permissions-Policy "geolocation=(), camera=(), microphone=()"
-		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' wss: https:; frame-ancestors 'self';"
-		-X-SMSLY-Control-Plane
-	}
 }
 
 # Fallback site: any HTTPS request that arrives before the auto-generated
@@ -47,9 +37,7 @@
 # challenge path here.
 :80 {
 	@not_ip not header_regexp host ^([0-9]{1,3}[.]){3}[0-9]{1,3}$
-	@not_local not host localhost
-	@not_local not host 127.0.0.1
-	@not_local not host *.local
+	@not_local not host localhost 127.0.0.1 *.local
 	@has_host header_regexp host .+
 	redir @has_host https://{host}{uri} 308
 	handle {
