@@ -603,8 +603,10 @@ services:
     - managed_by=smsly-hosting
   celery:
     security_opt:
-      - no-new-privileges:true
       - apparmor:docker-default
+    cap_add:
+      - SETGID
+      - SETUID
     cap_drop:
       - ALL
     build:
@@ -667,8 +669,10 @@ services:
     profiles:
       - extra-workers
     security_opt:
-      - no-new-privileges:true
       - apparmor:docker-default
+    cap_add:
+      - SETGID
+      - SETUID
     cap_drop:
       - ALL
     build:
@@ -726,8 +730,10 @@ services:
     profiles:
       - extra-workers
     security_opt:
-      - no-new-privileges:true
       - apparmor:docker-default
+    cap_add:
+      - SETGID
+      - SETUID
     cap_drop:
       - ALL
     build:
@@ -783,8 +789,10 @@ services:
           memory: ${CELERY_WORKER3_MEMORY_LIMIT:-4G}
   celery-beat:
     security_opt:
-      - no-new-privileges:true
       - apparmor:docker-default
+    cap_add:
+      - SETGID
+      - SETUID
     cap_drop:
       - ALL
     build:
@@ -875,8 +883,10 @@ services:
     - managed_by=smsly-hosting
   celery-fast:
     security_opt:
-      - no-new-privileges:true
       - apparmor:docker-default
+    cap_add:
+      - SETGID
+      - SETUID
     cap_drop:
       - ALL
     build:
@@ -931,8 +941,10 @@ services:
           memory: ${CELERY_FAST_MEMORY_LIMIT:-2G}
   celery-deploy:
     security_opt:
-      - no-new-privileges:true
       - apparmor:docker-default
+    cap_add:
+      - SETGID
+      - SETUID
     cap_drop:
       - ALL
     build:
