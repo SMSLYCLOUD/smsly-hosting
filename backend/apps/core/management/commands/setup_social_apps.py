@@ -11,12 +11,16 @@ class Command(BaseCommand):
     """Setup GitHub and Google SocialApps for authentication."""
     help = 'Setup GitHub and Google SocialApps for authentication'
 
+    def add_arguments(self, parser):
+        parser.add_argument('--database', default='default')
+
     def handle(self, *args, **options):
+        db_alias = options['database']
         # ensure Site domain is correct
-        site = Site.objects.get(id=settings.SITE_ID)
+        site = Site.objects.using(db_alias).get(id=settings.SITE_ID)
         site.domain = settings.DOMAIN
         site.name = 'Grid'  # Updated brand name
-        site.save()
+        site.save(using=db_alias)
         self.stdout.write(self.style.SUCCESS(f'Updated Site: {site.domain} ({site.name})'))
 
         providers = {
@@ -41,7 +45,7 @@ class Command(BaseCommand):
                 )
                 continue
 
-            app, created = SocialApp.objects.update_or_create(
+            app, created = SocialApp.objects.using(db_alias).update_or_create(
                 provider=provider_id,
                 defaults={
                     'name': config['name'],

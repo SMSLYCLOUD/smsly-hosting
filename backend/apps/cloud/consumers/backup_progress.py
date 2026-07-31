@@ -5,7 +5,7 @@ from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from django.conf import settings
 
-from .base import authenticate_ws_token, get_websocket_subprotocol, logger
+from apps.deployments.consumers.base import authenticate_ws_token, get_websocket_subprotocol, logger
 
 
 class BackupProgressConsumer(AsyncWebsocketConsumer):

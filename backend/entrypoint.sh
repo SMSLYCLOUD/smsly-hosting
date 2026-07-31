@@ -391,21 +391,17 @@ create_admin_if_configured() {
 
 
 collect_static_nonfatal() {
-
-
-
     echo "Collecting static files..."
-
-
-
-    python manage.py collectstatic --noinput  || \
-
-
-
-        echo "WARNING: collectstatic failed (non-fatal)"
-
-
-
+    if [ "$(id -u)" = "0" ]; then
+        # Running as root with all capabilities dropped (cap_drop: ALL), uid 0 has no
+        # CAP_DAC_OVERRIDE and cannot write to the smsly-owned static volume. Drop to
+        # smsly so collectstatic can write.
+        su -s /bin/sh -c 'python manage.py collectstatic --noinput' smsly || \
+            echo "WARNING: collectstatic failed (non-fatal)"
+    else
+        python manage.py collectstatic --noinput || \
+            echo "WARNING: collectstatic failed (non-fatal)"
+    fi
 }
 
 
